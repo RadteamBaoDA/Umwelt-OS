@@ -90,3 +90,170 @@ export function mergeEntity(id: string, payload: { into_id: string; expected_rev
 export function splitEntity(id: string, payload: { evidence_ids: string[]; expected_revision: number; new_entity: { type: string; name: string; description?: string | null; metadata?: Record<string, unknown>; aliases?: string[]; reason: string }; reason: string }, csrfToken: string) { return apiRequest<EntityCorrectionResult>(`/api/v1/entities/${id}/split`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify(payload) }); }
 /** Suppresses the selected evidence at the expected revision with an audit reason and CSRF token. */
 export function suppressEntityEvidence(id: string, payload: { evidence_ids: string[]; expected_revision: number; reason: string }, csrfToken: string) { return apiRequest<EntityCorrectionResult>(`/api/v1/entities/${id}/suppressions`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify(payload) }); }
+
+export type MemoryItem = {
+  id: string;
+  content: string;
+  type: string;
+  provenance: Record<string, unknown>;
+  confidence: number;
+  reason: string | null;
+  status: 'active' | 'invalidated' | 'superseded' | 'forgotten';
+  is_manual: boolean;
+  superseded_by_id: string | null;
+  candidate_id: string | null;
+  created_at: string;
+  updated_at: string;
+  invalidated_at: string | null;
+  forgotten_at: string | null;
+};
+
+export type MemoryPage = {
+  items: MemoryItem[];
+  next_cursor: string | null;
+  total_count?: number | null;
+};
+
+export type MemoryCandidate = {
+  id: string;
+  content: string;
+  type: string;
+  provenance: Record<string, unknown>;
+  confidence: number;
+  novelty_score: number;
+  usefulness_score: number;
+  reason: string | null;
+  status: 'pending' | 'accepted' | 'rejected' | 'superseded' | 'expired';
+  rejection_reason: string | null;
+  created_at: string;
+  updated_at: string;
+  evaluated_at: string | null;
+};
+
+export type MemoryCandidatePage = {
+  items: MemoryCandidate[];
+  next_cursor: string | null;
+};
+
+export type MemoryPrivacyConfig = {
+  store_conversation_history: boolean;
+  store_agent_memory: boolean;
+  auto_accept_memory: boolean;
+};
+
+export type MemoryPurgeRequest = {
+  purge_forgotten_memories?: boolean;
+  purge_rejected_candidates?: boolean;
+  purge_conversation_history?: boolean;
+};
+
+export type MemoryPurgeResponse = {
+  purged_memories_count: number;
+  purged_candidates_count: number;
+  purged_conversations_count: number;
+};
+
+export const memoryKeys = {
+  all: ['memories'] as const,
+  list: (status?: string, type?: string, q?: string) => ['memories', 'list', status ?? 'active', type ?? '', q ?? ''] as const,
+  detail: (id: string) => ['memories', id] as const,
+  candidates: (status?: string) => ['memories', 'candidates', status ?? 'pending'] as const,
+  privacy: ['settings', 'memory-privacy'] as const,
+};
+
+/** Lists active or filtered memories with optional cursor pagination. */
+export function listMemories(cursor?: string, type?: string, status = 'active', q?: string) {
+  const p = new URLSearchParams({ limit: '50', status });
+  if (cursor) p.set('cursor', cursor);
+  if (type) p.set('type', type);
+  if (q) p.set('q', q);
+  return apiRequest<MemoryPage>(`/api/v1/memories?${p}`);
+}
+
+/** Fetches a single memory item by identifier. */
+export function getMemory(id: string) {
+  return apiRequest<MemoryItem>(`/api/v1/memories/${id}`);
+}
+
+/** Explicitly creates an owner memory item using CSRF protection. */
+export function createMemory(payload: { content: string; type?: string; reason?: string }, csrfToken: string) {
+  return apiRequest<MemoryItem>('/api/v1/memories', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify(payload),
+  });
+}
+
+/** Updates an active memory with CSRF protection. */
+export function updateMemory(id: string, payload: { content?: string; type?: string; reason?: string }, csrfToken: string) {
+  return apiRequest<MemoryItem>(`/api/v1/memories/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify(payload),
+  });
+}
+
+/** Forgets a memory immediately, purging it from retrieval context. */
+export function forgetMemory(id: string, reason: string | undefined, csrfToken: string) {
+  return apiRequest<MemoryItem>(`/api/v1/memories/${id}/forget`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify({ reason: reason || 'Forgotten by owner' }),
+  });
+}
+
+/** Marks an active memory invalidated with an explanation. */
+export function invalidateMemory(id: string, reason: string, csrfToken: string) {
+  return apiRequest<MemoryItem>(`/api/v1/memories/${id}/invalidate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify({ reason }),
+  });
+}
+
+/** Lists proposed memory candidates for owner review. */
+export function listMemoryCandidates(cursor?: string, status = 'pending') {
+  const p = new URLSearchParams({ limit: '50', status });
+  if (cursor) p.set('cursor', cursor);
+  return apiRequest<MemoryCandidatePage>(`/api/v1/memories/candidates/list?${p}`);
+}
+
+/** Accepts a proposed memory candidate into active memory. */
+export function acceptMemoryCandidate(id: string, csrfToken: string) {
+  return apiRequest<MemoryItem>(`/api/v1/memories/candidates/${id}/accept`, {
+    method: 'POST',
+    headers: csrfHeaders(csrfToken),
+  });
+}
+
+/** Rejects a proposed memory candidate with an optional explanation. */
+export function rejectMemoryCandidate(id: string, reason: string | undefined, csrfToken: string) {
+  return apiRequest<MemoryCandidate>(`/api/v1/memories/candidates/${id}/reject`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify({ reason }),
+  });
+}
+
+/** Reads owner memory and conversation privacy settings. */
+export function getMemoryPrivacyConfig() {
+  return apiRequest<MemoryPrivacyConfig>('/api/v1/settings/memory-privacy');
+}
+
+/** Updates owner memory and conversation privacy controls. */
+export function updateMemoryPrivacyConfig(payload: Partial<MemoryPrivacyConfig>, csrfToken: string) {
+  return apiRequest<MemoryPrivacyConfig>('/api/v1/settings/memory-privacy', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify(payload),
+  });
+}
+
+/** Purges forgotten memories, rejected candidates, or unpinned conversations. */
+export function purgeMemoryData(payload: MemoryPurgeRequest, csrfToken: string) {
+  return apiRequest<MemoryPurgeResponse>('/api/v1/settings/memory-privacy/purge', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify(payload),
+  });
+}

@@ -27,6 +27,8 @@ from modules.search.routes import router as search_router
 from core.realtime_routes import router as realtime_router
 from modules.timeline.routes import router as timeline_router
 from modules.knowledge.temporal.routes import router as temporal_router
+from modules.chat.routes import router as chat_router
+from modules.memory.routes import router as memory_router
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -73,7 +75,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(model_gateway_router)
     app.include_router(search_router)
     app.include_router(realtime_router)
+    app.include_router(chat_router)
+    app.include_router(memory_router)
     app.state.modules = register_modules()
+
 
     @app.get("/health")
     async def health() -> dict[str, str]:

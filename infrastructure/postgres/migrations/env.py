@@ -46,9 +46,14 @@ from modules.knowledge.temporal.models import (
 from modules.timeline.models import Event, EventParticipant, EventEvidence, ParticipantEvidence, EventAudit, EventSuppression, TimelineExtractionWork, TimelineExtractionResult
 from modules.settings.models import AISettingsRecord, OwnerPreferencesRecord
 from core.realtime import ReplayHead, ReplayRecord
+from modules.chat.models import Conversation, Message, ResponseRun, StreamEvent
+from modules.memory.models import Memory, MemoryCandidate, MemoryPrivacyRecord
 
 _auth_models = (AuthSession, Owner)
+_chat_models = (Conversation, Message, ResponseRun, StreamEvent)
+_memory_models = (Memory, MemoryCandidate, MemoryPrivacyRecord)
 _library_models = (
+
     Source, SourcePurgeOperation, Document, DocumentVersion, DocumentChunk,
     NormalizedDocumentIdentity, NormalizedVersionProvenance,
 )

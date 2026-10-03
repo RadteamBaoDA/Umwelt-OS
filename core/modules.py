@@ -8,9 +8,11 @@ from modules.knowledge.entities.descriptor import descriptor as entities
 from modules.knowledge.relationships.descriptor import descriptor as relationships
 from modules.timeline.descriptor import descriptor as timeline
 from modules.knowledge.temporal.descriptor import descriptor as temporal
+from modules.chat.descriptor import descriptor as chat
+from modules.memory.descriptor import descriptor as memory
 
 
-def register_modules(descriptors: Iterable[Any] = (sources, documents, entities, relationships, timeline, search, temporal)) -> dict[str, Any]:
+def register_modules(descriptors: Iterable[Any] = (sources, documents, entities, relationships, timeline, search, temporal, chat, memory)) -> dict[str, Any]:
     """Build a module registry and reject duplicate IDs or dependencies that are not registered."""
     registry: dict[str, Any] = {}
     for descriptor in descriptors:

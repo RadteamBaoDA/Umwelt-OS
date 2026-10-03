@@ -5,17 +5,20 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslations } from 'next-intl';
+import { MessageSquareIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
 import { CommandPalette } from '@/core/command-palette';
 import { ConnectionFooter } from '@/core/app-shell/connection-footer';
+import { ChatControllerProvider, useChatController } from '@/core/app-shell/chat-controller';
 import { detailDestinations, mainNavigation, settingsGroups } from '@/core/module-registry';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { useRealtime } from '@/core/realtime-provider';
 import { GoogleLink } from '@/modules/account/google-link';
 import { OwnerPreferences, PreferencesDialog } from '@/modules/account/preferences-dialog';
+import { ChatDrawer } from '@/modules/chat/chat-drawer';
 
 type Session = { authenticated: true; csrfToken: string };
 const SessionContext = createContext<Session | null>(null);
@@ -133,66 +136,105 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
     menuTriggerRef.current?.focus();
   };
 
+/**
+ * Button that toggles the quick-chat Sheet drawer presentation and listens for keyboard shortcut (Cmd+J / Ctrl+J).
+ *
+ * @returns Accessible button triggering chat drawer.
+ */
+function ChatTriggerButton() {
+  const t = useTranslations('chat');
+  const chatCtrl = useChatController();
+
+  useEffect(() => {
+    /** Global shortcut Ctrl+J or Cmd+J to toggle chat drawer */
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'j') {
+        e.preventDefault();
+        chatCtrl.toggleDrawer();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [chatCtrl]);
+
+  return (
+    <button
+      type="button"
+      onClick={chatCtrl.toggleDrawer}
+      className="button secondary flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold"
+      title={t('quickChat')}
+      aria-label={t('quickChat')}
+    >
+      <MessageSquareIcon className="size-4 text-accent" />
+      <span className="hidden sm:inline">{t('quickChat')}</span>
+    </button>
+  );
+}
+
   return <SessionContext.Provider value={session.data}>
-    <div className="shell">
-      <header className="topbar">
-        <Link href="/app" className="brand-name">BBD-OS</Link>
-        <div className="top-actions">
-          <CommandPalette />
-          <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
-            <DropdownMenuTrigger asChild>
-              <button ref={menuTriggerRef} type="button" className="button secondary" aria-label={t('userMenu')}>☻</button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" onCloseAutoFocus={(event) => {
-              if (suppressMenuFocusRef.current) {
-                event.preventDefault();
-                suppressMenuFocusRef.current = false;
-              }
-            }}>
-              <DropdownMenuItem onSelect={() => openFromMenu('preferences')}>{t('userSettings')}</DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => openFromMenu('account')}>{t('accountSettings')}</DropdownMenuItem>
-              <DropdownMenuItem disabled={logout.isPending} onSelect={() => logout.mutate()}>{t('signOut')}</DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+    <ChatControllerProvider>
+      <div className="shell">
+        <header className="topbar">
+          <Link href="/app" className="brand-name">BBD-OS</Link>
+          <div className="top-actions">
+            <ChatTriggerButton />
+            <CommandPalette />
+            <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+              <DropdownMenuTrigger asChild>
+                <button ref={menuTriggerRef} type="button" className="button secondary" aria-label={t('userMenu')}>☻</button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" onCloseAutoFocus={(event) => {
+                if (suppressMenuFocusRef.current) {
+                  event.preventDefault();
+                  suppressMenuFocusRef.current = false;
+                }
+              }}>
+                <DropdownMenuItem onSelect={() => openFromMenu('preferences')}>{t('userSettings')}</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => openFromMenu('account')}>{t('accountSettings')}</DropdownMenuItem>
+                <DropdownMenuItem disabled={logout.isPending} onSelect={() => logout.mutate()}>{t('signOut')}</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        </header>
+        <div className="workspace">
+          <nav className="workspace-nav" aria-label={t('mainNavigation')}>
+            {mainNavigation.map((item) => <Link key={item.id} href={item.href} aria-current={active === item.id ? 'page' : undefined}>{t(item.messageKey)}</Link>)}
+          </nav>
+          {settingsActive && <nav className="settings-nav" aria-label={t('settings')}>
+            <h2>{t('settings')}</h2>
+            {settingsGroups.map((item) => <Link key={item.id} href={item.href} aria-current={pathname === item.href ? 'page' : undefined}>{t(item.messageKey)}</Link>)}
+            <div className="settings-details">{detailDestinations.map((item) => <Link key={item.id} href={item.href}>{t(item.messageKey)}</Link>)}</div>
+          </nav>}
+          <main className="workspace-main">{children}</main>
         </div>
-      </header>
-      <div className="workspace">
-        <nav className="workspace-nav" aria-label={t('mainNavigation')}>
-          {mainNavigation.map((item) => <Link key={item.id} href={item.href} aria-current={active === item.id ? 'page' : undefined}>{t(item.messageKey)}</Link>)}
-        </nav>
-        {settingsActive && <nav className="settings-nav" aria-label={t('settings')}>
-          <h2>{t('settings')}</h2>
-          {settingsGroups.map((item) => <Link key={item.id} href={item.href} aria-current={pathname === item.href ? 'page' : undefined}>{t(item.messageKey)}</Link>)}
-          <div className="settings-details">{detailDestinations.map((item) => <Link key={item.id} href={item.href}>{t(item.messageKey)}</Link>)}</div>
-        </nav>}
-        <main className="workspace-main">{children}</main>
+        <ConnectionFooter
+          apiStatus={apiHealth.isFetching && apiHealth.isError ? 'reconnecting' : apiHealth.isPending ? 'connecting' : apiHealth.isError ? 'unavailable' : 'connected'}
+          realtimeStatus={realtime.status}
+          onRetry={() => apiHealth.refetch()}
+          retrying={apiHealth.isFetching}
+        />
+        {logout.error && <p className="error" role="alert">{t('signOutFailed')}</p>}
+        <PreferencesDialog
+          open={preferencesOpen}
+          onOpenChange={setPreferencesOpen}
+          preferences={savedPreferences}
+          loading={preferences.isPending && !preferences.data}
+          loadError={preferences.isError && !preferences.data}
+          retrying={preferences.isFetching}
+          onRetry={reloadPreferences}
+          csrfToken={session.data.csrfToken}
+          savingDisabled={!preferences.data}
+          authGeneration={generation}
+          onCloseAutoFocus={restoreMenuFocus}
+        />
+        <Dialog open={accountOpen} onOpenChange={setAccountOpen}>
+          <DialogContent closeLabel={t('close')} onCloseAutoFocus={restoreMenuFocus}>
+            <DialogHeader><DialogTitle>{t('accountSettings')}</DialogTitle><DialogDescription>{t('googleAccountDescription')}</DialogDescription></DialogHeader>
+            <GoogleLink />
+          </DialogContent>
+        </Dialog>
+        <ChatDrawer />
       </div>
-      <ConnectionFooter
-        apiStatus={apiHealth.isFetching && apiHealth.isError ? 'reconnecting' : apiHealth.isPending ? 'connecting' : apiHealth.isError ? 'unavailable' : 'connected'}
-        realtimeStatus={realtime.status}
-        onRetry={() => apiHealth.refetch()}
-        retrying={apiHealth.isFetching}
-      />
-      {logout.error && <p className="error" role="alert">{t('signOutFailed')}</p>}
-      <PreferencesDialog
-        open={preferencesOpen}
-        onOpenChange={setPreferencesOpen}
-        preferences={savedPreferences}
-        loading={preferences.isPending && !preferences.data}
-        loadError={preferences.isError && !preferences.data}
-        retrying={preferences.isFetching}
-        onRetry={reloadPreferences}
-        csrfToken={session.data.csrfToken}
-        savingDisabled={!preferences.data}
-        authGeneration={generation}
-        onCloseAutoFocus={restoreMenuFocus}
-      />
-      <Dialog open={accountOpen} onOpenChange={setAccountOpen}>
-        <DialogContent closeLabel={t('close')} onCloseAutoFocus={restoreMenuFocus}>
-          <DialogHeader><DialogTitle>{t('accountSettings')}</DialogTitle><DialogDescription>{t('googleAccountDescription')}</DialogDescription></DialogHeader>
-          <GoogleLink />
-        </DialogContent>
-      </Dialog>
-    </div>
+    </ChatControllerProvider>
   </SessionContext.Provider>;
 }

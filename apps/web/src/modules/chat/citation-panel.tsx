@@ -1,0 +1,128 @@
+'use client';
+
+import * as React from 'react';
+import Link from 'next/link';
+import { useTranslations } from 'next-intl';
+import { ExternalLinkIcon, FileTextIcon, XIcon } from 'lucide-react';
+import type { Citation } from '@/modules/chat/api';
+import { useDisplayPreferences } from '@/core/query-provider';
+import { formatDateTime } from '@/core/i18n';
+
+export interface CitationPanelProps {
+  /** List of citations to render. */
+  citations: Citation[];
+  /** Currently selected citation to highlight, if any. */
+  selectedCitation?: Citation | null;
+  /** Callback when user closes or dismisses the citation inspector. */
+  onClose?: () => void;
+  /** Whether the panel is rendered as a standalone overlay/card or an inline list. */
+  variant?: 'inline' | 'card' | 'standalone';
+}
+
+/**
+ * Citation evidence inspector rendering source provenance, document revision links,
+ * observed timestamps, and grounded quote excerpts.
+ *
+ * @param props - CitationPanelProps interface.
+ * @returns Accessible citation list or detailed inspection panel.
+ */
+export function CitationPanel({
+  citations,
+  selectedCitation,
+  onClose,
+  variant = 'inline',
+}: CitationPanelProps) {
+  const t = useTranslations('chat');
+  const display = useDisplayPreferences();
+  const timezone = display.confirmedPreferences?.timezone || 'UTC';
+  const locale = display.confirmedPreferences?.locale || 'en-us';
+
+  if (!citations.length && !selectedCitation) {
+    return null;
+  }
+
+  const itemsToRender = selectedCitation ? [selectedCitation] : citations;
+
+  return (
+    <div
+      className={
+        variant === 'standalone'
+          ? 'flex flex-col gap-3 p-4 rounded-xl border border-border bg-surface shadow-md'
+          : variant === 'card'
+            ? 'flex flex-col gap-2 p-3 rounded-lg border border-border bg-surface/70 mt-2'
+            : 'flex flex-col gap-2 mt-2 pt-2 border-t border-border/60'
+      }
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+          <FileTextIcon className="size-3.5 text-accent" />
+          <span>{t('citations')} ({itemsToRender.length})</span>
+        </div>
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent/10 transition-colors"
+            aria-label={t('closeDrawer')}
+          >
+            <XIcon className="size-3.5" />
+          </button>
+        )}
+      </div>
+
+      <div className="flex flex-col gap-2.5">
+        {itemsToRender.map((citation, idx) => {
+          const docHref = `/knowledge/documents/${citation.documentId}`;
+          const formattedDate = citation.observedAt
+            ? formatDateTime(citation.observedAt, locale, timezone)
+            : null;
+
+          return (
+            <div
+              key={`${citation.chunkId}-${idx}`}
+              className="flex flex-col gap-1.5 p-2.5 rounded-lg border border-border bg-background text-xs"
+            >
+              <div className="flex items-start justify-between gap-2">
+                <span className="font-semibold text-foreground line-clamp-1">
+                  [{idx + 1}] {citation.title}
+                </span>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <Link
+                    href={docHref}
+                    className="inline-flex items-center gap-1 text-[11px] text-accent hover:underline font-medium"
+                    title={t('openDocument')}
+                  >
+                    <span>{t('document')}</span>
+                    <ExternalLinkIcon className="size-3" />
+                  </Link>
+                  {citation.url && (
+                    <a
+                      href={citation.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+                      title={citation.url}
+                    >
+                      <ExternalLinkIcon className="size-3" />
+                    </a>
+                  )}
+                </div>
+              </div>
+
+              {citation.quote && (
+                <blockquote className="pl-2 border-l-2 border-accent/40 italic text-muted-foreground line-clamp-4 text-[11px] leading-relaxed">
+                  &ldquo;{citation.quote}&rdquo;
+                </blockquote>
+              )}
+
+              <div className="flex items-center justify-between text-[10px] text-muted-foreground pt-1 border-t border-border/40">
+                <span>{t('source')}: {citation.sourceType}</span>
+                {formattedDate && <span>{formattedDate}</span>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}

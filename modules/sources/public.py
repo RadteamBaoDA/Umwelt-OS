@@ -82,6 +82,21 @@ async def _lock_source_row(session: AsyncSession, source_id: UUID) -> Source | N
     )
 
 
+async def get_source_fence(session: AsyncSession, source_id: UUID) -> SourceFence | None:
+    """Read a detached source eligibility fence without acquiring a database row lock.
+
+    Owner: modules/sources
+    Fields: id, status, generation, local_only
+    Permissions & Deletion checks: Read-only projection; returns None if source does not exist.
+    """
+    source = await session.get(Source, source_id)
+    if source is None:
+        return None
+    return SourceFence(
+        id=source.id, status=source.status, generation=source.generation, local_only=source.local_only
+    )
+
+
 async def lock_source(session: AsyncSession, source_id: UUID) -> SourceFence | None:
     """Acquire the source lock and return the narrow lifecycle fence contract."""
     source = await _lock_source_row(session, source_id)
@@ -90,6 +105,7 @@ async def lock_source(session: AsyncSession, source_id: UUID) -> SourceFence | N
     return SourceFence(
         id=source.id, status=source.status, generation=source.generation, local_only=source.local_only
     )
+
 
 
 async def lock_source_for_document(session: AsyncSession, source_id: UUID) -> None:

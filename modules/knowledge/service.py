@@ -4,6 +4,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modules.knowledge.documents import public as documents
 from modules.knowledge.entities import public as entities
 from modules.knowledge.relationships import public as relationships
 from modules.knowledge.temporal import public as temporal
@@ -74,3 +75,81 @@ class KnowledgeService:
     async def find_changes(self, **filters):
         """Delegate bounded recorded canonical mutations with current evidence/deletion checks."""
         return await temporal.find_changes(self.session, **filters)
+
+    async def chat_evidence(
+        self, refs: list[tuple[UUID, UUID]], *, require_active_source: bool = True
+    ) -> list[documents.ChatEvidenceChunk]:
+        """Read bounded detached evidence chunks with exact content and source privacy fence.
+
+        Args:
+            refs: Unique list of (document_version_id, chunk_id) pairs, bounded to 100.
+            require_active_source: If True, only returns chunks from active sources.
+
+        Returns:
+            Ordered list of detached ChatEvidenceChunk DTOs.
+        """
+        return await documents.read_chat_evidence_chunks(
+            self.session, refs, require_active_source=require_active_source
+        )
+
+    async def build_answer_context(self, redis, settings, request):
+        """Compose grounded retrieval context across search, entities, temporal and documents.
+
+        Args:
+            redis: Redis client instance for caching and rate limiting.
+            settings: Application settings configuration.
+            request: Validated AnswerContextRequest DTO.
+
+        Returns:
+            AnswerContext DTO containing deduplicated evidence, summaries, and privacy snapshots.
+        """
+        from modules.chat import retrieval
+
+        return await retrieval.build_context(self.session, redis, settings, request)
+
+    async def get_memories(
+        self,
+        *,
+        limit: int = 50,
+        cursor: str | None = None,
+        memory_type: str | None = None,
+        status: str = "active",
+        query: str | None = None,
+    ):
+        """Retrieve memories through the public memory service interface.
+
+        Args:
+            limit: Maximum items to return (bounded to 100).
+            cursor: Opaque cursor for pagination.
+            memory_type: Optional filter by memory type ('fact', 'preference', 'instruction').
+            status: Status filter, defaults to 'active'.
+            query: Optional substring or semantic search query.
+
+        Returns:
+            MemoryPage DTO of matching memory items.
+        """
+        from modules.memory.public import MemoryService
+
+        return await MemoryService(self.session).get_memories(
+            limit=limit,
+            cursor=cursor,
+            memory_type=memory_type,
+            status=status,
+            query=query,
+        )
+
+    async def get_memory_context(self, *, limit: int = 20):
+        """Retrieve active memories formatted for prompt or agent context injection.
+
+        Excluded forgotten or invalidated memories. Bounded by privacy settings.
+
+        Args:
+            limit: Maximum memory items to return (default 20).
+
+        Returns:
+            List of active MemoryRead DTOs.
+        """
+        from modules.memory.public import MemoryService
+
+        return await MemoryService(self.session).get_active_memory_context(limit=limit)
+

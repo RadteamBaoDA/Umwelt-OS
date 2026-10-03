@@ -1088,3 +1088,127 @@ async def _read_evidence_ref_rows(
     if set(by_ref) != set(refs):
         raise ValueError("Evidence reference is missing or does not match its document revision")
     return [by_ref[ref] for ref in refs]
+
+
+@dataclass(frozen=True)
+class ChatEvidenceChunk:
+    """Detached evidence chunk with full content and source privacy metadata for chat retrieval.
+
+    Attributes:
+        document_id: Owning document UUID.
+        document_version_id: Revision UUID.
+        version_number: Document version integer.
+        chunk_id: Chunk UUID.
+        chunk_index: Position index within document.
+        content: Full text of the chunk for grounding and quote validation.
+        source_id: Origin source UUID.
+        source_name: Human-readable source name.
+        source_status: Source status (e.g. 'active', 'paused', 'archived').
+        source_generation: Ingestion/sync generation counter.
+        local_only: Whether the source is restricted to local processing.
+        title: Normalized version title or document title.
+        canonical_url: Canonical document/version URL if available.
+        metadata_is_version_snapshot: True if title/URL were captured from revision provenance.
+        observed_at: Version observation timestamp.
+        published_at: Document publication timestamp if known.
+    """
+
+    document_id: UUID
+    document_version_id: UUID
+    version_number: int
+    chunk_id: UUID
+    chunk_index: int
+    content: str
+    source_id: UUID
+    source_name: str
+    source_status: str
+    source_generation: int
+    local_only: bool
+    title: str
+    canonical_url: str | None
+    metadata_is_version_snapshot: bool
+    observed_at: datetime
+    published_at: datetime | None
+
+
+async def read_chat_evidence_chunks(
+    session: AsyncSession,
+    refs: list[tuple[UUID, UUID]],
+    *,
+    require_active_source: bool = True,
+) -> list[ChatEvidenceChunk]:
+    """Read bounded detached evidence chunks with exact content and source privacy fence.
+
+    Owner: modules/knowledge/documents
+    Fields: document_id, document_version_id, version_number, chunk_id, chunk_index,
+            content, source_id, source_name, source_status, source_generation, local_only,
+            title, canonical_url, metadata_is_version_snapshot, observed_at, published_at.
+    Permissions & Deletion checks:
+        Enforces unique references bounded to 100 items. When require_active_source is True,
+        restricts to Source.status == 'active'. Revalidates NormalizedVersionProvenance for
+        immutable revision metadata snapshots. Read-only projection; no write-through modifications.
+
+    Args:
+        session: Active database session.
+        refs: Unique list of (document_version_id, chunk_id) tuples.
+        require_active_source: Whether to filter out chunks belonging to inactive sources.
+
+    Returns:
+        List of detached ChatEvidenceChunk DTOs in the order of valid matching refs.
+
+    Raises:
+        ValueError: If refs list exceeds 100 items or contains duplicates.
+    """
+    if len(refs) > 100 or len(set(refs)) != len(refs):
+        raise ValueError("Evidence references must be unique and contain at most 100 items")
+    if not refs:
+        return []
+
+    statement = (
+        select(Document, DocumentVersion, DocumentChunk, Source)
+        .join(DocumentVersion, DocumentVersion.document_id == Document.id)
+        .join(DocumentChunk, DocumentChunk.document_version_id == DocumentVersion.id)
+        .join(Source, Source.id == Document.source_id)
+        .where(tuple_(DocumentVersion.id, DocumentChunk.id).in_(refs))
+    )
+    if require_active_source:
+        statement = statement.where(Source.status == "active")
+
+    rows = (await session.execute(statement)).all()
+    if not rows:
+        return []
+
+    provenance_rows = (await session.scalars(
+        select(NormalizedVersionProvenance).where(
+            NormalizedVersionProvenance.document_version_id.in_(
+                {version.id for _, version, _, _ in rows}
+            )
+        )
+    )).all()
+    provenance_by_version = {item.document_version_id: item for item in provenance_rows}
+
+    by_ref = {}
+    for doc, ver, chunk, src in rows:
+        prov = provenance_by_version.get(ver.id)
+        by_ref[(ver.id, chunk.id)] = ChatEvidenceChunk(
+            document_id=doc.id,
+            document_version_id=ver.id,
+            version_number=ver.version_number,
+            chunk_id=chunk.id,
+            chunk_index=chunk.chunk_index,
+            content=chunk.content,
+            source_id=src.id,
+            source_name=src.name,
+            source_status=src.status,
+            source_generation=src.generation,
+            local_only=src.local_only,
+            title=prov.title if prov else doc.title,
+            canonical_url=prov.canonical_url if prov else doc.canonical_url,
+            metadata_is_version_snapshot=prov is not None,
+            observed_at=ver.observed_at,
+            published_at=doc.published_at,
+        )
+
+    # Return matching items in the caller's requested order, omitting any deleted/missing refs.
+    return [by_ref[ref] for ref in refs if ref in by_ref]
+
