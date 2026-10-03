@@ -1,17 +1,19 @@
 import base64
 import binascii
 import json
-from datetime import datetime
+from datetime import UTC, datetime
+from hashlib import sha256
+from copy import deepcopy
 from uuid import UUID
 
-from sqlalchemy import delete, desc, func, or_, select, tuple_
+from sqlalchemy import delete, desc, func, or_, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.pagination import decode_cursor, encode_cursor
 from core.realtime import commit_with_replay, make_graph_change
 from modules.knowledge.documents import public as documents
 from modules.knowledge.entities import public as entities
-from modules.knowledge.relationships.models import Relationship, RelationshipEvidence
+from modules.knowledge.relationships.models import Relationship, RelationshipEvidence, RelationshipSnapshotHistory
 from modules.knowledge.relationships.schemas import (
     EvidenceRead,
     EntityGraphRead,
@@ -22,9 +24,290 @@ from modules.knowledge.relationships.schemas import (
     RelationshipRead,
     CorrectionRelationshipRef,
     CorrectionSupportRef,
+    RelationshipSnapshot,
 )
 
 MAX_CLEANUP_SUPPORTS = 10_000
+
+
+async def record_relationship_history(
+    session: AsyncSession, relationship_id: UUID, *, deleted: bool = False,
+) -> None:
+    """Flush one presently observed owner snapshot; never backdate canonical truth.
+
+    Caller holds canonical mutation fences and commits. Raw citation excerpts,
+    titles and URLs are excluded; derived state is physically cleared on purge.
+    Complete exact support is bounded and no missing historical state is invented.
+    """
+    snapshot = await get_relationship_snapshot(session, relationship_id)
+    if snapshot is None:
+        return
+    session.add(RelationshipSnapshotHistory(
+        relationship_id=relationship_id, deleted=deleted,
+        state=snapshot.relationship.model_dump(mode="json", exclude={"evidence"}),
+        support=snapshot.supports,
+    ))
+    await session.flush()
+
+
+async def purge_history_support(session: AsyncSession, refs: list[tuple[UUID, UUID]]) -> None:
+    """Remove purged evidence from every retained history page without committing.
+
+    Caller holds deletion source/document fences before support cascades. Derived
+    fields sharing any removed support lose their entire state; owner-authored
+    fields survive without removed citations. Identifier-only support remains.
+    """
+    if len(set(refs)) > MAX_CLEANUP_SUPPORTS:
+        raise ValueError("Historical support purge exceeds atomic bound")
+    pairs = {(str(version), str(chunk)) for version, chunk in refs}
+    if not pairs:
+        return
+    after = 0
+    # ponytail: JSON support scan; add a GIN index if retained history makes purge slow.
+    while True:
+        rows = list((await session.scalars(select(RelationshipSnapshotHistory).where(
+            RelationshipSnapshotHistory.id > after,
+            or_(*[RelationshipSnapshotHistory.support.contains([{
+                "document_version_id": version, "chunk_id": chunk,
+            }]) for version, chunk in pairs]),
+        ).order_by(RelationshipSnapshotHistory.id).limit(100).with_for_update())).all())
+        if not rows:
+            break
+        for row in rows:
+            row.support = [item for item in row.support if (
+                str(item.get("document_version_id")), str(item.get("chunk_id")),
+            ) not in pairs]
+            if row.state.get("origin") != "owner":
+                row.state = {}  # Past derived text cannot survive evidence purge.
+        after = rows[-1].id
+        await session.flush()
+
+
+async def _schedule_relationship_change(
+    session: AsyncSession, relationship_id: UUID, fields: list[str], *, deleted: bool = False,
+) -> None:
+    """Queue detached exact support in the same owner transaction before commit."""
+    from modules.knowledge.temporal import public as temporal
+    row = await session.get(Relationship, relationship_id)
+    if row is None:
+        return
+    support = list((await session.execute(select(
+        RelationshipEvidence.document_version_id, RelationshipEvidence.chunk_id,
+    ).where(RelationshipEvidence.relationship_id == relationship_id).limit(MAX_CLEANUP_SUPPORTS + 1))).all())
+    if len(support) > MAX_CLEANUP_SUPPORTS:
+        raise ValueError("Relationship change exceeds complete support bound")
+    await temporal.schedule_canonical_change(
+        session, kind="relationship", canonical_id=relationship_id, revision=None,
+        fields=fields, support=[(version, chunk) for version, chunk in support],
+        origin=row.origin, deleted=deleted,
+    )
+
+
+async def get_relationship_snapshot(
+    session: AsyncSession, relationship_id: UUID,
+) -> RelationshipSnapshot | None:
+    """Detach complete current fact/support state under caller-held owner fences.
+
+    Includes all support, endpoint revisions/redirects, exact memberships and
+    source generations in deterministic digest. Missing/revoked provenance or
+    over10000 support fails closed. Caller holds source/document then entity/fact
+    publication locks when comparing for writes; this query never commits.
+    """
+    row = await session.get(Relationship, relationship_id)
+    if row is None:
+        return None
+    supports = list((await session.scalars(select(RelationshipEvidence).where(
+        RelationshipEvidence.relationship_id == relationship_id,
+    ).order_by(RelationshipEvidence.id).limit(MAX_CLEANUP_SUPPORTS + 1))).all())
+    if len(supports) > MAX_CLEANUP_SUPPORTS:
+        raise ValueError("Relationship snapshot exceeds complete support bound")
+    if row.origin == "derived" and not supports:
+        raise LookupError("Derived relationship has no permitted support")
+    evidence = []
+    for offset in range(0, len(supports), 100):
+        batch = await _evidence_read(session, supports[offset:offset + 100])
+        if len(batch) != len(supports[offset:offset + 100]):
+            raise LookupError("Relationship support is unavailable")
+        evidence.extend(batch)
+    endpoint_refs = await entities.get_entity_refs(session, [row.source_entity_id, row.target_entity_id])
+    membership_ids = sorted({identifier for item in supports for identifier in (
+        item.source_membership_id, item.target_membership_id,
+    ) if identifier is not None})
+    memberships = []
+    for offset in range(0, len(membership_ids), 200):
+        memberships.extend(await entities.get_membership_refs(session, membership_ids[offset:offset + 200]))
+    by_id = {item.id: item for item in memberships}
+    for item in supports:
+        if row.origin == "derived" and (item.source_membership_id is None or item.target_membership_id is None):
+            raise LookupError("Derived relationship endpoint support is unavailable")
+        for identifier, endpoint in ((item.source_membership_id, row.source_entity_id), (item.target_membership_id, row.target_entity_id)):
+            if identifier is not None:
+                membership = by_id[identifier]
+                if (membership.entity_id, membership.document_version_id, membership.chunk_id) != (endpoint, item.document_version_id, item.chunk_id):
+                    raise LookupError("Relationship endpoint support changed")
+    from modules.sources import public as sources
+    generations = {}
+    for identifier in sorted({item.source_id for item in evidence}):
+        source = await sources.get_connector_source(session, identifier)
+        if source is None or source.status != "active":
+            raise LookupError("Relationship source is unavailable")
+        generations[str(identifier)] = source.generation
+    value = _relationship_read(row, evidence).model_copy(deep=True)
+    payload = {
+        "relationship": value.model_dump(mode="json"),
+        "updated_at": row.updated_at.isoformat(),
+        "endpoints": [ref.model_dump(mode="json") for ref in endpoint_refs],
+        "memberships": [ref.model_dump(mode="json") for ref in memberships],
+        "source_generations": generations,
+        "supports": [{
+            "id": str(item.id), "relationship_id": str(item.relationship_id),
+            "document_id": str(item.document_id) if item.document_id else None,
+            "source_id": str(item.source_id) if item.source_id else None,
+            "document_version_id": str(item.document_version_id), "chunk_id": str(item.chunk_id),
+            "observed_at": item.observed_at.isoformat() if item.observed_at else None,
+            "extracted_at": item.extracted_at.isoformat(), "confidence": item.confidence,
+            "source_membership_id": str(item.source_membership_id) if item.source_membership_id else None,
+            "target_membership_id": str(item.target_membership_id) if item.target_membership_id else None,
+        } for item in supports],
+    }
+    digest = sha256(json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+    return RelationshipSnapshot(
+        relationship=value, endpoints=deepcopy(payload["endpoints"]),
+        memberships=deepcopy(payload["memberships"]), source_generations=generations, digest=digest,
+        supports=deepcopy(payload["supports"]),
+    )
+
+
+async def _list_relationships_as_of(
+    session: AsyncSession, *, limit: int, cursor: str | None, entity_id: UUID | None,
+    valid_at: datetime | None, include_unknown_validity: bool,
+    knowledge_as_of: datetime, fingerprint: str,
+) -> RelationshipPage:
+    """Page actual latest recorded canonical snapshots by transaction cutoff.
+
+    Current deletion/permission and retained exact support are checked again.
+    Never return current fields as historical substitutes; unavailable intervals
+    are explicit. Pagination covers snapshot identities, not loaded current rows.
+    """
+    ranked = select(
+        RelationshipSnapshotHistory.id.label("history_id"),
+        func.row_number().over(partition_by=RelationshipSnapshotHistory.relationship_id,
+            order_by=(RelationshipSnapshotHistory.recorded_at.desc(), RelationshipSnapshotHistory.id.desc())).label("position"),
+    ).where(RelationshipSnapshotHistory.recorded_at <= knowledge_as_of).subquery()
+    missing_statement = select(Relationship.id).where(Relationship.created_at <= knowledge_as_of,
+        ~select(RelationshipSnapshotHistory.id).where(
+        RelationshipSnapshotHistory.relationship_id == Relationship.id,
+        RelationshipSnapshotHistory.recorded_at <= knowledge_as_of,
+    ).exists())
+    if entity_id is not None:
+        missing_statement = missing_statement.where(or_(
+            Relationship.source_entity_id == entity_id, Relationship.target_entity_id == entity_id,
+        ))
+    missing = list((await session.scalars(missing_statement.order_by(Relationship.id).limit(101))).all())
+    statement = select(RelationshipSnapshotHistory).join(
+        ranked, ranked.c.history_id == RelationshipSnapshotHistory.id,
+    ).where(ranked.c.position == 1)
+    if entity_id is not None:
+        statement = statement.where(or_(
+            RelationshipSnapshotHistory.state["source_entity_id"].astext == str(entity_id),
+            RelationshipSnapshotHistory.state["target_entity_id"].astext == str(entity_id),
+        ))
+    if cursor:
+        try:
+            if len(cursor) > 1024:
+                raise ValueError
+            scope, position = json.loads(base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True))
+            if scope != fingerprint:
+                raise ValueError
+            recorded_at, identifier = decode_cursor(position)
+        except (ValueError, TypeError, binascii.Error) as exc:
+            raise ValueError("Invalid relationship history cursor") from exc
+        statement = statement.where(tuple_(RelationshipSnapshotHistory.recorded_at,
+            RelationshipSnapshotHistory.relationship_id) < (recorded_at, identifier))
+    rows = list((await session.scalars(statement.order_by(
+        RelationshipSnapshotHistory.recorded_at.desc(), RelationshipSnapshotHistory.relationship_id.desc(),
+    ).limit(limit + 1))).all())
+    more, rows = len(rows) > limit, rows[:limit]
+    next_cursor = None
+    if more and rows:
+        next_cursor = base64.urlsafe_b64encode(json.dumps([
+            fingerprint, encode_cursor(rows[-1].recorded_at, rows[-1].relationship_id),
+        ]).encode()).decode().rstrip("=")
+    items, unavailable = [], []
+    from modules.sources import public as sources
+    for history in rows:
+        if history.deleted:
+            continue
+        if not history.state or await session.get(Relationship, history.relationship_id) is None:
+            unavailable.append(history.relationship_id)
+            continue
+        item = RelationshipRead.model_validate(history.state)
+        unknown = item.valid_from is None or item.valid_to is None
+        if unknown and not include_unknown_validity:
+            continue
+        if valid_at is not None and ((item.valid_from is not None and item.valid_from > valid_at)
+                                    or (item.valid_to is not None and item.valid_to <= valid_at)):
+            continue
+        try:
+            endpoint_refs = await entities.get_entity_refs(session, [item.source_entity_id, item.target_entity_id])
+            canonical_endpoints = {ref.requested_id: ref.canonical_id for ref in endpoint_refs}
+            pairs = list(dict.fromkeys((UUID(str(s["document_version_id"])), UUID(str(s["chunk_id"]))) for s in history.support))
+            if len(pairs) > MAX_CLEANUP_SUPPORTS:
+                raise ValueError("Historical snapshot support exceeds its bound")
+            refs = []
+            for offset in range(0, len(pairs), 100):
+                refs.extend(await documents.read_evidence_refs(session, pairs[offset:offset + 100]))
+            permitted_sources = set()
+            for source_id in sorted({ref.source_id for ref in refs}):
+                source = await sources.get_connector_source(session, source_id)
+                if source is not None and source.status == "active":
+                    permitted_sources.add(source_id)
+            by_pair = {(ref.document_version_id, ref.chunk_id): ref for ref in refs
+                       if ref.source_id in permitted_sources and ref.observed_at <= knowledge_as_of}
+            # Any missing support can have contributed to the retained derived fields.
+            if item.origin == "derived" and (not pairs or len(by_pair) != len(pairs)):
+                unavailable.append(history.relationship_id)
+                continue
+            membership_ids = sorted({UUID(str(s[key])) for s in history.support
+                for key in ("source_membership_id", "target_membership_id") if s.get(key)})
+            memberships = []
+            for offset in range(0, len(membership_ids), 200):
+                memberships.extend(await entities.get_membership_refs(session, membership_ids[offset:offset + 200]))
+            by_membership = {member.id: member for member in memberships}
+            evidence = []
+            for support in history.support:
+                pair = UUID(str(support["document_version_id"])), UUID(str(support["chunk_id"]))
+                ref = by_pair.get(pair)
+                if ref is None:
+                    continue
+                for key, endpoint in (("source_membership_id", item.source_entity_id),
+                                      ("target_membership_id", item.target_entity_id)):
+                    if not support.get(key):
+                        if item.origin == "derived":
+                            raise LookupError("Historical endpoint support unavailable")
+                        continue
+                    member = by_membership[UUID(str(support[key]))]
+                    if (member.entity_id != canonical_endpoints[endpoint]
+                            or (member.document_version_id, member.chunk_id) != pair):
+                        raise LookupError("Historical endpoint support changed")
+                evidence.append(EvidenceRead(
+                    id=UUID(str(support["id"])), relationship_id=item.id,
+                    document_id=ref.document_id, document_version_id=ref.document_version_id,
+                    version_number=ref.version_number, chunk_id=ref.chunk_id,
+                    observed_at=ref.observed_at, extracted_at=datetime.fromisoformat(str(support["extracted_at"])),
+                    confidence=float(support["confidence"]),
+                    source_entity_membership_id=UUID(str(support["source_membership_id"])) if support.get("source_membership_id") else None,
+                    target_entity_membership_id=UUID(str(support["target_membership_id"])) if support.get("target_membership_id") else None,
+                    title=ref.title, canonical_url=ref.canonical_url, source_id=ref.source_id,
+                    excerpt=ref.excerpt, metadata_is_version_snapshot=ref.metadata_is_version_snapshot,
+                ))
+            item.evidence = evidence
+            items.append(item)
+        except (LookupError, ValueError):
+            unavailable.append(history.relationship_id)
+    return RelationshipPage(items=items, next_cursor=next_cursor, knowledge_as_of=knowledge_as_of,
+        canonical_history_available=not missing and not unavailable,
+        observation_history_only=False, unavailable_relationship_ids=list(dict.fromkeys(unavailable + missing[:100])))
 
 
 def _relationship_read(
@@ -43,6 +326,7 @@ def _relationship_read(
         metadata=relationship.metadata_json,
         created_at=relationship.created_at,
         evidence=evidence or [],
+        validity_precision="bounded" if relationship.valid_from is not None and relationship.valid_to is not None else "unknown",
     )
 
 
@@ -58,7 +342,11 @@ async def publish_extracted_relationship(
     target_membership_id: UUID,
     confidence: float,
 ) -> UUID | None:
-    """Publish evidence-backed extraction inside the caller's source transaction."""
+    """Publish exact extraction support, observed history and temporal desired state.
+
+    Caller owns source/document fences and canonical transaction; no commit or
+    external work. Stored observation history begins now, never at fact validity.
+    """
     if source_entity_id == target_entity_id:
         return None
     refs = await documents.read_evidence_refs(session, [(document_version_id, chunk_id)])
@@ -79,6 +367,7 @@ async def publish_extracted_relationship(
         Relationship.valid_from.is_(None),
         Relationship.valid_to.is_(None),
     ).with_for_update())
+    created = relationship is None
     if relationship is None:
         relationship = Relationship(
             source_entity_id=source_entity_id, target_entity_id=target_entity_id,
@@ -93,6 +382,7 @@ async def publish_extracted_relationship(
         RelationshipEvidence.source_membership_id == source_membership_id,
         RelationshipEvidence.target_membership_id == target_membership_id,
     ).with_for_update())
+    support_changed = evidence is None or confidence > evidence.confidence
     if evidence is None:
         session.add(RelationshipEvidence(
             relationship_id=relationship.id, document_version_id=document_version_id,
@@ -106,8 +396,13 @@ async def publish_extracted_relationship(
     supported_confidence = await session.scalar(select(func.max(RelationshipEvidence.confidence)).where(
         RelationshipEvidence.relationship_id == relationship.id,
     ))
+    confidence_changed = supported_confidence is not None and supported_confidence != relationship.confidence
     if supported_confidence is not None:
         relationship.confidence = supported_confidence
+    await session.flush()
+    if created or support_changed or confidence_changed:
+        await record_relationship_history(session, relationship.id)
+        await _schedule_relationship_change(session, relationship.id, ["support", "confidence"])
     return relationship.id
 
 
@@ -143,43 +438,136 @@ async def _evidence_read(session: AsyncSession, rows: list[RelationshipEvidence]
 
 
 async def list_relationships(
-    session: AsyncSession, limit: int, cursor: str | None, entity_id: UUID | None = None
+    session: AsyncSession, limit: int, cursor: str | None, entity_id: UUID | None = None,
+    *, valid_at: datetime | None = None, include_unknown_validity: bool = True,
+    knowledge_as_of: datetime | None = None,
 ) -> RelationshipPage:
-    """Return a cursor-paged relationship list, optionally incident to one entity."""
+    """Page current canonical facts with half-open validity and observation cutoff.
+
+    Null bounds mean unknown, not proven open validity. A knowledge cutoff returns
+    actual retained owner snapshots and currently permitted evidence observed by
+    then. Unrecorded/purged intervals are unavailable, never filled with current fields.
+    Current permissions/deletion apply at every read; cursors bind all filters.
+    """
+    if not 1 <= limit <= 100:
+        raise ValueError("Relationship page limit must be between 1 and 100")
+    for instant in (valid_at, knowledge_as_of):
+        if instant is not None and (instant.tzinfo is None or instant.utcoffset() is None):
+            raise ValueError("Relationship time controls require aware instants")
+    valid_at = valid_at.astimezone(UTC) if valid_at else None
+    knowledge_as_of = knowledge_as_of.astimezone(UTC) if knowledge_as_of else None
+    if entity_id is not None:
+        entity_id = await entities.resolve_canonical_entity_id(session, entity_id)
+    filters = [str(entity_id) if entity_id else None, valid_at.isoformat() if valid_at else None,
+               include_unknown_validity, knowledge_as_of.isoformat() if knowledge_as_of else None]
+    fingerprint = sha256(json.dumps(filters, separators=(",", ":")).encode()).hexdigest()
+    if knowledge_as_of is not None:
+        return await _list_relationships_as_of(
+            session, limit=limit, cursor=cursor, entity_id=entity_id, valid_at=valid_at,
+            include_unknown_validity=include_unknown_validity,
+            knowledge_as_of=knowledge_as_of, fingerprint=fingerprint,
+        )
     statement = select(Relationship)
+    known = Relationship.valid_from.is_not(None) & Relationship.valid_to.is_not(None)
+    if not include_unknown_validity:
+        statement = statement.where(known)
+    if valid_at is not None:
+        in_interval = or_(Relationship.valid_from.is_(None), Relationship.valid_from <= valid_at) & or_(
+            Relationship.valid_to.is_(None), Relationship.valid_to > valid_at,
+        )
+        statement = statement.where(in_interval)
     if entity_id is not None:
         statement = statement.where(
             or_(Relationship.source_entity_id == entity_id, Relationship.target_entity_id == entity_id)
         )
     if cursor:
-        created_at, identifier = decode_cursor(cursor)
+        try:
+            if len(cursor) > 1024:
+                raise ValueError
+            scope, position = json.loads(base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True))
+            if scope != fingerprint:
+                raise ValueError
+            created_at, identifier = decode_cursor(position)
+        except (ValueError, TypeError, binascii.Error) as exc:
+            raise ValueError("Invalid relationship filter cursor") from exc
         statement = statement.where(tuple_(Relationship.created_at, Relationship.id) < (created_at, identifier))
     rows = list((await session.scalars(
         statement.order_by(desc(Relationship.created_at), desc(Relationship.id)).limit(limit + 1)
     )).all())
     has_more = len(rows) > limit
     rows = rows[:limit]
-    next_cursor = encode_cursor(rows[-1].created_at, rows[-1].id) if has_more and rows else None
-    return RelationshipPage(items=[_relationship_read(row) for row in rows], next_cursor=next_cursor)
+    next_cursor = None
+    if has_more and rows:
+        next_cursor = base64.urlsafe_b64encode(json.dumps([
+            fingerprint, encode_cursor(rows[-1].created_at, rows[-1].id),
+        ]).encode()).decode().rstrip("=")
+    items = []
+    for row in rows:
+        try:
+            snapshot = await get_relationship_snapshot(session, row.id)
+        except LookupError:
+            continue
+        if snapshot is None:
+            continue
+        item = snapshot.relationship
+        items.append(item)
+    return RelationshipPage(items=items, next_cursor=next_cursor,
+                            canonical_history_available=knowledge_as_of is None,
+                            knowledge_as_of=knowledge_as_of,
+                            observation_history_only=knowledge_as_of is not None)
 
 
 async def list_relationship_evidence(
-    session: AsyncSession, relationship_id: UUID, limit: int, cursor: str | None
+    session: AsyncSession, relationship_id: UUID, limit: int, cursor: str | None,
+    *, knowledge_as_of: datetime | None = None,
 ) -> tuple[list[EvidenceRead] | None, str | None]:
-    """Page one relationship's evidence; None indicates the relationship is absent."""
+    """Page retained observations independently of canonical historical availability.
+
+    Current source permission/deletion still applies. An aware cutoff filters
+    observed time, not fact validity or owner edits; cursor binds identity/cutoff.
+    """
+    if not 1 <= limit <= 100:
+        raise ValueError("Relationship evidence limit must be between 1 and 100")
+    if knowledge_as_of is not None:
+        if knowledge_as_of.tzinfo is None or knowledge_as_of.utcoffset() is None:
+            raise ValueError("Evidence cutoff requires an aware instant")
+        knowledge_as_of = knowledge_as_of.astimezone(UTC)
+    fingerprint = sha256(json.dumps([str(relationship_id), knowledge_as_of.isoformat() if knowledge_as_of else None]).encode()).hexdigest()
     if await session.get(Relationship, relationship_id) is None:
         return None, None
     statement = select(RelationshipEvidence).where(RelationshipEvidence.relationship_id == relationship_id)
+    if knowledge_as_of is not None:
+        statement = statement.where(RelationshipEvidence.observed_at <= knowledge_as_of)
     if cursor:
-        extracted_at, identifier = decode_cursor(cursor)
+        try:
+            if len(cursor) > 1024:
+                raise ValueError
+            scope, position = json.loads(base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True))
+            if scope != fingerprint:
+                raise ValueError
+            extracted_at, identifier = decode_cursor(position)
+        except (ValueError, TypeError, binascii.Error) as exc:
+            raise ValueError("Invalid relationship observation cursor") from exc
         statement = statement.where(tuple_(RelationshipEvidence.extracted_at, RelationshipEvidence.id) > (extracted_at, identifier))
     rows = list((await session.scalars(
         statement.order_by(RelationshipEvidence.extracted_at, RelationshipEvidence.id).limit(limit + 1)
     )).all())
     more = len(rows) > limit
     rows = rows[:limit]
-    next_cursor = encode_cursor(rows[-1].extracted_at, rows[-1].id) if more and rows else None
-    return await _evidence_read(session, rows), next_cursor
+    next_cursor = None
+    if more and rows:
+        next_cursor = base64.urlsafe_b64encode(json.dumps([
+            fingerprint, encode_cursor(rows[-1].extracted_at, rows[-1].id),
+        ]).encode()).decode().rstrip("=")
+    evidence = await _evidence_read(session, rows)
+    from modules.sources import public as sources
+    permitted = set()
+    for source_id in sorted({ref.source_id for ref in evidence}):
+        source = await sources.get_connector_source(session, source_id)
+        if source is not None and source.status == "active":
+            permitted.add(source_id)
+    return [ref for ref in evidence if ref.source_id in permitted
+            and (knowledge_as_of is None or ref.observed_at <= knowledge_as_of)], next_cursor
 
 
 def _encode_neighbor_cursor(focus_id: UUID, created_at: datetime, relationship_id: UUID) -> str:
@@ -254,7 +642,7 @@ async def create_relationship(
     audit actor. The input may be owner or derived origin. Derived relationships
     require both endpoint memberships for each evidence ref and use the maximum
     evidence confidence; the function locks write refs and commits audit plus
-    graph notification.
+    graph notification, retained canonical snapshot and temporal desired state.
     """
     if payload.source_entity_id == payload.target_entity_id:
         raise ValueError("Relationship endpoints must be different")
@@ -338,6 +726,8 @@ async def create_relationship(
         session, actor_id=actor_id, operation="relationship_create", reason=payload.reason,
         affected_ids=[relationship.id, *endpoints],
     )
+    await record_relationship_history(session, relationship.id)
+    await _schedule_relationship_change(session, relationship.id, ["created", "support"])
     await commit_with_replay(session, [make_graph_change(relationship_id=relationship.id)])
     return result
 
@@ -349,7 +739,8 @@ async def remove_relationship(
 
     Authorization is enforced by the owner-write route; ``actor_id`` is audit
     provenance. Returns False when the relationship is absent, rejects terminal
-    endpoints, and commits the deletion audit with a graph tombstone on success.
+    endpoints, and captures exact support/history before deleting. Desired-state
+    deletion, audit and replay commit atomically; no external graph work occurs.
     """
     hint = await session.get(Relationship, relationship_id)
     if hint is None:
@@ -364,6 +755,11 @@ async def remove_relationship(
     )
     if relationship is None:
         return False
+    await record_relationship_history(session, relationship_id, deleted=True)
+    await _schedule_relationship_change(session, relationship_id, ["deleted"], deleted=True)
+    await session.execute(update(RelationshipSnapshotHistory).where(
+        RelationshipSnapshotHistory.relationship_id == relationship_id,
+    ).values(state={}, support=[]))
     await session.delete(relationship)
     await entities.record_owner_action(
         session, actor_id=actor_id, operation="relationship_delete", reason=reason,
@@ -591,7 +987,11 @@ async def apply_entity_merge(
     expected_relationship_ids: set[UUID], closure_entity_ids: list[UUID],
     source_redirect_ids: set[UUID],
 ) -> list[tuple[UUID, UUID]]:
-    """Redirect incident edges, merge duplicate supports, and return replacement IDs."""
+    """Redirect incident edges and retain presently observed post-correction history.
+
+    Caller fences and captures old history before membership moves, then commits
+    correction scheduling. This owner helper flushes; it never commits.
+    """
     refs = await list_correction_relationship_refs(session, closure_entity_ids)
     if {item.id for item in refs} != expected_relationship_ids:
         raise ValueError("Correction relationship closure changed; retry preview")
@@ -630,6 +1030,11 @@ async def apply_entity_merge(
                 replacements.append((row.id, survivor.id))
                 await session.delete(row)
     await _refresh_derived_confidence(session, affected_relationship_ids)
+    await session.flush()
+    for identifier in sorted(affected_relationship_ids):
+        await record_relationship_history(session, identifier)
+    for old_id, _ in replacements:
+        session.add(RelationshipSnapshotHistory(relationship_id=old_id, deleted=True, state={}, support=[]))
     return replacements
 
 
@@ -637,7 +1042,11 @@ async def apply_entity_split(
     session: AsyncSession, entity_id: UUID, new_entity_id: UUID,
     membership_ids: set[UUID], expected_relationship_ids: set[UUID],
 ) -> list[tuple[UUID, UUID]]:
-    """Move endpoint-supported edges to the replacement entity and return mappings."""
+    """Move exact endpoint support and retain observed post-correction history.
+
+    Caller captures old history before memberships move and owns correction
+    scheduling/commit. Missing old identities receive identifier-only tombstones.
+    """
     refs = await list_correction_relationship_refs(session, [entity_id])
     if {item.id for item in refs} != expected_relationship_ids:
         raise ValueError("Correction relationship closure changed; retry preview")
@@ -693,6 +1102,12 @@ async def apply_entity_split(
         if len(source_rows) == len(moving):
             await session.delete(row)
     await _refresh_derived_confidence(session, affected_relationship_ids)
+    await session.flush()
+    for identifier in sorted(affected_relationship_ids):
+        if await session.get(Relationship, identifier) is None:
+            session.add(RelationshipSnapshotHistory(relationship_id=identifier, deleted=True, state={}, support=[]))
+        else:
+            await record_relationship_history(session, identifier)
     return replacements
 
 

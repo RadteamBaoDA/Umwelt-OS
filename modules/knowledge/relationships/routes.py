@@ -1,4 +1,5 @@
 from typing import Annotated
+from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -24,9 +25,24 @@ async def list_relationships(
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     cursor: str | None = None,
     entity_id: UUID | None = None,
+    valid_at: datetime | None = None,
+    include_unknown_validity: bool = True,
+    knowledge_as_of: datetime | None = None,
 ) -> RelationshipPage:
-    """List bounded relationships for the authenticated owner."""
-    return await public.list_relationships(session, limit, cursor, entity_id)
+    """List owner facts with separate validity/observation controls and bound cursor.
+
+    Historical canonical values remain explicitly unavailable where never saved;
+    current permissions and retained exact evidence are required for all rows.
+    """
+    try:
+        return await public.list_relationships(
+            session, limit, cursor, entity_id, valid_at=valid_at,
+            include_unknown_validity=include_unknown_validity, knowledge_as_of=knowledge_as_of,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("", response_model=RelationshipRead, status_code=201)
@@ -69,9 +85,15 @@ async def list_evidence(
     _owner: OwnerRead,
     limit: Annotated[int, Query(ge=1, le=50)] = 20,
     cursor: str | None = Query(default=None, max_length=512),
+    knowledge_as_of: datetime | None = None,
 ) -> EvidencePage:
-    """Return bounded relationship evidence or 404 when the relationship is absent."""
-    rows, next_cursor = await public.list_relationship_evidence(session, relationship_id, limit, cursor)
+    """Return permitted retained observations, separately from historical fact values."""
+    try:
+        rows, next_cursor = await public.list_relationship_evidence(
+            session, relationship_id, limit, cursor, knowledge_as_of=knowledge_as_of,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if rows is None:
         raise HTTPException(status_code=404, detail="Relationship not found")
     return EvidencePage(items=rows, next_cursor=next_cursor)

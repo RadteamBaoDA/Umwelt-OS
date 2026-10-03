@@ -19,6 +19,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
+from core.heavy_work import bounded_heavy_work
 from core.realtime import ReplayDraft, commit_with_replay, make_ingestion_change, make_knowledge_change, make_source_change
 from core.storage import cleanup_orphaned_files, storage_path
 from modules.connectors.public import ConnectorRecord
@@ -780,6 +781,7 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
         raise Retry(defer=delay) from exc
 
 
+@bounded_heavy_work
 async def process_uploaded_file(ctx: dict[str, object], event_id: str) -> None:
     """Parse one staged upload after committing processing state and its lease.
 

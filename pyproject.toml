@@ -23,6 +23,15 @@ dependencies = [
     "itsdangerous>=2.2,<3",
     "openai>=2.20,<3",
     "cryptography>=50,<51",
+    "graphiti-core[falkordb]==0.30.2",
+    "falkordb==1.2.0",
+    "neo4j==5.28.3",
+    "pytz==2026.4",
+    "numpy==2.5.3",
+    "tenacity==9.1.4",
+    "posthog==7.61.1",
+    "backoff==2.2.1",
+    "python-dateutil==2.9.0.post0",
 ]
 
 [dependency-groups]

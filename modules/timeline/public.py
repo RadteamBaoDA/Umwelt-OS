@@ -1,0 +1,1180 @@
+"""Public detached event queries, owner commands, and cleanup contracts."""
+
+import base64
+import hashlib
+import json
+from datetime import UTC, date, datetime, time, timedelta
+from typing import Any
+from uuid import UUID
+from zoneinfo import ZoneInfo
+
+from pydantic import ValidationError
+from sqlalchemy import delete, desc, select, tuple_
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from core.realtime import ReplayDraft, commit_with_replay, make_timeline_change, make_timeline_collection_change
+from modules.knowledge.documents import public as documents
+from modules.knowledge.entities import public as entities
+from modules.timeline.models import Event, EventAudit, EventEvidence, EventParticipant, EventSuppression, ParticipantEvidence
+from modules.timeline.schemas import EventCreate, EventPage, EventPatch, EventRead, TimelinePage, TimelineQuery
+
+MAX_PAGE = 100
+
+
+def day_window(day: date, timezone: str) -> tuple[datetime, datetime]:
+    """Return local calendar-day boundaries as UTC using independent zone conversions.
+
+    Folded local midnight chooses its earliest valid instant. A skipped or
+    nonexistent midnight raises ValueError rather than shifting the boundary.
+    """
+    zone = ZoneInfo(timezone)
+
+    def boundary(value: date) -> datetime:
+        """Resolve a local midnight and verify that the timezone round-trip preserves it."""
+        naive = datetime.combine(value, time.min)
+        candidates = [naive.replace(tzinfo=zone, fold=fold) for fold in (0, 1)]
+        valid = [item for item in candidates if item.astimezone(UTC).astimezone(zone).replace(tzinfo=None) == naive]
+        if not valid:
+            raise ValueError("calendar boundary is nonexistent in the requested timezone")
+        return min(valid, key=lambda item: item.astimezone(UTC)).astimezone(UTC)
+
+    return boundary(day), boundary(day + timedelta(days=1))
+
+
+def _cursor_encode(value: dict[str, object]) -> str:
+    """Encode bounded canonical JSON into an opaque URL-safe cursor."""
+    raw = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def _cursor_decode(value: str | None, fingerprint: str) -> dict[str, object]:
+    """Validate cursor version and normalized-filter fingerprint before paging."""
+    if not value:
+        return {"v": 1, "f": fingerprint, "p": 0, "k": None}
+    if len(value) > 1024:
+        raise ValueError("cursor is too long")
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(value + "=" * (-len(value) % 4)))
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise ValueError("cursor is malformed") from exc
+    if not isinstance(payload, dict) or payload.get("v") != 1 or payload.get("f") != fingerprint:
+        raise ValueError("cursor does not match this query")
+    if type(payload.get("p")) is not int or payload["p"] not in range(3):
+        raise ValueError("cursor partition is invalid")
+    key = payload.get("k")
+    if key is not None and (
+        not isinstance(key, list) or len(key) != 2
+        or not all(isinstance(item, str) for item in key)
+    ):
+        raise ValueError("cursor key is malformed")
+    if key is not None:
+        try:
+            if str(UUID(key[1])) != key[1]:
+                raise ValueError("cursor ID is not canonical")
+            if payload["p"] == 1:
+                parsed_date = date.fromisoformat(key[0])
+                if parsed_date.isoformat() != key[0]:
+                    raise ValueError("cursor date is not canonical")
+            else:
+                parsed_instant = datetime.fromisoformat(key[0])
+                if parsed_instant.tzinfo is None or parsed_instant.utcoffset() is None:
+                    raise ValueError("cursor timestamp must be aware")
+                if parsed_instant.utcoffset().total_seconds() != 0 or parsed_instant.astimezone(UTC).isoformat() != key[0]:
+                    raise ValueError("cursor timestamp is not canonical UTC")
+        except (ValueError, TypeError) as exc:
+            raise ValueError("cursor key is malformed") from exc
+    return payload
+
+
+async def _event_read(session: AsyncSession, event: Event) -> EventRead:
+    """Build an owner DTO from canonical rows and currently valid exact evidence."""
+    participants = list((await session.scalars(
+        select(EventParticipant).where(EventParticipant.event_id == event.id).order_by(EventParticipant.role, EventParticipant.entity_id)
+    )).all())
+    evidence_rows = list((await session.scalars(
+        select(EventEvidence).where(EventEvidence.event_id == event.id).order_by(EventEvidence.id)
+    )).all())
+    evidence: list[dict[str, Any]] = []
+    for item in evidence_rows:
+        if item.document_version_id is None or item.chunk_id is None:
+            continue
+        refs = await documents.read_evidence_refs(session, [(item.document_version_id, item.chunk_id)])
+        if not refs:
+            continue
+        ref = refs[0]
+        evidence.append({
+            "source_id": ref.source_id, "document_id": ref.document_id,
+            "document_version_id": ref.document_version_id, "version_number": ref.version_number,
+            "chunk_id": ref.chunk_id, "observed_at": ref.observed_at,
+            "title": item.title_snapshot if item.metadata_is_version_snapshot else ref.title,
+            "canonical_url": item.url_snapshot if item.metadata_is_version_snapshot else ref.canonical_url,
+            "metadata_is_version_snapshot": item.metadata_is_version_snapshot,
+            "excerpt": ref.excerpt,
+        })
+    return EventRead(
+        id=event.id, source_id=event.source_id, type=event.type, subtype=event.subtype,
+        title=event.title, summary=event.summary, importance_score=event.importance_score,
+        confidence=event.confidence, metadata=event.metadata_json, origin=event.origin,
+        date_precision=event.date_precision, started_at=event.started_at, ended_at=event.ended_at,
+        occurred_date=event.occurred_date, end_date=event.end_date,
+        occurrence_timezone=event.occurrence_timezone, observed_at=event.observed_at,
+        valid_from=event.valid_from, valid_to=event.valid_to, revision=event.revision,
+        created_at=event.created_at, updated_at=event.updated_at,
+        participants=[{"entity_id": item.entity_id, "role": item.role, "metadata": item.metadata_json} for item in participants],
+        evidence=evidence,
+    )
+
+
+async def get_event(session: AsyncSession, event_id: UUID) -> EventRead | None:
+    """Read one visible event with detached participant and evidence projections."""
+    event = await session.scalar(select(Event).where(Event.id == event_id, Event.deleted_at.is_(None)))
+    if event is None:
+        return None
+    if event.origin == "derived" and await session.scalar(select(EventEvidence.id).where(
+        EventEvidence.event_id == event.id, EventEvidence.document_version_id.is_not(None),
+        EventEvidence.chunk_id.is_not(None),
+    ).limit(1)) is None:
+        return None
+    return await _event_read(session, event)
+
+
+async def list_event_evidence(session: AsyncSession, event_id: UUID) -> list[dict[str, Any]] | None:
+    """Return exact live evidence references for a visible event, or None when absent."""
+    event = await session.scalar(select(Event.id).where(Event.id == event_id, Event.deleted_at.is_(None)))
+    if event is None:
+        return None
+    result = await _event_read(session, await session.get(Event, event_id))
+    return result.evidence if result else None
+
+
+async def _list_partition(session: AsyncSession, query: TimelineQuery, partition: int, key: object | None, limit: int) -> list[Event]:
+    """Read a stable occurrence partition with shared visibility and type filters applied."""
+    statement = select(Event).where(Event.deleted_at.is_(None)).where(
+        (Event.origin == "manual") | Event.id.in_(select(EventEvidence.event_id).where(
+            EventEvidence.event_id == Event.id, EventEvidence.document_version_id.is_not(None),
+            EventEvidence.chunk_id.is_not(None),
+        ))
+    )
+    if query.source_id is not None:
+        statement = statement.where(Event.source_id == query.source_id)
+    if query.type is not None:
+        # Escape SQL LIKE metacharacters so the user value remains a literal substring.
+        type_pattern = query.type.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        statement = statement.where(Event.type.ilike(f"%{type_pattern}%", escape="\\"))
+    if partition == 0:
+        statement = statement.where(Event.date_precision == "timed")
+        if query.date_from is not None:
+            start, _ = day_window(query.date_from, query.timezone)
+            _, end = day_window(query.date_to - timedelta(days=1), query.timezone)  # type: ignore[operator]
+            statement = statement.where(Event.started_at >= start, Event.started_at < end)
+        if query.entity_id is not None:
+            statement = statement.where(Event.id.in_(select(EventParticipant.event_id).where(EventParticipant.entity_id == query.entity_id)))
+        if key is not None:
+            instant, identifier = key  # type: ignore[misc]
+            statement = statement.where(tuple_(Event.started_at, Event.id) < (datetime.fromisoformat(str(instant)), UUID(str(identifier))))
+        statement = statement.order_by(desc(Event.started_at), desc(Event.id))
+    elif partition == 1:
+        statement = statement.where(Event.date_precision == "date")
+        if query.date_from is not None:
+            statement = statement.where(Event.occurred_date >= query.date_from, Event.occurred_date < query.date_to)
+        if query.entity_id is not None:
+            statement = statement.where(Event.id.in_(select(EventParticipant.event_id).where(EventParticipant.entity_id == query.entity_id)))
+        if key is not None:
+            day, identifier = key  # type: ignore[misc]
+            statement = statement.where(tuple_(Event.occurred_date, Event.id) < (date.fromisoformat(str(day)), UUID(str(identifier))))
+        statement = statement.order_by(desc(Event.occurred_date), desc(Event.id))
+    else:
+        statement = statement.where(Event.date_precision == "unknown")
+        if query.precision != "unknown" and query.date_from is not None:
+            statement = statement.where(False)
+        if query.entity_id is not None:
+            statement = statement.where(Event.id.in_(select(EventParticipant.event_id).where(EventParticipant.entity_id == query.entity_id)))
+        if key is not None:
+            instant, identifier = key  # type: ignore[misc]
+            statement = statement.where(tuple_(Event.created_at, Event.id) < (datetime.fromisoformat(str(instant)), UUID(str(identifier))))
+        statement = statement.order_by(desc(Event.created_at), desc(Event.id))
+    return list((await session.scalars(statement.limit(limit))).all())
+
+
+async def list_events(session: AsyncSession, *, limit: int = 50, cursor: str | None = None, source_id: UUID | None = None) -> EventPage:
+    """Return bounded events with stable timed/date/unknown cursor partitions."""
+    query = TimelineQuery(source_id=source_id)
+    return await _list_page(session, query, limit, cursor)
+
+
+async def list_timeline(session: AsyncSession, query: TimelineQuery, *, limit: int = 50, cursor: str | None = None) -> TimelinePage:
+    """Return timeline pages in timed, date-only, then unknown partition order."""
+    return await _list_page(session, query, limit, cursor)
+
+
+async def _list_page(session: AsyncSession, query: TimelineQuery, limit: int, cursor: str | None) -> TimelinePage:
+    """Apply the shared finite cursor algorithm and detached DTO projection."""
+    if not 1 <= limit <= MAX_PAGE:
+        raise ValueError("page size must be between 1 and 100")
+    filters = query.model_dump(mode="json")
+    fingerprint = hashlib.sha256(json.dumps(filters, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    position = _cursor_decode(cursor, fingerprint)
+    partition = int(position["p"])
+    key = position["k"]
+    items: list[Event] = []
+    next_position: dict[str, object] | None = None
+    while partition < 3 and len(items) < limit:
+        if query.precision == "timed" and partition != 0 or query.precision == "date" and partition != 1 or query.precision == "unknown" and partition != 2:
+            rows = []
+        else:
+            rows = await _list_partition(session, query, partition, key, limit - len(items) + 1)
+        room = limit - len(items)
+        items.extend(rows[:room])
+        if len(rows) > room:
+            last = rows[room - 1]
+            value = last.started_at if partition == 0 else last.occurred_date if partition == 1 else last.created_at
+            next_position = {"v": 1, "f": fingerprint, "p": partition, "k": [value.isoformat(), str(last.id)]}
+            break
+        partition += 1
+        key = None
+    if next_position is None and partition < 3 and len(items) == limit:
+        next_position = {"v": 1, "f": fingerprint, "p": partition, "k": None}
+    return TimelinePage(items=[await _event_read(session, row) for row in items], next_cursor=_cursor_encode(next_position) if next_position else None)
+
+
+async def _evidence_rows(session: AsyncSession, pairs: list[tuple[UUID, UUID]], *, for_write: bool) -> list[Any]:
+    """Resolve exact version/chunk pairs through the documents owner boundary."""
+    if not pairs:
+        return []
+    refs = await documents.read_evidence_refs(session, pairs, for_write=for_write)
+    if len(refs) != len(pairs):
+        raise ValueError("event evidence is missing, inactive, or no longer authorized")
+    return refs
+
+
+async def _read_evidence_closure(session: AsyncSession, pairs: list[tuple[UUID, UUID]]) -> list[Any]:
+    """Read a unique event support closure of at most 200 pairs in owner-sized batches.
+
+    A correction can combine 100 old and 100 replacement references; extraction
+    can span 150 references. Missing or unauthorized evidence propagates the
+    owner's validation error; callers retain complete checks and lock ordering.
+    This helper never acquires write locks or truncates support.
+    """
+    if len(pairs) > 200 or len(set(pairs)) != len(pairs):
+        raise ValueError("Event evidence closure must contain at most 200 unique references")
+    refs = []
+    # Owner reads cap each request at 100; splitting preserves the full closure
+    # without weakening that shared boundary or changing source lock ordering.
+    for offset in range(0, len(pairs), 100):
+        refs.extend(await documents.read_evidence_refs(session, pairs[offset:offset + 100]))
+    return refs
+
+
+async def _set_participants(session: AsyncSession, event_id: UUID, values: list[Any], *, origin: str) -> None:
+    """Replace participant links after validating every canonical entity reference."""
+    await session.execute(delete(EventParticipant).where(EventParticipant.event_id == event_id))
+    entity_ids = sorted({item.entity_id for item in values}, key=str)
+    refs = await entities.get_entity_refs(session, entity_ids, for_write=True) if entity_ids else []
+    if len(refs) != len(entity_ids):
+        raise ValueError("participant entity is missing or redirected")
+    for item in values:
+        session.add(EventParticipant(event_id=event_id, entity_id=item.entity_id, role=item.role,
+                                     metadata_json=item.metadata, origin=origin))
+
+
+async def _remove_unsupported_derived_participants(session: AsyncSession, event_id: UUID) -> None:
+    """Remove derived participant roles with no exact surviving event-evidence support.
+
+    Evidence replacement may cascade its participant-support rows. Manual links
+    remain owner-authored, while each derived link must retain at least one
+    exact supporting chunk from the event's current evidence set.
+    """
+    unsupported_ids = list((await session.scalars(select(EventParticipant.id).where(
+        EventParticipant.event_id == event_id,
+        EventParticipant.origin == "derived",
+        ~EventParticipant.id.in_(select(ParticipantEvidence.participant_id)),
+    ))).all())
+    if unsupported_ids:
+        await session.execute(delete(EventParticipant).where(EventParticipant.id.in_(unsupported_ids)))
+
+
+async def create_event(session: AsyncSession, payload: EventCreate, *, actor_id: int) -> EventRead:
+    """Create a manual event and flush its exact evidence, participants, and replay atomically.
+
+    This caller-owned HTTP command commits through ``commit_with_replay``;
+    reusable support helpers only flush and never commit.
+    """
+    pairs = list(payload.evidence)
+    refs = await _evidence_rows(session, pairs, for_write=bool(pairs))
+    source_ids = sorted({ref.source_id for ref in refs}, key=str)
+    if len(source_ids) > 1:
+        raise ValueError("manual event evidence must belong to one source")
+    # Resolve owner observation only at creation; derived occurrence is never inferred here.
+    event = Event(
+        source_id=source_ids[0] if source_ids else None, type=payload.type, subtype=payload.subtype,
+        title=payload.title, summary=payload.summary, importance_score=payload.importance_score,
+        confidence=payload.confidence, metadata_json=payload.metadata, origin="manual",
+        date_precision=payload.date_precision, started_at=payload.started_at, ended_at=payload.ended_at,
+        occurred_date=payload.occurred_date, end_date=payload.end_date,
+        occurrence_timezone=payload.occurrence_timezone, observed_at=payload.observed_at or datetime.now(UTC),
+        valid_from=payload.valid_from, valid_to=payload.valid_to,
+    )
+    session.add(event)
+    await session.flush()
+    for ref in refs:
+        session.add(EventEvidence(
+            event_id=event.id, source_id=ref.source_id, document_id=ref.document_id,
+            document_version_id=ref.document_version_id, chunk_id=ref.chunk_id,
+            version_number=ref.version_number, observed_at=ref.observed_at,
+            title_snapshot=ref.title, url_snapshot=ref.canonical_url,
+            metadata_is_version_snapshot=ref.metadata_is_version_snapshot,
+            evidence_metadata={},
+        ))
+    await _set_participants(session, event.id, payload.participants, origin="manual")
+    await _schedule_temporal_event(session, event, ["created"])
+    await commit_with_replay(session, [make_timeline_change(event.id, event.revision)])
+    return await _event_read(session, event)
+
+
+async def update_event(session: AsyncSession, event_id: UUID, payload: EventPatch, *, actor_id: int) -> EventRead | None:
+    """Apply a revision-fenced owner correction after locking its immutable support closure.
+
+    Locks source, document, canonical participant and event rows in that order.
+    Any revision or support change while those locks are acquired aborts before
+    mutation; the caller commits the correction, audit and replay atomically.
+    Explicit null clears nullable fields, participant links, or evidence lists.
+    """
+    initial = (await session.execute(select(Event.revision, Event.origin, Event.deleted_at).where(
+        Event.id == event_id, Event.deleted_at.is_(None),
+    ))).one_or_none()
+    if initial is None:
+        return None
+    initial_evidence = list((await session.execute(select(
+        EventEvidence.id, EventEvidence.source_id, EventEvidence.document_id,
+        EventEvidence.document_version_id, EventEvidence.chunk_id,
+    ).where(EventEvidence.event_id == event_id).order_by(EventEvidence.id))).all())
+    initial_participants = list((await session.execute(select(
+        EventParticipant.id, EventParticipant.entity_id, EventParticipant.role, EventParticipant.origin,
+    ).where(EventParticipant.event_id == event_id).order_by(EventParticipant.id))).all())
+    fields = payload.model_fields_set
+    supplied = payload.model_dump(exclude_unset=True, exclude={"expected_revision", "reason", "participants", "evidence"})
+    old_pairs = [(row.document_version_id, row.chunk_id) for row in (await session.scalars(
+        select(EventEvidence).where(EventEvidence.event_id == event_id).order_by(EventEvidence.id)
+    )).all() if row.document_version_id is not None and row.chunk_id is not None]
+    new_pairs = payload.evidence if "evidence" in fields else None
+    all_pairs = list(dict.fromkeys([*old_pairs, *(new_pairs or [])]))
+    refs_before = await _read_evidence_closure(session, all_pairs)
+    source_ids = sorted({item.source_id for item in refs_before}, key=str)
+    from modules.sources import public as sources
+    for source_id in source_ids:
+        if await sources.lock_source(session, source_id) is None:
+            raise ValueError("event evidence source is unavailable")
+    document_ids = sorted({item.document_id for item in refs_before}, key=str)
+    # Old and replacement support can span 200 owners. Keep the global sorted
+    # order across batches and retain every row lock in this same transaction.
+    for offset in range(0, len(document_ids), 100):
+        await documents.lock_document_ids(session, document_ids[offset:offset + 100])
+    refs_after = await _read_evidence_closure(session, all_pairs)
+    if refs_after != refs_before:
+        raise ValueError("stale event evidence closure; retry the correction")
+    participant_values = (payload.participants or []) if "participants" in fields else []
+    old_entity_ids = {row.entity_id for row in initial_participants}
+    entity_ids = sorted(old_entity_ids | {item.entity_id for item in participant_values}, key=str)
+    if entity_ids:
+        canonical_refs = []
+        for offset in range(0, len(entity_ids), 100):
+            canonical_refs.extend(await entities.get_entity_refs(session, entity_ids[offset:offset + 100], for_write=True))
+        if [item.requested_id for item in canonical_refs] != entity_ids or any(
+            item.canonical_id != item.requested_id for item in canonical_refs
+        ):
+            raise ValueError("participant entity is missing or redirected; retry the correction")
+    event = await session.scalar(select(Event).where(Event.id == event_id).with_for_update().execution_options(populate_existing=True))
+    if event is None or event.deleted_at is not None:
+        return None
+    current_evidence = list((await session.execute(select(
+        EventEvidence.id, EventEvidence.source_id, EventEvidence.document_id,
+        EventEvidence.document_version_id, EventEvidence.chunk_id,
+    ).where(EventEvidence.event_id == event_id).order_by(EventEvidence.id))).all())
+    current_participants = list((await session.execute(select(
+        EventParticipant.id, EventParticipant.entity_id, EventParticipant.role, EventParticipant.origin,
+    ).where(EventParticipant.event_id == event_id).order_by(EventParticipant.id))).all())
+    if (
+        event.revision != initial.revision or event.origin != initial.origin
+        or event.deleted_at != initial.deleted_at
+        or current_evidence != initial_evidence or current_participants != initial_participants
+        or event.revision != payload.expected_revision
+    ):
+        raise ValueError("stale event revision or support closure; retry the correction")
+    prior = event.revision
+    changed: dict[str, object] = {}
+    for field, value in supplied.items():
+        if field in {"participants", "evidence"}:
+            continue
+        column = "metadata_json" if field == "metadata" else field
+        old = getattr(event, column)
+        if field in {"started_at", "ended_at", "valid_from", "valid_to"}:
+            value = _normalize_optional_instant(value)
+        if field == "metadata" and value is None:
+            value = {}
+        if old != value:
+            setattr(event, column, value)
+            changed[field] = value.isoformat() if isinstance(value, (datetime, date)) else value
+            if event.origin == "derived":
+                owners = set(event.owner_fields)
+                owners.add(field)
+                event.owner_fields = sorted(owners)
+    # Validate the fully merged temporal shape before any durable revision is published.
+    from modules.timeline.schemas import EventCreate
+    EventCreate(
+        type=event.type, subtype=event.subtype, title=event.title, summary=event.summary,
+        importance_score=event.importance_score, confidence=event.confidence, metadata=event.metadata_json,
+        date_precision=event.date_precision, started_at=event.started_at, ended_at=event.ended_at,
+        occurred_date=event.occurred_date, end_date=event.end_date,
+        occurrence_timezone=event.occurrence_timezone, observed_at=event.observed_at,
+        valid_from=event.valid_from, valid_to=event.valid_to,
+    )
+    if "participants" in fields:
+        await _set_participants(session, event.id, participant_values, origin="manual")
+        changed["participants"] = [item.model_dump(mode="json") for item in participant_values]
+        if event.origin == "derived":
+            event.owner_fields = sorted(set(event.owner_fields) | {"participants"})
+    if "evidence" in fields:
+        evidence_pairs = payload.evidence or []
+        refs = await _evidence_rows(session, evidence_pairs, for_write=bool(evidence_pairs))
+        evidence_sources = {ref.source_id for ref in refs}
+        if len(evidence_sources) > 1:
+            raise ValueError("event evidence must belong to one source")
+        await session.execute(delete(EventEvidence).where(EventEvidence.event_id == event.id))
+        for ref in refs:
+            session.add(EventEvidence(event_id=event.id, source_id=ref.source_id, document_id=ref.document_id,
+                document_version_id=ref.document_version_id, chunk_id=ref.chunk_id,
+                version_number=ref.version_number, observed_at=ref.observed_at, title_snapshot=ref.title,
+                url_snapshot=ref.canonical_url, evidence_metadata={},
+                metadata_is_version_snapshot=ref.metadata_is_version_snapshot))
+        event.source_id = next(iter(evidence_sources), None)
+        if event.origin == "derived":
+            await _remove_unsupported_derived_participants(session, event.id)
+        changed["evidence"] = [f"{ref.document_version_id}:{ref.chunk_id}" for ref in refs]
+        if event.origin == "derived":
+            event.owner_fields = sorted(set(event.owner_fields) | {"evidence"})
+    if not changed:
+        raise ValueError("event correction contains no changes")
+    event.revision += 1
+    event.updated_at = datetime.now(UTC)
+    session.add(EventAudit(event_id=event.id, actor_id=actor_id, reason=payload.reason,
+        prior_revision=prior, resulting_revision=event.revision, changed_json=changed))
+    await _schedule_temporal_event(session, event, list(changed))
+    await commit_with_replay(session, [make_timeline_change(event.id, event.revision)])
+    return await _event_read(session, event)
+
+
+def _normalize_optional_instant(value: Any) -> Any:
+    """Normalize explicit-offset datetimes for merged PATCH payload values."""
+    if isinstance(value, datetime):
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("timestamps must include an explicit UTC offset")
+        return value.astimezone(UTC)
+    return value
+
+
+async def delete_event(session: AsyncSession, event_id: UUID, *, expected_revision: int, reason: str, actor_id: int) -> bool:
+    """Tombstone a revision-fenced event and suppress its exact derived proposal before replay commit."""
+    event = await session.scalar(select(Event).where(Event.id == event_id).with_for_update())
+    if event is None or event.deleted_at is not None:
+        return False
+    if event.revision != expected_revision:
+        raise ValueError("event revision is stale")
+    if event.origin == "derived":
+        supports = list((await session.scalars(select(EventEvidence).where(
+            EventEvidence.event_id == event.id, EventEvidence.document_version_id.is_not(None), EventEvidence.candidate_hash.is_not(None)
+        ))).all())
+        unique_supports = {(item.document_version_id, item.candidate_hash): item for item in supports}
+        for item in unique_supports.values():
+            session.add(EventSuppression(document_id=item.document_id, document_version_id=item.document_version_id,
+                source_id=item.source_id, source_generation=item.source_generation, candidate_hash=item.candidate_hash))
+    prior = event.revision
+    event.deleted_at = datetime.now(UTC)
+    event.revision += 1
+    session.add(EventAudit(event_id=event.id, actor_id=actor_id, reason=reason,
+        prior_revision=prior, resulting_revision=event.revision, changed_json={"deleted": True}))
+    await _schedule_temporal_event(session, event, ["deleted"], deleted=True)
+    await commit_with_replay(session, [make_timeline_change(event.id, event.revision, deleted=True)])
+    return True
+
+
+async def schedule_extraction_work(session: AsyncSession, ready: Any, extractor_version: str, prompt_version: str) -> UUID:
+    """Idempotently create timeline extraction work and flush without committing the caller transaction."""
+    from sqlalchemy.dialects.postgresql import insert
+    from modules.timeline.models import TimelineExtractionWork
+    statement = insert(TimelineExtractionWork).values(
+        document_id=ready.document_id, document_version_id=ready.document_version_id,
+        source_id=ready.source_id, source_generation=ready.source_generation,
+        extractor_version=extractor_version, prompt_version=prompt_version,
+    ).on_conflict_do_nothing(constraint="uq_timeline_extraction_work_identity").returning(TimelineExtractionWork.id)
+    work_id = await session.scalar(statement)
+    if work_id is None:
+        work_id = await session.scalar(select(TimelineExtractionWork.id).where(
+            TimelineExtractionWork.document_version_id == ready.document_version_id,
+            TimelineExtractionWork.source_generation == ready.source_generation,
+            TimelineExtractionWork.extractor_version == extractor_version,
+            TimelineExtractionWork.prompt_version == prompt_version,
+        ))
+    await session.flush()
+    return work_id
+
+
+async def claim_extraction_work(session: AsyncSession, work_id: UUID, lease_owner: str, now: datetime) -> Any | None:
+    """Claim due work or terminalize an exhausted expired lease; flush without committing."""
+    from datetime import timedelta
+    from modules.timeline.models import TimelineExtractionWork
+    work = await session.scalar(select(TimelineExtractionWork).where(
+        TimelineExtractionWork.id == work_id,
+        (TimelineExtractionWork.status == "pending") | (
+            (TimelineExtractionWork.status == "running") & (TimelineExtractionWork.lease_expires_at <= now)
+        ),
+        TimelineExtractionWork.next_attempt_at <= now,
+    ).with_for_update(skip_locked=True))
+    if work is None:
+        return None
+    if work.status == "running" and work.attempt >= 5:
+        work.status, work.error_code = "failed", "lease_attempts_exhausted"
+        work.lease_owner = work.lease_expires_at = None
+        await session.flush()
+        return None
+    work.status, work.attempt = "running", work.attempt + 1
+    work.lease_owner, work.lease_expires_at = lease_owner, now + timedelta(seconds=110)
+    work.error_code = None
+    await session.flush()
+    return work
+
+
+async def list_recoverable_extraction_work(session: AsyncSession, limit: int = 25) -> list[UUID]:
+    """Return bounded due pending work and expired leases for claim or exhaustion handling."""
+    from modules.timeline.models import TimelineExtractionWork
+    if not 1 <= limit <= 100:
+        raise ValueError("Timeline recovery page must be between 1 and 100")
+    now = datetime.now(UTC)
+    return list((await session.scalars(select(TimelineExtractionWork.id).where(
+        ((TimelineExtractionWork.status == "pending") & (TimelineExtractionWork.next_attempt_at <= now))
+        | ((TimelineExtractionWork.status == "running") & (TimelineExtractionWork.lease_expires_at <= now)),
+    ).order_by(TimelineExtractionWork.next_attempt_at, TimelineExtractionWork.id).limit(limit))).all())
+
+
+async def list_blocked_extraction_work(
+    session: AsyncSession, limit: int = 25,
+) -> list[tuple[UUID, UUID, int, str, str]]:
+    """List a bounded page of retryable policy-blocked work and its dependency fence."""
+    from modules.timeline.models import TimelineExtractionWork
+    if not 1 <= limit <= 100:
+        raise ValueError("Blocked timeline recovery page must be between 1 and 100")
+    rows = (await session.execute(select(
+        TimelineExtractionWork.id, TimelineExtractionWork.document_version_id,
+        TimelineExtractionWork.source_generation, TimelineExtractionWork.error_code,
+        TimelineExtractionWork.dependency_fingerprint,
+    ).where(
+        TimelineExtractionWork.status == "blocked",
+        TimelineExtractionWork.error_code.in_(("ai_policy_denied", "structured_unsupported")),
+        TimelineExtractionWork.dependency_fingerprint.is_not(None),
+        TimelineExtractionWork.next_attempt_at <= datetime.now(UTC),
+    ).order_by(TimelineExtractionWork.updated_at, TimelineExtractionWork.id).limit(limit))).all()
+    return [(row[0], row[1], row[2], row[3], row[4]) for row in rows]
+
+
+async def requeue_blocked_extraction_work(
+    session: AsyncSession, work_id: UUID, previous_fingerprint: str, current_fingerprint: str,
+) -> bool:
+    """Requeue policy-blocked work only if its stored dependency fence still matches."""
+    from modules.timeline.models import TimelineExtractionWork
+    if previous_fingerprint == current_fingerprint:
+        return False
+    work = await session.scalar(select(TimelineExtractionWork).where(
+        TimelineExtractionWork.id == work_id, TimelineExtractionWork.status == "blocked",
+        TimelineExtractionWork.dependency_fingerprint == previous_fingerprint,
+    ).with_for_update())
+    if work is None:
+        return False
+    work.status, work.attempt = "pending", 0
+    work.next_attempt_at = datetime.now(UTC)
+    work.error_code = work.dependency_fingerprint = None
+    work.lease_owner = work.lease_expires_at = None
+    return True
+
+
+async def defer_blocked_extraction_recheck(
+    session: AsyncSession, work_id: UUID, fingerprint: str, *, minutes: int = 15,
+) -> None:
+    """Delay the next recheck only while a policy block retains the observed dependency fence."""
+    from modules.timeline.models import TimelineExtractionWork
+    work = await session.scalar(select(TimelineExtractionWork).where(
+        TimelineExtractionWork.id == work_id, TimelineExtractionWork.status == "blocked",
+        TimelineExtractionWork.dependency_fingerprint == fingerprint,
+    ).with_for_update())
+    if work is not None:
+        work.next_attempt_at = datetime.now(UTC) + timedelta(minutes=minutes)
+
+
+async def set_extraction_work_error(session: AsyncSession, work_id: UUID, lease_owner: str,
+                                    error_code: str, *, blocked: bool = False,
+                                    dependency_fingerprint: str | None = None) -> None:
+    """Persist lease-owned retry state; blocked retries fence against the attempted dependencies.
+
+    The caller retains the request's original dependency fingerprint when it
+    discards stale output so a newly permitted configuration can be retried.
+    """
+    from datetime import timedelta
+    from modules.timeline.models import TimelineExtractionWork
+    now = datetime.now(UTC)
+    work = await session.scalar(select(TimelineExtractionWork).where(
+        TimelineExtractionWork.id == work_id, TimelineExtractionWork.status == "running",
+        TimelineExtractionWork.lease_owner == lease_owner, TimelineExtractionWork.lease_expires_at > now,
+    ).with_for_update())
+    if work is None:
+        return
+    work.status = "blocked" if blocked else ("failed" if work.attempt >= 5 else "pending")
+    work.error_code = error_code[:64]
+    work.dependency_fingerprint = dependency_fingerprint if blocked else None
+    work.next_attempt_at = now + timedelta(minutes=15) if blocked else now + timedelta(minutes=min(2 ** work.attempt, 60))
+    work.lease_owner = work.lease_expires_at = None
+
+
+async def block_local_only_extraction_work(session: AsyncSession, work_id: UUID) -> None:
+    """Mark extraction ineligible while the source remains local-only, without a recheck fence.
+
+    Configuration changes cannot authorize provider egress from a local-only
+    source, so this durable state has no scheduled policy recheck.
+    """
+    from modules.timeline.models import TimelineExtractionWork
+    work = await session.scalar(select(TimelineExtractionWork).where(
+        TimelineExtractionWork.id == work_id,
+    ).with_for_update())
+    if work is not None and work.status != "succeeded":
+        work.status, work.error_code = "blocked", "local_only_source"
+        work.next_attempt_at = datetime.max.replace(tzinfo=UTC)
+        work.dependency_fingerprint = None
+        work.lease_owner = work.lease_expires_at = None
+        await session.flush()
+
+
+async def finish_extraction_work(session: AsyncSession, work_id: UUID, lease_owner: str,
+                                 proposals: list[dict[str, object]], model: str | None) -> bool:
+    """Persist bounded structured proposals without raw source chunks under a live lease."""
+    from modules.timeline.models import TimelineExtractionResult, TimelineExtractionWork
+    now = datetime.now(UTC)
+    work = await session.scalar(select(TimelineExtractionWork).where(
+        TimelineExtractionWork.id == work_id, TimelineExtractionWork.status == "running",
+        TimelineExtractionWork.lease_owner == lease_owner, TimelineExtractionWork.lease_expires_at > now,
+    ).with_for_update())
+    if work is None:
+        return False
+    result = await session.scalar(select(TimelineExtractionResult).where(
+        TimelineExtractionResult.work_id == work.id
+    ).with_for_update())
+    if result is None:
+        session.add(TimelineExtractionResult(work_id=work.id, proposals_json=proposals, model=model))
+    else:
+        result.proposals_json, result.model = proposals, model
+    work.status, work.lease_owner, work.lease_expires_at = "succeeded", None, None
+    await session.flush()
+    return True
+
+
+async def publish_extracted_events(session: AsyncSession, *, work_id: UUID, lease_owner: str,
+                                   ready: Any, proposals: Any, model: str | None,
+                                   membership_revisions: dict[UUID, int]) -> bool:
+    """Publish bounded event proposals and exact evidence under caller-owned source/document fences.
+
+    Resolves and locks participant entities after inference, then event rows.
+    Membership revisions captured before inference must still match the locked
+    canonical revisions. Existing owner fields win; if proposed unowned
+    temporal fields conflict with that merged state, the unowned temporal
+    refresh group is skipped and named while safe fields, evidence, and results
+    publish.
+    It flushes only; the worker commits results, replay and success atomically.
+    """
+    from hashlib import sha256
+    from sqlalchemy.dialects.postgresql import insert
+    from modules.timeline.extraction import EXTRACTOR_VERSION, PROMPT_VERSION
+    from modules.timeline.models import TimelineExtractionWork
+    work = await session.scalar(select(TimelineExtractionWork).where(
+        TimelineExtractionWork.id == work_id, TimelineExtractionWork.status == "running",
+        TimelineExtractionWork.lease_owner == lease_owner,
+        TimelineExtractionWork.lease_expires_at > datetime.now(UTC),
+    ).with_for_update())
+    if work is None or work.source_generation != ready.source_generation or work.document_version_id != ready.document_version_id:
+        return False
+    chunk_ids = sorted({chunk for item in proposals.events for chunk in item.evidence_chunk_ids}, key=str)
+    refs = await documents.read_extraction_evidence_refs(
+        session, document_id=ready.document_id, document_version_id=ready.document_version_id,
+        source_id=ready.source_id, source_generation=ready.source_generation, chunk_ids=chunk_ids,
+    ) if chunk_ids else []
+    if refs is None:
+        raise ValueError("event evidence is no longer current")
+    evidence = await _read_evidence_closure(session, [(item.document_version_id, item.chunk_id) for item in refs])
+    if len(evidence) != len(refs):
+        raise ValueError("event evidence snapshot is unavailable")
+    evidence_by_chunk = {item.chunk_id: item for item in evidence}
+    memberships = []
+    for offset in range(0, len(chunk_ids), 100):
+        memberships.extend(await entities.list_version_membership_refs(session, ready.document_version_id,
+                                                                       chunk_ids[offset:offset + 100]))
+    membership_by_id = {item.membership_id: item for item in memberships}
+    allowed = set(chunk_ids)
+    normalized: list[tuple[Any, str, dict[tuple[UUID, str], Any]]] = []
+    entity_ids: set[UUID] = set()
+    identity = f"{ready.document_version_id}:{ready.source_generation}:{EXTRACTOR_VERSION}:{PROMPT_VERSION}"
+    for proposal in proposals.events:
+        if not set(proposal.evidence_chunk_ids) <= allowed:
+            raise ValueError("model returned unknown event evidence")
+        participants: dict[tuple[UUID, str], Any] = {}
+        for participant in proposal.participants:
+            membership = membership_by_id.get(participant.membership_id)
+            if membership is None or membership.chunk_id not in participant.chunk_ids:
+                raise ValueError("model returned an unknown participant membership")
+            if not set(participant.chunk_ids) <= set(proposal.evidence_chunk_ids):
+                raise ValueError("participant support must be a subset of event evidence")
+            exact = {item.chunk_id for item in memberships if item.entity_id == membership.entity_id
+                     and item.chunk_id in participant.chunk_ids}
+            if exact != set(participant.chunk_ids):
+                raise ValueError("participant role lacks exact canonical membership support")
+            key = (membership.entity_id, participant.role)
+            previous = participants.get(key)
+            if previous is not None:
+                participant = previous.model_copy(update={
+                    "chunk_ids": sorted(set(previous.chunk_ids) | set(participant.chunk_ids), key=str),
+                })
+            participants[key] = participant
+            entity_ids.add(membership.entity_id)
+        participant_identity = [
+            (str(entity_id), role, sorted(map(str, item.chunk_ids)))
+            for (entity_id, role), item in participants.items()
+        ]
+        data = proposal.model_dump(mode="json")
+        fingerprint = {
+            "type": proposal.type, "title": proposal.title,
+            "occurrence": [data.get(name) for name in ("date_precision", "started_at", "ended_at", "occurred_date", "end_date")],
+            "participants": sorted(participant_identity),
+            "evidence": sorted(map(str, proposal.evidence_chunk_ids)),
+        }
+        candidate_hash = sha256(json.dumps(fingerprint, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        normalized.append((proposal, candidate_hash, participants))
+    unique_by_candidate: dict[str, tuple[Any, str, dict[tuple[UUID, str], Any]]] = {}
+    for item in normalized:
+        previous = unique_by_candidate.get(item[1])
+        item_json = json.dumps(item[0].model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+        previous_json = json.dumps(previous[0].model_dump(mode="json"), sort_keys=True, separators=(",", ":")) if previous else ""
+        if previous is None or item_json < previous_json:
+            unique_by_candidate[item[1]] = item
+    normalized = [unique_by_candidate[key] for key in sorted(unique_by_candidate)]
+    # No graph lock is held during provider inference; acquire sorted canonical
+    # entity revisions and then events only after a validated response exists.
+    if entity_ids:
+        refs = await entities.get_entity_refs(session, sorted(entity_ids, key=str), for_write=True)
+        if {item.canonical_id for item in refs} != entity_ids:
+            raise ValueError("participant canonical identity changed during extraction")
+        expected_revisions = {
+            membership_by_id[participant.membership_id].entity_id:
+            membership_revisions[participant.membership_id]
+            for proposal in proposals.events for participant in proposal.participants
+        }
+        if any(item.revision != expected_revisions.get(item.canonical_id) for item in refs):
+            raise ValueError("participant canonical revision changed during extraction")
+    candidates = [item[1] for item in normalized]
+    existing = list((await session.scalars(select(Event).where(
+        Event.extraction_identity == identity, Event.candidate_hash.in_(candidates)
+    ).order_by(Event.id).with_for_update())).all()) if candidates else []
+    by_hash = {item.candidate_hash: item for item in existing}
+    suppressed = set((await session.scalars(select(EventSuppression.candidate_hash).where(
+        EventSuppression.document_version_id == ready.document_version_id,
+        EventSuppression.candidate_hash.in_(candidates),
+    ))).all()) if candidates else set()
+    published: list[tuple[Event, Any]] = []
+    refresh_conflicts: dict[str, list[str]] = {}
+    for proposal, candidate_hash, participants in normalized:
+        if candidate_hash in suppressed:
+            continue
+        event = by_hash.get(candidate_hash)
+        if event is None:
+            event = Event(
+                source_id=ready.source_id, type=proposal.type, subtype=proposal.subtype,
+                title=proposal.title, summary=proposal.summary, importance_score=proposal.importance_score,
+                confidence=proposal.confidence, metadata_json={}, origin="derived",
+                date_precision=proposal.date_precision,
+                started_at=proposal.started_at.astimezone(UTC) if proposal.started_at else None,
+                ended_at=proposal.ended_at.astimezone(UTC) if proposal.ended_at else None,
+                occurred_date=proposal.occurred_date, end_date=proposal.end_date,
+                occurrence_timezone=proposal.occurrence_timezone, observed_at=ready.observed_at,
+                valid_from=proposal.valid_from.astimezone(UTC) if proposal.valid_from else None,
+                valid_to=proposal.valid_to.astimezone(UTC) if proposal.valid_to else None,
+                extraction_identity=identity, candidate_hash=candidate_hash,
+            )
+            session.add(event)
+            await session.flush()
+        else:
+            owners = set(event.owner_fields)
+            refreshed = {
+                "title": proposal.title, "summary": proposal.summary, "type": proposal.type,
+                "subtype": proposal.subtype, "importance_score": proposal.importance_score,
+                "confidence": proposal.confidence, "date_precision": proposal.date_precision,
+                "started_at": proposal.started_at.astimezone(UTC) if proposal.started_at else None,
+                "ended_at": proposal.ended_at.astimezone(UTC) if proposal.ended_at else None,
+                "occurred_date": proposal.occurred_date, "end_date": proposal.end_date,
+                "occurrence_timezone": proposal.occurrence_timezone,
+                "valid_from": proposal.valid_from.astimezone(UTC) if proposal.valid_from else None,
+                "valid_to": proposal.valid_to.astimezone(UTC) if proposal.valid_to else None,
+            }
+            pending_updates = {
+                field: value for field, value in refreshed.items()
+                if field not in owners and getattr(event, field) != value
+            }
+            base_values = {
+                "type": event.type, "subtype": event.subtype, "title": event.title,
+                "summary": event.summary, "importance_score": event.importance_score,
+                "confidence": event.confidence, "metadata": event.metadata_json,
+                "date_precision": event.date_precision, "started_at": event.started_at,
+                "ended_at": event.ended_at, "occurred_date": event.occurred_date,
+                "end_date": event.end_date, "occurrence_timezone": event.occurrence_timezone,
+                "observed_at": event.observed_at, "valid_from": event.valid_from,
+                "valid_to": event.valid_to,
+            }
+            temporal_fields = {
+                "date_precision", "started_at", "ended_at", "occurred_date", "end_date",
+                "occurrence_timezone", "valid_from", "valid_to",
+            }
+            candidate_values = {**base_values, **pending_updates}
+            try:
+                EventCreate(**candidate_values)
+            except ValidationError:
+                temporal_conflicts = sorted(set(pending_updates) & temporal_fields)
+                if not temporal_conflicts:
+                    raise
+                # Retain the previously valid owner-corrected temporal shape;
+                # a conflicting unowned boundary is not allowed to replace it.
+                pending_updates = {
+                    field: value for field, value in pending_updates.items()
+                    if field not in temporal_fields
+                }
+                candidate_values = {**base_values, **pending_updates}
+                EventCreate(**candidate_values)
+                refresh_conflicts[candidate_hash] = temporal_conflicts
+            changed = bool(pending_updates)
+            for field, value in pending_updates.items():
+                setattr(event, field, value)
+            if changed:
+                event.revision += 1
+                event.updated_at = datetime.now(UTC)
+        published.append((event, proposal))
+        if "evidence" not in event.owner_fields:
+            for chunk_id in proposal.evidence_chunk_ids:
+                ref = evidence_by_chunk[chunk_id]
+                await session.execute(insert(EventEvidence).values(
+                    event_id=event.id, source_id=ref.source_id, document_id=ref.document_id,
+                    document_version_id=ref.document_version_id, chunk_id=ref.chunk_id,
+                    version_number=ref.version_number, source_generation=ready.source_generation,
+                    extraction_identity=identity, candidate_hash=candidate_hash,
+                    confidence=proposal.confidence, extracted_at=datetime.now(UTC),
+                    observed_at=ref.observed_at, title_snapshot=ref.title, url_snapshot=ref.canonical_url,
+                    evidence_metadata={}, excerpt=ref.excerpt,
+                    metadata_is_version_snapshot=ref.metadata_is_version_snapshot,
+                ).on_conflict_do_nothing(constraint="uq_timeline_event_evidence"))
+        if "participants" not in event.owner_fields and "evidence" not in event.owner_fields:
+            for (entity_id, _role), participant in participants.items():
+                row = await session.scalar(select(EventParticipant).where(
+                    EventParticipant.event_id == event.id, EventParticipant.entity_id == entity_id,
+                    EventParticipant.role == participant.role,
+                ).with_for_update())
+                if row is None:
+                    row = EventParticipant(event_id=event.id, entity_id=entity_id, role=participant.role,
+                                           metadata_json={}, origin="derived")
+                    session.add(row)
+                    await session.flush()
+                rows = (await session.scalars(select(EventEvidence).where(
+                    EventEvidence.event_id == event.id, EventEvidence.chunk_id.in_(participant.chunk_ids)
+                ))).all()
+                for item in rows:
+                    await session.execute(insert(ParticipantEvidence).values(
+                        participant_id=row.id, event_evidence_id=item.id
+                    ).on_conflict_do_nothing(constraint="uq_timeline_participant_evidence"))
+    await session.flush()
+    proposals_json = [{
+        "event_id": str(event.id), "candidate_hash": event.candidate_hash,
+        "proposal": proposal.model_dump(mode="json"),
+        "support": {"document_version_id": str(ready.document_version_id),
+                    "chunk_ids": [str(item) for item in proposal.evidence_chunk_ids],
+                    "membership_ids": [str(item.membership_id) for item in proposal.participants]},
+        "refresh_conflicts": refresh_conflicts.get(str(event.candidate_hash), []),
+    } for event, proposal in published]
+    if not await finish_extraction_work(session, work_id, lease_owner, proposals_json, model):
+        return False
+    for event, _proposal in published:
+        await _schedule_temporal_event(session, event, ["extracted"])
+    return True
+
+
+async def _schedule_temporal_event(session: AsyncSession, event: Event, fields: list[str], *, deleted: bool = False) -> None:
+    """Flush desired temporal history with the canonical event transaction, preserving exact evidence IDs."""
+    from modules.knowledge.temporal import public as temporal
+    rows = (await session.scalars(select(EventEvidence).where(EventEvidence.event_id == event.id))).all()
+    await temporal.schedule_canonical_change(
+        session, kind="event", canonical_id=event.id, revision=event.revision, fields=fields,
+        support=[(item.document_version_id, item.chunk_id) for item in rows
+                 if item.document_version_id is not None and item.chunk_id is not None],
+        origin=event.origin, deleted=deleted,
+    )
+
+
+async def temporal_event_refs(session: AsyncSession, version_ids: list[UUID]) -> list[dict[str, Any]]:
+    """Expose complete bounded canonical event/support identity for selected temporal versions; no private reads by callers."""
+    if len(set(version_ids)) > 100:
+        raise ValueError("Temporal event scope exceeds100 versions")
+    rows = (await session.execute(select(Event, EventEvidence).join(
+        EventEvidence, EventEvidence.event_id == Event.id,
+    ).where(EventEvidence.document_version_id.in_(version_ids), Event.deleted_at.is_(None),
+            ).order_by(Event.id, EventEvidence.id).limit(10001))).all()
+    if len(rows) > 10000:
+        raise ValueError("Temporal event support closure exceeds10000 references")
+    return [{"event_id": event.id, "revision": event.revision, "origin": event.origin,
+             "document_version_id": evidence.document_version_id, "chunk_id": evidence.chunk_id,
+             "valid_from": event.valid_from, "valid_to": event.valid_to}
+            for event, evidence in rows]
+
+
+async def support_cleanup_ids(session: AsyncSession, *, document_id: UUID | None = None, source_id: UUID | None = None) -> tuple[list[UUID], list[UUID]]:
+    """Return participant entity and all affected event IDs for upfront lock closure.
+
+    Cleanup uses one source-scoped collection invalidation, so event identities
+    are not truncated to the realtime per-batch limit.
+    """
+    statement = select(Event.id, EventParticipant.entity_id).join(EventEvidence, EventEvidence.event_id == Event.id).outerjoin(
+        EventParticipant, EventParticipant.event_id == Event.id)
+    if document_id is not None:
+        statement = statement.where(EventEvidence.document_id == document_id)
+    elif source_id is not None:
+        statement = statement.where(EventEvidence.source_id == source_id)
+    else:
+        raise ValueError("specify one cleanup scope")
+    rows = (await session.execute(statement)).all()
+    return sorted({entity_id for _, entity_id in rows if entity_id is not None}, key=str), sorted({event_id for event_id, _ in rows}, key=str)
+
+
+async def correction_event_ids(session: AsyncSession, entity_ids: list[UUID]) -> list[UUID]:
+    """Capture bounded event rows containing participants before correction locks are taken."""
+    if not entity_ids:
+        return []
+    ids = list((await session.scalars(select(EventParticipant.event_id).where(
+        EventParticipant.entity_id.in_(entity_ids)
+    ).distinct().order_by(EventParticipant.event_id).limit(201))).all())
+    if len(ids) > 200:
+        raise ValueError("Timeline correction closure exceeds 200 participant events")
+    return sorted(set(ids), key=str)
+
+
+async def lock_event_ids(session: AsyncSession, event_ids: list[UUID]) -> None:
+    """Acquire captured event row locks in global UUID order after entity and relationship locks."""
+    if event_ids:
+        await session.execute(select(Event.id).where(Event.id.in_(sorted(set(event_ids), key=str))).order_by(Event.id).with_for_update())
+
+
+async def revise_corrected_events(session: AsyncSession, event_ids: list[UUID], *, entity_id: UUID) -> list[ReplayDraft]:
+    """Bump each changed event once and return one entity-scoped collection invalidation.
+
+    Callers must supply only events whose participant representation changed
+    and must already hold their event locks after canonical entity locks.
+    """
+    changed_ids = sorted(set(event_ids), key=str)
+    for event_id in changed_ids:
+        event = await session.get(Event, event_id)
+        if event is not None:
+            event.revision += 1
+            event.updated_at = datetime.now(UTC)
+            await _schedule_temporal_event(session, event, ["participants"])
+    return [make_timeline_collection_change(entity_id=entity_id)] if changed_ids else []
+
+
+async def apply_entity_merge(session: AsyncSession, *, source_id: UUID, target_id: UUID, event_ids: list[UUID]) -> list[UUID]:
+    """Transfer links through prelocked events, coalesce roles with manual origin winning, and return changed IDs."""
+    rows = list((await session.scalars(select(EventParticipant).where(
+        EventParticipant.event_id.in_(event_ids), EventParticipant.entity_id == source_id
+    ).order_by(EventParticipant.event_id, EventParticipant.id).with_for_update())).all()) if event_ids else []
+    changed_ids: set[UUID] = set()
+    for row in rows:
+        changed_ids.add(row.event_id)
+        duplicate = await session.scalar(select(EventParticipant).where(
+            EventParticipant.event_id == row.event_id, EventParticipant.entity_id == target_id,
+            EventParticipant.role == row.role,
+        ).with_for_update())
+        if duplicate is None:
+            row.entity_id = target_id
+            continue
+        evidence = list((await session.scalars(select(ParticipantEvidence).where(
+            ParticipantEvidence.participant_id == row.id
+        ))).all())
+        existing_ids = set((await session.scalars(select(ParticipantEvidence.event_evidence_id).where(
+            ParticipantEvidence.participant_id == duplicate.id
+        ))).all())
+        for support in evidence:
+            if support.event_evidence_id in existing_ids:
+                await session.delete(support)
+            else:
+                support.participant_id = duplicate.id
+        if row.origin == "manual":
+            duplicate.origin = "manual"
+        await session.delete(row)
+    return sorted(changed_ids, key=str)
+
+
+async def apply_entity_split(session: AsyncSession, *, source_id: UUID, target_id: UUID,
+                             event_ids: list[UUID], selected_pairs: set[tuple[UUID, UUID]]) -> list[UUID]:
+    """Move only selected exact-support derived links and return changed event IDs; retain manual links."""
+    rows = list((await session.scalars(select(EventParticipant).where(
+        EventParticipant.event_id.in_(event_ids), EventParticipant.entity_id == source_id,
+        EventParticipant.origin == "derived",
+    ).order_by(EventParticipant.event_id, EventParticipant.id).with_for_update())).all()) if event_ids else []
+    evidence_by_id = {item.id: item for item in (await session.scalars(select(EventEvidence).where(
+        EventEvidence.event_id.in_(event_ids)
+    ))).all()} if event_ids else {}
+    changed_ids: set[UUID] = set()
+    for row in rows:
+        supports = list((await session.scalars(select(ParticipantEvidence).where(
+            ParticipantEvidence.participant_id == row.id
+        ))).all())
+        selected_supports = [item for item in supports if item.event_evidence_id in evidence_by_id
+            and evidence_by_id[item.event_evidence_id].document_version_id is not None
+            and evidence_by_id[item.event_evidence_id].chunk_id is not None
+            and (evidence_by_id[item.event_evidence_id].document_version_id,
+                 evidence_by_id[item.event_evidence_id].chunk_id) in selected_pairs]
+        if not selected_supports:
+            continue
+        changed_ids.add(row.event_id)
+        duplicate = await session.scalar(select(EventParticipant).where(
+            EventParticipant.event_id == row.event_id, EventParticipant.entity_id == target_id,
+            EventParticipant.role == row.role,
+        ).with_for_update())
+        if duplicate is None:
+            duplicate = EventParticipant(event_id=row.event_id, entity_id=target_id,
+                role=row.role, metadata_json=row.metadata_json, origin="derived")
+            session.add(duplicate)
+            await session.flush()
+        for support in selected_supports:
+            support.participant_id = duplicate.id
+        if len(selected_supports) == len(supports):
+            await session.delete(row)
+    return sorted(changed_ids, key=str)
+
+
+async def remove_entity_participants(session: AsyncSession, entity_ids: list[UUID]) -> list[UUID]:
+    """Remove participant links for terminally deleted entities and return their affected event IDs."""
+    if entity_ids:
+        event_ids = list((await session.scalars(select(EventParticipant.event_id).where(
+            EventParticipant.entity_id.in_(entity_ids),
+        ).distinct())).all())
+        await session.execute(delete(EventParticipant).where(EventParticipant.entity_id.in_(entity_ids)))
+        return sorted(set(event_ids), key=str)
+    return []
+
+
+async def remove_document_support(session: AsyncSession, *, document_id: UUID, source_id: UUID) -> list[ReplayDraft]:
+    """Remove one document's evidence and only participants whose exact support vanished; flush without commit."""
+    evidence_ids = list((await session.scalars(select(EventEvidence.id).where(EventEvidence.document_id == document_id))).all())
+    event_ids = list((await session.scalars(select(EventEvidence.event_id).where(EventEvidence.document_id == document_id))).all())
+    participant_ids = list((await session.scalars(select(EventParticipant.id).join(
+        ParticipantEvidence, ParticipantEvidence.participant_id == EventParticipant.id,
+    ).where(ParticipantEvidence.event_evidence_id.in_(evidence_ids)))).all()) if evidence_ids else []
+    await session.execute(delete(EventEvidence).where(EventEvidence.id.in_(evidence_ids)))
+    orphaned = list((await session.scalars(select(EventParticipant.id).where(
+        EventParticipant.id.in_(participant_ids), EventParticipant.origin == "derived",
+        ~EventParticipant.id.in_(select(ParticipantEvidence.participant_id)),
+    ))).all()) if participant_ids else []
+    if orphaned:
+        await session.execute(delete(EventParticipant).where(EventParticipant.id.in_(orphaned)))
+    for event_id in sorted(set(event_ids), key=str):
+        event = await session.get(Event, event_id, with_for_update=True)
+        if event is not None:
+            event.revision += 1
+    await _hide_unsupported(session, event_ids)
+    await session.flush()
+    return [make_timeline_collection_change(source_id=source_id)] if event_ids else []
+
+
+async def remove_source_support(session: AsyncSession, *, source_id: UUID) -> list[ReplayDraft]:
+    """Remove one source's support while preserving unrelated evidence and owner-authored event fields."""
+    event_ids = list((await session.scalars(select(EventEvidence.event_id).where(EventEvidence.source_id == source_id))).all())
+    evidence_ids = list((await session.scalars(select(EventEvidence.id).where(EventEvidence.source_id == source_id))).all())
+    participant_ids = list((await session.scalars(select(EventParticipant.id).join(
+        ParticipantEvidence, ParticipantEvidence.participant_id == EventParticipant.id,
+    ).where(ParticipantEvidence.event_evidence_id.in_(evidence_ids)))).all()) if evidence_ids else []
+    await session.execute(delete(EventEvidence).where(EventEvidence.id.in_(evidence_ids)))
+    orphaned = list((await session.scalars(select(EventParticipant.id).where(
+        EventParticipant.id.in_(participant_ids), EventParticipant.origin == "derived",
+        ~EventParticipant.id.in_(select(ParticipantEvidence.participant_id)),
+    ))).all()) if participant_ids else []
+    if orphaned:
+        await session.execute(delete(EventParticipant).where(EventParticipant.id.in_(orphaned)))
+    for event_id in sorted(set(event_ids), key=str):
+        event = await session.get(Event, event_id, with_for_update=True)
+        if event is not None:
+            event.revision += 1
+    await _hide_unsupported(session, event_ids)
+    await session.flush()
+    return [make_timeline_collection_change(source_id=source_id)] if event_ids else []
+
+
+async def _hide_unsupported(session: AsyncSession, event_ids: list[UUID]) -> None:
+    """Hide unsupported derived events and scrub every extracted field not explicitly owner-corrected."""
+    for event_id in sorted(set(event_ids), key=str):
+        event = await session.get(Event, event_id, with_for_update=True)
+        if event is None or event.origin != "derived":
+            continue
+        remaining = await session.scalar(select(EventEvidence.id).where(EventEvidence.event_id == event_id).limit(1))
+        if remaining is None:
+            owners = set(event.owner_fields)
+            event.title = event.title if "title" in owners else "[unsupported derived event]"
+            event.summary = event.summary if "summary" in owners else None
+            if not owners:
+                event.deleted_at = datetime.now(UTC)
+            # Once exact support is gone, retain only fields the owner explicitly
+            # corrected; extraction identifiers remain solely as suppression keys.
+            event.source_id = None
+            if "type" not in owners:
+                event.type = "unsupported_derived_event"
+            if "subtype" not in owners:
+                event.subtype = None
+            if "importance_score" not in owners:
+                event.importance_score = None
+            if "confidence" not in owners:
+                event.confidence = None
+            if "metadata" not in owners:
+                event.metadata_json = {}
+            timed_owner = event.date_precision == "timed" and bool(
+                owners.intersection({"started_at", "ended_at", "date_precision"})
+            )
+            date_owner = event.date_precision == "date" and bool(
+                owners.intersection({"occurred_date", "end_date", "date_precision"})
+            )
+            precision_owner = "date_precision" in owners
+            if timed_owner:
+                # A start instant is the minimum shape-required anchor when an
+                # owner corrected only the end or precision of a timed event.
+                event.date_precision = "timed"
+                event.occurred_date = event.end_date = None
+                event.ended_at = event.ended_at if "ended_at" in owners else None
+                event.occurrence_timezone = event.occurrence_timezone if "occurrence_timezone" in owners else None
+            elif date_owner:
+                # Keep only the date anchor required to represent an owner date correction.
+                event.date_precision = "date"
+                event.started_at = event.ended_at = None
+                event.end_date = event.end_date if "end_date" in owners else None
+                event.occurrence_timezone = event.occurrence_timezone if "occurrence_timezone" in owners else None
+            elif "date_precision" in owners and event.date_precision == "unknown":
+                event.date_precision = "unknown"
+                event.started_at = event.ended_at = None
+                event.occurred_date = event.end_date = None
+                event.occurrence_timezone = None
+            else:
+                event.date_precision = "unknown"
+                event.started_at = event.ended_at = None
+                event.occurred_date = event.end_date = None
+                event.occurrence_timezone = event.occurrence_timezone if "occurrence_timezone" in owners else None
+            if not owners.intersection({"valid_from", "valid_to"}):
+                event.valid_from = event.valid_to = None
+            elif "valid_to" not in owners:
+                event.valid_to = None
+            # A corrected exclusive end still needs its current start boundary to satisfy the range shape.
+            event.observed_at = event.created_at
+            await session.execute(delete(EventParticipant).where(
+                EventParticipant.event_id == event_id, EventParticipant.origin == "derived",
+            ))

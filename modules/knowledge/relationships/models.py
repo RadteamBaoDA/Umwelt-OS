@@ -1,12 +1,30 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, UniqueConstraint, func, literal_column
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Index, String, UniqueConstraint, func, literal_column
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
 from core.database import Base
+
+
+class RelationshipSnapshotHistory(Base):
+    """Retain owner-observed canonical states without cascading away deletion evidence.
+
+    State excludes citation text/title/URLs. Exact support IDs authorize fresh
+    citation reads; source purge clears derived state rather than preserving raw
+    removed text. Empty state means unavailable, never a fabricated past value.
+    """
+    __tablename__ = "relationship_snapshot_history"
+    __table_args__ = (Index("ix_relationship_snapshot_history_relationship", "relationship_id", "recorded_at", "id"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    relationship_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    state: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    support: Mapped[list[dict[str, object]]] = mapped_column(JSONB, nullable=False)
+    deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
 
 
 class Relationship(Base):

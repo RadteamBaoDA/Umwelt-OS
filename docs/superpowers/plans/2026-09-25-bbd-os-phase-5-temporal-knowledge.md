@@ -12,7 +12,7 @@
 
 **Entry gate:** Phase 4 entities/evidence; Phase 3 permitted chat/structured/embedding capabilities.
 
-**Implementation status:** In progress. P05-T2 production code/build/scoped review complete in isolated commit `028a17e`; T1 remains in progress, T3/T4 and whole-phase develop integration pending. Runtime acceptance remains deferred; see EXECUTION.md for exact receipts.
+**Implementation status:** Production behavior T1–T4 is integrated in the unified phase worktree and independently source-reviewed. Whole-phase review closed the ready-event input-limit regression and lifecycle record correction; scoped frontend review closed build repair/token/OSS findings. Frozen 54-file prescribed builds pass Next.js compilation, integrated TypeScript and static generation, then fail because Docker Desktop cannot start. Final source freeze and staged scope receipts are in EXECUTION.md. Full four-image build, task completion receipts and squash into develop remain pending; runtime acceptance is deferred.
 
 Implementation stage: production code and affected production builds only. Do not create, modify, or run tests, fixtures, lint, or standalone typecheck. Begin the deferred test stage only after production code for Phases 1-12 is complete.
 
@@ -53,7 +53,7 @@ Module ownership: **timeline, knowledge/temporal**. Backend domain models/servic
 **Interfaces — consumes/produces:** TemporalGraph.initialize, upsert_episode, search_at, delete_episode, health; adapter accepts ModelGateway policy-aware clients and canonical entity ID mappings. FalkorDB is the first candidate, isolated from the ARQ Redis instance.
 
 
-- [ ] **P05-T1.1 — Implement production behavior.** Pin a compatible Graphiti/FalkorDB pair using official sources, route all Graphiti model calls through the controlled clients. Record unresolved compatibility or resource gates; do not silently swap backend, drop Graphiti or claim mini-host capacity. Never share the queue Redis volume with FalkorDB.
+- [x] **P05-T1.1 — Implement production behavior.** Pin a compatible Graphiti/FalkorDB pair using official sources, route all Graphiti model calls through the controlled clients. Record unresolved compatibility or resource gates; do not silently swap backend, drop Graphiti or claim mini-host capacity. Never share the queue Redis volume with FalkorDB.
 
 Concrete contract/configuration shape (illustrative values, not production defaults):
 
@@ -103,7 +103,7 @@ Concrete contract/configuration shape (illustrative values, not production defau
 **Interfaces — consumes/produces:** GraphSync(document_version_id,canonical_entity_ids,episode_id,status); KnowledgeService.get_entity_timeline, get_timeline, get_events, find_changes. POST /system/graph/reconcile -> run_id.
 
 
-- [ ] **P05-T3.1 — Implement production behavior.** PostgreSQL owns canonical IDs, corrections and sync status; Graphiti owns derived temporal representation. Store stable episode mappings, tombstones and source policy on each sync request. Reconciliation repairs missed writes and applies evidence removal without deleting facts still supported elsewhere. Emit KnowledgeChanged after canonical changes; UI can show graph pending/failed without hiding the underlying record.
+- [x] **P05-T3.1 — Implement production behavior.** PostgreSQL owns canonical IDs, corrections and sync status; Graphiti owns derived temporal representation. Store stable episode mappings, tombstones and source policy on each sync request. Reconciliation repairs missed writes and applies evidence removal without deleting facts still supported elsewhere. Emit KnowledgeChanged after canonical changes; UI can show graph pending/failed without hiding the underlying record.
 
 Concrete contract/configuration shape (illustrative values, not production defaults):
 
@@ -128,7 +128,7 @@ Concrete contract/configuration shape (illustrative values, not production defau
 **Interfaces — consumes/produces:** Timeline displays occurred/observed/validity labels separately. Graph date filtering uses validity windows; historical truth is not implied by the dashboard date filter.
 
 
-- [ ] **P05-T4.1 — Implement production behavior.** Provide source/type/entity/date filters, pagination, event details and links to evidence/entity pages; render local time with explicit timezone. Display late-arrival and graph-sync status truthfully. Add entity history tabs only when their APIs exist and accessible relationship history controls.
+- [x] **P05-T4.1 — Implement production behavior.** Provide source/type/entity/date filters, pagination, event details and links to evidence/entity pages; render local time with explicit timezone. Display late-arrival and graph-sync status truthfully. Add entity history tabs only when their APIs exist and accessible relationship history controls.
 
 Concrete contract/configuration shape (illustrative values, not production defaults):
 

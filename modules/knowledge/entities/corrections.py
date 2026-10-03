@@ -23,6 +23,7 @@ from modules.knowledge.entities.schemas import (
 )
 from modules.knowledge.relationships import public as relationships
 from modules.sources import public as sources
+from modules.timeline import public as timeline
 
 MAX_CORRECTION_ENTITIES = 100
 MAX_CORRECTION_MEMBERSHIPS = 200
@@ -58,6 +59,7 @@ class _Closure:
     source_ids: list[UUID]
     document_ids: list[UUID]
     membership_ids: list[UUID]
+    timeline_event_ids: list[UUID]
 
     @property
     def relationship_ids(self) -> list[UUID]:
@@ -80,6 +82,7 @@ class _Closure:
             "source_ids": [str(item) for item in self.source_ids],
             "document_ids": [str(item) for item in self.document_ids],
             "membership_ids": [str(item) for item in self.membership_ids],
+            "timeline_events": [str(item) for item in self.timeline_event_ids],
         }
         return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
@@ -99,6 +102,7 @@ class _DeleteClosure:
     source_ids: list[UUID]
     document_ids: list[UUID]
     lock_entity_ids: list[UUID]
+    timeline_event_ids: list[UUID]
 
     @property
     def entity_ids(self) -> list[UUID]:
@@ -125,6 +129,7 @@ class _DeleteClosure:
             "sources": [str(item) for item in self.source_ids],
             "documents": [str(item) for item in self.document_ids],
             "lock_entities": [str(item) for item in self.lock_entity_ids],
+            "timeline_events": [str(item) for item in self.timeline_event_ids],
         }, sort_keys=True, separators=(",", ":"))
 
 
@@ -248,10 +253,14 @@ async def _discover(
     }, key=str)
     if len(document_ids) > MAX_CORRECTION_EVIDENCE_REFS:
         raise _conflict("correction_too_large", "Correction document lock closure exceeds 100", entity_ids=closure_entity_ids)
+    try:
+        timeline_event_ids = await timeline.correction_event_ids(session, closure_entity_ids)
+    except ValueError as exc:
+        raise _conflict("correction_too_large", str(exc), entity_ids=closure_entity_ids) from exc
     return _Closure(
         entity_rows, source_memberships, aliases, alias_supports, field_supports,
         relationship_refs, redirect_rows, entity_closure_ids, closure_entity_ids, pairs, source_ids, document_ids,
-        sorted(all_membership_ids, key=str),
+        sorted(all_membership_ids, key=str), timeline_event_ids,
     )
 
 
@@ -388,6 +397,10 @@ async def _discover_delete_closure(session: AsyncSession, entity_id: UUID) -> _D
     lock_entity_ids = sorted(neighbor_ids | entity_ids, key=str)
     if len(lock_entity_ids) > MAX_CORRECTION_ENTITIES:
         raise _conflict("deletion_too_large", "Entity deletion graph closure exceeds 100", entity_ids=sorted(neighbor_ids | entity_ids, key=str), relationship_ids=[item.id for item in relationship_refs])
+    try:
+        timeline_event_ids = await timeline.correction_event_ids(session, lock_entity_ids)
+    except ValueError as exc:
+        raise _conflict("deletion_too_large", str(exc), entity_ids=lock_entity_ids) from exc
     lock_entity_rows = list((await session.scalars(select(Entity).where(Entity.id.in_(lock_entity_ids)).order_by(Entity.id).execution_options(populate_existing=True))).all())
     if len(lock_entity_rows) != len(lock_entity_ids):
         raise _conflict("deletion_closure_changed", "An incident graph entity disappeared during deletion discovery", entity_ids=lock_entity_ids, relationship_ids=[item.id for item in relationship_refs])
@@ -410,7 +423,7 @@ async def _discover_delete_closure(session: AsyncSession, entity_id: UUID) -> _D
         raise _conflict("deletion_too_large", "Entity deletion document lock closure exceeds 100", entity_ids=sorted(entity_ids, key=str))
     return _DeleteClosure(entity_rows, list(redirect_rows.values()), memberships, aliases,
                           alias_supports, field_supports, decisions, relationship_refs,
-                          pairs, source_ids, document_ids, lock_entity_ids)
+                          pairs, source_ids, document_ids, lock_entity_ids, timeline_event_ids)
 
 
 async def delete_canonical_entity(
@@ -443,6 +456,7 @@ async def delete_canonical_entity(
         relationship_ids, support_ids = await relationships.lock_delete_closure(session, before.entity_ids)
     except ValueError as exc:
         raise _conflict("deletion_too_large", str(exc), entity_ids=before.entity_ids, relationship_ids=before.relationship_ids) from exc
+    await timeline.lock_event_ids(session, before.timeline_event_ids)
     after = await _discover_delete_closure(session, entity_id)
     if before_signature != after.signature() or relationship_ids != after.relationship_ids:
         raise _conflict("deletion_closure_changed", "Incident relationships changed while locks were acquired; retry", entity_ids=after.entity_ids, relationship_ids=relationship_ids)
@@ -461,10 +475,14 @@ async def delete_canonical_entity(
             relationship_ids=final.relationship_ids,
         )
     after = final
+    await _temporal_before_relationships(session, relationship_ids)
+    await _temporal_correction(session, after.memberships,
+                               [(row.id, row.revision) for row in after.entity_rows], "deleted", deleted=True)
     try:
         await relationships.remove_entity_closure(session, after.entity_ids, relationship_ids, support_ids)
     except ValueError as exc:
         raise _conflict("deletion_closure_changed", str(exc), entity_ids=after.entity_ids, relationship_ids=relationship_ids) from exc
+    changed_timeline_ids = await timeline.remove_entity_participants(session, after.entity_ids)
     await session.execute(delete(EntityAliasEvidence).where(EntityAliasEvidence.alias_id.in_([item.id for item in after.aliases])))
     await session.execute(delete(EntityFieldEvidence).where(EntityFieldEvidence.entity_id.in_(after.entity_ids)))
     await session.execute(delete(EntityCorrectionDecision).where(or_(
@@ -501,6 +519,7 @@ async def delete_canonical_entity(
     await session.flush()
     drafts = [make_graph_change(entity_id=identifier, deleted=True) for identifier in after.entity_ids]
     drafts.extend(make_graph_change(relationship_id=identifier, deleted=True) for identifier in relationship_ids)
+    drafts.extend(await timeline.revise_corrected_events(session, changed_timeline_ids, entity_id=entity_id))
     await commit_with_replay(session, drafts)
     return True
 
@@ -540,6 +559,7 @@ async def _locked_closure(
         await relationships.lock_correction_closure(session, before.relationship_entity_ids, set(before.relationship_ids))
     except ValueError as exc:
         raise _conflict("correction_closure_changed", str(exc), entity_ids=before.entity_ids, relationship_ids=before.relationship_ids) from exc
+    await timeline.lock_event_ids(session, before.timeline_event_ids)
     after = await _discover(session, entity_ids, include_target_memberships=include_target_memberships)
     if before_signature != after.signature():
         raise _conflict("correction_closure_changed", "Correction closure changed while locks were acquired; retry", entity_ids=before.entity_ids, membership_ids=[item.id for item in before.memberships], relationship_ids=before.relationship_ids)
@@ -680,6 +700,7 @@ async def merge_entity(
     if await entities.resolve_canonical_entity_id(session, source_id) != source_id or await entities.resolve_canonical_entity_id(session, payload.into_id) != payload.into_id:
         raise _conflict("redirected_entity", "Use canonical entity IDs for corrections", entity_ids=[source_id, payload.into_id])
     closure = await _locked_closure(session, [source_id, payload.into_id], include_target_memberships=True)
+    await _temporal_before_relationships(session, closure.relationship_ids)
     source, target, memberships, target_aliases, source_aliases = await _validate_merge_request(source_id, payload, closure)
     previous_revisions = {str(source.id): source.revision, str(target.id): target.revision}
     for field_name in ("name", "description"):
@@ -755,6 +776,10 @@ async def merge_entity(
         )
     except ValueError as exc:
         raise _conflict("relationship_merge_conflict", str(exc), entity_ids=[source.id, target.id], relationship_ids=closure.relationship_ids) from exc
+    changed_timeline_ids = await timeline.apply_entity_merge(
+        session, source_id=source.id, target_id=target.id,
+        event_ids=closure.timeline_event_ids,
+    )
     for redirect in closure.redirect_rows:
         redirect.target_entity_id = target.id
     session.add(EntityRedirect(old_entity_id=source.id, target_entity_id=target.id, actor_id=actor_id, reason=" ".join(payload.reason.split()), created_at=datetime.now(UTC)))
@@ -778,6 +803,9 @@ async def merge_entity(
     )
     drafts = [make_graph_change(entity_id=target.id)]
     drafts.extend(make_graph_change(relationship_id=new) for _, new in replacements)
+    drafts.extend(await timeline.revise_corrected_events(session, changed_timeline_ids, entity_id=target.id))
+    await _temporal_correction(session, closure.memberships,
+                               [(source.id, source.revision), (target.id, target.revision)], "merge")
     await commit_with_replay(session, drafts)
     return result
 
@@ -797,6 +825,7 @@ async def split_entity(
         raise _conflict("redirected_entity", "Use the canonical entity ID for corrections", entity_ids=[entity_id])
     closure = await _locked_closure(session, [entity_id])
     source, selected = await _validate_split_request(entity_id, payload, closure)
+    await _temporal_before_relationships(session, closure.relationship_ids)
     selected_ids = set(payload.evidence_ids)
     new_id = uuid4()
     new_entity = Entity(
@@ -853,6 +882,11 @@ async def split_entity(
         )
     except ValueError as exc:
         raise _conflict("relationship_split_conflict", str(exc), entity_ids=[entity_id], relationship_ids=closure.relationship_ids) from exc
+    changed_timeline_ids = await timeline.apply_entity_split(
+        session, source_id=entity_id, target_id=new_id,
+        event_ids=closure.timeline_event_ids,
+        selected_pairs={(item.document_version_id, item.chunk_id) for item in selected},
+    )
     for field_name in ("name", "description"):
         if getattr(source, f"{field_name}_origin") != "derived":
             continue
@@ -877,6 +911,9 @@ async def split_entity(
     )
     drafts = [make_graph_change(entity_id=source.id), make_graph_change(entity_id=new_id)]
     drafts.extend(make_graph_change(relationship_id=new) for _, new in replacements)
+    drafts.extend(await timeline.revise_corrected_events(session, changed_timeline_ids, entity_id=source.id))
+    await _temporal_correction(session, closure.memberships,
+                               [(source.id, source.revision), (new_entity.id, new_entity.revision)], "split")
     await commit_with_replay(session, drafts)
     return result
 
@@ -949,5 +986,22 @@ async def suppress_candidates(
         operation="suppress", entity_id=entity_id, canonical_entity_id=entity_id,
         replacement_entity_ids=[], revision=entity.revision,
     )
+    await _temporal_correction(session, selected, [(entity.id, entity.revision)], "suppression")
     await commit_with_replay(session, [make_graph_change(entity_id=entity_id)])
     return result
+
+
+async def _temporal_before_relationships(session: AsyncSession, relationship_ids: list[UUID]) -> None:
+    """Record actual pre-correction owner state before endpoint memberships move; history starts at this observation."""
+    for relationship_id in relationship_ids:
+        await relationships.record_relationship_history(session, relationship_id)
+
+
+async def _temporal_correction(session: AsyncSession, memberships, entity_revisions: list[tuple[UUID, int]],
+                               operation: str, *, deleted: bool = False) -> None:
+    """Flush identifier-only desired-state changes with the canonical correction's existing atomic commit."""
+    from modules.knowledge.temporal import public as temporal
+    pairs = sorted({(member.document_version_id, member.chunk_id) for member in memberships}, key=str)
+    for entity_id, revision in entity_revisions:
+        await temporal.schedule_canonical_change(session, kind="entity", canonical_id=entity_id,
+            revision=revision, fields=[operation], support=pairs, origin="owner", deleted=deleted)

@@ -5,6 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+
 EntityType = Literal[
     "person", "organization", "company", "project", "repository", "place", "country",
     "product", "topic", "technology", "asset", "device", "website", "event_subject", "other",
@@ -171,6 +172,17 @@ class EntityMembershipReferenceRead(BaseModel):
     observed_at: datetime
     extracted_at: datetime
     confidence: float
+
+
+class VersionMembershipReference(BaseModel):
+    """Expose a bounded current-version membership key, canonical entity revision, chunk, and observation."""
+    membership_id: UUID
+    entity_id: UUID
+    entity_type: EntityType
+    entity_revision: int
+    chunk_id: UUID
+    observed_at: datetime
+    name: str | None
 
 
 class EntityEvidenceRead(BaseModel):
@@ -372,3 +384,37 @@ class EvidenceRef(BaseModel):
     confidence: float = Field(ge=0, le=1)
     source_membership_id: UUID | None = None
     target_membership_id: UUID | None = None
+
+
+class EntityTemporalNodeSeed(BaseModel):
+    """Detached current field proof over exactly selected source-local memberships."""
+    entity_id: UUID
+    revision: int
+    type: str
+    name: str
+    summary: str | None
+    source_id: UUID
+    source_generation: int
+    memberships: list[EntityMembershipReferenceRead]
+    name_support_membership_ids: list[UUID]
+    summary_support_membership_ids: list[UUID]
+    name_hash: str
+    summary_hash: str | None
+
+
+class EntityHistoryItem(BaseModel):
+    """Expose identifier-only correction audit without retaining reasons or deleted text."""
+    id: UUID
+    recorded_at: datetime
+    operation: str
+    affected_ids: list[UUID]
+    revisions: dict[str, int | None]
+
+
+class EntityHistoryPage(BaseModel):
+    """Page owner edits separately from currently retained membership observations."""
+    items: list[EntityHistoryItem]
+    next_cursor: str | None
+    historical_values_available: bool = False
+    memberships: list[EntityEvidenceRead] = Field(default_factory=list)
+    membership_next_cursor: str | None = None

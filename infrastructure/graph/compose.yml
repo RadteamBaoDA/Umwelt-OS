@@ -1,0 +1,24 @@
+services:
+  graph:
+    profiles: ["graph"]
+    image: docker.io/falkordb/falkordb:v4.22.0@sha256:4ac83f55062d364dcf151692635138b0bd2e12578019a56eb86ef53d067b116b
+    environment:
+      BROWSER: "0"
+      GRAPH_PASSWORD: ${GRAPH_PASSWORD:?Set GRAPH_PASSWORD for the optional graph profile}
+      REDIS_ARGS: --appendonly yes --appendfsync everysec --maxmemory 1073741824 --maxmemory-policy noeviction --requirepass ${GRAPH_PASSWORD:?Set GRAPH_PASSWORD for the optional graph profile}
+      FALKORDB_ARGS: MAX_QUEUED_QUERIES 4 TIMEOUT_DEFAULT 5000 TIMEOUT_MAX 5000 RESULTSET_SIZE 1000
+    volumes:
+      - graph-data:/var/lib/falkordb/data
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$GRAPH_PASSWORD\" redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    cpus: 1.0
+    mem_limit: 1536m
+
+volumes:
+  graph-data:

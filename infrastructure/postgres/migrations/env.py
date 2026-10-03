@@ -38,7 +38,12 @@ from modules.knowledge.entities.models import (
     EntityExtractionWork,
     EntityExtractionResult,
 )
-from modules.knowledge.relationships.models import Relationship, RelationshipEvidence
+from modules.knowledge.relationships.models import Relationship, RelationshipEvidence, RelationshipSnapshotHistory
+from modules.knowledge.temporal.models import (
+    GraphAllocation, GraphPartition, GraphMapping, GraphSupport, GraphOperation,
+    GraphReceipt, GraphChange, GraphReconcileRun, GraphDispatch, GraphReconcileMember, GraphRebuildDependency,
+)
+from modules.timeline.models import Event, EventParticipant, EventEvidence, ParticipantEvidence, EventAudit, EventSuppression, TimelineExtractionWork, TimelineExtractionResult
 from modules.settings.models import AISettingsRecord, OwnerPreferencesRecord
 from core.realtime import ReplayHead, ReplayRecord
 
@@ -73,6 +78,19 @@ _knowledge_models = (
     EntityExtractionResult,
     Relationship,
     RelationshipEvidence,
+    RelationshipSnapshotHistory,
+    Event,
+    EventParticipant,
+    EventEvidence,
+    ParticipantEvidence,
+    EventAudit,
+    EventSuppression,
+    TimelineExtractionWork,
+    TimelineExtractionResult,
+)
+_temporal_models = (
+    GraphAllocation, GraphPartition, GraphMapping, GraphSupport, GraphOperation,
+    GraphReceipt, GraphChange, GraphReconcileRun, GraphDispatch, GraphReconcileMember, GraphRebuildDependency,
 )
 config = context.config
 if config.config_file_name is not None:

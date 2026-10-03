@@ -25,6 +25,8 @@ from modules.settings.routes import router as settings_router
 from modules.model_gateway.routes import router as model_gateway_router
 from modules.search.routes import router as search_router
 from core.realtime_routes import router as realtime_router
+from modules.timeline.routes import router as timeline_router
+from modules.knowledge.temporal.routes import router as temporal_router
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -61,6 +63,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(documents_router)
     app.include_router(entities_router)
     app.include_router(relationships_router)
+    app.include_router(timeline_router)
+    app.include_router(temporal_router)
     app.include_router(document_upload_router)
     app.include_router(ingestion_router)
     app.include_router(connectors_router)

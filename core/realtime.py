@@ -48,15 +48,17 @@ class IngestionChanged(_Payload):
 
 
 class KnowledgeChanged(_Payload):
-    """Realtime payload for source, index, or graph changes with scope-specific identity validation."""
+    """Realtime payload for source, index, graph, or timeline changes with scoped identities."""
     type: Literal["knowledge.changed"] = "knowledge.changed"
-    scope: Literal["source", "index", "graph"] = "source"
+    scope: Literal["source", "index", "graph", "timeline", "timeline_collection"] = "source"
     source_id: UUID | None = None
     document_id: UUID | None = None
     version: int | None = Field(default=None, ge=1)
     deleted: bool = False
     entity_id: UUID | None = None
     relationship_id: UUID | None = None
+    event_id: UUID | None = None
+    event_revision: int | None = Field(default=None, ge=1)
     index_generation_id: UUID | None = None
     index_status: Literal["queued", "running", "active", "failed", "retired"] | None = None
     indexed_items: int | None = Field(default=None, ge=0)
@@ -64,7 +66,7 @@ class KnowledgeChanged(_Payload):
 
     @model_validator(mode="after")
     def validate_scope(self) -> "KnowledgeChanged":
-        """Enforce the mutually exclusive field requirements for source, index, and graph knowledge events."""
+        """Enforce mutually exclusive identity fields for source, index, graph, event, and collection invalidations."""
         if self.scope == "source":
             if self.source_id is None or any((
                 self.entity_id is not None,
@@ -73,6 +75,8 @@ class KnowledgeChanged(_Payload):
                 self.index_status is not None,
                 self.indexed_items is not None,
                 self.failed_items is not None,
+                self.event_id is not None,
+                self.event_revision is not None,
             )):
                 raise ValueError("Source knowledge events require a source identity only")
             return self
@@ -82,6 +86,7 @@ class KnowledgeChanged(_Payload):
                 or self.deleted or self.entity_id is not None or self.relationship_id is not None
                 or self.index_generation_id is None or self.index_status is None
                 or self.indexed_items is None or self.failed_items is None
+                or self.event_id is not None or self.event_revision is not None
             )
         ):
             raise ValueError("Index knowledge events require only a generation identity and progress")
@@ -90,8 +95,26 @@ class KnowledgeChanged(_Payload):
             or self.source_id is not None or self.document_id is not None or self.version is not None
             or self.index_generation_id is not None or self.index_status is not None
             or self.indexed_items is not None or self.failed_items is not None
+            or self.event_id is not None or self.event_revision is not None
         ):
             raise ValueError("Graph knowledge events require exactly one entity or relationship identity")
+        if self.scope == "timeline" and (
+            self.event_id is None or self.event_revision is None
+            or self.source_id is not None or self.document_id is not None or self.version is not None
+            or self.entity_id is not None or self.relationship_id is not None
+            or self.index_generation_id is not None or self.index_status is not None
+            or self.indexed_items is not None or self.failed_items is not None
+        ):
+            raise ValueError("Timeline knowledge events require an event identity and revision only")
+        if self.scope == "timeline_collection" and (
+            (self.source_id is None) == (self.entity_id is None)
+            or self.document_id is not None or self.version is not None or self.deleted
+            or self.relationship_id is not None
+            or self.event_id is not None or self.event_revision is not None
+            or self.index_generation_id is not None or self.index_status is not None
+            or self.indexed_items is not None or self.failed_items is not None
+        ):
+            raise ValueError("Timeline collection invalidations require exactly one source or entity identity")
         return self
 
 
@@ -214,6 +237,20 @@ def make_graph_change(
     return KnowledgeChanged(
         scope="graph", entity_id=entity_id, relationship_id=relationship_id, deleted=deleted
     )
+
+
+def make_timeline_change(event_id: UUID, revision: int, *, deleted: bool = False) -> KnowledgeChanged:
+    """Construct a canonical timeline replay event without overloading graph or document identity."""
+    return KnowledgeChanged(scope="timeline", event_id=event_id, event_revision=revision, deleted=deleted)
+
+
+def make_timeline_collection_change(
+    *, source_id: UUID | None = None, entity_id: UUID | None = None,
+) -> KnowledgeChanged:
+    """Construct a bounded collection invalidation scoped to exactly one source or entity."""
+    if (source_id is None) == (entity_id is None):
+        raise ValueError("Timeline collection invalidations require exactly one source or entity identity")
+    return KnowledgeChanged(scope="timeline_collection", source_id=source_id, entity_id=entity_id)
 
 
 async def commit_with_replay(session: AsyncSession, drafts: list[ReplayDraft] | tuple[ReplayDraft, ...] = ()) -> None:

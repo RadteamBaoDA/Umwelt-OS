@@ -6,6 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.knowledge.entities import public as entities
 from modules.knowledge.relationships import public as relationships
+from modules.knowledge.temporal import public as temporal
+from modules.timeline import public as timeline
 
 
 class KnowledgeService:
@@ -42,3 +44,33 @@ class KnowledgeService:
     async def resolve_relationship_review(self, candidate_id: UUID, payload, *, actor_id: int):
         """Delegate relationship review with its authenticated actor identity."""
         return await entities.resolve_relationship_review(self.session, candidate_id, payload, actor_id=actor_id)
+
+    async def get_events(self, *, limit=50, cursor=None, source_id=None):
+        """Delegate canonical event paging; derived graph outage never removes canonical results."""
+        return await timeline.list_events(self.session, limit=limit, cursor=cursor, source_id=source_id)
+
+    async def get_timeline(self, query, *, limit=50, cursor=None):
+        """Delegate all server filters and precision partitions to the accepted timeline owner."""
+        return await timeline.list_timeline(self.session, query, limit=limit, cursor=cursor)
+
+    async def get_entity_timeline(self, entity_id: UUID, query, *, graph_enabled: bool, limit=50, cursor=None):
+        """Resolve participant history and authorized graph status using the caller's runtime enablement setting."""
+        canonical_id = await entities.resolve_canonical_entity_id(self.session, entity_id)
+        selected = query.model_copy(update={"entity_id": canonical_id})
+        page = await self.get_timeline(selected, limit=limit, cursor=cursor)
+        versions = sorted({UUID(str(item["document_version_id"])) for event in page.items
+                           for item in event.evidence if item.get("document_version_id")}, key=str)
+        statuses = []
+        for offset in range(0, len(versions), 100):
+            statuses.extend(await temporal.mapping_statuses(self.session, versions[offset:offset + 100],
+                                                            graph_enabled=graph_enabled))
+        return {"canonical_entity_id": canonical_id, "timeline": page, "graph_statuses": statuses}
+
+    async def entity_history(self, entity_id: UUID, *, limit=50, cursor=None, membership_cursor=None):
+        """Delegate actual owner correction audit and independently paged retained membership history."""
+        return await entities.list_entity_history(self.session, entity_id, limit=limit, cursor=cursor,
+                                                   membership_cursor=membership_cursor)
+
+    async def find_changes(self, **filters):
+        """Delegate bounded recorded canonical mutations with current evidence/deletion checks."""
+        return await temporal.find_changes(self.session, **filters)

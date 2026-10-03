@@ -14,13 +14,15 @@ import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescript
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ApiError } from '@/core/api';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { useGuardedNavigation } from '@/core/guarded-navigation';
 import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
-import { addEntityAlias, deleteEntityAlias, entityKeys, getEntity, getEntityNeighbors, getRelationshipEvidence, listEntities, listEntityEvidence, mergeEntity, previewMergeEntity, previewSplitEntity, splitEntity, suppressEntityEvidence, updateEntity, type Entity } from './api';
+import { addEntityAlias, deleteEntityAlias, entityKeys, getEntity, getEntityNeighbors, getEntityTimeline, getRelationshipEvidence, listEntities, listEntityEvidence, listEntityHistory, mergeEntity, previewMergeEntity, previewSplitEntity, splitEntity, suppressEntityEvidence, updateEntity, type Entity } from './api';
 import { EntityGraph } from './entity-graph';
+import { EventDetail } from '@/modules/timeline/event-detail';
 
 const identitySchema = z.object({ name: z.string().max(300), description: z.string().max(10_000), reason: z.string().trim().min(1).max(300) });
 type IdentityValues = z.infer<typeof identitySchema>;
@@ -81,6 +83,9 @@ export function EntityDetail() {
   const entity = useQuery({ queryKey: entityKeys.detail(entityId), queryFn: () => getEntity(entityId) });
   useEffect(() => { if (ensureEntityDocument()) setDocumentReadyId(entityId); }, [ensureEntityDocument, entityId]);
   const evidence = useInfiniteQuery({ queryKey: entityKeys.evidence(entityId), initialPageParam: undefined as string | undefined, queryFn: ({ pageParam }) => listEntityEvidence(entityId, pageParam), getNextPageParam: (page) => page.next_cursor ?? undefined });
+  const history = useInfiniteQuery({ queryKey: entityKeys.history(entityId), initialPageParam: undefined as string | undefined, queryFn: ({ pageParam }) => listEntityHistory(entityId, pageParam), getNextPageParam: (page) => page.next_cursor ?? undefined });
+  const historyEvidence = useInfiniteQuery({ queryKey: [...entityKeys.history(entityId), 'memberships'], initialPageParam: undefined as string | undefined, queryFn: ({ pageParam }) => listEntityHistory(entityId, undefined, pageParam), getNextPageParam: (page) => page.membership_next_cursor ?? undefined });
+  const entityTimeline = useInfiniteQuery({ queryKey: entityKeys.timeline(entityId, { timezone: display.timezone }), initialPageParam: undefined as string | undefined, queryFn: ({ pageParam }) => getEntityTimeline(entityId, { timezone: display.timezone }, pageParam), getNextPageParam: (page) => page.timeline.next_cursor ?? undefined });
   const neighbors = useInfiniteQuery({ queryKey: entityKeys.neighbors(entityId), initialPageParam: undefined as string | undefined, queryFn: ({ pageParam }) => getEntityNeighbors(entityId, pageParam), getNextPageParam: (page) => page.next_cursor ?? undefined });
   const relationshipEvidence = useInfiniteQuery({ queryKey: ['relationships', selectedRelationshipId, 'evidence'], enabled: !!selectedRelationshipId, initialPageParam: undefined as string | undefined, queryFn: ({ pageParam }) => getRelationshipEvidence(selectedRelationshipId!, pageParam), getNextPageParam: (page) => page.next_cursor ?? undefined });
   const targetId = correction.watch('targetId');
@@ -181,6 +186,10 @@ export function EntityDetail() {
   const staleIdentity = !!baseline.current && (baseline.current.revision !== value.revision || baseline.current.id !== value.id);
   const staleSelection = selected.length > 0 && selectionRevision !== value.revision;
   const relationshipRows = relationshipEvidence.data?.pages.flatMap((page) => page.items) ?? [];
+  const historyRows = history.data?.pages.flatMap((page) => page.items) ?? [];
+  const historyEvidenceRows = historyEvidence.data?.pages.flatMap((page) => page.memberships) ?? [];
+  const entityEvents = entityTimeline.data?.pages.flatMap((page) => page.timeline.items) ?? [];
+  const entityGraphStatuses = entityTimeline.data?.pages.flatMap((page) => page.graph_statuses) ?? [];
   /** Clears pending identity edits without committing them. */
   const clearIdentityDraft = () => { baseline.current = { id: value.id, revision: value.revision, name: value.name ?? '', description: value.description ?? '' }; identity.reset({ name: value.name ?? '', description: value.description ?? '', reason: 'owner_review' }); update.reset(); };
   /** Stores the latest correction preview or submission issue for display. */
@@ -289,6 +298,29 @@ export function EntityDetail() {
       </AlertDialogContent>
     </AlertDialog>
     {suppress.error && <p className="error" role="alert">{formatError(suppress.error)}</p>}
+
+    <h2>{t('history')}</h2>
+    <Tabs defaultValue="owner-actions">
+      <TabsList><TabsTrigger value="owner-actions">{t('ownerActions')}</TabsTrigger><TabsTrigger value="retained-evidence">{t('retainedEvidence')}</TabsTrigger></TabsList>
+      <TabsContent value="owner-actions">
+        <p className="muted">{t('historyValuesUnavailable')}</p>
+        {history.isError && <p className="error" role="alert">{t('historyUnavailable')} <Button className="secondary" onClick={() => history.refetch()}>{t('retry')}</Button></p>}
+        <ul className="stack">{historyRows.map((item) => <li className="card" key={item.id}><strong>{item.operation}</strong><p>{t('recorded')} {formatDateTime(item.recorded_at, display.locale, display.timezone)}</p><p>{t('affectedIds')}: {item.affected_ids.join(', ') || t('none')}</p><p>{t('revisions')}: {Object.entries(item.revisions).map(([id, revision]) => `${id}: ${revision}`).join(', ') || t('none')}</p></li>)}</ul>
+        {history.hasNextPage && <Button className="secondary" disabled={history.isFetchingNextPage} onClick={() => history.fetchNextPage()}>{t('loadHistory')}</Button>}
+      </TabsContent>
+      <TabsContent value="retained-evidence">
+        {historyEvidence.isError && <p className="error" role="alert">{t('historyUnavailable')} <Button className="secondary" onClick={() => historyEvidence.refetch()}>{t('retry')}</Button></p>}
+        <ul className="stack">{historyEvidenceRows.map((item) => <li className="card" key={item.id}><Link href={`/knowledge/documents/${item.document_id}?version=${item.version_number}#cited-revision`}>{item.title} · {t('documentVersion')} {item.version_number}</Link><small className="muted">{item.metadata_is_version_snapshot ? t('metadataVersionSnapshot') : t('metadataCurrentFallback')}</small><p>{t('observed')} {formatDateTime(item.observed_at, display.locale, display.timezone)}</p><blockquote>{item.excerpt}</blockquote></li>)}</ul>
+        {historyEvidence.hasNextPage && <Button className="secondary" disabled={historyEvidence.isFetchingNextPage} onClick={() => historyEvidence.fetchNextPage()}>{t('loadHistory')}</Button>}
+      </TabsContent>
+    </Tabs>
+
+    <section aria-labelledby="entity-timeline-heading"><h2 id="entity-timeline-heading">{t('entityTimeline')}</h2>
+      {entityTimeline.isError && <p className="error" role="alert">{t('timelineUnavailable')} <Button className="secondary" onClick={() => entityTimeline.refetch()}>{t('retry')}</Button></p>}
+      {entityTimeline.data && <p className="muted" role="status">{t('graphStatuses')}: {entityGraphStatuses.map((status) => `${status.status}${status.graph_enabled ? '' : ` (${t('graphDisabled')})`}${status.error_code ? ` (${status.error_code})` : ''}`).join(', ') || t('noGraphStatuses')}</p>}
+      <div className="stack">{entityEvents.map((event) => <EventDetail key={event.id} event={event} locale={display.locale} timezone={display.timezone} entityNames={new Map([[value.id, value.name ?? t('unnamedEntity')]])} />)}</div>
+      {entityTimeline.hasNextPage && <Button className="secondary" disabled={entityTimeline.isFetchingNextPage} onClick={() => entityTimeline.fetchNextPage()}>{t('loadTimeline')}</Button>}
+    </section>
 
     <AlertDialog open={!!aliasRemovalSnapshot} onOpenChange={(open) => { if (!open && !removeAlias.isPending) { setAliasRemovalSnapshot(null); removeAlias.reset(); } }}>
       <AlertDialogContent onEscapeKeyDown={(event) => { if (removeAlias.isPending) event.preventDefault(); }}>

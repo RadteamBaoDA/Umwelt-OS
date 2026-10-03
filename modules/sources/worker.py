@@ -55,11 +55,12 @@ async def process_source_purge(ctx: dict[str, object], event_id: str) -> None:
         operation.status = "running"
         operation.error_code = None
         raw_uris = list(operation.raw_uris)
-        await documents.delete_source_documents(session, source.id)
+        timeline_drafts = await documents.delete_source_documents(session, source.id)
         await ingestion.cancel_and_purge_source_ingestion(session, source.id)
         await commit_with_replay(session, [
             make_source_change(source.id, source.generation, source.status, operation_id=operation_id),
             make_knowledge_change(source.id, deleted=True),
+            *timeline_drafts,
         ])
 
     # Persist tombstones first so a retry can finish file cleanup after a crash.

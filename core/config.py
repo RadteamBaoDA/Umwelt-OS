@@ -12,6 +12,13 @@ class Settings(BaseSettings):
 
     database_url: str = Field(default="postgresql+asyncpg://bbd:bbd@postgres:5432/bbd", repr=False)
     redis_url: str = Field(default="redis://redis:6379/0", repr=False)
+    graph_enabled: bool = Field(default=False, validation_alias="GRAPH_ENABLED")
+    graph_host: str = Field(default="graph", validation_alias="GRAPH_HOST", repr=False)
+    graph_port: int = Field(default=6379, ge=1, le=65535, validation_alias="GRAPH_PORT")
+    graph_username: str | None = Field(default=None, validation_alias="GRAPH_USERNAME", repr=False)
+    graph_password: SecretStr = Field(default=SecretStr(""), validation_alias="GRAPH_PASSWORD", repr=False)
+    graph_database: str = Field(default="bbd_temporal", validation_alias="GRAPH_DATABASE")
+    graph_embedding_dimensions: int | None = Field(default=None, ge=1, le=4096, validation_alias="GRAPH_EMBEDDING_DIMENSIONS")
     data_dir: Path = Path("/data")
     upload_max_bytes: int = Field(default=25 * 1024 * 1024, gt=0, le=1024 * 1024 * 1024)
     parser_timeout_seconds: int = Field(default=120, gt=0, le=3600)

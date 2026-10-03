@@ -13,6 +13,7 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
+from core.heavy_work import bounded_heavy_work
 from core.model_gateway.client import CapabilityUnsupported, ModelGateway, ModelGatewayError, PrivacyPolicyDenied
 from core.model_gateway.cache import capability_key
 from core.model_gateway.schemas import CapabilityResult
@@ -148,6 +149,15 @@ async def process_document_ready(ctx: dict[str, object], event_id: str) -> None:
         ):
             await mark_event_delivered(session, event_uuid)
             return
+        # Keep both owners behind the source/document fence until their durable rows
+        # and the single outbox acknowledgement commit together.
+        if not await documents.lock_document_for_extraction(session, ready.document_id, ready.source_id):
+            await mark_event_delivered(session, event_uuid)
+            return
+        ready = await documents.get_ready_version_ref(session, version_id)
+        if ready is None or ready.source_generation != source.generation:
+            await mark_event_delivered(session, event_uuid)
+            return
         work = await entities.schedule_extraction_work(
             session, version_id, ready.source_generation, EXTRACTOR_VERSION, PROMPT_VERSION,
         )
@@ -157,10 +167,21 @@ async def process_document_ready(ctx: dict[str, object], event_id: str) -> None:
             work.next_attempt_at = datetime.max.replace(tzinfo=UTC)
             work.dependency_fingerprint = None
         work_id = work.id
+        from modules.timeline import public as timeline
+        timeline_work_id = await timeline.schedule_extraction_work(
+            session, ready, "events-v1", "events-prompt-v1",
+        )
+        from modules.knowledge.temporal import public as temporal
+        await temporal.schedule_version(session, ready)
+        if ready.local_only:
+            await timeline.block_local_only_extraction_work(session, timeline_work_id)
         await mark_event_delivered(session, event_uuid)
     if ready.local_only:
         return
     await process_entity_extraction_work(ctx, str(work_id))
+    if not ready.local_only:
+        from modules.timeline.worker import process_timeline_extraction_work
+        await process_timeline_extraction_work(ctx, str(timeline_work_id))
 
 
 async def recover_entity_extraction_work(ctx: dict[str, object]) -> int:
@@ -245,6 +266,7 @@ async def recover_entity_extraction_work(ctx: dict[str, object]) -> int:
     return enqueued
 
 
+@bounded_heavy_work
 async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: str) -> None:
     """Run one lease-owned extraction job and publish only fenced graph changes.
 

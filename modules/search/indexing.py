@@ -10,6 +10,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
+from core.heavy_work import bounded_heavy_work
 from core.model_gateway.client import ModelGateway, ModelGatewayError, PrivacyPolicyDenied
 from core.model_gateway.policy import may_send
 from core.model_gateway.schemas import ModelMapping, RequestPolicy
@@ -157,6 +158,7 @@ async def create_generation(session: AsyncSession, mapping: ModelMapping, gatewa
     return generation
 
 
+@bounded_heavy_work
 async def index_pending_chunks(ctx: dict[str, object]) -> int:
     """Index a bounded number of eligible chunks under source locks and current AI policy."""
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])

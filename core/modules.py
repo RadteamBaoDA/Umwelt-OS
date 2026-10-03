@@ -6,9 +6,11 @@ from modules.sources.descriptor import descriptor as sources
 from modules.search.descriptor import descriptor as search
 from modules.knowledge.entities.descriptor import descriptor as entities
 from modules.knowledge.relationships.descriptor import descriptor as relationships
+from modules.timeline.descriptor import descriptor as timeline
+from modules.knowledge.temporal.descriptor import descriptor as temporal
 
 
-def register_modules(descriptors: Iterable[Any] = (sources, documents, entities, relationships, search)) -> dict[str, Any]:
+def register_modules(descriptors: Iterable[Any] = (sources, documents, entities, relationships, timeline, search, temporal)) -> dict[str, Any]:
     """Build a module registry and reject duplicate IDs or dependencies that are not registered."""
     registry: dict[str, Any] = {}
     for descriptor in descriptors:

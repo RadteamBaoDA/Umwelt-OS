@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.pagination import decode_cursor, encode_cursor
 from core.chunking import chunk_text
-from core.realtime import commit_with_replay, make_knowledge_change
+from core.realtime import ReplayDraft, commit_with_replay, make_knowledge_change
 from modules.knowledge.documents.models import (
     Document, DocumentChunk, DocumentVersion, NormalizedDocumentIdentity,
     NormalizedVersionProvenance,
@@ -26,6 +26,14 @@ from modules.sources.models import Source
 
 EXTRACTION_CHUNK_LIMIT = 100
 EXTRACTION_INPUT_BYTES = 64_000
+
+
+class ExtractionInputLimitError(ValueError):
+    """Signal an immutable version outside extraction limits without exposing its content.
+
+    Scheduling owners may persist blocked work while acknowledging canonical
+    readiness. Existing ValueError handlers retain their validation behavior.
+    """
 
 
 @dataclass(frozen=True)
@@ -554,40 +562,55 @@ async def delete_document(session: AsyncSession, document_id: UUID) -> bool:
         identity.document_id = None
         from modules.ingestion import public as ingestion
         await ingestion.tombstone_document_materializations(session, document.id)
-    await _remove_graph_support(session, document_id=document_id)
+    timeline_drafts = await _remove_graph_support(
+        session, document_id=document_id, replay_source_id=source_id,
+    )
     result = await session.scalars(
         delete(Document)
         .where(Document.id == document_id, Document.source_id == source_id)
         .returning(Document.id)
     )
     deleted = result.first() is not None
-    drafts = [make_knowledge_change(source_id, document_id, deleted=True)] if deleted else []
+    drafts: list[ReplayDraft] = [*timeline_drafts]
+    if deleted:
+        drafts.append(make_knowledge_change(source_id, document_id, deleted=True))
     await commit_with_replay(session, drafts)
     return deleted
 
 
-async def delete_source_documents(session: AsyncSession, source_id: UUID) -> None:
-    """Delete owned data inside the caller's source-locked transaction; do not commit."""
+async def delete_source_documents(session: AsyncSession, source_id: UUID) -> list[ReplayDraft]:
+    """Delete source-owned data and return timeline invalidations without committing."""
     document_ids = list((await session.scalars(
         select(Document.id).where(Document.source_id == source_id).order_by(Document.id).limit(10_001).with_for_update()
     )).all())
     if len(document_ids) > 10_000:
         raise ValueError("Source graph cleanup exceeds its atomic document limit")
-    await _remove_graph_support(session, source_id=source_id)
+    timeline_drafts = await _remove_graph_support(session, source_id=source_id)
     await session.execute(
         delete(NormalizedDocumentIdentity).where(NormalizedDocumentIdentity.source_id == source_id)
     )
     await session.execute(delete(Document).where(Document.source_id == source_id))
+    return timeline_drafts
 
 
 async def _remove_graph_support(
-    session: AsyncSession, *, document_id: UUID | None = None, source_id: UUID | None = None
-) -> None:
-    """Remove evidence-backed entity and relationship support for exactly one scope."""
+    session: AsyncSession, *, document_id: UUID | None = None, source_id: UUID | None = None,
+    replay_source_id: UUID | None = None,
+) -> list[ReplayDraft]:
+    """Remove evidence-backed graph and timeline support in source/document → entities → relationships → events order.
+
+    ``document_id`` and ``source_id`` select exactly one cleanup scope.
+    Document deletion separately passes its locked source identity for the
+    timeline collection invalidation after the document row is deleted.
+    """
     if (document_id is None) == (source_id is None):
         raise ValueError("Specify one document or source for graph cleanup")
+    if replay_source_id is not None and document_id is None:
+        raise ValueError("A replay source identity is valid only for document cleanup")
     from modules.knowledge.entities import public as entities
     from modules.knowledge.relationships import public as relationships
+    from modules.timeline import public as timeline
+    from modules.knowledge.temporal import public as temporal
 
     refs = await list_evidence_ref_keys(session, document_id=document_id, source_id=source_id)
     membership_ids, entity_ids = await entities.support_cleanup_ids(
@@ -596,20 +619,37 @@ async def _remove_graph_support(
     relationship_ids, relationship_entity_ids = await relationships.support_cleanup_ids(
         session, refs=refs, document_id=document_id, source_id=source_id, membership_ids=membership_ids
     )
-    all_entity_ids = sorted(set(entity_ids) | set(relationship_entity_ids), key=str)
+    timeline_entity_ids, timeline_event_ids = await timeline.support_cleanup_ids(
+        session, document_id=document_id, source_id=source_id
+    )
+    all_entity_ids = sorted(set(entity_ids) | set(relationship_entity_ids) | set(timeline_entity_ids), key=str)
     # Lock entity rows before relationship rows consistently with correction transactions.
     await entities.lock_entity_ids(session, all_entity_ids)
     await relationships.lock_relationship_ids(session, relationship_ids)
+    # Keep the cross-module lock order stable: event locks follow all graph locks.
+    await timeline.lock_event_ids(session, timeline_event_ids)
+    # Capture detached graph cleanup before any evidence/source cascade; this helper
+    # performs no provider work and shares the caller's canonical deletion commit.
+    await temporal.tombstone_scope(session, document_id=document_id, source_id=source_id)
+    await relationships.purge_history_support(session, refs)
     if document_id is not None:
         await relationships.remove_document_support(
             session, document_id=document_id, refs=refs, membership_ids=membership_ids
         )
         await entities.remove_document_support(session, document_id)
+        cleanup_source_id = replay_source_id
+        if cleanup_source_id is None:
+            cleanup_source_id = await session.scalar(select(Document.source_id).where(Document.id == document_id))
+        if cleanup_source_id is None:
+            raise ValueError("Document support cleanup requires its locked source identity")
+        timeline_drafts = await timeline.remove_document_support(session, document_id=document_id, source_id=cleanup_source_id)
     else:
         await relationships.remove_source_support(
             session, source_id=source_id, refs=refs, membership_ids=membership_ids
         )
         await entities.remove_source_support(session, source_id)
+        timeline_drafts = await timeline.remove_source_support(session, source_id=source_id)
+    return timeline_drafts
 
 
 async def append_content(
@@ -675,7 +715,11 @@ async def append_content(
 async def read_extraction_input(
     session: AsyncSession, version_id: UUID, allowed_chunk_ids: list[UUID] | None = None
 ) -> ExtractionInput | None:
-    """Return bounded chunks only for the active source's ready current version."""
+    """Return chunks for the active source's ready current version within extraction bounds.
+
+    Raise ExtractionInputLimitError for empty, oversized or over-count input;
+    unrelated selection validation remains ValueError. No partial input is returned.
+    """
     statement = (
         select(
             Document.id, Document.source_id, Source.generation, Source.local_only,
@@ -708,7 +752,7 @@ async def read_extraction_input(
     )
     chunk_count, byte_count = stats.one()
     if not chunk_count or chunk_count > EXTRACTION_CHUNK_LIMIT or byte_count > EXTRACTION_INPUT_BYTES:
-        raise ValueError("Extraction input exceeds its chunk or byte limit")
+        raise ExtractionInputLimitError("Extraction input exceeds its chunk or byte limit")
     chunks = list((await session.execute(chunks_query.order_by(DocumentChunk.chunk_index))).all())
     if allowed_chunk_ids is not None and {identifier for identifier, _ in chunks} != set(allowed_chunk_ids):
         return None

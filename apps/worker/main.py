@@ -29,6 +29,8 @@ from modules.knowledge.entities.worker import (
     process_entity_extraction_work,
     recover_entity_extraction_work,
 )
+from modules.timeline.worker import process_timeline_extraction_work, recover_timeline_extraction_work
+from modules.knowledge.temporal.worker import process_graph_operation, recover_graph_work
 
 async def startup(ctx: dict[str, object]) -> None:
     """Load worker settings and create its bounded async database pool in the ARQ context."""
@@ -68,7 +70,8 @@ class WorkerSettings:
     """ARQ worker registration, recurring schedules, retry/concurrency bounds, and lifecycle hooks."""
     functions: ClassVar[list[object]] = [
         purge_expired_sessions, process_ingestion_event, process_normalize_event, process_uploaded_file, process_source_purge,
-        reconcile_connectors, process_document_ready, process_entity_extraction_work,
+        reconcile_connectors, process_document_ready, process_entity_extraction_work, process_timeline_extraction_work,
+        process_graph_operation,
     ]
     cron_jobs: ClassVar[list[object]] = [
         cron(purge_expired_sessions, minute=0),
@@ -77,11 +80,15 @@ class WorkerSettings:
         cron(index_pending_chunks, minute=set(range(0, 60, 1))),
         cron(reconcile_connectors, second=set(range(0, 60, 5)), run_at_start=True),
         cron(recover_entity_extraction_work, minute=set(range(0, 60, 1))),
+        cron(recover_timeline_extraction_work, minute=set(range(0, 60, 1))),
+        cron(recover_graph_work, second=set(range(0, 60, 5)), run_at_start=True),
     ]
     redis_settings = RedisSettings.from_dsn(Settings().redis_url)
     max_jobs = 1
     max_tries = 5
-    job_timeout = 120
+    # The graph owner budget is 150 seconds; ARQ must leave time for durable
+    # uncertainty publication and cancellation before the 180-second lease ends.
+    job_timeout = 180
     health_check_key = ARQ_WORKER_HEALTH_KEY
     health_check_interval = 15
     on_startup = startup

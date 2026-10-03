@@ -61,9 +61,10 @@ type IngestionEvent = ReplayEnvelope & {
   stage_key?: string | null; stage_status?: string | null;
 };
 type KnowledgeEvent = ReplayEnvelope & {
-  scope?: 'source' | 'index' | 'graph'; source_id?: string | null; document_id?: string | null; version?: number | null;
+  scope?: 'source' | 'index' | 'graph' | 'timeline' | 'timeline_collection'; source_id?: string | null; document_id?: string | null; version?: number | null;
   deleted: boolean; index_generation_id?: string | null;
   entity_id?: string | null; relationship_id?: string | null;
+  event_id?: string | null; event_revision?: number | null;
   index_status?: 'queued' | 'running' | 'active' | 'failed' | 'retired' | null;
   indexed_items?: number | null; failed_items?: number | null;
 };
@@ -105,7 +106,7 @@ function isCurrent(cursor: string, previous: string): boolean {
   return BigInt(nextMatch[2]) > BigInt(previousMatch[2]);
 }
 
-/** Owns the authenticated event stream, cursor replay, query invalidation, and bounded document refresh queue for descendants. */
+/** Owns the authenticated event stream, cursor replay, domain query invalidation, and bounded document refresh queue for descendants. */
 export function RealtimeProvider({ children }: { children: ReactNode }) {
   const client = useQueryClient();
   const display = useDisplayPreferences();
@@ -396,6 +397,42 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
           ]);
           return;
         }
+        if (value.scope === 'timeline') {
+          if (
+            !value.event_id || !UUID_RE.test(value.event_id)
+            || !Number.isSafeInteger(value.event_revision) || (value.event_revision ?? 0) < 1
+            || value.source_id != null || value.document_id != null || value.version != null
+            || value.entity_id != null || value.relationship_id != null
+            || value.index_generation_id != null || value.index_status != null
+            || value.indexed_items != null || value.failed_items != null
+            || typeof value.deleted !== 'boolean'
+          ) { resync(true); return; }
+          void Promise.all([
+            client.invalidateQueries({ queryKey: ['events'] }),
+            client.invalidateQueries({ queryKey: ['timeline'] }),
+            // Entity-scoped timelines share event occurrence and participant data.
+            client.invalidateQueries({ queryKey: ['entities'] }),
+          ]);
+          return;
+        }
+        if (value.scope === 'timeline_collection') {
+          if (
+            ((value.source_id == null) === (value.entity_id == null))
+            || (value.source_id != null && !UUID_RE.test(value.source_id))
+            || (value.entity_id != null && !UUID_RE.test(value.entity_id))
+            || value.document_id != null || value.version != null || value.deleted
+            || value.relationship_id != null
+            || value.event_id != null || value.event_revision != null
+            || value.index_generation_id != null || value.index_status != null
+            || value.indexed_items != null || value.failed_items != null
+          ) { resync(true); return; }
+          void Promise.all([
+            client.invalidateQueries({ queryKey: ['events'] }),
+            client.invalidateQueries({ queryKey: ['timeline'] }),
+            client.invalidateQueries({ queryKey: ['entities'] }),
+          ]);
+          return;
+        }
         if (
           (value.scope !== undefined && value.scope !== 'source')
           || !value.source_id || !UUID_RE.test(value.source_id)
@@ -403,8 +440,15 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
           || value.index_generation_id != null || value.index_status != null
           || value.indexed_items != null || value.failed_items != null
           || value.entity_id != null || value.relationship_id != null
+          || value.event_id != null || value.event_revision != null
           || typeof value.deleted !== 'boolean'
         ) { resync(true); return; }
+        // Projection updates use source invalidations even before an entity exists.
+        // Refetch canonical-backed status instead of treating the event as proof.
+        void Promise.all([
+          client.invalidateQueries({ queryKey: ['graph-status'] }),
+          client.invalidateQueries({ queryKey: ['entities'] }),
+        ]);
         if (value.deleted) {
           void Promise.all([
             client.invalidateQueries({ queryKey: ['entities'] }),

@@ -107,6 +107,7 @@ class ModelGateway:
         path: str,
         payload: dict[str, Any],
         probe: bool = False,
+        before_send: Callable[[], Awaitable[None]] | None = None,
     ) -> Any:
         """Check policy and cached capability before sending a bounded, retried gateway request; map transport and provider errors."""
         if not may_send(policy, alias, mapping, self.destination_id, bool(self.api_key), capability):
@@ -139,8 +140,12 @@ class ModelGateway:
             ) as client:
                 for attempt in range(2):
                     try:
+                        # Keep the gateway-owned settings check even when a scoped
+                        # operation adds its own source/evidence freshness fence.
                         if self.before_send is not None:
                             await self.before_send()
+                        if before_send is not None and before_send is not self.before_send:
+                            await before_send()
                         if path == "chat/completions":
                             response = await client.chat.completions.create(**body)
                         elif path == "embeddings":
@@ -195,9 +200,25 @@ class ModelGateway:
 
         return await self._with_slot(send)
 
-    async def chat(self, alias: str, mapping: ModelMapping | None, policy: RequestPolicy, messages: list[dict[str, Any]], probe: bool = False) -> Any:
-        """Send chat messages through the common policy and capability-checked request path."""
-        return await self._request(alias, mapping, policy, "chat", "chat/completions", {"messages": messages}, probe)
+    async def chat(
+        self, alias: str, mapping: ModelMapping | None, policy: RequestPolicy,
+        messages: list[dict[str, Any]], probe: bool = False, *,
+        max_tokens: int | None = None, temperature: float | None = None,
+        before_send: Callable[[], Awaitable[None]] | None = None,
+    ) -> Any:
+        """Send bounded chat requests under gateway policy and optional per-attempt authorization."""
+        if max_tokens is not None and not 1 <= max_tokens <= 8192:
+            raise ValueError("max_tokens must be between 1 and 8192")
+        if temperature is not None and not 0 <= temperature <= 2:
+            raise ValueError("temperature must be between 0 and 2")
+        payload: dict[str, Any] = {"messages": messages}
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        if temperature is not None:
+            payload["temperature"] = temperature
+        return await self._request(
+            alias, mapping, policy, "chat", "chat/completions", payload, probe, before_send
+        )
 
     async def stream(self, alias: str, mapping: ModelMapping | None, policy: RequestPolicy, messages: list[dict[str, Any]], probe: bool = False) -> AsyncIterator[str]:
         """Stream chat completions after policy and capability checks; retry only before any chunk is emitted."""
@@ -253,18 +274,50 @@ class ModelGateway:
                     except EndpointNetworkPolicyError as exc:
                         raise ModelGatewayError("Model gateway network policy denied the destination") from exc
 
-    async def embed(self, alias: str, mapping: ModelMapping | None, policy: RequestPolicy, inputs: list[str], probe: bool = False) -> Any:
-        """Request embeddings through the common policy and capability-checked request path."""
-        return await self._request(alias, mapping, policy, "embeddings", "embeddings", {"input": inputs}, probe)
+    async def embed(
+        self, alias: str, mapping: ModelMapping | None, policy: RequestPolicy,
+        inputs: list[str], probe: bool = False, *,
+        before_send: Callable[[], Awaitable[None]] | None = None,
+    ) -> Any:
+        """Request embeddings through gateway policy with a fresh per-attempt authorization check."""
+        return await self._request(
+            alias, mapping, policy, "embeddings", "embeddings", {"input": inputs}, probe, before_send
+        )
 
-    async def structured(self, alias: str, mapping: ModelMapping | None, policy: RequestPolicy, messages: list[dict[str, Any]], schema: dict[str, Any], probe: bool = False) -> Any:
-        """Request a chat completion constrained by the supplied JSON schema."""
-        return await self._request(alias, mapping, policy, "structured", "chat/completions", {"messages": messages, "response_format": {"type": "json_schema", "json_schema": schema}}, probe)
+    async def structured(
+        self, alias: str, mapping: ModelMapping | None, policy: RequestPolicy,
+        messages: list[dict[str, Any]], schema: dict[str, Any], probe: bool = False, *,
+        max_tokens: int | None = None, temperature: float | None = None,
+        before_send: Callable[[], Awaitable[None]] | None = None,
+    ) -> Any:
+        """Request schema-constrained output with bounded completion options and per-attempt authorization."""
+        if max_tokens is not None and not 1 <= max_tokens <= 8192:
+            raise ValueError("max_tokens must be between 1 and 8192")
+        if temperature is not None and not 0 <= temperature <= 2:
+            raise ValueError("temperature must be between 0 and 2")
+        payload: dict[str, Any] = {
+            "messages": messages,
+            "response_format": {"type": "json_schema", "json_schema": schema},
+        }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        if temperature is not None:
+            payload["temperature"] = temperature
+        return await self._request(
+            alias, mapping, policy, "structured", "chat/completions", payload, probe, before_send
+        )
 
     async def tools(self, alias: str, mapping: ModelMapping | None, policy: RequestPolicy, messages: list[dict[str, Any]], tools: list[dict[str, Any]], probe: bool = False) -> Any:
         """Request a chat completion with the supplied tool definitions."""
         return await self._request(alias, mapping, policy, "tools", "chat/completions", {"messages": messages, "tools": tools}, probe)
 
-    async def rerank(self, alias: str, mapping: ModelMapping | None, policy: RequestPolicy, query: str, documents: list[str], probe: bool = False) -> Any:
-        """Request document reranking through the configured gateway capability."""
-        return await self._request(alias, mapping, policy, "reranking", "rerank", {"query": query, "documents": documents}, probe)
+    async def rerank(
+        self, alias: str, mapping: ModelMapping | None, policy: RequestPolicy,
+        query: str, documents: list[str], probe: bool = False, *,
+        before_send: Callable[[], Awaitable[None]] | None = None,
+    ) -> Any:
+        """Request bounded reranking through gateway policy and fresh per-attempt authorization."""
+        return await self._request(
+            alias, mapping, policy, "reranking", "rerank",
+            {"query": query, "documents": documents}, probe, before_send,
+        )

@@ -31,6 +31,7 @@ from modules.knowledge.entities.models import (
     EntityExtractionResult,
 )
 from modules.knowledge.entities.schemas import (
+    EntityTemporalNodeSeed, EntityHistoryItem, EntityHistoryPage,
     AliasCreate,
     EntityAliasRead,
     EntityEvidencePage,
@@ -39,6 +40,7 @@ from modules.knowledge.entities.schemas import (
     EntityReviewEndpoint,
     EntityCreate,
     EntityMembershipReferenceRead,
+    VersionMembershipReference,
     EntityPage,
     EntityPatch,
     EntityRead,
@@ -51,6 +53,162 @@ from modules.knowledge.entities.schemas import (
     EntityRelationshipReviewResult,
     canonicalize_name,
 )
+
+
+async def get_temporal_node_seeds(
+    session: AsyncSession, membership_ids: list[UUID],
+) -> tuple[EntityTemporalNodeSeed, ...]:
+    """Prove current nonblank fields against exact selected source-local evidence.
+
+    Requires caller-held source/document fences and current egress policy. Up to
+    100 unique memberships must belong to one active source generation. Missing,
+    stale, redirected or unsupported fields fail closed; no writes or commits.
+    Owner authorship alone is not source-local evidence for model seed text.
+    """
+    if not membership_ids or len(membership_ids) > 100 or len(set(membership_ids)) != len(membership_ids):
+        raise ValueError("Node seed memberships must contain 1 to 100 unique IDs")
+    rows = list((await session.scalars(select(EntityEvidenceMembership).where(
+        EntityEvidenceMembership.id.in_(membership_ids),
+    ).order_by(EntityEvidenceMembership.id))).all())
+    if len(rows) != len(membership_ids) or len({row.source_id for row in rows}) != 1:
+        raise LookupError("Node seed memberships are missing or cross-source")
+    source = await sources.get_connector_source(session, rows[0].source_id)
+    if source is None or source.status != "active":
+        raise LookupError("Node seed source is unavailable")
+    from modules.knowledge.documents import public as documents
+    groups: dict[tuple[UUID, UUID], list[UUID]] = {}
+    for row in rows:
+        groups.setdefault((row.document_id, row.document_version_id), []).append(row.chunk_id)
+    for (document_id, version_id), chunks in groups.items():
+        fences = await documents.review_version_fences(session, [version_id])
+        fence = fences.get(version_id)
+        refs = await documents.read_evidence_refs(session, [
+            (version_id, chunk) for chunk in dict.fromkeys(chunks)
+        ])
+        if (fence is None or fence.document_id != document_id or fence.source_id != source.id
+                or fence.current_source_generation != source.generation
+                or len(refs) != len(set(chunks))
+                or any(ref.document_id != document_id or ref.source_id != source.id for ref in refs)):
+            raise LookupError("Node seed retained evidence is not current and permitted")
+    result = []
+    for entity_id in sorted({row.entity_id for row in rows}):
+        ref = (await get_entity_refs(session, [entity_id]))[0]
+        if ref.canonical_id != entity_id:
+            raise LookupError("Node seed identity was redirected")
+        entity = await session.get(Entity, entity_id)
+        if entity is None or not entity.name or not entity.name.strip() or entity.name_origin is None:
+            raise LookupError("Node seed name is unavailable")
+        selected = [row for row in rows if row.entity_id == entity_id]
+        proofs = list((await session.scalars(select(EntityFieldEvidence).where(
+            EntityFieldEvidence.entity_id == entity_id,
+            EntityFieldEvidence.membership_id.in_([row.id for row in selected]),
+        ))).all())
+        name_hash = sha256(entity.name.encode("utf-8")).hexdigest()
+        name_support = sorted({p.membership_id for p in proofs if p.field_name == "name" and p.value_hash == name_hash})
+        if not name_support:
+            raise LookupError("Node seed name has no exact selected field support")
+        summary_hash = sha256(entity.description.encode("utf-8")).hexdigest() if entity.description and entity.description.strip() and entity.description_origin else None
+        summary_support = sorted({p.membership_id for p in proofs if p.field_name == "description" and p.value_hash == summary_hash})
+        result.append(EntityTemporalNodeSeed(
+            entity_id=entity.id, revision=entity.revision, type=entity.type,
+            name=entity.name, summary=entity.description if summary_support else None,
+            source_id=source.id, source_generation=source.generation,
+            memberships=await get_membership_refs(session, [row.id for row in selected]),
+            name_support_membership_ids=name_support, summary_support_membership_ids=summary_support,
+            name_hash=name_hash, summary_hash=summary_hash if summary_support else None,
+        ))
+    if sum(len((seed.name + (seed.summary or "")).encode("utf-8")) for seed in result) > 64_000:
+        raise ValueError("Node seed text exceeds its 64000-byte aggregate bound")
+    return tuple(result)
+
+
+async def list_entity_history(
+    session: AsyncSession, entity_id: UUID, limit: int = 50, cursor: str | None = None,
+    *, membership_cursor: str | None = None,
+) -> EntityHistoryPage | None:
+    """Page identifier-only owner audit for a currently accessible canonical entity.
+
+    No reason/raw historical values are exposed. Audit timestamps describe edits,
+    not occurrence; retained evidence remains available via list_entity_evidence.
+    Bound cursor to requested identity and never manufacture past field values.
+    """
+    if not 1 <= limit <= 100:
+        raise ValueError("Entity history page limit must be between 1 and 100")
+    try:
+        canonical = await resolve_canonical_entity_id(session, entity_id)
+    except LookupError:
+        return None
+    statement = select(EntityOwnerAction).where(or_(
+        EntityOwnerAction.affected_ids.contains([str(entity_id)]),
+        EntityOwnerAction.affected_ids.contains([str(canonical)]),
+    ))
+    if cursor:
+        try:
+            if len(cursor) > 1024:
+                raise ValueError
+            identity, position = json.loads(base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True))
+            if identity != str(entity_id):
+                raise ValueError
+            timestamp, identifier = decode_cursor(position)
+        except (ValueError, TypeError, binascii.Error) as exc:
+            raise ValueError("Invalid entity history cursor") from exc
+        statement = statement.where(tuple_(EntityOwnerAction.created_at, EntityOwnerAction.id) < (timestamp, identifier))
+    rows = list((await session.scalars(statement.order_by(
+        EntityOwnerAction.created_at.desc(), EntityOwnerAction.id.desc(),
+    ).limit(limit + 1))).all())
+    more, rows = len(rows) > limit, rows[:limit]
+    next_cursor = None
+    if more and rows:
+        position = encode_cursor(rows[-1].created_at, rows[-1].id)
+        next_cursor = base64.urlsafe_b64encode(json.dumps([str(entity_id), position]).encode()).decode().rstrip("=")
+    membership_position = None
+    if membership_cursor:
+        try:
+            if len(membership_cursor) > 1024:
+                raise ValueError
+            identity, membership_position = json.loads(base64.b64decode(
+                membership_cursor + "=" * (-len(membership_cursor) % 4), altchars=b"-_", validate=True,
+            ))
+            if identity != str(entity_id):
+                raise ValueError
+            decode_cursor(membership_position)
+        except (ValueError, TypeError, binascii.Error) as exc:
+            raise ValueError("Invalid entity membership history cursor") from exc
+    membership_page = await list_entity_evidence(session, canonical, limit, membership_position)
+    if membership_page:
+        permitted = set()
+        for source_id in sorted({item.source_id for item in membership_page.items}):
+            source = await sources.get_connector_source(session, source_id)
+            if source is not None and source.status == "active":
+                permitted.add(source_id)
+        membership_page.items = [item for item in membership_page.items if item.source_id in permitted]
+    membership_next = None
+    if membership_page and membership_page.next_cursor:
+        membership_next = base64.urlsafe_b64encode(json.dumps([
+            str(entity_id), membership_page.next_cursor,
+        ]).encode()).decode().rstrip("=")
+    return EntityHistoryPage(items=[EntityHistoryItem(
+        id=row.id, recorded_at=row.created_at, operation=row.operation,
+        affected_ids=row.affected_ids, revisions=row.revisions,
+    ) for row in rows], next_cursor=next_cursor,
+        memberships=membership_page.items if membership_page else [],
+        membership_next_cursor=membership_next)
+
+
+async def _schedule_entity_change(
+    session: AsyncSession, entity: Entity, fields: list[str], origin: str,
+) -> None:
+    """Flush exact current support/revision scheduling in caller's canonical transaction."""
+    from modules.knowledge.temporal import public as temporal
+    rows = list((await session.execute(select(
+        EntityEvidenceMembership.document_version_id, EntityEvidenceMembership.chunk_id,
+    ).where(EntityEvidenceMembership.entity_id == entity.id).limit(10_001))).all())
+    if len(rows) > 10_000:
+        raise ValueError("Entity change exceeds complete support bound")
+    await temporal.schedule_canonical_change(
+        session, kind="entity", canonical_id=entity.id, revision=entity.revision,
+        fields=fields, support=[(version, chunk) for version, chunk in rows], origin=origin,
+    )
 
 
 class RedirectedEntityConflict(ValueError):
@@ -254,6 +412,101 @@ async def get_membership_refs(
     if set(by_id) != set(ids):
         raise LookupError("Entity evidence membership is missing")
     return [by_id[identifier] for identifier in ids]
+
+
+async def list_version_membership_refs(
+    session: AsyncSession, document_version_id: UUID, chunk_ids: list[UUID]
+) -> list[VersionMembershipReference]:
+    """Return bounded canonical memberships for chunks already authorized by documents extraction input.
+
+    The caller must keep the documents source/document egress fence and must
+    validate each returned chunk against that extraction input. The detached
+    result exposes membership keys for model selection; the model never chooses
+    a global entity ID.
+    """
+    if len(chunk_ids) > 100 or len(set(chunk_ids)) != len(chunk_ids):
+        raise ValueError("Version membership chunks must be unique and bounded")
+    if not chunk_ids:
+        return []
+    rows = (await session.execute(
+        select(EntityEvidenceMembership, Entity)
+        .join(Entity, Entity.id == EntityEvidenceMembership.entity_id)
+        .where(
+            EntityEvidenceMembership.document_version_id == document_version_id,
+            EntityEvidenceMembership.chunk_id.in_(chunk_ids),
+            ~EntityEvidenceMembership.entity_id.in_(select(EntityRedirect.old_entity_id)),
+        )
+        .order_by(EntityEvidenceMembership.id)
+    )).all()
+    if len(rows) > 150:
+        raise ValueError("Version membership context exceeds 150 exact supports")
+    return [VersionMembershipReference(
+        membership_id=membership.id, entity_id=entity.id, entity_type=entity.type,
+        entity_revision=entity.revision, chunk_id=membership.chunk_id,
+        observed_at=membership.observed_at,
+        name=entity.name if entity.name_origin is not None else None,
+    ) for membership, entity in rows]
+
+
+async def list_retained_version_membership_refs(
+    session: AsyncSession, document_version_id: UUID, chunk_ids: list[UUID],
+) -> list[VersionMembershipReference]:
+    """Return canonical membership keys for exact currently permitted retained chunks.
+
+    Accepts an older retained version without making it current extraction input.
+    The caller holds its source/document egress fences and checks destination
+    policy; this read checks active source and current generation using document
+    public provenance contracts. Up to100 unique chunks and100 memberships are
+    authorized completely, never truncated. Missing/deleted/mismatched evidence
+    raises LookupError; malformed or over-bound input raises ValueError. Names
+    are identity hints, not model seed proof: get_temporal_node_seeds owns that
+    source-local field-value proof. No locks, writes or commits occur here.
+    """
+    if len(chunk_ids) > 100 or len(set(chunk_ids)) != len(chunk_ids):
+        raise ValueError("Retained membership chunks must be unique and bounded to100")
+    if not chunk_ids:
+        return []
+    from modules.knowledge.documents import public as documents
+
+    fences = await documents.review_version_fences(session, [document_version_id])
+    fence = fences.get(document_version_id)
+    if fence is None:
+        raise LookupError("Retained membership version is unavailable")
+    source = await sources.get_connector_source(session, fence.source_id)
+    if source is None or source.status != "active" or source.generation != fence.current_source_generation:
+        raise LookupError("Retained membership source policy or generation changed")
+    try:
+        evidence = await documents.read_evidence_refs(
+            session, [(document_version_id, chunk_id) for chunk_id in chunk_ids],
+        )
+    except ValueError as exc:
+        raise LookupError("Retained membership evidence is unavailable") from exc
+    if len(evidence) != len(chunk_ids) or any(
+        ref.document_id != fence.document_id or ref.source_id != fence.source_id
+        for ref in evidence
+    ):
+        raise LookupError("Retained membership evidence identity changed")
+    rows = (await session.execute(
+        select(EntityEvidenceMembership, Entity)
+        .join(Entity, Entity.id == EntityEvidenceMembership.entity_id)
+        .where(
+            EntityEvidenceMembership.document_version_id == document_version_id,
+            EntityEvidenceMembership.chunk_id.in_(chunk_ids),
+            ~EntityEvidenceMembership.entity_id.in_(select(EntityRedirect.old_entity_id)),
+        )
+        .order_by(EntityEvidenceMembership.id).limit(101)
+    )).all()
+    if len(rows) > 100:
+        raise ValueError("Retained membership context exceeds100 exact supports")
+    if any(membership.document_id != fence.document_id or membership.source_id != fence.source_id
+           for membership, _ in rows):
+        raise LookupError("Retained membership owner provenance changed")
+    return [VersionMembershipReference(
+        membership_id=membership.id, entity_id=entity.id, entity_type=entity.type,
+        entity_revision=entity.revision, chunk_id=membership.chunk_id,
+        observed_at=membership.observed_at,
+        name=entity.name if entity.name_origin is not None else None,
+    ) for membership, entity in rows]
 
 
 async def list_entity_evidence(
@@ -774,7 +1027,8 @@ async def publish_derived_field(
     """Publish a derived field and bind its exact value to one valid membership.
 
     The caller owns the source/document locks and the outer transaction. This
-    command takes entity then membership locks and never commits.
+    command takes entity then membership locks and queues temporal desired state
+    with exact current support in the same transaction; it never commits.
     """
     if field_name not in {"name", "description"}:
         raise ValueError("Unsupported derived entity field")
@@ -834,6 +1088,8 @@ async def publish_derived_field(
     elif previous_value != value or previous_origin != "derived":
         entity.revision += 1
     await session.flush()
+    if support_exists is None or previous_value != value or previous_origin != "derived":
+        await _schedule_entity_change(session, entity, [field_name, "support"], "derived")
     return True
 
 
@@ -1266,7 +1522,7 @@ async def get_document_correction_decisions(
 
 
 async def create_entity(session: AsyncSession, payload: EntityCreate, *, actor_id: int) -> EntityRead:
-    """Create an owner-authored entity, aliases, audit row, and graph change atomically."""
+    """Commit owner fields, aliases, audit and temporal desired-state change atomically."""
     entity = Entity(
         type=payload.type,
         name=payload.name,
@@ -1298,6 +1554,7 @@ async def create_entity(session: AsyncSession, payload: EntityCreate, *, actor_i
             session, actor_id=actor_id, operation="entity_create", reason=payload.reason,
             affected_ids=[entity.id], revisions={str(entity.id): 1},
         )
+        await _schedule_entity_change(session, entity, ["name", "description", "metadata", "aliases"], "owner")
         await commit_with_replay(session, [make_graph_change(entity_id=entity.id)])
     except IntegrityError:
         await session.rollback()
@@ -1314,7 +1571,7 @@ async def update_entity(
     provenance. Returns None if the row disappears, rejects merged/deleted IDs
     with typed conflicts and stale revisions with ValueError, marks edited fields
     owner-authored, removes their derived field support, then commits audit and
-    graph changes.
+    graph changes plus exact-support temporal desired state in one transaction.
     """
     try:
         canonical_id = await resolve_canonical_entity_id(session, entity_id)
@@ -1358,6 +1615,7 @@ async def update_entity(
         session, actor_id=actor_id, operation="entity_update", reason=payload.reason,
         affected_ids=[entity.id], revisions={str(entity.id): previous_revision},
     )
+    await _schedule_entity_change(session, entity, sorted(payload.model_fields_set - {"expected_revision", "reason"}), "owner")
     await commit_with_replay(session, [make_graph_change(entity_id=entity.id)])
     return result
 
@@ -1369,7 +1627,7 @@ async def add_alias(
 
     The owner-write route authorizes the operation. Redirected or terminal IDs
     raise typed conflicts; a missing canonical row returns None. A successful
-    insert records the actor/reason and publishes the graph change.
+    insert records the actor/reason and atomically schedules graph desired state.
     """
     try:
         canonical_id = await resolve_canonical_entity_id(session, entity_id)
@@ -1400,6 +1658,7 @@ async def add_alias(
         session, actor_id=actor_id, operation="alias_create", reason=payload.reason,
         affected_ids=[entity.id, alias.id], revisions={str(entity.id): entity.revision},
     )
+    await _schedule_entity_change(session, entity, ["aliases"], "owner")
     await commit_with_replay(session, [make_graph_change(entity_id=entity.id)])
     return result
 
@@ -1411,7 +1670,7 @@ async def delete_alias(
 
     The owner-write route authorizes the operation. Redirected or terminal IDs
     raise typed conflicts; a missing entity or alias returns False. Success
-    records the actor/reason and publishes the graph change.
+    records the actor/reason and atomically schedules graph desired state.
     """
     try:
         canonical_id = await resolve_canonical_entity_id(session, entity_id)
@@ -1434,6 +1693,7 @@ async def delete_alias(
         session, actor_id=actor_id, operation="alias_delete", reason=reason,
         affected_ids=[entity.id, alias_id], revisions={str(entity.id): entity.revision},
     )
+    await _schedule_entity_change(session, entity, ["aliases"], "owner")
     await commit_with_replay(session, [make_graph_change(entity_id=entity.id)])
     return True
 

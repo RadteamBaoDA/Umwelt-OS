@@ -62,7 +62,7 @@ class EvidenceRead(BaseModel):
 
 
 class RelationshipRead(BaseModel):
-    """Serialize a relationship and its evidence-backed or owner-authored state."""
+    """Serialize canonical state; any nullable validity boundary is explicitly unknown."""
     id: UUID
     source_entity_id: UUID
     target_entity_id: UUID
@@ -74,12 +74,21 @@ class RelationshipRead(BaseModel):
     metadata: dict[str, Any]
     created_at: datetime
     evidence: list[EvidenceRead] = Field(default_factory=list)
+    validity_precision: Literal["bounded", "unknown"] = "unknown"
 
 
 class RelationshipPage(BaseModel):
-    """Return a relationship page and its optional continuation cursor."""
+    """Page canonical rows with separate historical coverage and observed-time controls.
+
+    Unavailable identifiers are bounded hints, not fabricated historical values;
+    current evidence observations remain separately pageable through evidence API.
+    """
     items: list[RelationshipRead]
     next_cursor: str | None
+    canonical_history_available: bool = True
+    knowledge_as_of: datetime | None = None
+    observation_history_only: bool = False
+    unavailable_relationship_ids: list[UUID] = Field(default_factory=list)
 
 
 class EvidencePage(BaseModel):
@@ -124,3 +133,13 @@ class CorrectionRelationshipRef(BaseModel):
     valid_to: datetime | None
     metadata: dict[str, Any]
     supports: list[CorrectionSupportRef]
+
+
+class RelationshipSnapshot(BaseModel):
+    """Complete detached current owner state and exact support digest; no fake revision."""
+    relationship: RelationshipRead
+    endpoints: list[dict[str, Any]]
+    memberships: list[dict[str, Any]]
+    supports: list[dict[str, Any]]
+    source_generations: dict[str, int]
+    digest: str
