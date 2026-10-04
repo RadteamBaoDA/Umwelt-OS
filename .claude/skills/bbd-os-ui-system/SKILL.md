@@ -29,3 +29,11 @@ Read [the design system](../../../docs/DESIGN_SYSTEM.md) before UI work. It owns
 Follow repository GitNexus impact/change-scope requirements for production symbols. During the authorized implementation stage run builds only: do not add/run tests, lint or standalone typecheck; deferred behavioral validation belongs to the later test stage.
 
 Record actual dependencies/ported code and notices in the OSS inventory and README at delivery. Distinguish proposed components, interactive mockups, code/build completion and verified runtime behavior. A reference HTML mockup is not evidence that shadcn/Recharts or backend preference persistence is integrated.
+
+## Code documentation required by the owner
+
+Before handing off generated or changed production code, ensure every named function/method/component/hook has JSDoc (JavaScript/TypeScript) or a Python docstring describing its real purpose and contract. Add inline comments for non-obvious invariants, authorization, transaction/lock ordering, retry/idempotency/deletion behavior and UI state transitions. Preserve accurate existing comments and OSS notices; never fabricate safety guarantees or narrate obvious lines. Follow AGENTS.md's Mandatory Code Documentation section for details and existing-code coverage.
+
+Review documentation alongside source behavior. Keep changes limited to comments/docstrings during a documentation task; preserve signatures and application logic. Tests remain deferred under the owner's code/build-only stage. Update checkpoint files continuously and batch their commits with a completed large task or phase instead of committing every status update.
+
+For other authored production languages, use their native named-function documentation format; keep test-only helpers deferred with the test stage.
