@@ -4,10 +4,10 @@
 
 - Product scope: canonical sections 165–166; original phase plans plus [R01–R16](2026-09-30-umwelt-os-spec-reconciliation.md).
 - Method: subagent-driven; code/build first, test stage only after all original and supplemental code/build/review completes.
-- Current action (2026-10-05): ACTIVE, owner resumed remaining plan. Parallel independent reviews at P11-T4 f3684a2, R12 R1 884d7bc, R14 R1 c6df508. develop remains 71b32aa. gpt-6-luna implementation (Luna6.1 unavailable); gpt-6.1-sol review/planning. Production builds only until all code/reviews close.
+- Current action (2026-10-06): ACTIVE. develop 1a48454 includes P01–P11, Collector/MCP, R07, R12 and R14. R15 composition8467803 passed the prescribed build and independent composition review; integrated in this task commit. P12 backup/restore implementation and owner-export production build continue in isolated worktrees. gpt-6-luna implements/builds; gpt-6.1-sol reviews. Tests remain deferred until all production code/reviews close.
 - Baseline: original Phases 1–3 code/build/review complete; Phase 3 commit 4d0f774 is present in local main history. Runtime acceptance deferred.
 - Preserved historical draft: D:/Project/Umwelt-OS-phase-4 on codex/bbd-os-phase-4, with uncommitted entity/relationship code and 0007_entities.py. Verified backup retained; this is not the active implementation tree.
-- Active production tasks: P11-T4 review, R12/R14 scoped repair re-reviews; existing worktrees reused. Repairs/builds follow verdicts; Docker builds serialized.
+- Active production tasks: P12-T1 backup/restore and owner-export contracts; R15 final composition review. Owner-export holds the serialized production build slot. Remaining P12-T2–T5 and R16 are incomplete.
 - Report completion immediately and commit/merge scoped completed work per owner authorization. No push/deploy/destructive owner-data operations.
 
 ## Phase checkpoints
@@ -26,7 +26,7 @@
 | 9 | [Ready](2026-09-25-umwelt-os-phase-9-github-integration.md) | Code/build/review complete; squash-merged into develop | Deferred validation | integrate/p09 b470593; T3 review clean; T4 + phase final review fix-first → fixed (76731e5, 6629865, b470593) |
 | 10 | [Ready](2026-09-25-umwelt-os-phase-10-automation-workflows.md) | Code/build/review complete; squash-merged into develop | Deferred validation; webhook trigger after n8n inbound receiver gate | codex/umwelt-p10 deb5446; T1–T4 review clean; phase final review fix-first → fixed |
 | 11 | [Ready](2026-09-25-umwelt-os-phase-11-observability-operations.md) | Production code/build/source review complete a19d77b, phase squash integration | R12/R14 composition; deferred validation | T4 scoped PASS e7060ee; final whole-phase docs review PASS a19d77b; exact full build PASS |
-| 12 | [Ready](2026-09-25-umwelt-os-phase-12-hardening-release-acceptance.md) | Not started | P12-T1 | Not executed |
+| 12 | [Ready](2026-09-25-umwelt-os-phase-12-hardening-release-acceptance.md) | P12-T1 in progress in isolated worktrees; phase incomplete | Backup/restore and owner-export build/review, then T2–T5/R16 | No runtime restore or capacity acceptance claimed |
 
 ## External acceptance gates
 
@@ -2188,3 +2188,18 @@ Root read independentSol R15 scoped report: ACCEPTED exact9e352e4, all sevenclos
 
 ### R07 source integration complete — 2026-10-06
 Accepted composed source0b190510 integrated into develop fromdb67fd1: actual AnythingLLM frontend slices/provenance, append-only edit/regenerate receipts, exact retained citation reader, active-run SSE navigation/remount/Stop recovery, minimal drawer and guarded initial-fetch failures. Independent original review, scoped repair review and composition review PASS; exact prescribed composed build PASS exit0 Next integratedTS20routes/fourDockerimages. Newr07_chat_mutation_receipts followsr14_observations; static48revision one-head chain inspected, no migration execution. Root squash contains exactly25accepted source/OSSfiles plus completed-task checkpoint documents. R15 repair9e352e4 independently accepted; next compose against newdevelop. P12 backup/export remains incomplete, ownerexports isolated Luna task started at accepted composition source. No tests/runtime/providers/SQL/push/deploy; not whole-plan or runtime completion. Unrelated AGENTS/CLAUDE/UX deletions preserved unstaged.
+
+### R07 worktree cleanup / P12 owner exports live — 2026-10-06
+Root verified accepted R07 source byte-equivalent to integrated1a48454 across production/OSS paths, clean task tree and no task.env; copied all ignored R07 reports into root.superpowers/sdd/r07 before cleanup. git worktree remove --force unregistered R07 but reported directory not empty; residual folder remains. Native PowerShell residual removal was rejected by automatic policy review; no alternate deletion workaround used. Cleanup incomplete at filesystem level, evidence and branch commits preserved. R15 accepted source composition redispatch currently threadcap; P12 backup and isolated Lunaownerexports live. No newmerge/tests/runtime/SQL/providers/push/deploy.
+
+### R15 composition author reassigned — 2026-10-06
+Retained r15 author/fresh composition dispatch remains threadcap. Root prepared mechanical merge in idle R15 tree and saved own composition-handoff.md: accepteddevelop1a48454 plus acceptedR15repair9e352e4, only two dependency conflicts resolved retaining both approved sets. RetainedLuna r07_implement followup SUCCEEDED as finite R15 composition/build owner assigned exclusively to existing R15 worktree (former R07worktree unregistered). Author instructed resume prepared merge, inspect source, run granted full prescribed build then freeze/report; independent compositionreview remains next gate. P12backup and ownerexports live; exportpreflight/contracts receipt requested. No newrootmerge/tests/runtime/SQL/providers/push/deploy.
+
+### R15 composition build prerequisite — 2026-10-06
+Live Luna composition author first prescribed build failed at local Next compile: ignored node_modules lacks newly merged approved R07 markdown-it/DOMPurify despite merged package/lock. Author authorized npm ci exact lockfile dependency synchronization only as build prerequisite, no lock/source regeneration or audit/test commands; reruns full prescribed build afterward, retains serialized slot. P12 full host backup source progresses durable n8n recovery, mandatory isolated restore/export/UI still pending; root requested finite remaining inventory and received ownercontracts. No newrootmerge/tests/runtime/SQL/providers/push/deploy.
+
+### R15 review capacity / P12 export DTO source — 2026-10-06
+R15 exact84678032 composition clean/finalbuildPASS; retained and fresh Sol compositionreview dispatch currently threadcap, no integration acceptance. Root inspected mutable P12ownerexportDTOs now authored in Chat/Documents schemas: allowlisted records, typed fences/privacy/history and final validation result. Root notified author to bound total page bytes (100 max-size versions is not a resource bound), preserve full content via continuation, prevent validation-only digests in portable output, and fence same-count edits/deletion/publication. Public query/validation implementation still underway, no build/completion. P12 host isolated restore/recovery source authored, key/graph/n8n readiness gates required before complete claim. No newrootmerge/tests/runtime/SQL/providers/push/deploy.
+
+### P12 owner export queries authored — 2026-10-06
+Root current mutable source verifies four assigned ownerfiles changed: Chat/Documents DTOs and publicexportqueries/finalvalidation now being authored. Documents fixed cutoff/keyset/allowlist/source+revision fences/count revalidation and payload admission present; streaming8MiB page refinement underway. Root identified unlabeled Source.id selected then row.source_id in finalvalidator, sent precise source repair to author. No final build/freeze/acceptance yet. SolR15 composition dispatch remains threadcap including delegate attempt; exact84678032 remains cleanbuilt unintegrated. Existing P12 livehandles preserved, no taskrestart. No newrootmerge/tests/runtime/SQL/providers/push/deploy.

@@ -27,9 +27,11 @@ from modules.news.topics import (
 from modules.news.seed import ensure_demo_topics
 from modules.news.relevance import score_relevance
 from modules.news.schemas import (
-    RelevanceRead, StoryDetail, StoryFilter, StoryPage, StoryRead, TrendFilter,
-    TrendPage, TrendRead,
+    CorrelationBucketRead, CorrelationCoverageRead, CorrelationQuery, CorrelationResult,
+    CiiUnavailableRead, RelevanceRead, StoryDetail, StoryFilter, StoryPage, StoryRead,
+    TrendFilter, TrendPage, TrendRead,
 )
+from modules.news.correlation import build_correlations
 from modules.news.stories import cluster_observation, get_story, list_stories
 from modules.news.trends import list_trends
 from modules.news.worker import process_news_document_ready, recover_news_work
@@ -41,5 +43,6 @@ __all__ = [
     "RelevanceRead", "StoryDetail", "StoryFilter", "StoryPage", "StoryRead",
     "TrendFilter", "TrendPage", "TrendRead", "cluster_observation", "get_story",
     "list_stories", "list_trends", "process_news_document_ready", "recover_news_work",
-    "score_relevance",
+    "score_relevance", "CorrelationBucketRead", "CorrelationCoverageRead", "CorrelationQuery",
+    "CorrelationResult", "CiiUnavailableRead", "build_correlations",
 ]

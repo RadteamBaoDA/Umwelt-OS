@@ -69,18 +69,19 @@ class ObservationEvidenceCandidate:
     document_version_id: UUID
 
 
-async def current_observation_evidence_ids(
+async def current_observation_evidence_versions(
     session: AsyncSession,
     candidates: Sequence[ObservationEvidenceCandidate],
     current_scopes: dict[UUID, object],
-) -> frozenset[UUID]:
-    """Return candidates backed by one current document version and matching accepted provider scope.
+) -> dict[UUID, int]:
+    """Return current evidence revisions backed by matching document and provider fences.
 
-    Documents owns version/provenance reads. The result contains only accepted observation IDs;
-    foreign modules never receive Document ORM rows or provenance bodies.
+    Documents owns version/provenance reads. The result contains accepted observation IDs
+    paired with their current version numbers; foreign modules never receive Document ORM
+    rows or provenance bodies.
     """
     if not candidates or len(candidates) > 256:
-        return frozenset()
+        return {}
     rows = (await session.execute(
         select(
             Document.id, DocumentVersion.id, Source.id, Source.generation,
@@ -103,7 +104,7 @@ async def current_observation_evidence_ids(
             source_id, source_generation, version_number, current_version,
             provider_id, accepted_generation, provenance,
         ))
-    accepted: set[UUID] = set()
+    accepted: dict[UUID, int] = {}
     for candidate in candidates:
         current = current_scopes.get(candidate.source_id)
         if (
@@ -127,8 +128,8 @@ async def current_observation_evidence_ids(
             and isinstance(provenance, dict)
             and provenance.get("provider_scope_discriminator") == candidate.provider_scope_discriminator
         ):
-            accepted.add(candidate.observation_id)
-    return frozenset(accepted)
+            accepted[candidate.observation_id] = version_number
+    return accepted
 
 
 def _provider_snapshot(

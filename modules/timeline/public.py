@@ -9,14 +9,17 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from pydantic import ValidationError
-from sqlalchemy import delete, desc, select, tuple_
+from sqlalchemy import delete, desc, or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.realtime import ReplayDraft, commit_with_replay, make_timeline_change, make_timeline_collection_change
 from modules.knowledge.documents import public as documents
 from modules.knowledge.entities import public as entities
 from modules.timeline.models import Event, EventAudit, EventEvidence, EventParticipant, EventSuppression, ParticipantEvidence
-from modules.timeline.schemas import EventCreate, EventPage, EventPatch, EventRead, TimelinePage, TimelineQuery
+from modules.timeline.schemas import (
+    CorrelationSignalPage, CorrelationSignalRead, EventCreate, EventPage, EventPatch,
+    EventRead, TimelinePage, TimelineQuery,
+)
 
 MAX_PAGE = 100
 
@@ -145,6 +148,97 @@ async def list_event_evidence(session: AsyncSession, event_id: UUID) -> list[dic
         return None
     result = await _event_read(session, await session.get(Event, event_id))
     return result.evidence if result else None
+
+
+async def list_correlation_signals(
+    session: AsyncSession, *, domain: str, from_at: datetime, to_at: datetime,
+    regions: list[str], source_ids: list[UUID], limit: int = 100,
+) -> CorrelationSignalPage:
+    """Project a bounded timed event slice into detached IDs after exact evidence checks.
+
+    Region values must already be recorded under event metadata ``region``. Events
+    without a live document-version/chunk reference are excluded. Military and
+    escalation labels also require a recorded participant entity. No event title,
+    summary, excerpt, or coordinate is returned to the correlation owner.
+    """
+    if (
+        from_at.tzinfo is None or from_at.utcoffset() is None
+        or to_at.tzinfo is None or to_at.utcoffset() is None
+        or domain not in {"military", "economic", "disaster", "escalation"}
+        or from_at >= to_at or not 1 <= limit <= 100
+        or not 1 <= len(regions) <= 32 or len(regions) != len(set(regions))
+        or not 1 <= len(source_ids) <= 32 or len(source_ids) != len(set(source_ids))
+        or any(not region or len(region) > 80 or region != region.strip() for region in regions)
+    ):
+        raise ValueError("Invalid bounded correlation projection scope")
+    selected_sources = set(source_ids)
+    start, end = from_at.astimezone(UTC), to_at.astimezone(UTC)
+    statement = select(Event).where(
+        Event.deleted_at.is_(None), Event.date_precision == "timed",
+        Event.started_at >= start, Event.started_at < end,
+        Event.type == domain,
+        Event.metadata_json["region"].as_string().in_(regions),
+        Event.id.in_(select(EventEvidence.event_id).where(
+            EventEvidence.event_id == Event.id,
+            EventEvidence.document_version_id.is_not(None),
+            EventEvidence.chunk_id.is_not(None),
+        )),
+        # Coarse persisted-source admission bounds candidate work; live Document refs below
+        # make the final decision and prevent stale EventEvidence.source_id from authorizing IDs.
+        or_(
+            Event.source_id.in_(selected_sources),
+            Event.id.in_(select(EventEvidence.event_id).where(
+                EventEvidence.event_id == Event.id,
+                EventEvidence.source_id.in_(selected_sources),
+                EventEvidence.document_version_id.is_not(None),
+                EventEvidence.chunk_id.is_not(None),
+            )),
+        ),
+    ).order_by(Event.started_at, Event.id).limit(1_001)
+    rows = list((await session.scalars(statement)).all())
+    signals: list[CorrelationSignalRead] = []
+    for event in rows:
+        if event.source_id is not None and event.source_id not in selected_sources:
+            continue
+        current = await _event_read(session, event)
+        if not current.evidence or (
+            event.type in {"military", "escalation"} and not current.participants
+        ):
+            continue
+        live_evidence = {
+            (item["document_version_id"], item["chunk_id"]): item
+            for item in current.evidence if item["source_id"] in selected_sources
+        }
+        evidence_rows = (await session.scalars(select(EventEvidence).where(
+            EventEvidence.event_id == event.id,
+        ).order_by(EventEvidence.id))).all()
+        exact_rows = [item for item in evidence_rows if item.source_id in selected_sources and (
+            item.document_version_id, item.chunk_id
+        ) in live_evidence]
+        if not exact_rows:
+            continue
+        exact_refs = [live_evidence[(item.document_version_id, item.chunk_id)] for item in exact_rows]
+        event_evidence_ids = [item.id for item in exact_rows]
+        document_ids = sorted({item["document_id"] for item in exact_refs if item["document_id"]}, key=str)
+        document_version_ids = sorted({item["document_version_id"] for item in exact_refs if item["document_version_id"]}, key=str)
+        region = event.metadata_json.get("region")
+        if not isinstance(region, str) or region not in regions:
+            continue
+        signals.append(CorrelationSignalRead(
+            signal_id=event.id, event_id=event.id, event_type=event.type,
+            region=region, observed_at=event.started_at, source_id=event.source_id,
+            event_evidence_ids=event_evidence_ids[:100],
+            document_ids=document_ids[:100],
+            document_version_ids=document_version_ids[:100],
+            chunk_ids=sorted({item.chunk_id for item in exact_rows if item.chunk_id}, key=str)[:100],
+            omitted_event_evidence_ids=max(0, len(event_evidence_ids) - 100),
+            omitted_document_ids=max(0, len(document_ids) - 100),
+            omitted_document_version_ids=max(0, len(document_version_ids) - 100),
+        ))
+        if len(signals) > limit:
+            break
+    truncated = len(signals) > limit or len(rows) > 1_000
+    return CorrelationSignalPage(items=signals[:limit], truncated=truncated)
 
 
 async def _list_partition(session: AsyncSession, query: TimelineQuery, partition: int, key: object | None, limit: int) -> list[Event]:

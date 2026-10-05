@@ -5,14 +5,20 @@ from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.dependencies import require_owner
 from core.auth.models import AuthSession
 from core.database import get_session
-from modules.news.schemas import StoryDetail, StoryFilter, StoryPage, TrendFilter, TrendPage
+from modules.news.public import build_correlations
+from modules.news.schemas import (
+    CiiUnavailableRead, CorrelationQuery, CorrelationResult, StoryDetail, StoryFilter,
+    StoryPage, TrendFilter, TrendPage,
+)
 from modules.news.stories import get_story, list_stories
 from modules.news.trends import list_trends
+from modules.connectors import public as connector_public
 from modules.settings.public import module_dependency
 
 router = APIRouter(prefix="/api/v1", tags=["news"], dependencies=[Depends(module_dependency("news"))])
@@ -75,3 +81,46 @@ async def list_trends_route(
     """Return current source-breadth trend candidates with explicit baseline flags."""
     _no_store(response)
     return await list_trends(session, owner.owner_id, TrendFilter(source_ids=source_ids, limit=limit))
+
+
+@router.get("/intelligence/correlations", response_model=CorrelationResult)
+async def read_correlations(
+    session: Session, _owner: OwnerRead, response: Response,
+    regions: Annotated[list[str], Query(min_length=1, max_length=32)],
+    from_at: datetime, to_at: datetime,
+    source_ids: Annotated[list[UUID], Query(max_length=32)] = [],
+    limit_per_domain: Annotated[int, Query(ge=1, le=100)] = 100,
+) -> CorrelationResult:
+    """Return bounded evidence-only temporal co-occurrence for the authenticated owner."""
+    _no_store(response)
+    try:
+        query = CorrelationQuery(
+            regions=regions, from_at=from_at, to_at=to_at, source_ids=source_ids,
+            limit_per_domain=limit_per_domain,
+        )
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail="Correlation query is invalid") from exc
+    try:
+        return await build_correlations(session, query)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Correlation query is invalid") from exc
+
+
+@router.get("/intelligence/cii", response_model=CiiUnavailableRead)
+async def read_cii_availability(
+    _owner: OwnerRead, response: Response,
+    countries: Annotated[list[str], Query(max_length=31)] = [],
+) -> CiiUnavailableRead:
+    """Expose a consumed CII v8 unavailable state without fabricating scores or country coverage."""
+    _no_store(response)
+    try:
+        projection = connector_public.cii_v8_availability(countries)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="CII country scope is invalid") from exc
+    return CiiUnavailableRead(**{
+        "method_version": projection.method_version,
+        "requested_countries": list(projection.requested_countries),
+        "score": projection.score, "band": projection.band,
+        "movement_24h": projection.movement_24h, "as_of": projection.as_of,
+        "availability": projection.availability, "reason": projection.reason,
+    })

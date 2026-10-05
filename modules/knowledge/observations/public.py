@@ -12,7 +12,9 @@ from sqlalchemy import and_, func, or_, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.knowledge.observations.models import Observation
-from modules.knowledge.observations.schemas import ObservationQuery, WorldMeasurement
+from modules.knowledge.observations.schemas import (
+    GeospatialObservationPage, GeospatialObservationRead, ObservationQuery, WorldMeasurement,
+)
 from modules.connectors import public as connectors
 from modules.knowledge.documents import public as documents
 from modules.sources import public as sources
@@ -139,7 +141,7 @@ def _decode_cursor(cursor: str, fingerprint: str) -> tuple[datetime, UUID]:
 
 async def list_observations(
     session: AsyncSession, query: ObservationQuery, cursor: str | None = None,
-) -> tuple[tuple[Observation, ...], str | None, bool]:
+) -> tuple[tuple[Observation, ...], str | None, bool, dict[UUID, int]]:
     """Read only current-generation, current-provider-scope, current-evidence points under bounded scanning."""
     scopes: list[ObservationScopeRead] = []
     current_scopes: dict[UUID, object] = {}
@@ -166,6 +168,11 @@ async def list_observations(
         or_(*source_scope_filters), Observation.is_current.is_(True),
         Observation.observed_at >= query.from_at, Observation.observed_at < query.to_at,
     )
+    if query.geospatial_only:
+        # Do not infer point coordinates from a location label; only provider-recorded points map.
+        statement = statement.where(
+            Observation.latitude.is_not(None), Observation.longitude.is_not(None),
+        )
     if query.metrics:
         statement = statement.where(Observation.metric.in_(query.metrics))
     if query.symbols:
@@ -180,6 +187,7 @@ async def list_observations(
     page: list[Observation] = []
     scanned = 0
     last_scanned: Observation | None = None
+    page_version_numbers: dict[UUID, int] = {}
     scan_truncated = False
     while scanned < 2_048 and len(page) <= query.limit:
         batch = tuple((await session.scalars(
@@ -194,10 +202,11 @@ async def list_observations(
             external_id=row.external_id, document_id=row.document_id,
             document_version_id=row.document_version_id,
         ) for row in batch)
-        allowed = await documents.current_observation_evidence_ids(session, candidates, current_scopes)
+        allowed = await documents.current_observation_evidence_versions(session, candidates, current_scopes)
         for row in batch:
             if row.id in allowed:
                 page.append(row)
+                page_version_numbers[row.id] = allowed[row.id]
                 if len(page) > query.limit:
                     break
         scanned += len(batch)
@@ -209,6 +218,7 @@ async def list_observations(
             scan_truncated = True
     has_more = len(page) > query.limit
     page = page[:query.limit]
+    page_version_numbers = {row.id: page_version_numbers[row.id] for row in page}
     next_cursor = None
     if has_more and page:
         last = page[-1]
@@ -218,7 +228,50 @@ async def list_observations(
         last = last_scanned
         payload = json.dumps([fingerprint, last.observed_at.astimezone(UTC).isoformat(), str(last.id)], separators=(",", ":")).encode()
         next_cursor = base64.urlsafe_b64encode(payload).decode().rstrip("=")
-    return tuple(page), next_cursor, scan_truncated
+    return tuple(page), next_cursor, scan_truncated, page_version_numbers
+
+
+async def list_geospatial_observations(
+    session: AsyncSession, query: ObservationQuery, cursor: str | None = None,
+) -> GeospatialObservationPage:
+    """Return at most one page of current Open-Meteo point evidence for valid selected sources.
+
+    Non-weather and inactive sources are counted as omitted rather than causing a
+    broad query failure. The underlying query still applies the standard source,
+    provider-scope, generation, current revision and exact-document evidence fences.
+    """
+    if not query.source_ids:
+        raise ValueError("At least one map source is required")
+    eligible: list[UUID] = []
+    omitted = 0
+    for source_id in query.source_ids:
+        source = await sources.get_connector_source(session, source_id)
+        snapshot = await connectors.get_current_provider_scope(
+            session, source_id,
+            source.generation if source is not None and source.status == "active" else -1,
+        )
+        # Only the existing weather adapter declares point coordinates; market symbols have none.
+        if snapshot is None or snapshot.provider_id != "open_meteo":
+            omitted += 1
+        else:
+            eligible.append(source_id)
+    if not eligible:
+        return GeospatialObservationPage(
+            items=[], next_cursor=None, truncated=False, omitted_source_count=omitted,
+        )
+    scoped_query = query.model_copy(update={
+        "source_ids": eligible, "geospatial_only": True,
+    })
+    rows, next_cursor, truncated, version_numbers = await list_observations(session, scoped_query, cursor)
+    version_numbers_by_observation = version_numbers
+    items = [GeospatialObservationRead.model_validate({
+        **{key: getattr(row, key) for key in GeospatialObservationRead.model_fields if hasattr(row, key)},
+        "document_version_number": version_numbers_by_observation.get(row.id),
+    }) for row in rows]
+    return GeospatialObservationPage(
+        items=items, next_cursor=next_cursor, truncated=truncated,
+        omitted_source_count=omitted,
+    )
 
 
 async def purge_source_in_uow(session: AsyncSession, source_id: UUID) -> None:

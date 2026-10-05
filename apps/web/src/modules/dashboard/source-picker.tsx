@@ -21,7 +21,7 @@ export const SOURCE_BACKED_RENDERERS: Readonly<Record<string, { provider: string
 
 /** Renderers whose configured data sources are read through the Documents owner projection. */
 export const MULTI_SOURCE_RENDERERS = new Set([
-  'telegram_feed', 'text_panel', 'table_panel', 'video_panel',
+  'telegram_feed', 'text_panel', 'table_panel', 'video_panel', 'map', 'intelligence_panel',
 ]);
 
 /** Choose up to 32 active sources without exposing connector configuration. */

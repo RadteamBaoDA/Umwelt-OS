@@ -44,6 +44,7 @@ class ObservationQuery(BaseModel):
     from_at: datetime
     to_at: datetime
     limit: StrictInt = Field(default=100, ge=1, le=100)
+    geospatial_only: bool = False
 
     @field_validator("from_at", "to_at")
     @classmethod
@@ -106,6 +107,21 @@ class ObservationRead(BaseModel):
     provider_delay_seconds: int | None
     document_id: UUID
     document_version_id: UUID
+
+
+class GeospatialObservationRead(ObservationRead):
+    """Expose a current authorized observation only when the provider recorded both coordinates."""
+    latitude: float
+    longitude: float
+    document_version_number: int | None = Field(default=None, ge=1)
+
+
+class GeospatialObservationPage(BaseModel):
+    """Return a bounded current point page and aggregate unsupported-source coverage."""
+    items: list[GeospatialObservationRead] = Field(max_length=100)
+    next_cursor: str | None
+    truncated: bool = False
+    omitted_source_count: int = Field(ge=0, le=32)
 
 
 class ObservationPage(BaseModel):

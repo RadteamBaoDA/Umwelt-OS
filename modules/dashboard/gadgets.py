@@ -50,7 +50,8 @@ RENDERERS: tuple[RendererDescriptor, ...] = (
     RendererDescriptor("video_panel", 1, 6, 4, "available", ("video",)),
     RendererDescriptor("finance_chart", 1, 6, 4, "available", ("market_series", "world_observations")),
     RendererDescriptor("personal_context", 1, 4, 4, "planned", ("personal_context",)),
-    RendererDescriptor("map", 1, 8, 6, "planned", ("map_layers",)),
+    RendererDescriptor("map", 1, 8, 6, "available", ("map_layers", "world_observations")),
+    RendererDescriptor("intelligence_panel", 1, 8, 6, "available", ("cross_stream_correlation", "cii_v8_availability")),
     RendererDescriptor("highlights", 1, 4, 3, "available", ("highlights",)),
     RendererDescriptor("watch_rules", 1, 4, 3, "available", ("watch_rules",)),
     RendererDescriptor("tasks", 1, 4, 4, "available", ("tasks",)),
@@ -113,14 +114,16 @@ def validate_renderer_configuration(
     """Reject selectors outside the renderer's narrow v1 scope while retaining validated filters.
 
     Source and item selectors remain configuration only; this function performs no source lookup,
-    authorization, collector creation, or renderer execution.
+    authorization, collector creation, or renderer execution. Map-only engine and precise-location
+    preferences are rejected on other renderer IDs, and layer IDs must belong to the fixed catalog.
     """
     renderer_descriptor(renderer_id)
     allowed_scope = {
         "telegram_feed": {"channel_ids"},
         "finance_chart": {"symbols", "metrics", "lookback_days"},
         "weather": {"metrics", "lookback_days"},
-        "map": {"regions", "map_layer_ids"},
+        "map": {"regions", "map_layer_ids", "lookback_days"},
+        "intelligence_panel": {"regions", "lookback_days", "cii_country_codes"},
     }.get(renderer_id, {"source_item_ids"})
     for field_name, values in configuration.scope.model_dump().items():
         if field_name not in allowed_scope and values:
@@ -129,6 +132,18 @@ def validate_renderer_configuration(
         raise ValueError("Finance chart metric is outside the provider-declared daily OHLCV set")
     if renderer_id == "weather" and set(configuration.scope.metrics) - {"temperature_2m", "relative_humidity_2m", "precipitation", "wind_speed_10m"}:
         raise ValueError("Weather metric is outside the Open-Meteo allowlist")
+    if renderer_id == "map":
+        if set(configuration.scope.map_layer_ids) - {
+            "world_observations", "military", "economic", "disaster", "escalation",
+        }:
+            raise ValueError("Map layer is not in the bounded catalog")
+    if renderer_id == "intelligence_panel":
+        if configuration.scope.map_layer_ids or configuration.scope.metrics or configuration.scope.symbols:
+            raise ValueError("Map and measurement selectors are not valid for the intelligence panel")
+    if renderer_id != "map" and (
+        configuration.filters.map_engine is not None or configuration.filters.show_precise_locations
+    ):
+        raise ValueError("Map display preferences are only valid for the map renderer")
     return configuration
 
 

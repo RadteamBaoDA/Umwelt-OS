@@ -13,7 +13,9 @@ from core.auth.dependencies import require_owner
 from core.auth.models import AuthSession
 from core.database import get_session
 from modules.knowledge.observations import public
-from modules.knowledge.observations.schemas import ObservationPage, ObservationQuery, ObservationRead
+from modules.knowledge.observations.schemas import (
+    GeospatialObservationPage, ObservationPage, ObservationQuery, ObservationRead,
+)
 from modules.settings.public import module_dependency
 
 router = APIRouter(
@@ -22,6 +24,34 @@ router = APIRouter(
 )
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[AuthSession, Depends(require_owner)]
+
+
+@router.get("/geospatial", response_model=GeospatialObservationPage)
+async def read_geospatial_observations(
+    session: Session, _owner: OwnerRead, response: Response,
+    source_ids: Annotated[list[UUID], Query(min_length=1, max_length=32)],
+    from_at: datetime, to_at: datetime,
+    regions: Annotated[list[str], Query(max_length=32)] = Query(default=[]),
+    limit: Annotated[int, Query(ge=1, le=100)] = 100,
+    cursor: Annotated[str | None, Query(max_length=2048)] = None,
+) -> GeospatialObservationPage:
+    """Return current, evidence-backed point observations under one owner-gated cursor scope."""
+    response.headers["Cache-Control"] = "private, no-store"
+    try:
+        query = ObservationQuery(
+            source_ids=source_ids, regions=regions, from_at=from_at, to_at=to_at,
+            limit=limit, geospatial_only=True,
+        )
+    except ValidationError as exc:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=422, detail="Geospatial observation query is invalid") from exc
+    try:
+        return await public.list_geospatial_observations(session, query, cursor)
+    except ValueError as exc:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=422, detail="Geospatial observation query is invalid") from exc
 
 
 @router.get("", response_model=ObservationPage)
@@ -34,19 +64,20 @@ async def read_observations(
     regions: Annotated[list[str], Query(max_length=32)] = Query(default=[]),
     limit: Annotated[int, Query(ge=1, le=100)] = 100,
     cursor: Annotated[str | None, Query(max_length=2048)] = None,
+    geospatial_only: bool = False,
 ) -> ObservationPage:
     """Return an owner-authorized half-open time series page with raw values omitted."""
     response.headers["Cache-Control"] = "private, no-store"
     try:
         query = ObservationQuery(
             source_ids=source_ids, metrics=metrics, symbols=symbols, regions=regions,
-            from_at=from_at, to_at=to_at, limit=limit,
+            from_at=from_at, to_at=to_at, limit=limit, geospatial_only=geospatial_only,
         )
     except ValidationError as exc:
         from fastapi import HTTPException
 
         raise HTTPException(status_code=422, detail="Observation query is invalid") from exc
-    items, next_cursor, truncated = await public.list_observations(session, query, cursor)
+    items, next_cursor, truncated, _ = await public.list_observations(session, query, cursor)
     return ObservationPage(
         items=[ObservationRead.model_validate(row) for row in items],
         next_cursor=next_cursor, truncated=truncated,

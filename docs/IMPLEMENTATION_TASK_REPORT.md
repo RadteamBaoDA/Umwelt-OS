@@ -1,6 +1,6 @@
 # Umwelt-OS — Detailed task report
 
-Snapshot: 2026-10-05. ACTIVE. P01–P11 production delivery integrated in develop c58a56e; P12 not implemented. R12 0522cc4 accepted source/build/scoped review, composition with P11 active; R14 round2 build PASS pending final freeze/re-review; R07 tree prepared pending implementation capacity. Historical detailed rows below are superseded by this snapshot.
+Snapshot: 2026-10-06. ACTIVE. develop `1a48454`: P01–P11, Collector/MCP, R12 (`8b0b5a3`), R14 (`db67fd1`) and R07 (`1a48454`) integrated. R15 composition `8467803` built and frozen; independent composition review pending. P12 backup/restore and owner export contracts are being implemented in separate worktrees. P12 remaining tasks and R16 are incomplete. Historical pending rows below are superseded by this snapshot.
 
 Completion means production code/build/source review, not runtime acceptance. Original49 tasks:44 P01–P11 production delivered/integrated;5 P12 not implemented. Supplemental scopes R07/R12/R14/R15/R16 still require closure; no product completion percentage is asserted.
 
@@ -37,15 +37,15 @@ Completion means production code/build/source review, not runtime acceptance. Or
 | R04 | Integrated | Embedded connector editor/settings; e9938d8 |
 | R05 | Integrated | OpenAI SDK/OmniRoute AI settings/privacy; 65c5acf |
 | R06 | Integrated | Durable shared SSE/replay/resync; 35fc0c5 |
-| R07 | Actual source port NOT implemented | Drawer/full Chat infrastructure exists; genuine bounded AnythingLLM upstream source port/provenance remains |
+| R07 | Integrated | Actual bounded AnythingLLM port/provenance, revisions, citation reader and SSE recovery; `1a48454`; code/build/review complete, runtime deferred |
 | R08 + R08.1 | Integrated production scope | MCP tools/grants/native editor/manual + scheduled authenticated collection; supplemental 71b32aa |
 | R09 | Integrated | Header/footer/user menu/theme/en-vi; 3e98c0f; remaining legacy localization tracked in R16 |
 | R10 | Integrated in P08 | Dashboard/groups/gadget persistence/presets |
 | R11 | Integrated in P08 | Edit-mode grid/drag/resize/save/reading stability |
-| R12 | Code/build done, acceptance pending | Source-backed gadget consumers repair 884d7bc; independent re-review/integration pending |
+| R12 | Integrated | Source-backed gadget consumers; `8b0b5a3`; code/build/review complete, runtime deferred |
 | R13 | Integrated in P09 | Native news/social/research/Telegram providers within implemented catalog; unsupported providers must remain unavailable |
-| R14 | Code/build done, acceptance pending | Alpha Vantage/Open-Meteo structured observations repair c6df508; independent re-review/integration pending |
-| R15 | NOT implemented | Dual maps/shared layers/evidence intelligence; preflight only |
+| R14 | Integrated | Alpha Vantage/Open-Meteo observations and Finance/Weather consumers; `db67fd1`; runtime deferred |
+| R15 | Composition built; final review pending | Dual maps/shared layers/evidence intelligence, seven repairs accepted at `9e352e4`; composed `8467803` build PASS; not yet integrated |
 | R16 | NOT implemented as complete scope | OSS/release/onboarding/operations reconciliation; preliminary work does not close task |
 | P02-RN1 | Integrated | Receipt-to-library normalization; e759bb8 |
 | P10 webhook supplement | Integrated | Scoped ingress credentials/authentication/durable dedupe; 71b32aa |

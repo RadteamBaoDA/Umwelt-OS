@@ -1,6 +1,6 @@
 # Umwelt-OS implementation status
 
-Updated: 2026-10-05 — ACTIVE. P11 integratedc58a56e; R12 composed/build/review accepted d60d01a, production integration now. R14 accepted7086167 composition next; R07 Luna actual source port active. No runtime/provider/capacity acceptance.
+Updated: 2026-10-06 — ACTIVE. develop `1a48454` includes P01–P11, Collector/MCP, R12, R14 and R07. R15 composition `8467803` build and final independent review PASS; integrated in this task commit. Two P12 agents implement backup/restore and owner export contracts; remaining P12/R16 scope incomplete. Runtime/provider/capacity acceptance deferred.
 
 
 ## Current checkpoint — 2026-10-05
