@@ -9,13 +9,14 @@ same compiled workflow, limits and fences as any other profile run.
 from typing import Any
 
 from core.tools import ToolDefinition, ToolRegistry, ToolResult, ToolRisk
+from modules.agents.internal_writes import INTERNAL_WRITE_TOOLS
 
 HANDOFF_TOOL = "agents.handoff"
 # Supervisor and Automation are never targets: depth is 1, and Automation belongs to Phase 10.
 HANDOFF_TARGETS = ("knowledge", "research", "personal", "project", "news", "planning")
 # Tools a delegated specialist never receives: effects need the owner approval card of a directly
 # started run, nested handoff would exceed depth 1, and browser budget is bound to the run profile.
-HANDOFF_EXCLUDED_TOOLS = frozenset({"webhook.send", HANDOFF_TOOL, "browser.read"})
+HANDOFF_EXCLUDED_TOOLS = frozenset({"webhook.send", HANDOFF_TOOL, "browser.read", *INTERNAL_WRITE_TOOLS})
 MAX_HANDOFF_ANSWER_CHARS = 12_000
 MAX_HANDOFF_CITATIONS = 20
 

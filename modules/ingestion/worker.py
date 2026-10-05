@@ -697,11 +697,17 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
                             safe_metadata[key] = value[:2_000]
                         elif isinstance(value, list):
                             safe_metadata[key] = [item[:500] for item in value[:100] if isinstance(item, str)]
+                    from modules.connectors import public as connectors
+                    scope = await connectors.get_current_provider_scope(
+                        session, observation.source_id, generation,
+                    )
                     provenance = {
                         "title": title, "canonical_url": canonical_url,
                         "published_at": published_at.isoformat() if published_at else None,
                         "content_type": content_type, "metadata": safe_metadata,
                     }
+                    if scope is not None:
+                        provenance["provider_scope_discriminator"] = scope.discriminator
                     result = await documents.upsert_normalized_document(
                         session,
                         NormalizedDocumentInput(

@@ -11,6 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.model_gateway.schemas import AIExecutionConfig
 from core.tools import ToolRegistry, ToolRisk
 from modules.agents.handoff import HANDOFF_TOOL
+from modules.agents.internal_writes import (
+    INTERNAL_PROFILE_TOOLS, INTERNAL_WRITE_PROFILES, is_internal_write,
+)
 from modules.agents.models import AgentProfile, AgentProfileRevision
 from modules.agents.schemas import AgentProfilePatch, AgentProfileRead, AgentProfileTool
 
@@ -23,10 +26,10 @@ DEFAULT_PROMPTS = {
     "supervisor": "Coordinate the owner's request using the approved read-only tools. Delegate at most once, and only through agents.handoff called by itself; if it is unavailable or refused, handle the request directly and explain unavailable capabilities.",
     "knowledge": "Answer questions grounded in the owner's authorized knowledge sources. Cite only evidence returned by the registered tools and say when evidence is insufficient.",
     "research": "Research the owner's question using only the currently registered tools and selected sources. Do not imply that browser research or external search is available unless its tool is present.",
-    "personal": "Help the owner reason about personal information in selected knowledge sources. Do not invent tasks, goals, reminders, or private records that an authorized tool did not return.",
+    "personal": "Help the owner reason about personal information in selected knowledge sources and about the owner's tasks and goals. Do not invent tasks, goals, reminders, or private records that an authorized tool did not return; task and goal changes need the owner's approval.",
     "project": "Help with project information found in selected knowledge sources. Do not present generic documents as structured project records when no project owner tool is registered.",
     "news": "Answer news-related questions only from sources actually returned by registered tools. Do not fabricate headlines or imply live news coverage when its adapter is unavailable.",
-    "planning": "Help the owner plan from available evidence. Do not create or modify tasks or goals; state when the owning task or goal tools are unavailable.",
+    "planning": "Help the owner plan from available evidence and the owner's tasks and goals. Any task or goal change is only a proposal: request the write tool and wait for the owner's approval card; never claim a change happened before it is approved.",
     "automation": "Automation is unavailable until its owning Phase 10 workflow capability is registered.",
 }
 AUTOMATION_PROFILE_ID = "automation"
@@ -40,10 +43,8 @@ NATIVE_READ_TOOLS = frozenset({
 })
 SPECIALIST_GATES = {"research": "browser.read"}
 DOMAIN_UNAVAILABLE = {
-    "personal": "phase_8_personal_tools_unavailable",
     "project": "project_owner_tools_unavailable",
     "news": "news_owner_tools_unavailable",
-    "planning": "phase_8_planning_tools_unavailable",
     "automation": "phase_10_automation_unavailable",
 }
 
@@ -62,8 +63,8 @@ def _tool_contracts(registry: ToolRegistry) -> dict[str, dict[str, str]]:
                 "name": definition.name, "version": definition.version,
                 "fingerprint": definition.schema_fingerprint,
             }
-        elif (definition.name == "webhook.send" and definition.risk == ToolRisk.EXTERNAL_WRITE
-              and definition.confirmation_required):
+        elif ((definition.name == "webhook.send" and definition.risk == ToolRisk.EXTERNAL_WRITE
+               and definition.confirmation_required) or is_internal_write(definition)):
             result[definition.name] = {
                 "name": definition.name, "version": definition.version,
                 "fingerprint": definition.schema_fingerprint,
@@ -76,7 +77,8 @@ def _snapshot(
 ) -> dict[str, object]:
     """Build the secret-free profile view, retaining exact registry fingerprints as authority ceilings."""
     contracts = _tool_contracts(registry)
-    defaults = NATIVE_READ_TOOLS | ({HANDOFF_TOOL} if profile_id == "supervisor" else frozenset())
+    defaults = (NATIVE_READ_TOOLS | ({HANDOFF_TOOL} if profile_id == "supervisor" else frozenset())
+                | (INTERNAL_PROFILE_TOOLS if profile_id in INTERNAL_WRITE_PROFILES else frozenset()))
     selected = row.allowed_tools if row is not None else [
         contracts[name] for name in sorted(defaults) if name in contracts
     ]
@@ -103,6 +105,7 @@ def _snapshot(
         "allowed_tools": valid_tools,
         "available_tools": [item for name, item in sorted(contracts.items())
                              if (name != "webhook.send" or profile_id in {"supervisor", "research"})
+                             and (name not in INTERNAL_PROFILE_TOOLS or profile_id in INTERNAL_WRITE_PROFILES)
                              and (name != HANDOFF_TOOL or profile_id == "supervisor")],
         "source_ids": list(row.source_ids) if row is not None else [],
         "capability": capability, "unavailable_reasons": sorted(set(unavailable)),
@@ -193,6 +196,8 @@ async def update_profile_in_uow(
         raise HTTPException(status_code=422, detail="Selected tool contract is no longer available")
     if "webhook.send" in {item["name"] for item in chosen} and profile_id not in {"supervisor", "research"}:
         raise HTTPException(status_code=422, detail="This profile cannot request external actions")
+    if {item["name"] for item in chosen} & INTERNAL_PROFILE_TOOLS and profile_id not in INTERNAL_WRITE_PROFILES:
+        raise HTTPException(status_code=422, detail="This profile cannot use task or goal tools")
     if HANDOFF_TOOL in {item["name"] for item in chosen} and profile_id != "supervisor":
         raise HTTPException(status_code=422, detail="Only the Supervisor profile may delegate")
     if profile_id == AUTOMATION_PROFILE_ID and patch.enabled:

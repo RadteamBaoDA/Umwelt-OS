@@ -118,8 +118,22 @@ class KnowledgeChanged(_Payload):
         return self
 
 
+class DashboardChanged(_Payload):
+    """Identify a committed dashboard/definition revision without disclosing its configuration.
+
+    ``scope`` selects the owning revision counter, ``id`` identifies that resource,
+    and the strict boolean ``deleted`` marks its terminal revision. Revisions are strict positive safe
+    integers so JavaScript clients can compare them without precision loss.
+    """
+    type: Literal["dashboard.changed"] = "dashboard.changed"
+    scope: Literal["dashboard", "definition", "brief"]
+    id: UUID
+    revision: int = Field(strict=True, ge=1, le=2**53 - 1)
+    deleted: bool = Field(strict=True)
+
+
 ReplayDraft: TypeAlias = Annotated[
-    SourceChanged | IngestionChanged | KnowledgeChanged,
+    SourceChanged | IngestionChanged | KnowledgeChanged | DashboardChanged,
     Field(discriminator="type"),
 ]
 
@@ -252,6 +266,16 @@ def make_timeline_collection_change(
         raise ValueError("Timeline collection invalidations require exactly one source or entity identity")
     return KnowledgeChanged(scope="timeline_collection", source_id=source_id, entity_id=entity_id)
 
+def make_dashboard_change(scope: str, resource_id: UUID, revision: int, *, deleted: bool = False) -> DashboardChanged:
+    """Create a validated identifier-only event for one committed dashboard revision.
+
+    ``scope`` is dashboard or definition; ``resource_id`` and its positive safe
+    ``revision`` identify the owner counter. ``deleted`` marks final deletion.
+    Pydantic raises ``ValidationError`` for unsupported scopes or invalid values.
+    """
+    return DashboardChanged(scope=scope, id=resource_id, revision=revision, deleted=deleted)
+
+
 
 async def commit_with_replay(session: AsyncSession, drafts: list[ReplayDraft] | tuple[ReplayDraft, ...] = ()) -> None:
     """Commit domain writes and replay rows atomically, taking the replay lock last."""
@@ -304,3 +328,4 @@ async def current_head(session: AsyncSession) -> ReplayHead:
     if head is None:
         raise RuntimeError("Realtime replay head has not been initialized")
     return head
+

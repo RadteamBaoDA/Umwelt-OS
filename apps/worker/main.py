@@ -32,6 +32,8 @@ from modules.knowledge.entities.worker import (
 )
 from modules.timeline.worker import process_timeline_extraction_work, recover_timeline_extraction_work
 from modules.knowledge.temporal.worker import process_graph_operation, recover_graph_work
+from modules.news.worker import process_news_document_ready, recover_news_work
+from modules.dashboard.worker import run_scheduled_brief
 from modules.chat.worker import process_chat_response, purge_expired_chat_runs
 from modules.agents.worker import compose_agent_registry, process_agent_run, reconcile_agent_dispatch
 
@@ -88,7 +90,7 @@ class WorkerSettings:
     functions: ClassVar[list[object]] = [
         purge_expired_sessions, process_ingestion_event, process_normalize_event, process_uploaded_file, process_source_purge,
         reconcile_connectors, process_document_ready, process_entity_extraction_work, process_timeline_extraction_work,
-        process_graph_operation, process_chat_response, purge_expired_chat_runs,
+        process_graph_operation, process_news_document_ready, process_chat_response, purge_expired_chat_runs,
         process_agent_run,
     ]
     cron_jobs: ClassVar[list[object]] = [
@@ -100,6 +102,8 @@ class WorkerSettings:
         cron(recover_entity_extraction_work, minute=set(range(0, 60, 1))),
         cron(recover_timeline_extraction_work, minute=set(range(0, 60, 1))),
         cron(recover_graph_work, second=set(range(0, 60, 5)), run_at_start=True),
+        cron(recover_news_work, minute=set(range(0, 60, 1)), run_at_start=True),
+        cron(run_scheduled_brief, minute=set(range(0, 60, 1)), run_at_start=True),
         cron(purge_expired_chat_runs, minute=set(range(0, 60, 15))),
         cron(reconcile_agent_dispatch, second=set(range(0, 60, 5)), run_at_start=True),
     ]

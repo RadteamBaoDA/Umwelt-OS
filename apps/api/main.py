@@ -25,9 +25,15 @@ from modules.connectors.provisioning_routes import router as connector_provision
 from modules.settings.routes import router as settings_router
 from modules.model_gateway.routes import router as model_gateway_router
 from modules.search.routes import router as search_router
+from modules.dashboard.routes import router as dashboard_router
 from core.realtime_routes import router as realtime_router
 from modules.timeline.routes import router as timeline_router
 from modules.knowledge.temporal.routes import router as temporal_router
+from modules.tasks.routes import router as tasks_router
+from modules.goals.routes import router as goals_router
+from modules.news.topics import router as topics_router
+from modules.news.routes import router as news_router
+from modules.notifications.routes import router as notifications_router
 from modules.chat.routes import router as chat_router
 from modules.memory.routes import router as memory_router
 from modules.tools.routes import router as tools_router, browser_jobs_router
@@ -37,6 +43,8 @@ from modules.tools.builtins import register_builtin_tools
 from modules.tools.webhook import register_webhook_tool
 from modules.tools.browser import register_browser_tool
 from modules.agents.handoff import register_handoff_tool
+from modules.goals.tools import register_goal_tools
+from modules.tasks.tools import register_task_tools
 from modules.tools.public import McpAdmission, McpRuntime, create_inbound_mcp_bundle
 from modules.agents.routes import router as agents_router
 
@@ -116,7 +124,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(settings_router)
     app.include_router(model_gateway_router)
     app.include_router(search_router)
+    app.include_router(dashboard_router)
     app.include_router(realtime_router)
+    app.include_router(tasks_router)
+    app.include_router(goals_router)
+    app.include_router(topics_router)
+    app.include_router(news_router)
+    app.include_router(notifications_router)
     app.include_router(chat_router)
     app.include_router(memory_router)
     app.include_router(agents_router)
@@ -130,6 +144,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         register_webhook_tool(tool_registry, app_settings)
         register_browser_tool(tool_registry)
         register_handoff_tool(tool_registry, frozenset(declared_tools))
+        register_task_tools(tool_registry, frozenset(declared_tools))
+        register_goal_tools(tool_registry, frozenset(declared_tools))
     app.state.tool_registry = tool_registry
     if app.state.modules["tools"].enabled:
         app.include_router(tools_router)

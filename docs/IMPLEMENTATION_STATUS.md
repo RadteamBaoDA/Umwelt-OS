@@ -1,6 +1,6 @@
 # Umwelt-OS implementation status
 
-Updated: 2026-10-05 — Claude controller: P07 code/build/review complete and squash-merged into develop. P08 tasks complete on codex/bbd-p08-dashboard (awaiting P07 seam composition + phase review). P09 T3/T4, P10–P12 remain. Deferred acceptance unchanged.
+Updated: 2026-10-05 — Claude controller: P07 and P08 code/build/review complete and squash-merged into develop. P09 T1–T3 complete on integrate/p09; T4 next. P10–P12 remain. Deferred acceptance unchanged.
 
 
 ## Current checkpoint — 2026-10-05
@@ -11,7 +11,7 @@ This live snapshot supersedes older current-action paragraphs; historical entrie
 | --- | --- | --- |
 | P01–P06 | Production code/build/source review recorded complete; P05/P06 are in develop history. Runtime/provider acceptance remains deferred. | Preserve accepted code while composing later phases. |
 | P07 | Code/build/review complete; squash-merged into develop. Registry/MCP/harness/approvals, specialists + bounded supervisor handoff, browser-use (gated off), Agents UI, R08 MCP collection adapter (manual). | Open gates: browser S4 OmniRoute capability probe + isolation proof; R08.1 code remaining (n8n workflow template + collector-authenticated trigger, separate credential — N-5); MCP editor UI lands with P08; handoff unverified at runtime. |
-| P08 | Proposal R1/R2/R3/R5/R6 source fixes reviewed; R4 nested evidence-wrapper consumer repaired. Exact current Goals.public SHA256 9F03509EAD32198FEF9B508901BA9D8349887F8E0F137C8D861BDFC95E88DEDD matches repair freeze. Prescribed repair build passed: 18 frontend pages and four images. | Finish R4-only independent source re-review, compose accepted P07 Chat privacy/provider/migration seams, then remaining daily brief/context/notifications/selected-day chat and R11/R12. |
+| P08 | Code/build/review complete; squash-merged into develop. Tasks/goals/topics, stories/trends, daily context + revisioned brief + notifications (en/vi), dashboard R10–R12, contextual day drawer on P06 chat, task/goal agent tools on P07 registry with approvals, MCP editor. | Deferred minors in SDD ledger; republish design-system artifact (tokens.json changed). |
 | P09 | GitHub OAuth/S1 and S2 accepted; S2 canonical commit c5c036b with code/build/source closure. T3/T4 prerequisite author currently has 17 unmerged paths and 240 dirty paths. | Resolve accepted prerequisite composition, freeze/build/review, then implement mapping and actual gadget/Timeline presentation. |
 | P10–P12 | Not implemented in the original plan ledger. | Automation, observability, hardening/backup/restore and final deferred validation after all production/reconciliation code. |
 | Repository rename | Primary is a real D:/Project/Umwelt-OS directory, not a junction; old primary path absent. Git lists 20 registered checkouts with new paths; all 19 linked .git registrations repaired successfully this checkpoint. Remote points to RadteamBaoDA/Umwelt-OS. Markdown/plan/owned skill naming updated. | Desktop saved project path still points at the former directory and reports isGitRepository=false; archived attachment/path metadata completion remains unverified. Finalize log has no SUCCESS, so do not treat old queued helper as completion. |

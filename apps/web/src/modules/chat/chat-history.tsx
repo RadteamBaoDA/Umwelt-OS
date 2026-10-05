@@ -22,6 +22,7 @@ import {
   listConversations,
   type Conversation,
 } from '@/modules/chat/api';
+import { useChatController } from '@/core/app-shell/chat-controller';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 
 export interface ChatHistoryProps {
@@ -59,10 +60,13 @@ export function ChatHistory({
     queryFn: () => listConversations(),
   });
 
+  const { unbindConversation } = useChatController();
   const deleteMutation = useMutation({
     mutationFn: (id: string) => deleteConversation(id, session.csrfToken),
     onSuccess: (_, deletedId) => {
       void queryClient.invalidateQueries({ queryKey: chatKeys.conversations() });
+      // A deleted day conversation must stop being that day's drawer target.
+      unbindConversation(deletedId);
       if (activeConversationId === deletedId) {
         onNewConversation();
       }

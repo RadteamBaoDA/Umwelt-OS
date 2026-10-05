@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 import modules  # noqa: F401  # Domain model packages are imported here as they are added.
 from core.auth.models import AuthSession, Owner
+from core.demo_seed import DemoSeedReceipt
 from core.remote_heavy_models import RemoteHeavyGuard
 from core.database import Base
 from modules.knowledge.documents.models import (
@@ -46,6 +47,21 @@ from modules.knowledge.temporal.models import (
 )
 from modules.timeline.models import Event, EventParticipant, EventEvidence, ParticipantEvidence, EventAudit, EventSuppression, TimelineExtractionWork, TimelineExtractionResult
 from modules.settings.models import AISettingsRecord, OwnerPreferencesRecord
+from modules.dashboard.models import (
+    Dashboard,
+    DashboardGroup,
+    DashboardLayout,
+    GadgetDefinition,
+    GadgetInstance,
+    GadgetPlacement,
+    BriefSchedule,
+    DailyBrief,
+)
+from modules.notifications.models import Notification
+from modules.tasks.models import Task
+from modules.goals.models import Goal
+from modules.news.topics import Topic
+from modules.news.models import NewsObservation, NewsRecoveryCheckpoint, NewsStory, NewsStoryIdentity
 from core.realtime import ReplayHead, ReplayRecord
 from modules.chat.models import AgentActivityLink, Conversation, Message, ResponseRun, StreamEvent
 from modules.memory.models import Memory, MemoryCandidate, MemoryPrivacyRecord
@@ -53,6 +69,7 @@ from modules.tools.models import BrowserPageEvidence, BrowserReadJob
 from modules.agents.models import AgentApproval, AgentEffect, AgentRun, AgentToolCall
 
 _auth_models = (AuthSession, Owner)
+_demo_seed_models = (DemoSeedReceipt,)
 _core_remote_heavy_models = (RemoteHeavyGuard,)
 _chat_models = (Conversation, Message, ResponseRun, StreamEvent, AgentActivityLink)
 _memory_models = (Memory, MemoryCandidate, MemoryPrivacyRecord)
@@ -76,6 +93,17 @@ _ingestion_models = (
 _search_models = (IndexGeneration, SearchIndexItem)
 _connector_models = (AgentBrowserGrant, ConnectorProvisioning, ConnectorManagedCredential)
 _realtime_models = (ReplayHead, ReplayRecord)
+_dashboard_models = (
+    Dashboard,
+    DashboardGroup,
+    GadgetDefinition,
+    GadgetInstance,
+    DashboardLayout,
+    GadgetPlacement,
+)
+_task_goal_models = (Task, Goal, Topic)
+_brief_models = (DailyBrief, BriefSchedule, Notification)
+_news_models = (NewsStory, NewsStoryIdentity, NewsObservation, NewsRecoveryCheckpoint)
 _knowledge_models = (
     Entity,
     EntityAlias,

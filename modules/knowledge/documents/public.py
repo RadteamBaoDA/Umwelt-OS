@@ -107,6 +107,346 @@ class ReviewVersionFence:
 
 
 @dataclass(frozen=True)
+class NewsChunkProjection:
+    """Expose bounded immutable chunk identity and text to the News owner."""
+    id: UUID
+    index: int
+    content: str
+
+
+@dataclass(frozen=True)
+class NewsDocumentProjection:
+    """Carry a detached current-version snapshot for owner-authorized News reads."""
+    document_id: UUID
+    document_version_id: UUID
+    version_number: int
+    source_id: UUID
+    current_source_generation: int
+    source_name: str
+    source_type: str
+    provider: str | None
+    local_only: bool
+    canonical_url: str | None
+    content_hash: str
+    provider_item_id: str | None
+    scope_discriminator: str | None
+    title: str
+    published_at: datetime | None
+    observed_at: datetime
+    created_at: datetime
+    chunks: tuple[NewsChunkProjection, ...]
+    metadata_is_version_snapshot: bool
+    accepted_record_hash: str | None
+    normalization_version: int | None
+    chunk_count: int
+    chunks_truncated: bool
+
+
+@dataclass(frozen=True)
+class NewsProjectionStatus:
+    """Expose bounded non-sensitive reasons that selected current evidence is incomplete."""
+    incomplete_reasons: tuple[str, ...]
+
+
+async def get_news_document_projection(
+    session: AsyncSession, document_id: UUID, *, expected_source_generation: int | None = None,
+) -> NewsDocumentProjection | None:
+    """Return a current, ready document projection only under its active source generation.
+
+    The caller must first authorize the source through the Sources public contract.
+    This read excludes deleted, paused, replaced, or incomplete versions and caps
+    chunks at 100. Legacy/manual documents remain readable with explicitly
+    non-snapshot metadata provenance rather than inferred historical metadata.
+    """
+    row = (await session.execute(
+        select(Document, DocumentVersion, Source)
+        .join(DocumentVersion, DocumentVersion.document_id == Document.id)
+        .join(Source, Source.id == Document.source_id)
+        .where(
+            Document.id == document_id,
+            Document.current_version == DocumentVersion.version_number,
+            Document.extraction_status.in_(("ready", "succeeded")),
+            Source.status == "active",
+            *([Source.generation == expected_source_generation] if expected_source_generation is not None else []),
+        )
+    )).one_or_none()
+    if row is None:
+        return None
+    document, version, source = row
+    provenance_rows = list((await session.scalars(
+        select(NormalizedVersionProvenance).where(
+            NormalizedVersionProvenance.document_version_id == version.id,
+        ).order_by(
+            NormalizedVersionProvenance.accepted_record_hash,
+            NormalizedVersionProvenance.normalization_version,
+        ).limit(2)
+    )).all())
+    if provenance_rows and (
+        len(provenance_rows) != 1 or provenance_rows[0].source_generation != source.generation
+    ):
+        # Normalized data cannot fall back to mutable legacy metadata when its
+        # accepted generation is stale or its immutable identity is ambiguous.
+        return None
+    if len(provenance_rows) > 1:
+        return None
+    if provenance_rows:
+        provenance = provenance_rows[0]
+        if source.type in {"rss", "web", "api"}:
+            from modules.connectors import public as connectors
+
+            current_scope = await connectors.get_current_provider_scope(
+                session, source.id, source.generation,
+            )
+            accepted_scope = provenance.provenance_json.get("provider_scope_discriminator")
+            if (
+                current_scope is None or not isinstance(accepted_scope, str)
+                or len(accepted_scope) != 64 or accepted_scope != current_scope.discriminator
+            ):
+                return None
+    else:
+        if source.type in {"rss", "web", "api"}:
+            # Provider documents without immutable acceptance provenance cannot
+            # establish their current scope and must not use mutable legacy fields.
+            return None
+        provenance = None
+    chunk_rows = list((await session.execute(
+        select(DocumentChunk.id, DocumentChunk.chunk_index, DocumentChunk.content)
+        .where(DocumentChunk.document_version_id == version.id)
+        .order_by(DocumentChunk.chunk_index, DocumentChunk.id).limit(101)
+    )).all())
+    if not chunk_rows:
+        return None
+    chunk_count = len(chunk_rows) if len(chunk_rows) <= 100 else int(await session.scalar(
+        select(func.count()).select_from(DocumentChunk).where(DocumentChunk.document_version_id == version.id)
+    ) or 0)
+    chunks_truncated = len(chunk_rows) > 100
+    chunk_rows = chunk_rows[:100]
+    return NewsDocumentProjection(
+        document_id=document.id, document_version_id=version.id, version_number=version.version_number,
+        source_id=source.id, current_source_generation=source.generation, source_name=source.name,
+        source_type=source.type, provider=source.provider, local_only=source.local_only,
+        canonical_url=provenance.canonical_url if provenance else (document.canonical_url if not provenance_rows else None),
+        content_hash=version.content_hash,
+        provider_item_id=(document.external_id[:512] if document.external_id else None),
+        scope_discriminator=(provenance.provenance_json.get("provider_scope_discriminator") if provenance else None),
+        title=provenance.title if provenance else (document.title if not provenance_rows else "Untitled"),
+        published_at=provenance.published_at if provenance else (document.published_at if not provenance_rows else None),
+        observed_at=provenance.selection_observed_at if provenance else (document.observed_at or version.observed_at),
+        created_at=version.created_at,
+        chunks=tuple(NewsChunkProjection(id=identifier, index=index, content=content[:20_000]) for identifier, index, content in chunk_rows),
+        metadata_is_version_snapshot=provenance is not None,
+        accepted_record_hash=provenance.accepted_record_hash if provenance else None,
+        normalization_version=provenance.normalization_version if provenance else None,
+        chunk_count=chunk_count, chunks_truncated=chunks_truncated,
+    )
+
+
+async def news_retained_observation_allowed(
+    session: AsyncSession, *, document_id: UUID, source_id: UUID,
+    expected_source_generation: int,
+) -> bool:
+    """Confirm a retained News count still belongs to the current active source scope.
+
+    This boolean fence deliberately does not return historical or current text and
+    does not require the observed historical version to remain current. It checks
+    the document's present ready revision, active source generation, and current
+    provider scope without loading chunks or exposing metadata to News.
+    """
+    rows = list((await session.execute(
+        select(
+            Source.type, Source.generation,
+            NormalizedVersionProvenance.source_generation,
+            NormalizedVersionProvenance.provenance_json,
+        )
+        .join(Document, Document.source_id == Source.id)
+        .join(DocumentVersion, DocumentVersion.document_id == Document.id)
+        .outerjoin(
+            NormalizedVersionProvenance,
+            NormalizedVersionProvenance.document_version_id == DocumentVersion.id,
+        )
+        .where(
+            Document.id == document_id, Document.source_id == source_id,
+            Document.current_version == DocumentVersion.version_number,
+            Document.extraction_status.in_(("ready", "succeeded")),
+            Source.status == "active", Source.generation == expected_source_generation,
+        )
+        .order_by(NormalizedVersionProvenance.id)
+        .limit(2)
+    )).all())
+    if len(rows) != 1:
+        return False
+    source_type, generation, accepted_generation, provenance = rows[0]
+    if provenance is not None and accepted_generation != generation:
+        return False
+    if source_type not in {"rss", "web", "api"}:
+        return True
+    if provenance is None:
+        return False
+    accepted_scope = provenance.get("provider_scope_discriminator")
+    if not isinstance(accepted_scope, str) or len(accepted_scope) != 64:
+        return False
+    from modules.connectors import public as connectors
+
+    current_scope = await connectors.get_current_provider_scope(
+        session, source_id, expected_source_generation,
+    )
+    return current_scope is not None and current_scope.discriminator == accepted_scope
+
+
+async def news_projection_scope_unavailable(
+    session: AsyncSession, document_id: UUID, expected_source_generation: int,
+) -> bool:
+    """Report only whether a supported provider scope fence prevents News evidence output.
+
+    The result contains no source configuration, item identifiers, or counts. Deleted,
+    replaced, inactive, or stale-generation documents are not classified as scope failures.
+    """
+    row = (await session.execute(
+        select(Document, DocumentVersion, Source)
+        .join(DocumentVersion, DocumentVersion.document_id == Document.id)
+        .join(Source, Source.id == Document.source_id)
+        .where(
+            Document.id == document_id,
+            Document.current_version == DocumentVersion.version_number,
+            Document.extraction_status.in_(("ready", "succeeded")),
+            Source.status == "active", Source.generation == expected_source_generation,
+        )
+    )).one_or_none()
+    if row is None:
+        return False
+    document, version, source = row
+    if source.type not in {"rss", "web", "api"}:
+        return False
+    provenance_rows = list((await session.scalars(
+        select(NormalizedVersionProvenance).where(
+            NormalizedVersionProvenance.document_version_id == version.id,
+        ).order_by(
+            NormalizedVersionProvenance.accepted_record_hash,
+            NormalizedVersionProvenance.normalization_version,
+        ).limit(2)
+    )).all())
+    if len(provenance_rows) != 1 or provenance_rows[0].source_generation != source.generation:
+        return True
+    accepted_scope = provenance_rows[0].provenance_json.get("provider_scope_discriminator")
+    if not isinstance(accepted_scope, str) or len(accepted_scope) != 64:
+        return True
+    from modules.connectors import public as connectors
+
+    current_scope = await connectors.get_current_provider_scope(session, source.id, source.generation)
+    return current_scope is None or accepted_scope != current_scope.discriminator
+
+
+async def news_current_scope_status(
+    session: AsyncSession, source_ids: tuple[UUID, ...],
+) -> NewsProjectionStatus:
+    """Summarize current provider-scope omissions for at most 100 selected documents.
+
+    Only fixed reason codes leave Documents; provider settings, credentials, item IDs and
+    omission counts stay inside the owner module. A capped scan reports incompleteness.
+    """
+    if not source_ids or len(source_ids) > 32 or len(set(source_ids)) != len(source_ids):
+        raise ValueError("News scope status requires 1 to 32 unique sources")
+    rows = list((await session.execute(
+        select(
+            Document.id, Source.id, Source.type, Source.generation,
+            NormalizedVersionProvenance.source_generation,
+            NormalizedVersionProvenance.provenance_json,
+        )
+        .join(DocumentVersion, DocumentVersion.document_id == Document.id)
+        .join(Source, Source.id == Document.source_id)
+        .outerjoin(
+            NormalizedVersionProvenance,
+            NormalizedVersionProvenance.document_version_id == DocumentVersion.id,
+        )
+        .where(
+            Document.source_id.in_(source_ids),
+            Document.current_version == DocumentVersion.version_number,
+            Document.extraction_status.in_(("ready", "succeeded")),
+            Source.status == "active",
+        )
+        .order_by(Document.id, NormalizedVersionProvenance.id)
+        .limit(101)
+    )).all())
+    reasons: set[str] = set()
+    if len(rows) > 100:
+        reasons.add("candidate_scan_limit")
+    source_scope: dict[UUID, str | None] = {}
+    provider_types = {"rss", "web", "api"}
+    for _document_id, source_id, source_type, generation, _accepted_generation, _provenance in rows[:100]:
+        if source_type in provider_types and source_id not in source_scope:
+            from modules.connectors import public as connectors
+
+            snapshot = await connectors.get_current_provider_scope(session, source_id, generation)
+            source_scope[source_id] = snapshot.discriminator if snapshot else None
+    for _document_id, source_id, source_type, generation, accepted_generation, provenance in rows[:100]:
+        if source_type not in provider_types:
+            continue
+        accepted_scope = provenance.get("provider_scope_discriminator") if isinstance(provenance, dict) else None
+        if (
+            source_scope.get(source_id) is None or accepted_generation != generation
+            or not isinstance(accepted_scope, str) or accepted_scope != source_scope[source_id]
+        ):
+            reasons.add("scope_unavailable")
+    return NewsProjectionStatus(incomplete_reasons=tuple(sorted(reasons)))
+
+
+async def list_news_document_projections(
+    session: AsyncSession, *, source_ids: tuple[UUID, ...], limit: int = 50,
+    cursor: str | None = None, observed_since: datetime | None = None,
+) -> tuple[list[NewsDocumentProjection], str | None]:
+    """Page bounded current ready versions from explicitly authorized active sources."""
+    if not source_ids or len(source_ids) > 32 or len(set(source_ids)) != len(source_ids) or not 1 <= limit <= 100:
+        raise ValueError("News source page must contain 1 to 32 unique sources and a bounded limit")
+    statement = (
+        select(Document.id, Document.created_at)
+        .join(DocumentVersion, DocumentVersion.document_id == Document.id)
+        .join(Source, Source.id == Document.source_id)
+        .where(
+            Document.source_id.in_(source_ids), Document.current_version == DocumentVersion.version_number,
+            Document.extraction_status.in_(("ready", "succeeded")), Source.status == "active",
+            select(DocumentChunk.id).where(DocumentChunk.document_version_id == DocumentVersion.id).exists(),
+        )
+    )
+    if observed_since is not None:
+        statement = statement.where(func.coalesce(Document.observed_at, DocumentVersion.observed_at) >= observed_since)
+    if cursor:
+        created_at, document_cursor = _decode_news_projection_cursor(cursor)
+        statement = statement.where(tuple_(Document.created_at, Document.id) < (created_at, document_cursor))
+    rows = list((await session.execute(statement.order_by(Document.created_at.desc(), Document.id.desc()).limit(limit + 1))).all())
+    more = len(rows) > limit
+    rows = rows[:limit]
+    projections = []
+    for document_id, _created_at in rows:
+        item = await get_news_document_projection(session, document_id)
+        if item is not None and item.source_id in source_ids:
+            projections.append(item)
+    next_cursor = _encode_news_projection_cursor(rows[-1][1], rows[-1][0]) if more and rows else None
+    return projections, next_cursor
+
+
+def _encode_news_projection_cursor(created_at: datetime, document_id: UUID) -> str:
+    """Encode the bounded News projection keyset as canonical unpadded URL-safe base64."""
+    raw = f"{created_at.isoformat()}|{document_id}"
+    return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+
+
+def _decode_news_projection_cursor(cursor: str) -> tuple[datetime, UUID]:
+    """Decode and validate a canonical projection cursor without exposing parse errors."""
+    try:
+        raw = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)).decode()
+        timestamp, identifier = raw.split("|", 1)
+        parsed = datetime.fromisoformat(timestamp)
+        if parsed.tzinfo is None or _encode_news_projection_cursor(parsed, UUID(identifier)) != cursor:
+            raise ValueError
+        return parsed, UUID(identifier)
+    except (ValueError, UnicodeDecodeError, binascii.Error) as exc:
+        raise ValueError("Invalid News projection cursor") from exc
+
+
+
+
+@dataclass(frozen=True)
+@dataclass(frozen=True)
 class ToolDocumentRead:
     """Detached current-version document metadata exposed to the registered tool owner."""
     id: UUID
@@ -1018,22 +1358,29 @@ async def get_ready_version_ref(session: AsyncSession, version_id: UUID) -> Read
 
 
 async def _publish_document_ready(session: AsyncSession, document: Document, version: DocumentVersion) -> None:
-    """Queue the version-ready event with the source generation captured at publish time."""
+    """Queue independent entity and News events in the document transaction.
+
+    The existing entity consumer commits its own single outbox record, so News
+    receives a separate durable receipt instead of depending on that ACK order.
+    Both payloads identify one immutable revision and source generation.
+    """
     from core.events import DomainEvent
     from modules.ingestion import public as ingestion
 
     source = await session.get(Source, document.source_id)
     if source is None:
         return
-    await ingestion.publish_event(session, DomainEvent(
-        id=uuid4(), type="document.version.ready", version=1,
-        occurred_at=datetime.now(UTC), producer="modules.knowledge.documents",
-        payload={
-            "source_id": str(source.id), "document_id": str(document.id),
-            "document_version_id": str(version.id), "source_generation": source.generation,
-            "version_number": version.version_number,
-        },
-    ))
+    payload = {
+        "source_id": str(source.id), "document_id": str(document.id),
+        "document_version_id": str(version.id), "source_generation": source.generation,
+        "version_number": version.version_number,
+    }
+    for event_type in ("document.version.ready", "news.document.ready"):
+        await ingestion.publish_event(session, DomainEvent(
+            id=uuid4(), type=event_type, version=1,
+            occurred_at=datetime.now(UTC), producer="modules.knowledge.documents",
+            payload=payload,
+        ))
 
 
 def encode_version_cursor(version_number: int) -> str:

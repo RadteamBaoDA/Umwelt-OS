@@ -12,7 +12,14 @@ from core.events import DomainEvent
 from core.realtime import commit_with_replay, make_source_change
 from core.tools.schemas import ToolDestination
 from modules.sources.models import Source, SourcePurgeOperation
-from modules.sources.schemas import ConnectorSource, SourceCreate, SourceFence, SourcePatch
+from modules.sources.schemas import (
+    ConnectorSource,
+    GadgetSourceSelection,
+    GadgetSourceSelectionPage,
+    SourceCreate,
+    SourceFence,
+    SourcePatch,
+)
 
 
 @dataclass(frozen=True)
@@ -283,6 +290,123 @@ async def list_sources(
     rows = rows[:limit]
     next_cursor = encode_cursor(rows[-1].created_at, rows[-1].id) if has_more and rows else None
     return rows, next_cursor
+
+
+async def get_gadget_sources(
+    session: AsyncSession, source_ids: tuple[UUID, ...]
+) -> tuple[GadgetSourceSelection, ...]:
+    """Project up to 32 unique source IDs in request order for an authorized dashboard caller.
+
+    The caller must already have owner authorization; this internal query does
+    not grant access to external agents. Missing IDs are omitted. The detached
+    projection excludes configuration, credentials, scopes, and content, and
+    does not prove provider item-level authorization.
+    """
+    if len(source_ids) > 32 or len(set(source_ids)) != len(source_ids):
+        raise ValueError("At most 32 distinct source IDs may be projected")
+    if not source_ids:
+        return ()
+
+    rows = await session.execute(
+        select(
+            Source.id,
+            Source.name,
+            Source.type,
+            Source.provider,
+            Source.status,
+            Source.generation,
+            Source.local_only,
+        ).where(Source.id.in_(source_ids))
+    )
+    by_id = {
+        row.id: GadgetSourceSelection(
+            id=row.id,
+            name=row.name,
+            type=row.type,
+            provider=row.provider,
+            status=row.status,
+            generation=row.generation,
+            local_only=row.local_only,
+        )
+        for row in rows
+    }
+    return tuple(by_id[source_id] for source_id in source_ids if source_id in by_id)
+
+
+async def list_active_gadget_sources(
+    session: AsyncSession, *, limit: int = 32, cursor: str | None = None,
+) -> GadgetSourceSelectionPage:
+    """Page detached active-source identities for owner News selection and bounded catch-up.
+
+    This contract contains only the existing gadget-safe source fields, applies
+    active lifecycle and stable creation/ID keyset filters, and excludes scope,
+    configuration, credentials and provider item policy. Callers must still use
+    Documents current-version/scope fences for each item; this is not item-level
+    authorization and does not grant agent access.
+    """
+    if not 1 <= limit <= 32:
+        raise ValueError("Active source projection limit must be between 1 and 32")
+    statement = select(
+        Source.id, Source.name, Source.type, Source.provider, Source.status,
+        Source.generation, Source.local_only, Source.created_at,
+    ).where(Source.status == "active")
+    if cursor is not None:
+        timestamp, identifier = decode_cursor(cursor)
+        statement = statement.where(tuple_(Source.created_at, Source.id) < (timestamp, identifier))
+    rows = list((await session.execute(statement.order_by(desc(Source.created_at), desc(Source.id)).limit(limit + 1))).all())
+    more = len(rows) > limit
+    rows = rows[:limit]
+    items = tuple(GadgetSourceSelection(
+        id=row.id, name=row.name, type=row.type, provider=row.provider,
+        status=row.status, generation=row.generation, local_only=row.local_only,
+    ) for row in rows)
+    next_cursor = encode_cursor(rows[-1].created_at, rows[-1].id) if more and rows else None
+    return GadgetSourceSelectionPage(items=items, next_cursor=next_cursor)
+
+
+async def list_gadget_sources(
+    session: AsyncSession, limit: int = 50, cursor: str | None = None
+) -> GadgetSourceSelectionPage:
+    """Return an authorized caller's bounded source-selection page using created-at/ID keyset order.
+
+    Only dashboard selection fields are queried, so connector configuration,
+    credentials, scopes, and source content never enter this detached page.
+    Authorization remains the route caller's responsibility; this projection
+    does not establish provider item-level authorization.
+    """
+    if not 1 <= limit <= 100:
+        raise ValueError("Source selection page limit must be between 1 and 100")
+
+    statement = select(
+        Source.id,
+        Source.name,
+        Source.type,
+        Source.provider,
+        Source.status,
+        Source.generation,
+        Source.local_only,
+        Source.created_at,
+    ).order_by(desc(Source.created_at), desc(Source.id))
+    if cursor is not None:
+        timestamp, identifier = decode_cursor(cursor)
+        statement = statement.where(tuple_(Source.created_at, Source.id) < (timestamp, identifier))
+    rows = list((await session.execute(statement.limit(limit + 1))).all())
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    next_cursor = encode_cursor(rows[-1].created_at, rows[-1].id) if has_more and rows else None
+    items = tuple(
+        GadgetSourceSelection(
+            id=row.id,
+            name=row.name,
+            type=row.type,
+            provider=row.provider,
+            status=row.status,
+            generation=row.generation,
+            local_only=row.local_only,
+        )
+        for row in rows
+    )
+    return GadgetSourceSelectionPage(items=items, next_cursor=next_cursor)
 
 
 async def update_source(

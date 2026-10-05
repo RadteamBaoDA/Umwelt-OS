@@ -1,20 +1,29 @@
+"""Central module registration and capability dependency validation."""
+
 from collections.abc import Iterable
 from typing import Any
 
+from modules.dashboard.descriptor import descriptor as dashboard
+from modules.goals.descriptor import descriptor as goals
 from modules.knowledge.documents.descriptor import descriptor as documents
-from modules.sources.descriptor import descriptor as sources
-from modules.search.descriptor import descriptor as search
 from modules.knowledge.entities.descriptor import descriptor as entities
 from modules.knowledge.relationships.descriptor import descriptor as relationships
-from modules.timeline.descriptor import descriptor as timeline
 from modules.knowledge.temporal.descriptor import descriptor as temporal
+from modules.news.descriptor import descriptor as news
+from modules.notifications.descriptor import descriptor as notifications
+from modules.search.descriptor import descriptor as search
+from modules.sources.descriptor import descriptor as sources
+from modules.tasks.descriptor import descriptor as tasks
+from modules.timeline.descriptor import descriptor as timeline
+
 from modules.chat.descriptor import descriptor as chat
 from modules.memory.descriptor import descriptor as memory
 from modules.tools.descriptor import descriptor as tools
 from modules.agents.descriptor import descriptor as agents
 
 
-def register_modules(descriptors: Iterable[Any] = (sources, documents, entities, relationships, timeline, search, temporal, chat, memory, tools, agents)) -> dict[str, Any]:
+def register_modules(descriptors: Iterable[Any] = (sources, documents, entities, relationships, timeline, search, temporal,
+        dashboard, tasks, goals, news, notifications, chat, memory, tools, agents)) -> dict[str, Any]:
     """Build the descriptor registry and reject duplicate IDs or missing dependencies.
 
     Args:

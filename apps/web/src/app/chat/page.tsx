@@ -19,7 +19,7 @@ function ChatPageContent() {
 
   const handleSelectConversation = React.useCallback(
     (id: string) => {
-      chatCtrl.setActiveConversationId(id);
+      chatCtrl.selectConversation(id);
       setMobileView('chat');
     },
     [chatCtrl],

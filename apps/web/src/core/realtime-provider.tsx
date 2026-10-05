@@ -68,6 +68,9 @@ type KnowledgeEvent = ReplayEnvelope & {
   index_status?: 'queued' | 'running' | 'active' | 'failed' | 'retired' | null;
   indexed_items?: number | null; failed_items?: number | null;
 };
+type DashboardEvent = ReplayEnvelope & {
+  type: 'dashboard.changed'; scope: 'dashboard' | 'definition' | 'brief'; id: string; revision: number; deleted: boolean;
+};
 
 const RealtimeContext = createContext<RealtimeContextValue | null>(null);
 const CURSOR_RE = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):(0|[1-9][0-9]{0,18})$/;
@@ -144,7 +147,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     if (fullRefreshQueued.current) setDocumentRefreshRequired(true);
   }, []);
 
-  /** Invalidates source, ingestion, connector, operation, entity, relationship, and search queries after realtime changes. */
+  /** Invalidates operational and dashboard configuration queries after reconnect so snapshots cannot leave stale availability visible. */
   const invalidateOperationalQueries = useCallback(async () => {
     await Promise.all([
       client.invalidateQueries({ queryKey: ['sources'] }),
@@ -158,6 +161,14 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       client.invalidateQueries({ queryKey: ['entities'] }),
       client.invalidateQueries({ queryKey: ['relationships'] }),
       client.invalidateQueries({ queryKey: ['search'] }),
+      client.invalidateQueries({ queryKey: ['dashboards'] }),
+      client.invalidateQueries({ queryKey: ['dashboard'] }),
+      client.invalidateQueries({ queryKey: ['gadget-definitions'] }),
+      client.invalidateQueries({ queryKey: ['gadget-definition'] }),
+      client.invalidateQueries({ queryKey: ['gadget-renderers'] }),
+      client.invalidateQueries({ queryKey: ['gadget-sources'] }),
+      client.invalidateQueries({ queryKey: ['dashboard-presets'] }),
+      client.invalidateQueries({ queryKey: ['dashboard-preset-preview'] }),
     ]);
   }, [client]);
 
@@ -344,7 +355,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
           if (authCheckController === controller) authCheckController = null;
         });
       };
-      register(stream, attempt, 'source.changed', (event) => {
+      /** Refreshes source-backed definition/dashboard availability and presets without carrying source or dashboard content in the event. */
+      const handleSourceChange = (event: MessageEvent<string>) => {
         const value = parseEnvelope<SourceEvent>(event.data);
         if (!value || !UUID_RE.test(value.source_id) || !Number.isSafeInteger(value.generation)) { resync(true); return; }
         void Promise.all([
@@ -353,8 +365,17 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
           client.invalidateQueries({ queryKey: ['connector-activation', value.source_id] }),
           client.invalidateQueries({ queryKey: ['source-ingestion', value.source_id] }),
           ...(value.operation_id ? [client.invalidateQueries({ queryKey: ['operation', value.operation_id] })] : []),
+          client.invalidateQueries({ queryKey: ['gadget-sources'] }),
+          // Definitions expose source lifecycle warnings, so a source event invalidates the whole owner library.
+          client.invalidateQueries({ queryKey: ['gadget-definitions'] }),
+          client.invalidateQueries({ queryKey: ['gadget-definition'] }),
+          client.invalidateQueries({ queryKey: ['dashboards'] }),
+          client.invalidateQueries({ queryKey: ['dashboard'] }),
+          client.invalidateQueries({ queryKey: ['dashboard-presets'] }),
+          client.invalidateQueries({ queryKey: ['dashboard-preset-preview'] }),
         ]);
-      });
+      };
+      register(stream, attempt, 'source.changed', handleSourceChange);
       register(stream, attempt, 'ingestion.changed', (event) => {
         const value = parseEnvelope<IngestionEvent>(event.data);
         if (!value || !UUID_RE.test(value.source_id) || !UUID_RE.test(value.run_id)) { resync(true); return; }
@@ -459,6 +480,35 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         if (value.document_id) queueDocumentUpdate(value.document_id);
         else queueDocumentUpdate(null);
       });
+      /** Validates the public identifier-only dashboard event before invalidating its resource and dependent query families. */
+      const handleDashboardChange = (event: MessageEvent<string>) => {
+        const value = parseEnvelope<DashboardEvent>(event.data);
+        if (
+          !value || value.type !== 'dashboard.changed'
+          || Object.keys(value).some((key) => !['schema_version', 'type', 'scope', 'id', 'revision', 'deleted'].includes(key))
+          || (value.scope !== 'dashboard' && value.scope !== 'definition' && value.scope !== 'brief')
+          || typeof value.id !== 'string' || !UUID_RE.test(value.id)
+          || !Number.isSafeInteger(value.revision) || value.revision < 1
+          || typeof value.deleted !== 'boolean'
+        ) { resync(true); return; }
+        const invalidations = value.scope === 'brief'
+          ? [
+            client.invalidateQueries({ queryKey: ['daily-context'] }),
+            client.invalidateQueries({ queryKey: ['notifications'] }),
+          ]
+          : value.scope === 'dashboard'
+          ? [
+            client.invalidateQueries({ queryKey: ['dashboards'] }),
+            client.invalidateQueries({ queryKey: ['dashboard', value.id] }),
+          ]
+          : [
+            client.invalidateQueries({ queryKey: ['gadget-definitions'] }),
+            client.invalidateQueries({ queryKey: ['gadget-definition', value.id] }),
+            client.invalidateQueries({ queryKey: ['dashboard'] }),
+          ];
+        void Promise.all(invalidations);
+      };
+      register(stream, attempt, 'dashboard.changed', handleDashboardChange);
       /** Checks whether a control event came from the current event stream. */
       const ownControlEvent = () => ownsStream();
       stream.addEventListener('resync_required', () => { if (ownControlEvent()) resync(true); });

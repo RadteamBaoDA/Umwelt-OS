@@ -2,6 +2,8 @@ import base64
 import binascii
 import hashlib
 import json
+import math
+from dataclasses import dataclass
 from collections.abc import Awaitable, Callable, Sequence
 from uuid import UUID
 
@@ -11,21 +13,126 @@ from redis.exceptions import RedisError
 from sqlalchemy import and_, false, func, or_, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from core.config import Settings
 from core.model_gateway.client import ModelGatewayError, PrivacyPolicyDenied
 from core.model_gateway.policy import may_send
+from modules.goals.schemas import GoalFilter, GoalPage
 from core.model_gateway.schemas import AIExecutionConfig, ModelMapping, RequestPolicy
 from core.tools.schemas import ToolDestination, ToolOutputFence
 from modules.knowledge.documents.models import Document, DocumentChunk, DocumentVersion
 from modules.search.indexing import configured_embedding, embedding_values, gateway
 from modules.search.models import IndexGeneration, SearchIndexItem
-from modules.search.schemas import Citation, SearchHit, SearchIndexStatus, SearchRequest, SearchResponse, SearchSource
+from modules.search.schemas import (
+    Citation,
+    SearchHit,
+    SearchIndexStatus,
+    SearchRequest,
+    SearchResponse,
+    SearchSource,
+)
 from modules.sources.models import Source
+from modules.tasks.schemas import TaskFilter, TaskPage
 
 MAX_CANDIDATES = 500
 MAX_RANKED_CANDIDATES = MAX_CANDIDATES * 2
 FALLBACK_WARNING = "Semantic search unavailable"
+
+
+@dataclass(frozen=True)
+class NewsSimilarityRead:
+    """Return stored-vector cosine similarity plus its active generation identity."""
+    left_chunk_id: UUID
+    right_chunk_id: UUID
+    cosine_similarity: float
+    generation_id: UUID
+    model_id: str
+    model_version: str | None
+    response_model_id: str | None
+    dimensions: int
+    gateway_identity: str | None
+
+
+@dataclass(frozen=True)
+class NewsSimilarityResult:
+    """Distinguish usable bounded matches from missing or incompatible index capability."""
+    items: tuple[NewsSimilarityRead, ...]
+    capability: str
+
+
+async def compare_news_evidence_embeddings(
+    session: AsyncSession, incoming_chunk_id: UUID, candidate_chunk_ids: tuple[UUID, ...],
+) -> NewsSimilarityResult:
+    """Compare only active stored embeddings for current visible news chunks.
+
+    No gateway call or embedding generation occurs here. Both sides must be
+    succeeded in the same active generation and current ready documents from
+    active remotely indexable sources. At most 100 candidates are inspected.
+    """
+    if len(candidate_chunk_ids) > 100 or len(set(candidate_chunk_ids)) != len(candidate_chunk_ids):
+        raise ValueError("News similarity accepts at most 100 unique candidates")
+    if not candidate_chunk_ids:
+        return NewsSimilarityResult(items=(), capability="no_candidates")
+    generation = await session.scalar(select(IndexGeneration).where(IndexGeneration.status == "active"))
+    if generation is None or generation.dimensions is None:
+        return NewsSimilarityResult(items=(), capability="index_unavailable")
+    incoming = aliased(SearchIndexItem, name="news_incoming_index_item")
+    candidate = aliased(SearchIndexItem, name="news_candidate_index_item")
+    left_source = aliased(Source, name="news_incoming_source")
+    right_source = aliased(Source, name="news_candidate_source")
+    left_doc = aliased(Document, name="news_incoming_document")
+    right_doc = aliased(Document, name="news_candidate_document")
+    left_version = aliased(DocumentVersion, name="news_incoming_version")
+    right_version = aliased(DocumentVersion, name="news_candidate_version")
+    left_chunk = aliased(DocumentChunk, name="news_incoming_chunk")
+    right_chunk = aliased(DocumentChunk, name="news_candidate_chunk")
+    stmt = (
+        select(
+            incoming.chunk_id, candidate.chunk_id,
+            (1.0 - incoming.embedding.op("<=>")(candidate.embedding)).label("similarity"),
+            IndexGeneration.id, IndexGeneration.model_id, IndexGeneration.model_version,
+            IndexGeneration.response_model_id, IndexGeneration.dimensions, IndexGeneration.gateway_identity,
+        )
+        .join(IndexGeneration, IndexGeneration.id == incoming.generation_id)
+        .join(candidate, (candidate.generation_id == incoming.generation_id) & (candidate.status == "succeeded"))
+        .join(left_chunk, left_chunk.id == incoming.chunk_id)
+        .join(left_version, left_version.id == left_chunk.document_version_id)
+        .join(left_doc, left_doc.id == left_version.document_id)
+        .join(left_source, left_source.id == left_doc.source_id)
+        .join(right_chunk, right_chunk.id == candidate.chunk_id)
+        .join(right_version, right_version.id == right_chunk.document_version_id)
+        .join(right_doc, right_doc.id == right_version.document_id)
+        .join(right_source, right_source.id == right_doc.source_id)
+        .where(
+            incoming.chunk_id == incoming_chunk_id, incoming.status == "succeeded",
+            incoming.generation_id == generation.id, IndexGeneration.status == "active",
+            candidate.chunk_id.in_(candidate_chunk_ids),
+            left_doc.current_version == left_version.version_number,
+            right_doc.current_version == right_version.version_number,
+            left_doc.extraction_status.in_(("ready", "succeeded")),
+            right_doc.extraction_status.in_(("ready", "succeeded")),
+            left_source.status == "active", right_source.status == "active",
+            left_source.local_only.is_(False), right_source.local_only.is_(False),
+        )
+    )
+    rows = list((await session.execute(stmt.limit(101))).all())
+    if len(rows) > 100:
+        return NewsSimilarityResult(items=(), capability="candidate_limit_exceeded")
+    if not rows:
+        return NewsSimilarityResult(items=(), capability="embeddings_unavailable")
+    values = []
+    for left_id, right_id, score, generation_id, model, version, response, dimensions, gateway_identity in rows:
+        value = float(score)
+        if not math.isfinite(value) or value < -1.00001 or value > 1.00001:
+            return NewsSimilarityResult(items=(), capability="invalid_vector_result")
+        values.append(NewsSimilarityRead(
+            left_chunk_id=left_id, right_chunk_id=right_id,
+            cosine_similarity=max(-1.0, min(1.0, value)), generation_id=generation_id,
+            model_id=model, model_version=version, response_model_id=response,
+            dimensions=dimensions, gateway_identity=gateway_identity,
+        ))
+    return NewsSimilarityResult(items=tuple(values), capability="available")
 
 
 def _cursor_scope(
@@ -424,3 +531,28 @@ async def index_status(session: AsyncSession) -> SearchIndexStatus:
     return SearchIndexStatus(run_id=generation.id, status=generation.status, model_id=generation.model_id,
                              dimensions=generation.dimensions, indexed_items=counts.get("succeeded", 0),
                              failed_items=counts.get("failed", 0))
+
+
+async def search_tasks_and_goals(
+    session: AsyncSession,
+    owner_id: int,
+    task_filter: TaskFilter,
+    goal_filter: GoalFilter,
+) -> tuple[TaskPage, GoalPage]:
+    """Return bounded owner pages by delegating all task and goal reads to their public APIs.
+
+    The caller supplies filters built from the authenticated owner's query. Each domain
+    keeps its own cursor; task tombstone fences and reconciled goal projections remain
+    controlled by the owning public list contract. This path performs reads only and
+    returns owner DTOs without assigning a synthetic relevance score.
+    """
+    if not task_filter.q or not task_filter.q.strip():
+        # Keep a whitespace query from becoming an unfiltered owner list request.
+        return TaskPage(items=[]), GoalPage(items=[])
+
+    from modules.goals import public as goals
+    from modules.tasks import public as tasks
+
+    task_page = await tasks.list_tasks(session, owner_id, task_filter)
+    goal_page = await goals.list_goals(session, owner_id, goal_filter)
+    return task_page, goal_page

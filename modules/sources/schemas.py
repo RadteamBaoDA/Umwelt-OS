@@ -62,6 +62,33 @@ class SourceFence(BaseModel):
     local_only: bool
 
 
+class GadgetSourceSelection(BaseModel):
+    """Expose source identity and lifecycle for an already-authorized dashboard caller.
+
+    This immutable projection deliberately excludes configuration, credentials,
+    scopes, and content. It does not establish provider item-level permissions.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: UUID
+    name: str
+    type: str
+    provider: str | None
+    status: str
+    generation: int
+    local_only: bool
+
+
+class GadgetSourceSelectionPage(BaseModel):
+    """Return an immutable bounded page of dashboard-selectable source metadata."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    items: tuple[GadgetSourceSelection, ...]
+    next_cursor: str | None
+
+
 class ConnectorSource(BaseModel):
     """Detached configuration snapshot for connector validation and dispatch."""
 

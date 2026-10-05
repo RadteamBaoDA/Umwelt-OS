@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useCallback, useContext, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useRef, useState, type ReactNode } from 'react';
 import type { ChatContext } from '@/modules/chat/api';
 
 /**
@@ -63,6 +63,25 @@ export interface ChatControllerContextValue {
   clearPendingSpecialistRun: (conversationId: string) => void;
   /** Starts a clean new conversation state while preserving or resetting context. */
   resetConversation: () => void;
+  /**
+   * Switches the drawer to the conversation bound to a day (or a fresh one if none exists yet).
+   * Earlier day conversations and their background runs are never modified or cancelled.
+   */
+  selectDay: (day: { date: string; timezone: string }) => void;
+  /** Explicitly binds a newly created conversation to the day captured before its create request. */
+  bindDayConversation: (day: { date: string; timezone: string }, conversationId: string) => void;
+  /**
+   * Selects an existing conversation (e.g. from history). Never rebinds a day; drops a day context
+   * that does not own this conversation so later sends cannot leak into it.
+   */
+  selectConversation: (id: string) => void;
+  /** Forgets any day binding that points at a deleted conversation so that day starts a fresh one. */
+  unbindConversation: (id: string) => void;
+}
+
+/** Builds the in-memory key binding one day context to its conversation. */
+function dayKey(date: string | undefined, timezone: string | undefined): string {
+  return `${date}|${timezone}`;
 }
 
 const ChatControllerContext = createContext<ChatControllerContextValue | null>(null);
@@ -102,10 +121,39 @@ export function ChatControllerProvider({ children }: { children: ReactNode }) {
    * Selects a conversation and advances its generation even when the same ID is selected again.
    * The generation lets in-flight Chat work distinguish a later visit to the same conversation.
    */
-  const selectConversation = useCallback((id: string | null) => {
+  const selectConversationRaw = useCallback((id: string | null) => {
     setActiveConversationId(id);
     setActiveConversationGeneration((generation) => generation + 1);
   }, []);
+
+  // Day -> conversation bindings for this browser session; a conversation keeps the day it was created with.
+  const dayConversations = useRef(new Map<string, string>());
+  const contextRef = useRef<ChatContext | null>(null);
+  contextRef.current = context;
+
+  const bindDayConversation = useCallback((day: { date: string; timezone: string }, conversationId: string) => {
+    dayConversations.current.set(dayKey(day.date, day.timezone), conversationId);
+  }, []);
+
+  /** Switches context and conversation together so a send can never mix two days. */
+  const selectDay = useCallback((day: { date: string; timezone: string }) => {
+    setContext({ kind: 'day', date: day.date, timezone: day.timezone });
+    selectConversationRaw(dayConversations.current.get(dayKey(day.date, day.timezone)) ?? null);
+  }, [selectConversationRaw]);
+
+  const unbindConversation = useCallback((id: string) => {
+    for (const [key, value] of dayConversations.current) {
+      if (value === id) dayConversations.current.delete(key);
+    }
+  }, []);
+
+  const selectHistoryConversation = useCallback((id: string) => {
+    const now = contextRef.current;
+    if (now?.kind === 'day' && dayConversations.current.get(dayKey(now.date, now.timezone)) !== id) {
+      setContext(null);
+    }
+    selectConversationRaw(id);
+  }, [selectConversationRaw]);
 
   /**
    * Stores a pending envelope by its immutable conversation identity for all Chat surfaces.
@@ -131,13 +179,13 @@ export function ChatControllerProvider({ children }: { children: ReactNode }) {
    */
   const openDrawer = useCallback((params?: ChatOpenParams) => {
     if (params?.conversationId !== undefined) {
-      selectConversation(params.conversationId);
+      selectConversationRaw(params.conversationId);
     }
     if (params?.context !== undefined) {
       setContext(params.context);
     }
     setIsDrawerOpen(true);
-  }, [selectConversation]);
+  }, [selectConversationRaw]);
 
   /**
    * Closes the drawer presentation only. Active generation runs continue on the server.
@@ -157,9 +205,9 @@ export function ChatControllerProvider({ children }: { children: ReactNode }) {
    * Clears the active conversation ID and composer draft while preserving thread-keyed retry envelopes.
    */
   const resetConversation = useCallback(() => {
-    selectConversation(null);
+    selectConversationRaw(null);
     setDraft('');
-  }, [selectConversation]);
+  }, [selectConversationRaw]);
 
   const value: ChatControllerContextValue = {
     isDrawerOpen,
@@ -171,12 +219,16 @@ export function ChatControllerProvider({ children }: { children: ReactNode }) {
     openDrawer,
     closeDrawer,
     toggleDrawer,
-    setActiveConversationId: selectConversation,
+    setActiveConversationId: selectConversationRaw,
     setContext,
     setDraft,
     setPendingSpecialistRun,
     clearPendingSpecialistRun,
     resetConversation,
+    selectDay,
+    bindDayConversation,
+    selectConversation: selectHistoryConversation,
+    unbindConversation,
   };
 
   return (

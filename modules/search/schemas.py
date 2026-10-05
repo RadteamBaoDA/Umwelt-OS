@@ -4,6 +4,9 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from modules.goals.schemas import GoalRead
+from modules.tasks.schemas import TaskRead
+
 
 class SearchFilters(BaseModel):
     """Bound source, date, and content-type filters for a search request."""
@@ -83,3 +86,24 @@ class SearchIndexStatus(BaseModel):
     dimensions: int | None
     indexed_items: int
     failed_items: int
+
+
+class GlobalSearchResponse(BaseModel):
+    """Return independently paginated document, task, and goal search results.
+
+    Task and goal entries retain their owners' read DTOs. Each continuation token
+    pages only its corresponding domain; ``total`` counts items returned in this
+    response and does not claim to count the full matching corpus.
+    """
+
+    documents: list[SearchHit] = Field(default_factory=list)
+    tasks: list[TaskRead] = Field(default_factory=list)
+    goals: list[GoalRead] = Field(default_factory=list)
+    document_next_cursor: str | None = None
+    task_next_cursor: str | None = None
+    goal_next_cursor: str | None = None
+    total: int = Field(
+        default=0,
+        description="Number of document, task, and goal items returned in this response; not a corpus count.",
+    )
+

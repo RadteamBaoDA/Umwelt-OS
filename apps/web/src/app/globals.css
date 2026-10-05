@@ -6,11 +6,22 @@
   --color-popover: var(--surface);
   --color-popover-foreground: var(--text);
   --color-border: var(--line);
+  --color-input: var(--line);
   --color-ring: var(--accent);
+  --color-primary: var(--accent);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--bg);
+  --color-secondary-foreground: var(--text);
   --color-accent: var(--bg);
   --color-accent-foreground: var(--text);
   --color-muted-foreground: var(--muted);
   --color-destructive: var(--danger);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
   --radius-lg: 12px;
   --radius-md: 9px;
   --radius-sm: 6px;
@@ -24,7 +35,14 @@
   --muted: #69756e;
   --line: #dfe4df;
   --accent: #176a4a;
+  --primary-foreground: #ffffff;
   --danger: #a82e35;
+  --destructive-foreground: #ffffff;
+  --chart-1: #176a4a;
+  --chart-2: #2563eb;
+  --chart-3: #d97706;
+  --chart-4: #7c3aed;
+  --chart-5: #0d9488;
 }
 
 * { box-sizing: border-box; }
@@ -45,11 +63,18 @@ html.dark {
   --muted: #a1afa6;
   --line: #35433a;
   --accent: #77c69c;
+  --primary-foreground: #102117;
   --danger: #ff9b9f;
+  --destructive-foreground: #141a17;
+  --chart-1: #77c69c;
+  --chart-2: #60a5fa;
+  --chart-3: #f59e0b;
+  --chart-4: #a78bfa;
+  --chart-5: #2dd4bf;
 }
 
-button, input, textarea, select { font: inherit; }
-a { color: var(--accent); }
+button:not([data-slot='button']), input, textarea, select { font: inherit; }
+a:not([data-slot='button']) { color: var(--accent); }
 .page { min-height: 100vh; display: grid; place-items: center; padding: 32px 18px; }
 .auth-panel, .status-panel { width: min(100%, 480px); background: var(--surface); border: 1px solid var(--line); border-radius: 18px; padding: 34px; box-shadow: 0 14px 36px #14251a0b; }
 .brand { color: var(--accent); font-size: 13px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
@@ -67,9 +92,9 @@ h1 { margin: 12px 0 8px; font-size: clamp(27px, 5vw, 36px); letter-spacing: -.04
 .select-item-indicator { position: absolute; right: 8px; display: inline-flex; align-items: center; }
 .select-item[data-highlighted] { background: var(--bg); }
 .select-item[data-state='checked'] { color: var(--accent); }
-.button { min-height: 44px; padding: 10px 16px; border: 0; border-radius: 9px; background: var(--accent); color: white; cursor: pointer; font-weight: 700; }
-html.dark .button { color: #102117; }
-.button:disabled { opacity: .65; cursor: progress; }
+.button:not([data-slot='button']) { min-height: 44px; padding: 10px 16px; border: 0; border-radius: 9px; background: var(--accent); color: var(--primary-foreground); cursor: pointer; font-weight: 700; }
+html.dark .button:not([data-slot='button']) { color: #102117; }
+.button:not([data-slot='button']):disabled { opacity: .65; cursor: progress; }
 .error { color: var(--danger); font-size: 14px; }
 .shell { min-height: 100vh; min-height: 100dvh; padding: max(24px, env(safe-area-inset-top)) max(24px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left)); display: flex; flex-direction: column; }
 .topbar { width: 100%; margin: 0 auto 34px; display: flex; justify-content: space-between; align-items: center; gap: 14px; }
@@ -104,7 +129,7 @@ html.dark .button { color: #102117; }
 .version-list li { display: flex; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
 .text-button { background: none; border: 0; color: var(--accent); cursor: pointer; padding: 0; text-align: left; }
 .version-preview pre, .saved-content pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
-.secondary { background: transparent; color: var(--text); border: 1px solid var(--line); }
+.secondary:not([data-slot='button']) { background: transparent; color: var(--text); border: 1px solid var(--line); }
 .search-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px; }
 .search-excerpt { line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .preferences-dialog { width: min(calc(100vw - 2rem), 560px); max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 2rem); overflow-y: auto; overscroll-behavior: contain; padding-bottom: max(24px, env(safe-area-inset-bottom)); }

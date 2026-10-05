@@ -16,6 +16,7 @@ from modules.agents.schemas import (
     ApprovalDecisionRead, ApprovalDecisionRequest, ApprovalRead, AgentRunRead, AgentRunStart,
 )
 from modules.agents.approvals import decision as resolve_decision
+from modules.agents.internal_writes import INTERNAL_DESTINATION, INTERNAL_WRITE_TOOLS
 from modules.tools.webhook import load_webhook_profiles
 from modules.agents.specialists import get_profile, list_profiles, update_profile_in_uow
 from modules.settings import public as settings_public
@@ -169,7 +170,10 @@ async def _resolve_approval_request(
         session, session_factory=request.app.state.session_factory, approval_id=approval_id,
         owner_id=owner.owner_id, auth_session_hash=owner.token_hash, approve=approve,
         expiry_hours=settings.approval_expiry_hours,
-        destination_revision=profile.revision if profile else "", definition=definition,
+        destination_revision=(
+            INTERNAL_DESTINATION[1] if candidate.tool_name in INTERNAL_WRITE_TOOLS
+            else profile.revision if profile else ""
+        ), definition=definition,
     )
     if run.status == "queued":
         await request.app.state.redis.enqueue_job(

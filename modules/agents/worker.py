@@ -34,6 +34,8 @@ from modules.tools.builtins import register_builtin_tools
 from modules.tools.webhook import register_webhook_tool
 from modules.tools.browser import register_browser_tool
 from modules.agents.handoff import register_handoff_tool
+from modules.goals.tools import register_goal_tools
+from modules.tasks.tools import register_task_tools
 from modules.tools.public import McpAdmission, McpRuntime
 
 logger = logging.getLogger(__name__)
@@ -578,6 +580,8 @@ async def compose_agent_registry(
         register_webhook_tool(registry, settings)
         register_browser_tool(registry)
         register_handoff_tool(registry, frozenset(declared_tools))
+        register_task_tools(registry, frozenset(declared_tools))
+        register_goal_tools(registry, frozenset(declared_tools))
     admission = McpAdmission(redis)
     runtime = McpRuntime(
         registry, session_factory, redis, settings, admission,

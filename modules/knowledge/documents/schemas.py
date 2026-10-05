@@ -90,7 +90,7 @@ class NormalizedDocumentInput(BaseModel):
     @classmethod
     def bounded_provenance(cls, value: dict[str, Any]) -> dict[str, Any]:
         """Allow only declared provenance fields and enforce the metadata bound."""
-        allowed = {"title", "canonical_url", "published_at", "content_type", "author", "language", "metadata"}
+        allowed = {"title", "canonical_url", "published_at", "content_type", "author", "language", "metadata", "provider_scope_discriminator"}
         if value.keys() - allowed:
             raise ValueError("provenance contains unsupported fields")
         return validate_metadata(value)

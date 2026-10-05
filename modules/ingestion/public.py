@@ -1,7 +1,9 @@
 import hashlib
 import json
 import secrets
+from collections.abc import Mapping
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
 from uuid import UUID, uuid4
@@ -28,6 +30,71 @@ from modules.ingestion.schemas import CrawlReceipt, EventDelivery, Receipt, Rece
 from modules.knowledge.documents import public as documents
 from modules.sources import public as sources
 from modules.sources.schemas import ConnectorSource
+
+
+@dataclass(frozen=True)
+class NewsDocumentReadyEvent:
+    """Detached fixed-shape News readiness event owned by Ingestion."""
+    id: UUID
+    version: int
+    status: str
+    payload: dict[str, object]
+    valid_payload: bool
+
+
+async def lock_news_document_ready_event(
+    session: AsyncSession, event_id: UUID,
+) -> NewsDocumentReadyEvent | None:
+    """Lock one News readiness outbox row and return only its bounded event payload.
+
+    The event table remains private to Ingestion. Invalid or oversized payloads
+    return a detached DTO with valid_payload false so the consumer can terminally
+    fail the receipt without parsing arbitrary or unbounded JSON fields.
+    """
+    event = await session.scalar(select(EventOutbox).where(
+        EventOutbox.id == event_id, EventOutbox.type == "news.document.ready",
+    ).with_for_update())
+    if event is None:
+        return None
+    payload = event.payload
+    required = {"source_id", "source_generation", "document_id", "document_version_id", "version_number"}
+    valid = isinstance(payload, Mapping) and set(payload) == required and len(payload) == len(required)
+    if valid:
+        strings = (payload.get("source_id"), payload.get("document_id"), payload.get("document_version_id"))
+        valid = all(isinstance(value, str) and len(value) <= 36 for value in strings)
+        generation = payload.get("source_generation")
+        version_number = payload.get("version_number")
+        valid = valid and type(generation) is int and 0 <= generation <= 2**31 - 1
+        valid = valid and type(version_number) is int and 1 <= version_number <= 2**31 - 1
+    detached = dict(payload) if valid else {}
+    return NewsDocumentReadyEvent(
+        id=event.id, version=event.version, status=event.status,
+        payload=detached, valid_payload=bool(valid),
+    )
+
+
+async def mark_news_document_ready_event_delivered(session: AsyncSession, event_id: UUID) -> bool:
+    """Flush News event acknowledgement without committing the caller's transaction."""
+    event = await session.scalar(select(EventOutbox).where(
+        EventOutbox.id == event_id, EventOutbox.type == "news.document.ready",
+    ).with_for_update())
+    if event is None:
+        return False
+    event.status = "delivered"
+    await session.flush()
+    return True
+
+
+async def fail_news_document_ready_event(session: AsyncSession, event_id: UUID) -> bool:
+    """Flush a terminal invalid News receipt state while leaving commit to the caller."""
+    event = await session.scalar(select(EventOutbox).where(
+        EventOutbox.id == event_id, EventOutbox.type == "news.document.ready",
+    ).with_for_update())
+    if event is None:
+        return False
+    event.status = "failed"
+    await session.flush()
+    return True
 
 def _digest(value: object) -> str:
     """Hash canonical JSON so equivalent payload mappings share an identity."""

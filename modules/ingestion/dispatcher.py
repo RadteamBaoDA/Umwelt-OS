@@ -16,6 +16,7 @@ WORKER_BY_EVENT = {
     "connector.crawl.requested": "process_ingestion_event",
     "ingestion.normalize.requested": "process_normalize_event",
     "document.version.ready": "process_document_ready",
+    "news.document.ready": "process_news_document_ready",
 }
 
 

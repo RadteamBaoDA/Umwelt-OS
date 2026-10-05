@@ -7,6 +7,8 @@ from urllib.parse import urlsplit
 from uuid import UUID
 import asyncio
 from dataclasses import dataclass
+import hashlib
+import json
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, StrictBool, StrictInt, field_validator
@@ -64,6 +66,49 @@ class ConnectorConfigurationSnapshot:
     activation_error_code: str | None
     provider_credential_configured: bool
     provider_credential_state: str | None
+
+
+@dataclass(frozen=True)
+class ProviderScopeSnapshot:
+    """Expose only a generation-fenced digest of supported provider scope."""
+    source_id: UUID
+    source_generation: int
+    provider_id: str
+    discriminator: str
+
+
+async def get_current_provider_scope(
+    session: AsyncSession, source_id: UUID, expected_source_generation: int,
+) -> ProviderScopeSnapshot | None:
+    """Hash validated non-secret scope fields for supported active providers only.
+
+    The result contains no connector configuration values. Unsupported providers,
+    inactive sources, invalid config, and stale generations fail closed as None.
+    """
+    from modules.connectors.catalog import get_catalog_entry
+    from modules.sources import public as sources
+
+    source = await sources.get_connector_source(session, source_id)
+    if source is None or source.status != "active" or source.generation != expected_source_generation:
+        return None
+    provider_id = {"rss": "rss", "web": "web", "api": "rest"}.get(source.type)
+    entry = get_catalog_entry(provider_id) if provider_id else None
+    if entry is None or entry.availability != "available":
+        return None
+    try:
+        configuration = ConnectorConfig.model_validate(source.configuration).model_dump(
+            mode="json", exclude_none=True,
+        )
+    except Exception:
+        return None
+    values = {name: configuration[name] for name in entry.scope_fields if name in configuration}
+    if len(values) != len(entry.scope_fields):
+        return None
+    encoded = json.dumps([provider_id, values], sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return ProviderScopeSnapshot(
+        source_id=source.id, source_generation=source.generation,
+        provider_id=provider_id, discriminator=hashlib.sha256(encoded.encode()).hexdigest(),
+    )
 
 
 @dataclass(frozen=True)

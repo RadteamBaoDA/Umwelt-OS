@@ -24,6 +24,7 @@ from modules.agents.handoff import (
     HANDOFF_EXCLUDED_TOOLS, HANDOFF_TARGETS, HANDOFF_TOOL, MAX_HANDOFF_ANSWER_CHARS,
     MAX_HANDOFF_CITATIONS, HandoffRefused,
 )
+from modules.agents.internal_writes import INTERNAL_DESTINATION, is_internal_write
 from modules.agents.models import AgentApproval, AgentEffect, AgentProfile, AgentRun, AgentToolCall
 from modules.agents.public import (
     APPROVAL_PROMPT_VERSION, APPROVAL_WORKFLOW_TOOLS, APPROVAL_WORKFLOW_VERSION,
@@ -313,6 +314,8 @@ class HarnessContext:
                  and definition.schema_fingerprint == expected.get("fingerprint"))
         if definition.risk == ToolRisk.READ_ONLY:
             return exact and not definition.confirmation_required
+        if exact and self.workflow_version == SPECIALIST_WORKFLOW_VERSION and is_internal_write(definition):
+            return True
         return bool(
             exact and self.workflow_version in {APPROVAL_WORKFLOW_VERSION, SPECIALIST_WORKFLOW_VERSION}
             and definition.name == "webhook.send" and definition.risk == ToolRisk.EXTERNAL_WRITE
@@ -343,6 +346,30 @@ class HarnessContext:
                 claim_generation=self.claim_generation, definition=definition,
                 arguments=arguments, destination_id=destination_id,
                 destination_revision=profile.revision,
+            )
+        except Exception:
+            return False
+
+    async def authorize_internal_write(
+        self, state: HarnessState, action_id: UUID, definition: Any, arguments: dict[str, Any],
+    ) -> bool:
+        """Revalidate session, claim, Chat link and evidence, then reserve the one internal write."""
+        from modules.agents.approvals import reserve_effect_before_send
+
+        try:
+            run = await self._run_snapshot()
+            destination_id, destination_revision = INTERNAL_DESTINATION
+            if state.get("source_fences") and not await revalidate_native_output_fences(
+                self.session_factory, self.decode_fences(state["source_fences"]),
+                self.owner_principal(state, destination_id), destination_kind="remote",
+            ):
+                return False
+            return await reserve_effect_before_send(
+                self.session_factory, action_id=action_id, run_id=self.run_id,
+                owner_id=run.owner_id, auth_session_hash=run.auth_session_hash,
+                claim_generation=self.claim_generation, definition=definition,
+                arguments=arguments, destination_id=destination_id,
+                destination_revision=destination_revision,
             )
         except Exception:
             return False
@@ -482,7 +509,8 @@ class HarnessContext:
         capabilities = {"source.read"}
         for name in self.allowed_tools:
             definition = self.registry.get_tool(name)
-            if (definition is not None and definition.risk == ToolRisk.READ_ONLY
+            if (definition is not None
+                    and (definition.risk == ToolRisk.READ_ONLY or is_internal_write(definition))
                     and self.supports_definition(definition, self.tool_contracts.get(name, {}))):
                 capabilities.update(definition.permissions)
         if "webhook.send" in self.allowed_tools:
@@ -994,6 +1022,7 @@ def build_workflow(context: HarnessContext, checkpointer: Any) -> Any:
             webhook_profile = None
             approval_verifier = None
             before_webhook_send = None
+            before_internal_write = None
             if definition.risk != ToolRisk.READ_ONLY or definition.confirmation_required:
                 from modules.agents.approvals import (
                     action_identity, approval_for_slot, create_pending_approval,
@@ -1003,7 +1032,14 @@ def build_workflow(context: HarnessContext, checkpointer: Any) -> Any:
 
                 profile_alias = arguments.get("profile")
                 webhook_profile = load_webhook_profiles(context.settings).get(profile_alias) if isinstance(profile_alias, str) else None
-                if request["name"] != "webhook.send" or webhook_profile is None:
+                internal_write = is_internal_write(definition)
+                # Webhook actions bind a deployment profile; internal writes bind the fixed local destination.
+                approval_destination = (
+                    INTERNAL_DESTINATION if internal_write
+                    else (webhook_profile.alias, webhook_profile.revision)
+                    if request["name"] == "webhook.send" and webhook_profile is not None else None
+                )
+                if approval_destination is None:
                     precomputed_result = ({"error": "tool_unavailable"}, "denied", "tool_unavailable", ())
                 else:
                     action_id = action_identity(context.run_id, ordinal)
@@ -1013,7 +1049,7 @@ def build_workflow(context: HarnessContext, checkpointer: Any) -> Any:
                             context.session_factory, run_id=context.run_id, owner_id=row.owner_id,
                             auth_session_hash=row.auth_session_hash, claim_generation=context.claim_generation,
                             ordinal=ordinal, definition=definition, arguments=arguments,
-                            destination_id=webhook_profile.alias, destination_revision=webhook_profile.revision,
+                            destination_id=approval_destination[0], destination_revision=approval_destination[1],
                             source_fences=state["source_fences"],
                             expiry_hours=context.settings.approval_expiry_hours,
                         )
@@ -1054,13 +1090,20 @@ def build_workflow(context: HarnessContext, checkpointer: Any) -> Any:
                             current: Any, values: dict[str, Any], _principal: ToolExecutionPrincipal, _phase: str,
                         ) -> bool:
                             """Match registry policy admission to this exact persisted approval and effect slot."""
-                            return bool(webhook_profile and action_id and await verify_approved_action(
+                            return bool(approval_destination and action_id and await verify_approved_action(
                                 context.session_factory, action_id=action_id, run_id=context.run_id,
                                 owner_id=row.owner_id, auth_session_hash=row.auth_session_hash,
                                 claim_generation=context.claim_generation, definition=current, arguments=values,
-                                destination_id=webhook_profile.alias,
-                                destination_revision=webhook_profile.revision,
+                                destination_id=approval_destination[0],
+                                destination_revision=approval_destination[1],
                             ))
+
+                        async def before_internal_write(requested_action_id: str) -> bool:
+                            """Reserve the exact approved task/goal write after current run fences pass."""
+                            return bool(
+                                internal_write and action_id and requested_action_id == str(action_id)
+                                and await context.authorize_internal_write(state, action_id, definition, arguments)
+                            )
 
                         async def before_webhook_send(profile: Any, requested_action_id: str) -> bool:
                             """Reserve the matching effect only after current profile and source fences pass."""
@@ -1106,6 +1149,7 @@ def build_workflow(context: HarnessContext, checkpointer: Any) -> Any:
                     "before_embedding_send": before_embedding_send,
                     "approval_verifier": approval_verifier,
                     "before_webhook_send": before_webhook_send,
+                    "before_internal_write": before_internal_write,
                     "action_id": str(action_id) if action_id else None,
                     "run_id": str(context.run_id),
                     **({"handoff_runner": handoff_runner} if request["name"] == HANDOFF_TOOL else {}),

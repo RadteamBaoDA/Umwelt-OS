@@ -192,6 +192,10 @@ export function ChatSession({
       const retryEnvelope = pendingProfileRun?.prompt === content ? pendingProfileRun : null;
       let targetId = retryEnvelope?.conversationId ?? conversationId;
       let attemptedProfileRun: PendingSpecialistRun | null = null;
+      // Day captured before any await: a day conversation is bound to it no matter where the user navigates.
+      const day = chatCtrl.context?.kind === 'day' && chatCtrl.context.date && chatCtrl.context.timezone
+        ? { date: chatCtrl.context.date, timezone: chatCtrl.context.timezone }
+        : null;
 
       try {
         const selected = mode === 'full' && selectedProfileId !== 'assistant'
@@ -209,10 +213,13 @@ export function ChatSession({
               title: titleExcerpt,
               context_kind: chatCtrl.context?.kind,
               context_resource_id: chatCtrl.context?.resource_id,
+              // A day conversation stores its immutable day so it can be recognized later.
+              metadata: day ? { date: day.date, timezone: day.timezone } : undefined,
             },
             session.csrfToken,
           );
           targetId = created.id;
+          if (day) chatCtrl.bindDayConversation(day, targetId);
           if (canUpdateCurrentView()) {
             const nextGeneration = viewGeneration + 1;
             promotedSelectionRef.current = {
@@ -470,7 +477,9 @@ export function ChatSession({
       {chatCtrl.context && (
         <div className="flex items-center justify-between gap-2 px-4 py-2 bg-accent/5 border-b border-accent/15 text-xs text-foreground shrink-0">
           <span className="truncate">
-            {chatCtrl.context.kind === 'document'
+            {chatCtrl.context.kind === 'day'
+              ? t('contextDay', { date: String(chatCtrl.context.date ?? ''), timezone: String(chatCtrl.context.timezone ?? '') })
+              : chatCtrl.context.kind === 'document'
               ? t('contextDocument', { title: String(chatCtrl.context.resource_id ?? '') })
               : chatCtrl.context.kind === 'entity'
                 ? t('contextEntity', { name: String(chatCtrl.context.resource_id ?? '') })

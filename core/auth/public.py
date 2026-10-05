@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.auth.models import AuthSession
+from core.auth.models import AuthSession, Owner
 
 
 async def revalidate_owner_session(
@@ -33,4 +33,12 @@ async def revalidate_owner_session(
     return current is not None
 
 
-__all__ = ["revalidate_owner_session"]
+async def get_demo_owner_id(session: AsyncSession) -> int:
+    """Return the configured singleton owner ID, failing when setup has not created it."""
+    owner_id = await session.scalar(select(Owner.id).where(Owner.id == 1))
+    if owner_id is None:
+        raise RuntimeError("Demo seeding requires the configured owner account")
+    return owner_id
+
+
+__all__ = ["get_demo_owner_id", "revalidate_owner_session"]

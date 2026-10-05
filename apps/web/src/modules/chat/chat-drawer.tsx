@@ -65,6 +65,8 @@ export function ChatDrawer() {
 
         <div className="flex-1 min-h-0 flex flex-col">
           <ChatSession
+            // Remount per day so in-flight stream UI of another day's run never shows here; the run continues server-side.
+            key={chatCtrl.context?.kind === 'day' ? `${chatCtrl.context.date}|${chatCtrl.context.timezone}` : 'general'}
             conversationId={chatCtrl.activeConversationId}
             onConversationCreated={(id) => chatCtrl.setActiveConversationId(id)}
             mode="drawer"

@@ -1,0 +1,222 @@
+"""Private SQLAlchemy persistence models for dashboard configuration and layout."""
+
+from datetime import date, datetime
+from uuid import UUID, uuid4
+
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    Date,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.types import Uuid
+
+from core.database import Base
+
+class Dashboard(Base):
+    """Own a named dashboard and one safe-integer revision for all structural edits."""
+
+    __tablename__ = "dashboards"
+    __table_args__ = (
+        CheckConstraint("revision BETWEEN 1 AND 9007199254740991", name="ck_dashboards_revision"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    owner_id: Mapped[int] = mapped_column(
+        ForeignKey("owner.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    revision: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="1")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class DashboardGroup(Base):
+    """Group instances within one dashboard while exposing a composite target for safe FKs."""
+
+    __tablename__ = "dashboard_groups"
+    __table_args__ = (
+        CheckConstraint("position >= 0", name="ck_dashboard_groups_position"),
+        UniqueConstraint("id", "dashboard_id", name="uq_dashboard_groups_id_dashboard"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    dashboard_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("dashboards.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+
+
+class GadgetDefinition(Base):
+    """Persist reusable bounded selectors and renderer configuration without source content."""
+
+    __tablename__ = "gadget_definitions"
+    __table_args__ = (
+        CheckConstraint("revision BETWEEN 1 AND 9007199254740991", name="ck_gadget_definitions_revision"),
+        CheckConstraint("jsonb_typeof(source_ids) = 'array'", name="ck_gadget_definitions_source_ids_array"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    owner_id: Mapped[int] = mapped_column(
+        ForeignKey("owner.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    revision: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="1")
+    renderer: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_ids: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, server_default="[]"
+    )
+    scope: Mapped[dict[str, object]] = mapped_column(
+        JSONB, nullable=False, server_default="{}"
+    )
+    filters: Mapped[dict[str, object]] = mapped_column(
+        JSONB, nullable=False, server_default="{}"
+    )
+    highlight_rules: Mapped[list[dict[str, object]]] = mapped_column(
+        JSONB, nullable=False, server_default="[]"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class GadgetInstance(Base):
+    """Place one reusable definition into a dashboard-owned group with a local title/order."""
+
+    __tablename__ = "gadget_instances"
+    __table_args__ = (
+        CheckConstraint("position >= 0", name="ck_gadget_instances_position"),
+        UniqueConstraint("id", "dashboard_id", name="uq_gadget_instances_id_dashboard"),
+        ForeignKeyConstraint(
+            ["group_id", "dashboard_id"],
+            ["dashboard_groups.id", "dashboard_groups.dashboard_id"],
+            ondelete="CASCADE",
+            name="fk_gadget_instances_group_dashboard",
+        ),
+        ForeignKeyConstraint(
+            ["definition_id"], ["gadget_definitions.id"], ondelete="RESTRICT",
+            name="fk_gadget_instances_definition",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    dashboard_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("dashboards.id", ondelete="CASCADE"), nullable=False
+    )
+    group_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    definition_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    title: Mapped[str | None] = mapped_column(String(200))
+    position: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+
+
+class DashboardLayout(Base):
+    """Persist independent desktop and mobile column counts under a composite layout key."""
+
+    __tablename__ = "dashboard_layouts"
+    __table_args__ = (
+        CheckConstraint("breakpoint IN ('desktop', 'mobile')", name="ck_dashboard_layouts_breakpoint"),
+        CheckConstraint("columns BETWEEN 1 AND 20", name="ck_dashboard_layouts_columns"),
+    )
+
+    dashboard_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("dashboards.id", ondelete="CASCADE"), primary_key=True
+    )
+    breakpoint: Mapped[str] = mapped_column(String(8), primary_key=True)
+    columns: Mapped[int] = mapped_column(Integer, nullable=False, server_default="20")
+
+
+class GadgetPlacement(Base):
+    """Persist a validated integer rectangle linked to an instance and matching dashboard layout."""
+
+    __tablename__ = "gadget_placements"
+    __table_args__ = (
+        CheckConstraint("x BETWEEN 0 AND 19", name="ck_gadget_placements_x"),
+        CheckConstraint("y BETWEEN 0 AND 100000", name="ck_gadget_placements_y"),
+        CheckConstraint("y + h <= 100000", name="ck_gadget_placements_bottom_bound"),
+        CheckConstraint("w BETWEEN 1 AND 20", name="ck_gadget_placements_w"),
+        CheckConstraint("h BETWEEN 1 AND 100000", name="ck_gadget_placements_h"),
+        ForeignKeyConstraint(
+            ["dashboard_id", "breakpoint"],
+            ["dashboard_layouts.dashboard_id", "dashboard_layouts.breakpoint"],
+            ondelete="CASCADE",
+            name="fk_gadget_placements_layout",
+        ),
+        ForeignKeyConstraint(
+            ["instance_id", "dashboard_id"],
+            ["gadget_instances.id", "gadget_instances.dashboard_id"],
+            ondelete="CASCADE",
+            name="fk_gadget_placements_instance_dashboard",
+        ),
+    )
+
+    dashboard_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    breakpoint: Mapped[str] = mapped_column(String(8), primary_key=True)
+    instance_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    x: Mapped[int] = mapped_column(Integer, nullable=False)
+    y: Mapped[int] = mapped_column(Integer, nullable=False)
+    w: Mapped[int] = mapped_column(Integer, nullable=False)
+    h: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class DailyBrief(Base):
+    """One immutable saved brief revision for a local date; regeneration appends, never overwrites.
+
+    ``status`` flips to ``stale`` (never deleted) when cited evidence disappears so the saved
+    historical text stays distinct from lists refreshed from current records.
+    """
+
+    __tablename__ = "daily_briefs"
+    __table_args__ = (
+        CheckConstraint("revision >= 1", name="ck_daily_briefs_revision"),
+        CheckConstraint("status IN ('current', 'stale')", name="ck_daily_briefs_status"),
+        CheckConstraint("jsonb_typeof(citations) = 'array'", name="ck_daily_briefs_citations_array"),
+        UniqueConstraint("owner_id", "brief_date", "timezone", "revision", name="uq_daily_briefs_revision"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("owner.id", ondelete="CASCADE"), nullable=False)
+    brief_date: Mapped[date] = mapped_column(Date, nullable=False)
+    timezone: Mapped[str] = mapped_column(String(64), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    input_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="current")
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    citations: Mapped[list[dict[str, object]]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    model_alias: Mapped[str] = mapped_column(String(32), nullable=False)
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class BriefSchedule(Base):
+    """Owner-editable daily brief schedule (default 07:00 Asia/Ho_Chi_Minh) read by the ARQ cron."""
+
+    __tablename__ = "brief_schedules"
+    __table_args__ = (
+        CheckConstraint("hour BETWEEN 0 AND 23 AND minute BETWEEN 0 AND 59", name="ck_brief_schedules_time"),
+    )
+
+    owner_id: Mapped[int] = mapped_column(ForeignKey("owner.id", ondelete="CASCADE"), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    hour: Mapped[int] = mapped_column(Integer, nullable=False, server_default="7")
+    minute: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    timezone: Mapped[str] = mapped_column(String(64), nullable=False, server_default="Asia/Ho_Chi_Minh")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
