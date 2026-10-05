@@ -280,6 +280,12 @@ class TestToolRegistryAsync:
         filtered = registry.list_tools(allowed_tools=frozenset(["other.tool"]))
         assert len(filtered) == 0
 
+    @pytest.fixture(autouse=True)
+    def mock_refresh_module_registry(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Mock _refresh_module_registry to return True for unit testing without live db session."""
+        from unittest.mock import AsyncMock
+        monkeypatch.setattr(ToolRegistry, "_refresh_module_registry", AsyncMock(return_value=True))
+
     @pytest.mark.asyncio
     async def test_invoke_tool_success_read_only(self, test_module_registry: dict[str, Any]) -> None:
         """invoke_tool successfully executes an authorized read-only tool."""
