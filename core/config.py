@@ -5,6 +5,8 @@ from urllib.parse import urlsplit
 from pydantic import AnyHttpUrl, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from core.mcp_endpoint import normalize_mcp_url
+
 
 class Settings(BaseSettings):
     """Validated application configuration loaded from environment and the optional .env file; secret fields are masked in representations."""
@@ -52,6 +54,15 @@ class Settings(BaseSettings):
     ai_allowed_endpoint_cidrs: list[str] = Field(
         default_factory=list, validation_alias="AI_ALLOWED_ENDPOINT_CIDRS", repr=False
     )
+    # This administrator-only map is separate from AI gateway egress exceptions.
+    mcp_allowed_endpoint_cidrs: dict[tuple[str, str, int], tuple[str, ...]] = Field(
+        default_factory=dict, validation_alias="MCP_ALLOWED_ENDPOINT_CIDRS", repr=False
+    )
+    mcp_stdio_profile_manifest: str = Field(
+        default="", validation_alias="MCP_STDIO_PROFILE_MANIFEST", repr=False
+    )
+    webhook_profiles_json: str = Field(default="", validation_alias="WEBHOOK_PROFILES", repr=False)
+    approval_expiry_hours: int = Field(default=24, ge=1, le=72, validation_alias="APPROVAL_EXPIRY_HOURS")
 
     @field_validator("ai_allowed_endpoint_hosts")
     @classmethod
@@ -92,6 +103,59 @@ class Settings(BaseSettings):
                 raise ValueError("IPv4-mapped IPv6 CIDRs must use the equivalent IPv4 CIDR")
             networks.append(network.with_prefixlen)
         return sorted(set(networks))
+
+    @field_validator("mcp_allowed_endpoint_cidrs", mode="before")
+    @classmethod
+    def normalize_mcp_endpoint_origins(cls, values: object) -> object:
+        """Convert deployment origin keys to the exact normalized tuple consumed by MCP transport."""
+        if not isinstance(values, dict):
+            raise ValueError("MCP_ALLOWED_ENDPOINT_CIDRS must be a JSON object")
+        if len(values) > 64:
+            raise ValueError("MCP_ALLOWED_ENDPOINT_CIDRS supports at most 64 exact origins")
+        normalized: dict[tuple[str, str, int], object] = {}
+        for raw_origin, cidrs in values.items():
+            if not isinstance(raw_origin, str):
+                raise ValueError("MCP_ALLOWED_ENDPOINT_CIDRS keys must be origin strings")
+            scheme, host, port, _path = normalize_mcp_url(raw_origin, origin_only=True)
+            origin = (scheme, host, port)
+            if origin in normalized:
+                raise ValueError("MCP_ALLOWED_ENDPOINT_CIDRS contains duplicate normalized origins")
+            normalized[origin] = cidrs
+        return normalized
+
+    @field_validator("mcp_allowed_endpoint_cidrs")
+    @classmethod
+    def validate_mcp_endpoint_cidrs(
+        cls, values: dict[tuple[str, str, int], tuple[str, ...]]
+    ) -> dict[tuple[str, str, int], tuple[str, ...]]:
+        """Canonicalize bounded private or loopback destination networks for exact MCP origins."""
+        private_networks = tuple(
+            ipaddress.ip_network(value)
+            for value in (
+                "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+                "fc00::/7", "127.0.0.0/8", "::1/128",
+            )
+        )
+        normalized: dict[tuple[str, str, int], tuple[str, ...]] = {}
+        for origin, values_for_origin in values.items():
+            if not values_for_origin:
+                raise ValueError("Each MCP endpoint exception must approve at least one CIDR")
+            if len(values_for_origin) > 16:
+                raise ValueError("Each MCP endpoint may approve at most 16 CIDRs")
+            networks = []
+            for value in values_for_origin:
+                network = ipaddress.ip_network(value, strict=False)
+                if (network.prefixlen == 0 or
+                        isinstance(network, ipaddress.IPv6Network)
+                        and network.network_address.ipv4_mapped is not None or
+                        not any(
+                            network.version == approved.version and network.subnet_of(approved)
+                            for approved in private_networks
+                        )):
+                    raise ValueError("MCP endpoint CIDRs must be bounded private or loopback networks")
+                networks.append(network.with_prefixlen)
+            normalized[origin] = tuple(sorted(set(networks)))
+        return normalized
 
     @field_validator("omniroute_base_url", mode="before")
     @classmethod

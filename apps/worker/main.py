@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+from redis.asyncio import Redis
 
 from core.auth.models import AuthSession
 from core.config import Settings
@@ -32,18 +33,33 @@ from modules.knowledge.entities.worker import (
 from modules.timeline.worker import process_timeline_extraction_work, recover_timeline_extraction_work
 from modules.knowledge.temporal.worker import process_graph_operation, recover_graph_work
 from modules.chat.worker import process_chat_response, purge_expired_chat_runs
+from modules.agents.worker import compose_agent_registry, process_agent_run, reconcile_agent_dispatch
 
 async def startup(ctx: dict[str, object]) -> None:
-    """Load worker settings and create its bounded async database pool in the ARQ context."""
+    """Load the bounded database pool and compose the worker-owned native/MCP agent registry."""
     settings = Settings()
     ctx["settings"] = settings
     engine = create_async_engine(settings.database_url, pool_pre_ping=True, pool_size=2)
     ctx["session_factory"] = async_sessionmaker(engine, expire_on_commit=False)
     ctx["db_engine"] = engine
+    try:
+        registry, admission, runtime = await compose_agent_registry(
+            settings, cast(async_sessionmaker[AsyncSession], ctx["session_factory"]),
+            cast(Redis, ctx["redis"]),
+        )
+        ctx["agent_tool_registry"] = registry
+        ctx["agent_mcp_admission"] = admission
+        ctx["agent_mcp_runtime"] = runtime
+    except Exception:
+        await engine.dispose()
+        raise
 
 
 async def shutdown(ctx: dict[str, object]) -> None:
-    """Dispose the worker database engine when present."""
+    """Stop new worker MCP admissions and dispose the database engine when present."""
+    admission = ctx.get("agent_mcp_admission")
+    if admission is not None:
+        cast(Any, admission).stop()
     engine = ctx.get("db_engine")
     if engine is not None:
         await cast(AsyncEngine, engine).dispose()
@@ -73,6 +89,7 @@ class WorkerSettings:
         purge_expired_sessions, process_ingestion_event, process_normalize_event, process_uploaded_file, process_source_purge,
         reconcile_connectors, process_document_ready, process_entity_extraction_work, process_timeline_extraction_work,
         process_graph_operation, process_chat_response, purge_expired_chat_runs,
+        process_agent_run,
     ]
     cron_jobs: ClassVar[list[object]] = [
         cron(purge_expired_sessions, minute=0),
@@ -84,6 +101,7 @@ class WorkerSettings:
         cron(recover_timeline_extraction_work, minute=set(range(0, 60, 1))),
         cron(recover_graph_work, second=set(range(0, 60, 5)), run_at_start=True),
         cron(purge_expired_chat_runs, minute=set(range(0, 60, 15))),
+        cron(reconcile_agent_dispatch, second=set(range(0, 60, 5)), run_at_start=True),
     ]
     redis_settings = RedisSettings.from_dsn(Settings().redis_url)
 

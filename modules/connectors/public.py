@@ -1,4 +1,6 @@
 from datetime import UTC, datetime, timedelta
+import hashlib
+import json
 from ipaddress import ip_address
 from socket import getaddrinfo
 from urllib.parse import urlsplit
@@ -7,10 +9,10 @@ import asyncio
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, StrictBool, StrictInt, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from modules.sources.schemas import ConnectorSource, SourceFence
-from modules.connectors.models import ConnectorProvisioning
+from modules.connectors.models import AgentBrowserGrant, ConnectorProvisioning
 
 DEFAULT_TIMEZONE = "Asia/Ho_Chi_Minh"
 DEFAULT_OVERLAP = timedelta(days=1)
@@ -62,6 +64,225 @@ class ConnectorConfigurationSnapshot:
     activation_error_code: str | None
     provider_credential_configured: bool
     provider_credential_state: str | None
+
+
+@dataclass(frozen=True)
+class AgentBrowserScope:
+    """Bind browser reads to current source and connector revisions and one exact HTTPS path."""
+
+    source_id: UUID
+    source_generation: int
+    connector_revision: int
+    grant_revision: int
+    scope_hash: str
+    origin: str
+    path_prefix: str
+    local_only: bool
+    enabled: bool
+
+
+@dataclass(frozen=True)
+class AgentBrowserScopeRead(AgentBrowserScope):
+    """Expose only the owner-approved source scope and its revision fences."""
+
+
+class AgentBrowserGrantPatch(BaseModel):
+    """Allow only an explicit enable change fenced to the current source configuration."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+    enabled: StrictBool
+    expected_source_generation: StrictInt = Field(ge=1)
+    expected_connector_revision: StrictInt = Field(ge=1)
+
+
+def _agent_browser_scope_url(value: object) -> tuple[str, str]:
+    """Derive a normalized HTTPS origin and path prefix from configured source URL only."""
+    from urllib.parse import unquote, urlsplit
+
+    if not isinstance(value, str):
+        raise ValueError("Web source URL is unavailable")
+    parsed = urlsplit(value)
+    path = parsed.path or "/"
+    decoded_path = unquote(path)
+    if (
+        parsed.scheme.lower() != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or "?" in value
+        or "#" in value
+        or (parsed.port is not None and parsed.port != 443)
+        or any(segment in {".", ".."} for segment in decoded_path.split("/"))
+        or "%2f" in path.lower()
+        or "%5c" in path.lower()
+        or "\\" in decoded_path
+    ):
+        raise ValueError("Browser grant requires an unambiguous credential-free HTTPS source URL")
+    host = parsed.hostname.encode("idna").decode("ascii").lower()
+    try:
+        address = ip_address(host)
+        if getattr(address, "scope_id", None) is not None:
+            raise ValueError("Scoped IP source URLs are not allowed")
+        rendered_host = f"[{host}]" if address.version == 6 else host
+    except ValueError as exc:
+        if "Scoped IP" in str(exc):
+            raise
+        rendered_host = host
+    return f"https://{rendered_host}", path.rstrip("/") or "/"
+
+
+def agent_browser_target_in_scope(scope: AgentBrowserScope, value: str | None) -> bool:
+    """Match a credential-free HTTPS target to one exact origin and path-segment grant."""
+    from urllib.parse import unquote, urlsplit
+
+    if not value or len(value.encode("utf-8")) > 2048 or "?" in value or "#" in value:
+        return False
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+        raw_host = parsed.hostname
+        if raw_host is None:
+            return False
+        host = raw_host.encode("idna").decode("ascii").lower()
+        try:
+            address = ip_address(host)
+            if getattr(address, "scope_id", None) is not None:
+                return False
+            rendered = f"[{host}]" if address.version == 6 else host
+        except ValueError:
+            rendered = host
+    except (UnicodeError, ValueError):
+        return False
+    path = unquote(parsed.path or "/")
+    prefix = unquote(scope.path_prefix or "/")
+    return bool(
+        parsed.scheme == "https" and parsed.username is None and parsed.password is None
+        and parsed.query == "" and parsed.fragment == ""
+        and f"https://{rendered}" == scope.origin
+        and (port is None or port == 443)
+        and not any(segment in {".", ".."} for segment in path.split("/"))
+        and "%2f" not in parsed.path.lower() and "%5c" not in parsed.path.lower()
+        and "%25" not in parsed.path.lower()
+        and "\\" not in path
+        and (path == prefix or prefix == "/" or path.startswith(prefix.rstrip("/") + "/"))
+    )
+
+
+def _scope_hash(source_id: UUID, generation: int, revision: int, origin: str, path: str) -> str:
+    """Hash canonical source identity and bounded scope fields for stale-grant detection."""
+    value = json.dumps(
+        [str(source_id), generation, revision, origin, path],
+        separators=(",", ":"), ensure_ascii=True,
+    )
+    return hashlib.sha256(value.encode("ascii")).hexdigest()
+
+
+async def resolve_agent_browser_scope(
+    session: AsyncSession, owner_id: int, source_id: UUID
+) -> AgentBrowserScope | None:
+    """Resolve an enabled grant only while the active web source and connector revision match."""
+    from modules.sources import public as sources
+
+    if owner_id != 1:
+        return None
+    source = await sources.get_connector_source(session, source_id)
+    if source is None or source.status != "active" or source.type != "web":
+        return None
+    configuration = await get_connector_configuration(session, source_id)
+    row = await session.get(AgentBrowserGrant, source_id)
+    if configuration is None or row is None:
+        return None
+    try:
+        origin, path_prefix = _agent_browser_scope_url(configuration.configuration.get("url"))
+    except (TypeError, ValueError):
+        return None
+    scope_hash = _scope_hash(
+        source_id, source.generation, configuration.expected_revision, origin, path_prefix
+    )
+    if (
+        row.owner_id != owner_id
+        or row.source_generation != source.generation
+        or row.connector_revision != configuration.expected_revision
+        or row.scope_hash != scope_hash
+        or row.origin != origin
+        or row.path_prefix != path_prefix
+    ):
+        return None
+    return AgentBrowserScope(
+        source_id, source.generation, configuration.expected_revision,
+        row.grant_revision, scope_hash, origin, path_prefix,
+        source.local_only, row.enabled and not source.local_only,
+    )
+
+
+async def invalidate_agent_browser_grant_in_uow(
+    session: AsyncSession, source_id: UUID
+) -> None:
+    """Disable and revision-bump an existing browser grant in its source lifecycle transaction."""
+    row = await session.get(AgentBrowserGrant, source_id, with_for_update=True)
+    if row is None:
+        return
+    row.enabled = False
+    row.grant_revision += 1
+    await session.flush()
+
+
+async def update_agent_browser_grant_in_uow(
+    session: AsyncSession, owner_id: int, source_id: UUID,
+    expected_revision: int, grant: AgentBrowserGrantPatch,
+) -> AgentBrowserScopeRead:
+    """Update explicit browser opt-in for the current configured web source; caller commits."""
+    from modules.sources import public as sources
+
+    if owner_id != 1:
+        raise PermissionError("Browser grant owner is unavailable")
+    source = await sources.lock_source(session, source_id)
+    source_view = await sources.get_connector_source(session, source_id)
+    configuration = await get_connector_configuration(session, source_id)
+    if (
+        source is None or source_view is None or source.status != "active"
+        or source_view.type != "web" or configuration is None
+    ):
+        raise LookupError("Active configured web source is unavailable")
+    if (
+        type(expected_revision) is not int or expected_revision < 0
+        or grant.expected_source_generation != source.generation
+        or grant.expected_connector_revision != configuration.expected_revision
+    ):
+        raise ValueError("Browser grant source or connector revision conflict")
+    origin, path_prefix = _agent_browser_scope_url(configuration.configuration.get("url"))
+    scope_hash = _scope_hash(
+        source_id, source.generation, configuration.expected_revision, origin, path_prefix
+    )
+    row = await session.get(AgentBrowserGrant, source_id, with_for_update=True)
+    current_revision = row.grant_revision if row is not None else 0
+    if current_revision != expected_revision:
+        raise ValueError("Browser grant revision conflict")
+    if row is None:
+        row = AgentBrowserGrant(
+            source_id=source_id, owner_id=owner_id, source_generation=source.generation,
+            connector_revision=configuration.expected_revision, grant_revision=1,
+            scope_hash=scope_hash, origin=origin, path_prefix=path_prefix,
+            local_only=source.local_only, enabled=grant.enabled and not source.local_only,
+        )
+        session.add(row)
+    else:
+        row.source_generation = source.generation
+        row.connector_revision = configuration.expected_revision
+        row.grant_revision += 1
+        row.scope_hash = scope_hash
+        row.origin = origin
+        row.path_prefix = path_prefix
+        row.local_only = source.local_only
+        row.enabled = grant.enabled and not source.local_only
+    await session.flush()
+    return AgentBrowserScopeRead(
+        source_id, source.generation, configuration.expected_revision,
+        row.grant_revision, scope_hash, origin, path_prefix,
+        source.local_only, row.enabled,
+    )
 
 
 async def get_connector_configuration(

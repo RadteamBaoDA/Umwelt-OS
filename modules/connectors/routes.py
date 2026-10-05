@@ -5,7 +5,7 @@ import hashlib
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.dependencies import require_owner_write
@@ -20,9 +20,13 @@ from modules.connectors.public import (
     CrawlRequest,
     CrawlResult,
     RSSRequest,
+    AgentBrowserGrantPatch,
+    resolve_agent_browser_scope,
+    update_agent_browser_grant_in_uow,
     validate_public_url,
     save_connector_configuration,
 )
+from modules.connectors import mcp as mcp_collection
 from modules.connectors import registry
 from modules.connectors import provisioning
 from modules.connectors.n8n import workflow_webhook_path
@@ -56,6 +60,76 @@ class ManualSyncResult(BaseModel):
     run_id: UUID | None = None
     batch_id: UUID | None = None
     status: str = "queued"
+    failed_calls: list[str] = []
+
+
+class McpCollectionRequest(BaseModel):
+    """Carry a generation-checked MCP collection configuration; it never carries commands or URLs."""
+    model_config = ConfigDict(extra="forbid")
+
+    expected_generation: int = Field(ge=1)
+    configuration: mcp_collection.McpCollectionConfig
+
+
+@router.put("/{source_id}/mcp-collection")
+async def configure_mcp_collection(
+    source_id: UUID, payload: McpCollectionRequest, session: Session, _owner: OwnerWrite
+) -> dict[str, Any]:
+    """Save the allowlisted connection and grant calls of an active ``mcp`` source.
+
+    Grants are reviewed on the MCP connection (purpose collection, scoped to this source);
+    this route only pins which reviewed grants run with which fixed arguments. Semantic
+    validity is enforced at collection time against live fences.
+    """
+    source = await _source(session, source_id)
+    if source.type != mcp_collection.PROVIDER_ID or source.status != "active":
+        raise HTTPException(status_code=409, detail="Active MCP source required")
+    saved = await sources.set_connector_configuration(
+        session, source_id, payload.expected_generation,
+        payload.configuration.model_dump(mode="json"),
+    )
+    if saved is None:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="Source changed while configuration was validated")
+    await commit_with_replay(session, [make_source_change(saved.id, saved.generation, saved.status)])
+    return {
+        "source_id": saved.id, "source_generation": saved.generation,
+        "configuration": saved.configuration,
+    }
+
+
+@router.get("/{source_id}/agent-browser-grant")
+async def read_agent_browser_grant(
+    source_id: UUID, session: Session, _owner: OwnerWrite
+) -> dict[str, object]:
+    """Return the current source-bound browser opt-in, without exposing connector credentials."""
+    scope = await resolve_agent_browser_scope(session, _owner.owner_id, source_id)
+    if scope is None:
+        return {"available": False, "enabled": False}
+    return {"available": True, **scope.__dict__}
+
+
+@router.put("/{source_id}/agent-browser-grant")
+async def update_agent_browser_grant(
+    source_id: UUID,
+    payload: AgentBrowserGrantPatch,
+    expected_revision: int,
+    session: Session,
+    _owner: OwnerWrite,
+) -> dict[str, object]:
+    """Apply owner browser opt-in with optimistic grant and source configuration fences."""
+    try:
+        scope = await update_agent_browser_grant_in_uow(
+            session, _owner.owner_id, source_id, expected_revision, payload
+        )
+        await session.commit()
+    except LookupError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=404, detail="Active web source is unavailable") from exc
+    except ValueError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="Browser grant revision is stale") from exc
+    return {"available": True, **scope.__dict__}
 
 
 async def _source(session: AsyncSession, source_id: UUID) -> ConnectorSource:
@@ -130,6 +204,20 @@ async def trigger_collection(
     """Queue a manual collection run for an active supported connector."""
     source = await _source(session, source_id)
     settings = request.app.state.settings
+    if source.type == mcp_collection.PROVIDER_ID:
+        # MCP collection runs in-process through the reviewed client; no n8n workflow is involved.
+        runtime = getattr(request.app.state, "mcp_runtime", None)
+        if runtime is None:
+            raise HTTPException(status_code=503, detail="MCP runtime is unavailable")
+        await session.rollback()
+        try:
+            return ManualSyncResult.model_validate(await mcp_collection.collect(
+                runtime, request.app.state.session_factory, source_id,
+            ))
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="Source not found") from exc
+        except mcp_collection.McpCollectionError as exc:
+            raise HTTPException(status_code=409, detail=exc.code) from exc
     if source.status != "active" or source.type not in {"rss", "web", "api"}:
         raise HTTPException(status_code=409, detail="Active packaged connector required")
     provisioned = await provisioning.activation_status(session, source_id)

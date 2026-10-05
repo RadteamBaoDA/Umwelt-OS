@@ -1,6 +1,6 @@
 from collections.abc import AsyncIterator
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 import secrets
 
 from fastapi import FastAPI
@@ -20,6 +20,7 @@ from modules.ingestion.routes import documents_router as document_upload_router
 from modules.ingestion.routes import router as ingestion_router
 from modules.sources.routes import router as sources_router
 from modules.connectors.routes import router as connectors_router
+from modules.tools.browser_control import router as browser_control_router
 from modules.connectors.provisioning_routes import router as connector_provisioning_router
 from modules.settings.routes import router as settings_router
 from modules.model_gateway.routes import router as model_gateway_router
@@ -29,20 +30,60 @@ from modules.timeline.routes import router as timeline_router
 from modules.knowledge.temporal.routes import router as temporal_router
 from modules.chat.routes import router as chat_router
 from modules.memory.routes import router as memory_router
+from modules.tools.routes import router as tools_router, browser_jobs_router
+from modules.tools.mcp_management_routes import router as mcp_management_router
+from core.tools import ToolRegistry
+from modules.tools.builtins import register_builtin_tools
+from modules.tools.webhook import register_webhook_tool
+from modules.tools.browser import register_browser_tool
+from modules.agents.handoff import register_handoff_tool
+from modules.tools.public import McpAdmission, McpRuntime, create_inbound_mcp_bundle
+from modules.agents.routes import router as agents_router
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
-    """Construct the FastAPI app, lifespan-managed clients, middleware, routers, realtime capacity limit, and module registry."""
+    """Compose the API, owner security middleware, domain services and canonical tool registry.
+
+    Args:
+        settings: Optional settings override; absent uses validated process configuration.
+    Returns:
+        FastAPI application with lifespan-owned database/Redis clients and app-scoped modules.
+    Side effects:
+        Creates clients and registers only tool names contributed by enabled descriptors. When
+        agents has one fixed owner-authenticated REST workflow; when tools is enabled, it composes
+        shared admission/runtime callbacks, owner routes before the
+        exact slash-terminated inbound mount, and one root-managed SDK session manager. Lifespan
+        hydrates at most the runtime's bounded owner catalog and drains admission before manager
+        exit; Redis and SQLAlchemy disposal run even when startup hydration fails.
+    """
     app_settings = settings or Settings()
     engine = create_async_engine(app_settings.database_url, pool_pre_ping=True, pool_size=5, max_overflow=0)
     redis = Redis.from_url(app_settings.redis_url, decode_responses=True)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-        """Dispose Redis and the database engine when the API application shuts down."""
-        yield
-        await redis.aclose()
-        await engine.dispose()
+        """Run the SDK manager once, hydrate bounded owner state, and always close shared clients.
+
+        Admission is stopped before the SDK manager drains; Redis and SQLAlchemy are closed even
+        when manager entry or sequential owner hydration fails during startup.
+        """
+        try:
+            async with AsyncExitStack() as stack:
+                try:
+                    bundle = getattr(_app.state, "mcp_bundle", None)
+                    if bundle is not None:
+                        await stack.enter_async_context(bundle.server.session_manager.run())
+                        await _app.state.mcp_runtime.hydrate_connections(owner_id=1)
+                    yield
+                finally:
+                    admission = getattr(_app.state, "mcp_admission", None)
+                    if admission is not None:
+                        admission.stop()
+        finally:
+            try:
+                await redis.aclose()
+            finally:
+                await engine.dispose()
 
     app = FastAPI(title="BBD-OS", lifespan=lifespan)
     app.state.settings = app_settings
@@ -70,6 +111,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(document_upload_router)
     app.include_router(ingestion_router)
     app.include_router(connectors_router)
+    app.include_router(browser_control_router)
     app.include_router(connector_provisioning_router)
     app.include_router(settings_router)
     app.include_router(model_gateway_router)
@@ -77,7 +119,49 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(realtime_router)
     app.include_router(chat_router)
     app.include_router(memory_router)
+    app.include_router(agents_router)
+    app.include_router(browser_jobs_router)
     app.state.modules = register_modules()
+    tool_registry = ToolRegistry(module_registry=app.state.modules)
+    enabled_descriptors = [item for item in app.state.modules.values() if item.enabled]
+    declared_tools = {name for item in enabled_descriptors for name in item.tools}
+    if app.state.modules["tools"].enabled and declared_tools:
+        register_builtin_tools(tool_registry, frozenset(declared_tools))
+        register_webhook_tool(tool_registry, app_settings)
+        register_browser_tool(tool_registry)
+        register_handoff_tool(tool_registry, frozenset(declared_tools))
+    app.state.tool_registry = tool_registry
+    if app.state.modules["tools"].enabled:
+        app.include_router(tools_router)
+        app.include_router(mcp_management_router)
+        admission = McpAdmission(redis)
+        runtime = McpRuntime(
+            tool_registry,
+            app.state.session_factory,
+            redis,
+            app_settings,
+            admission,
+            approved_destination_cidrs=app_settings.mcp_allowed_endpoint_cidrs,
+        )
+        audience, authority, origin = runtime.audience, runtime.authority, runtime.origin
+        bundle = create_inbound_mcp_bundle(
+            registry=tool_registry,
+            session_factory=app.state.session_factory,
+            redis=redis,
+            settings=app_settings,
+            admission=admission,
+            audience=audience,
+            expected_host=authority,
+            allowed_origins=frozenset({origin}),
+            authenticate_inbound=runtime.authenticate_inbound,
+            authorize_inbound=runtime.authorize_inbound,
+            revalidate_inbound=runtime.revalidate_inbound,
+            revalidate_inbound_output=runtime.revalidate_inbound_output,
+        )
+        app.state.mcp_admission = admission
+        app.state.mcp_runtime = runtime
+        app.state.mcp_bundle = bundle
+        app.mount("/api/v1/mcp", bundle.guarded_asgi_app)
 
 
     @app.get("/health")

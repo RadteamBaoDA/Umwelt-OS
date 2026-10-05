@@ -151,3 +151,28 @@ class StreamEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     response_run: Mapped["ResponseRun"] = relationship("ResponseRun", back_populates="stream_events")
+
+
+class AgentActivityLink(Base):
+    """Store bounded agent activity owned by a chat conversation and its privacy retention."""
+
+    __tablename__ = "chat_agent_activity_links"
+    __table_args__ = (
+        UniqueConstraint("agent_run_id", name="uq_chat_agent_activity_run"),
+        Index("ix_chat_agent_activity_conversation", "conversation_id", "updated_at"),
+        CheckConstraint("owner_id = 1 AND length(auth_session_hash) = 64", name="ck_chat_agent_activity_owner_auth"),
+        CheckConstraint("jsonb_array_length(activities) <= 64", name="ck_chat_agent_activity_bound"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    conversation_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("chat_conversations.id", ondelete="CASCADE"), nullable=False
+    )
+    agent_run_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    owner_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    auth_session_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    activities: Mapped[list[dict[str, object]]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    ephemeral: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())

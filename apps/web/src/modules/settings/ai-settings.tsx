@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { apiRequest, csrfHeaders } from '@/core/api';
 import { apiFailureKey } from '@/core/api-failure-key';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
+import { AgentSettingsWorkspace } from '@/modules/agents/agent-settings';
 
 type Mapping = { model: string; version: string | null; destination: 'unknown' | 'remote' };
 type Privacy = { allow_remote_reasoning: boolean; allow_remote_embeddings: boolean; allow_remote_web_search: boolean; reasoning_destinations: string[]; embedding_destinations: string[]; web_search_destinations: string[] };
@@ -20,7 +21,7 @@ const capabilityTypes = ['chat', 'streaming', 'embeddings', 'structured', 'tools
 const draftStorageKey = 'bbd:settings:ai:draft:v1';
 const defaultPrivacy: Privacy = { allow_remote_reasoning: false, allow_remote_embeddings: false, allow_remote_web_search: false, reasoning_destinations: [], embedding_destinations: [], web_search_destinations: [] };
 
-/** Loads and saves AI, provider, and privacy settings while guarding navigation when a draft is dirty. */
+/** Loads AI, provider, privacy and specialist settings while guarding unsaved gateway drafts. */
 export function AISettingsWorkspace() {
   const t = useTranslations('aiSettings');
   const { csrfToken } = useWorkspaceSession();
@@ -140,7 +141,7 @@ export function AISettingsWorkspace() {
   const set = (patch: Partial<AISettings>) => setDraft({ ...saved, ...patch });
   /** Merges a partial privacy update into the current AI settings draft. */
   const setPrivacy = (patch: Partial<Privacy>) => set({ privacy: { ...defaultPrivacy, ...saved.privacy, ...patch } });
-  return <section className="content-panel"><span className="brand">{t('gateway')}</span><h1>{t('title')}</h1><p className="muted">{t('description')}</p>
+  return <><section className="content-panel"><span className="brand">{t('gateway')}</span><h1>{t('title')}</h1><p className="muted">{t('description')}</p>
     <p className="muted" role="status">{save.isPending ? t('saving') : dirty ? t('unsaved') : t('saved')}</p>
     <form className="form" onSubmit={(event) => { event.preventDefault(); save.mutate(saved); }}>
       <fieldset disabled={save.isPending} className="form-fields">
@@ -183,5 +184,5 @@ export function AISettingsWorkspace() {
       {save.error && <p className="error" role="alert">{t(apiFailureKey(save.error) ?? 'saveFailed')}</p>}{probe.error && <p className="error" role="alert">{t(apiFailureKey(probe.error) ?? 'probeFailed')}</p>}{draftProbe.data && <p className="muted" role="status">{t('draftProbe')} {draftProbe.data.capability} {draftProbe.data.result}; {t('draftProbeUnstored')}</p>}{draftProbe.error && <p className="error" role="alert">{t(apiFailureKey(draftProbe.error) ?? 'draftProbeFailed')}</p>}
       <div className="form-actions"><Button type="submit" disabled={save.isPending || !dirty}>{t('saveButton')}</Button><Button type="button" className="secondary" disabled={save.isPending || !dirty} onClick={() => { sessionStorage.removeItem(draftStorageKey); setDraft(null); setGatewayKey(''); setGatewayAction('unchanged'); setSearchKey(''); setSearchAction('unchanged'); setRestoredSecret(false); save.reset(); draftProbe.reset(); discover.reset(); }}>{t('cancelChanges')}</Button></div>
     </form>
-  </section>;
+  </section><AgentSettingsWorkspace /></>;
 }

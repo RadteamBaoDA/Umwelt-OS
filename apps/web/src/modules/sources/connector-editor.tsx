@@ -46,7 +46,7 @@ function isProvider(value: string): value is Provider {
 /** Maps a provider identifier to its localized catalog key. */
 function providerKey(providerId: string): string {
   return ({
-    rss: 'providerRss', web: 'providerWeb', rest: 'providerRest', github: 'providerGithub',
+    rss: 'providerRss', web: 'providerWeb', rest: 'providerRest', mcp: 'providerMcp', github: 'providerGithub',
     google_mail: 'providerGoogleMail', google_calendar: 'providerGoogleCalendar', google_drive: 'providerGoogleDrive',
   } as Record<string, string>)[providerId] ?? 'provider';
 }

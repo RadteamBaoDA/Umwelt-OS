@@ -2,18 +2,21 @@ import base64
 import binascii
 import hashlib
 import json
+from collections.abc import Awaitable, Callable, Sequence
 from uuid import UUID
 
 from fastapi import HTTPException
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
-from sqlalchemy import func, select, text
+from sqlalchemy import and_, false, func, or_, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import Settings
 from core.model_gateway.client import ModelGatewayError, PrivacyPolicyDenied
 from core.model_gateway.policy import may_send
+from core.model_gateway.schemas import AIExecutionConfig, ModelMapping, RequestPolicy
+from core.tools.schemas import ToolDestination, ToolOutputFence
 from modules.knowledge.documents.models import Document, DocumentChunk, DocumentVersion
 from modules.search.indexing import configured_embedding, embedding_values, gateway
 from modules.search.models import IndexGeneration, SearchIndexItem
@@ -25,35 +28,61 @@ MAX_RANKED_CANDIDATES = MAX_CANDIDATES * 2
 FALLBACK_WARNING = "Semantic search unavailable"
 
 
-def _cursor_scope(request: SearchRequest) -> str:
-    """Hash all paging-relevant request fields except cursor and page size."""
+def _cursor_scope(
+    request: SearchRequest, destination: ToolDestination = ToolDestination.LOCAL,
+    source_generation_fences: dict[UUID, int] | None = None,
+) -> str:
+    """Bind cursors to request, destination and exact source generations."""
     content = request.model_dump(exclude={"cursor", "limit"}, mode="json")
+    content["destination"] = destination.value
+    content["source_generations"] = sorted(
+        ((str(source_id), generation) for source_id, generation in (source_generation_fences or {}).items())
+    )
     return hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()[:16]
 
 
-def _offset(request: SearchRequest) -> int:
-    """Decode a canonical cursor bound to the request and reject invalid offsets."""
+def _offset(
+    request: SearchRequest, destination: ToolDestination = ToolDestination.LOCAL,
+    source_generation_fences: dict[UUID, int] | None = None,
+) -> int:
+    """Decode a canonical cursor bound to request, destination class and supported offsets."""
     if request.cursor is None:
         return 0
     try:
         raw = base64.urlsafe_b64decode(request.cursor + "=" * (-len(request.cursor) % 4)).decode()
         scope, position = raw.split(":", 1)
         offset = int(position)
-        if scope != _cursor_scope(request) or offset < 0 or offset > MAX_RANKED_CANDIDATES or _encode_cursor(request, offset) != request.cursor:
+        if scope != _cursor_scope(request, destination, source_generation_fences) or offset < 0 or offset > MAX_RANKED_CANDIDATES or _encode_cursor(request, offset, destination, source_generation_fences) != request.cursor:
             raise ValueError
         return offset
     except (ValueError, UnicodeDecodeError, IndexError, binascii.Error) as exc:
         raise HTTPException(status_code=422, detail="Invalid search cursor") from exc
 
 
-def _encode_cursor(request: SearchRequest, offset: int) -> str:
-    """Encode the request scope and ranked offset as unpadded URL-safe base64."""
-    return base64.urlsafe_b64encode(f"{_cursor_scope(request)}:{offset}".encode()).decode().rstrip("=")
+def _encode_cursor(
+    request: SearchRequest, offset: int, destination: ToolDestination = ToolDestination.LOCAL,
+    source_generation_fences: dict[UUID, int] | None = None,
+) -> str:
+    """Encode request/destination scope and ranked offset as unpadded URL-safe base64."""
+    return base64.urlsafe_b64encode(
+        f"{_cursor_scope(request, destination, source_generation_fences)}:{offset}".encode()
+    ).decode().rstrip("=")
 
 
-def _filters(statement, request: SearchRequest):
-    """Apply source, content-type, and effective observation-date predicates."""
+def _filters(
+    statement, request: SearchRequest, destination: ToolDestination = ToolDestination.LOCAL,
+    source_generation_fences: dict[UUID, int] | None = None,
+):
+    """Apply privacy, source-generation, type and effective-date predicates before ranking."""
     filters = request.filters
+    if destination != ToolDestination.LOCAL:
+        statement = statement.where(Source.local_only.is_(False))
+    if source_generation_fences is not None:
+        generation_conditions = [
+            and_(Document.source_id == source_id, Source.generation == generation)
+            for source_id, generation in source_generation_fences.items()
+        ]
+        statement = statement.where(or_(*generation_conditions) if generation_conditions else false())
     if filters.source_ids:
         statement = statement.where(Document.source_id.in_(filters.source_ids))
     if filters.content_types:
@@ -65,9 +94,12 @@ def _filters(statement, request: SearchRequest):
     return statement
 
 
-def _visible_rows(*columns):
-    """Build a current-ready document query restricted to active sources."""
-    return (
+def _visible_rows(
+    *columns, destination: ToolDestination = ToolDestination.LOCAL,
+    source_generation_fences: dict[UUID, int] | None = None,
+):
+    """Build a fresh active/current query with destination and optional generation fences."""
+    statement = (
         select(*columns)
         .join(DocumentVersion, DocumentVersion.id == DocumentChunk.document_version_id)
         .join(Document, Document.id == DocumentVersion.document_id)
@@ -78,29 +110,66 @@ def _visible_rows(*columns):
             Source.status == "active",
         )
     )
+    if destination != ToolDestination.LOCAL:
+        statement = statement.where(Source.local_only.is_(False))
+    if source_generation_fences is not None:
+        fence_conditions = [
+            and_(Document.source_id == source_id, Source.generation == generation)
+            for source_id, generation in source_generation_fences.items()
+        ]
+        statement = statement.where(or_(*fence_conditions) if fence_conditions else false())
+    return statement
 
 
-async def _lexical_ids(session: AsyncSession, request: SearchRequest) -> list[UUID]:
-    """Retrieve bounded lexical candidates using PostgreSQL simple-text ranking."""
+async def _lexical_ids(
+    session: AsyncSession, request: SearchRequest,
+    destination: ToolDestination = ToolDestination.LOCAL,
+    source_generation_fences: dict[UUID, int] | None = None,
+) -> list[UUID]:
+    """Retrieve bounded candidates after active/current, privacy and generation SQL filters."""
     vector = func.to_tsvector(text("'simple'"), DocumentChunk.content)
     query = func.websearch_to_tsquery(text("'simple'"), request.query)
-    statement = _filters(_visible_rows(DocumentChunk.id), request).where(vector.op("@@")(query)).order_by(
+    statement = _filters(
+        _visible_rows(DocumentChunk.id, destination=destination), request, destination,
+        source_generation_fences,
+    ).where(vector.op("@@")(query)).order_by(
         func.ts_rank_cd(vector, query).desc(), DocumentChunk.id,
     ).limit(MAX_CANDIDATES)
     return list((await session.scalars(statement)).all())
 
 
-async def _vector_ids(session: AsyncSession, request: SearchRequest, generation: IndexGeneration, values: list[float]) -> list[UUID]:
-    """Retrieve bounded cosine-nearest chunks under the current visibility filters."""
+async def _vector_ids(
+    session: AsyncSession, request: SearchRequest, generation: IndexGeneration,
+    values: list[float], destination: ToolDestination = ToolDestination.LOCAL,
+    source_generation_fences: dict[UUID, int] | None = None,
+) -> list[UUID]:
+    """Retrieve bounded cosine candidates after destination and generation fences."""
     dimensions = generation.dimensions
     if dimensions is None:
         return []
     clauses = [
         "i.generation_id = :generation_id", "i.status = 'succeeded'", "i.embedding IS NOT NULL",
         "v.version_number = d.current_version", "d.extraction_status IN ('ready', 'succeeded')",
-        "s.status = 'active'", "s.local_only = false",
+        "s.status = 'active'",
     ]
+    if destination != ToolDestination.LOCAL:
+        clauses.append("s.local_only = false")
     params: dict[str, object] = {"generation_id": generation.id, "embedding": json.dumps(values), "limit": MAX_CANDIDATES}
+    if source_generation_fences is not None:
+        if not source_generation_fences:
+            clauses.append("false")
+        else:
+            fence_clauses = []
+            for index, (source_id, source_generation) in enumerate(source_generation_fences.items()):
+                source_key = f"fence_source_{index}"
+                generation_key = f"fence_generation_{index}"
+                fence_clauses.append(
+                    f"(d.source_id = CAST(:{source_key} AS uuid) AND s.generation = :{generation_key})"
+                )
+                params[source_key] = str(source_id)
+                params[generation_key] = source_generation
+            # Keep every candidate inside the exact owner snapshot before vector LIMIT.
+            clauses.append("(" + " OR ".join(fence_clauses) + ")")
     if request.filters.source_ids:
         clauses.append("d.source_id = ANY(CAST(:source_ids AS uuid[]))")
         params["source_ids"] = request.filters.source_ids
@@ -126,10 +195,28 @@ async def _vector_ids(session: AsyncSession, request: SearchRequest, generation:
     return list((await session.scalars(statement, params)).all())
 
 
-async def search(session: AsyncSession, redis: Redis, settings: Settings, request: SearchRequest) -> SearchResponse:
-    """Run lexical or policy-checked hybrid retrieval and revalidate visible citations."""
-    offset = _offset(request)
-    lexical = await _lexical_ids(session, request)
+async def search(
+    session: AsyncSession, redis: Redis, settings: Settings, request: SearchRequest,
+    *, destination: ToolDestination = ToolDestination.LOCAL,
+    source_generation_fences: dict[UUID, int] | None = None,
+    before_embedding_send: Callable[[AIExecutionConfig, ModelMapping | None, RequestPolicy, dict[UUID, int]], Awaitable[None]] | None = None,
+) -> SearchResponse:
+    """Retrieve and return current evidence under a trusted destination privacy class.
+
+    Remote destinations exclude local-only sources in lexical/vector candidates and final
+    hydration, bind cursors to that destination, and recheck exact chunk/version/source generation
+    after any embedding await. This owner-side check is immediately before returning the result;
+    a future remote sender must perform its own fresh recheck immediately before transmission.
+    When supplied, ``before_embedding_send`` runs after the existing embedding privacy/revision
+    recheck on every gateway attempt and receives the fresh config, mapping, policy, and original
+    pre-await source generations; its authorization or cancellation exceptions propagate.
+    """
+    if source_generation_fences is not None and len(source_generation_fences) > 100:
+        raise ValueError("Search source fence exceeds its supported bound")
+    if destination != ToolDestination.LOCAL and not source_generation_fences:
+        raise ValueError("Remote search requires current source-generation fences")
+    offset = _offset(request, destination, source_generation_fences)
+    lexical = await _lexical_ids(session, request, destination, source_generation_fences)
     vector: list[UUID] = []
     effective_mode = "lexical"
     warnings: list[str] = []
@@ -148,17 +235,25 @@ async def search(session: AsyncSession, redis: Redis, settings: Settings, reques
             async def recheck_send() -> None:
                 """Reload gateway and privacy state immediately before embedding the query."""
                 latest, latest_mapping, latest_policy = await configured_embedding(session, settings, redis)
-                if (latest.gateway_identity != config.gateway_identity or latest_mapping != mapping
+                if (latest.configuration_revision != config.configuration_revision
+                        or latest.endpoint_destination_id != config.endpoint_destination_id
+                        or latest.gateway_identity != config.gateway_identity or latest_mapping != mapping
                         or not may_send(latest_policy, "embedding", latest_mapping,
                                         latest.endpoint_destination_id or "omniroute",
                                         bool(latest.omniroute_api_key), "embeddings")):
                     raise PrivacyPolicyDenied("Search embedding denied by current settings")
+                if before_embedding_send is not None:
+                    await before_embedding_send(
+                        latest, latest_mapping, latest_policy, dict(source_generation_fences or {}),
+                    )
 
             response = await gateway(config, redis, recheck_send).embed("embedding", mapping, policy, [request.query])
             values, returned_model = embedding_values(response, generation.dimensions)
             if returned_model != generation.response_model_id:
                 raise ValueError("Embedding response identity changed")
-            vector = await _vector_ids(session, request, generation, values)
+            vector = await _vector_ids(
+                session, request, generation, values, destination, source_generation_fences,
+            )
             effective_mode = "hybrid"
         except (ModelGatewayError, RedisError, ValueError, OSError):
             warnings.append(FALLBACK_WARNING)
@@ -175,7 +270,7 @@ async def search(session: AsyncSession, redis: Redis, settings: Settings, reques
             ranked[chunk_id] = ranked.get(chunk_id, 0.0) + 1 / (60 + rank)
     ordered = sorted(ranked, key=lambda chunk_id: (-ranked[chunk_id], str(chunk_id)))
     selected = ordered[offset:offset + request.limit + 1]
-    # Recheck all source, revision and deletion fences after the provider call.
+    # Hydrate only current/active rows allowed by the original source generations and destination.
     rows = (await session.execute(_filters(
         _visible_rows(
             DocumentChunk.id,
@@ -192,18 +287,23 @@ async def search(session: AsyncSession, redis: Redis, settings: Settings, reques
             Source.id,
             Source.name,
             Source.type,
-        ), request,
+            Source.generation,
+            destination=destination,
+            source_generation_fences=source_generation_fences,
+        ), request, destination, source_generation_fences,
     ).where(DocumentChunk.id.in_(selected)))).all() if selected else []
     visible = {row[0]: row for row in rows}
     items = []
+    expected_fences: dict[UUID, tuple[UUID, UUID, UUID, int]] = {}
     for chunk_id in selected[:request.limit]:
         if chunk_id not in visible:
             continue
         (
             chunk_id, content, version_id, version_number, version_observed, document_id,
             title, document_observed, published_at, content_type, canonical_url,
-            source_id, source_name, source_type,
+            source_id, source_name, source_type, source_generation,
         ) = visible[chunk_id]
+        expected_fences[chunk_id] = (document_id, version_id, source_id, source_generation)
         excerpt = content[:500]
         items.append(SearchHit(
             document_id=document_id, document_version_id=version_id, version_number=version_number, chunk_id=chunk_id,
@@ -215,8 +315,102 @@ async def search(session: AsyncSession, redis: Redis, settings: Settings, reques
                               title=title, url=canonical_url,
                               observedAt=document_observed or version_observed, quote=excerpt),
         ))
-    next_cursor = _encode_cursor(request, offset + request.limit) if len(selected) > request.limit else None
+    current_ids = await _revalidate_tool_result_fences(
+        session, expected_fences, destination, source_generation_fences,
+    )
+    items = [item for item in items if item.chunk_id in current_ids]
+    next_cursor = _encode_cursor(
+        request, offset + request.limit, destination, source_generation_fences,
+    ) if len(selected) > request.limit else None
     return SearchResponse(items=items, next_cursor=next_cursor, effective_mode=effective_mode, warnings=warnings)
+
+
+async def _revalidate_tool_result_fences(
+    session: AsyncSession,
+    expected: dict[UUID, tuple[UUID, UUID, UUID, int]],
+    destination: ToolDestination,
+    source_generation_fences: dict[UUID, int] | None,
+) -> set[UUID]:
+    """Return exact active/current source-generation tuples still eligible in a fresh query.
+
+    Remote local-only sources, changed owner-supplied source generations, stale versions and
+    deleted chunks are rejected after provider/retrieval awaits and immediately before return.
+    This is a read-time check, not an atomic guarantee for a later network send.
+    """
+    if not expected:
+        return set()
+    statement = (
+        select(DocumentChunk.id, DocumentVersion.id, Document.id, Source.id, Source.generation)
+        .join(DocumentVersion, DocumentVersion.id == DocumentChunk.document_version_id)
+        .join(Document, Document.id == DocumentVersion.document_id)
+        .join(Source, Source.id == Document.source_id)
+        .where(
+            DocumentChunk.id.in_(expected),
+            Document.current_version == DocumentVersion.version_number,
+            Document.extraction_status.in_(("ready", "succeeded")),
+            Source.status == "active",
+        )
+    )
+    if destination != ToolDestination.LOCAL:
+        statement = statement.where(Source.local_only.is_(False))
+    if source_generation_fences is not None:
+        conditions = [
+            and_(Document.source_id == source_id, Source.generation == generation)
+            for source_id, generation in source_generation_fences.items()
+        ]
+        statement = statement.where(or_(*conditions) if conditions else false())
+    rows = (await session.execute(statement)).all()
+    valid: set[UUID] = set()
+    for chunk_id, version_id, document_id, source_id, generation in rows:
+        if expected.get(chunk_id) == (document_id, version_id, source_id, generation):
+            valid.add(chunk_id)
+    return valid
+
+
+async def revalidate_tool_search_fences(
+    session: AsyncSession,
+    fences: Sequence[ToolOutputFence],
+    *,
+    source_ids: frozenset[UUID],
+    owner_all: bool = False,
+    destination: ToolDestination = ToolDestination.REMOTE,
+) -> bool:
+    """Require every bounded native Search result fence to remain exact and currently eligible.
+
+    This public Search-owner contract accepts only chunk result DTOs and checks explicit source
+    scope before delegating to Search's existing current-version/deletion/privacy projection.
+    """
+    if len(fences) > 100:
+        return False
+    expected: dict[UUID, tuple[UUID, UUID, UUID, int]] = {}
+    source_generations: dict[UUID, int] = {}
+    for fence in fences:
+        if (
+            not isinstance(fence, ToolOutputFence)
+            or not isinstance(fence.document_id, UUID)
+            or not isinstance(fence.document_version_id, UUID)
+            or not isinstance(fence.source_id, UUID)
+            or type(fence.source_generation) is not int or fence.source_generation < 1
+            or not isinstance(fence.chunk_id, UUID)
+        ):
+            return False
+        if not owner_all and fence.source_id not in source_ids:
+            return False
+        if fence.chunk_id in expected:
+            return False
+        previous_generation = source_generations.setdefault(fence.source_id, fence.source_generation)
+        if previous_generation != fence.source_generation:
+            return False
+        expected[fence.chunk_id] = (
+            fence.document_id, fence.document_version_id,
+            fence.source_id, fence.source_generation,
+        )
+    if not expected:
+        return True
+    valid = await _revalidate_tool_result_fences(
+        session, expected, destination, source_generations,
+    )
+    return valid == set(expected)
 
 
 async def index_status(session: AsyncSession) -> SearchIndexStatus:

@@ -79,3 +79,31 @@ class ConnectorManagedCredential(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
+
+
+class AgentBrowserGrant(Base):
+    """Persist explicit owner opt-in for static reads from one credential-free web source."""
+
+    __tablename__ = "agent_browser_grants"
+    __table_args__ = (
+        CheckConstraint("owner_id = 1", name="ck_agent_browser_grants_single_owner"),
+        CheckConstraint("source_generation > 0 AND connector_revision > 0", name="ck_agent_browser_grants_fences"),
+        CheckConstraint("grant_revision > 0", name="ck_agent_browser_grants_revision"),
+        Index("ix_agent_browser_grants_owner_enabled", "owner_id", "enabled"),
+    )
+
+    source_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("sources.id", ondelete="CASCADE"), primary_key=True
+    )
+    owner_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    source_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    connector_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    grant_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    scope_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    origin: Mapped[str] = mapped_column(String(512), nullable=False)
+    path_prefix: Mapped[str] = mapped_column(String(2048), nullable=False)
+    local_only: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )

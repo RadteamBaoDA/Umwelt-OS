@@ -26,6 +26,10 @@ class HeavyLeaseLost(RuntimeError):
     """Reject continuing local work after its ownership connection fails."""
 
 
+class RemoteHeavyWorkBlocked(RuntimeError):
+    """Reject new local heavy work while an earlier remote job may still run."""
+
+
 @dataclass(frozen=True)
 class HeavyLease:
     """Identify local operation and monotonic deadline, never remote cessation.
@@ -66,6 +70,15 @@ async def heavy_job_slot(
                 ), {"key": HEAVY_LOCK_KEY})
             if not acquired:
                 raise HeavyWorkBusy("Another process owns heavy execution capacity")
+            # The remote guard is durable across loss of this local connection;
+            # a guard stops blocking once its expires_at passes (set just past the
+            # remote job's hard bound), which is the recovery path for a dead service.
+            from core.remote_heavy import has_blocking_remote_heavy_work
+
+            if await has_blocking_remote_heavy_work(session):
+                raise RemoteHeavyWorkBlocked(
+                    "Remote heavy work is active or uncertain; retry after its guard clears or expires"
+                )
             owner = asyncio.current_task()
             renewal_error: Exception | None = None
 
@@ -120,4 +133,7 @@ def bounded_heavy_work(function: Callable[P, Awaitable[R]]) -> Callable[P, Await
                 return await function(*args, **kwargs)
         except HeavyWorkBusy as exc:
             raise Retry(defer=5) from exc
+        except RemoteHeavyWorkBlocked as exc:
+            # Guards expire on their own; defer instead of failing the job permanently.
+            raise Retry(defer=30) from exc
     return bounded

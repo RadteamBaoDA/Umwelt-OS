@@ -16,7 +16,7 @@ class SearchDescriptor:
     routes: tuple[str, ...] = ("/api/v1/search",)
     emitted_events: tuple[str, ...] = ()
     consumed_events: tuple[str, ...] = ()
-    tools: tuple[str, ...] = ()
+    tools: tuple[str, ...] = ("search.query",)
     navigation: tuple[dict[str, str], ...] = ({"label": "Search", "href": "/search"},)
     settings_schema: dict[str, object] | None = None
 

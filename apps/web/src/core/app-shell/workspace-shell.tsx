@@ -12,7 +12,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
 import { CommandPalette } from '@/core/command-palette';
 import { ConnectionFooter } from '@/core/app-shell/connection-footer';
-import { ChatControllerProvider, useChatController } from '@/core/app-shell/chat-controller';
+import { useChatController } from '@/core/app-shell/chat-controller';
 import { detailDestinations, mainNavigation, settingsGroups } from '@/core/module-registry';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { useRealtime } from '@/core/realtime-provider';
@@ -172,7 +172,6 @@ function ChatTriggerButton() {
 }
 
   return <SessionContext.Provider value={session.data}>
-    <ChatControllerProvider>
       <div className="shell">
         <header className="topbar">
           <Link href="/app" className="brand-name">BBD-OS</Link>
@@ -235,6 +234,5 @@ function ChatTriggerButton() {
         </Dialog>
         <ChatDrawer />
       </div>
-    </ChatControllerProvider>
   </SessionContext.Provider>;
 }

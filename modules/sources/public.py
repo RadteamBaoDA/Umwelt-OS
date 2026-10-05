@@ -1,4 +1,5 @@
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
@@ -9,8 +10,28 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.pagination import decode_cursor, encode_cursor
 from core.events import DomainEvent
 from core.realtime import commit_with_replay, make_source_change
+from core.tools.schemas import ToolDestination
 from modules.sources.models import Source, SourcePurgeOperation
 from modules.sources.schemas import ConnectorSource, SourceCreate, SourceFence, SourcePatch
+
+
+@dataclass(frozen=True)
+class ToolSourceRead:
+    """Detached source identity and lifecycle fields safe for native tool output."""
+    id: UUID
+    name: str
+    type: str
+    status: str
+    generation: int
+    local_only: bool
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class ToolSourcePage:
+    """Carry a bounded detached source page and continuation cursor."""
+    items: tuple[ToolSourceRead, ...]
+    next_cursor: str | None
 
 
 async def create_source(session: AsyncSession, payload: SourceCreate) -> Source:
@@ -53,6 +74,57 @@ async def ensure_demo_source(session: AsyncSession, source_id: UUID, namespace: 
 async def get_source(session: AsyncSession, source_id: UUID) -> Source | None:
     """Read a source ORM record by identifier."""
     return await session.get(Source, source_id)
+
+
+async def get_tool_source(
+    session: AsyncSession, source_id: UUID, *, source_ids: frozenset[UUID],
+    owner_all: bool = False, destination: ToolDestination = ToolDestination.LOCAL,
+) -> ToolSourceRead | None:
+    """Read an active source projection within exact scope and destination privacy policy."""
+    if not owner_all and source_id not in source_ids:
+        return None
+    row = (await session.execute(
+        select(Source.id, Source.name, Source.type, Source.status, Source.generation,
+               Source.local_only, Source.created_at)
+        .where(Source.id == source_id, Source.status == "active")
+    )).one_or_none()
+    if row is not None and destination != ToolDestination.LOCAL and row.local_only:
+        return None
+    return ToolSourceRead(*row) if row else None
+
+
+async def list_tool_sources(
+    session: AsyncSession, *, limit: int, cursor: str | None,
+    source_ids: frozenset[UUID], owner_all: bool = False,
+    destination: ToolDestination = ToolDestination.LOCAL,
+) -> ToolSourcePage:
+    """Page active, exact-scope sources after destination privacy filtering.
+
+    Remote local-only rows are excluded before ordering, limit and cursor construction; the
+    projection contains no source configuration or credentials.
+    """
+    if not 1 <= limit <= 100:
+        raise ValueError("Source tool page size is outside its supported bound")
+    statement = select(
+        Source.id, Source.name, Source.type, Source.status, Source.generation,
+        Source.local_only, Source.created_at,
+    ).where(Source.status == "active")
+    if destination != ToolDestination.LOCAL:
+        statement = statement.where(Source.local_only.is_(False))
+    if not owner_all:
+        if not source_ids:
+            return ToolSourcePage((), None)
+        statement = statement.where(Source.id.in_(source_ids))
+    if cursor:
+        timestamp, identifier = decode_cursor(cursor)
+        statement = statement.where(tuple_(Source.created_at, Source.id) < (timestamp, identifier))
+    rows = list((await session.execute(
+        statement.order_by(desc(Source.created_at), desc(Source.id)).limit(limit + 1)
+    )).all())
+    more = len(rows) > limit
+    page = rows[:limit]
+    next_cursor = encode_cursor(page[-1].created_at, page[-1].id) if more and page else None
+    return ToolSourcePage(tuple(ToolSourceRead(*row) for row in page), next_cursor)
 
 
 def _connector_source(source: Source) -> ConnectorSource:
@@ -323,11 +395,14 @@ async def start_source_purge(
 
 
 async def _fence_connector_source(session: AsyncSession, source: Source) -> None:
-    """Revoke source credentials and invalidate outstanding connector collection."""
+    """Revoke credentials and browser opt-in, then invalidate outstanding collection work."""
     from modules.connectors import public as connectors
     from modules.ingestion import public as ingestion
 
     await ingestion.revoke_source_credentials(session, source.id)
+    await connectors.invalidate_agent_browser_grant_in_uow(session, source.id)
+    from modules.tools.public import purge_browser_results_in_uow
+    await purge_browser_results_in_uow(session, source_ids=[source.id])
     await connectors.fence_source_collection(
         session,
         SourceFence(

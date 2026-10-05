@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 import modules  # noqa: F401  # Domain model packages are imported here as they are added.
 from core.auth.models import AuthSession, Owner
+from core.remote_heavy_models import RemoteHeavyGuard
 from core.database import Base
 from modules.knowledge.documents.models import (
     Document, DocumentChunk, DocumentVersion, NormalizedDocumentIdentity, NormalizedVersionProvenance,
@@ -23,7 +24,7 @@ from modules.ingestion.models import (
     SourceIngestionState,
     SourceObservation,
 )
-from modules.connectors.models import ConnectorManagedCredential, ConnectorProvisioning
+from modules.connectors.models import AgentBrowserGrant, ConnectorManagedCredential, ConnectorProvisioning
 from modules.sources.models import Source, SourcePurgeOperation
 from modules.search.models import IndexGeneration, SearchIndexItem
 from modules.knowledge.entities.models import (
@@ -46,12 +47,17 @@ from modules.knowledge.temporal.models import (
 from modules.timeline.models import Event, EventParticipant, EventEvidence, ParticipantEvidence, EventAudit, EventSuppression, TimelineExtractionWork, TimelineExtractionResult
 from modules.settings.models import AISettingsRecord, OwnerPreferencesRecord
 from core.realtime import ReplayHead, ReplayRecord
-from modules.chat.models import Conversation, Message, ResponseRun, StreamEvent
+from modules.chat.models import AgentActivityLink, Conversation, Message, ResponseRun, StreamEvent
 from modules.memory.models import Memory, MemoryCandidate, MemoryPrivacyRecord
+from modules.tools.models import BrowserPageEvidence, BrowserReadJob
+from modules.agents.models import AgentApproval, AgentEffect, AgentRun, AgentToolCall
 
 _auth_models = (AuthSession, Owner)
-_chat_models = (Conversation, Message, ResponseRun, StreamEvent)
+_core_remote_heavy_models = (RemoteHeavyGuard,)
+_chat_models = (Conversation, Message, ResponseRun, StreamEvent, AgentActivityLink)
 _memory_models = (Memory, MemoryCandidate, MemoryPrivacyRecord)
+_browser_read_models = (BrowserReadJob, BrowserPageEvidence)
+_agent_models = (AgentRun, AgentToolCall, AgentApproval, AgentEffect)
 _library_models = (
 
     Source, SourcePurgeOperation, Document, DocumentVersion, DocumentChunk,
@@ -68,7 +74,7 @@ _ingestion_models = (
     SourceObservation,
 )
 _search_models = (IndexGeneration, SearchIndexItem)
-_connector_models = (ConnectorProvisioning, ConnectorManagedCredential)
+_connector_models = (AgentBrowserGrant, ConnectorProvisioning, ConnectorManagedCredential)
 _realtime_models = (ReplayHead, ReplayRecord)
 _knowledge_models = (
     Entity,

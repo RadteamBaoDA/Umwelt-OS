@@ -8,14 +8,14 @@ from typing import Any, cast
 from uuid import UUID
 
 from redis.asyncio import Redis
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
 from core.model_gateway.client import ModelGateway, ModelGatewayError, PrivacyPolicyDenied
 from core.model_gateway.schemas import RequestPolicy
 from modules.chat.citations import ensure_grounded_answer
-from modules.chat.models import Conversation, Message, ResponseRun, StreamEvent
+from modules.chat.models import AgentActivityLink, Conversation, Message, ResponseRun, StreamEvent
 from modules.chat.retrieval import (
     build_context,
     format_grounded_context,
@@ -70,31 +70,55 @@ async def is_history_storage_enabled(session: AsyncSession) -> bool:
 
 
 async def purge_expired_chat_runs(ctx: dict[str, object]) -> int:
-    """Clean up ephemeral response runs and conversations that have exceeded their 24h retention window.
+    """Clean expired Chat data and redact linked agent payloads while preserving effect tombstones.
 
     Args:
         ctx: ARQ worker context containing the database session factory.
 
     Returns:
-        Total number of expired response runs removed.
+        Total number of expired response runs, conversations, and ephemeral activity links removed.
+
+    Side effects:
+        Linked agent runs are cancelled and their prompts, checkpoints, approval arguments, and
+        tool-call arguments are purged before expired activity links disappear. Possibly sent
+        actions remain review-only in the independent effect ledger.
     """
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     now = datetime.now(UTC)
     async with factory() as session:
+        expired_activity_rows = list((await session.execute(select(
+            AgentActivityLink.id, AgentActivityLink.agent_run_id,
+        ).join(Conversation, Conversation.id == AgentActivityLink.conversation_id).where(or_(
+            AgentActivityLink.ephemeral.is_(True) & (AgentActivityLink.expires_at <= now),
+            Conversation.ephemeral.is_(True) & (Conversation.expires_at <= now),
+        )).order_by(AgentActivityLink.id).limit(100))).all())
+        expired_agent_run_ids = [run_id for _link_id, run_id in expired_activity_rows]
+        if expired_agent_run_ids:
+            from modules.agents.public import purge_agent_runs
+
+            await purge_agent_runs(session, expired_agent_run_ids)
+        expired_activity = await session.execute(delete(AgentActivityLink).where(
+            AgentActivityLink.id.in_([link_id for link_id, _run_id in expired_activity_rows]),
+        )) if expired_activity_rows else None
         expired_runs = await session.execute(
             delete(ResponseRun).where(
                 ResponseRun.ephemeral.is_(True),
                 ResponseRun.expires_at <= now,
             )
         )
+        has_activity_links = select(AgentActivityLink.id).where(
+            AgentActivityLink.conversation_id == Conversation.id,
+        ).exists()
         expired_convs = await session.execute(
             delete(Conversation).where(
                 Conversation.ephemeral.is_(True),
                 Conversation.expires_at <= now,
+                ~has_activity_links,
             )
         )
         await session.commit()
-        return (expired_runs.rowcount or 0) + (expired_convs.rowcount or 0)
+        removed_links = (expired_activity.rowcount or 0) if expired_activity is not None else 0
+        return (expired_runs.rowcount or 0) + (expired_convs.rowcount or 0) + removed_links
 
 
 async def run_response_generation(

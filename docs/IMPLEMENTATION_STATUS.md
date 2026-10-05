@@ -1,6 +1,6 @@
 # Umwelt-OS implementation status
 
-Updated: 2026-10-05 — live checkpoint: develop 962035d; real primary folder Umwelt-OS; linked Git paths repaired. P07 browser/P08 proposals/P09 composition remain unfinished. No implementation subagents currently running. Original code/build-first and deferred acceptance scope remains unchanged.
+Updated: 2026-10-05 — Claude controller: P07 code/build/review complete and squash-merged into develop. P08 tasks complete on codex/bbd-p08-dashboard (awaiting P07 seam composition + phase review). P09 T3/T4, P10–P12 remain. Deferred acceptance unchanged.
 
 
 ## Current checkpoint — 2026-10-05
@@ -10,7 +10,7 @@ This live snapshot supersedes older current-action paragraphs; historical entrie
 | Area | Current status | Next required action |
 | --- | --- | --- |
 | P01–P06 | Production code/build/source review recorded complete; P05/P06 are in develop history. Runtime/provider acceptance remains deferred. | Preserve accepted code while composing later phases. |
-| P07 | Accepted specialist S1 committed faa80d2; browser S2/S3 production source is still being implemented. Browser author has 95 dirty paths and no unmerged index entries. | Resume browser callback/control/isolation and lock-order wiring, freeze source, build, review; remaining supervisor/browser/MCP collection scope still required. |
+| P07 | Code/build/review complete; squash-merged into develop. Registry/MCP/harness/approvals, specialists + bounded supervisor handoff, browser-use (gated off), Agents UI, R08 MCP collection adapter (manual). | Open gates: browser S4 OmniRoute capability probe + isolation proof; R08.1 code remaining (n8n workflow template + collector-authenticated trigger, separate credential — N-5); MCP editor UI lands with P08; handoff unverified at runtime. |
 | P08 | Proposal R1/R2/R3/R5/R6 source fixes reviewed; R4 nested evidence-wrapper consumer repaired. Exact current Goals.public SHA256 9F03509EAD32198FEF9B508901BA9D8349887F8E0F137C8D861BDFC95E88DEDD matches repair freeze. Prescribed repair build passed: 18 frontend pages and four images. | Finish R4-only independent source re-review, compose accepted P07 Chat privacy/provider/migration seams, then remaining daily brief/context/notifications/selected-day chat and R11/R12. |
 | P09 | GitHub OAuth/S1 and S2 accepted; S2 canonical commit c5c036b with code/build/source closure. T3/T4 prerequisite author currently has 17 unmerged paths and 240 dirty paths. | Resolve accepted prerequisite composition, freeze/build/review, then implement mapping and actual gadget/Timeline presentation. |
 | P10–P12 | Not implemented in the original plan ledger. | Automation, observability, hardening/backup/restore and final deferred validation after all production/reconciliation code. |
@@ -34,7 +34,7 @@ Markers: `[ ]` not started; `[~]` in progress; `[x]` complete; `[!]` blocked.
 - [x] Phase 4: P04-T1–T4 production code/build/scoped review, migration source repair (`1c5a453`), whole-phase source review, and pinned develop integration build complete. Merged locally into develop as fa1ed6a; five managed worktrees archived; database migration application history and runtime/provider acceptance remain unknown/deferred. Historical dirty draft preserved.
 - [x] Phase 5: T1-T4 code/build/review complete, merged to develop (`2be2846`), behavioral acceptance deferred.
 - [x] Phase 6: Ask/RAG, citations, AnythingLLM chat port and memory (T1-T4) complete; full four-image build passed; merged to develop; behavioral acceptance deferred.
-- [~] Phase 7: registry/MCP transport/auth/admission/stdio, durable LangGraph harness and immutable approval/effect lifecycle source reviewed, integrated and committed c934667. Frontend20pages PASS; canonical integration build pending (Docker engine recovered). Approval author archived with recoverable snapshot. MCP collection and P07-T4 specialists/browser remain required; phase not merged into develop.
+- [x] Phase 7 (code/build/review): T1–T4 + R08 adapter squash-merged into develop 2026-10-05; build exit0 + compileall clean; behavioral acceptance deferred. R08.1 schedule/trigger code and browser S4 gate open.
 - [~] Phase 8: Tasks/Goals backend and real UI, topics, Search UI, seed receipts, renderer metadata, MCP Settings UI and reviewed News story/trend/relevance source integrated canonical P08. News frontend 18/18 build passes; canonical integration build pending (Docker engine recovered). Actual News gadget/catalog mount source review closed and five paths integrated; author worktree archived with recoverable snapshot. Native task/goal tools and real proposal producer, daily context/brief/notifications, selected-day chat and remaining R11/R12 behavior still required.
 - [~] Phase 9: R13 + GitHub OAuth/S1 committed93686af; S2 webhook/hint/current-evidence code/build/source complete and committed c5c036b. Canonical frontend17pages/four-image integration build passed. Completed S2 author worktree archived. T3 project/event mapping and T4 presentation preflight active; phase not merged into develop, runtime acceptance deferred.
 - [ ] Phase 10: automation.

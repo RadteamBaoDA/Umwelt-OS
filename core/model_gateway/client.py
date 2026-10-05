@@ -307,9 +307,32 @@ class ModelGateway:
             alias, mapping, policy, "structured", "chat/completions", payload, probe, before_send
         )
 
-    async def tools(self, alias: str, mapping: ModelMapping | None, policy: RequestPolicy, messages: list[dict[str, Any]], tools: list[dict[str, Any]], probe: bool = False) -> Any:
-        """Request a chat completion with the supplied tool definitions."""
-        return await self._request(alias, mapping, policy, "tools", "chat/completions", {"messages": messages, "tools": tools}, probe)
+    async def tools(
+        self,
+        alias: str,
+        mapping: ModelMapping | None,
+        policy: RequestPolicy,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        probe: bool = False,
+        *,
+        max_tokens: int | None = None,
+        before_send: Callable[[], Awaitable[None]] | None = None,
+    ) -> Any:
+        """Request bounded tool-capable chat through the gateway's policy and retry fences.
+
+        The optional completion cap shares chat's 1–8192 validation. ``before_send`` runs on
+        every gateway attempt, so callers can revalidate current authorization and source
+        identities after a retry without bypassing capability, endpoint, slot, or privacy checks.
+        """
+        if max_tokens is not None and not 1 <= max_tokens <= 8192:
+            raise ValueError("max_tokens must be between 1 and 8192")
+        payload: dict[str, Any] = {"messages": messages, "tools": tools}
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        return await self._request(
+            alias, mapping, policy, "tools", "chat/completions", payload, probe, before_send
+        )
 
     async def rerank(
         self, alias: str, mapping: ModelMapping | None, policy: RequestPolicy,

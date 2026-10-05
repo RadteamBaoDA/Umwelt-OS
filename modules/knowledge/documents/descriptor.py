@@ -16,7 +16,7 @@ class DocumentDescriptor:
     routes: tuple[str, ...] = ("/api/v1/documents", "/api/v1/documents/upload", "/api/v1/documents/{id}/raw")
     emitted_events: tuple[str, ...] = ()
     consumed_events: tuple[str, ...] = ()
-    tools: tuple[str, ...] = ()
+    tools: tuple[str, ...] = ("knowledge.get_document", "knowledge.list_documents")
     navigation: tuple[dict[str, str], ...] = (
         {"label": "Documents", "href": "/knowledge/documents"},
     )

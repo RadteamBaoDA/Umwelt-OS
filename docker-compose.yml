@@ -42,6 +42,7 @@ services:
       context: .
       dockerfile: infrastructure/docker/api.Dockerfile
     env_file: .env
+    init: true
     volumes:
       - app-data:/data
     expose: ["8000"]
@@ -64,6 +65,7 @@ services:
       dockerfile: infrastructure/docker/api.Dockerfile
     command: ["arq", "apps.worker.main.WorkerSettings"]
     env_file: .env
+    init: true
     volumes:
       - app-data:/data
     depends_on:

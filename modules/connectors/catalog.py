@@ -69,6 +69,24 @@ _ENTRIES = (
         unavailable_operations=("automatic_recovery_after_lost_n8n_credential_create_id",),
     ),
     CatalogEntry(
+        provider_id="mcp",
+        label="MCP server",
+        auth_methods=("none", "bearer"),
+        scope_fields=("connection_id", "calls"),
+        configuration_fields=("connection_id", "calls"),
+        quota_limits={"max_calls": 10, "max_records": 500, "max_response_bytes": 256_000},
+        history_description=(
+            "One request per allowlisted tool or resource per run; provider pagination is not followed "
+            "and there is no backfill. Unchanged items repeat as observations."
+        ),
+        collection_modes=("manual",),
+        supports_history=False,
+        supports_edit=False,
+        supports_delete=False,
+        availability="available",
+        unavailable_operations=("owner_editor_ui", "n8n_scheduled_collection"),
+    ),
+    CatalogEntry(
         provider_id="github",
         label="GitHub",
         auth_methods=("oauth2",),

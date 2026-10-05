@@ -1,0 +1,264 @@
+"""Owner profile contracts and immutable configuration snapshots for specialist runs."""
+
+import hashlib
+import json
+from uuid import UUID
+
+from fastapi import HTTPException
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from core.model_gateway.schemas import AIExecutionConfig
+from core.tools import ToolRegistry, ToolRisk
+from modules.agents.handoff import HANDOFF_TOOL
+from modules.agents.models import AgentProfile, AgentProfileRevision
+from modules.agents.schemas import AgentProfilePatch, AgentProfileRead, AgentProfileTool
+
+PROFILE_TITLES = {
+    "supervisor": "Supervisor", "knowledge": "Knowledge", "research": "Research",
+    "personal": "Personal", "project": "Project", "news": "News",
+    "planning": "Planning", "automation": "Automation",
+}
+DEFAULT_PROMPTS = {
+    "supervisor": "Coordinate the owner's request using the approved read-only tools. Delegate at most once, and only through agents.handoff called by itself; if it is unavailable or refused, handle the request directly and explain unavailable capabilities.",
+    "knowledge": "Answer questions grounded in the owner's authorized knowledge sources. Cite only evidence returned by the registered tools and say when evidence is insufficient.",
+    "research": "Research the owner's question using only the currently registered tools and selected sources. Do not imply that browser research or external search is available unless its tool is present.",
+    "personal": "Help the owner reason about personal information in selected knowledge sources. Do not invent tasks, goals, reminders, or private records that an authorized tool did not return.",
+    "project": "Help with project information found in selected knowledge sources. Do not present generic documents as structured project records when no project owner tool is registered.",
+    "news": "Answer news-related questions only from sources actually returned by registered tools. Do not fabricate headlines or imply live news coverage when its adapter is unavailable.",
+    "planning": "Help the owner plan from available evidence. Do not create or modify tasks or goals; state when the owning task or goal tools are unavailable.",
+    "automation": "Automation is unavailable until its owning Phase 10 workflow capability is registered.",
+}
+AUTOMATION_PROFILE_ID = "automation"
+PROFILE_LIMITS = {
+    "max_steps": 20, "max_tool_calls": 10, "max_active_seconds": 300,
+    "max_browser_jobs": 2, "max_browser_pages": 6, "max_browser_bytes": 10 * 1024 * 1024,
+}
+NATIVE_READ_TOOLS = frozenset({
+    "knowledge.get_document", "knowledge.list_documents", "search.query",
+    "sources.list_sources", "sources.get_source",
+})
+SPECIALIST_GATES = {"research": "browser.read"}
+DOMAIN_UNAVAILABLE = {
+    "personal": "phase_8_personal_tools_unavailable",
+    "project": "project_owner_tools_unavailable",
+    "news": "news_owner_tools_unavailable",
+    "planning": "phase_8_planning_tools_unavailable",
+    "automation": "phase_10_automation_unavailable",
+}
+
+
+def _canonical_json(value: object) -> bytes:
+    """Encode snapshot values deterministically for request and profile identity digests."""
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+def _tool_contracts(registry: ToolRegistry) -> dict[str, dict[str, str]]:
+    """Expose only registered non-confirmed read tools and the established webhook approval contract."""
+    result: dict[str, dict[str, str]] = {}
+    for definition in registry.list_tools():
+        if definition.risk == ToolRisk.READ_ONLY and not definition.confirmation_required:
+            result[definition.name] = {
+                "name": definition.name, "version": definition.version,
+                "fingerprint": definition.schema_fingerprint,
+            }
+        elif (definition.name == "webhook.send" and definition.risk == ToolRisk.EXTERNAL_WRITE
+              and definition.confirmation_required):
+            result[definition.name] = {
+                "name": definition.name, "version": definition.version,
+                "fingerprint": definition.schema_fingerprint,
+            }
+    return result
+
+
+def _snapshot(
+    row: AgentProfile | None, profile_id: str, registry: ToolRegistry,
+) -> dict[str, object]:
+    """Build the secret-free profile view, retaining exact registry fingerprints as authority ceilings."""
+    contracts = _tool_contracts(registry)
+    defaults = NATIVE_READ_TOOLS | ({HANDOFF_TOOL} if profile_id == "supervisor" else frozenset())
+    selected = row.allowed_tools if row is not None else [
+        contracts[name] for name in sorted(defaults) if name in contracts
+    ]
+    unavailable: list[str] = []
+    valid_tools = [item for item in selected if isinstance(item, dict)
+                   and item.get("name") in contracts
+                   and contracts[item["name"]] == item]
+    gate = SPECIALIST_GATES.get(profile_id)
+    if gate is not None and gate not in {item["name"] for item in valid_tools}:
+        unavailable.append("bounded_browser_unavailable")
+    if profile_id == "supervisor" and HANDOFF_TOOL not in {item["name"] for item in valid_tools}:
+        unavailable.append("bounded_supervisor_handoff_unavailable")
+    if profile_id in DOMAIN_UNAVAILABLE:
+        unavailable.append(DOMAIN_UNAVAILABLE[profile_id])
+    profile_enabled = row.enabled if row is not None else profile_id != AUTOMATION_PROFILE_ID
+    if not valid_tools:
+        unavailable.append("registered_read_tools_unavailable")
+    capability = "unavailable" if not valid_tools or not profile_enabled else "partial" if unavailable else "available"
+    return {
+        "id": profile_id, "title": PROFILE_TITLES[profile_id], "enabled": profile_enabled,
+        "revision": row.revision if row is not None else 0,
+        "model_alias": row.model_alias if row is not None else "reasoning-large",
+        "prompt": row.prompt if row is not None else DEFAULT_PROMPTS[profile_id],
+        "allowed_tools": valid_tools,
+        "available_tools": [item for name, item in sorted(contracts.items())
+                             if (name != "webhook.send" or profile_id in {"supervisor", "research"})
+                             and (name != HANDOFF_TOOL or profile_id == "supervisor")],
+        "source_ids": list(row.source_ids) if row is not None else [],
+        "capability": capability, "unavailable_reasons": sorted(set(unavailable)),
+        "limits": PROFILE_LIMITS,
+    }
+
+
+def _read_profile(value: dict[str, object]) -> AgentProfileRead:
+    """Validate a prepared profile snapshot before returning it through the public DTO."""
+    return AgentProfileRead.model_validate(value)
+
+
+def _profile_content(value: AgentProfileRead) -> dict[str, object]:
+    """Keep only owner-edited profile content in its immutable revision hash."""
+    return value.model_dump(mode="json", exclude={"available_tools", "capability", "unavailable_reasons"})
+
+
+async def list_profiles(
+    session: AsyncSession, owner_id: int, registry: ToolRegistry, config: AIExecutionConfig,
+) -> tuple[AgentProfileRead, ...]:
+    """List the fixed specialist roster and mark unavailable aliases or domain adapters explicitly."""
+    if owner_id != 1:
+        raise HTTPException(status_code=404, detail="Agent profiles not found")
+    rows = (await session.scalars(select(AgentProfile).where(AgentProfile.owner_id == owner_id))).all()
+    by_id = {row.profile_id: row for row in rows}
+    profiles = []
+    for profile_id in PROFILE_TITLES:
+        value = _snapshot(by_id.get(profile_id), profile_id, registry)
+        alias = value["model_alias"]
+        if alias not in config.aliases or not config.aliases[alias].model:
+            value["unavailable_reasons"] = sorted({*value["unavailable_reasons"], "model_alias_unconfigured"})
+            value["capability"] = "unavailable"
+        else:
+            value["unavailable_reasons"] = sorted({*value["unavailable_reasons"], "model_tool_capability_unverified"})
+            if value["capability"] == "available":
+                value["capability"] = "partial"
+        profiles.append(_read_profile(value))
+    return tuple(profiles)
+
+
+async def get_profile(
+    session: AsyncSession, owner_id: int, profile_id: str,
+    registry: ToolRegistry, config: AIExecutionConfig,
+) -> AgentProfileRead:
+    """Return one known fixed-roster profile or a non-enumerating not-found response."""
+    if profile_id not in PROFILE_TITLES:
+        raise HTTPException(status_code=404, detail="Agent profile not found")
+    row = await session.scalar(select(AgentProfile).where(
+        AgentProfile.owner_id == owner_id, AgentProfile.profile_id == profile_id,
+    ))
+    value = _snapshot(row, profile_id, registry)
+    alias = value["model_alias"]
+    if alias not in config.aliases or not config.aliases[alias].model:
+        value["unavailable_reasons"] = sorted({*value["unavailable_reasons"], "model_alias_unconfigured"})
+        value["capability"] = "unavailable"
+    else:
+        value["unavailable_reasons"] = sorted({*value["unavailable_reasons"], "model_tool_capability_unverified"})
+        if value["capability"] == "available":
+            value["capability"] = "partial"
+    return _read_profile(value)
+
+
+async def update_profile_in_uow(
+    session: AsyncSession, owner_id: int, profile_id: str, patch: AgentProfilePatch,
+    registry: ToolRegistry, config: AIExecutionConfig,
+) -> AgentProfileRead:
+    """Write one optimistic profile revision into the caller's transaction without committing it."""
+    if owner_id != 1 or profile_id not in PROFILE_TITLES:
+        raise HTTPException(status_code=404, detail="Agent profile not found")
+    # A row lock cannot serialize concurrent creation while this profile has no row yet.
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(:lock_key)"),
+        {"lock_key": int.from_bytes(hashlib.sha256(f"profile:{owner_id}:{profile_id}".encode()).digest()[:8], "big", signed=True)},
+    )
+    row = await session.scalar(select(AgentProfile).where(
+        AgentProfile.owner_id == owner_id, AgentProfile.profile_id == profile_id,
+    ).with_for_update())
+    current_revision = row.revision if row is not None else 0
+    if patch.expected_revision != current_revision:
+        raise HTTPException(status_code=409, detail="Agent profile changed; reload before saving")
+    if len(patch.prompt.encode("utf-8")) > 32_000:
+        raise HTTPException(status_code=413, detail="Agent prompt exceeds the size limit")
+    if patch.model_alias not in config.aliases:
+        raise HTTPException(status_code=422, detail="Model alias is not configured")
+    contracts = _tool_contracts(registry)
+    chosen = [item.model_dump() for item in patch.allowed_tools]
+    if len({item["name"] for item in chosen}) != len(chosen) or any(contracts.get(item["name"]) != item for item in chosen):
+        raise HTTPException(status_code=422, detail="Selected tool contract is no longer available")
+    if "webhook.send" in {item["name"] for item in chosen} and profile_id not in {"supervisor", "research"}:
+        raise HTTPException(status_code=422, detail="This profile cannot request external actions")
+    if HANDOFF_TOOL in {item["name"] for item in chosen} and profile_id != "supervisor":
+        raise HTTPException(status_code=422, detail="Only the Supervisor profile may delegate")
+    if profile_id == AUTOMATION_PROFILE_ID and patch.enabled:
+        raise HTTPException(status_code=409, detail="Automation profiles are unavailable until Phase 10")
+    if patch.source_ids:
+        from modules.sources.public import list_tool_sources
+
+        selected_source_ids = frozenset(patch.source_ids)
+        sources = await list_tool_sources(
+            session, limit=len(selected_source_ids), cursor=None,
+            source_ids=selected_source_ids, owner_all=False,
+        )
+        if {item.id for item in sources.items} != selected_source_ids:
+            raise HTTPException(status_code=422, detail="Source scope contains an inactive source")
+    revision = current_revision + 1
+    if row is None:
+        row = AgentProfile(profile_id=profile_id, owner_id=owner_id)
+        session.add(row)
+    row.enabled = patch.enabled
+    row.model_alias = patch.model_alias
+    row.prompt = patch.prompt
+    row.allowed_tools = chosen
+    row.source_ids = [str(item) for item in patch.source_ids]
+    row.revision = revision
+    profile_view = _snapshot(row, profile_id, registry)
+    snapshot = _profile_content(_read_profile(profile_view))
+    snapshot_hash = hashlib.sha256(_canonical_json(snapshot)).hexdigest()
+    session.add(AgentProfileRevision(
+        profile_id=profile_id, owner_id=owner_id, revision=revision,
+        snapshot=snapshot, snapshot_hash=snapshot_hash,
+    ))
+    await session.flush()
+    return _read_profile(profile_view)
+
+
+async def resolve_profile_snapshot(
+    session: AsyncSession, owner_id: int, profile_id: str, expected_revision: int,
+    registry: ToolRegistry, config: AIExecutionConfig,
+) -> tuple[dict[str, object], str]:
+    """Resolve a selected enabled revision and bind its exact current tool/model contracts before enqueue."""
+    profile = await get_profile(session, owner_id, profile_id, registry, config)
+    if profile.revision != expected_revision:
+        raise HTTPException(status_code=409, detail="Agent profile changed; reload before starting")
+    if not profile.enabled or profile.capability == "unavailable":
+        raise HTTPException(status_code=503, detail="Agent profile capability is unavailable")
+    contracts = _tool_contracts(registry)
+    profile_snapshot = _profile_content(profile)
+    digest = hashlib.sha256(_canonical_json(profile_snapshot)).hexdigest()
+    snapshot = profile.model_dump(mode="json")
+    snapshot.pop("available_tools", None)
+    snapshot["profile_revision_hash"] = digest
+    if not snapshot["allowed_tools"] or any(contracts.get(item["name"]) != item for item in snapshot["allowed_tools"]):
+        raise HTTPException(status_code=503, detail="Agent profile tools are unavailable")
+    mapping = config.aliases.get(profile.model_alias)
+    if mapping is None or not mapping.model:
+        raise HTTPException(status_code=503, detail="Agent profile model alias is unavailable")
+    # Pin only identity and policy metadata; the gateway secret never enters the run snapshot.
+    snapshot["gateway"] = {
+        "configuration_revision": config.configuration_revision,
+        "gateway_identity": config.gateway_identity,
+        "destination_id": config.endpoint_destination_id,
+        "model_alias": profile.model_alias,
+        "model": mapping.model,
+        "model_version": mapping.version,
+        "model_destination": mapping.destination,
+        "privacy": config.privacy.model_dump(mode="json"),
+    }
+    snapshot["run_snapshot_hash"] = hashlib.sha256(_canonical_json(snapshot)).hexdigest()
+    return snapshot, digest

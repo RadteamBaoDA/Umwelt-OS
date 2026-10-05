@@ -260,6 +260,16 @@ class ResponseRunRead(BaseModel):
     completed_at: datetime | None = None
 
 
+class AgentActivityRead(BaseModel):
+    """Expose only bounded identifiers and status/tool names linked to an owned conversation."""
+
+    model_config = ConfigDict(extra="forbid")
+    conversation_id: UUID
+    agent_run_id: UUID
+    activities: list[dict[str, Any]] = Field(default_factory=list, max_length=64)
+    updated_at: datetime
+
+
 class CancelResponse(BaseModel):
     """Outcome of a response run cancellation request."""
 

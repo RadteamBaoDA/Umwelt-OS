@@ -19,6 +19,7 @@ from core.auth.dependencies import SESSION_COOKIE, require_owner, require_owner_
 from core.auth.models import AuthSession
 from core.database import get_session
 from modules.chat.models import Conversation, Message, ResponseRun, StreamEvent
+from modules.chat import public as chat_public
 from modules.chat.schemas import (
     CancelResponse,
     ConversationCreate,
@@ -134,6 +135,16 @@ async def list_conversations(
         )
         for row in rows
     ]
+
+
+@router.get("/api/v1/conversations/{conversation_id}/agent-runs/{run_id}/activity", response_model=chat_public.AgentActivityRead)
+async def read_agent_activity(
+    conversation_id: UUID, run_id: UUID, session: Session, owner: OwnerRead,
+) -> chat_public.AgentActivityRead:
+    """Read bounded agent activity through its owner-checked chat conversation link."""
+    return await chat_public.get_agent_activity(
+        session, conversation_id, run_id, owner.owner_id, owner.token_hash,
+    )
 
 
 @router.post("/api/v1/conversations", response_model=ConversationRead, status_code=201)
@@ -298,20 +309,32 @@ async def delete_conversation(
     session: Session,
     _owner: OwnerWrite,
 ) -> None:
-    """Delete a conversation along with cascading messages, runs, and events.
+    """Delete conversation content and redact linked agent payloads while preserving effect tombstones.
 
     Args:
         conversation_id: UUID of the conversation to delete.
         session: Active asynchronous database session.
         _owner: Authenticated owner write session dependency.
 
+    Side effects:
+        Cancels linked agent runs and purges their prompts, checkpoint payloads, approval arguments,
+        and tool-call arguments before the Chat-owned activity link cascades away. A possibly sent
+        effect stays in requires_review so deletion cannot make its action replayable.
+
     Raises:
         HTTPException: 404 if conversation does not exist.
     """
-    conv = await session.scalar(select(Conversation).where(Conversation.id == conversation_id))
+    # Lock the Chat parent before agent runs and approvals; take any future upstream domain
+    # lifecycle locks before this row so the cross-module deletion order remains acyclic.
+    conv = await session.scalar(select(Conversation).where(
+        Conversation.id == conversation_id,
+    ).with_for_update().execution_options(populate_existing=True))
     if conv is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
+    from modules.agents.public import purge_conversation_actions
+
+    await purge_conversation_actions(session, conversation_id, _owner.owner_id)
     await session.delete(conv)
     await session.commit()
 

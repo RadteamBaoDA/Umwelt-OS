@@ -18,7 +18,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
-from core.heavy_work import HeavyLeaseLost, HeavyWorkBusy, heavy_job_slot
+from core.heavy_work import HeavyLeaseLost, HeavyWorkBusy, RemoteHeavyWorkBlocked, heavy_job_slot
 from core.model_gateway.client import ModelGateway, PrivacyPolicyDenied
 from core.model_gateway.schemas import ModelMapping, RequestPolicy
 from core.realtime import commit_with_replay
@@ -1028,6 +1028,8 @@ async def process_graph_operation(ctx: dict[str, object], operation_id_value: st
                 await _join_local_cleanup(graph.close())
     except HeavyWorkBusy as exc:
         raise Retry(defer=5) from exc
+    except RemoteHeavyWorkBlocked as exc:
+        raise Retry(defer=30) from exc
     except HeavyLeaseLost:
         # The cancellation handler already fenced the graph outcome before its
         # awaited local cleanup; ownership loss itself is not remote cessation.

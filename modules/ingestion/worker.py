@@ -22,7 +22,7 @@ from core.config import Settings
 from core.heavy_work import bounded_heavy_work
 from core.realtime import ReplayDraft, commit_with_replay, make_ingestion_change, make_knowledge_change, make_source_change
 from core.storage import cleanup_orphaned_files, storage_path
-from modules.connectors.public import ConnectorRecord
+from modules.connectors.public import CollectionFence, ConnectorRecord
 from modules.ingestion.dispatcher import mark_event_delivered
 from modules.ingestion.models import (
     COLLECTION_LEASE,
@@ -111,14 +111,74 @@ async def _collect_web_job(
     run_id: UUID,
     stage_id: UUID,
 ) -> None:
-    """Call the browser collector for a persisted web stage and validate its result."""
+    """Collect one active web stage after checking its persisted source and lease fence.
+
+    The worker owns the existing heavy-work slot; this helper never reacquires it.
+    Source, connector, run, stage, and lease authority is checked in a short local
+    transaction before egress and rechecked before receipt publication. Network
+    I/O runs only after those row locks and the database session are released.
+    Missing, coercible (including bool), or stale revisions fail closed.
+    """
     settings = cast(Settings, ctx["settings"])
     config = cast(dict[str, object], event.payload["configuration"])
     token = settings.browser_shared_token.get_secret_value()
     if not token:
         raise ValueError("Browser collector is not configured")
+    source_id = UUID(str(event.payload["source_id"]))
+    source_generation = event.payload.get("source_generation")
+    connector_revision = event.payload.get("connector_revision")
+    if (
+        type(source_generation) is not int
+        or source_generation < 1
+        or type(connector_revision) is not int
+        or connector_revision < 1
+    ):
+        raise ValueError("Crawl job is missing a valid persisted collection fence")
+    fence = CollectionFence(
+        source_generation=source_generation,
+        connector_revision=connector_revision,
+    )
+    # Revalidate the durable claim immediately before egress. Do not keep the
+    # source/run/stage locks across the remote request; publication rechecks them.
+    async with factory() as session:
+        source = await sources.lock_source(session, source_id)
+        source_view = await sources.get_connector_source(session, source_id)
+        from modules.connectors import public as connectors
+
+        run = await session.scalar(
+            select(IngestionRun).where(
+                IngestionRun.id == run_id, IngestionRun.source_id == source_id
+            ).with_for_update()
+        )
+        stage = await session.scalar(
+            select(IngestionStage).where(
+                IngestionStage.id == stage_id, IngestionStage.run_id == run_id
+            ).with_for_update()
+        )
+        state = await session.get(SourceIngestionState, source_id, with_for_update=True)
+        now = datetime.now(UTC)
+        if (
+            source is None
+            or source.status != "active"
+            or source.generation != source_generation
+            or source_view is None
+            or not await connectors.require_collection_fence(session, source_view, fence)
+            or run is None
+            or run.status != "running"
+            or stage is None
+            or stage.status != "running"
+            or stage.lease_expires_at is None
+            or stage.lease_expires_at <= now
+            or state is None
+            or state.lease_run_id != run_id
+            or state.lease_expires_at is None
+            or state.lease_expires_at <= now
+        ):
+            raise ValueError("Crawl job is no longer active")
     payload = {
-        "source_id": str(event.payload["source_id"]),
+        "source_id": str(source_id),
+        "source_generation": source_generation,
+        "connector_revision": connector_revision,
         "url": config["url"],
         "mode": config["mode"],
         "max_pages": config["max_pages"],
@@ -161,20 +221,18 @@ async def _collect_web_job(
     ).hexdigest()
 
     async with factory() as session:
-        source_id = UUID(str(event.payload["source_id"]))
         source = await sources.lock_source(session, source_id)
         source_view = await sources.get_connector_source(session, source_id)
         from modules.connectors import public as connectors
         from modules.ingestion import public as ingestion
 
-        event_revision = event.payload.get("connector_revision")
         fence_current = bool(
             source_view is not None
             and await connectors.require_batch_fence(
                 session,
                 source_view,
-                int(event.payload.get("source_generation", -1)),
-                event_revision if isinstance(event_revision, int) else None,
+                source_generation,
+                connector_revision,
             )
         )
         run = await session.scalar(
@@ -185,7 +243,7 @@ async def _collect_web_job(
         batch = await session.scalar(select(IngestionBatch).where(IngestionBatch.id == run.batch_id)) if run else None
         if (
             source is None or source.status != "active"
-            or source.generation != int(event.payload.get("source_generation", -1))
+            or source.generation != source_generation
             or not fence_current
             or run is None or stage is None or batch is None
             or state is None or state.lease_run_id != run.id

@@ -16,7 +16,7 @@ class SourceDescriptor:
     routes: tuple[str, ...] = ("/api/v1/sources",)
     emitted_events: tuple[str, ...] = ()
     consumed_events: tuple[str, ...] = ()
-    tools: tuple[str, ...] = ()
+    tools: tuple[str, ...] = ("sources.list_sources", "sources.get_source")
     navigation: tuple[dict[str, str], ...] = ({"label": "Sources", "href": "/sources"},)
     settings_schema: dict[str, object] | None = None
 
