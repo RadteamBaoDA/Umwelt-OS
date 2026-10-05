@@ -25,7 +25,7 @@ export type IngestionRun = {
   run_id: string;
   source_id: string;
   status: 'queued' | 'running' | 'succeeded' | 'needs_ocr' | 'failed';
-  stages: { stage_key: string; status: string; attempts: number; error_code: string | null; result_count: number | null; normalized_count: number; duplicate_count: number; skipped_count: number; failed_count: number; pending_count: number; updated_at: string }[];
+  stages: { stage_key: string; status: string; attempts: number; error_code: string | null; result_count: number | null; normalized_count: number; duplicate_count: number; selected_current_count: number; skipped_count: number; failed_count: number; pending_count: number; updated_at: string }[];
   error_code: string | null;
   created_at: string;
   updated_at: string;
@@ -55,6 +55,13 @@ export type ConnectorConfig = {
   include_releases?: boolean;
   github_history_days?: number;
   telegram_chat_ids?: string[];
+  market_symbols?: string[];
+  market_currency?: string;
+  market_exchange_timezone?: string;
+  weather_latitude?: number;
+  weather_longitude?: number;
+  weather_timezone?: string;
+  weather_metrics?: string[];
   history_mode?: 'returned_snapshot' | 'pending_updates';
   connection_id?: string;
   calls?: { grant_id: string; arguments: Record<string, unknown> }[];
@@ -305,6 +312,14 @@ export function deactivateConnector(id: string, csrfToken: string, signal?: Abor
 /** Removes the provider credential only at the supplied expected revision, using CSRF protection. */
 export function removeProviderCredential(id: string, expectedRevision: number, csrfToken: string, signal?: AbortSignal) {
   return apiRequest<ConnectorActivation>(`/api/v1/connectors/${id}/credentials/provider?expected_revision=${expectedRevision}`, { method: 'DELETE', headers: csrfHeaders(csrfToken), signal });
+}
+
+/** Stores a world-provider key through the owner-protected encrypted credential slot. */
+export function saveWorldProviderCredential(id: string, expectedGeneration: number, expectedConnectorRevision: number, apiKey: string, csrfToken: string, signal?: AbortSignal) {
+  return apiRequest<{ source_id: string; provider: string; configured: boolean }>(`/api/v1/connectors/sources/${id}/world-data-credential`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify({ expected_generation: expectedGeneration, expected_connector_revision: expectedConnectorRevision, api_key: apiKey }), signal,
+  });
 }
 
 /** Starts connector collection with CSRF protection and returns the accepted run or batch identifiers. */

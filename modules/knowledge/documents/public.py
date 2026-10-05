@@ -56,6 +56,81 @@ class ExtractionInputLimitError(ValueError):
     """
 
 
+@dataclass(frozen=True)
+class ObservationEvidenceCandidate:
+    """Identify one structured point's immutable document acceptance fences."""
+    observation_id: UUID
+    source_id: UUID
+    source_generation: int
+    provider: str
+    provider_scope_discriminator: str
+    external_id: str
+    document_id: UUID
+    document_version_id: UUID
+
+
+async def current_observation_evidence_ids(
+    session: AsyncSession,
+    candidates: Sequence[ObservationEvidenceCandidate],
+    current_scopes: dict[UUID, object],
+) -> frozenset[UUID]:
+    """Return candidates backed by one current document version and matching accepted provider scope.
+
+    Documents owns version/provenance reads. The result contains only accepted observation IDs;
+    foreign modules never receive Document ORM rows or provenance bodies.
+    """
+    if not candidates or len(candidates) > 256:
+        return frozenset()
+    rows = (await session.execute(
+        select(
+            Document.id, DocumentVersion.id, Source.id, Source.generation,
+            DocumentVersion.version_number, Document.current_version,
+            NormalizedVersionProvenance.provider_id,
+            NormalizedVersionProvenance.source_generation,
+            NormalizedVersionProvenance.provenance_json,
+        )
+        .join(DocumentVersion, DocumentVersion.document_id == Document.id)
+        .join(Source, Source.id == Document.source_id)
+        .join(NormalizedVersionProvenance, NormalizedVersionProvenance.document_version_id == DocumentVersion.id)
+        .where(DocumentVersion.id.in_({item.document_version_id for item in candidates}))
+    )).all()
+    by_identity: dict[tuple[UUID, UUID], list[tuple[UUID, int, int, int, str, int, dict[str, object]]]] = {}
+    for (
+            doc_id, version_id, source_id, source_generation, version_number,
+            current_version, provider_id, accepted_generation, provenance,
+    ) in rows:
+        by_identity.setdefault((doc_id, version_id), []).append((
+            source_id, source_generation, version_number, current_version,
+            provider_id, accepted_generation, provenance,
+        ))
+    accepted: set[UUID] = set()
+    for candidate in candidates:
+        current = current_scopes.get(candidate.source_id)
+        if (
+            current is None or getattr(current, "provider_id", None) != candidate.provider
+            or getattr(current, "source_generation", None) != candidate.source_generation
+            or getattr(current, "discriminator", None) != candidate.provider_scope_discriminator
+        ):
+            continue
+        matches = by_identity.get((candidate.document_id, candidate.document_version_id), [])
+        if len(matches) != 1:
+            continue
+        row = matches[0]
+        (
+            source_id, source_generation, version_number, current_version,
+            provider_id, accepted_generation, provenance,
+        ) = row
+        if (
+            source_id == candidate.source_id and source_generation == candidate.source_generation
+            and version_number == current_version and provider_id == candidate.external_id
+            and accepted_generation == candidate.source_generation
+            and isinstance(provenance, dict)
+            and provenance.get("provider_scope_discriminator") == candidate.provider_scope_discriminator
+        ):
+            accepted.add(candidate.observation_id)
+    return frozenset(accepted)
+
+
 def _provider_snapshot(
     document: Document,
     version: DocumentVersion,
@@ -1198,11 +1273,11 @@ async def upsert_normalized_document(
     allocation; source, normalized identity, and document rows serialize writers.
     Generic providers select current content by observed time and accepted hash.
     Telegram requires owner-validated order, rejects a conflicting equal rank,
-    and selects by observed time, epoch, then update ID. Version numbering remains
-    independently monotonic, and transaction commit/derived cleanup belongs to
-    the caller's ingestion completion boundary. The source-first lock returns a
-    narrow lifecycle fence; provider ownership comes from the detached source
-    projection, which must still match that fence before identity allocation.
+    and selects by observed time, epoch, then update ID. Structured world data
+    leaves current-version selection to the observations owner, which orders the
+    accepted ingestion identity and calls the exact-version selection contract
+    below in this transaction. Version numbering remains independently monotonic;
+    transaction commit and derived cleanup belong to the ingestion boundary.
     """
     source = await sources.lock_source(session, payload.source_id)
     if source is None or source.status != "active" or source.generation != payload.expected_source_generation:
@@ -1302,7 +1377,11 @@ async def upsert_normalized_document(
         )
         if current_provenance is None:
             raise ValueError("Provider identity conflicts with an owner-authored current revision")
-    if source_projection.provider == "telegram":
+    if source_projection.provider in {"alpha_vantage", "open_meteo"}:
+        # Observation acceptance time and ingestion identity, not provider event
+        # time or worker arrival order, own structured-series current selection.
+        selected = False
+    elif source_projection.provider == "telegram":
         incoming_metadata = ProviderRecordMetadata.model_validate(provider_record)
         incoming_telegram = incoming_metadata.telegram
         if incoming_telegram is None or payload.telegram_order is None:
@@ -1371,6 +1450,65 @@ async def upsert_normalized_document(
         document_version_id=version.id, version_number=version.version_number,
         created_version=True, selected_current=selected, chunk_count=chunk_count,
     )
+
+
+async def select_current_world_document_version(
+    session: AsyncSession, *, document_id: UUID, document_version_id: UUID,
+    expected_source_generation: int, provider_scope_discriminator: str,
+) -> bool:
+    """Select one immutable world-data revision after Observations accepts it as current.
+
+    The caller must make this call in the same ingestion transaction as the
+    observation write. Documents owns current-version and metadata projection;
+    accepted_at plus ingestion identity remain owned by Observations. The source
+    generation, provider scope, document identity, and retained version provenance
+    are rechecked before changing the pointer, so retries and delayed workers can
+    only restore a version that the current acceptance decision already selected.
+    """
+    source_id = await session.scalar(select(Document.source_id).where(Document.id == document_id))
+    if source_id is None:
+        return False
+    source = await sources.lock_source(session, source_id)
+    if source is None or source.status != "active" or source.generation != expected_source_generation:
+        return False
+    source_projection = await sources.get_connector_source(session, source_id)
+    if (
+        source_projection is None or source_projection.status != "active"
+        or source_projection.generation != expected_source_generation
+        or source_projection.provider not in {"alpha_vantage", "open_meteo"}
+    ):
+        return False
+    document = await session.scalar(
+        select(Document).where(Document.id == document_id, Document.source_id == source_id).with_for_update()
+    )
+    if document is None:
+        return False
+    selected = (await session.execute(
+        select(DocumentVersion, NormalizedVersionProvenance)
+        .join(NormalizedVersionProvenance, NormalizedVersionProvenance.document_version_id == DocumentVersion.id)
+        .where(
+            DocumentVersion.id == document_version_id,
+            DocumentVersion.document_id == document.id,
+            NormalizedVersionProvenance.document_id == document.id,
+            NormalizedVersionProvenance.provider_id == document.external_id,
+            NormalizedVersionProvenance.source_generation == expected_source_generation,
+        )
+    )).one_or_none()
+    if selected is None:
+        return False
+    version, provenance = selected
+    if provenance.provenance_json.get("provider_scope_discriminator") != provider_scope_discriminator:
+        return False
+    document.current_version = version.version_number
+    document.content_hash = version.content_hash
+    document.title = provenance.title
+    document.canonical_url = provenance.canonical_url
+    document.published_at = provenance.published_at
+    document.content_type = provenance.content_type
+    document.observed_at = provenance.observed_at
+    document.extraction_status = "ready"
+    await session.flush()
+    return True
 
 
 async def add_uploaded_document(
@@ -1554,6 +1692,8 @@ async def delete_document(session: AsyncSession, document_id: UUID) -> bool:
     )
     if document is None:
         return False
+    from modules.knowledge.observations import public as observations
+    await observations.purge_document_in_uow(session, document.id)
     if document.external_id is not None:
         identity = await session.scalar(
             select(NormalizedDocumentIdentity).where(
@@ -1596,6 +1736,8 @@ async def delete_source_documents(session: AsyncSession, source_id: UUID) -> lis
     )).all())
     if len(document_ids) > 10_000:
         raise ValueError("Source graph cleanup exceeds its atomic document limit")
+    from modules.knowledge.observations import public as observations
+    await observations.purge_source_in_uow(session, source_id)
     timeline_drafts = await _remove_graph_support(session, source_id=source_id)
     await session.execute(
         delete(NormalizedDocumentIdentity).where(NormalizedDocumentIdentity.source_id == source_id)

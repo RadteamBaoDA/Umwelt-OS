@@ -161,6 +161,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       client.invalidateQueries({ queryKey: ['entities'] }),
       client.invalidateQueries({ queryKey: ['relationships'] }),
       client.invalidateQueries({ queryKey: ['search'] }),
+      client.invalidateQueries({ queryKey: ['world-observations'] }),
       client.invalidateQueries({ queryKey: ['dashboards'] }),
       client.invalidateQueries({ queryKey: ['dashboard'] }),
       client.invalidateQueries({ queryKey: ['gadget-definitions'] }),
@@ -359,11 +360,14 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       const handleSourceChange = (event: MessageEvent<string>) => {
         const value = parseEnvelope<SourceEvent>(event.data);
         if (!value || !UUID_RE.test(value.source_id) || !Number.isSafeInteger(value.generation)) { resync(true); return; }
+        // Source policy can make cached series unauthorized; clear them before refetching.
+        client.removeQueries({ queryKey: ['world-observations'] });
         void Promise.all([
           client.invalidateQueries({ queryKey: ['sources'] }),
           client.invalidateQueries({ queryKey: ['connector-configuration', value.source_id] }),
           client.invalidateQueries({ queryKey: ['connector-activation', value.source_id] }),
           client.invalidateQueries({ queryKey: ['source-ingestion', value.source_id] }),
+          client.invalidateQueries({ queryKey: ['world-observations'] }),
           client.invalidateQueries({ queryKey: ['search'] }),
           ...(value.operation_id ? [client.invalidateQueries({ queryKey: ['operation', value.operation_id] })] : []),
           client.invalidateQueries({ queryKey: ['gadget-sources'] }),
@@ -465,6 +469,13 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
           || value.event_id != null || value.event_revision != null
           || typeof value.deleted !== 'boolean'
         ) { resync(true); return; }
+        if (value.deleted) {
+          // Deletion revokes the evidence behind cached measurements; reset clears it and refetches mounted consumers.
+          void client.resetQueries({ queryKey: ['world-observations'] });
+        } else {
+          // Keep ordinary updates stable while the user reads; refresh their values on focus/remount.
+          void client.invalidateQueries({ queryKey: ['world-observations'], refetchType: 'none' });
+        }
         // Projection updates use source invalidations even before an entity exists.
         // Refetch canonical-backed status instead of treating the event as proof.
         void Promise.all([

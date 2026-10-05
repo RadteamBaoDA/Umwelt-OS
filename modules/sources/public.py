@@ -211,6 +211,16 @@ async def lock_source(session: AsyncSession, source_id: UUID) -> SourceFence | N
     )
 
 
+async def filter_active_source_ids(session: AsyncSession, source_ids: Sequence[UUID]) -> tuple[UUID, ...]:
+    """Return only owner sources that are active and still eligible for current reads."""
+    if not source_ids or len(source_ids) > 32:
+        return ()
+    rows = await session.scalars(
+        select(Source.id).where(Source.id.in_(source_ids), Source.status == "active", Source.retired_at.is_(None))
+    )
+    return tuple(rows.all())
+
+
 
 async def lock_source_for_document(session: AsyncSession, source_id: UUID) -> None:
     """Validate the source and hold its lock until the caller's transaction ends."""

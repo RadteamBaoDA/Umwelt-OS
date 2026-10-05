@@ -48,12 +48,14 @@ class GadgetScope(StrictConfiguration):
     map_layer_ids: list[Annotated[str, Field(min_length=1, max_length=80)]] = Field(
         default_factory=list, max_length=32
     )
+    metrics: list[Annotated[str, Field(min_length=1, max_length=80)]] = Field(default_factory=list, max_length=32)
+    lookback_days: StrictInt | None = Field(default=None, ge=1, le=366)
 
     @model_validator(mode="after")
     def ensure_unique_selectors(self) -> "GadgetScope":
         """Reject duplicates so selectors have stable canonical fingerprints and storage."""
         for name, values in self.model_dump().items():
-            if len(values) != len(set(values)):
+            if isinstance(values, list) and len(values) != len(set(values)):
                 raise ValueError(f"{name} must contain distinct values")
         return self
 

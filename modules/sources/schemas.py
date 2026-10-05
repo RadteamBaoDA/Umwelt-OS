@@ -26,7 +26,10 @@ class SourceCreate(BaseModel):
             "arxiv": "rss",
             "huggingface": "api",
             "github_releases": "api",
+            "github": "api",
             "telegram": "api",
+            "alpha_vantage": "api",
+            "open_meteo": "api",
         }.get(self.provider)
         if self.provider is not None and expected is None:
             raise ValueError("Provider is not registered")

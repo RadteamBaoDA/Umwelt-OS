@@ -67,7 +67,7 @@ class ReceiveBatch(BaseModel):
     @model_validator(mode="after")
     def limit_serialized_payload(self) -> "ReceiveBatch":
         """Reject oversized batches and untrusted attempts to supply provider proof."""
-        if any({"provider_record", "_owner_telegram_proof", "_native_telegram"} & record.metadata.keys() for record in self.records):
+        if any({"provider_record", "world_data", "_owner_telegram_proof", "_native_telegram"} & record.metadata.keys() for record in self.records):
             raise ValueError("provider_record metadata is reserved for trusted normalization")
         payload = json.dumps(self.model_dump(mode="json"), separators=(",", ":"), ensure_ascii=False)
         if len(payload.encode("utf-8")) > 10 * 1024 * 1024:
@@ -115,6 +115,7 @@ class StageRead(BaseModel):
     result_count: int | None = None
     normalized_count: int = 0
     duplicate_count: int = 0
+    selected_current_count: int = 0
     skipped_count: int = 0
     failed_count: int = 0
     pending_count: int = 0

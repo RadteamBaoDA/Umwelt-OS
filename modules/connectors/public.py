@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modules.sources.schemas import ConnectorSource, SourceFence
 from modules.connectors.models import (
     AgentBrowserGrant, ConnectorProvisioning, GithubOAuthGrant, GithubWebhookCapacity,
-    GithubWebhookDelivery, GithubWebhookOutbox, GithubSourceHint,
+    GithubWebhookDelivery, GithubWebhookOutbox, GithubSourceHint, ConnectorWorldCredential,
 )
 from modules.ingestion.schemas import IngestionRecord, TelegramRawDelivery
 
@@ -32,8 +32,8 @@ async def observability_queue_summary(session: AsyncSession) -> dict[str, dict[s
 
 DEFAULT_TIMEZONE = "Asia/Ho_Chi_Minh"
 DEFAULT_OVERLAP = timedelta(days=1)
-NATIVE_PROVIDERS = frozenset({"youtube", "arxiv", "huggingface", "github_releases", "github", "telegram"})
-PROVIDER_SOURCE_TYPES = {"youtube": "rss", "arxiv": "rss", "huggingface": "api", "github_releases": "api", "github": "api", "telegram": "api"}
+NATIVE_PROVIDERS = frozenset({"youtube", "arxiv", "huggingface", "github_releases", "github", "telegram", "alpha_vantage", "open_meteo"})
+PROVIDER_SOURCE_TYPES = {"youtube": "rss", "arxiv": "rss", "huggingface": "api", "github_releases": "api", "github": "api", "telegram": "api", "alpha_vantage": "api", "open_meteo": "api"}
 
 
 class ProviderRateLimited(RuntimeError):
@@ -135,6 +135,13 @@ class ConnectorConfig(BaseModel):
     include_releases: bool = False
     github_history_days: StrictInt = Field(default=90, ge=1, le=365)
     telegram_chat_ids: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=100)
+    market_symbols: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=5)
+    market_currency: str | None = Field(default=None, min_length=3, max_length=3, pattern=r"^[A-Z]{3}$")
+    market_exchange_timezone: str | None = Field(default=None, min_length=1, max_length=64)
+    weather_latitude: float | None = Field(default=None, ge=-90, le=90)
+    weather_longitude: float | None = Field(default=None, ge=-180, le=180)
+    weather_timezone: str | None = Field(default=None, min_length=1, max_length=64)
+    weather_metrics: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=8)
     history_mode: Literal["returned_snapshot", "pending_updates"] | None = None
 
     @field_validator("timezone")
@@ -177,6 +184,28 @@ class ConnectorConfig(BaseModel):
             raise ValueError("Telegram chat IDs must be unique signed decimal strings")
         return value
 
+    @model_validator(mode="after")
+    def validate_world_data_scope(self) -> "ConnectorConfig":
+        """Keep finance and weather scopes narrow, unique, and internally complete."""
+        if self.market_symbols is not None and (
+            len(set(self.market_symbols)) != len(self.market_symbols)
+            or any(not re.fullmatch(r"[A-Z0-9.^_-]{1,20}", symbol) for symbol in self.market_symbols)
+        ):
+            raise ValueError("Market symbols must be unique uppercase provider symbols")
+        if self.market_symbols is not None and self.schedule_interval_minutes not in (None, 1440):
+            raise ValueError("Alpha Vantage collection must be scheduled at most once per day")
+        if (self.market_currency is None) != (self.market_exchange_timezone is None):
+            raise ValueError("Market currency and exchange timezone must be configured together")
+        weather_fields = (self.weather_latitude, self.weather_longitude, self.weather_timezone, self.weather_metrics)
+        if any(value is not None for value in weather_fields) and any(value is None for value in weather_fields):
+            raise ValueError("Weather coordinates, timezone, and metrics must be configured together")
+        if self.weather_metrics is not None and (
+            len(set(self.weather_metrics)) != len(self.weather_metrics)
+            or not set(self.weather_metrics).issubset({"temperature_2m", "relative_humidity_2m", "precipitation", "wind_speed_10m"})
+        ):
+            raise ValueError("Weather metric is outside the Open-Meteo bounded allowlist")
+        return self
+
 
 @dataclass(frozen=True)
 class ConnectorConfigurationSnapshot:
@@ -216,18 +245,23 @@ async def get_current_provider_scope(
     from modules.connectors.catalog import get_catalog_entry
     from modules.sources import public as sources
 
-    source = await sources.get_connector_source(session, source_id)
-    if source is None or source.status != "active" or source.generation != expected_source_generation:
+    fence = await sources.lock_source(session, source_id)
+    if fence is None or fence.status != "active" or fence.generation != expected_source_generation:
         return None
-    provider_id = {"rss": "rss", "web": "web", "api": "rest"}.get(source.type)
+    source = await sources.get_connector_source(session, source_id)
+    if source is None or source.status != fence.status or source.generation != fence.generation:
+        return None
+    provider_id = source.provider or {"rss": "rss", "web": "web", "api": "rest"}.get(source.type)
     entry = get_catalog_entry(provider_id) if provider_id else None
-    if entry is None or entry.availability != "available":
+    if entry is None or entry.availability not in {"available", "implemented", "requires_credentials"}:
         return None
     try:
-        configuration = ConnectorConfig.model_validate(source.configuration).model_dump(
-            mode="json", exclude_none=True,
-        )
+        from modules.connectors.registry import configuration as provider_configuration
+
+        configuration = provider_configuration(source).model_dump(mode="json", exclude_none=True)
     except Exception:
+        return None
+    if any(name not in configuration for name in entry.scope_fields):
         return None
     values = {name: configuration[name] for name in entry.scope_fields if name in configuration}
     if len(values) != len(entry.scope_fields):
@@ -484,6 +518,7 @@ async def get_connector_configuration(
             source_generation=source.generation,
             connector_revision=row.desired_revision,
         )
+    world_credential = await session.get(ConnectorWorldCredential, source_id) if source.provider == "alpha_vantage" else None
     configuration = ConnectorConfig.model_validate(source.configuration).model_dump(
         mode="json", exclude_none=True
     )
@@ -494,6 +529,8 @@ async def get_connector_configuration(
             "github_releases": {"github_owner", "github_repository"},
             "github": {"github_owner", "github_repository", "include_issues", "include_pulls", "include_commits", "include_releases", "github_history_days"},
             "telegram": {"telegram_chat_ids"},
+            "alpha_vantage": {"market_symbols", "market_currency", "market_exchange_timezone"},
+            "open_meteo": {"weather_latitude", "weather_longitude", "weather_timezone", "weather_metrics"},
         }[source.provider]
         common = {"timezone", "schedule_interval_minutes", "timeout_seconds", "history_mode"}
         configuration = {
@@ -502,7 +539,10 @@ async def get_connector_configuration(
         }
         configuration.setdefault("history_mode", "pending_updates" if source.provider == "telegram" else "returned_snapshot")
         configuration.setdefault("timezone", DEFAULT_TIMEZONE)
-        configuration.setdefault("schedule_interval_minutes", default_schedule_interval_minutes(source.type))
+        configuration.setdefault(
+            "schedule_interval_minutes",
+            1440 if source.provider == "alpha_vantage" else default_schedule_interval_minutes(source.type),
+        )
         if "timeout_seconds" not in source.configuration:
             configuration["timeout_seconds"] = 30
     if "schedule_interval_minutes" not in configuration:
@@ -538,10 +578,17 @@ async def get_connector_configuration(
                  and row is not None
                  and native_credential.configuration_revision == row.desired_revision)
             if source.provider == "telegram"
+            else bool(world_credential is not None and row is not None
+                      and world_credential.source_generation == source.generation
+                      and world_credential.configuration_revision == row.desired_revision)
+            if source.provider == "alpha_vantage"
             else bool(provider_credential is not None and provider_credential.state == "ready"
                       and provider_credential.credential_id)
         ),
-        provider_credential_state=(native_credential.state if source.provider == "telegram" and native_credential is not None
+        provider_credential_state=("ready" if source.provider == "alpha_vantage" and world_credential is not None
+                                   and row is not None and world_credential.source_generation == source.generation
+                                   and world_credential.configuration_revision == row.desired_revision
+                                   else native_credential.state if source.provider == "telegram" and native_credential is not None
                                    else provider_credential.state if provider_credential is not None else None),
     )
 
@@ -567,6 +614,8 @@ def serialize_source_configuration(source: ConnectorSource, config: ConnectorCon
         "github_releases": {"github_owner", "github_repository"},
         "github": {"github_owner", "github_repository", "include_issues", "include_pulls", "include_commits", "include_releases", "github_history_days"},
         "telegram": {"telegram_chat_ids"},
+        "alpha_vantage": {"market_symbols", "market_currency", "market_exchange_timezone"},
+        "open_meteo": {"weather_latitude", "weather_longitude", "weather_timezone", "weather_metrics"},
     }[source.provider]
     common = {"timezone", "schedule_interval_minutes", "timeout_seconds", "history_mode"}
     supplied = config.model_fields_set
@@ -581,7 +630,10 @@ def serialize_source_configuration(source: ConnectorSource, config: ConnectorCon
     serialized = {key: value for key, value in values.items() if key in scope_fields | common}
     serialized["history_mode"] = expected_history
     serialized.setdefault("timezone", DEFAULT_TIMEZONE)
-    serialized.setdefault("schedule_interval_minutes", default_schedule_interval_minutes(source.type))
+    serialized.setdefault(
+        "schedule_interval_minutes",
+        1440 if source.provider == "alpha_vantage" else default_schedule_interval_minutes(source.type),
+    )
     serialized["timeout_seconds"] = timeout_seconds
     return serialized
 
@@ -604,6 +656,7 @@ class ProviderCollectionPage(BaseModel):
     records: tuple[IngestionRecord, ...] = Field(max_length=500)
     coverage: Literal["returned_snapshot", "pending_updates_only", "truncated"]
     next_eligible_at: datetime | None = None
+    credential_operation_id: UUID | None = None
 
     @field_validator("next_eligible_at")
     @classmethod

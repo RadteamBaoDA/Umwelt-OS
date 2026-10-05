@@ -1,6 +1,6 @@
 from typing import Annotated, Any, Awaitable, Literal, TypeVar
 from datetime import UTC, datetime, timedelta
-from uuid import UUID
+from uuid import UUID, uuid4
 import hashlib
 import asyncio
 import secrets
@@ -41,7 +41,7 @@ from modules.connectors.github import oauth as github_oauth
 from modules.connectors.github.adapter import collect_github_segment
 from modules.connectors.github.schemas import GitHubHintClaimProof, project_github_source_config
 from modules.connectors.github.sync import validate_github_segment
-from modules.connectors.models import GithubOAuthGrant
+from modules.connectors.models import GithubOAuthGrant, ConnectorProvisioning, ConnectorWorldCredential
 from modules.ingestion import public as ingestion
 from modules.ingestion.schemas import Receipt, ReceiveBatch
 from modules.ingestion.schemas import (
@@ -53,7 +53,7 @@ from modules.ingestion.schemas import (
 )
 from modules.sources import public as sources
 from modules.sources.schemas import ConnectorSource
-from modules.settings.public import module_dependency
+from modules.settings.public import module_dependency, module_is_enabled
 
 router = APIRouter(prefix="/api/v1/connectors/sources", tags=["connectors"])
 Session = Annotated[AsyncSession, Depends(get_session)]
@@ -98,6 +98,59 @@ class McpScheduledCollectionRequest(BaseModel):
     source_generation: int = Field(ge=1)
     connector_revision: int = Field(ge=1)
     connection_id: UUID
+
+
+class WorldProviderCredentialPut(BaseModel):
+    """Carry one write-only provider API key under source and connector revision fences."""
+    model_config = ConfigDict(extra="forbid")
+    expected_generation: int = Field(ge=1)
+    expected_connector_revision: int = Field(ge=1)
+    api_key: str = Field(min_length=1, max_length=256)
+
+
+@router.put(
+    "/{source_id}/world-data-credential",
+    dependencies=[Depends(module_dependency("connectors"))],
+)
+async def save_world_provider_credential(
+    source_id: UUID, payload: WorldProviderCredentialPut, request: Request,
+    session: Session, _owner: OwnerWrite,
+) -> dict[str, object]:
+    """Encrypt and replace the Alpha Vantage key without returning its value."""
+    source = await sources.lock_source(session, source_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="Source not found")
+    if source.provider != "alpha_vantage" or source.status != "active" or source.generation != payload.expected_generation:
+        raise HTTPException(status_code=409, detail="Alpha Vantage source generation changed")
+    provisioning_row = await session.get(ConnectorProvisioning, source_id, with_for_update=True)
+    if provisioning_row is None or provisioning_row.desired_revision != payload.expected_connector_revision:
+        raise HTTPException(status_code=409, detail="Connector configuration revision changed")
+    key = request.app.state.settings.connector_credential_encryption_key.get_secret_value()
+    if not key:
+        raise HTTPException(status_code=503, detail="Provider credential encryption is unavailable")
+    from modules.connectors.credentials import encrypt_credential_input, secret_fingerprint
+
+    operation_id = uuid4()
+    ciphertext = encrypt_credential_input(
+        key, source_id=source.id, slot="native:alpha_vantage", operation_id=operation_id,
+        request={"api_key": payload.api_key},
+        binding={"provider": "alpha_vantage", "source_generation": source.generation,
+                 "configuration_revision": provisioning_row.desired_revision,
+                 "fingerprint": secret_fingerprint(key, payload.api_key)},
+    )
+    credential = await session.get(ConnectorWorldCredential, source_id, with_for_update=True)
+    values = {
+        "provider": "alpha_vantage", "source_generation": source.generation,
+        "configuration_revision": provisioning_row.desired_revision,
+        "operation_id": operation_id, "encrypted_key": ciphertext,
+    }
+    if credential is None:
+        session.add(ConnectorWorldCredential(source_id=source.id, **values))
+    else:
+        for name, value in values.items():
+            setattr(credential, name, value)
+    await session.commit()
+    return {"source_id": source.id, "configured": True, "provider": "alpha_vantage"}
 
 
 @router.put("/{source_id}/mcp-collection", dependencies=[Depends(module_dependency("connectors"))])
@@ -421,6 +474,8 @@ async def fetch_native_provider(
     """
     collector_token = await _collector(session, source_id, authorization)
     source = await _source(session, source_id)
+    if not await module_is_enabled(session, "ingestion"):
+        raise HTTPException(status_code=404, detail="Provider collection is unavailable")
     segment_deadline = (
         asyncio.get_running_loop().time() + 60 if source.provider == "github" else None
     )
@@ -588,9 +643,93 @@ async def fetch_native_provider(
                     )
                     page = None
                 else:
-                    from modules.connectors.providers.social import collect_github_releases
+                    if source.provider in {"alpha_vantage", "open_meteo"}:
+                        from modules.connectors.providers.world_data import collect_world_data
+                        from modules.ingestion.models import CollectorCredential, SourceIngestionState
 
-                    page = await collect_github_releases(source, collected_at=collected_at)
+                        async def before_world_request(credential_operation_id: UUID | None) -> None:
+                            """Recheck bearer, source, revision, exact lease and provider credential before each GET."""
+                            factory = request.app.state.session_factory
+                            async with factory() as authorization_session:
+                                current_source = await sources.lock_source(authorization_session, source.id)
+                                source_projection = await sources.get_connector_source(
+                                    authorization_session, source.id,
+                                )
+                                fence_valid = bool(
+                                    current_source is not None and source_projection is not None
+                                    and current_source.status == "active"
+                                    and current_source.generation == payload.source_generation
+                                    and source_projection.status == current_source.status
+                                    and source_projection.generation == current_source.generation
+                                    and await provisioning.require_collection_fence(
+                                        authorization_session, source_projection,
+                                        payload.source_generation, payload.connector_revision, lock=True,
+                                    )
+                                )
+                                token_hash = hashlib.sha256(collector_token.encode()).hexdigest()
+                                bearer_valid = bool(await authorization_session.scalar(select(
+                                    CollectorCredential.token_hash
+                                ).where(
+                                    CollectorCredential.token_hash == token_hash,
+                                    CollectorCredential.source_id == source.id,
+                                    CollectorCredential.scope == "ingestion:write",
+                                    CollectorCredential.revoked_at.is_(None),
+                                ))) if fence_valid else False
+                                credential_valid = True
+                                if source.provider == "alpha_vantage" and fence_valid and bearer_valid:
+                                    credential = await authorization_session.get(
+                                        ConnectorWorldCredential, source.id, with_for_update=True,
+                                    )
+                                    credential_valid = bool(
+                                        credential is not None
+                                        and credential.provider == "alpha_vantage"
+                                        and credential.operation_id == credential_operation_id
+                                        and credential.source_generation == payload.source_generation
+                                        and credential.configuration_revision == payload.connector_revision
+                                    )
+                                state = await authorization_session.get(
+                                    SourceIngestionState, source.id, with_for_update=True,
+                                ) if fence_valid and bearer_valid and credential_valid else None
+                                now = datetime.now(UTC)
+                                lease_valid = bool(
+                                    state is not None
+                                    and state.collection_lease_token == lease.token
+                                    and state.lease_expires_at is not None
+                                    and state.lease_expires_at > now
+                                    and state.lease_run_id is None
+                                )
+                                if not (fence_valid and bearer_valid and lease_valid and credential_valid):
+                                    raise HTTPException(
+                                        status_code=409,
+                                        detail="World provider source or collection authority changed",
+                                    )
+
+                        page = await collect_world_data(
+                            source, collected_at=collected_at,
+                            settings=request.app.state.settings,
+                            session=session,
+                            redis=request.app.state.redis,
+                            before_request=before_world_request,
+                        )
+                    else:
+                        from modules.connectors.providers.social import collect_github_releases
+
+                        page = await collect_github_releases(source, collected_at=collected_at)
+                if source.provider == "alpha_vantage" and page is not None:
+                    current_source = await sources.lock_source(session, source.id)
+                    current_provisioning = await provisioning.require_collection_fence(
+                        session, source, payload.source_generation, payload.connector_revision, lock=True,
+                    )
+                    current_credential = await session.get(ConnectorWorldCredential, source.id, with_for_update=True)
+                    if (
+                        current_source is None or current_source.status != "active"
+                        or current_source.generation != payload.source_generation or not current_provisioning
+                        or current_credential is None
+                        or current_credential.operation_id != page.credential_operation_id
+                        or current_credential.source_generation != payload.source_generation
+                        or current_credential.configuration_revision != payload.connector_revision
+                    ):
+                        raise HTTPException(status_code=409, detail="World provider credential or source changed during collection")
                 eligible = None
                 if page is not None and page.next_eligible_at is not None:
                     eligible = await _extend_provider_cooldown(request, source.provider, page.next_eligible_at)

@@ -48,7 +48,7 @@ RENDERERS: tuple[RendererDescriptor, ...] = (
     RendererDescriptor("text_panel", 1, 4, 3, "available", ("documents",)),
     RendererDescriptor("table_panel", 1, 6, 4, "available", ("documents",)),
     RendererDescriptor("video_panel", 1, 6, 4, "available", ("video",)),
-    RendererDescriptor("finance_chart", 1, 6, 4, "planned", ("market_series",)),
+    RendererDescriptor("finance_chart", 1, 6, 4, "available", ("market_series", "world_observations")),
     RendererDescriptor("personal_context", 1, 4, 4, "planned", ("personal_context",)),
     RendererDescriptor("map", 1, 8, 6, "planned", ("map_layers",)),
     RendererDescriptor("highlights", 1, 4, 3, "available", ("highlights",)),
@@ -56,7 +56,7 @@ RENDERERS: tuple[RendererDescriptor, ...] = (
     RendererDescriptor("tasks", 1, 4, 4, "available", ("tasks",)),
     RendererDescriptor("goals", 1, 4, 4, "available", ("goals",)),
     RendererDescriptor("daily_brief", 1, 6, 4, "available", ("daily_brief",)),
-    RendererDescriptor("weather", 1, 4, 3, "planned", ("weather",)),
+    RendererDescriptor("weather", 1, 4, 3, "available", ("weather", "world_observations")),
     RendererDescriptor("research", 1, 4, 4, "planned", ("research",)),
     # Reads the GitHub project summary and Timeline slice of one configured github source.
     RendererDescriptor("github_project", 1, 6, 4, "available", ("github_project",)),
@@ -118,12 +118,17 @@ def validate_renderer_configuration(
     renderer_descriptor(renderer_id)
     allowed_scope = {
         "telegram_feed": {"channel_ids"},
-        "finance_chart": {"symbols"},
+        "finance_chart": {"symbols", "metrics", "lookback_days"},
+        "weather": {"metrics", "lookback_days"},
         "map": {"regions", "map_layer_ids"},
     }.get(renderer_id, {"source_item_ids"})
     for field_name, values in configuration.scope.model_dump().items():
         if field_name not in allowed_scope and values:
             raise ValueError(f"{field_name} is not valid for renderer {renderer_id}")
+    if renderer_id == "finance_chart" and set(configuration.scope.metrics) - {"open", "high", "low", "close", "volume"}:
+        raise ValueError("Finance chart metric is outside the provider-declared daily OHLCV set")
+    if renderer_id == "weather" and set(configuration.scope.metrics) - {"temperature_2m", "relative_humidity_2m", "precipitation", "wind_speed_10m"}:
+        raise ValueError("Weather metric is outside the Open-Meteo allowlist")
     return configuration
 
 

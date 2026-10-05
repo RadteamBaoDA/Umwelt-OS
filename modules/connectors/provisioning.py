@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.realtime import ReplayDraft, commit_with_replay, make_source_change
-from modules.connectors.models import ConnectorManagedCredential, ConnectorNativeCredential, ConnectorProvisioning
+from modules.connectors.models import ConnectorManagedCredential, ConnectorNativeCredential, ConnectorProvisioning, ConnectorWorldCredential
 from modules.connectors.public import NativeCredentialSnapshot
 from modules.sources import public as sources
 from modules.sources.schemas import ConnectorSource, SourceFence
@@ -518,6 +518,9 @@ async def save_desired(
     prior_enabled = row.desired_enabled or row.state == "active"
     row.source_generation = source_generation
     row.desired_revision += 1
+    world_credential = await session.get(ConnectorWorldCredential, source_id, with_for_update=True)
+    if world_credential is not None:
+        await session.delete(world_credential)
     row.desired_configuration = copy.deepcopy(configuration)
     row.desired_enabled = False
     row.state = "saved_not_active"

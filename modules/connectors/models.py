@@ -172,6 +172,23 @@ class ConnectorNativeCredential(Base):
     )
 
 
+class ConnectorWorldCredential(Base):
+    """Store an encrypted source-bound API key for an explicitly configured world provider."""
+    __tablename__ = "connector_world_credentials"
+    __table_args__ = (
+        CheckConstraint("provider = 'alpha_vantage'", name="ck_connector_world_credentials_provider"),
+        CheckConstraint("source_generation > 0 AND configuration_revision > 0", name="ck_connector_world_credentials_fences"),
+    )
+
+    source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("sources.id", ondelete="CASCADE"), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    configuration_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    operation_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    encrypted_key: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
 class GithubOAuthAttempt(Base):
     """Persist a single-use browser-bound GitHub PKCE attempt under source fences."""
     __tablename__ = "github_oauth_attempts"

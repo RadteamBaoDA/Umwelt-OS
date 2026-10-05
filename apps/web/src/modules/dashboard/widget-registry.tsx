@@ -17,6 +17,7 @@ import { TelegramFeed } from './gadgets/telegram-feed';
 import { TextPanel } from './gadgets/text-panel';
 import { TimelineGadget } from './gadgets/timeline-gadget';
 import { VideoPanel } from './gadgets/video-panel';
+import { WeatherPanel } from './gadgets/weather-panel';
 import { WatchlistGadget } from './gadgets/watchlist-gadget';
 
 /** Standard props supplied to every resolved gadget renderer. */
@@ -46,6 +47,7 @@ const GADGET_REGISTRY: Record<string, React.ComponentType<GadgetRendererProps>> 
   finance_chart: (props) => <FinanceChart instance={props.instance} />,
   metrics_chart: (props) => <MetricsChart instance={props.instance} />,
   github_project: (props) => <GithubProjectGadget instance={props.instance} />,
+  weather: (props) => <WeatherPanel instance={props.instance} />,
 };
 
 /**

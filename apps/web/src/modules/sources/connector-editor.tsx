@@ -31,6 +31,7 @@ import {
   getMonotonicConnectorConfiguration,
   selectMonotonicConnectorConfiguration,
   removeProviderCredential,
+  saveWorldProviderCredential,
   saveConnectorConfiguration,
   Source,
   sourceKeys,
@@ -47,9 +48,9 @@ import {
 } from './api';
 
 const intervals = [15, 30, 60, 360, 1440] as const;
-const sourceTypes = { rss: 'rss', web: 'web', rest: 'api', mcp: 'mcp', youtube: 'rss', arxiv: 'rss', huggingface: 'api', github: 'api', github_releases: 'api', telegram: 'api' } as const;
+const sourceTypes = { rss: 'rss', web: 'web', rest: 'api', mcp: 'mcp', youtube: 'rss', arxiv: 'rss', huggingface: 'api', github: 'api', github_releases: 'api', telegram: 'api', alpha_vantage: 'api', open_meteo: 'api' } as const;
 type Provider = keyof typeof sourceTypes;
-const nativeProviders = new Set<Provider>(['youtube', 'arxiv', 'huggingface', 'github', 'github_releases', 'telegram']);
+const nativeProviders = new Set<Provider>(['youtube', 'arxiv', 'huggingface', 'github', 'github_releases', 'telegram', 'alpha_vantage', 'open_meteo']);
 
 /** Checks whether a provider identifier belongs to the supported provider set. */
 function isProvider(value: string): value is Provider {
@@ -62,7 +63,7 @@ function providerKey(providerId: string): string {
     rss: 'providerRss', web: 'providerWeb', rest: 'providerRest', mcp: 'providerMcp', github: 'providerGithub',
     google_mail: 'providerGoogleMail', google_calendar: 'providerGoogleCalendar', google_drive: 'providerGoogleDrive',
     youtube: 'providerYoutube', arxiv: 'providerArxiv', huggingface: 'providerHuggingface', github_releases: 'providerGithubReleases',
-    telegram: 'providerTelegram', google_news: 'providerGoogleNews', reddit: 'providerReddit', hacker_news: 'providerHackerNews',
+    telegram: 'providerTelegram', alpha_vantage: 'providerAlphaVantage', open_meteo: 'providerOpenMeteo', google_news: 'providerGoogleNews', reddit: 'providerReddit', hacker_news: 'providerHackerNews',
     mastodon: 'providerMastodon', bluesky: 'providerBluesky', x: 'providerX', vietnamese_press: 'providerVietnamesePress',
     gdelt_government: 'providerGdelt', finance: 'providerFinance', weather_disaster_climate: 'providerWeather', cyber_cve: 'providerCyber',
     map_osint: 'providerMapOsint', browser: 'providerBrowser', notes: 'providerNotes', health: 'providerHealth',
@@ -76,8 +77,9 @@ function defaultConfiguration(provider: Provider): ConnectorConfig {
   if (nativeProviders.has(provider)) return {
     timeout_seconds: 30,
     timezone: 'Asia/Ho_Chi_Minh',
-    schedule_interval_minutes: provider === 'youtube' || provider === 'arxiv' ? 15 : 30,
+    schedule_interval_minutes: provider === 'alpha_vantage' ? 1440 : provider === 'youtube' || provider === 'arxiv' ? 15 : 30,
     history_mode: provider === 'telegram' ? 'pending_updates' : 'returned_snapshot',
+    ...(provider === 'open_meteo' ? { weather_metrics: ['temperature_2m'], weather_timezone: 'UTC', weather_latitude: 0, weather_longitude: 0 } : {}),
     ...(provider === 'github' ? { include_issues: true, include_pulls: true, include_commits: true, include_releases: true, github_history_days: 90 } : {}),
   };
   return {
@@ -562,6 +564,7 @@ export function ConnectorEditor({
       revisionRef.current = acknowledged.expected_revision;
       setActivationState(result.state);
       setActivationError(result.error_code);
+      setProviderCredentialConfigured(acknowledged.provider_credential_configured);
       if (draftVersion.current === submittedVersion) {
         setDirty(false);
         dirtyRef.current = Boolean(secret);
@@ -607,13 +610,21 @@ export function ConnectorEditor({
       }
       const id = actionSourceId;
       if (!id || !requestIsCurrent(token)) return;
-      const replacingSecret = activationDraft.authMethod === 'telegram_bot_token' ? activationDraft.telegramSecretAction === 'replace' : Boolean(activationDraft.secret);
+      const replacingWorldKey = provider === 'alpha_vantage' && Boolean(activationDraft.secret);
+      if (provider === 'alpha_vantage' && !replacingWorldKey && !providerCredentialConfigured) {
+        setError('providerSecretRequired');
+        return;
+      }
+      if (replacingWorldKey) {
+        await saveWorldProviderCredential(id, sourceGenerationRef.current, nextRevision, activationDraft.secret, csrfToken, token.controller.signal);
+      }
+      const replacingSecret = provider === 'alpha_vantage' ? false : activationDraft.authMethod === 'telegram_bot_token' ? activationDraft.telegramSecretAction === 'replace' : Boolean(activationDraft.secret);
       const result = await activateConnector(id, nextRevision, replacingSecret ? 'replace' : 'keep', replacingSecret ? activationDraft.secret : undefined, csrfToken, token.controller.signal);
       if (!requestIsCurrent(token)) return;
       setActivationState(result.state);
       setActivationError(result.error_code);
-      setProviderCredentialConfigured(activationDraft.authMethod === 'http_header' || activationDraft.authMethod === 'telegram_bot_token' || providerCredentialConfigured);
-      const replacementAccepted = replacingSecret;
+      setProviderCredentialConfigured(replacingWorldKey || activationDraft.authMethod === 'http_header' || activationDraft.authMethod === 'telegram_bot_token' || providerCredentialConfigured);
+      const replacementAccepted = replacingSecret || replacingWorldKey;
       if (replacementAccepted) { setSecret(''); setTelegramSecretAction('keep'); }
       if (draftVersion.current === token.draftVersion) {
         setDirty(false);
@@ -960,9 +971,10 @@ export function ConnectorEditor({
               <div className="field"><Label htmlFor="source-telegram-secret-action">{t('telegramCredentialAction')}</Label><Select value={telegramSecretAction} onValueChange={(value) => { setTelegramSecretAction(value as 'keep' | 'replace'); setSecret(''); dirtyRef.current = dirty; draftVersion.current += 1; setValidation(null); setNotice(''); }}><SelectTrigger id="source-telegram-secret-action"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="keep">{t('keepCredential')}</SelectItem><SelectItem value="replace">{t('replaceCredential')}</SelectItem></SelectContent></Select></div>
               {telegramSecretAction === 'replace' && <div className="field"><Label htmlFor="source-telegram-token">{t('telegramBotToken')}</Label><Input id="source-telegram-token" type="password" autoComplete="new-password" maxLength={512} required value={secret} onChange={(event) => { setSecret(event.target.value); dirtyRef.current = true; setDirty(true); draftVersion.current += 1; setValidation(null); setNotice(''); }} /><small className="muted">{t('secretHelp')}</small></div>}
             </>}
+            {provider === 'alpha_vantage' && <div className="field"><Label htmlFor="source-alpha-key">{t('alphaVantageKey')}</Label><Input id="source-alpha-key" type="password" autoComplete="new-password" maxLength={256} required={!providerCredentialConfigured} value={secret} onChange={(event) => { setSecret(event.target.value); dirtyRef.current = true; setDirty(true); draftVersion.current += 1; setValidation(null); setNotice(''); }} /><small className="muted">{providerCredentialConfigured ? t('credentialSavedWriteOnly') : t('secretHelp')}</small></div>}
           </>}
           <div className="field"><Label htmlFor="source-timezone">{t('timezone')}</Label><Input id="source-timezone" value={configuration.timezone} onChange={(event) => changeConfiguration('timezone', event.target.value)} /></div>
-          <div className="field"><Label htmlFor="source-schedule">{t('schedule')}</Label><Select value={String(configuration.schedule_interval_minutes)} onValueChange={(value) => changeConfiguration('schedule_interval_minutes', Number(value) as ConnectorConfig['schedule_interval_minutes'])}><SelectTrigger id="source-schedule"><SelectValue /></SelectTrigger><SelectContent>{intervals.map((minutes) => <SelectItem key={minutes} value={String(minutes)}>{t('everyMinutes', { minutes })}</SelectItem>)}</SelectContent></Select></div>
+          <div className="field"><Label htmlFor="source-schedule">{t('schedule')}</Label><Select value={String(configuration.schedule_interval_minutes)} onValueChange={(value) => changeConfiguration('schedule_interval_minutes', Number(value) as ConnectorConfig['schedule_interval_minutes'])}><SelectTrigger id="source-schedule"><SelectValue /></SelectTrigger><SelectContent>{(provider === 'alpha_vantage' ? [1440] : intervals).map((minutes) => <SelectItem key={minutes} value={String(minutes)}>{t('everyMinutes', { minutes })}</SelectItem>)}</SelectContent></Select></div>
           {provider === 'rest' && <>
             <div className="field"><Label htmlFor="source-auth-method">{t('auth')}</Label><Select value={authMethod} onValueChange={(value) => { setAuthMethod(value as typeof authMethod); markDraftChanged(); setValidation(null); }}><SelectTrigger id="source-auth-method"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">{t('noAuthentication')}</SelectItem><SelectItem value="http_header">{t('headerAuthentication')}</SelectItem></SelectContent></Select></div>
             {authMethod === 'http_header' && <>
@@ -973,6 +985,7 @@ export function ConnectorEditor({
         </div>
         </fieldset>
         {historyDescription && <div className="source-capability"><strong>{t('history')}</strong><p>{historyDescription}</p>{nativeProviders.has(provider) && <p>{t('providerHistoryCaveat')}</p>}</div>}
+        {provider === 'open_meteo' && <div className="source-capability"><strong>{t('providerTerms')}</strong><p>{t('openMeteoTerms')}</p></div>}
         {provider === 'github' && <section className="source-capability" aria-live="polite">
           <strong>{githubStatusQuery.data?.state === 'ready' ? t('githubConnected') : t('githubNotConnected')}</strong>
           {githubStatusQuery.data?.expires_at && <p>{t('githubExpires')}: {formatDate(githubStatusQuery.data.expires_at, display.locale, display.timezone)}</p>}

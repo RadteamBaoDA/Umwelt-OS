@@ -631,9 +631,13 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
     keeps its existing lease lifecycle. Provider validation uses the detached
     connector projection obtained under the source lock. Telegram selection
     time must agree across its persisted record, raw Bot API clock, and selected
-    observation column before current-version ordering is authorized. Source
-    ownership is locked before run, stage, and progress rows, and a newer token
-    or run is never modified.
+    observation column before current-version ordering is authorized. Structured
+    observations select by accepted time and ingestion identity; their winning
+    immutable document version is projected through Documents before commit.
+    If Observations is lifecycle-disabled, world normalization stays durably
+    pending instead of consuming its accepted canonical records.
+    Source ownership is locked before run, stage, and progress rows, and a newer
+    token or run is never modified.
     """
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     identifier = UUID(event_id)
@@ -703,6 +707,26 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
                     _update_native_run_lease(state, run.id, terminal=True)
                 await session.commit()
                 return
+
+            if source_projection.provider in {"alpha_vantage", "open_meteo"}:
+                from modules.settings.public import module_is_enabled
+
+                if not await module_is_enabled(session, "knowledge.observations"):
+                    # The connector already accepted canonical provider records; retain their
+                    # normalization progress until the owning observation projection is enabled.
+                    deferred_until = datetime.now(UTC) + timedelta(seconds=60)
+                    stage.status = "pending"
+                    stage.next_attempt_at = deferred_until
+                    stage.lease_expires_at = None
+                    run.status = "queued"
+                    run.error_code = None
+                    event.status = "pending"
+                    event.next_attempt_at = deferred_until
+                    if native_source:
+                        state = await session.get(SourceIngestionState, run.source_id, with_for_update=True)
+                        _update_native_run_lease(state, run.id, terminal=False)
+                    await _commit_ingestion_change(session, run, stage)
+                    return
 
             stage.status = "running"
             stage.lease_expires_at = datetime.now(UTC) + timedelta(seconds=STAGE_TIMEOUT_SECONDS)
@@ -811,6 +835,18 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
                             )
                         elif native_telegram_envelope is not None:
                             raise ValueError("Telegram delivery proof is not valid for this provider")
+                    elif source_projection.provider in {"alpha_vantage", "open_meteo"}:
+                        from modules.knowledge.documents.schemas import ProviderRecordMetadata, WorldDataMeasurement
+
+                        measurement = WorldDataMeasurement.model_validate(raw_metadata.get("world_data"))
+                        if measurement.provider != source_projection.provider:
+                            raise ValueError("Structured measurement does not match configured source provider")
+                        provider_record = ProviderRecordMetadata(
+                            provider=measurement.provider, identity=record.provider_id,
+                            provider_version=record.version, timestamp_basis="collection",
+                            coverage="returned_snapshot", content_truncated=False,
+                            world_data=measurement,
+                        )
                     elif source_projection.provider in {"youtube", "arxiv", "huggingface", "github_releases", "github", "telegram"}:
                         raise ValueError("Native provider record metadata is missing")
                     title_value = raw_metadata.get("title")
@@ -848,6 +884,9 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
                     scope = await connectors.get_current_provider_scope(
                         session, observation.source_id, generation,
                     )
+                    accepted_at = observation.received_at
+                    if source_projection.provider in {"alpha_vantage", "open_meteo"} and (scope is None or accepted_at is None):
+                        raise ValueError("Accepted world observation is missing its scope or acceptance clock")
                     provenance = {
                         "title": title, "canonical_url": canonical_url,
                         "published_at": published_at.isoformat() if published_at else None,
@@ -879,6 +918,50 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
                             telegram_order=telegram_order,
                         ),
                     )
+                    observation_write = None
+                    if (
+                        source_projection.provider in {"alpha_vantage", "open_meteo"}
+                        and result.disposition != "tombstoned"
+                        and result.document_id is not None and result.document_version_id is not None
+                        and provider_record is not None and provider_record.world_data is not None
+                    ):
+                        from modules.knowledge.observations import public as observations
+                        from modules.knowledge.observations.schemas import WorldMeasurement
+
+                        if scope is None or accepted_at is None:
+                            raise ValueError("Accepted world observation is missing its scope or acceptance clock")
+                        observation_write = await observations.upsert_from_ingestion(
+                            session, source_id=observation.source_id,
+                            source_generation=generation,
+                            ingestion_observation_id=observation.id,
+                            document_id=result.document_id,
+                            document_version_id=result.document_version_id,
+                            external_id=record.provider_id,
+                            provider_version=record.version,
+                            observed_at=record.observed_at,
+                            collected_at=record.collected_at or observation.collected_at or datetime.now(UTC),
+                            accepted_at=accepted_at,
+                            provider_scope_discriminator=scope.discriminator,
+                            measurement=WorldMeasurement.model_validate(
+                                provider_record.world_data.model_dump(mode="python")
+                            ),
+                        )
+                        if observation_write is not None and observation_write.selected_current:
+                            selected_document = await documents.select_current_world_document_version(
+                                session, document_id=result.document_id,
+                                document_version_id=result.document_version_id,
+                                expected_source_generation=generation,
+                                provider_scope_discriminator=scope.discriminator,
+                            )
+                            if not selected_document:
+                                raise RuntimeError("Accepted current observation has no selectable document version")
+                        if observation_write is not None:
+                            result = result.model_copy(update={
+                                "selected_current": observation_write.selected_current,
+                            })
+                        progress.selected_current = (
+                            observation_write.selected_current if observation_write is not None else False
+                        )
                     progress.disposition = {
                         "normalized": "normalized", "duplicate": "duplicate", "tombstoned": "skipped",
                     }[result.disposition]
@@ -903,7 +986,10 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
                             },
                         )
                         await ingestion_api.publish_event(session, ready)
-                    if result.selected_current and result.created_version:
+                    if source_projection.provider in {"alpha_vantage", "open_meteo"}:
+                        # Structured series can change even when the normalized document version is reused.
+                        knowledge_changes.append(make_knowledge_change(observation.source_id))
+                    elif result.selected_current and result.created_version:
                         knowledge_changes.append(make_knowledge_change(
                             observation.source_id, result.document_id, result.version_number
                         ))

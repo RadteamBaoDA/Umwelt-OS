@@ -1345,6 +1345,7 @@ async def _read_stages(session: AsyncSession, stages: list[IngestionStage]) -> l
             ObservationNormalization.stage_id,
             func.sum(case((ObservationNormalization.disposition == "normalized", 1), else_=0)),
             func.sum(case((ObservationNormalization.disposition == "duplicate", 1), else_=0)),
+            func.sum(case((ObservationNormalization.selected_current.is_(True), 1), else_=0)),
             func.sum(case((ObservationNormalization.disposition == "skipped", 1), else_=0)),
             func.sum(case((ObservationNormalization.disposition == "failed", 1), else_=0)),
             func.sum(case((ObservationNormalization.disposition == "pending", 1), else_=0)),
@@ -1362,9 +1363,10 @@ async def _read_stages(session: AsyncSession, stages: list[IngestionStage]) -> l
             error_code=stage.error_code, result_count=stage.result_count, updated_at=stage.updated_at,
             normalized_count=by_stage.get(stage.id, (0, 0, 0, 0, 0))[0],
             duplicate_count=by_stage.get(stage.id, (0, 0, 0, 0, 0))[1],
-            skipped_count=by_stage.get(stage.id, (0, 0, 0, 0, 0))[2],
-            failed_count=by_stage.get(stage.id, (0, 0, 0, 0, 0))[3],
-            pending_count=by_stage.get(stage.id, (0, 0, 0, 0, 0))[4],
+            selected_current_count=by_stage.get(stage.id, (0, 0, 0, 0, 0, 0))[2],
+            skipped_count=by_stage.get(stage.id, (0, 0, 0, 0, 0, 0))[3],
+            failed_count=by_stage.get(stage.id, (0, 0, 0, 0, 0, 0))[4],
+            pending_count=by_stage.get(stage.id, (0, 0, 0, 0, 0, 0))[5],
         )
         for stage in stages
     ]

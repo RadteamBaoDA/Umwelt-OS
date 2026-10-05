@@ -8,7 +8,49 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, 
 
 MAX_CONTENT_BYTES = 1_048_576
 MAX_METADATA_BYTES = 65_536
-PROVIDER_IDS = ("youtube", "arxiv", "huggingface", "github_releases", "github", "telegram")
+PROVIDER_IDS = ("youtube", "arxiv", "huggingface", "github_releases", "github", "telegram", "alpha_vantage", "open_meteo")
+
+
+class WorldDataMeasurement(BaseModel):
+    """Preserve one provider-declared numeric value with its original measurement semantics."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    provider: Literal["alpha_vantage", "open_meteo"]
+    metric: str = Field(min_length=1, max_length=80)
+    value: float | None
+    unit: str = Field(min_length=1, max_length=64)
+    currency: str | None = Field(default=None, min_length=3, max_length=3, pattern=r"^[A-Z]{3}$")
+    timezone: str | None = Field(default=None, max_length=64)
+    symbol: str | None = Field(default=None, max_length=40)
+    region: str | None = Field(default=None, max_length=80)
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    published_at: datetime | None = None
+    quality: Literal["provider_reported", "forecast", "missing"]
+    missing_reason: str | None = Field(default=None, max_length=64)
+    provider_fields: dict[str, str | float | int | None] = Field(default_factory=dict, max_length=12)
+
+    @field_validator("value")
+    @classmethod
+    def finite_measurement(cls, value: float | None) -> float | None:
+        """Reject NaN and infinity before values reach PostgreSQL or a renderer."""
+        import math
+
+        if value is not None and not math.isfinite(value):
+            raise ValueError("Measurement value must be finite")
+        return value
+
+    @model_validator(mode="after")
+    def validate_provider_fields(self) -> "WorldDataMeasurement":
+        """Keep retained source-row evidence inside each provider's declared field set."""
+        allowed = {
+            "alpha_vantage": {"date", "symbol", "open", "high", "low", "close", "volume"},
+            "open_meteo": {"time", "timezone", "utc_offset_seconds", "latitude", "longitude"},
+        }[self.provider]
+        if self.provider_fields.keys() - allowed:
+            raise ValueError("Structured provider row contains undeclared fields")
+        if (self.value is None) != (self.quality == "missing") or (self.value is None) != (self.missing_reason is not None):
+            raise ValueError("Missing values must carry an explicit missing reason and quality")
+        return self
 
 
 class ProviderTelegramMedia(BaseModel):
@@ -52,7 +94,7 @@ class ProviderTelegramMetadata(BaseModel):
 class ProviderRecordMetadata(BaseModel):
     """Retain typed, bounded provider fields separately from generic metadata."""
     model_config = ConfigDict(extra="forbid", frozen=True)
-    provider: Literal["youtube", "arxiv", "huggingface", "github_releases", "github", "telegram"]
+    provider: Literal["youtube", "arxiv", "huggingface", "github_releases", "github", "telegram", "alpha_vantage", "open_meteo"]
     identity: str = Field(min_length=1, max_length=512)
     provider_version: str | None = Field(default=None, max_length=255)
     timestamp_basis: Literal["provider_modified", "provider_published", "collection"]
@@ -62,6 +104,7 @@ class ProviderRecordMetadata(BaseModel):
     license_label: str | None = Field(default=None, max_length=255)
     source_fields: dict[str, Any] = Field(default_factory=dict)
     telegram: ProviderTelegramMetadata | None = None
+    world_data: WorldDataMeasurement | None = None
 
     @field_validator("provider_modified_at")
     @classmethod
@@ -78,6 +121,11 @@ class ProviderRecordMetadata(BaseModel):
         """Enforce provider-specific allowlists and require Telegram's typed identity block."""
         if (self.provider == "telegram") != (self.telegram is not None):
             raise ValueError("Telegram detail must match provider")
+        if self.provider in {"alpha_vantage", "open_meteo"}:
+            if self.world_data is None or self.world_data.provider != self.provider:
+                raise ValueError("World-data measurement must match provider")
+        elif self.world_data is not None:
+            raise ValueError("World-data metadata is reserved for structured providers")
         allowed = {
             "youtube": {"author", "summary", "title", "tags", "published_at", "provider_updated_at"},
             "arxiv": {"author", "authors", "categories", "tags", "summary", "title", "published_at", "provider_updated_at"},
@@ -85,6 +133,7 @@ class ProviderRecordMetadata(BaseModel):
             "github_releases": {"node_id", "name", "body", "html_url", "tag_name", "draft", "prerelease", "author", "created_at", "published_at"},
             "github": {"record_type", "node_id", "html_url"},
             "telegram": set(),
+            "alpha_vantage": set(), "open_meteo": set(),
         }[self.provider]
         if self.source_fields.keys() - allowed:
             raise ValueError("Provider snapshot contains unsupported source fields")

@@ -47,7 +47,7 @@ export function NewsFeed({ instance }: NewsFeedProps) {
   const keywordQuery = (filters.keywords ?? []).map((word) => word.trim()).filter(Boolean).join(' ');
   const queryIsTooLong = keywordQuery.length > 200;
   const query = keywordQuery && !queryIsTooLong ? keywordQuery : undefined;
-  const hasUnsupportedScope = Object.values(scope).some((values) => values?.length);
+  const hasUnsupportedScope = Object.values(scope).some((values) => Array.isArray(values) && values.length > 0);
   const hasUnsupportedExclusions = Boolean(filters.exclude_keywords?.length);
   const hasUnsupportedHighlights = highlightRules.length > 0;
   const unsupportedNotices = [

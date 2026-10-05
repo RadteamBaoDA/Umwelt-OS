@@ -68,7 +68,7 @@ export function MetricsChart({
   const targetSymbol =
     definition.scope?.symbols?.[0] ||
     definition.filters?.keywords?.[0] ||
-    'INDEX COMPOSITE';
+    'Market data';
 
   const [timeRange, setTimeRange] = useState<ChartTimeRange>('7d');
   const [chartKind, setChartKind] = useState<ChartKind>('area');
@@ -86,14 +86,14 @@ export function MetricsChart({
         latestValue: 0,
         startValue: 0,
         changeAmount: 0,
-        changePercent: 0,
+        changePercent: null,
         isPositive: true,
       };
     }
     const first = data[0].value;
     const last = data[data.length - 1].value;
     const diff = last - first;
-    const pct = first !== 0 ? (diff / first) * 100 : 0;
+    const pct = first !== 0 ? (diff / first) * 100 : null;
     return {
       latestValue: last,
       startValue: first,
@@ -145,7 +145,7 @@ export function MetricsChart({
               )}
               <span>
                 {isPositive ? '+' : ''}
-                {changePercent.toFixed(2)}%
+                {changePercent === null ? '—' : `${changePercent.toFixed(2)}%`}
               </span>
               <span className="text-[10px] text-muted-foreground font-normal">
                 ({isPositive ? '+' : ''}

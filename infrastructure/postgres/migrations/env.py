@@ -35,7 +35,9 @@ from modules.connectors.models import (
     GithubWebhookDelivery,
     GithubWebhookOutbox,
     GithubSourceHint,
+    ConnectorWorldCredential,
 )
+from modules.knowledge.observations.models import Observation
 from modules.sources.models import Source, SourcePurgeOperation
 from modules.search.models import IndexGeneration, SearchIndexItem
 from modules.knowledge.entities.models import (

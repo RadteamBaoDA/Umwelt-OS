@@ -83,6 +83,8 @@ export function GadgetSettings({
   const [keywords, setKeywords] = useState<string>('');
   const [excludeKeywords, setExcludeKeywords] = useState<string>('');
   const [symbols, setSymbols] = useState<string>('');
+  const [metrics, setMetrics] = useState<string>('');
+  const [lookbackDays, setLookbackDays] = useState<number>(90);
   const [highlightRules, setHighlightRules] = useState<HighlightRule[]>([]);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [sourceId, setSourceId] = useState<string | null>(null);
@@ -103,6 +105,8 @@ export function GadgetSettings({
       setKeywords((def.filters?.keywords ?? []).join(', '));
       setExcludeKeywords((def.filters?.exclude_keywords ?? []).join(', '));
       setSymbols((def.scope?.symbols ?? []).join(', '));
+      setMetrics((def.scope?.metrics ?? []).join(', '));
+      setLookbackDays(def.scope?.lookback_days ?? 90);
       setSourceId(def.source_ids?.[0] ?? null);
       setSelectedSourceIds([...(def.source_ids ?? [])].slice(0, 32));
       setChannelIds((def.scope?.channel_ids ?? []).join(', '));
@@ -130,6 +134,7 @@ export function GadgetSettings({
         .split(',')
         .map((s) => s.trim().toUpperCase())
         .filter(Boolean);
+      const parsedMetrics = metrics.split(',').map((metric) => metric.trim()).filter(Boolean);
 
       // 1. Update instance title if changed
       if (title.trim() !== (instance.title || '')) {
@@ -160,10 +165,16 @@ export function GadgetSettings({
           },
           scope: {
             ...instance.definition.scope,
-            symbols: parsedSymbols.length > 0 ? parsedSymbols : undefined,
-            ...(instance.definition.renderer === 'telegram_feed'
+            ...(instance.definition.renderer === 'finance_chart' ? {
+              symbols: parsedSymbols.length > 0 ? parsedSymbols : [],
+              metrics: parsedMetrics.length > 0 ? parsedMetrics : ['close'],
+              lookback_days: lookbackDays,
+            } : instance.definition.renderer === 'weather' ? {
+              metrics: parsedMetrics,
+              lookback_days: lookbackDays,
+            } : instance.definition.renderer === 'telegram_feed'
               ? { channel_ids: channelIds.split(',').map((item) => item.trim()).filter(Boolean) }
-              : {}),
+              : parsedSymbols.length > 0 ? { symbols: parsedSymbols } : {}),
           },
           highlight_rules: highlightRules,
         },
@@ -276,34 +287,41 @@ export function GadgetSettings({
 
           {/* Limit & Scope row */}
           <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="gadget-limit" className="text-xs font-semibold">
-                Max items limit
-              </Label>
-              <Input
-                id="gadget-limit"
-                type="number"
-                min={1}
-                max={100}
-                value={limit}
-                onChange={(e) => setLimit(parseInt(e.target.value, 10) || 20)}
-                className="h-8 text-xs font-mono bg-muted/20"
-              />
-            </div>
+            {instance.definition.renderer === 'finance_chart' && <>
+              <div className="space-y-1.5">
+                <Label htmlFor="gadget-limit" className="text-xs font-semibold">
+                  Max items limit
+                </Label>
+                <Input
+                  id="gadget-limit"
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={limit}
+                  onChange={(e) => setLimit(parseInt(e.target.value, 10) || 20)}
+                  className="h-8 text-xs font-mono bg-muted/20"
+                />
+              </div>
 
-            <div className="space-y-1.5">
-              <Label htmlFor="gadget-symbols" className="text-xs font-semibold">
-                Tracked symbols (comma-separated)
-              </Label>
-              <Input
-                id="gadget-symbols"
-                value={symbols}
-                onChange={(e) => setSymbols(e.target.value)}
-                placeholder="NVDA, TSLA, BTC"
-                className="h-8 text-xs font-mono uppercase bg-muted/20"
-              />
-            </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="gadget-symbols" className="text-xs font-semibold">
+                  Tracked symbols (comma-separated)
+                </Label>
+                <Input
+                  id="gadget-symbols"
+                  value={symbols}
+                  onChange={(e) => setSymbols(e.target.value)}
+                  placeholder="NVDA, TSLA, BTC"
+                  className="h-8 text-xs font-mono uppercase bg-muted/20"
+                />
+              </div>
+            </>}
           </div>
+
+          {(instance.definition.renderer === 'finance_chart' || instance.definition.renderer === 'weather') && <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5"><Label htmlFor="gadget-metrics" className="text-xs font-semibold">{t('observationMetrics')}</Label><Input id="gadget-metrics" value={metrics} onChange={(event) => setMetrics(event.target.value)} placeholder={instance.definition.renderer === 'finance_chart' ? 'close, volume' : 'temperature_2m, precipitation'} className="h-8 text-xs font-mono bg-muted/20" /></div>
+            <div className="space-y-1.5"><Label htmlFor="gadget-lookback" className="text-xs font-semibold">{t('observationLookback')}</Label><Input id="gadget-lookback" type="number" min={1} max={366} value={lookbackDays} onChange={(event) => setLookbackDays(Number(event.target.value))} className="h-8 text-xs font-mono bg-muted/20" /></div>
+          </div>}
 
           {/* Keywords filter */}
           <div className="space-y-1.5">

@@ -7,6 +7,8 @@ from typing import Any
 from modules.dashboard.descriptor import descriptor as dashboard
 from modules.goals.descriptor import descriptor as goals
 from modules.knowledge.documents.descriptor import descriptor as documents
+from modules.knowledge.observations.descriptor import descriptor as observations
+from modules.ingestion.descriptor import descriptor as ingestion
 from modules.knowledge.entities.descriptor import descriptor as entities
 from modules.knowledge.relationships.descriptor import descriptor as relationships
 from modules.knowledge.temporal.descriptor import descriptor as temporal
@@ -23,13 +25,14 @@ from modules.tools.descriptor import descriptor as tools
 from modules.agents.descriptor import descriptor as agents
 from modules.automations.descriptor import descriptor as automations
 from modules.observability.descriptor import descriptor as observability
-from modules.ingestion.descriptor import descriptor as ingestion
 from modules.connectors.descriptor import descriptor as connectors
 
 
-def register_modules(descriptors: Iterable[Any] = (sources, documents, entities, relationships, timeline, search, temporal,
+def register_modules(descriptors: Iterable[Any] = (
+        sources, ingestion, documents, observations, entities, relationships, timeline, search, temporal,
         dashboard, tasks, goals, news, notifications, chat, memory, tools, agents,
-        automations, observability, ingestion, connectors)) -> dict[str, Any]:
+        automations, observability, connectors,
+)) -> dict[str, Any]:
     """Build the descriptor registry and reject duplicate IDs or missing dependencies.
 
     Args:

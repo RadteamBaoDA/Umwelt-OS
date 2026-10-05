@@ -20,7 +20,10 @@ def configuration(source: ConnectorSource) -> ConnectorConfig:
     Generic connectors retain their historical 60-second default. Native
     sources with an omitted stored timeout use the provider's 30-second bound.
     """
-    config = ConnectorConfig.model_validate(source.configuration or {})
+    raw_configuration = dict(source.configuration or {})
+    if source.provider == "alpha_vantage":
+        raw_configuration.setdefault("schedule_interval_minutes", 1440)
+    config = ConnectorConfig.model_validate(raw_configuration)
     if is_native_provider(source.provider) and "timeout_seconds" not in (source.configuration or {}):
         config = config.model_copy(update={"timeout_seconds": 30})
     return config
@@ -53,6 +56,8 @@ def validate(source: ConnectorSource) -> dict[str, Any]:
             "github_releases": {"github_owner", "github_repository"},
             "github": {"github_owner", "github_repository", "include_issues", "include_pulls", "include_commits", "include_releases", "github_history_days"},
             "telegram": {"telegram_chat_ids"},
+            "alpha_vantage": {"market_symbols", "market_currency", "market_exchange_timezone"},
+            "open_meteo": {"weather_latitude", "weather_longitude", "weather_timezone", "weather_metrics"},
         }[source.provider]
         common = {"timezone", "schedule_interval_minutes", "timeout_seconds"}
         expected_history = "pending_updates" if source.provider == "telegram" else "returned_snapshot"
@@ -67,6 +72,15 @@ def validate(source: ConnectorSource) -> dict[str, Any]:
             raise ValueError("Native provider request timeout cannot exceed 30 seconds")
         if source.provider == "github_releases" and (not config.github_owner or not config.github_repository):
             raise ValueError("GitHub owner and repository are required")
+        if source.provider == "alpha_vantage" and (
+            not config.market_symbols or not config.market_currency or not config.market_exchange_timezone
+        ):
+            raise ValueError("Alpha Vantage symbols, currency, and exchange timezone are required")
+        if source.provider == "open_meteo" and (
+            config.weather_latitude is None or config.weather_longitude is None
+            or not config.weather_timezone or not config.weather_metrics
+        ):
+            raise ValueError("Open-Meteo coordinates, timezone, and metric scope are required")
         if source.provider == "github":
             from modules.connectors.github.schemas import project_github_source_config
 
@@ -82,6 +96,7 @@ def validate(source: ConnectorSource) -> dict[str, Any]:
     if set(source.configuration or {}) & {
         "youtube_channel_id", "arxiv_category", "huggingface_author",
         "github_owner", "github_repository", "include_issues", "include_pulls", "include_commits", "include_releases", "telegram_chat_ids", "history_mode",
+        "market_symbols", "market_currency", "market_exchange_timezone", "weather_latitude", "weather_longitude", "weather_timezone", "weather_metrics",
     }:
         raise ValueError("Provider scope requires a registered source provider")
     config = configuration(source)

@@ -17,6 +17,7 @@ from modules.observability.operations_routes import router as operations_router
 from core.modules import register_modules
 from core.system.routes import router as system_router
 from modules.knowledge.documents.routes import router as documents_router
+from modules.knowledge.observations.routes import router as observations_router
 from modules.knowledge.entities.routes import router as entities_router
 from modules.knowledge.relationships.routes import router as relationships_router
 from modules.ingestion.routes import documents_router as document_upload_router
@@ -119,6 +120,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(system_router)
     app.include_router(sources_router)
     app.include_router(documents_router)
+    app.include_router(observations_router)
     app.include_router(entities_router)
     app.include_router(relationships_router)
     app.include_router(timeline_router)

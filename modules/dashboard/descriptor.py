@@ -11,11 +11,12 @@ class DashboardDescriptor:
     description: str = "Save owner-selected dashboard layouts and gadget configuration."
     enabled: bool = True
     dependencies: tuple[str, ...] = (
-        "sources", "tasks", "goals", "news", "timeline", "notifications", "knowledge.documents",
+        "sources", "tasks", "goals", "news", "timeline", "notifications",
+        "knowledge.documents", "knowledge.observations",
     )
     scheduled_jobs: tuple[str, ...] = ("run_scheduled_brief", "run_scheduled_highlights")
     provides: tuple[str, ...] = ("dashboards", "gadget_definitions", "daily_context", "daily_brief")
-    requires: tuple[str, ...] = ("sources",)
+    requires: tuple[str, ...] = ("sources", "world_observations")
     routes: tuple[str, ...] = (
         "/api/v1/dashboards",
         "/api/v1/dashboards/{id}",

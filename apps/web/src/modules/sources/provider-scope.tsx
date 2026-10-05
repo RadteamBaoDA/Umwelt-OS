@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import type { ConnectorConfig } from './api';
 
-export type NativeProvider = 'youtube' | 'arxiv' | 'huggingface' | 'github' | 'github_releases' | 'telegram';
+export type NativeProvider = 'youtube' | 'arxiv' | 'huggingface' | 'github' | 'github_releases' | 'telegram' | 'alpha_vantage' | 'open_meteo';
 
 /** Renders fixed native-provider scope controls; GitHub resource flags and bounded history horizon remain in the owning revision-fenced draft. */
 export function ProviderScope({
@@ -65,6 +65,17 @@ export function ProviderScope({
         <Input id="source-scope-github_history_days" type="number" min={1} max={365} value={configuration.github_history_days ?? 90} disabled={disabled} onChange={(event) => onChange('github_history_days', Number(event.target.value))} />
       </div>
     </>}
+  </>;
+  if (provider === 'alpha_vantage') return <>
+    {field('market_symbols', t('marketSymbols'), (configuration.market_symbols ?? []).join(', '), (value) => onChange('market_symbols', value.split(/[\s,]+/).filter(Boolean).slice(0, 5)), { maxLength: 110 })}
+    {field('market_currency', t('marketCurrency'), configuration.market_currency ?? '', (value) => onChange('market_currency', value.toUpperCase()), { maxLength: 3, pattern: '[A-Z]{3}' })}
+    {field('market_exchange_timezone', t('marketExchangeTimezone'), configuration.market_exchange_timezone ?? '', (value) => onChange('market_exchange_timezone', value), { maxLength: 64 })}
+  </>;
+  if (provider === 'open_meteo') return <>
+    {field('weather_latitude', t('weatherLatitude'), String(configuration.weather_latitude ?? ''), (value) => onChange('weather_latitude', value === '' ? undefined : Number(value)), { maxLength: 24, pattern: '-?[0-9]{1,2}(\\.[0-9]+)?' })}
+    {field('weather_longitude', t('weatherLongitude'), String(configuration.weather_longitude ?? ''), (value) => onChange('weather_longitude', value === '' ? undefined : Number(value)), { maxLength: 24, pattern: '-?[0-9]{1,3}(\\.[0-9]+)?' })}
+    {field('weather_timezone', t('weatherTimezone'), configuration.weather_timezone ?? '', (value) => onChange('weather_timezone', value), { maxLength: 64 })}
+    {field('weather_metrics', t('weatherMetrics'), (configuration.weather_metrics ?? []).join(', '), (value) => onChange('weather_metrics', value.split(/[\s,]+/).filter(Boolean).slice(0, 4)), { maxLength: 200 })}
   </>;
   return <div className="field">
     <Label htmlFor="source-scope-telegram_chat_ids">{t('telegramChannelIds')}</Label>

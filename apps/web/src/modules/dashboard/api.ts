@@ -51,6 +51,8 @@ export type GadgetScope = {
   symbols?: string[];
   regions?: string[];
   map_layer_ids?: string[];
+  metrics?: string[];
+  lookback_days?: number;
 };
 
 /** Explainable match against one immutable current document version. */

@@ -15,6 +15,8 @@ import { dashboardKeys, listGadgetSources } from './api';
 /** Renderers whose data comes from exactly one configured source, with the provider they require. */
 export const SOURCE_BACKED_RENDERERS: Readonly<Record<string, { provider: string }>> = {
   github_project: { provider: 'github' },
+  finance_chart: { provider: 'alpha_vantage' },
+  weather: { provider: 'open_meteo' },
 };
 
 /** Renderers whose configured data sources are read through the Documents owner projection. */

@@ -56,7 +56,7 @@ export function SyncHistory({ source }: { source: Source }) {
         <span>{stage.stage_key === 'normalize' ? t('normalizeStage') : stage.stage_key}</span>
         <span>{t(statusKey(stage.status))}{stage.error_code ? ` · ${stage.error_code}` : ''}</span>
         {stage.result_count !== null && <small>{t(stage.stage_key === 'normalize' || stage.stage_key === 'parse_file' ? 'chunkCount' : 'resultCount')}: {stage.result_count}</small>}
-        {stage.stage_key === 'normalize' && <small>{t('normalizedCount')}: {stage.normalized_count} · {t('duplicateCount')}: {stage.duplicate_count} · {t('skippedCount')}: {stage.skipped_count} · {t('failedCount')}: {stage.failed_count} · {t('pendingCount')}: {stage.pending_count}</small>}
+        {stage.stage_key === 'normalize' && <small>{t('normalizedCount')}: {stage.normalized_count} · {t('selectedCurrentCount')}: {stage.selected_current_count} · {t('duplicateCount')}: {stage.duplicate_count} · {t('skippedCount')}: {stage.skipped_count} · {t('failedCount')}: {stage.failed_count} · {t('pendingCount')}: {stage.pending_count}</small>}
         {stage.status === 'failed' && run.status === 'failed' && source.status === 'active' && !hasActiveStage && <Button className="secondary" disabled={retry.isPending} onClick={() => retry.mutate({ runId: run.run_id, stageKey: stage.stage_key })}>{t('retryRun')}</Button>}
       </p>)}
     </article>;
