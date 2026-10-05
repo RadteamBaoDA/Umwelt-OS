@@ -1,6 +1,6 @@
 # P04-T4 repair 2 source report
 
-Date: 2026-10-02. Scope: repair the four residual source findings from `task-P04-T4-review-2.md` (F5, F6, F7, F9). Worktree: `C:/Users/doana/.codex/worktrees/bbd-p04-entities/BBD-OS`. This report records the current repair 2 patch; production source was not changed while writing it.
+Date: 2026-10-02. Scope: repair the four residual source findings from `task-P04-T4-review-2.md` (F5, F6, F7, F9). Worktree: `C:/Users/doana/.codex/worktrees/bbd-p04-entities/Umwelt-OS`. This report records the current repair 2 patch; production source was not changed while writing it.
 
 ## Findings closed at source level
 

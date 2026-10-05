@@ -1,6 +1,6 @@
 # P02-RN1 bounded owner ruling
 
-Date: 2026-10-01. Source inspected in read-only prep tree `C:/Users/doana/.codex/worktrees/bbd-p02-normalize/BBD-OS`, controller base `876aa77`. Existing RN1 brief/plan remains authoritative; this pins down its ordering/deletion contracts, not a new architecture. No production edit, Git/index, build/test/lint/typecheck, migration/runtime/DB/provider call or agent was run. Only this scratch ruling is written.
+Date: 2026-10-01. Source inspected in read-only prep tree `C:/Users/doana/.codex/worktrees/bbd-p02-normalize/Umwelt-OS`, controller base `876aa77`. Existing RN1 brief/plan remains authoritative; this pins down its ordering/deletion contracts, not a new architecture. No production edit, Git/index, build/test/lint/typecheck, migration/runtime/DB/provider call or agent was run. Only this scratch ruling is written.
 
 ## Entry dependency
 

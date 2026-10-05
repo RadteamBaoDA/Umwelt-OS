@@ -1,6 +1,6 @@
-# BBD-OS Phase 10 — Automation Rules and Workflow Management Implementation Plan
+# Umwelt-OS Phase 10 — Automation Rules and Workflow Management Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax. The owner authorized continuous progress through ready tasks; use the [master plan](2026-09-25-bbd-os-master-plan.md) and [execution ledger](EXECUTION.md), without repeated phase-scope approval.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax. The owner authorized continuous progress through ready tasks; use the [master plan](2026-09-25-umwelt-os-master-plan.md) and [execution ledger](EXECUTION.md), without repeated phase-scope approval.
 
 **Goal:** Let the owner configure bounded scheduled/event-driven rules without duplicating connector schedule ownership or inventing a workflow language.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Existing FastAPI/Pydantic/SQLAlchemy/Alembic/PostgreSQL, Redis/ARQ, Next.js/React/TypeScript/TanStack Query, phase-specific OSS dependencies are pinned only after their compatibility checks.
 
-**Spec:** [Canonical specification](../../../specs/personal-intelligence-os-spec-v2.md), sections 10, 60–61, 95, 138.18, 158–159. The [master plan](2026-09-25-bbd-os-master-plan.md) defines common contracts, the drawer decision, test harness and ownership across phases.
+**Spec:** [Canonical specification](../../../specs/personal-intelligence-os-spec-v2.md), sections 10, 60–61, 95, 138.18, 158–159. The [master plan](2026-09-25-umwelt-os-master-plan.md) defines common contracts, the drawer decision, test harness and ownership across phases.
 
 **Entry gate:** Phase 2 durable events/n8n; Phase 7 approvals; Phase 8 tasks/brief/notifications.
 
@@ -18,7 +18,7 @@ Code stage: implement production code and run affected production builds only. D
 
 ## Spec reconciliation — 2026-09-30
 
-Read [R01–R16 supplemental plan](2026-09-30-bbd-os-spec-reconciliation.md) and canonical sections **165–166** before execution. Assigned scope: **R04/R09 Settings placement**. Preserve original task IDs and historical evidence. Production code/build only until all original and supplemental code/build/review is complete; no tests/fixtures, lint, standalone typecheck or runtime acceptance in this stage.
+Read [R01–R16 supplemental plan](2026-09-30-umwelt-os-spec-reconciliation.md) and canonical sections **165–166** before execution. Assigned scope: **R04/R09 Settings placement**. Preserve original task IDs and historical evidence. Production code/build only until all original and supplemental code/build/review is complete; no tests/fixtures, lint, standalone typecheck or runtime acceptance in this stage.
 
 Main navigation is Dashboard/Chat/Settings; Settings has three groups; account/appearance/language live in the user menu. Detail routes do not become main-navigation items. Migration names below are historical planning examples: inspect current head and active worktrees, including unfinished Phase 4 0007_entities.py, and allocate a unique linked revision without rewriting shipped migrations.
 
@@ -90,7 +90,7 @@ Concrete contract/configuration shape (illustrative IDs/timestamps are test data
 **Interfaces — consumes/produces:** Automation Agent creates proposals using registered schemas; owner accept creates a disabled draft rule, separate explicit enable starts it. UI offers Trigger/Conditions/Actions with preview, enable/disable, run history and manual Run now.
 
 
-- [ ] **P10-T3.3 — Implement the minimal production behavior.** Use schema-backed ordinary forms rather than a node-canvas or custom DSL. Show estimated scope and exact external targets, validation errors, preview reasons and action outcomes. Allow opening related approval on full Chat/run detail. Clear disabled/unavailable actions when their owning module is disabled. Keep source schedule editing in Settings/Data sources through BBD-OS adapters.
+- [ ] **P10-T3.3 — Implement the minimal production behavior.** Use schema-backed ordinary forms rather than a node-canvas or custom DSL. Show estimated scope and exact external targets, validation errors, preview reasons and action outcomes. Allow opening related approval on full Chat/run detail. Clear disabled/unavailable actions when their owning module is disabled. Keep source schedule editing in Settings/Data sources through Umwelt-OS adapters.
 
 Concrete contract/configuration shape (illustrative IDs/timestamps are test data, not production defaults):
 

@@ -12,7 +12,7 @@ Compatibility therefore resolves the entry decision without claiming to resolve 
 
 ## Verified original and integrated parents
 
-- Original: `D:/Project/BBD-OS-phase-4/infrastructure/postgres/migrations/versions/0007_entities.py`.
+- Original: `D:/Project/Umwelt-OS-phase-4/infrastructure/postgres/migrations/versions/0007_entities.py`.
 - SHA256: `09E02930E58C6F437EF8614664FA084E57E10555A7E00EA40D02634B8927D0BD`.
 - Original upgrade creates `entities`, `entity_aliases`, `relationships`, `relationship_evidence` and their indexes/constraints. Its downgrade drops those tables. No idempotent table-existence fallback is present or needed for a properly recorded revision.
 - Current integrated root source after controller merge `35fc0c5` contains `r06_realtime_replay`, whose parent is `r09_owner_preferences`. Existing chain: `0006_search -> r02_google_identity -> r03_connector_provisioning -> r05_ai_settings -> r09_owner_preferences -> r06_realtime_replay`.

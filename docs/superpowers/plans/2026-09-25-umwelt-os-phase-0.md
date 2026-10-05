@@ -1,4 +1,4 @@
-# BBD-OS Phase 0 Implementation Plan
+# Umwelt-OS Phase 0 Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -99,7 +99,7 @@ from fastapi import FastAPI
 from core.config import Settings
 
 def create_app(settings: Settings | None = None) -> FastAPI:
-    app = FastAPI(title="BBD-OS")
+    app = FastAPI(title="Umwelt-OS")
     app.state.settings = settings or Settings()
 
     @app.get("/health")

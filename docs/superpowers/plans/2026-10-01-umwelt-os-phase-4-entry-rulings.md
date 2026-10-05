@@ -4,7 +4,7 @@ Date: 2026-10-01. Reviewer: `/root/sol_reasoning`. Source baseline: controller-d
 
 ## Entry decision
 
-Resume P04-T1–T4 on the final integrated R04/R06 base, preserving `D:/Project/BBD-OS-phase-4` and transporting only reviewed production drafts. Independent canonical SQL/manual authoring/UI work can proceed with model extraction visibly gated. Unconfigured, denied or unsupported structured capability is an explicit extraction state; historical Phase 3 builds do not prove a live provider. Graphiti belongs to P05 and does not gate this SQL work.
+Resume P04-T1–T4 on the final integrated R04/R06 base, preserving `D:/Project/Umwelt-OS-phase-4` and transporting only reviewed production drafts. Independent canonical SQL/manual authoring/UI work can proceed with model extraction visibly gated. Unconfigured, denied or unsupported structured capability is an explicit extraction state; historical Phase 3 builds do not prove a live provider. Graphiti belongs to P05 and does not gate this SQL work.
 
 Allocate P04 migrations from the actual final R06 head; current root ends at `r09_owner_preferences`. Keep original `0007_entities.py` bytes and investigate application history before choosing any compatibility transition. Its untracked status does not prove it was never applied. Do not overwrite current ledgers/instructions with preserved draft versions. Current controller integration order into `develop` governs the older plan's `main` example.
 

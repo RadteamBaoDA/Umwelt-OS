@@ -1,4 +1,4 @@
-# BBD-OS UI design system
+# Umwelt-OS UI design system
 
 Status: UI technology and experience decisions selected by the owner. This document defines implementation requirements; it does not claim that dependencies, migration, theme persistence or translation are already implemented.
 
@@ -41,7 +41,7 @@ Use shadcn primitives rather than hand-built substitutes. Business components su
 - Only New chat, user/assistant messages, composer with send/stop, and close are visible. An accessible Sheet title/description may be visually hidden.
 - History, thread selector, model/context controls, attachment management and web-search controls belong on the full Chat page. Main Chat navigation opens the current thread without clearing its draft or restarting generation.
 - Body scrolls independently; composer stays at the bottom. Preserve focus trapping, Escape/close, accessible naming and return focus from Sheet primitives. Do not disable these behaviors to imitate a screenshot.
-- Port the requested AnythingLLM chat source into this repository while adapting it to these components and the existing BBD-OS thread/permissions/API contracts. AI calls use server-side OpenAI SDK via **Ommi Router**. There is no local-AI/Ollama requirement.
+- Port the requested AnythingLLM chat source into this repository while adapting it to these components and the existing Umwelt-OS thread/permissions/API contracts. AI calls use server-side OpenAI SDK via **Ommi Router**. There is no local-AI/Ollama requirement.
 
 ## 3. Semantic tokens and visual rules
 

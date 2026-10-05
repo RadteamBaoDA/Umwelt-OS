@@ -1,6 +1,6 @@
-# BBD-OS
+# Umwelt-OS
 
-BBD-OS is a self-hosted Personal Intelligence OS. Phase 0 provides the private owner account, service status, database migrations, a small background worker, and the local deployment foundation. It does not collect sources, call AI models, or run graph, n8n, or browser services yet.
+Umwelt-OS is a self-hosted Personal Intelligence OS. Phase 0 provides the private owner account, service status, database migrations, a small background worker, and the local deployment foundation. It does not collect sources, call AI models, or run graph, n8n, or browser services yet.
 
 ## Start locally
 

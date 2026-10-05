@@ -1,6 +1,6 @@
-# BBD-OS Phase 1 — Core Data Platform Implementation Plan
+# Umwelt-OS Phase 1 — Core Data Platform Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax. The owner authorized continuous progress through ready tasks; use the [master plan](2026-09-25-bbd-os-master-plan.md) and [execution ledger](EXECUTION.md), without repeated phase-scope approval.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax. The owner authorized continuous progress through ready tasks; use the [master plan](2026-09-25-umwelt-os-master-plan.md) and [execution ledger](EXECUTION.md), without repeated phase-scope approval.
 
 **Goal:** Persist and manage sources and documents with provenance, immutable revisions, authenticated APIs, and useful library screens.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Existing FastAPI/Pydantic/SQLAlchemy/Alembic/PostgreSQL, Redis/ARQ, Next.js/React/TypeScript/TanStack Query, pytest and Playwright; phase-specific OSS dependencies are pinned only after their compatibility checks.
 
-**Spec:** [Canonical specification](../../../specs/personal-intelligence-os-spec-v2.md), sections 2.3, 13, 73–85, 95, 110–112, 139–156. The [master plan](2026-09-25-bbd-os-master-plan.md) defines common contracts, the drawer decision, test harness and ownership across phases.
+**Spec:** [Canonical specification](../../../specs/personal-intelligence-os-spec-v2.md), sections 2.3, 13, 73–85, 95, 110–112, 139–156. The [master plan](2026-09-25-umwelt-os-master-plan.md) defines common contracts, the drawer decision, test harness and ownership across phases.
 
 **Entry gate:** Phase 0 acceptance.
 
@@ -18,7 +18,7 @@ Code stage: implement production code and run affected production builds only. D
 
 ## Spec reconciliation — 2026-09-30
 
-Read [R01–R16 supplemental plan](2026-09-30-bbd-os-spec-reconciliation.md) and canonical sections **165–166** before execution. Assigned scope: **R01/R02**. Preserve original task IDs and historical evidence. Production code/build only until all original and supplemental code/build/review is complete; no tests/fixtures, lint, standalone typecheck or runtime acceptance in this stage.
+Read [R01–R16 supplemental plan](2026-09-30-umwelt-os-spec-reconciliation.md) and canonical sections **165–166** before execution. Assigned scope: **R01/R02**. Preserve original task IDs and historical evidence. Production code/build only until all original and supplemental code/build/review is complete; no tests/fixtures, lint, standalone typecheck or runtime acceptance in this stage.
 
 Main navigation is Dashboard/Chat/Settings; Settings has three groups; account/appearance/language live in the user menu. Detail routes do not become main-navigation items. Migration names below are historical planning examples: inspect current head and active worktrees, including unfinished Phase 4 0007_entities.py, and allocate a unique linked revision without rewriting shipped migrations.
 

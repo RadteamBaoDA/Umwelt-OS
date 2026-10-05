@@ -1,10 +1,10 @@
-# BBD-OS Spec 165–166 Reconciliation Implementation Plan
+# Umwelt-OS Spec 165–166 Reconciliation Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax. Preserve the owner-selected execution method. This plan requires review before implementation; this planning turn does not start production work.
 
 **Goal:** Reconcile the existing Phase 1–12 delivery with the configurable Life Dashboard, embedded connector/MCP setup, SSE, Google sign-in and current source ownership decisions.
 
-**Architecture:** Keep the Python/FastAPI modular monolith and existing PostgreSQL/pgvector, protected raw storage and Redis/ARQ. n8n owns its external source schedules behind BBD-OS adapters; LangGraph and Graphiti retain their approved roles. Next.js provides Dashboard/Chat/Settings; OpenAI SDK uses the existing OmniRoute boundary.
+**Architecture:** Keep the Python/FastAPI modular monolith and existing PostgreSQL/pgvector, protected raw storage and Redis/ARQ. n8n owns its external source schedules behind Umwelt-OS adapters; LangGraph and Graphiti retain their approved roles. Next.js provides Dashboard/Chat/Settings; OpenAI SDK uses the existing OmniRoute boundary.
 
 **Tech Stack:** Existing locked stack; shadcn/ui with Radix and semantic tokens, Recharts through shadcn Chart, globe.gl/deck.gl, maintained OAuth/OIDC and MCP libraries selected/pinned when consumed. No mandatory Ollama, Airbyte, separate time-series DB or WebSocket service.
 
@@ -77,7 +77,7 @@ Every task first reads its existing owning phase, spec and consumers. File lists
 
 **Phase/dependencies:** Before new production work; supplements P01.
 
-**Files and responsibilities:** Modify: AGENTS.md, README.md, .agents/skills/implementing-bbd-os/SKILL.md, .agents/skills/implementing-bbd-os/plan-map.md, .github/workflows/ci.yml, docs/development.md. Modify only cross-module callers confirmed by impact analysis when an internal import must be replaced; extend modules/knowledge/documents/public.py and modules/sources/public.py for the consumed read contract.
+**Files and responsibilities:** Modify: AGENTS.md, README.md, .agents/skills/implementing-umwelt-os/SKILL.md, .agents/skills/implementing-umwelt-os/plan-map.md, .github/workflows/ci.yml, docs/development.md. Modify only cross-module callers confirmed by impact analysis when an internal import must be replaced; extend modules/knowledge/documents/public.py and modules/sources/public.py for the consumed read contract.
 
 **Interfaces — consumes/produces:** Consumes spec 165–166 and current source. Produces one current-task ledger, an explicit public-contract/read-projection policy and build-only default CI; deferred validation is a separately enabled workflow stage.
 
@@ -102,7 +102,7 @@ Contract shape (illustrative IDs/values, not credentials or production observati
 
 **Interfaces — consumes/produces:** GET /api/v1/auth/google/status returns configured,linked; POST /api/v1/auth/google/start accepts purpose=login|link and returns authorization_url; GET /api/v1/auth/google/callback exchanges code; POST /api/v1/auth/google/unlink requires owner reauthentication. Issuer+subject identifies the linked owner. Existing session/logout/CSRF contracts remain.
 
-- [ ] **R02.1 — Trace and implement the owning production behavior.** Use a maintained OIDC library with authorization-code+PKCE, browser-bound single-use expiring state and nonce. Link requires a recently reauthenticated owner; login cannot create/link an identity. Verify signature/JWKS, issuer, audience, expiration, nonce and verified email, then rotate BBD-OS session/CSRF cookies. Request openid email profile only; bounded callback handling and allowlisted return targets. Retain password login because Google-only policy is unresolved. Reject unlink of the last usable method; show unconfigured/provider-error states. Store client secret server-side and document one-time provider app registration; Gmail collection grants are separate.
+- [ ] **R02.1 — Trace and implement the owning production behavior.** Use a maintained OIDC library with authorization-code+PKCE, browser-bound single-use expiring state and nonce. Link requires a recently reauthenticated owner; login cannot create/link an identity. Verify signature/JWKS, issuer, audience, expiration, nonce and verified email, then rotate Umwelt-OS session/CSRF cookies. Request openid email profile only; bounded callback handling and allowlisted return targets. Retain password login because Google-only policy is unresolved. Reject unlink of the last usable method; show unconfigured/provider-error states. Store client secret server-side and document one-time provider app registration; Gmail collection grants are separate.
 
 Contract shape (illustrative IDs/values, not credentials or production observations):
 
@@ -123,7 +123,7 @@ Contract shape (illustrative IDs/values, not credentials or production observati
 
 **Interfaces — consumes/produces:** CatalogEntry declares provider_id,auth_methods,scope_fields,collection_modes,history/edit/delete support and availability. POST /api/v1/connectors/{source_id}/validate returns validation results without activation; PUT /api/v1/connectors/{source_id}/configuration accepts expected_revision and desired settings; GET /api/v1/connectors/{source_id}/activation returns desired_revision,applied_revision,state,error_code.
 
-- [ ] **R03.1 — Trace and implement the owning production behavior.** Use supported pinned n8n APIs for template creation/update, credentials/reference association and activation; no n8n database writes. Persist desired revision and recoverable reconciliation work before calling external APIs. Retry an idempotent reconcile without duplicating workflow/credentials. Fence disabled sources immediately. Native credentials live in protected BBD-OS storage; n8n credentials use its protected store and BBD-OS references. Mask/redact secrets, distinguish unchanged/replaced/removed values, enforce SSRF and endpoint policy. Add server OAuth start/callback/refresh/revoke flows to the relevant provider adapter; prevent stale callback/configuration overwriting a new revision. Mark unsupported provisioning operations unavailable rather than sending the owner to n8n UI.
+- [ ] **R03.1 — Trace and implement the owning production behavior.** Use supported pinned n8n APIs for template creation/update, credentials/reference association and activation; no n8n database writes. Persist desired revision and recoverable reconciliation work before calling external APIs. Retry an idempotent reconcile without duplicating workflow/credentials. Fence disabled sources immediately. Native credentials live in protected Umwelt-OS storage; n8n credentials use its protected store and Umwelt-OS references. Mask/redact secrets, distinguish unchanged/replaced/removed values, enforce SSRF and endpoint policy. Add server OAuth start/callback/refresh/revoke flows to the relevant provider adapter; prevent stale callback/configuration overwriting a new revision. Mark unsupported provisioning operations unavailable rather than sending the owner to n8n UI.
 
 Contract shape (illustrative IDs/values, not credentials or production observations):
 
@@ -147,7 +147,7 @@ Contract shape (illustrative IDs/values, not credentials or production observati
 
 **Interfaces — consumes/produces:** Consumes R03 catalog/configuration/activation APIs and existing sync/pause/run APIs. Produces Connect → Choose data → Collect editor inside Settings/Data sources, including a nested MCP entry when R08 is available.
 
-- [ ] **R04.1 — Trace and implement the owning production behavior.** Use provider schemas and real authorized scope discovery. Keep credential/connect/scope/schedule/timezone/history/Save & enable in BBD-OS. Show collected/indexed/current-run/error separately; support Collect now, Pause/Resume, reconnect, retry and disconnect with keep-data/delete-data choice. A saved-but-inactive source remains visibly inactive. Retain safe drafts after errors, guard dirty navigation, prevent duplicate submissions and show actual server validation time. OAuth consent may open the provider and return, but no ordinary task requires another administration UI.
+- [ ] **R04.1 — Trace and implement the owning production behavior.** Use provider schemas and real authorized scope discovery. Keep credential/connect/scope/schedule/timezone/history/Save & enable in Umwelt-OS. Show collected/indexed/current-run/error separately; support Collect now, Pause/Resume, reconnect, retry and disconnect with keep-data/delete-data choice. A saved-but-inactive source remains visibly inactive. Retain safe drafts after errors, guard dirty navigation, prevent duplicate submissions and show actual server validation time. OAuth consent may open the provider and return, but no ordinary task requires another administration UI.
 
 Contract shape (illustrative IDs/values, not credentials or production observations):
 
@@ -210,7 +210,7 @@ Contract shape (illustrative IDs/values, not credentials or production observati
 
 **Interfaces — consumes/produces:** ChatContext supports general/document/entity/day plus selected item identities and versions. One ChatSession/conversation/run powers drawer and /chat. Drawer only New chat,messages,composer/send-stop,close; full page owns history,context,citations,activity,approvals and web-search controls.
 
-- [ ] **R07.1 — Trace and implement the owning production behavior.** Clone upstream AnythingLLM at a recorded revision, review license/notices, port only needed chat source into the owning frontend module and track original paths/modifications in OSS_USED.md. Adapt upstream transport/auth/state to BBD-OS P06 APIs and shadcn; no iframe, standalone AnythingLLM deployment or copied provider secrets. Use large right Sheet, full mobile, focus return and in-memory private drafts. Multi-item Ask AI carries exact versions and permission-checked citations. History opens existing IDs; opening full Chat never starts a duplicate thread. Closing does not Stop. Full page uses configured permitted web search through registered tools.
+- [ ] **R07.1 — Trace and implement the owning production behavior.** Clone upstream AnythingLLM at a recorded revision, review license/notices, port only needed chat source into the owning frontend module and track original paths/modifications in OSS_USED.md. Adapt upstream transport/auth/state to Umwelt-OS P06 APIs and shadcn; no iframe, standalone AnythingLLM deployment or copied provider secrets. Use large right Sheet, full mobile, focus return and in-memory private drafts. Multi-item Ask AI carries exact versions and permission-checked citations. History opens existing IDs; opening full Chat never starts a duplicate thread. Closing does not Stop. Full page uses configured permitted web search through registered tools.
 
 Contract shape (illustrative IDs/values, not credentials or production observations):
 
@@ -229,7 +229,7 @@ Contract shape (illustrative IDs/values, not credentials or production observati
 
 **Files and responsibilities:** Create: modules/tools/mcp_client.py, modules/tools/mcp_server.py, modules/tools/mcp_schemas.py, modules/connectors/mcp.py, apps/web/src/modules/sources/mcp-editor.tsx. Extend planned modules/tools/registry.py, modules/tools/dispatch.py, connector catalog/routes, credential storage and app composition. Generate MCP grant/connection migration.
 
-**Interfaces — consumes/produces:** Remote transport Streamable HTTP; local stdio is administrator allowlisted. POST /api/v1/mcp/connections/{id}/discover returns tool/resource schema revisions; connection grants explicitly select capabilities. Scoped inbound clients call BBD-OS MCP tools via /api/v1/mcp with independent authentication/revocation.
+**Interfaces — consumes/produces:** Remote transport Streamable HTTP; local stdio is administrator allowlisted. POST /api/v1/mcp/connections/{id}/discover returns tool/resource schema revisions; connection grants explicitly select capabilities. Scoped inbound clients call Umwelt-OS MCP tools via /api/v1/mcp with independent authentication/revocation.
 
 - [ ] **R08.1 — Trace and implement the owning production behavior.** Use maintained MCP SDK; pin compatible protocol/auth versions at execution. Draft checks do not grant every discovered tool. Verify schemas, timeout, current connection/module/grant state, source scope, egress and approval at dispatch. Changed schemas require review. Do not launch arbitrary commands from UI/model input. Expose public Search/Knowledge tools only when implemented. Inbound clients receive explicit scopes, never owner privilege by default. MCP collection adapter declares record identity, normalization, provenance, pagination/history limitations; n8n-backed schedule calls the existing protected collection API. Disable stops new calls and retains data unless deleted.
 
@@ -315,7 +315,7 @@ Contract shape (illustrative IDs/values, not credentials or production observati
 
 **Interfaces — consumes/produces:** Renderer descriptors declare accepted data shapes,minimum sizes,permissions and source capabilities. Rules return match reasons/severity; read/bookmark state is per owner. FinanceSeries carries timestamp,value,unit,currency,provider_delay metadata where known.
 
-- [ ] **R12.1 — Trace and implement the owning production behavior.** Provide compatible source/template selection, filters and explainable highlight rules with rule-specific notifications. Use Recharts via shadcn Chart for market series. Telegram renderer accepts one/many channels, identity/published/collected/edited timestamps, media placeholders and multi-item Ask AI; BBD-OS read state is not Telegram receipt. Text/table/video render only authorized data; sanitize source markup and validate media URLs. Loading/empty/stale/delayed/quota/error remain distinct. Charts respond to container size; no invented price/delay metadata. Map layers belong to map gadget editor.
+- [ ] **R12.1 — Trace and implement the owning production behavior.** Provide compatible source/template selection, filters and explainable highlight rules with rule-specific notifications. Use Recharts via shadcn Chart for market series. Telegram renderer accepts one/many channels, identity/published/collected/edited timestamps, media placeholders and multi-item Ask AI; Umwelt-OS read state is not Telegram receipt. Text/table/video render only authorized data; sanitize source markup and validate media URLs. Loading/empty/stale/delayed/quota/error remain distinct. Charts respond to container size; no invented price/delay metadata. Map layers belong to map gadget editor.
 
 Contract shape (illustrative IDs/values, not credentials or production observations):
 
@@ -336,7 +336,7 @@ Contract shape (illustrative IDs/values, not credentials or production observati
 
 **Interfaces — consumes/produces:** Required configured collection modes retain validate/sync/normalize/health. Provider manifests enumerate all section 165/166 sources and distinguish implemented,requires_credentials,unsupported_operation,planned; capability gates are visible. Normalized social records retain provider/channel/message/thread IDs and version/observed times.
 
-- [ ] **R13.1 — Trace and implement the owning production behavior.** Implement feed-backed Google News/YouTube/arXiv/Hugging Face/GitHub Release integrations where the chosen official feed/API supports the scope, reusing RSS/REST receipt contracts. Add Telegram Bot API/provider adapter for explicitly authorized channels; support bounded available history and received edits without assuming arbitrary-channel access or inferring deletion during outage. Add provider-specific Reddit/Hacker News/Mastodon/Bluesky/X/Vietnamese-press adapters only when endpoint/license/auth/quotas are established; otherwise catalog them visibly as planned/unavailable, never advertise generic REST as completed support. Credential and schedule setup stays inside BBD-OS. Preserve source policy and source-version citations.
+- [ ] **R13.1 — Trace and implement the owning production behavior.** Implement feed-backed Google News/YouTube/arXiv/Hugging Face/GitHub Release integrations where the chosen official feed/API supports the scope, reusing RSS/REST receipt contracts. Add Telegram Bot API/provider adapter for explicitly authorized channels; support bounded available history and received edits without assuming arbitrary-channel access or inferring deletion during outage. Add provider-specific Reddit/Hacker News/Mastodon/Bluesky/X/Vietnamese-press adapters only when endpoint/license/auth/quotas are established; otherwise catalog them visibly as planned/unavailable, never advertise generic REST as completed support. Credential and schedule setup stays inside Umwelt-OS. Preserve source policy and source-version citations.
 
 Contract shape (illustrative IDs/values, not credentials or production observations):
 
@@ -440,7 +440,7 @@ Run focused owning suites first, then integration/E2E and the existing lint/type
 | --- | --- |
 | AI coding-agent instructions, module ownership, CI stage separation | R01 |
 | Google login; separate Gmail permissions | R02 |
-| All normal connector setup inside BBD-OS, no n8n administration UI | R03/R04 |
+| All normal connector setup inside Umwelt-OS, no n8n administration UI | R03/R04 |
 | Direct OmniRoute + server-side OpenAI SDK + permitted web search | R05/P06/P07 |
 | Dashboard SSE and run-scoped chat streaming | R06/P06-T2/R07 |
 | AnythingLLM source port, minimal drawer, full Chat history | R07 |

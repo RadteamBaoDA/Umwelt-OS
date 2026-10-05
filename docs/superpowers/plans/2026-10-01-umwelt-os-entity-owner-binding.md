@@ -1,6 +1,6 @@
 # P04-T1 owner binding ruling — actual R06 replay and document evidence
 
-Date: 2026-10-01. Bounded owner decision for P04-T1 on controller-supplied integrated base `6f7d50a`, tree `C:/Users/doana/.codex/worktrees/bbd-p04-entities/BBD-OS`. Existing P04 entry/migration rulings and T1–T4 scope stand. This fills the pending R06 binding; it is not a phase replan or production/runtime approval. API additions below are proposed T1 contracts, not claims they already exist.
+Date: 2026-10-01. Bounded owner decision for P04-T1 on controller-supplied integrated base `6f7d50a`, tree `C:/Users/doana/.codex/worktrees/bbd-p04-entities/Umwelt-OS`. Existing P04 entry/migration rulings and T1–T4 scope stand. This fills the pending R06 binding; it is not a phase replan or production/runtime approval. API additions below are proposed T1 contracts, not claims they already exist.
 
 ## 1. Minimal consumed replay branch
 

@@ -28,7 +28,7 @@ A private personal-intelligence workspace: calm, dense, honest about what it kno
 - One family, `sans` (Inter → system UI stack). Inter is named but not shipped; most machines render the system face. Don't introduce a second family.
 - Page: `eyebrow` (accent, uppercase) → `page-title` → body in `muted`. Sub-panels use `section-title`. Overlays use `dialog-title`.
 - Body is 15px / 1.6. Labels are `label` (13px / 650). Status and timestamps `meta` or `caption`, in `muted`.
-- The wordmark is the text "BBD-OS" in `brand-name` (800, −0.03em). There is no logo file.
+- The wordmark is the text "Umwelt-OS" in `brand-name` (800, −0.03em). There is no logo file.
 
 ### Space, size, layout
 - Scale `space-1…space-6` (4/8/12/16/24/32px). Every control is at least `control-height` (44px).

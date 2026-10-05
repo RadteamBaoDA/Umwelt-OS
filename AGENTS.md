@@ -26,7 +26,7 @@ The specification requires ESLint and TypeScript checks for frontend code, and R
 
 ## UI Design System
 
-For BBD-OS frontend design, implementation, or review, load `.agents/skills/bbd-os-ui-system/SKILL.md` and follow `docs/DESIGN_SYSTEM.md`. Use shadcn/ui components and semantic tokens, Recharts for financial charts, light/dark/system themes, and the two locale preferences `en-us` / `vi-vi` (normalized to `en-US` / `vi-VN` for formatting). Main navigation remains Dashboard / Chat / Settings. These explicit UI decisions govern older UI examples; they do not authorize unrelated backend changes or override the code/build-only stage.
+For Umwelt-OS frontend design, implementation, or review, load `.agents/skills/umwelt-os-ui-system/SKILL.md` and follow `docs/DESIGN_SYSTEM.md`. Use shadcn/ui components and semantic tokens, Recharts for financial charts, light/dark/system themes, and the two locale preferences `en-us` / `vi-vi` (normalized to `en-US` / `vi-VN` for formatting). Main navigation remains Dashboard / Chat / Settings. These explicit UI decisions govern older UI examples; they do not authorize unrelated backend changes or override the code/build-only stage.
 
 ## Testing Guidelines
 
@@ -45,7 +45,7 @@ Never commit secrets or personal data. Provide placeholder configuration in `.en
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **BBD-OS** (4566 symbols, 11750 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **Umwelt-OS** (4566 symbols, 11750 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
@@ -61,7 +61,7 @@ This project is indexed by GitNexus as **BBD-OS** (4566 symbols, 11750 relations
 
 1. `gitnexus_query({query: "<error or symptom>"})` — find execution flows related to the issue
 2. `gitnexus_context({name: "<suspect function>"})` — see all callers, callees, and process participation
-3. `READ gitnexus://repo/BBD-OS/process/{processName}` — trace the full execution flow step by step
+3. `READ gitnexus://repo/Umwelt-OS/process/{processName}` — trace the full execution flow step by step
 4. For regressions: `gitnexus_detect_changes({scope: "compare", base_ref: "main"})` — see what your branch changed
 
 ## When Refactoring
@@ -100,10 +100,10 @@ This project is indexed by GitNexus as **BBD-OS** (4566 symbols, 11750 relations
 
 | Resource | Use for |
 |----------|---------|
-| `gitnexus://repo/BBD-OS/context` | Codebase overview, check index freshness |
-| `gitnexus://repo/BBD-OS/clusters` | All functional areas |
-| `gitnexus://repo/BBD-OS/processes` | All execution flows |
-| `gitnexus://repo/BBD-OS/process/{name}` | Step-by-step execution trace |
+| `gitnexus://repo/Umwelt-OS/context` | Codebase overview, check index freshness |
+| `gitnexus://repo/Umwelt-OS/clusters` | All functional areas |
+| `gitnexus://repo/Umwelt-OS/processes` | All execution flows |
+| `gitnexus://repo/Umwelt-OS/process/{name}` | Step-by-step execution trace |
 
 ## Self-Check Before Finishing
 

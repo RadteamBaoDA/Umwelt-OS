@@ -1,6 +1,6 @@
-# BBD-OS Phase 12 — Hardening, Backup, Recovery and Full Acceptance Implementation Plan
+# Umwelt-OS Phase 12 — Hardening, Backup, Recovery and Full Acceptance Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax. The owner authorized continuous progress through ready tasks; use the [master plan](2026-09-25-bbd-os-master-plan.md) and [execution ledger](EXECUTION.md), without repeated phase-scope approval.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax. The owner authorized continuous progress through ready tasks; use the [master plan](2026-09-25-umwelt-os-master-plan.md) and [execution ledger](EXECUTION.md), without repeated phase-scope approval.
 
 **Goal:** Verify the full approved product on a clean installation and documented mini-host workload with recoverable backups and honest operational limits.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Existing FastAPI/Pydantic/SQLAlchemy/Alembic/PostgreSQL, Redis/ARQ, Next.js/React/TypeScript/TanStack Query, phase-specific OSS dependencies are pinned only after their compatibility checks.
 
-**Spec:** [Canonical specification](../../../specs/personal-intelligence-os-spec-v2.md), sections 71, 78–94, 108–135, 155, 161–162. The [master plan](2026-09-25-bbd-os-master-plan.md) defines common contracts, the drawer decision, test harness and ownership across phases.
+**Spec:** [Canonical specification](../../../specs/personal-intelligence-os-spec-v2.md), sections 71, 78–94, 108–135, 155, 161–162. The [master plan](2026-09-25-umwelt-os-master-plan.md) defines common contracts, the drawer decision, test harness and ownership across phases.
 
 **Entry gate:** Functional acceptance from Phases 1–11; actual target hardware and permitted live integrations for final release gate.
 
@@ -18,7 +18,7 @@ Code stage: implement production code and run affected production builds only. D
 
 ## Spec reconciliation — 2026-09-30
 
-Read [R01–R16 supplemental plan](2026-09-30-bbd-os-spec-reconciliation.md) and canonical sections **165–166** before execution. Assigned scope: **R02–R16 lifecycle and R16 release**. Preserve original task IDs and historical evidence. Production code/build only until all original and supplemental code/build/review is complete; no tests/fixtures, lint, standalone typecheck or runtime acceptance in this stage.
+Read [R01–R16 supplemental plan](2026-09-30-umwelt-os-spec-reconciliation.md) and canonical sections **165–166** before execution. Assigned scope: **R02–R16 lifecycle and R16 release**. Preserve original task IDs and historical evidence. Production code/build only until all original and supplemental code/build/review is complete; no tests/fixtures, lint, standalone typecheck or runtime acceptance in this stage.
 
 Main navigation is Dashboard/Chat/Settings; Settings has three groups; account/appearance/language live in the user menu. Detail routes do not become main-navigation items. Migration names below are historical planning examples: inspect current head and active worktrees, including unfinished Phase 4 0007_entities.py, and allocate a unique linked revision without rewriting shipped migrations.
 
@@ -90,7 +90,7 @@ Concrete contract/configuration shape (illustrative IDs/timestamps are test data
 **Interfaces — consumes/produces:** Onboarding: owner -> model/privacy -> capability test -> sources -> explicit sample/personal import -> indexing progress -> Dashboard. Each step is resumable; no model or network still permits existing local data access.
 
 
-- [ ] **P12-T3.3 — Implement the minimal production behavior.** Seed fictional projects/events/articles/tasks/entities/relationships/conversations only on explicit command with stable IDs and no user-data overwrite. Implement onboarding and drawer behavior using existing navigation, settings, accessibility and responsive UI patterns. Drawer default closed, right overlay/full-mobile, focus trap/return, preserved draft/context, explicit Stop and citations/history on full Chat; no permanent empty column. If the client cannot reach the server, show offline/unavailable; no browser-cache offline guarantee is implied. When only external providers are unavailable but BBD-OS is reachable, retained data and lexical search remain usable; remote-dependent chat/semantic query is explicitly unavailable. Add safe reset command with named workspace and explicit destructive confirmation, never a successful no-op.
+- [ ] **P12-T3.3 — Implement the minimal production behavior.** Seed fictional projects/events/articles/tasks/entities/relationships/conversations only on explicit command with stable IDs and no user-data overwrite. Implement onboarding and drawer behavior using existing navigation, settings, accessibility and responsive UI patterns. Drawer default closed, right overlay/full-mobile, focus trap/return, preserved draft/context, explicit Stop and citations/history on full Chat; no permanent empty column. If the client cannot reach the server, show offline/unavailable; no browser-cache offline guarantee is implied. When only external providers are unavailable but Umwelt-OS is reachable, retained data and lexical search remain usable; remote-dependent chat/semantic query is explicitly unavailable. Add safe reset command with named workspace and explicit destructive confirmation, never a successful no-op.
 
 Concrete contract/configuration shape (illustrative IDs/timestamps are test data, not production defaults):
 

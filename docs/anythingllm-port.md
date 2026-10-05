@@ -2,7 +2,7 @@
 
 ## Overview
 
-In accordance with Phase 6 and specification reconciliation task R07, the chat interface adapts AnythingLLM's interaction patterns into BBD-OS's privacy-first, single-owner modular monolith architecture. Rather than deploying an external AnythingLLM instance or embedding an iframe, the essential conversational workflows (persistent thread management, grounded retrieval evidence presentation, SSE streaming, and in-memory draft retention) are cleanly ported and implemented as repository-owned Next.js components.
+In accordance with Phase 6 and specification reconciliation task R07, the chat interface adapts AnythingLLM's interaction patterns into Umwelt-OS's privacy-first, single-owner modular monolith architecture. Rather than deploying an external AnythingLLM instance or embedding an iframe, the essential conversational workflows (persistent thread management, grounded retrieval evidence presentation, SSE streaming, and in-memory draft retention) are cleanly ported and implemented as repository-owned Next.js components.
 
 ## Architecture and Adaptation Boundaries
 
@@ -34,6 +34,6 @@ In accordance with Phase 6 and specification reconciliation task R07, the chat i
 - Each citation exposes the title, document version, quote excerpt, observed timestamp, and direct links to the document revision in Knowledge (`/knowledge/documents/{id}`).
 
 ### 5. Transport and Provider Isolation
-- Chat routes and background workers communicate solely through BBD-OS's internal API (`/api/v1/conversations`, `/api/v1/conversations/{id}/messages`, `/api/v1/responses/{id}/events`).
+- Chat routes and background workers communicate solely through Umwelt-OS's internal API (`/api/v1/conversations`, `/api/v1/conversations/{id}/messages`, `/api/v1/responses/{id}/events`).
 - Streaming is delivered via Server-Sent Events (SSE) with `Last-Event-ID` resumption support.
 - Provider egress is completely mediated by `ModelGateway` under owner privacy policy; no client-side provider secrets or external third-party AI scripts are used.

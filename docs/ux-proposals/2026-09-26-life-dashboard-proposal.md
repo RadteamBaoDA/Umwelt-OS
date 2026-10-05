@@ -2,7 +2,7 @@
 
 Ngày: 2026-09-26. Trạng thái: **các quyết định sản phẩm/UI đã được người dùng chốt và đưa vào mục 165 của spec hiện tại**; chưa phải bằng chứng hoàn thành production. Bản minh họa duy nhất: `life-dashboard-preview.html`; dữ liệu, chat và cập nhật trong đó đều là mô phỏng.
 
-**Design system được chọn:** [shadcn/ui + Recharts, theme và i18n](../DESIGN_SYSTEM.md). Toàn bộ UI production theo shadcn; chart cổ phiếu/coin dùng Recharts. Skill áp dụng: `.agents/skills/bbd-os-ui-system/SKILL.md`. Bản HTML cũ là minh họa luồng, chưa phải source shadcn/Recharts được tích hợp.
+**Design system được chọn:** [shadcn/ui + Recharts, theme và i18n](../DESIGN_SYSTEM.md). Toàn bộ UI production theo shadcn; chart cổ phiếu/coin dùng Recharts. Skill áp dụng: `.agents/skills/umwelt-os-ui-system/SKILL.md`. Bản HTML cũ là minh họa luồng, chưa phải source shadcn/Recharts được tích hợp.
 
 ## 1. Mục tiêu và tiêu chí thành công
 
@@ -71,12 +71,12 @@ Không tự gọi tool MCP có tác dụng ghi để refresh gadget. Chỉ tool/
 Ba nhóm Settings:
 
 - **Nguồn dữ liệu:** danh sách nguồn và trạng thái; editor Kết nối → Chọn dữ liệu → Thu thập trên server. Có kiểm tra, lịch/timezone, lịch sử ban đầu, Lưu & bật, Thu thập ngay, Pause/Resume và lỗi. Retry/quota/retention/log, MCP và quyền nguồn cá nhân ở Nâng cao. Collector chạy tiếp khi đóng browser; dùng API/adapter và scheduler hiện có.
-- **AI & Ommi Router:** endpoint, credential dạng che, kiểm tra kết nối, lấy danh sách model hoặc nhập ID, chọn model chat/tóm tắt, web search/provider. Embedding/budget/privacy ở Nâng cao. BBD-OS gọi OpenAI SDK phía server qua gateway hiện có; không tạo provider manager thứ hai hoặc local AI. Credential được bảo vệ phía server; không trả key đã lưu về browser.
+- **AI & Ommi Router:** endpoint, credential dạng che, kiểm tra kết nối, lấy danh sách model hoặc nhập ID, chọn model chat/tóm tắt, web search/provider. Embedding/budget/privacy ở Nâng cao. Umwelt-OS gọi OpenAI SDK phía server qua gateway hiện có; không tạo provider manager thứ hai hoặc local AI. Credential được bảo vệ phía server; không trả key đã lưu về browser.
 - **Dashboard & Gadget:** dashboard/preset, thư viện định nghĩa gadget và template, rule highlight/thông báo. Map layers nằm trong cấu hình gadget bản đồ. Preset không ghi đè layout hiện tại im lặng.
 
 **User menu:** tài khoản và Appearance & language mở shadcn Dialog: Light/Dark/System, English (US)/Tiếng Việt; không lặp lại trong Settings. Locale app `en-us`/`vi-vi` map sang `en-US`/`vi-VN`; Save lưu, Cancel/close khôi phục. Không tự dịch tin hay đổi tiền tệ/timezone. Cấu hình lịch/timezone riêng của nguồn vẫn nằm tại nguồn đó.
 
-Form có mặc định hợp lý, một hành động Save chính, báo dirty/saved/error và giữ bản nháp khi lỗi. Kiểm tra kết nối không tự lưu; rời form có thay đổi chưa lưu phải cho người dùng quyết định. Toàn bộ luồng thông thường nằm trong UI BBD-OS, không yêu cầu mở n8n hoặc Ommi Router để cấu hình căn bản.
+Form có mặc định hợp lý, một hành động Save chính, báo dirty/saved/error và giữ bản nháp khi lỗi. Kiểm tra kết nối không tự lưu; rời form có thay đổi chưa lưu phải cho người dùng quyết định. Toàn bộ luồng thông thường nằm trong UI Umwelt-OS, không yêu cầu mở n8n hoặc Ommi Router để cấu hình căn bản.
 
 #### Panel inventory và feature catalog phải có
 
@@ -224,25 +224,25 @@ Ví dụ: “AI + nguồn arXiv/Hugging Face/GitHub → highlight”; “CVE ả
 
 Yêu cầu người dùng: dùng drawer và port phần chat AnythingLLM. Đã đọc source upstream tại commit `128a01575a50f0284aeca75a93399b6fb1db0328`; LICENSE tại commit này là MIT (Copyright Mintplex Labs Inc.). Đây là khảo sát để chốt phạm vi port, chưa có code AnythingLLM được tích hợp vào sản phẩm.
 
-**Cách tích hợp đã xác nhận:** clone upstream tại revision được ghi nhận, port source chat cùng dependency cần dùng vào bộ source BBD-OS, build và bảo trì cùng dự án. Không dùng iframe hoặc ứng dụng AnythingLLM bên ngoài. Giữ copyright/license notice, ghi đường dẫn nguồn và các thay đổi. Có bản clone tham khảo chưa có nghĩa đã port xong.
+**Cách tích hợp đã xác nhận:** clone upstream tại revision được ghi nhận, port source chat cùng dependency cần dùng vào bộ source Umwelt-OS, build và bảo trì cùng dự án. Không dùng iframe hoặc ứng dụng AnythingLLM bên ngoài. Giữ copyright/license notice, ghi đường dẫn nguồn và các thay đổi. Có bản clone tham khảo chưa có nghĩa đã port xong.
 
-| Phần source upstream | Cách đưa vào BBD-OS |
+| Phần source upstream | Cách đưa vào Umwelt-OS |
 | --- | --- |
 | `frontend/src/components/WorkspaceChat/index.jsx` | Tách phần nạp history/context khỏi điều hướng workspace, đặt trong drawer dùng chung |
-| `WorkspaceChat/ChatContainer/index.jsx` | Port state hội thoại, gửi/nhận và trạng thái generation; map thread/context sang BBD-OS |
+| `WorkspaceChat/ChatContainer/index.jsx` | Port state hội thoại, gửi/nhận và trạng thái generation; map thread/context sang Umwelt-OS |
 | `ChatContainer/PromptInput/` | Port composer, gửi/dừng, draft; drawer giữ tối giản, các control bổ sung chỉ trên trang Chat |
-| `ChatContainer/ChatHistory/`, `Citation/` | Port message renderer/actions và citation; giữ liên kết bằng chứng BBD-OS |
+| `ChatContainer/ChatHistory/`, `Citation/` | Port message renderer/actions và citation; giữ liên kết bằng chứng Umwelt-OS |
 | `ChatContainer/SourcesSidebar/`, `ChatSidebar/` | Tích hợp trên trang Chat đầy đủ; drawer không có sidebar/tab nguồn/ngữ cảnh |
-| `frontend/src/models/workspace.js`, `workspaceThread.js` | Map history/thread/stream/cancel sang API BBD-OS; upstream stream dùng fetch-event-source và abort |
+| `frontend/src/models/workspace.js`, `workspaceThread.js` | Map history/thread/stream/cancel sang API Umwelt-OS; upstream stream dùng fetch-event-source và abort |
 | `frontend/src/utils/chat/` | Audit message events, Markdown/sanitize và agent events khi port; không đưa HTML chưa làm sạch vào UI |
 
-Frontend upstream có `react-router-dom`, các context riêng, event listeners trên window, workspace models và styling riêng; BBD-OS đang dùng Next.js/TypeScript. Vì vậy phải port phần source cùng các dependency cần thiết, chuyển routing và contract ở biên, quản lý cleanup listener khi drawer đóng/mở, và lưu lại upstream commit/license/notice để bảo trì. Không thể chép một component rồi tuyên bố toàn bộ chat đã hoạt động.
+Frontend upstream có `react-router-dom`, các context riêng, event listeners trên window, workspace models và styling riêng; Umwelt-OS đang dùng Next.js/TypeScript. Vì vậy phải port phần source cùng các dependency cần thiết, chuyển routing và contract ở biên, quản lý cleanup listener khi drawer đóng/mở, và lưu lại upstream commit/license/notice để bảo trì. Không thể chép một component rồi tuyên bố toàn bộ chat đã hoạt động.
 
 **Drawer đã chốt theo yêu cầu mới:** drawer lớn bên phải, tham khảo [MUI right temporary drawer](https://mui.com/material-ui/react-drawer/). Desktop đề xuất rộng khoảng 60–70% viewport với giới hạn đọc thoải mái; mobile phủ đủ chiều rộng. Chỉ có **New chat**, **danh sách tin nhắn user/assistant**, **ô nhập với gửi/dừng**, và nút đóng. Header không có model/thread selector, History, attachment, web-search toggle, tab nguồn, chip ngữ cảnh hoặc nút mở rộng. Citation có thể nằm trong nội dung câu trả lời. Các công cụ và quản lý hội thoại nằm ở trang Chat riêng.
 
 Drawer production dùng **shadcn Sheet** neo mép phải, cao viewport, có backdrop, focus management, Esc/close và trả focus về nút mở. Vùng tin nhắn cuộn, composer giữ dưới cùng và thích ứng bàn phím mobile. Đóng drawer giữ thread/draft; không đồng nghĩa xóa hoặc gửi lại câu hỏi. Link MUI chỉ tham khảo hành vi; thư viện component được chọn là shadcn/ui, không cài Material UI.
 
-Các hành vi chat port cần có trong phạm vi nghiệm thu: nhiều lượt/thread và history, streaming + stop, Markdown/code có sanitize, citation mở đúng bằng chứng, copy/edit/regenerate theo contract, tool/web-search status, attachment có quyền nếu bật. TTS/STT và công cụ chuyên biệt upstream là phạm vi mở rộng nếu được chọn; không mặc nhiên kéo cả backend/agent stack AnythingLLM vào BBD-OS.
+Các hành vi chat port cần có trong phạm vi nghiệm thu: nhiều lượt/thread và history, streaming + stop, Markdown/code có sanitize, citation mở đúng bằng chứng, copy/edit/regenerate theo contract, tool/web-search status, attachment có quyền nếu bật. TTS/STT và công cụ chuyên biệt upstream là phạm vi mở rộng nếu được chọn; không mặc nhiên kéo cả backend/agent stack AnythingLLM vào Umwelt-OS.
 
 **History, New chat và trang Chat AI riêng là phạm vi bắt buộc:**
 
@@ -261,7 +261,7 @@ flowchart LR
     T --> H
 ```
 
-Web search, RAG, GraphRAG và consent vẫn đi qua knowledge/tools/runtime của BBD-OS. Drawer có thể nhận context snapshot với source IDs, bộ lọc, thời gian và selected record IDs; không gửi toàn bộ dữ liệu dashboard mỗi lần hỏi. Nếu thao tác thay đổi dữ liệu cá nhân hoặc hành động bên ngoài, giữ approval và audit hiện có.
+Web search, RAG, GraphRAG và consent vẫn đi qua knowledge/tools/runtime của Umwelt-OS. Drawer có thể nhận context snapshot với source IDs, bộ lọc, thời gian và selected record IDs; không gửi toàn bộ dữ liệu dashboard mỗi lần hỏi. Nếu thao tác thay đổi dữ liệu cá nhân hoặc hành động bên ngoài, giữ approval và audit hiện có.
 
 - Mở từ một sự kiện, một tập kết quả, thực thể hoặc câu hỏi tự do. Trang Chat có phần xem/chỉnh ngữ cảnh; drawer giữ tối giản. Khi mở từ gadget/tin, ngữ cảnh có thể được nêu trong tin nhắn mở đầu để người dùng hiểu câu hỏi đang gắn với dữ liệu nào.
 - Phạm vi: kho đã thu thập; kho + web; thêm nguồn cá nhân đã cấp quyền. Không tự coi bật web là cho phép gửi nội dung cá nhân ra ngoài.
@@ -394,7 +394,7 @@ Các đợt dưới đây là thứ tự bàn giao sản phẩm, chưa đánh l�
 | A — Chỉnh hướng | Map yêu cầu vào code hiện có; cập nhật spec/status/plan | Có ma trận đã có/thiếu/giữ lại; không mất nền tảng Phase 0–3 |
 | B — Thu thập → dashboard động | Source registry, ingestion, chuẩn hóa, provenance, nguồn công khai đầu tiên, snapshot/realtime, dashboard/group/gadget settings, index + globe | Luồng production liền mạch tới UI; thêm gadget từ connector đã cấu hình, lưu/sắp xếp layout; build được; nguồn cần credential hiển thị đúng trạng thái |
 | C — Cá nhân hóa | Watchlist, rules, highlight explainability, saved views, notifications | Rule được lưu và áp dụng vào dữ liệu mới; UI có preview và lý do |
-| D — Hỏi sâu | Port AnythingLLM chat vào drawer, contextual chat, hybrid retrieval, web search, citations, quyền và budget | Source được port có provenance/license; API/stream/thread/cancel nối BBD-OS; câu hỏi đi qua dữ liệu được phép và trả nguồn |
+| D — Hỏi sâu | Port AnythingLLM chat vào drawer, contextual chat, hybrid retrieval, web search, citations, quyền và budget | Source được port có provenance/license; API/stream/thread/cancel nối Umwelt-OS; câu hỏi đi qua dữ liệu được phép và trả nguồn |
 | E — Mở rộng dữ liệu | Hoàn thiện các adapter News/Social/Finance/Weather/Cyber/Research trong catalog | Có source-specific settings, capability/health/quota; activation phụ thuộc quyền và provider |
 | F — Personal + Knowledge | Personal connectors, entities, graph, timeline, correlation, memory và vai trò agent | Liên kết World/User Data theo quyền; hành động đi qua approval; không để graph chặn B–D |
 | G — Test sau toàn bộ code | Contract/integration/E2E, quyền và egress, realtime reconnect, citation, tải và UX/a11y | Thực hiện ở giai đoạn kiểm thử riêng sau khi production code hoàn thành |
@@ -437,7 +437,7 @@ Telegram là **một loại gadget trong `life-dashboard-preview.html`**, không
 
 Trong ô Telegram: feed gộp channel đã chọn, lọc nhanh toàn bộ/một channel, lọc tin chưa đọc/highlight/đã lưu, tô từ khóa và nêu lý do, đánh dấu đã đọc, lưu tin, xem provenance và mở quick-chat drawer dùng chung theo tin. Hội thoại và citation Telegram giữ nguyên khi mở trang Chat/history. Tin mới vào hàng đợi có nút hiển thị; không tự chèn làm nhảy vị trí đọc. Channel/tin/attachment/phản hồi AI đều là dữ liệu hư cấu có nhãn mẫu; không có kết nối Telegram hoặc AI thật, chưa phải component shadcn đã tích hợp.
 
-- Identity production dùng connector instance + channel/chat ID + message ID; hiển thị thời gian đăng, thu thập và sửa riêng biệt. Đã đọc là trạng thái người dùng trong BBD-OS, không phải delivery/read receipt Telegram.
+- Identity production dùng connector instance + channel/chat ID + message ID; hiển thị thời gian đăng, thu thập và sửa riêng biệt. Đã đọc là trạng thái người dùng trong Umwelt-OS, không phải delivery/read receipt Telegram.
 - Highlight theo rule từ Settings → Dashboard & Gadget; lọc tại gadget chỉ đổi chế độ xem. Một connector phục vụ nhiều gadget; không tạo collector riêng cho từng ô.
 - Edit cập nhật đúng tin có version/provenance. Chỉ hiển thị deleted khi connector thực sự nhận tín hiệu xóa; mất quyền hoặc mất mạng không suy diễn thành xóa tin. Khả năng lịch sử, reply, forward, edit/delete phụ thuộc API/provider và quyền đã cấu hình.
 - Chỉ thu thập channel được cấp quyền; bot không tự đọc được mọi channel hoặc toàn bộ lịch sử. Liên kết nguồn production chỉ xuất hiện khi có URL hợp lệ và quyền truy cập; mockup không tạo link Telegram giả.

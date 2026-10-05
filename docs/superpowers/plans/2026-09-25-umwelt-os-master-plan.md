@@ -1,4 +1,4 @@
-# BBD-OS Approved Delivery Master Plan â€” Phases 0â€“12
+# Umwelt-OS Approved Delivery Master Plan â€” Phases 0â€“12
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development for task-by-task execution. Follow the phase files linked below and maintain [EXECUTION.md](EXECUTION.md). The owner approved the product scope and requested continuous progress through ready tasks; do not ask for repeated phase-scope approval.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** The approved stack and Phase 0 lockfiles. Add and pin dependencies when the owning task uses them; capability/backend compatibility is checked against the installed versions.
 
-**Spec:** [Canonical specification](../../../specs/personal-intelligence-os-spec-v2.md), sections 156–166. [R01–R16 reconciliation plan](2026-09-30-bbd-os-spec-reconciliation.md) governs conflicting earlier examples.
+**Spec:** [Canonical specification](../../../specs/personal-intelligence-os-spec-v2.md), sections 156–166. [R01–R16 reconciliation plan](2026-09-30-umwelt-os-spec-reconciliation.md) governs conflicting earlier examples.
 
 ## Global Constraints
 
@@ -36,22 +36,22 @@
 
 ## Plan Index and Dependencies
 
-Phase 0 is implemented: [existing Phase 0 plan](2026-09-25-bbd-os-phase-0.md). Preserve its acceptance evidence; do not rerun its implementation.
+Phase 0 is implemented: [existing Phase 0 plan](2026-09-25-umwelt-os-phase-0.md). Preserve its acceptance evidence; do not rerun its implementation.
 
 | Phase | Local implementation plan | Entry dependency | Tasks | Implementation |
 | --- | --- | --- | --- | --- |
-| 1 | [Core Data Platform](2026-09-25-bbd-os-phase-1-core-data-platform.md) | Phase 0 acceptance | 4 | Original code/build/review complete; supplemental pending; acceptance deferred |
-| 2 | [Ingestion and Packaged Connectors](2026-09-25-bbd-os-phase-2-ingestion-connectors.md) | Phase 1 sources/documents public contracts | 4 | Original code/build/review complete; supplemental pending; acceptance deferred |
-| 3 | [Search and Model Gateway Foundation](2026-09-25-bbd-os-phase-3-search-model-gateway.md) | Phase 2 chunks/provenance; live model acceptance needs configured endpoint and permitted aliases | 4 | Original code/build/review complete; supplemental pending; acceptance deferred |
-| 4 | [Entity Knowledge and Corrections](2026-09-25-bbd-os-phase-4-entity-knowledge.md) | Phase 3 validated structured-output alias, search and public library | 4 | P04-T1 uncommitted in separate worktree; reconciliation pending |
-| 5 | [Temporal Knowledge and Timeline](2026-09-25-bbd-os-phase-5-temporal-knowledge.md) | Phase 4 entities/evidence; Phase 3 permitted chat/structured/embedding capabilities | 4 | Not started |
-| 6 | [Chat, Drawer and Selective Memory](2026-09-25-bbd-os-phase-6-ask-chat-drawer-memory.md) | Phase 3 retrieval/gateway, Phase 4 entities, Phase 5 temporal public APIs | 4 | Not started |
-| 7 | [Agent Harness, Tools, MCP and Approvals](2026-09-25-bbd-os-phase-7-agent-harness-tools.md) | Phase 6 chat/memory; Phase 3 capabilities; Phase 2 isolated browser runtime | 4 | Not started |
-| 8 | [Configurable Dashboard, Tasks and Goals](2026-09-25-bbd-os-phase-8-today-daily-chat-tasks.md) | Phases 1â€“7 public knowledge, chat, events and tools; source collection already runs in Phase 2 | 4 | Not started |
-| 9 | [GitHub Collection and Project Knowledge](2026-09-25-bbd-os-phase-9-github-integration.md) | Phase 2 connector contract; Phases 4â€“8 entity/event/project presentation | 4 | Not started |
-| 10 | [Automation Rules and Workflow Management](2026-09-25-bbd-os-phase-10-automation-workflows.md) | Phase 2 durable events/n8n; Phase 7 approvals; Phase 8 tasks/brief/notifications | 4 | Not started |
-| 11 | [Observability and Operational Controls](2026-09-25-bbd-os-phase-11-observability-operations.md) | Phases 1â€“10 already emit run IDs, events, status and timing | 4 | Not started |
-| 12 | [Hardening, Backup, Recovery and Full Acceptance](2026-09-25-bbd-os-phase-12-hardening-release-acceptance.md) | Production code/build contracts from Phases 1–11; behavioral acceptance deferred; actual target hardware and permitted live integrations for final release gate | 5 | Not started |
+| 1 | [Core Data Platform](2026-09-25-umwelt-os-phase-1-core-data-platform.md) | Phase 0 acceptance | 4 | Original code/build/review complete; supplemental pending; acceptance deferred |
+| 2 | [Ingestion and Packaged Connectors](2026-09-25-umwelt-os-phase-2-ingestion-connectors.md) | Phase 1 sources/documents public contracts | 4 | Original code/build/review complete; supplemental pending; acceptance deferred |
+| 3 | [Search and Model Gateway Foundation](2026-09-25-umwelt-os-phase-3-search-model-gateway.md) | Phase 2 chunks/provenance; live model acceptance needs configured endpoint and permitted aliases | 4 | Original code/build/review complete; supplemental pending; acceptance deferred |
+| 4 | [Entity Knowledge and Corrections](2026-09-25-umwelt-os-phase-4-entity-knowledge.md) | Phase 3 validated structured-output alias, search and public library | 4 | P04-T1 uncommitted in separate worktree; reconciliation pending |
+| 5 | [Temporal Knowledge and Timeline](2026-09-25-umwelt-os-phase-5-temporal-knowledge.md) | Phase 4 entities/evidence; Phase 3 permitted chat/structured/embedding capabilities | 4 | Not started |
+| 6 | [Chat, Drawer and Selective Memory](2026-09-25-umwelt-os-phase-6-ask-chat-drawer-memory.md) | Phase 3 retrieval/gateway, Phase 4 entities, Phase 5 temporal public APIs | 4 | Not started |
+| 7 | [Agent Harness, Tools, MCP and Approvals](2026-09-25-umwelt-os-phase-7-agent-harness-tools.md) | Phase 6 chat/memory; Phase 3 capabilities; Phase 2 isolated browser runtime | 4 | Not started |
+| 8 | [Configurable Dashboard, Tasks and Goals](2026-09-25-umwelt-os-phase-8-today-daily-chat-tasks.md) | Phases 1â€“7 public knowledge, chat, events and tools; source collection already runs in Phase 2 | 4 | Not started |
+| 9 | [GitHub Collection and Project Knowledge](2026-09-25-umwelt-os-phase-9-github-integration.md) | Phase 2 connector contract; Phases 4â€“8 entity/event/project presentation | 4 | Not started |
+| 10 | [Automation Rules and Workflow Management](2026-09-25-umwelt-os-phase-10-automation-workflows.md) | Phase 2 durable events/n8n; Phase 7 approvals; Phase 8 tasks/brief/notifications | 4 | Not started |
+| 11 | [Observability and Operational Controls](2026-09-25-umwelt-os-phase-11-observability-operations.md) | Phases 1â€“10 already emit run IDs, events, status and timing | 4 | Not started |
+| 12 | [Hardening, Backup, Recovery and Full Acceptance](2026-09-25-umwelt-os-phase-12-hardening-release-acceptance.md) | Production code/build contracts from Phases 1–11; behavioral acceptance deferred; actual target hardware and permitted live integrations for final release gate | 5 | Not started |
 
 Original P01–P03 code/build/review is complete. Execute supplementary foundations and remaining phases in the reconciliation plan order. A blocked live integration does not prohibit independent production schema/UI work, but dependent live acceptance stays blocked. Never mark a phase complete while its mandatory acceptance remains unverified.
 
@@ -63,7 +63,7 @@ Original P01–P03 code/build/review is complete. Execute supplementary foundati
 - Large right shadcn Sheet contains only New chat, messages, composer/send-stop and close. Full Chat owns history/context/citations/activity/approvals/web search; shared conversation and draft. Port AnythingLLM source.
 - Saved briefs retain revisions and selected date/timezone context remains available in gadgets. Current records are not historical task-state snapshots; no fixed Today layout.
 - Three Settings groups: Data sources / AI & Ommi Router / Dashboard & Gadget. User menu owns account/theme/language.
-- All normal connector setup stays in BBD-OS through protected adapters; n8n remains internal schedule owner. Provider OAuth consent and administrator app registration still apply.
+- All normal connector setup stays in Umwelt-OS through protected adapters; n8n remains internal schedule owner. Provider OAuth consent and administrator app registration still apply.
 - SSE for dashboard and run-scoped chat, REST commands; MCP client/server and capability-dependent collection.
 - Add securely linked Google login, retain password pending owner choice. No local inference requirement.
 - shadcn/Radix semantic UI, Recharts, globe.gl/deck.gl, en-us/vi-vi.
@@ -139,16 +139,16 @@ Gmail/Calendar/Drive/Notion/Slack and named social/community providers remain la
 10. Continuous execution means continuing within an active run or resuming from this ledger. Markdown files do not create a scheduler/background process.
 ## Delivery Files and Current Checkpoint
 
-- Preserve the original **49 task IDs** and Phase 0 acceptance evidence. [R01–R16](2026-09-30-bbd-os-spec-reconciliation.md) adds **16 supplementary tasks** with exact files/contracts/deferred acceptance.
+- Preserve the original **49 task IDs** and Phase 0 acceptance evidence. [R01–R16](2026-09-30-umwelt-os-spec-reconciliation.md) adds **16 supplementary tasks** with exact files/contracts/deferred acceptance.
 - Original Phases 1–3 code/build/review complete; commit 4d0f774 is in local main history. Runtime acceptance remains deferred.
-- P04-T1 has uncommitted entity/relationship work and 0007_entities.py in D:/Project/BBD-OS-phase-4; preserve and reconcile before resuming.
+- P04-T1 has uncommitted entity/relationship work and 0007_entities.py in D:/Project/Umwelt-OS-phase-4; preserve and reconcile before resuming.
 - Current action: revised-plan review. Next production task: R01, then supplemental foundations and preserved Phase 4 work per new execution-order table.
 - No production implementation begins during this planning turn. Preserve subagent-driven method, immediate task reports and authorized scoped commits/phase merges; no push/deploy.
 
 ## External Integration Evidence and Release Gates
 
 Use primary project documentation and verify the versions installed at execution:
-- [OmniRoute](https://github.com/diegosouzapw/OmniRoute): configured endpoint/aliases; per-capability testing and destination policy are BBD-OS responsibilities.
+- [OmniRoute](https://github.com/diegosouzapw/OmniRoute): configured endpoint/aliases; per-capability testing and destination policy are Umwelt-OS responsibilities.
 - [Graphiti](https://github.com/getzep/graphiti): start compatibility testing with FalkorDB; keep it separate from queue Redis, and do not infer 8GB suitability from backend support.
 - [LangGraph interrupts](https://docs.langchain.com/oss/python/langgraph/interrupts): persist checkpoints and resume only after tool permissions/approval state are revalidated.
 - [n8n Schedule Trigger](https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.scheduletrigger/): use explicit timezone and verify the pinned runtime's scheduling behavior.
@@ -157,4 +157,4 @@ Final acceptance imports three RSS feeds, one GitHub repository, five text-beari
 
 ## Reconciliation coverage and execution gate
 
-Read [2026-09-30-bbd-os-spec-reconciliation.md](2026-09-30-bbd-os-spec-reconciliation.md) for supplementary dependency order and spec coverage. Original phase task counts are historical. All code/build/review must close before deferred test authoring/acceptance. Provider catalog entries are not implemented adapters. Review this revised plan before production execution; execution method is already subagent-driven.
+Read [2026-09-30-umwelt-os-spec-reconciliation.md](2026-09-30-umwelt-os-spec-reconciliation.md) for supplementary dependency order and spec coverage. Original phase task counts are historical. All code/build/review must close before deferred test authoring/acceptance. Provider catalog entries are not implemented adapters. Review this revised plan before production execution; execution method is already subagent-driven.

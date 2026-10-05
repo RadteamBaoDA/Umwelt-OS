@@ -1,4 +1,4 @@
-# BBD-OS — Personal Intelligence OS
+# Umwelt-OS — Personal Intelligence OS
 ## Master Product & Engineering Specification
 
 **Document type:** Product Requirements + UX Specification + Software Architecture + Implementation Plan  
@@ -1599,7 +1599,7 @@ Deliver working collection workflows for the following sources, reusing n8n buil
 - GitHub
 - Generic REST API
 
-n8n owns external collection schedules and provider credentials. BBD-OS owns source identity, ingestion, provenance, processing status, and its supported ingestion API. Package version-controlled workflow templates and mappings for these initial sources; installing n8n alone does not satisfy this requirement. Direct file upload remains a BBD-OS feature. See sections 159–160 for browser collection and synchronization semantics.
+n8n owns external collection schedules and provider credentials. Umwelt-OS owns source identity, ingestion, provenance, processing status, and its supported ingestion API. Package version-controlled workflow templates and mappings for these initial sources; installing n8n alone does not satisfy this requirement. Direct file upload remains a Umwelt-OS feature. See sections 159–160 for browser collection and synchronization semantics.
 
 File support:
 
@@ -4440,13 +4440,13 @@ If adding these requires major rewrites, the architecture is not sufficiently mo
 
 # 156. REVISED IMPLEMENTATION STRATEGY — 2026-09-25
 
-Build BBD-OS for one owner on a 2-core, 8 GB RAM machine with SSD storage. Model inference uses providers through OmniRoute; local inference is not required on this host. Prefer maintained components over implementing an agent engine, scheduler, queue, or browser engine from scratch.
+Build Umwelt-OS for one owner on a 2-core, 8 GB RAM machine with SSD storage. Model inference uses providers through OmniRoute; local inference is not required on this host. Prefer maintained components over implementing an agent engine, scheduler, queue, or browser engine from scratch.
 
 The selected application stack remains Python/FastAPI, Pydantic, SQLAlchemy, Alembic, PostgreSQL/pgvector, Redis/ARQ, LangGraph, and the specified Next.js frontend. Do not introduce a Go backend or a second application language for backend services without measured need and a separate decision.
 
 Use core/ and modules/ from sections 139–143 as the canonical domain layout. apps/api and apps/worker are runtime entry points; do not duplicate domain implementations under services/ or apps/api/app/. Create directories only when used. Public APIs use /api/v1; earlier unversioned resource examples are shorthand, except /health.
 
-Reuse libraries and workflow templates, but implement BBD-OS-specific contracts, authorization, provenance, idempotency, and error handling. A dependency installation or a mock provider is not a completed product feature.
+Reuse libraries and workflow templates, but implement Umwelt-OS-specific contracts, authorization, provenance, idempotency, and error handling. A dependency installation or a mock provider is not a completed product feature.
 
 # 157. MODEL GATEWAY AND PRIVACY
 
@@ -4501,9 +4501,9 @@ Ship version-controlled n8n workflow templates for RSS/Atom, GitHub, generic RES
 
 Support scheduled polling, provider webhooks when available, and Sync now. A trigger may itself poll; document actual behavior. Configure timezone explicitly as Asia/Ho_Chi_Minh by default, editable by the owner. Document missed-run recovery behavior for the pinned n8n version.
 
-BBD-OS owns source IDs, source settings, sync cursor/checkpoint, and run status; n8n owns execution of the external schedule and provider credentials. The connector adapter associates a source with its workflow and implements validate, sync, normalize, and health through supported interfaces. Agent source tools call that adapter, not arbitrary n8n workflows.
+Umwelt-OS owns source IDs, source settings, sync cursor/checkpoint, and run status; n8n owns execution of the external schedule and provider credentials. The connector adapter associates a source with its workflow and implements validate, sync, normalize, and health through supported interfaces. Agent source tools call that adapter, not arbitrary n8n workflows.
 
-Source UI must support setup, validation, pause/resume, Sync now, last fetch, last indexed, and errors. Section 165 now requires the normal collection-configuration flow inside BBD-OS, backed by supported server-side adapter/n8n APIs and protected credential storage. The owner need not open n8n to complete ordinary setup; any unsupported provider operation must be explicit. This requirement does not claim embedded credential setup is already implemented.
+Source UI must support setup, validation, pause/resume, Sync now, last fetch, last indexed, and errors. Section 165 now requires the normal collection-configuration flow inside Umwelt-OS, backed by supported server-side adapter/n8n APIs and protected credential storage. The owner need not open n8n to complete ordinary setup; any unsupported provider operation must be explicit. This requirement does not claim embedded credential setup is already implemented.
 
 Use a protected ingestion endpoint with a credential limited to ingestion and authorized sources. Validate batch schema, source identity, sizes, and provenance. n8n must not write application tables directly.
 
@@ -4512,7 +4512,7 @@ For each source:
 1. Bootstrap bounded history with pagination.
 2. Collect incremental changes using provider cursors or supported timestamps, with overlap and deduplication when necessary.
 3. Submit batches with stable source/provider record identities and version information.
-4. Advance the durable cursor only after BBD-OS acknowledges durable receipt; use conditional updates to prevent stale runs overwriting newer cursors.
+4. Advance the durable cursor only after Umwelt-OS acknowledges durable receipt; use conditional updates to prevent stale runs overwriting newer cursors.
 5. Process/index asynchronously. Show collection and indexing failures separately.
 
 Prevent overlapping syncs per source. Respect rate limits and Retry-After; retry bounded transient failures. Authenticate/verify provider webhooks according to provider contracts. Handle edits and deletions when the source exposes them; document sources that cannot reliably detect deletions. Retain provenance across duplicate observations.
@@ -4528,7 +4528,7 @@ Prefer the cheapest collection mode that satisfies the source:
 3. Crawlee Playwright crawler for JavaScript rendering or repeatable browser interactions.
 4. browser-use for tasks that require model-directed browser navigation.
 
-Use these libraries in a dedicated browser-capable worker deployment when needed. n8n submits a BBD-OS crawl job and receives a run ID; poll a protected status endpoint or receive an authenticated completion callback. Long browser runs must not hold an ingestion HTTP request open.
+Use these libraries in a dedicated browser-capable worker deployment when needed. n8n submits a Umwelt-OS crawl job and receives a run ID; poll a protected status endpoint or receive an authenticated completion callback. Long browser runs must not hold an ingestion HTTP request open.
 
 Crawl4AI and Browserless are alternatives, not additional default services. Do not deploy every crawler discussed. A browser-use task uses the configured OmniRoute alias only after capability testing; compatible chat HTTP alone does not prove browser-agent compatibility.
 
@@ -4550,7 +4550,7 @@ When graph or browser work exceeds available resources, first reduce concurrency
 
 # 162. VALIDATION AND DELIVERY GATES
 
-Phase 0 remains a runnable login-capable foundation: Compose, migrations, owner setup, sessions/CSRF, health/readiness, CI, documented development commands, and an unconfigured gateway state. Later phases remain required; do not treat Phase 0 as completion of BBD-OS.
+Phase 0 remains a runnable login-capable foundation: Compose, migrations, owner setup, sessions/CSRF, health/readiness, CI, documented development commands, and an unconfigured gateway state. Later phases remain required; do not treat Phase 0 as completion of Umwelt-OS.
 
 Before implementing graph integration, pin and verify Graphiti/backend compatibility and measure its resource footprint. Before relying on model-dependent flows, test actual configured OmniRoute chat, tool calls, streaming, and embeddings. Test providers are for automated checks, not evidence that a live provider works.
 
@@ -4578,7 +4578,7 @@ Verify current compatibility and pin versions during implementation; these links
 
 # 164. APPROVED PLAN DELIVERY AND CHAT DRAWER — 2026-09-25
 
-The owner approved the Phase 1–12 breakdown and requested that every phase plan be saved locally, with task-level checklists and continuous progression through ready tasks during execution. The master index is `docs/superpowers/plans/2026-09-25-bbd-os-master-plan.md`; `docs/superpowers/plans/EXECUTION.md` records current/next tasks, evidence and external acceptance gates. Plan availability does not imply implementation completion.
+The owner approved the Phase 1–12 breakdown and requested that every phase plan be saved locally, with task-level checklists and continuous progression through ready tasks during execution. The master index is `docs/superpowers/plans/2026-09-25-umwelt-os-master-plan.md`; `docs/superpowers/plans/EXECUTION.md` records current/next tasks, evidence and external acceptance gates. Plan availability does not imply implementation completion.
 
 The owner selected a contextual chat next to Today, saved historical briefs plus currently updated lists, and then clarified that chat must be a drawer to leave more display space. Sections 42 and 46 above are authoritative for that behavior. The drawer is shared across supported contexts, closed by default, and expands to the same conversation on `/ask`; this does not introduce multi-workspace accounts.
 
@@ -4620,11 +4620,11 @@ Collectors publish normalized documents, events, entities and time-series observ
 - New information queues behind an “N new items” action while the user reads. Distinguish unread state, rule highlight and severity; show why a highlight matched. Do not use color alone or treat all highlighted items as urgent.
 - Selecting one or several permitted items supports **Ask AI**. Keep the selected source identities/versions as thread context and return citations that reopen the exact supporting item.
 
-Telegram is a gadget renderer, not a separate application screen. Each definition selects **one or multiple authorized channels**; multiple gadgets may use different scopes. Show channel/message identity, publication/collection time, edited state when received, readable media placeholders, highlight reason and per-owner read/save state. BBD-OS read state is not a Telegram read receipt. History/replies/edits/deletions depend on the configured API/provider; do not infer deletion from an outage or assume bots can access arbitrary channels/history.
+Telegram is a gadget renderer, not a separate application screen. Each definition selects **one or multiple authorized channels**; multiple gadgets may use different scopes. Show channel/message identity, publication/collection time, edited state when received, readable media placeholders, highlight reason and per-owner read/save state. Umwelt-OS read state is not a Telegram read receipt. History/replies/edits/deletions depend on the configured API/provider; do not infer deletion from an outage or assume bots can access arbitrary channels/history.
 
 ## 165.4. Settings: exactly three top-level groups
 
-Use one Settings workspace with a compact local navigation and a content pane; collapse the local navigation on mobile. The normal tasks below stay in BBD-OS rather than redirecting the owner to provider administration products.
+Use one Settings workspace with a compact local navigation and a content pane; collapse the local navigation on mobile. The normal tasks below stay in Umwelt-OS rather than redirecting the owner to provider administration products.
 
 | Group | Owned configuration |
 | --- | --- |
@@ -4646,7 +4646,7 @@ Guided source editor:
 
 Expose **Collect now**, Pause/Resume, last run and actionable failures. Advanced controls include rate/concurrency limits, bounded retry/backoff, retention and diagnostic logs. Enforce permissions and scheduling semantics in backend APIs; the UI cannot grant itself collection rights.
 
-Collection runs on the server and continues when the browser closes. Keep n8n the schedule owner for n8n-backed sources, ARQ for internal bounded work, PostgreSQL for durable identities/cursors/run state, and existing adapter contracts. Implement the BBD-OS editor through supported APIs/credential-reference mechanisms; do not add a competing scheduler or direct n8n database writes. Save/configure/enable must be recoverable across partial failures and report actual activation status. Protect credentials in server storage, redact logs and never return plaintext secrets to the browser. Browser-originated endpoint configuration remains subject to SSRF/egress controls.
+Collection runs on the server and continues when the browser closes. Keep n8n the schedule owner for n8n-backed sources, ARQ for internal bounded work, PostgreSQL for durable identities/cursors/run state, and existing adapter contracts. Implement the Umwelt-OS editor through supported APIs/credential-reference mechanisms; do not add a competing scheduler or direct n8n database writes. Save/configure/enable must be recoverable across partial failures and report actual activation status. Protect credentials in server storage, redact logs and never return plaintext secrets to the browser. Browser-originated endpoint configuration remains subject to SSRF/egress controls.
 
 ### Direct Ommi Router configuration
 
@@ -4662,9 +4662,9 @@ Collection runs on the server and continues when the browser closes. Keep n8n th
 
 Quick chat is a large right-side **shadcn Sheet**, with only New chat, conversation messages, composer/send-stop and close. History, open/manage existing conversations, context and advanced web-search controls live on the full Chat page. Drawer and full page share the same thread, selected source context and draft.
 
-Clone/port the relevant **AnythingLLM** chat source into this repository, with revision/license/provenance tracking, then adapt it to BBD-OS contracts and shadcn components. An iframe, external AnythingLLM app or visual mock is not completion. AI traffic uses the configured backend OpenAI SDK/OmniRoute path.
+Clone/port the relevant **AnythingLLM** chat source into this repository, with revision/license/provenance tracking, then adapt it to Umwelt-OS contracts and shadcn components. An iframe, external AnythingLLM app or visual mock is not completion. AI traffic uses the configured backend OpenAI SDK/OmniRoute path.
 
-Use **shadcn/ui**, semantic theme tokens and a consistent Radix-based component family for the UI; use **Recharts through shadcn Chart** for stocks/coins and other financial charts. Use globe.gl for 3D and deck.gl for WebGL flat maps with shared layer identities. Do not introduce Material UI for the drawer. Follow `docs/DESIGN_SYSTEM.md` and `.agents/skills/bbd-os-ui-system/SKILL.md`.
+Use **shadcn/ui**, semantic theme tokens and a consistent Radix-based component family for the UI; use **Recharts through shadcn Chart** for stocks/coins and other financial charts. Use globe.gl for 3D and deck.gl for WebGL flat maps with shared layer identities. Do not introduce Material UI for the drawer. Follow `docs/DESIGN_SYSTEM.md` and `.agents/skills/umwelt-os-ui-system/SKILL.md`.
 
 Support light/dark/system and app locale IDs `en-us` / `vi-vi`, normalized to `en-US` / `vi-VN` for rendering/Intl. Translate UI and accessibility labels, not source content automatically; formatting does not convert currencies/timezones.
 
@@ -4732,7 +4732,7 @@ The catalog includes RSS/Atom, Google News feeds, GDELT/government sources, perm
 
 Reuse the existing validate/sync/normalize/health contracts. A generic REST connector does not replace provider-specific behavior. Preserve original record identity, versions, timestamps and provenance through deduplication and indexing. Prevent overlapping source syncs and advance cursors only after durable receipt. One collector serves many gadgets; gadgets never own polling, credentials or source ingestion.
 
-## 166.3. All connector management inside BBD-OS
+## 166.3. All connector management inside Umwelt-OS
 
 **Settings → Data sources** is the only normal connector-administration UI. Do not require users to open n8n, AnythingLLM, Airbyte or another administration app to connect, scope, schedule or operate a supported source. n8n remains an internal execution component rather than a user-facing configuration dependency.
 
@@ -4740,18 +4740,18 @@ Provide the complete flow: choose provider → connect → choose authorized dat
 
 Each catalog entry declares authentication method, configuration fields, scope discovery, supported collection modes, history/edit/delete capability and quota limits. Reuse common forms where appropriate; use provider-specific editors for different authorization/scope flows. Do not expose arbitrary workflow editing or raw execution commands as normal source setup.
 
-BBD-OS owns source identity, desired settings, cursor and public run/health status. For n8n-backed sources, its server adapter reconciles version-controlled workflow templates, protected credential references, scope, schedule and activation through supported n8n interfaces. n8n owns its provider execution credential and external schedule; BBD-OS stores the association/reference and never reads/writes n8n database tables directly. Native adapters use protected BBD-OS credential storage. Frontend users never receive service administration keys or plaintext stored secrets.
+Umwelt-OS owns source identity, desired settings, cursor and public run/health status. For n8n-backed sources, its server adapter reconciles version-controlled workflow templates, protected credential references, scope, schedule and activation through supported n8n interfaces. n8n owns its provider execution credential and external schedule; Umwelt-OS stores the association/reference and never reads/writes n8n database tables directly. Native adapters use protected Umwelt-OS credential storage. Frontend users never receive service administration keys or plaintext stored secrets.
 
 Record desired configuration revision and actual activation status. Make create/update/enable operations idempotent and recoverable across partial failures. If settings are saved but workflow activation fails, show **Saved, not active** with an actionable retry. Disabling a source must fence new work even while external schedule deactivation is being reconciled. Validate supported operations against the pinned n8n release; an unsupported credential/provisioning operation requires an implemented compatible adapter before the provider is advertised as fully supported.
 
-OAuth begins in BBD-OS and returns to its callback. The provider's own login/consent screen may still be required; it is not a third-party connector administration screen. Deployment administrators may need a provider developer console to register an OAuth application and redirect URI once. Document that prerequisite rather than promising consent or application registration can be bypassed.
+OAuth begins in Umwelt-OS and returns to its callback. The provider's own login/consent screen may still be required; it is not a third-party connector administration screen. Deployment administrators may need a provider developer console to register an OAuth application and redirect URI once. Document that prerequisite rather than promising consent or application registration can be bypassed.
 
 ## 166.4. MCP integration
 
 Support both directions through the existing tool/knowledge boundaries:
 
-1. **MCP client:** BBD-OS connects to authorized external MCP servers and exposes selected tools/resources to agents or collection adapters.
-2. **MCP server:** BBD-OS exposes explicitly permitted search/knowledge tools to external clients. Actions are only exposed through registered tools and their approval policies.
+1. **MCP client:** Umwelt-OS connects to authorized external MCP servers and exposes selected tools/resources to agents or collection adapters.
+2. **MCP server:** Umwelt-OS exposes explicitly permitted search/knowledge tools to external clients. Actions are only exposed through registered tools and their approval policies.
 
 External connections are configured in **Settings → Data sources → MCP** within the existing three-group Settings structure. Provide name, endpoint, supported authentication, draft connection check, capability discovery, selected tool/resource permissions, timeouts/limits, enable/disable and health/errors. Manage inbound client grants/revocation in the relevant advanced MCP section; inbound clients receive explicit scopes, never implicit owner access.
 
@@ -4774,7 +4774,7 @@ Select **SSE** for server-to-browser dashboard updates and AI response streaming
 
 ## 166.6. Google sign-in for the single owner
 
-Add **Sign in with Google** to the login experience. This means Google OAuth/OIDC identity authentication, not permission to read Gmail. Reuse BBD-OS owner sessions, HttpOnly cookies, CSRF and logout behavior rather than introducing an independent authentication system.
+Add **Sign in with Google** to the login experience. This means Google OAuth/OIDC identity authentication, not permission to read Gmail. Reuse Umwelt-OS owner sessions, HttpOnly cookies, CSRF and logout behavior rather than introducing an independent authentication system.
 
 Use server-side authorization-code flow with PKCE, browser-bound single-use expiring state and nonce. Use a maintained OAuth/OIDC implementation to validate Google issuer, signature/JWKS, audience, expiration, nonce and verified email; bind the owner identity to the verified issuer/subject, not an email string alone. Bound network calls and handle cancellation, invalid callbacks and provider outages without leaking identity details or tokens.
 

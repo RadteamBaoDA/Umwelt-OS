@@ -1,14 +1,31 @@
-# BBD-OS implementation status
+# Umwelt-OS implementation status
 
-Updated: 2026-10-05 (develop818b6af; reviewed P07 registry/MCP/harness/approvals c934667 and GitHub OAuth/S1 93686af remain in canonical worktrees; active Luna: P07 specialist S1 code/build/source complete and committed faa80d2, P08 full proposal/Chat/privacy source review, P09 S2 complete and committed c5c036b; T3/T4 preflight. P09 partial frontend17pages PASS; P07 specialist canonical frontend20pages and four-image build PASS, finite source review closed; Docker engine recovered. No new phase merge or validation-stage start).
+Updated: 2026-10-05 — live checkpoint: develop 962035d; real primary folder Umwelt-OS; linked Git paths repaired. P07 browser/P08 proposals/P09 composition remain unfinished. No implementation subagents currently running. Original code/build-first and deferred acceptance scope remains unchanged.
+
+
+## Current checkpoint — 2026-10-05
+
+This live snapshot supersedes older current-action paragraphs; historical entries retain their original evidence.
+
+| Area | Current status | Next required action |
+| --- | --- | --- |
+| P01–P06 | Production code/build/source review recorded complete; P05/P06 are in develop history. Runtime/provider acceptance remains deferred. | Preserve accepted code while composing later phases. |
+| P07 | Accepted specialist S1 committed faa80d2; browser S2/S3 production source is still being implemented. Browser author has 95 dirty paths and no unmerged index entries. | Resume browser callback/control/isolation and lock-order wiring, freeze source, build, review; remaining supervisor/browser/MCP collection scope still required. |
+| P08 | Proposal R1/R2/R3/R5/R6 source fixes reviewed; R4 nested evidence-wrapper consumer repaired. Exact current Goals.public SHA256 9F03509EAD32198FEF9B508901BA9D8349887F8E0F137C8D861BDFC95E88DEDD matches repair freeze. Prescribed repair build passed: 18 frontend pages and four images. | Finish R4-only independent source re-review, compose accepted P07 Chat privacy/provider/migration seams, then remaining daily brief/context/notifications/selected-day chat and R11/R12. |
+| P09 | GitHub OAuth/S1 and S2 accepted; S2 canonical commit c5c036b with code/build/source closure. T3/T4 prerequisite author currently has 17 unmerged paths and 240 dirty paths. | Resolve accepted prerequisite composition, freeze/build/review, then implement mapping and actual gadget/Timeline presentation. |
+| P10–P12 | Not implemented in the original plan ledger. | Automation, observability, hardening/backup/restore and final deferred validation after all production/reconciliation code. |
+| Repository rename | Primary is a real D:/Project/Umwelt-OS directory, not a junction; old primary path absent. Git lists 20 registered checkouts with new paths; all 19 linked .git registrations repaired successfully this checkpoint. Remote points to RadteamBaoDA/Umwelt-OS. Markdown/plan/owned skill naming updated. | Desktop saved project path still points at the former directory and reports isGitRepository=false; archived attachment/path metadata completion remains unverified. Finalize log has no SUCCESS, so do not treat old queued helper as completion. |
+| Execution | Only controller active; no implementation/review child agents running after restart/interruption. Production edits and composition index preserved. | Resume the three pending work streams from current bytes, not from scratch. |
+
+Current develop HEAD is 962035d (Add design system components and documentation), following 818b6af. No full P07/P08/P09 phase merge is established by the current checkpoint. Status files updated only; no commit, push, deploy, tests, lint, standalone typecheck or application/provider runtime validation performed in this status update. Git worktree repair changes Git path metadata, not production function logic.
 
 Markers: `[ ]` not started; `[~]` in progress; `[x]` complete; `[!]` blocked.
 
 - [x] Read the master specification and update the design for the discussed hardware, Python/OSS reuse, OmniRoute, n8n, and browser collection.
 - [x] Design review: owner approved the architecture, including OmniRoute, on 2026-09-25.
-- [x] Written Phase 0 implementation plan: `docs/superpowers/plans/2026-09-25-bbd-os-phase-0.md`.
+- [x] Written Phase 0 implementation plan: `docs/superpowers/plans/2026-09-25-umwelt-os-phase-0.md`.
 - [x] Phase 0: repository foundation, login, Compose, migrations, worker health, UI, CI, and operator docs.
-- [x] Saved master plan and all 12 Phase 1–12 implementation plans, with 49 task checklists: [master index](superpowers/plans/2026-09-25-bbd-os-master-plan.md).
+- [x] Saved master plan and all 12 Phase 1–12 implementation plans, with 49 task checklists: [master index](superpowers/plans/2026-09-25-umwelt-os-master-plan.md).
 - [x] Recorded the approved chat drawer and day-context/history UX in the canonical spec and Phase 6/8/12 plans.
 - [x] Created [execution ledger](superpowers/plans/EXECUTION.md) for evidence, external gates and continuous task progression. Phase 1-12 implementation uses a production-code/build stage first; tests begin only after all phase code is complete.
 - [x] Phase 1: core data platform code/build and whole-branch review complete; merged to `main` (`d425057`). Behavioral acceptance remains deferred.
@@ -28,7 +45,7 @@ Phase 0 verified on 2026-09-25: Ruff, mypy, pytest (15 passed, 1 integration tes
 
 ## Spec 165–166 supplemental delivery
 
-- [x] Updated master and Phase 1–12 plans; added [R01–R16](superpowers/plans/2026-09-30-bbd-os-spec-reconciliation.md).
+- [x] Updated master and Phase 1–12 plans; added [R01–R16](superpowers/plans/2026-09-30-umwelt-os-spec-reconciliation.md).
 - [x] R01 production code/build/review integrated into develop (`d968d89`); behavioral acceptance deferred.
 - [x] R02 secure Google login code/build/review integrated into develop (`faeb664`); live Google acceptance deferred.
 - [~] R03-core code/build/review integrated into develop (`fb647bb`, feature `a52bc24`); three repair rounds closed all material source findings. R03-OAuth carried to the actual GitHub consumer in P09-T1; full R03 pending.
@@ -46,7 +63,7 @@ This snapshot supersedes older current-action summaries. Historical execution en
 
 ### Integrated delivery
 
-- Current checkout: `D:/Project/BBD-OS`, branch `develop`, HEAD `393092a` (P04 production integration `fa1ed6a`). No subsequent P05/R10/R13 squash has occurred.
+- Current checkout: `D:/Project/Umwelt-OS`, branch `develop`, HEAD `393092a` (P04 production integration `fa1ed6a`). No subsequent P05/R10/R13 squash has occurred.
 - Original P01–P04 production code/build/review is complete in the recorded main/develop history; P00 retains its earlier verification. Later regression/runtime acceptance remains deferred.
 - Integrated supplemental work: R01, R02, R03-core, R04, R05, R06, R09 and P02-RN1. R03 remains incomplete until its GitHub OAuth consumer is implemented.
 - Completed production documentation task is recorded in `7a6c443` / `e6796a0`. Root AGENTS/CLAUDE and project skills enforce adjacent named-function JSDoc/docstrings, meaningful inline rationale and documentation review. Follow-up metadata/status edits remain local; this does not claim exhaustive documentation compliance of all future code.
@@ -68,12 +85,12 @@ This snapshot supersedes older current-action summaries. Historical execution en
 
 | Worktree | Branch / purpose | Disposition |
 | --- | --- | --- |
-| `C:/Users/doana/.codex/worktrees/bbd-p05-temporal/BBD-OS` | `codex/bbd-p05`, merged to develop | Archived with recoverable snapshot. |
-| `C:/Users/doana/.codex/worktrees/bbd-p06/BBD-OS` | `codex/bbd-p06`, Phase 6 merged | Git registration removed; leftover directory cleanup rejected by automatic approval; preserve. |
-| `C:/Users/doana/.codex/worktrees/bbd-p07/BBD-OS` | `codex/bbd-p07`, Phase 7 implementation | Canonical reviewed MCP source; T2 harness repair in isolated agent worktree; full build open. |
-| `C:/Users/doana/.codex/worktrees/bbd-p08-dashboard/BBD-OS` | `codex/bbd-p08-dashboard`, R10-R12 + P08 | Canonical reviewed backend/search/topics/seeds; S3 UI repair and embedded MCP UI active. |
-| `C:/Users/doana/.codex/worktrees/bbd-p09-providers/BBD-OS` | `codex/bbd-p09-providers`, isolated R13 | Locked/clean at `83ba123`, ready for P09-T1/rebase. |
-| `D:/Project/BBD-OS-phase-4` | `codex/bbd-os-phase-4`, historical dirty draft | Preserve; not the active P04 delivery tree. |
+| `C:/Users/doana/.codex/worktrees/bbd-p05-temporal/Umwelt-OS` | `codex/bbd-p05`, merged to develop | Archived with recoverable snapshot. |
+| `C:/Users/doana/.codex/worktrees/bbd-p06/Umwelt-OS` | `codex/bbd-p06`, Phase 6 merged | Git registration removed; leftover directory cleanup rejected by automatic approval; preserve. |
+| `C:/Users/doana/.codex/worktrees/bbd-p07/Umwelt-OS` | `codex/bbd-p07`, Phase 7 implementation | Canonical reviewed MCP source; T2 harness repair in isolated agent worktree; full build open. |
+| `C:/Users/doana/.codex/worktrees/bbd-p08-dashboard/Umwelt-OS` | `codex/bbd-p08-dashboard`, R10-R12 + P08 | Canonical reviewed backend/search/topics/seeds; S3 UI repair and embedded MCP UI active. |
+| `C:/Users/doana/.codex/worktrees/bbd-p09-providers/Umwelt-OS` | `codex/bbd-p09-providers`, isolated R13 | Locked/clean at `83ba123`, ready for P09-T1/rebase. |
+| `D:/Project/Umwelt-OS-phase-4` | `codex/bbd-os-phase-4`, historical dirty draft | Preserve; not the active P04 delivery tree. |
 
 P04 managed delivery worktrees were previously archived; the historical dirty draft above remains. This status update performs no commits, merges, pushes, archives or deletion. Checkpoints stay local and are committed with a completed large task/phase.
 
@@ -168,7 +185,7 @@ Source-only migration ancestry refresh: P08 r10_dashboard_configuration still br
 
 ### Resume build/review evidence
 
-- Re-ran ./scripts/dev.ps1 build from canonical bbd-p07/BBD-OS: Next production compilation/integrated TypeScript and 20/20 pages PASS; four-image Compose build FAIL exit1 because dockerDesktopLinuxEngine pipe is absent. No container completion, restart or runtime acceptance claimed.
+- Re-ran ./scripts/dev.ps1 build from canonical bbd-p07/Umwelt-OS: Next production compilation/integrated TypeScript and 20/20 pages PASS; four-image Compose build FAIL exit1 because dockerDesktopLinuxEngine pipe is absent. No container completion, restart or runtime acceptance claimed.
 - Fresh Sol R08 finite independent source review returned one P2 deployment-doc finding: README hash recipe omitted the mandatory policy discriminator and exact limit keys. No additional production-code defect found within the finite package. Retained Luna repair dispatched for README only; source closure/integration pending.
 
 ### Reviewed integrations — resumed 2026-10-04
@@ -388,7 +405,7 @@ P08 whole authored producer/Chat/privacy buildrepair succeeded:172posthashdrift0
 - No new develop phase merge/archive/push/deploy. Production plan remains unfinished; tests/lint/standalone typecheck and runtime/provider/SQL acceptance remain deferred.
 ### 2026-10-05 finite browser baseline and webhook review update
 
-- P07 browser S2/S3 managed worktree created at C:/Users/doana/.codex/worktrees/bbd-p07-browser-s2-s3/BBD-OS from faa80d2. Fresh checkout raw hashes differ through LF/CRLF conversion: root checked all27 named recipe paths against accepted canonical normalized text, zero semantic drift. Ruling: preserve raw bytes; use author baseline receipt A8A47C9D6EA536E8F46951AC98896022C05AC4CE5BD5EFAB8A930C6D94086CF1, retaining canonical digest provenance. Author told to continue. No baseline source rewritten.
+- P07 browser S2/S3 managed worktree created at C:/Users/doana/.codex/worktrees/bbd-p07-browser-s2-s3/Umwelt-OS from faa80d2. Fresh checkout raw hashes differ through LF/CRLF conversion: root checked all27 named recipe paths against accepted canonical normalized text, zero semantic drift. Ruling: preserve raw bytes; use author baseline receipt A8A47C9D6EA536E8F46951AC98896022C05AC4CE5BD5EFAB8A930C6D94086CF1, retaining canonical digest provenance. Author told to continue. No baseline source rewritten.
 - P08 original Luna resumed finite R1–R6 repair after transient thread-limit blockage cleared. No separate implementation agent changes the same author checkout.
 - P09 wave3 current40 hashes verified, exact changed path set five (model/public/worker/unshipped migration/connectors docs). Snapshot handoff says no source authored by that reporting turn; four before copies derive from wave2-before, not assumed wave2-final. Independent review is checking provenance and actual source. Initial source finding: private fanout DTO rejects unrelated binding BaseModel unless explicitly converted; repair required before closure.
 - Prescribed P09 wave3 build attempted: Next compiled17pages with integrated TypeScript, then Docker Compose exited1 because local ignored .env/POSTGRES_PASSWORD is absent. No Docker restart/runtime probe. Full build remains incomplete; root will provide isolated build-only environment and rerun after source repair freeze.
@@ -423,3 +440,5 @@ New managed author worktree bbd-p09-project-composition starts exact c5c036b. Lu
 Luna repair handoffC158A1023E980683414127C4D27C226BCE8EE4879B846030457C86B6EB3FDC47 frozen. Final172-source inventory46FD8D068AD5349D15200C48428F8B773AA6C34FB5D55912E8B7647AA9194B51 with3 SWC separate; ten before copies/six changed Python files. Root verified all172 hashes before prescribed build. Planning reconstruction intermediate7766F78BFEBA7F04EB2A6081FE50CB5BE4B477D1F7F5390A29D378CFAD407F6B preserved, verified original7D5D067C0F9301E9BB9C8293F122C0ADE574B670A328165A56050CBA7A100C03 restored only that file, finalDAF45A317FB09EDD8BF23FB28EB12BABCA94376EC6B932B9CDF5827960A453D2.
 Root prescribed build active; Sol finite R1–R6/source-direct-regression re-review active. No tests/lint/typecheck/runtime/provider/SQL probes. Aggregate GitNexus165/40/52 CRITICAL disclosed, incomplete scope not accepted closure. Accepted-P07 AgentRun privacy cleanup must compose in every applicable Chat deletion/expiry path; root ChatController/typed retry provider mounts and actual immutable migration DAG remain required separate integration. No P08 task/phase completion or new merge yet.
 2026-10-05 continuation after repo folder transition: P07 browser S2/S3 and P09 accepted prerequisite composition resumed in renamed Umwelt-OS worktrees; P08 finite repair review remains active. Direct R4 PlanningEvidenceRef consumer mismatch is source-confirmed and needs one-file repair before producer acceptance; prior successful build is not behavioral closure. No new phase merge or completion; tests/runtime/provider acceptance remains deferred.
+
+2026-10-05 naming transition: README/spec/plans/owned skills now use Umwelt-OS. Actual primary-folder and desktop metadata relocation waits for app/CLI closure in a backed-up one-shot helper; inspect finalize SUCCESS before declaring path transition complete. Implementation agents interrupted for this requested transition; original phase plan remains active and unfinished.

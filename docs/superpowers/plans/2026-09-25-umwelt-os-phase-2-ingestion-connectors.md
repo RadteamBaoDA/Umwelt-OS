@@ -1,6 +1,6 @@
-# BBD-OS Phase 2 — Ingestion and Packaged Connectors Implementation Plan
+# Umwelt-OS Phase 2 — Ingestion and Packaged Connectors Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax. The owner authorized continuous progress through ready tasks; use the [master plan](2026-09-25-bbd-os-master-plan.md) and [execution ledger](EXECUTION.md), without repeated phase-scope approval.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax. The owner authorized continuous progress through ready tasks; use the [master plan](2026-09-25-umwelt-os-master-plan.md) and [execution ledger](EXECUTION.md), without repeated phase-scope approval.
 
 **Goal:** Durably ingest supported files and collect RSS/Atom, URL and REST data with provenance, bounded jobs and recoverable progress.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Existing FastAPI/Pydantic/SQLAlchemy/Alembic/PostgreSQL, Redis/ARQ, Next.js/React/TypeScript/TanStack Query, pytest and Playwright; phase-specific OSS dependencies are pinned only after their compatibility checks.
 
-**Spec:** [Canonical specification](../../../specs/personal-intelligence-os-spec-v2.md), sections 30–31, 52–55, 67–68, 89, 95, 138.3–6, 158–161. The [master plan](2026-09-25-bbd-os-master-plan.md) defines common contracts, the drawer decision, test harness and ownership across phases.
+**Spec:** [Canonical specification](../../../specs/personal-intelligence-os-spec-v2.md), sections 30–31, 52–55, 67–68, 89, 95, 138.3–6, 158–161. The [master plan](2026-09-25-umwelt-os-master-plan.md) defines common contracts, the drawer decision, test harness and ownership across phases.
 
 **Entry gate:** Phase 1 sources/documents public contracts.
 
@@ -18,7 +18,7 @@ Code stage: implement production code and run affected production builds only. D
 
 ## Spec reconciliation — 2026-09-30
 
-Read [R01–R16 supplemental plan](2026-09-30-bbd-os-spec-reconciliation.md) and canonical sections **165–166** before execution. Assigned scope: **R03/R04**. Preserve original task IDs and historical evidence. Production code/build only until all original and supplemental code/build/review is complete; no tests/fixtures, lint, standalone typecheck or runtime acceptance in this stage.
+Read [R01–R16 supplemental plan](2026-09-30-umwelt-os-spec-reconciliation.md) and canonical sections **165–166** before execution. Assigned scope: **R03/R04**. Preserve original task IDs and historical evidence. Production code/build only until all original and supplemental code/build/review is complete; no tests/fixtures, lint, standalone typecheck or runtime acceptance in this stage.
 
 Main navigation is Dashboard/Chat/Settings; Settings has three groups; account/appearance/language live in the user menu. Detail routes do not become main-navigation items. Migration names below are historical planning examples: inspect current head and active worktrees, including unfinished Phase 4 0007_entities.py, and allocate a unique linked revision without rewriting shipped migrations.
 
@@ -80,7 +80,7 @@ Concrete contract/configuration shape (illustrative IDs/timestamps are test data
 
 **Production files and responsibilities:** Create modules/connectors/public.py, modules/connectors/registry.py, modules/connectors/n8n.py, modules/connectors/crawl.py and modules/connectors/routes.py; infrastructure/n8n/workflows/rss.json, infrastructure/n8n/workflows/url.json and infrastructure/n8n/workflows/rest.json; infrastructure/docker/browser.Dockerfile; docker-compose.connectors.yml; docs/connectors.md.
 
-**Interfaces — consumes/produces:** Connector.validate(source), sync(source,cursor), normalize(record), health(source); POST /sources/{id}/validate, /sync; PATCH source pause/resume; crawl submissions return run_id. BBD-OS controls source identity/cursors; n8n owns external schedules/credentials.
+**Interfaces — consumes/produces:** Connector.validate(source), sync(source,cursor), normalize(record), health(source); POST /sources/{id}/validate, /sync; PATCH source pause/resume; crawl submissions return run_id. Umwelt-OS controls source identity/cursors; n8n owns external schedules/credentials.
 
 - [x] **P02-T3.1 - Implement production behavior.** Package importable n8n workflow exports using credential references and protected receipt endpoints; include RSS/Atom pagination/overlap, URL and REST mappings. Add source timezone default Asia/Ho_Chi_Minh. Implement bounded overlap catch-up from last acknowledged cursor, not replay of every missed cron tick. Use Crawlee HTTP with BeautifulSoup first and PlaywrightCrawler for configured JS pages. One browser job, default 10 pages/depth2/60s and 25MiB aggregate download; network-level egress restrictions plus URL/redirect/DNS checks. No model-driven navigation until Phase 7.
 

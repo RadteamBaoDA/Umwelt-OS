@@ -1,6 +1,6 @@
-# BBD-OS Phase 9 — GitHub Collection and Project Knowledge Implementation Plan
+# Umwelt-OS Phase 9 — GitHub Collection and Project Knowledge Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax. The owner authorized continuous progress through ready tasks; use the [master plan](2026-09-25-bbd-os-master-plan.md) and [execution ledger](EXECUTION.md), without repeated phase-scope approval.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax. The owner authorized continuous progress through ready tasks; use the [master plan](2026-09-25-umwelt-os-master-plan.md) and [execution ledger](EXECUTION.md), without repeated phase-scope approval.
 
 **Goal:** Collect repositories, issues, pull requests, commits and releases through packaged workflows and expose their evidence in knowledge, Timeline and Today.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Existing FastAPI/Pydantic/SQLAlchemy/Alembic/PostgreSQL, Redis/ARQ, Next.js/React/TypeScript/TanStack Query, phase-specific OSS dependencies are pinned only after their compatibility checks.
 
-**Spec:** [Canonical specification](../../../specs/personal-intelligence-os-spec-v2.md), sections 53, 95, 115, 138.5, 159. The [master plan](2026-09-25-bbd-os-master-plan.md) defines common contracts, the drawer decision, test harness and ownership across phases.
+**Spec:** [Canonical specification](../../../specs/personal-intelligence-os-spec-v2.md), sections 53, 95, 115, 138.5, 159. The [master plan](2026-09-25-umwelt-os-master-plan.md) defines common contracts, the drawer decision, test harness and ownership across phases.
 
 **Entry gate:** Phase 2 connector contract; Phases 4–8 entity/event/project presentation.
 
@@ -18,7 +18,7 @@ Code stage: implement production code and run affected production builds only. D
 
 ## Spec reconciliation — 2026-09-30
 
-Read [R01–R16 supplemental plan](2026-09-30-bbd-os-spec-reconciliation.md) and canonical sections **165–166** before execution. Assigned scope: **R13–R15**. Preserve original task IDs and historical evidence. Production code/build only until all original and supplemental code/build/review is complete; no tests/fixtures, lint, standalone typecheck or runtime acceptance in this stage.
+Read [R01–R16 supplemental plan](2026-09-30-umwelt-os-spec-reconciliation.md) and canonical sections **165–166** before execution. Assigned scope: **R13–R15**. Preserve original task IDs and historical evidence. Production code/build only until all original and supplemental code/build/review is complete; no tests/fixtures, lint, standalone typecheck or runtime acceptance in this stage.
 
 Main navigation is Dashboard/Chat/Settings; Settings has three groups; account/appearance/language live in the user menu. Detail routes do not become main-navigation items. Migration names below are historical planning examples: inspect current head and active worktrees, including unfinished Phase 4 0007_entities.py, and allocate a unique linked revision without rewriting shipped migrations.
 
@@ -71,7 +71,7 @@ Concrete contract/configuration shape (illustrative IDs/timestamps are test data
 
 **Files and responsibilities:** Create modules/connectors/github/sync.py, modules/connectors/github/webhooks.py; extend protected connector webhook routes and n8n template.
 
-**Interfaces — consumes/produces:** POST /connectors/github/webhook verifies delivery signature and unique delivery ID; per-resource cursor persisted by BBD-OS only after durable batch acknowledgment. Source runs share the Phase 2 lease.
+**Interfaces — consumes/produces:** POST /connectors/github/webhook verifies delivery signature and unique delivery ID; per-resource cursor persisted by Umwelt-OS only after durable batch acknowledgment. Source runs share the Phase 2 lease.
 
 
 - [ ] **P09-T2.3 — Implement the minimal production behavior.** Implement webhook receipt persistence and signature validation in production code. Follow provider pagination, use bounded history plus updated-time overlap, dedupe by stable identity/version and prevent stale cursors replacing newer ones. Verify signatures over original bytes with constant-time comparison before parsing/trusting events; reject unsupported oversized events. Honor Retry-After/reset times, bound retries, and distinguish invalid permissions. Document which deletion/visibility changes can be discovered by webhook or reconciliation and mark unobservable records stale/unverified when access disappears.
@@ -112,7 +112,7 @@ Concrete contract/configuration shape (illustrative IDs/timestamps are test data
 **Interfaces — consumes/produces:** Sources renders GitHub scope, run state, fetched/indexed timestamps and separate errors. Project views and drawer context use existing entity/source IDs.
 
 
-- [ ] **P09-T4.3 — Implement the minimal production behavior.** Configure credential/repository/scope/schedule inside BBD-OS Settings/Data sources using R03/R04 supported APIs. Do not require n8n administration UI; surface unsupported provisioning. Show live run counts/status and links to provider evidence; surface project changes in configurable dashboard gadgets and Timeline details via existing providers.
+- [ ] **P09-T4.3 — Implement the minimal production behavior.** Configure credential/repository/scope/schedule inside Umwelt-OS Settings/Data sources using R03/R04 supported APIs. Do not require n8n administration UI; surface unsupported provisioning. Show live run counts/status and links to provider evidence; surface project changes in configurable dashboard gadgets and Timeline details via existing providers.
 
 Concrete contract/configuration shape (illustrative IDs/timestamps are test data, not production defaults):
 

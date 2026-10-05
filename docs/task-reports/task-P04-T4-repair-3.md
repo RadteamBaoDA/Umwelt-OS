@@ -1,6 +1,6 @@
 # P04-T4 repair 3 — F9 narrow source repair
 
-Date: 2026-10-02. Scope: close only the two residual F9 findings from `task-P04-T4-review-3.md` in `C:/Users/doana/.codex/worktrees/bbd-p04-entities/BBD-OS`. No backend revision protocol or other accepted group was changed.
+Date: 2026-10-02. Scope: close only the two residual F9 findings from `task-P04-T4-review-3.md` in `C:/Users/doana/.codex/worktrees/bbd-p04-entities/Umwelt-OS`. No backend revision protocol or other accepted group was changed.
 
 ## Numbered findings closed at source level
 
