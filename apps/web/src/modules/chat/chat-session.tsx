@@ -9,6 +9,8 @@ import {
   chatKeys,
   createConversation,
   getConversation,
+  hashMessageContent,
+  mutateMessage,
   sendMessage,
   streamResponseEvents,
   type ChatMessage,
@@ -17,7 +19,11 @@ import {
 import { ChatComposer } from './chat-composer';
 import { ChatTranscript } from './chat-transcript';
 import { ConversationAgentActivity } from '@/modules/agents/conversation-agent-activity';
-import { useChatController, type PendingSpecialistRun } from '@/core/app-shell/chat-controller';
+import {
+  PendingMessageMutationConflictError,
+  useChatController,
+  type PendingSpecialistRun,
+} from '@/core/app-shell/chat-controller';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -50,6 +56,8 @@ export interface ChatSessionProps {
  * Coordinates conversation querying, message sending with client_request_id idempotency,
  * active SSE event stream consumption, citation extraction, cancellation controls, and full-page
  * profile run selection/status/history while keeping the quick drawer's legacy assistant flow.
+ * Full Chat appends prompt edits and answer regenerations with stable shared request identities;
+ * the quick drawer does not expose these advanced message actions.
  * Specialist retries retain the exact prompt, profile revision, conversation, and request key in the shared
  * Chat controller until acknowledged, including across sidebar changes, drawer remounts, and page navigation.
  * Late acknowledgements refresh their target conversation, while visible state updates require the
@@ -75,13 +83,25 @@ export function ChatSession({
   const [isPending, setIsPending] = React.useState<boolean>(false);
   const [activeResponseId, setActiveResponseId] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const [editingMessageId, setEditingMessageId] = React.useState<string | null>(null);
   const [selectedProfileId, setSelectedProfileId] = React.useState('assistant');
   const [activeAgentRunId, setActiveAgentRunId] = React.useState<string | null>(null);
   const pendingProfileRun = conversationId
     ? chatCtrl.pendingSpecialistRuns[conversationId] ?? null
     : null;
+  const pendingMessageMutation = conversationId
+    ? chatCtrl.pendingMessageMutations[conversationId] ?? null
+    : null;
+  const effectiveEditingMessageId = editingMessageId
+    ?? (pendingMessageMutation?.action === 'edit' ? pendingMessageMutation.targetMessageId : null);
 
   const abortControllerRef = React.useRef<AbortController | null>(null);
+  const attachedResponseStreamRef = React.useRef<{
+    responseId: string;
+    conversationId: string;
+    controller: AbortController;
+    promise: Promise<void>;
+  } | null>(null);
   const sendGenerationRef = React.useRef(0);
   const mountedRef = React.useRef(false);
   const promotedSelectionRef = React.useRef<{
@@ -102,6 +122,9 @@ export function ChatSession({
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      // Detach this browser reader on unmount; the durable worker run continues on the server.
+      abortControllerRef.current?.abort();
+      abortControllerRef.current = null;
       // Invalidates local continuations when this view is removed; the server run is left alone.
       sendGenerationRef.current += 1;
     };
@@ -147,6 +170,7 @@ export function ChatSession({
     setStreamingText('');
     setStreamingCitations([]);
     setActiveResponseId(null);
+    setEditingMessageId(null);
     const promoted = promotedSelectionRef.current;
     if (promoted && promoted.sendGeneration === sendGenerationRef.current &&
         promoted.conversationId === (conversationId ?? null) &&
@@ -161,11 +185,219 @@ export function ChatSession({
   }, [conversationId, chatCtrl.activeConversationGeneration]);
 
   /**
+   * Streams a durable response into the currently selected view and refreshes its transcript on exit.
+   *
+   * @param responseId - Persisted response run to consume.
+   * @param responseConversationId - Conversation whose history is refreshed after the stream.
+   * @param isCurrentView - Guard that prevents late events updating another selected conversation.
+   * @remarks A fresh attachment starts from the first retained SSE event; it never resends a prompt.
+   */
+  const streamResponseRun = React.useCallback(async (
+    responseId: string,
+    responseConversationId: string,
+    isCurrentView: () => boolean,
+  ) => {
+    const attached = attachedResponseStreamRef.current;
+    if (
+      attached?.responseId === responseId
+      && attached.conversationId === responseConversationId
+      && !attached.controller.signal.aborted
+    ) {
+      await attached.promise;
+      return;
+    }
+    attached?.controller.abort();
+    const abortCtrl = new AbortController();
+    abortControllerRef.current = abortCtrl;
+    const streamPromise = streamResponseEvents(responseId, {
+      signal: abortCtrl.signal,
+      onDelta: (chunk) => {
+        if (isCurrentView()) setStreamingText((prev) => prev + chunk);
+      },
+      onCitations: (cites) => {
+        if (isCurrentView()) setStreamingCitations(cites);
+      },
+      onDone: () => {
+        if (isCurrentView()) {
+          setIsStreaming(false);
+          setStreamingText('');
+          setStreamingCitations([]);
+          setActiveResponseId(null);
+        }
+        void queryClient.invalidateQueries({ queryKey: chatKeys.conversation(responseConversationId) });
+        void queryClient.invalidateQueries({ queryKey: chatKeys.conversations() });
+      },
+      onStatus: (statusVal) => {
+        if (statusVal === 'cancelled') {
+          if (isCurrentView()) {
+            setIsStreaming(false);
+            setActiveResponseId(null);
+            setError(t('cancelled'));
+          }
+          void queryClient.invalidateQueries({ queryKey: chatKeys.conversation(responseConversationId) });
+        } else if (statusVal === 'auth_expired' && isCurrentView()) {
+          setIsStreaming(false);
+          setActiveResponseId(null);
+          setError(t('sessionExpired'));
+        }
+      },
+      onError: (streamError) => {
+        if (!abortCtrl.signal.aborted && isCurrentView()) {
+          setIsStreaming(false);
+          setIsPending(false);
+          setActiveResponseId(null);
+          setError(streamError.message || t('errorSending'));
+        }
+      },
+    });
+    const streamAttachment = {
+      responseId,
+      conversationId: responseConversationId,
+      controller: abortCtrl,
+      promise: streamPromise,
+    };
+    attachedResponseStreamRef.current = streamAttachment;
+    try {
+      await streamPromise;
+    } catch (streamError: unknown) {
+      // fetch() can reject before streamResponseEvents reaches its SSE reader error callback.
+      if (!abortCtrl.signal.aborted && isCurrentView()) {
+        setIsStreaming(false);
+        setIsPending(false);
+        setActiveResponseId(null);
+        setError(streamError instanceof Error ? streamError.message : t('errorSending'));
+      }
+      throw streamError;
+    } finally {
+      if (attachedResponseStreamRef.current === streamAttachment) {
+        attachedResponseStreamRef.current = null;
+        if (abortControllerRef.current === abortCtrl) abortControllerRef.current = null;
+      }
+    }
+  }, [queryClient, t]);
+
+  /** Reattaches to the owner-reported durable run when this conversation surface mounts or returns. */
+  React.useEffect(() => {
+    const responseId = conversationDetail?.active_response_id;
+    if (!conversationId || !responseId || selectionRef.current.conversationId !== conversationId) return;
+    const attached = attachedResponseStreamRef.current;
+    if (
+      attached?.responseId === responseId
+      && attached.conversationId === conversationId
+      && !attached.controller.signal.aborted
+    ) return;
+
+    const viewGeneration = selectionRef.current.generation;
+    const sendGeneration = ++sendGenerationRef.current;
+    const isCurrentView = () => mountedRef.current
+      && sendGenerationRef.current === sendGeneration
+      && selectionRef.current.generation === viewGeneration
+      && selectionRef.current.conversationId === conversationId;
+    setActiveResponseId(responseId);
+    setIsPending(false);
+    setIsStreaming(true);
+    setStreamingText('');
+    setStreamingCitations([]);
+    setError(null);
+    void streamResponseRun(responseId, conversationId, isCurrentView).catch(() => {
+      // streamResponseRun reports visible failures through its guarded error path.
+    });
+  }, [conversationId, conversationDetail?.active_response_id, chatCtrl.activeConversationGeneration, streamResponseRun]);
+
+  /**
+   * Submits an edit or regeneration using a stable shared request envelope until acknowledged.
+   *
+   * @param action - Whether to append a changed prompt or reuse the original prompt.
+   * @param targetMessageId - User prompt to edit or assistant response to regenerate.
+   * @param content - Replacement prompt text for an edit; omitted for regeneration.
+   */
+  const handleMessageMutation = React.useCallback(async (
+    action: 'edit' | 'regenerate',
+    targetMessageId: string,
+    content?: string,
+  ) => {
+    const targetConversationId = conversationId ?? selectionRef.current.conversationId;
+    const target = messages.find((message) => message.id === targetMessageId);
+    if (!targetConversationId || !target || (isPending || isStreaming)) return;
+    const sendGeneration = ++sendGenerationRef.current;
+    const viewGeneration = selectionRef.current.generation;
+    const viewConversationId = selectionRef.current.conversationId;
+    const isCurrentView = () => mountedRef.current
+      && sendGenerationRef.current === sendGeneration
+      && selectionRef.current.generation === viewGeneration
+      && selectionRef.current.conversationId === viewConversationId;
+
+    setError(null);
+    setIsPending(true);
+    try {
+      const baseContentHash = await hashMessageContent(target.content);
+      const envelope = chatCtrl.getOrCreatePendingMessageMutation(targetConversationId, {
+        action,
+        targetMessageId,
+        baseContentHash,
+        content,
+      });
+      const run = await mutateMessage(
+        targetConversationId,
+        targetMessageId,
+        {
+          action: envelope.action,
+          base_content_hash: envelope.baseContentHash,
+          client_request_id: envelope.clientRequestId,
+          ...(envelope.content !== undefined ? { content: envelope.content } : {}),
+        },
+        session.csrfToken,
+      );
+      chatCtrl.clearPendingMessageMutation(targetConversationId, envelope.clientRequestId);
+      if (isCurrentView()) {
+        setEditingMessageId(null);
+        chatCtrl.setDraft('');
+      }
+      void queryClient.invalidateQueries({ queryKey: chatKeys.conversations() });
+      if (!isCurrentView()) {
+        void queryClient.invalidateQueries({ queryKey: chatKeys.conversation(targetConversationId) });
+        return;
+      }
+      setActiveResponseId(run.response_id);
+      setIsPending(false);
+      setIsStreaming(true);
+      setStreamingText('');
+      setStreamingCitations([]);
+      await streamResponseRun(run.response_id, targetConversationId, isCurrentView);
+    } catch (mutationError: unknown) {
+      if (isCurrentView()) {
+        setIsPending(false);
+        setError(mutationError instanceof PendingMessageMutationConflictError
+          ? t('retryOriginalRevisionFirst')
+          : mutationError instanceof Error ? mutationError.message : t('revisionFailed'));
+      }
+    }
+  }, [chatCtrl, conversationId, isPending, isStreaming, messages, queryClient, session.csrfToken, streamResponseRun, t]);
+
+  /** Opens the full Chat composer with a user message's content for an append-only edit. */
+  const handleEditMessage = React.useCallback((message: ChatMessage) => {
+    if (mode !== 'full' || message.role !== 'user') return;
+    setEditingMessageId(message.id);
+    chatCtrl.setDraft(message.content);
+  }, [chatCtrl, mode]);
+
+  /** Reuses the parent assistant message's captured context for a new answer branch. */
+  const handleRegenerateMessage = React.useCallback((message: ChatMessage) => {
+    if (mode === 'full' && message.role === 'assistant') {
+      void handleMessageMutation('regenerate', message.id);
+    }
+  }, [handleMessageMutation, mode]);
+
+  /**
    * Dispatches a message to an existing or newly initialized conversation, retaining an unresolved
    * specialist's immutable retry envelope in shared memory before awaiting the durable start response.
    */
   const handleSend = React.useCallback(
     async (content: string) => {
+      if (mode === 'full' && effectiveEditingMessageId) {
+        await handleMessageMutation('edit', effectiveEditingMessageId, content);
+        return;
+      }
       const sendGeneration = ++sendGenerationRef.current;
       let viewGeneration = selectionRef.current.generation;
       let viewConversationId = selectionRef.current.conversationId;
@@ -297,53 +529,7 @@ export function ChatSession({
         setStreamingText('');
         setStreamingCitations([]);
 
-        // Start SSE stream
-        const abortCtrl = new AbortController();
-        abortControllerRef.current = abortCtrl;
-
-        await streamResponseEvents(responseRun.response_id, {
-          signal: abortCtrl.signal,
-          onDelta: (chunk) => {
-            if (canUpdateCurrentView()) setStreamingText((prev) => prev + chunk);
-          },
-          onCitations: (cites) => {
-            if (canUpdateCurrentView()) setStreamingCitations(cites);
-          },
-          onDone: () => {
-            if (canUpdateCurrentView()) {
-              setIsStreaming(false);
-              setStreamingText('');
-              setStreamingCitations([]);
-              setActiveResponseId(null);
-            }
-            void queryClient.invalidateQueries({ queryKey: chatKeys.conversation(responseConversationId) });
-            void queryClient.invalidateQueries({ queryKey: chatKeys.conversations() });
-          },
-          onStatus: (statusVal) => {
-            if (statusVal === 'cancelled') {
-              if (canUpdateCurrentView()) {
-                setIsStreaming(false);
-                setActiveResponseId(null);
-                setError(t('cancelled'));
-              }
-              void queryClient.invalidateQueries({ queryKey: chatKeys.conversation(responseConversationId) });
-            } else if (statusVal === 'auth_expired') {
-              if (canUpdateCurrentView()) {
-                setIsStreaming(false);
-                setActiveResponseId(null);
-                setError('Session expired');
-              }
-            }
-          },
-          onError: (err) => {
-            if (!abortCtrl.signal.aborted && canUpdateCurrentView()) {
-              setIsStreaming(false);
-              setIsPending(false);
-              setActiveResponseId(null);
-              setError(err.message || t('errorSending'));
-            }
-          },
-        });
+        await streamResponseRun(responseRun.response_id, responseConversationId, canUpdateCurrentView);
       } catch (err: unknown) {
         if (canUpdateCurrentView()) {
           setIsPending(false);
@@ -368,6 +554,9 @@ export function ChatSession({
       selectedProfileId,
       profiles.data,
       tAgents,
+      effectiveEditingMessageId,
+      handleMessageMutation,
+      streamResponseRun,
     ],
   );
 
@@ -401,6 +590,7 @@ export function ChatSession({
   const handleNewChat = React.useCallback(() => {
     sendGenerationRef.current += 1;
     chatCtrl.resetConversation();
+    setEditingMessageId(null);
     setError(null);
     setStreamingText('');
     setStreamingCitations([]);
@@ -416,7 +606,7 @@ export function ChatSession({
           <span className="font-semibold text-sm truncate text-foreground">
             {conversationDetail?.title || t('title')}
           </span>
-          {chatCtrl.context && (
+          {mode === 'full' && chatCtrl.context && (
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] bg-accent/15 text-accent font-medium shrink-0">
               <FileTextIcon className="size-3" />
               <span>{chatCtrl.context.kind}</span>
@@ -474,7 +664,7 @@ export function ChatSession({
       ) : null}
 
       {/* Grounded context indicator banner if present */}
-      {chatCtrl.context && (
+      {mode === 'full' && chatCtrl.context && (
         <div className="flex items-center justify-between gap-2 px-4 py-2 bg-accent/5 border-b border-accent/15 text-xs text-foreground shrink-0">
           <span className="truncate">
             {chatCtrl.context.kind === 'day'
@@ -497,14 +687,52 @@ export function ChatSession({
         </div>
       )}
 
+      {mode === 'full' && pendingMessageMutation && (
+        <div role="status" className="flex items-center justify-between gap-3 border-b border-border bg-accent/5 px-4 py-2 text-xs">
+          <span className="text-muted-foreground">{t('revisionUnacknowledged')}</span>
+          <Button
+            type="button"
+            className="secondary h-8 px-2 text-xs"
+            disabled={isPending || isStreaming}
+            onClick={() => void handleMessageMutation(
+              pendingMessageMutation.action,
+              pendingMessageMutation.targetMessageId,
+              pendingMessageMutation.content,
+            )}
+          >
+            {t('retryRevision')}
+          </Button>
+        </div>
+      )}
+
+      {mode === 'full' && effectiveEditingMessageId && !pendingMessageMutation && (
+        <div className="flex items-center justify-between gap-3 border-b border-border bg-accent/5 px-4 py-2 text-xs">
+          <span className="text-muted-foreground">{t('editingPrompt')}</span>
+          <Button
+            type="button"
+            className="secondary h-8 px-2 text-xs"
+            onClick={() => {
+              setEditingMessageId(null);
+              chatCtrl.setDraft('');
+            }}
+          >
+            {t('cancelEdit')}
+          </Button>
+        </div>
+      )}
+
       {/* Transcript area */}
       <ChatTranscript
+        conversationId={conversationId}
+        mode={mode}
         messages={messages}
         streamingText={streamingText}
         streamingCitations={streamingCitations}
         isStreaming={isStreaming}
         isPending={isPending}
         error={error}
+        onEditMessage={mode === 'full' ? handleEditMessage : undefined}
+        onRegenerateMessage={mode === 'full' ? handleRegenerateMessage : undefined}
         onRetry={() => {
           const retryDraft = pendingProfileRun?.prompt ?? chatCtrl.draft;
           if (retryDraft) {

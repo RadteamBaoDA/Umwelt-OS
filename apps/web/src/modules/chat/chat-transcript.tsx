@@ -2,13 +2,21 @@
 
 import * as React from 'react';
 import { useTranslations } from 'next-intl';
-import { AlertCircleIcon, BotIcon, Loader2Icon, UserIcon } from 'lucide-react';
+import { AlertCircleIcon, BotIcon, CheckIcon, CopyIcon, Loader2Icon, PencilIcon, RefreshCwIcon, UserIcon } from 'lucide-react';
 import type { ChatMessage, Citation } from '@/modules/chat/api';
+import { Button } from '@/components/ui/button';
 import { CitationPanel } from './citation-panel';
+import { ChatMarkdown } from './chat-markdown';
+import { useChatScroll } from './use-chat-scroll';
+import { useCopyMessage } from './use-copy-message';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { formatDateTime } from '@/core/i18n';
 
 export interface ChatTranscriptProps {
+  /** Currently selected conversation, used to reset the reading position between threads. */
+  conversationId?: string | null;
+  /** Surface mode; advanced mutation actions are available only on the full Chat page. */
+  mode?: 'drawer' | 'full';
   /** Ordered list of persistent messages in the conversation. */
   messages: ChatMessage[];
   /** Active response generation streaming text, if currently in flight. */
@@ -23,143 +31,24 @@ export interface ChatTranscriptProps {
   error?: string | null;
   /** Callback to retry sending after an error. */
   onRetry?: () => void;
+  /** Starts an append-only edit from a user prompt in full Chat. */
+  onEditMessage?: (message: ChatMessage) => void;
+  /** Starts an append-only regeneration from an assistant answer in full Chat. */
+  onRegenerateMessage?: (message: ChatMessage) => void;
   /** Optional callback when user clicks a citation badge. */
   onSelectCitation?: (citation: Citation) => void;
 }
 
 /**
- * Safely parses and renders a string containing basic markdown syntax
- * including headings, code blocks, lists, blockquotes, and inline emphasis.
+ * Conversation transcript rendering ordered messages, append-only revision relationships,
+ * full-page copy/edit/regenerate actions, full-page grounded citations, streaming deltas, and error states.
  *
- * @param content - Raw text containing markdown formatting.
- * @returns React elements representing the formatted content.
- */
-function FormattedMessageContent({ content }: { content: string }) {
-  const parts = React.useMemo(() => {
-    // Split by code blocks: ```lang ... ```
-    const codeBlockRegex = /```([a-zA-Z0-9_-]*)\n?([\s\S]*?)```/g;
-    const segments: Array<{ type: 'code' | 'text'; lang?: string; text: string }> = [];
-    let lastIndex = 0;
-    let match: RegExpExecArray | null;
-
-    while ((match = codeBlockRegex.exec(content)) !== null) {
-      if (match.index > lastIndex) {
-        segments.push({
-          type: 'text',
-          text: content.slice(lastIndex, match.index),
-        });
-      }
-      segments.push({
-        type: 'code',
-        lang: match[1] || 'text',
-        text: match[2],
-      });
-      lastIndex = match.index + match[0].length;
-    }
-
-    if (lastIndex < content.length) {
-      segments.push({
-        type: 'text',
-        text: content.slice(lastIndex),
-      });
-    }
-
-    return segments;
-  }, [content]);
-
-  return (
-    <div className="flex flex-col gap-2.5 text-sm leading-relaxed text-foreground break-words overflow-hidden">
-      {parts.map((segment, segIdx) => {
-        if (segment.type === 'code') {
-          return (
-            <div
-              key={segIdx}
-              className="relative my-2 rounded-lg border border-border bg-zinc-900 dark:bg-black p-3 text-xs text-zinc-100 overflow-x-auto font-mono"
-            >
-              {segment.lang && segment.lang !== 'text' && (
-                <span className="absolute top-2 right-2 text-[10px] text-zinc-400 uppercase select-none">
-                  {segment.lang}
-                </span>
-              )}
-              <pre>
-                <code>{segment.text}</code>
-              </pre>
-            </div>
-          );
-        }
-
-        // Render text segment paragraphs and bullet lists
-        const lines = segment.text.split('\n');
-        return (
-          <div key={segIdx} className="flex flex-col gap-1.5">
-            {lines.map((line, lineIdx) => {
-              const trimmed = line.trim();
-              if (!trimmed) {
-                return <div key={lineIdx} className="h-1" />;
-              }
-
-              // Heading check
-              if (trimmed.startsWith('### ')) {
-                return (
-                  <h4 key={lineIdx} className="font-bold text-sm mt-2 text-foreground">
-                    {trimmed.slice(4)}
-                  </h4>
-                );
-              }
-              if (trimmed.startsWith('## ')) {
-                return (
-                  <h3 key={lineIdx} className="font-bold text-base mt-2 text-foreground">
-                    {trimmed.slice(3)}
-                  </h3>
-                );
-              }
-              if (trimmed.startsWith('# ')) {
-                return (
-                  <h2 key={lineIdx} className="font-bold text-lg mt-3 text-foreground">
-                    {trimmed.slice(2)}
-                  </h2>
-                );
-              }
-
-              // Bullet item
-              if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
-                return (
-                  <div key={lineIdx} className="flex items-start gap-2 pl-2">
-                    <span className="text-accent shrink-0">•</span>
-                    <span>{trimmed.slice(2)}</span>
-                  </div>
-                );
-              }
-
-              // Blockquote
-              if (trimmed.startsWith('> ')) {
-                return (
-                  <blockquote
-                    key={lineIdx}
-                    className="pl-3 border-l-2 border-accent text-muted-foreground italic my-1"
-                  >
-                    {trimmed.slice(2)}
-                  </blockquote>
-                );
-              }
-
-              return <p key={lineIdx}>{trimmed}</p>;
-            })}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-/**
- * Conversation transcript rendering chronologically ordered user/assistant message bubbles,
- * grounded citation references, streaming delta tokens with animated indicator, and error states.
- *
- * @param props - ChatTranscriptProps interface.
+ * @param props - ChatTranscriptProps interface; mutation actions are rendered only for full Chat.
  * @returns Accessible conversation transcript viewport.
  */
 export function ChatTranscript({
+  conversationId,
+  mode = 'drawer',
   messages,
   streamingText,
   streamingCitations,
@@ -167,26 +56,31 @@ export function ChatTranscript({
   isPending = false,
   error = null,
   onRetry,
+  onEditMessage,
+  onRegenerateMessage,
 }: ChatTranscriptProps) {
   const t = useTranslations('chat');
   const display = useDisplayPreferences();
   const timezone = display.confirmedPreferences?.timezone || 'UTC';
   const locale = display.confirmedPreferences?.locale || 'en-us';
-  const bottomRef = React.useRef<HTMLDivElement>(null);
-  const containerRef = React.useRef<HTMLDivElement>(null);
-
-  /**
-   * Automatically scrolls to the newest message or streaming delta unless the user scrolled up.
-   */
-  React.useEffect(() => {
-    if (bottomRef.current) {
-      bottomRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
-    }
-  }, [messages.length, streamingText, isStreaming, isPending]);
+  const { containerRef, scrollHandlers } = useChatScroll({
+    conversationId,
+    messageCount: messages.length,
+    lastMessageId: messages[messages.length - 1]?.id,
+    lastMessageRole: messages[messages.length - 1]?.role,
+    isStreaming: isStreaming || isPending,
+  });
+  const { copyMessage, copiedMessageId, failedMessageId } = useCopyMessage(conversationId);
+  const messageById = React.useMemo(() => new Map(messages.map((message) => [message.id, message])), [messages]);
+  const revisedMessageIds = React.useMemo(
+    () => new Set(messages.flatMap((message) => message.revision_of_message_id ? [message.revision_of_message_id] : [])),
+    [messages],
+  );
 
   return (
     <div
       ref={containerRef}
+      {...scrollHandlers}
       className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 focus:outline-none"
       role="log"
       aria-live="polite"
@@ -208,6 +102,18 @@ export function ChatTranscript({
 
       {messages.map((msg) => {
         const isUser = msg.role === 'user';
+        const revisedMessage = msg.revision_of_message_id
+          ? messageById.get(msg.revision_of_message_id)
+          : undefined;
+        const relationshipLabel = revisedMessage?.role === 'assistant'
+          ? t(isUser ? 'regeneratedPrompt' : 'regeneratedAnswer')
+          : revisedMessage?.role === 'user'
+            ? t(isUser ? 'editedPrompt' : 'editedPromptAnswer')
+            : null;
+        const canEdit = mode === 'full' && isUser && Boolean(msg.response_id)
+          && !revisedMessageIds.has(msg.id) && Boolean(onEditMessage);
+        const canRegenerate = mode === 'full' && !isUser && msg.role === 'assistant'
+          && Boolean(msg.response_id) && !revisedMessageIds.has(msg.id) && Boolean(onRegenerateMessage);
         const formattedDate = msg.created_at
           ? formatDateTime(msg.created_at, locale, timezone)
           : null;
@@ -243,9 +149,52 @@ export function ChatTranscript({
                 {formattedDate && <span>{formattedDate}</span>}
               </div>
 
-              <FormattedMessageContent content={msg.content} />
+              {relationshipLabel && (
+                <p className="text-[11px] text-muted-foreground" aria-label={relationshipLabel}>
+                  {relationshipLabel}
+                </p>
+              )}
 
-              {!isUser && msg.citations && msg.citations.length > 0 && (
+              <ChatMarkdown content={msg.content} />
+
+              <div className="flex items-center gap-2">
+                {mode === 'full' && <button
+                  type="button"
+                  onClick={() => void copyMessage(msg.id, msg.content)}
+                  className="inline-flex min-h-8 items-center gap-1 rounded-md px-2 text-[11px] text-muted-foreground hover:bg-accent/10 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  aria-label={t('copyMessage')}
+                >
+                  {copiedMessageId === msg.id ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
+                  <span>{copiedMessageId === msg.id ? t('copiedMessage') : t('copyMessage')}</span>
+                </button>}
+                {mode === 'full' && failedMessageId === msg.id && (
+                  <span role="status" className="text-[11px] text-destructive">{t('copyFailed')}</span>
+                )}
+                {canEdit && (
+                  <Button
+                    type="button"
+                    className="secondary inline-flex min-h-8 items-center gap-1 px-2 text-[11px]"
+                    onClick={() => onEditMessage?.(msg)}
+                    aria-label={t('editPrompt')}
+                  >
+                    <PencilIcon className="size-3.5" />
+                    <span>{t('editPrompt')}</span>
+                  </Button>
+                )}
+                {canRegenerate && (
+                  <Button
+                    type="button"
+                    className="secondary inline-flex min-h-8 items-center gap-1 px-2 text-[11px]"
+                    onClick={() => onRegenerateMessage?.(msg)}
+                    aria-label={t('regenerateAnswer')}
+                  >
+                    <RefreshCwIcon className="size-3.5" />
+                    <span>{t('regenerateAnswer')}</span>
+                  </Button>
+                )}
+              </div>
+
+              {mode === 'full' && !isUser && msg.citations && msg.citations.length > 0 && (
                 <CitationPanel citations={msg.citations} variant="inline" />
               )}
             </div>
@@ -277,9 +226,9 @@ export function ChatTranscript({
               </span>
             </div>
 
-            <FormattedMessageContent content={streamingText || ''} />
+            <ChatMarkdown content={streamingText || ''} />
 
-            {streamingCitations && streamingCitations.length > 0 && (
+            {mode === 'full' && streamingCitations && streamingCitations.length > 0 && (
               <CitationPanel citations={streamingCitations} variant="inline" />
             )}
           </div>
@@ -305,7 +254,6 @@ export function ChatTranscript({
         </div>
       )}
 
-      <div ref={bottomRef} />
     </div>
   );
 }

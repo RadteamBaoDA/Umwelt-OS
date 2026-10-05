@@ -195,6 +195,36 @@ async def run_response_generation(
             if user_msg is None:
                 raise ValueError("User message not found")
             user_prompt = user_msg.content
+            revision_of_message_id = user_msg.revision_of_message_id
+
+            # A revision keeps the old transcript visible but regenerates from the logical
+            # conversation point being revised, without feeding the superseded branch back
+            # as recent assistant history.
+            history_cutoff = user_msg.created_at
+            if revision_of_message_id is not None:
+                revised_message = await session.scalar(
+                    select(Message).where(
+                        Message.id == revision_of_message_id,
+                        Message.conversation_id == conversation_id,
+                    )
+                )
+                revised_prompt = revised_message
+                if revised_message is not None and revised_message.role == "assistant":
+                    source_run = await session.scalar(
+                        select(ResponseRun).where(
+                            ResponseRun.assistant_message_id == revised_message.id,
+                            ResponseRun.conversation_id == conversation_id,
+                        )
+                    )
+                    revised_prompt = await session.scalar(
+                        select(Message).where(
+                            Message.id == source_run.user_message_id,
+                            Message.conversation_id == conversation_id,
+                            Message.role == "user",
+                        )
+                    ) if source_run is not None else None
+                if revised_prompt is not None and revised_prompt.role == "user":
+                    history_cutoff = revised_prompt.created_at
 
             # History opt-out check
             history_enabled = await is_history_storage_enabled(session)
@@ -207,7 +237,7 @@ async def run_response_generation(
                         select(Message)
                         .where(
                             Message.conversation_id == conversation_id,
-                            Message.created_at < user_msg.created_at,
+                            Message.created_at < history_cutoff,
                         )
                         .order_by(Message.created_at.asc())
                         .limit(20)
@@ -469,6 +499,7 @@ async def run_response_generation(
                 model_identity=model_ident,
                 citations=valid_citations,
                 response_id=response_id,
+                revision_of_message_id=revision_of_message_id,
             )
             session.add(assistant_msg)
             await session.flush()

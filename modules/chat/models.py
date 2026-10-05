@@ -53,13 +53,14 @@ class Conversation(Base):
 
 
 class Message(Base):
-    """Store user and assistant messages within an owner conversation."""
+    """Store immutable transcript entries and links to append-only prompt or answer revisions."""
 
     __tablename__ = "chat_messages"
     __table_args__ = (
         Index("ix_chat_messages_conversation_id", "conversation_id"),
         Index("ix_chat_messages_client_request_id", "client_request_id"),
         Index("ix_chat_messages_response_id", "response_id"),
+        Index("ix_chat_messages_revision_of_message_id", "revision_of_message_id"),
         Index("ix_chat_messages_created_at", "created_at"),
         CheckConstraint("role IN ('user', 'assistant', 'system')", name="ck_chat_messages_role"),
     )
@@ -75,6 +76,9 @@ class Message(Base):
     citations: Mapped[list[dict[str, object]]] = mapped_column(JSONB, nullable=False, server_default="[]")
     metadata_json: Mapped[dict[str, object]] = mapped_column("metadata", JSONB, nullable=False, server_default="{}")
     response_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    revision_of_message_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("chat_messages.id", ondelete="SET NULL"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
@@ -126,6 +130,36 @@ class ResponseRun(Base):
     stream_events: Mapped[list["StreamEvent"]] = relationship(
         "StreamEvent", back_populates="response_run", cascade="all, delete-orphan", order_by="StreamEvent.seq"
     )
+
+
+class MessageMutationReceipt(Base):
+    """Persist idempotent append-only edit/regenerate outcomes for one conversation request key."""
+
+    __tablename__ = "chat_message_mutation_receipts"
+    __table_args__ = (
+        UniqueConstraint("conversation_id", "client_request_id", name="uq_chat_message_mutation_request"),
+        CheckConstraint("action IN ('edit', 'regenerate')", name="ck_chat_message_mutation_action"),
+        CheckConstraint("length(request_digest) = 64", name="ck_chat_message_mutation_digest"),
+        Index("ix_chat_message_mutation_receipts_response_id", "response_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    conversation_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("chat_conversations.id", ondelete="CASCADE"), nullable=False
+    )
+    client_request_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    request_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    action: Mapped[str] = mapped_column(String(16), nullable=False)
+    target_message_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("chat_messages.id", ondelete="CASCADE"), nullable=False
+    )
+    result_user_message_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("chat_messages.id", ondelete="CASCADE"), nullable=False
+    )
+    response_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("chat_response_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
 class StreamEvent(Base):

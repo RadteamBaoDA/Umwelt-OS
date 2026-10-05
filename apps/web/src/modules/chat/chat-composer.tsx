@@ -1,5 +1,8 @@
 'use client';
 
+// Text sizing and Enter/Shift+Enter behavior are adapted from AnythingLLM's
+// PromptInput source; ChatController remains the private in-memory draft owner.
+
 import * as React from 'react';
 import { useTranslations } from 'next-intl';
 import { SendIcon, SquareIcon } from 'lucide-react';
@@ -55,7 +58,8 @@ export function ChatComposer({
    */
   const handleKeyDown = React.useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
+      // Enter during IME composition commits text instead of submitting the chat turn.
+      if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && e.nativeEvent.keyCode !== 229) {
         e.preventDefault();
         handleSend();
       }
@@ -69,9 +73,18 @@ export function ChatComposer({
   const handleChange = React.useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
       onChange(e.target.value);
+      e.target.style.height = 'auto';
+      e.target.style.height = `${Math.min(e.target.scrollHeight, 160)}px`;
     },
     [onChange],
   );
+
+  React.useLayoutEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = 'auto';
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`;
+  }, [value]);
 
   const canSend = value.trim().length > 0 && !isStreaming && !disabled;
 

@@ -225,13 +225,15 @@ class MessageRead(BaseModel):
     model_identity: str | None = None
     citations: list[dict[str, Any]] = Field(default_factory=list)
     response_id: UUID | None = None
+    revision_of_message_id: UUID | None = None
     created_at: datetime
 
 
 class ConversationDetailRead(ConversationRead):
-    """Full conversation projection including ordered messages."""
+    """Full conversation projection including ordered messages and any active response handle."""
 
     messages: list[MessageRead] = Field(default_factory=list)
+    active_response_id: UUID | None = None
 
 
 class SendMessageRequest(BaseModel):
@@ -242,6 +244,17 @@ class SendMessageRequest(BaseModel):
     content: str = Field(min_length=1, max_length=20000)
     client_request_id: str | None = Field(default=None, max_length=128)
     context: dict[str, Any] | None = None
+
+
+class MessageMutationRequest(BaseModel):
+    """Append an edited user prompt or regenerate an answer with its original context."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["edit", "regenerate"]
+    base_content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    client_request_id: str = Field(min_length=1, max_length=128)
+    content: str | None = Field(default=None, min_length=1, max_length=20_000)
 
 
 class SendMessageResponse(BaseModel):

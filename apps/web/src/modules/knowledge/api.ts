@@ -8,6 +8,7 @@ export type Document = {
   observed_at: string | null; language: string | null; created_at: string; updated_at: string;
 };
 export type DocumentVersion = { id: string; document_id: string; version_number: number; content: string; content_hash: string; observed_at: string; created_at: string };
+export type CitationTarget = { document_id: string; document_version_id: string; version_number: number; chunk_id: string; title: string; excerpt: string; observed_at: string };
 export type DocumentPage = { items: Document[]; next_cursor: string | null };
 export type GadgetDocumentProjection = {
   document_id: string; document_version_id: string; version_number: number; source_id: string;
@@ -64,6 +65,11 @@ export function setGadgetDocumentInteraction(
 export function getDocument(id: string) { return apiRequest<Document>(`/api/v1/documents/${id}`); }
 /** Fetches the requested numbered document version. */
 export function getVersion(id: string, number: number) { return apiRequest<DocumentVersion>(`/api/v1/documents/${id}/versions/${number}`); }
+/** Resolves the exact retained citation chunk through Documents' owner-checked reader. */
+export function getCitationTarget(id: string, versionId: string, chunkId: string) {
+  const query = new URLSearchParams({ document_version_id: versionId, chunk_id: chunkId });
+  return apiRequest<CitationTarget>(`/api/v1/documents/${id}/citation-target?${query}`);
+}
 /** Lists version history for the selected document. */
 export function listVersions(id: string, cursor?: string) { return apiRequest<VersionPage>(`/api/v1/documents/${id}/versions?limit=50${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`); }
 /** Creates a document from the supplied source, title, and content using the supplied CSRF token. */

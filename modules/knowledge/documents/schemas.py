@@ -535,6 +535,18 @@ class EvidenceReferenceRead(BaseModel):
     excerpt: str
 
 
+class CitationTargetRead(BaseModel):
+    """Resolve an owner-visible citation chunk to its exact immutable version and excerpt."""
+
+    document_id: UUID
+    document_version_id: UUID
+    version_number: int
+    chunk_id: UUID
+    title: str
+    excerpt: str
+    observed_at: datetime
+
+
 class DocumentList(BaseModel):
     """Return a bounded document page and its optional continuation cursor."""
     items: list[DocumentRead]

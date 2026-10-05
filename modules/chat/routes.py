@@ -3,6 +3,7 @@
 import asyncio
 from datetime import UTC, datetime
 import hashlib
+import hmac
 import json
 import logging
 import re
@@ -18,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from core.auth.dependencies import SESSION_COOKIE, require_owner, require_owner_write
 from core.auth.models import AuthSession
 from core.database import get_session
-from modules.chat.models import Conversation, Message, ResponseRun, StreamEvent
+from modules.chat.models import Conversation, Message, MessageMutationReceipt, ResponseRun, StreamEvent
 from modules.chat import public as chat_public
 from modules.settings.public import module_dependency
 from modules.chat.schemas import (
@@ -27,6 +28,7 @@ from modules.chat.schemas import (
     ConversationDetailRead,
     ConversationPatch,
     ConversationRead,
+    MessageMutationRequest,
     MessageRead,
     SendMessageRequest,
     SendMessageResponse,
@@ -46,6 +48,99 @@ _TOKEN_RE = re.compile(r"^[0-9a-f]{64}$")
 DB_READ_TIMEOUT = 3.0
 STREAM_POLL_INTERVAL = 0.1
 HEARTBEAT_INTERVAL = 15.0
+
+
+async def _lock_conversation(session: AsyncSession, conversation_id: UUID) -> Conversation:
+    """Take the Chat parent lock used to serialize message creation and mutation.
+
+    The same parent-before-child order is used by conversation deletion. Every send or
+    mutation must hold this row through its active-run check and durable insert so concurrent
+    requests cannot both observe an idle conversation.
+    """
+    conversation = await session.scalar(
+        select(Conversation)
+        .where(Conversation.id == conversation_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return conversation
+
+
+async def _reject_active_response(session: AsyncSession, conversation_id: UUID) -> None:
+    """Reject a second turn while this conversation already owns an uncompleted response.
+
+    Args:
+        session: Transaction that already holds the conversation row lock.
+        conversation_id: Conversation whose pending/streaming runs must be checked.
+    """
+    active_id = await session.scalar(
+        select(ResponseRun.id)
+        .where(
+            ResponseRun.conversation_id == conversation_id,
+            ResponseRun.status.in_(("pending", "streaming")),
+        )
+        .limit(1)
+    )
+    if active_id is not None:
+        raise HTTPException(status_code=409, detail="A response is already active for this conversation")
+
+
+async def _dispatch_response_run(request: Request, response_id: UUID) -> None:
+    """Enqueue and locally schedule an already committed response run.
+
+    The durable run row is created by the caller before dispatch. Keeping both delivery
+    mechanisms here preserves normal-send behavior while allowing append-only revisions to
+    use the same worker and event stream.
+    """
+    redis: Redis = request.app.state.redis
+    if hasattr(redis, "enqueue_job"):
+        try:
+            await redis.enqueue_job(
+                "process_chat_response",
+                str(response_id),
+                _job_id=f"chat-response:{response_id}",
+            )
+        except Exception as exc:
+            logger.warning("Failed to enqueue ARQ job: %s", exc)
+
+    asyncio.create_task(
+        run_response_generation(
+            response_id=response_id,
+            session_factory=request.app.state.session_factory,
+            settings=request.app.state.settings,
+            redis=redis,
+        )
+    )
+
+
+def _message_mutation_digest(
+    *, action: str, target_message_id: UUID, base_content_hash: str, content: str | None,
+) -> str:
+    """Hash canonical mutation fields so a request key cannot be replayed with new data.
+
+    Args:
+        action: Edit or regenerate operation selected by the user.
+        target_message_id: Immutable transcript entry acted upon.
+        base_content_hash: SHA-256 of the displayed message used for the concurrency fence.
+        content: Trimmed replacement text for edits, or None for regeneration.
+
+    Returns:
+        Lowercase SHA-256 digest of the canonical JSON payload.
+    """
+    canonical = json.dumps(
+        {
+            "action": action,
+            "target_message_id": str(target_message_id),
+            "base_content_hash": base_content_hash,
+            "content": content,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _token_hash(request: Request) -> str | None:
@@ -197,7 +292,10 @@ async def get_conversation(
     _owner: OwnerRead,
     response: Response,
 ) -> ConversationDetailRead:
-    """Retrieve full conversation details including chronologically ordered messages.
+    """Retrieve ordered messages and the durable handle for a pending/streaming response.
+
+    An active response ID lets any owner-authorized Chat surface reattach to its replayable SSE
+    stream after navigation or remount, without creating another message or generation run.
 
     Args:
         conversation_id: UUID of the target conversation.
@@ -224,6 +322,53 @@ async def get_conversation(
         )
     ).all()
 
+    # Check for an active run after reading messages. If completion raced with that first read,
+    # the active-run query sees no run and the terminal-run query below triggers a transcript
+    # reload. If completion happens after the active-run query, returning its ID is still safe:
+    # the replayed SSE delivers completion and invalidates this detail query.
+    active_response_id = await session.scalar(
+        select(ResponseRun.id)
+        .where(
+            ResponseRun.conversation_id == conversation_id,
+            ResponseRun.status.in_(("pending", "streaming")),
+            ResponseRun.assistant_message_id.is_(None),
+        )
+        .order_by(desc(ResponseRun.created_at), desc(ResponseRun.id))
+        .limit(1)
+    )
+    if active_response_id is None:
+        latest_run = await session.scalar(
+            select(ResponseRun)
+            .where(ResponseRun.conversation_id == conversation_id)
+            .order_by(desc(ResponseRun.created_at), desc(ResponseRun.id))
+            .limit(1)
+        )
+        if (
+            latest_run is not None
+            and latest_run.status == "completed"
+            and latest_run.assistant_message_id is not None
+            and all(message.id != latest_run.assistant_message_id for message in messages_rows)
+        ):
+            messages_rows = (
+                await session.scalars(
+                    select(Message)
+                    .where(Message.conversation_id == conversation_id)
+                    .order_by(Message.created_at.asc())
+                )
+            ).all()
+
+    response_ids_by_user_message: dict[UUID, UUID] = {}
+    if messages_rows:
+        response_rows = await session.execute(
+            select(ResponseRun.user_message_id, ResponseRun.id).where(
+                ResponseRun.user_message_id.in_([message.id for message in messages_rows])
+            )
+        )
+        response_ids_by_user_message = {
+            user_message_id: response_id
+            for user_message_id, response_id in response_rows.all()
+        }
+
     messages_list = [
         MessageRead(
             id=m.id,
@@ -233,12 +378,12 @@ async def get_conversation(
             client_request_id=m.client_request_id,
             model_identity=m.model_identity,
             citations=m.citations or [],
-            response_id=m.response_id,
+            response_id=m.response_id or response_ids_by_user_message.get(m.id),
+            revision_of_message_id=m.revision_of_message_id,
             created_at=m.created_at,
         )
         for m in messages_rows
     ]
-
     return ConversationDetailRead(
         id=conv.id,
         title=conv.title,
@@ -250,6 +395,7 @@ async def get_conversation(
         updated_at=conv.updated_at,
         metadata=conv.metadata_json or {},
         messages=messages_list,
+        active_response_id=active_response_id,
     )
 
 
@@ -356,9 +502,9 @@ async def send_message(
 ) -> SendMessageResponse:
     """Accept a user message, enforce client_request_id idempotency, and dispatch response generation.
 
-    Persists both the user message and a pending ResponseRun in the database before dispatching
-    background worker processing. Repeated submissions with the same client_request_id return
-    the existing response run without duplicated generation.
+    Locks the conversation while checking for a pending/streaming run and persisting the user
+    message and ResponseRun. Repeated submissions with the same client_request_id return the
+    existing response without duplicated generation.
 
     Args:
         conversation_id: UUID of the parent conversation.
@@ -371,11 +517,9 @@ async def send_message(
         SendMessageResponse with message_id, response_id, and pending/active status.
 
     Raises:
-        HTTPException: 404 if conversation is not found.
+        HTTPException: 404 if the conversation is missing; 409 if another response is active.
     """
-    conv = await session.scalar(select(Conversation).where(Conversation.id == conversation_id))
-    if conv is None:
-        raise HTTPException(status_code=404, detail="Conversation not found")
+    conv = await _lock_conversation(session, conversation_id)
 
     # Idempotency check with client_request_id
     if payload.client_request_id:
@@ -391,6 +535,8 @@ async def send_message(
                 response_id=existing_run.id,
                 status=existing_run.status,
             )
+
+    await _reject_active_response(session, conversation_id)
 
     # Persist user message and pending response run before dispatch
     user_msg = Message(
@@ -416,30 +562,163 @@ async def send_message(
     await session.commit()
     await session.refresh(response_run)
 
-    # Dispatch to ARQ and local asyncio background task
-    redis: Redis = request.app.state.redis
-    if hasattr(redis, "enqueue_job"):
-        try:
-            await redis.enqueue_job(
-                "process_chat_response",
-                str(response_run.id),
-                _job_id=f"chat-response:{response_run.id}",
-            )
-        except Exception as exc:
-            logger.warning("Failed to enqueue ARQ job: %s", exc)
-
-    # Also schedule local background execution to ensure prompt processing
-    asyncio.create_task(
-        run_response_generation(
-            response_id=response_run.id,
-            session_factory=request.app.state.session_factory,
-            settings=request.app.state.settings,
-            redis=redis,
-        )
-    )
+    await _dispatch_response_run(request, response_run.id)
 
     return SendMessageResponse(
         message_id=user_msg.id,
+        response_id=response_run.id,
+        status="pending",
+    )
+
+
+@router.post(
+    "/api/v1/conversations/{conversation_id}/messages/{message_id}/mutations",
+    response_model=SendMessageResponse,
+    status_code=202,
+)
+async def mutate_message(
+    conversation_id: UUID,
+    message_id: UUID,
+    payload: MessageMutationRequest,
+    request: Request,
+    session: Session,
+    _owner: OwnerWrite,
+) -> SendMessageResponse:
+    """Append an edited prompt or regenerated answer while retaining the original transcript.
+
+    The conversation row serializes this operation with normal sends. A receipt and new
+    ResponseRun commit atomically; identical retries return that run, while reusing the same
+    request ID for different content is rejected. Retrieval context comes only from the
+    original run and is revalidated by the worker before any model egress.
+
+    Args:
+        conversation_id: Parent conversation receiving the new branch.
+        message_id: Existing user prompt to edit or assistant answer to regenerate.
+        payload: Action, base-content digest, request identity, and replacement prompt if editing.
+        request: App state providing ARQ, worker, and model configuration handles.
+        session: Async transaction for parent lock, receipt lookup, and atomic inserts.
+        _owner: Authenticated owner session with write/CSRF validation.
+
+    Returns:
+        Acknowledgment containing the appended prompt ID and durable response-run ID.
+
+    Raises:
+        HTTPException: 404 for unavailable messages, 409 for stale/idempotency/active-run
+            conflicts, or 422 for action-role/content mismatches.
+    """
+    conversation = await _lock_conversation(session, conversation_id)
+    normalized_content = payload.content.strip() if payload.content is not None else None
+    if payload.action == "edit" and not normalized_content:
+        raise HTTPException(status_code=422, detail="Editing requires non-empty prompt content")
+    if payload.action == "regenerate" and payload.content is not None:
+        raise HTTPException(status_code=422, detail="Regeneration reuses the original prompt")
+    digest = _message_mutation_digest(
+        action=payload.action,
+        target_message_id=message_id,
+        base_content_hash=payload.base_content_hash,
+        content=normalized_content,
+    )
+
+    receipt = await session.scalar(
+        select(MessageMutationReceipt).where(
+            MessageMutationReceipt.conversation_id == conversation_id,
+            MessageMutationReceipt.client_request_id == payload.client_request_id,
+        )
+    )
+    if receipt is not None:
+        if not hmac.compare_digest(receipt.request_digest, digest):
+            raise HTTPException(status_code=409, detail="Mutation request ID was already used with different content")
+        replayed_run = await session.scalar(select(ResponseRun).where(ResponseRun.id == receipt.response_id))
+        if replayed_run is None:
+            raise HTTPException(status_code=409, detail="Mutation receipt is no longer available")
+        return SendMessageResponse(
+            message_id=receipt.result_user_message_id,
+            response_id=replayed_run.id,
+            status=replayed_run.status,
+        )
+
+    # A request key belongs to one creation path; reject a collision with a normal send.
+    collision = await session.scalar(
+        select(ResponseRun.id).where(
+            ResponseRun.conversation_id == conversation_id,
+            ResponseRun.client_request_id == payload.client_request_id,
+        ).limit(1)
+    )
+    if collision is not None:
+        raise HTTPException(status_code=409, detail="Mutation request ID is already in use")
+    await _reject_active_response(session, conversation_id)
+
+    target = await session.scalar(
+        select(Message)
+        .where(Message.id == message_id, Message.conversation_id == conversation_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if target is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+    expected_role = "user" if payload.action == "edit" else "assistant"
+    if target.role != expected_role:
+        raise HTTPException(status_code=422, detail="Mutation action does not match the message role")
+    actual_hash = hashlib.sha256(target.content.encode("utf-8")).hexdigest()
+    if not hmac.compare_digest(actual_hash, payload.base_content_hash):
+        raise HTTPException(status_code=409, detail="Message changed; reload the conversation before retrying")
+
+    original_run_statement = select(ResponseRun).where(
+        ResponseRun.conversation_id == conversation_id,
+        (ResponseRun.user_message_id == target.id)
+        if payload.action == "edit"
+        else (ResponseRun.id == target.response_id),
+    )
+    if payload.action == "regenerate":
+        original_run_statement = original_run_statement.where(ResponseRun.assistant_message_id == target.id)
+    original_run = await session.scalar(original_run_statement.order_by(desc(ResponseRun.created_at)).limit(1))
+    if original_run is None:
+        raise HTTPException(status_code=409, detail="The original response context is unavailable")
+    original_prompt = await session.scalar(
+        select(Message).where(
+            Message.id == original_run.user_message_id,
+            Message.conversation_id == conversation_id,
+            Message.role == "user",
+        )
+    )
+    if original_prompt is None:
+        raise HTTPException(status_code=409, detail="The original prompt is unavailable")
+
+    user_message = Message(
+        conversation_id=conversation_id,
+        role="user",
+        content=normalized_content if payload.action == "edit" else original_prompt.content,
+        client_request_id=payload.client_request_id,
+        revision_of_message_id=target.id,
+    )
+    session.add(user_message)
+    await session.flush()
+    response_run = ResponseRun(
+        conversation_id=conversation_id,
+        user_message_id=user_message.id,
+        client_request_id=payload.client_request_id,
+        status="pending",
+        # Retain the original captured context byte-for-byte. The worker rechecks its
+        # source/version fences before retrieval and before remote send.
+        retrieval_context=dict(original_run.retrieval_context or {}),
+    )
+    session.add(response_run)
+    await session.flush()
+    session.add(MessageMutationReceipt(
+        conversation_id=conversation_id,
+        client_request_id=payload.client_request_id,
+        request_digest=digest,
+        action=payload.action,
+        target_message_id=target.id,
+        result_user_message_id=user_message.id,
+        response_id=response_run.id,
+    ))
+    conversation.updated_at = func.now()  # type: ignore[assignment]
+    await session.commit()
+
+    await _dispatch_response_run(request, response_run.id)
+    return SendMessageResponse(
+        message_id=user_message.id,
         response_id=response_run.id,
         status="pending",
     )

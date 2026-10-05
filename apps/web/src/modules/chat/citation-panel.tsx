@@ -20,8 +20,8 @@ export interface CitationPanelProps {
 }
 
 /**
- * Citation evidence inspector rendering source provenance, document revision links,
- * observed timestamps, and grounded quote excerpts.
+ * Citation evidence inspector rendering source provenance, exact version/chunk navigation,
+ * observed timestamps, and grounded quote excerpts through the owner-checked Documents reader.
  *
  * @param props - CitationPanelProps interface.
  * @returns Accessible citation list or detailed inspection panel.
@@ -72,7 +72,11 @@ export function CitationPanel({
 
       <div className="flex flex-col gap-2.5">
         {itemsToRender.map((citation, idx) => {
-          const docHref = `/knowledge/documents/${citation.documentId}`;
+          const citationQuery = new URLSearchParams({
+            versionId: citation.documentVersionId,
+            chunkId: citation.chunkId,
+          });
+          const docHref = `/knowledge/documents/${citation.documentId}?${citationQuery.toString()}#cited-chunk`;
           const formattedDate = citation.observedAt
             ? formatDateTime(citation.observedAt, locale, timezone)
             : null;
