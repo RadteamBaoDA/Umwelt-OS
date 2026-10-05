@@ -5,7 +5,7 @@ description: Design, implement, or review BBD-OS frontend UI using its shadcn/ui
 
 # BBD-OS UI System
 
-Read [the design system](../../../docs/DESIGN_SYSTEM.md) before UI work. It owns component choices, token/theme/locale contracts and preference behavior. Read [the product proposal](../../../docs/ux-proposals/2026-09-26-life-dashboard-proposal.md) only for the feature being changed. Explicit user corrections govern older plans.
+Read [the design system](../../../docs/DESIGN_SYSTEM.md) before UI work. It owns component choices, token/theme/locale contracts and preference behavior. Then read [the design-system brand book](../../../docs/design-system/README.md) and use its [tokens](../../../docs/design-system/tokens.json) and per-component guidelines (`docs/design-system/components/<Name>/README.md`) for exact colors, type styles, spacing, radii, shadows, states and copy voice. Read [the product proposal](../../../docs/ux-proposals/2026-09-26-life-dashboard-proposal.md) only for the feature being changed. Explicit user corrections govern older plans.
 
 ## Locate before building
 
@@ -14,6 +14,8 @@ Read [the design system](../../../docs/DESIGN_SYSTEM.md) before UI work. It owns
 - Preserve the selected Radix-based shadcn family and Tailwind v4 conventions. Components generated for another family/version can have different imports and composition contracts; consult the official page linked in the design system when needed.
 
 ## Non-negotiable UI contracts
+
+- Values come from the design-system tokens: `bg`, `surface`, `text`, `muted`, `line`, `accent`, `on-accent`, `danger` (or their Tailwind aliases), radii `radius-sm/md/lg/card/dialog/panel`, spacing `space-1…space-6`, 44px `control-height`. `apps/web/src/app/globals.css` is the runtime source; keep `docs/design-system/tokens.json` in sync in the same change, and note that `muted` on `bg` (light) is 4.39:1, so prefer `muted` on `surface`.
 
 - All ordinary UI components compose shadcn primitives. Tokens are semantic CSS variables with paired foreground values, including portals, charts and dark mode. Do not introduce Material UI or parallel bespoke buttons/forms/dialogs.
 - Main navigation is Dashboard / Chat / Settings. User settings owns gadget definitions, connectors/MCP, rules and system preferences. Dashboard Edit only changes layout/instances; grid/handles are hidden in View and changes require Save or Cancel.

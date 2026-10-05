@@ -1,0 +1,36 @@
+<!-- @dsCard height=288 -->
+<style>
+  html, body { margin: 0; height: 100%; background: var(--bg); }
+  .cover { position: relative; width: 960px; height: 288px; overflow: hidden; background: var(--bg); font-family: var(--font-sans); }
+  .cover svg { position: absolute; inset: 0; }
+  .ink { fill: var(--text); }
+  .brand { fill: var(--accent); }
+  .tint { fill: var(--line); }
+  .signal { fill: var(--danger); }
+  .row { fill: var(--surface); }
+  .r-panel { rx: var(--radius-panel); }
+  .r-lg { rx: var(--radius-lg); }
+  .r-md { rx: var(--radius-md); }
+  .name { position: absolute; left: 32px; bottom: 64px; max-width: 440px; margin: 0; font-size: 104px; line-height: .92; font-weight: 800; letter-spacing: -0.03em; color: var(--text); }
+  .tag { position: absolute; left: 34px; bottom: 32px; max-width: 440px; margin: 0; font-size: 14px; font-weight: 600; color: var(--text); opacity: .78; }
+</style>
+<div class="cover">
+  <svg width="960" height="288" viewBox="0 0 960 288" aria-hidden="true">
+    <!--
+      blocks: text 200x240 + accent 232x152 (radius-panel), line 152x72 (radius-lg), danger 64x72 (radius-md, small: a state colour)
+      arrangement: one tall ink slab with satellites — a panel beside its sub-panels, flush on space-4 gaps
+      pattern: "geometric, modular, dense UI" — record rows cut by radius-md inside the slab; README: "radii nest outward" panel > sub-panel > control
+      scales: gaps space-4 (16px), row pitch control-height (44px), row height 32, radii radius-panel / radius-lg / radius-md
+    -->
+    <rect class="ink r-panel" x="496" y="24" width="200" height="240" rx="18"/>
+    <rect class="row r-md" x="516" y="48" width="160" height="32" rx="9"/>
+    <rect class="row r-md" x="516" y="92" width="128" height="32" rx="9"/>
+    <rect class="row r-md" x="516" y="136" width="160" height="32" rx="9"/>
+    <rect class="row r-md" x="516" y="180" width="96" height="32" rx="9"/>
+    <rect class="brand r-panel" x="712" y="24" width="232" height="152" rx="18"/>
+    <rect class="tint r-lg" x="712" y="192" width="152" height="72" rx="12"/>
+    <rect class="signal r-md" x="880" y="192" width="64" height="72" rx="9"/>
+  </svg>
+  <h1 class="name">BBD-OS</h1>
+  <p class="tag">Private personal intelligence workspace</p>
+</div>

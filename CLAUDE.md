@@ -1,7 +1,18 @@
+# UI Design System
+
+All frontend work (`apps/web`) follows the BBD-OS design system:
+
+- **Rules and contracts:** `docs/DESIGN_SYSTEM.md` (component mapping, theme, i18n, charts, layout).
+- **Tokens and brand book:** `docs/design-system/` — read `README.md` first (voice, color, type, spacing, states, iconography), then `tokens.json` (colors in light/dark, type styles, spacing, radii, shadows) and `components/<Name>/README.md` for each shadcn primitive.
+- **Source of truth for values:** `apps/web/src/app/globals.css`. `docs/design-system/tokens.json` mirrors it; when you change a token in CSS, update `tokens.json` in the same change (and the reverse).
+- **Published copy:** https://claude.ai/artifact/HsmKMkv9nMkoCrhnoZNM1X (re-publish after changing `docs/design-system/`).
+- Use the `bbd-os-ui-system` skill for any UI component, dashboard gadget, chat surface or User settings work.
+- Use semantic tokens only (`bg`, `surface`, `text`, `muted`, `line`, `accent`, `on-accent`, `danger` or their Tailwind aliases); never literal colors in feature code. Compose `apps/web/src/components/ui` primitives; no parallel button/dialog/form systems.
+
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **BBD-OS** (3144 symbols, 7969 relationships, 260 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **BBD-OS** (4566 symbols, 11750 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
