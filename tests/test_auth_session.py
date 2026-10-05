@@ -27,8 +27,11 @@ class MemorySession:
         self.store = store
         self.pending = None
 
-    async def scalar(self, _statement):
-        return 1
+    async def scalar(self, statement):
+        str_stmt = str(statement)
+        if "auth_session" in str_stmt.lower():
+            return next(iter(self.store.sessions.values()), None)
+        return self.store.owner
 
     async def get(self, model, key):
         if model is Owner:
