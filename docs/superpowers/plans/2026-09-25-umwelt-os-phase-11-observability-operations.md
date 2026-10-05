@@ -12,7 +12,7 @@
 
 **Entry gate:** Phases 1–10 already emit run IDs, events, status and timing.
 
-**Implementation status:** Not started. This file is an implementation plan, not evidence of working code.
+**Implementation status:** In progress (2026-10-05): T1 code/build/source review complete through repair 71fd47e and composed; T2 complete through e8b02e7; T3 active; T4 pending. Runtime acceptance remains deferred.
 
 Code stage: implement production code and run affected production builds only. Do not create or modify test files, or run tests, lint, standalone typecheck, audits, or non-build acceptance checks. Begin deferred behavioral acceptance only after all Phase 1-12 production code is complete.
 
@@ -52,7 +52,7 @@ Module ownership: **observability, settings**. Backend domain models/services st
 **Interfaces — consumes/produces:** TraceContext(request_id,ingestion_run_id?,agent_run_id?,tool_call_id?); GET /system/metrics and /system/runs with owner protection. Usage(tokens_in?,tokens_out?,cost?,model_identity?) nullable when unavailable.
 
 
-- [ ] **P11-T1.3 — Implement the minimal production behavior.** Reuse installed logging/structlog and stable run IDs. Instrument API latency/errors, queue delay, ingest stages, embeddings, models and tool duration with bounded-cardinality labels. Redact auth headers, cookie values, credential URLs and provider keys; raw prompts/documents disabled by default. Unknown usage stays null; price estimates carry model/rate timestamp and never substitute for authoritative billing. Optional telemetry sink errors are isolated from application transactions.
+- [x] **P11-T1.3 — Implement the minimal production behavior.** Reuse installed logging/structlog and stable run IDs. Instrument API latency/errors, queue delay, ingest stages, embeddings, models and tool duration with bounded-cardinality labels. Redact auth headers, cookie values, credential URLs and provider keys; raw prompts/documents disabled by default. Unknown usage stays null; price estimates carry model/rate timestamp and never substitute for authoritative billing. Optional telemetry sink errors are isolated from application transactions.
 
 Concrete contract/configuration shape (illustrative IDs/timestamps are test data, not production defaults):
 
@@ -60,9 +60,9 @@ Concrete contract/configuration shape (illustrative IDs/timestamps are test data
 {"model_identity":null,"tokens_in":null,"tokens_out":null,"estimated_cost":null,"latency_ms":120}
 ```
 
-- [ ] **P11-T1.4 - Build the affected deliverable.** Run `./scripts/dev.ps1 build` (or `make build`); fix production build failures before proceeding.
+- [x] **P11-T1.4 - Build the affected deliverable.** Run `./scripts/dev.ps1 build` (or `make build`); fix production build failures before proceeding.
 
-- [ ] **P11-T1.5 - Record build evidence and continue.** Record changed files, exact build command/result, review findings and unresolved gates in `EXECUTION.md`; then continue.
+- [x] **P11-T1.5 - Record build evidence and continue.** Record changed files, exact build command/result, review findings and unresolved gates in `EXECUTION.md`; then continue.
 
 ## Task P11-T2: Operations and data-quality screens
 
@@ -71,7 +71,7 @@ Concrete contract/configuration shape (illustrative IDs/timestamps are test data
 **Interfaces — consumes/produces:** GET /system/quality returns document counts,duplicate rate,unresolved entities,failed ingestion/extraction,stale sources,orphan chunks,graph lag; GET /system/queue returns bounded job summaries, not raw payloads.
 
 
-- [ ] **P11-T2.3 — Implement the minimal production behavior.** Build filterable runs/failures with links to evidence and run details; expose queue state, retry eligibility and actual worker health. Aggregate quality with bounded SQL queries and pagination; do not load every document into memory. Source stale thresholds use configured cadence. Existing UI errors remain visible even when observability profile is disabled.
+- [x] **P11-T2.3 — Implement the minimal production behavior.** Build filterable runs/failures with links to evidence and run details; expose queue state, retry eligibility and actual worker health. Aggregate quality with bounded SQL queries and pagination; do not load every document into memory. Source stale thresholds use configured cadence. Existing UI errors remain visible even when observability profile is disabled.
 
 Concrete contract/configuration shape (illustrative IDs/timestamps are test data, not production defaults):
 
@@ -79,9 +79,9 @@ Concrete contract/configuration shape (illustrative IDs/timestamps are test data
 {"orphan_chunks":0,"graph_sync_lag_seconds":null,"usage_state":"unavailable"}
 ```
 
-- [ ] **P11-T2.4 - Build the affected deliverable.** Run `./scripts/dev.ps1 build` (or `make build`); fix production build failures before proceeding.
+- [x] **P11-T2.4 - Build the affected deliverable.** Run `./scripts/dev.ps1 build` (or `make build`); fix production build failures before proceeding.
 
-- [ ] **P11-T2.5 - Record build evidence and continue.** Record changed files, exact build command/result, review findings and unresolved gates in `EXECUTION.md`; then continue.
+- [x] **P11-T2.5 - Record build evidence and continue.** Record changed files, exact build command/result, review findings and unresolved gates in `EXECUTION.md`; then continue.
 
 ## Task P11-T3: Retention, maintenance and module lifecycle
 
@@ -144,3 +144,6 @@ Run behavioral, integration, UI, live-service, recovery, and capacity checks onl
 - [x] Implementation tasks contain production work, affected builds and build evidence only.
 - [x] Behavioral acceptance is explicitly deferred until all Phase 1-12 production code is complete.
 - [x] Implementation and live/hardware verification are not claimed complete by this plan.
+
+
+

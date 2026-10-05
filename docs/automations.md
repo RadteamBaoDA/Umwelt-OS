@@ -15,11 +15,21 @@ Conditions may only reference the fields a trigger declares (`modules/automation
 | `task_due` | `status`, `goal_id`, `hours_until_due`, `created_by_automation` | `lead_minutes` window |
 | `goal_deadline` | `goal_id`, `status`, `days_until_deadline`, `progress` | `lead_days` window |
 | `connector_sync_result` | `source_id`, `status`, `new_items` | |
-| `webhook` | `event` | **Unavailable**, see below |
+| `webhook` | `event` | Authenticated source alias, durable key dedupe |
 
-## Webhook trigger: unavailable
+## Webhook triggers
 
-The `webhook` trigger is rejected at save (422) and reported unavailable by `GET /api/v1/automations/capabilities`. It stays so until the authenticated n8n inbound receiver exists (the "n8n inbound gate", spec section 10). Outbound `call_webhook` is separate and works through deployment-owned `WEBHOOK_PROFILES` aliases; a rule never carries a URL.
+Webhook triggers use an owner-created alias; rules carry an alias, never a URL. Enter the alias in the rule editor, then
+issue its inbound bearer there. Outbound `call_webhook` actions remain limited to `WEBHOOK_PROFILES`. The owner-only
+`POST /api/v1/automations/webhook-credentials/{alias}` response shows the random token once and expires it after 90 days;
+issue again to rotate. `DELETE` on the same path revokes it. Tokens are stored only as hashes. Keep the token in the sending
+system's secret store; it is separate from owner cookies and outbound `call_webhook` credentials.
+
+Send `POST /api/v1/automations/inbound/{alias}` with `X-Umwelt-Webhook-Token`, a unique `Idempotency-Key` (printable ASCII,
+up to 128 characters), `Content-Type: application/json`, and body `{"event":"..."}`. The body is capped at 64 KiB, but only
+the declared `event` field (up to 2,000 characters) is stored. Duplicate delivery with the same key and event returns
+`accepted: false`; reusing a key for a different event returns 409. The trigger inbox commits before 202, so retries are
+durably deduped. The automation worker still checks the current enabled rule revision and module fences before actions.
 
 ## Schedule ownership (single owner per logical job)
 

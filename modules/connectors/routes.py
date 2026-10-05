@@ -90,6 +90,15 @@ class McpCollectionRequest(BaseModel):
     configuration: mcp_collection.McpCollectionConfig
 
 
+class McpScheduledCollectionRequest(BaseModel):
+    """Carry only the source, provisioning, and reviewed connection identities baked into n8n."""
+    model_config = ConfigDict(extra="forbid")
+
+    source_generation: int = Field(ge=1)
+    connector_revision: int = Field(ge=1)
+    connection_id: UUID
+
+
 @router.put("/{source_id}/mcp-collection")
 async def configure_mcp_collection(
     source_id: UUID, payload: McpCollectionRequest, session: Session, _owner: OwnerWrite
@@ -110,11 +119,64 @@ async def configure_mcp_collection(
     if saved is None:
         await session.rollback()
         raise HTTPException(status_code=409, detail="Source changed while configuration was validated")
-    await commit_with_replay(session, [make_source_change(saved.id, saved.generation, saved.status)])
+    prior = await provisioning.activation_status(session, source_id)
+    provisioned = await provisioning.save_desired(
+        session, source_id, saved.generation,
+        prior.desired_revision if prior is not None else 0,
+        saved.configuration,
+    )
+    if provisioned is None:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="MCP source changed while scheduled configuration was saved")
+    await commit_with_replay(session, [make_source_change(
+        saved.id, saved.generation, saved.status, connector_state=provisioned.state,
+    )])
     return {
         "source_id": saved.id, "source_generation": saved.generation,
+        "expected_revision": provisioned.desired_revision,
         "configuration": saved.configuration,
     }
+
+
+@router.post("/{source_id}/mcp-collect", response_model=ManualSyncResult, status_code=202)
+async def collect_mcp_scheduled(
+    source_id: UUID, payload: McpScheduledCollectionRequest, session: Session,
+    request: Request, authorization: Annotated[str | None, Header()] = None,
+) -> ManualSyncResult:
+    """Run n8n MCP collection under its bearer, source, connector revision and grant fences.
+
+    The same source generation, applied connector revision and reviewed connection identity are
+    carried into the collector so each provider request and final receipt can recheck them.
+    """
+    token = await _mcp_collector(session, source_id, authorization)
+    source = await _source(session, source_id)
+    if source.type != mcp_collection.PROVIDER_ID or source.status != "active":
+        raise HTTPException(status_code=409, detail="Active MCP source required")
+    try:
+        config = mcp_collection.validate(source)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="MCP source configuration is invalid") from exc
+    if config.connection_id != payload.connection_id or not await provisioning.require_collection_fence(
+        session, source, payload.source_generation, payload.connector_revision, lock=True,
+    ):
+        raise HTTPException(status_code=409, detail="MCP source or provisioning revision is stale")
+    runtime = getattr(request.app.state, "mcp_runtime", None)
+    if runtime is None:
+        raise HTTPException(status_code=503, detail="MCP runtime is unavailable")
+    await session.rollback()
+    try:
+        result = await mcp_collection.collect(
+            runtime, request.app.state.session_factory, source_id, collector_token=token,
+            expected_connector_revision=payload.connector_revision,
+            expected_generation=payload.source_generation,
+            expected_connection_id=payload.connection_id,
+        )
+    except mcp_collection.McpCollectionError as exc:
+        status_code = 401 if exc.code == "mcp_collector_revoked" else 409
+        raise HTTPException(status_code=status_code, detail=exc.code) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="Source not found") from exc
+    return ManualSyncResult.model_validate(result)
 
 
 @router.get("/{source_id}/agent-browser-grant")
@@ -241,6 +303,18 @@ async def _collector(
         session, source_id, token
     ):
         raise HTTPException(status_code=401, detail="Source collector authentication required")
+    return token
+
+
+async def _mcp_collector(
+    session: AsyncSession, source_id: UUID, authorization: str | None,
+) -> str:
+    """Authenticate the distinct persistent n8n MCP collection credential for one source."""
+    scheme, _, token = (authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or not token or not await ingestion.collector_can_ingest(
+        session, source_id, token, scope="mcp:collect",
+    ):
+        raise HTTPException(status_code=401, detail="MCP collector authentication required")
     return token
 
 
@@ -774,15 +848,28 @@ async def trigger_collection(
     request: Request,
     _owner: OwnerWrite,
 ) -> ManualSyncResult:
-    """Invoke the packaged n8n wake after source authorization and applied-revision checks.
+    """Collect under owner authorization and the active source's applied connector revision.
 
-    The Connectors public owner repeats the source/provisioning fence and releases database locks
-    before network I/O. The actual provider fetch still uses n8n's packaged collector credential.
+    MCP runs its reviewed read in-process after the exact saved activation fence is checked; other
+    packaged connectors wake n8n. Neither path begins provider I/O for an inactive saved revision.
     """
     source = await _source(session, source_id)
     settings = request.app.state.settings
     if source.type == mcp_collection.PROVIDER_ID:
-        # MCP collection runs in-process through the reviewed client; no n8n workflow is involved.
+        provisioned = await provisioning.activation_status(session, source_id)
+        if (
+            source.status != "active" or provisioned is None
+            or provisioned.state != "active" or not provisioned.desired_enabled
+            or provisioned.applied_revision != provisioned.desired_revision
+            or provisioned.source_generation != source.generation
+            or not await provisioning.require_collection_fence(
+                session, source, source.generation, provisioned.desired_revision, lock=True,
+            )
+        ):
+            raise HTTPException(status_code=409, detail="Enable this MCP source before collecting")
+        expected_revision = provisioned.desired_revision
+        # MCP executes the reviewed provider read in-process, but only under the same saved
+        # activation revision required by packaged connectors. No unsaved draft can collect.
         runtime = getattr(request.app.state, "mcp_runtime", None)
         if runtime is None:
             raise HTTPException(status_code=503, detail="MCP runtime is unavailable")
@@ -790,6 +877,8 @@ async def trigger_collection(
         try:
             return ManualSyncResult.model_validate(await mcp_collection.collect(
                 runtime, request.app.state.session_factory, source_id,
+                expected_generation=source.generation,
+                expected_connector_revision=expected_revision,
             ))
         except LookupError as exc:
             raise HTTPException(status_code=404, detail="Source not found") from exc

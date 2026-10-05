@@ -7,6 +7,7 @@ never from model or UI free text, and stdio launch material stays in the admin p
 """
 
 from dataclasses import dataclass
+from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import UUID
 
@@ -43,6 +44,7 @@ async def read_collection_capability(
     source_id: UUID,
     source_generation: int,
     arguments: dict[str, Any],
+    authorize_extra: Callable[[], Awaitable[bool]] | None = None,
 ) -> McpCollectionRead:
     """Read one tool or resource through a collection grant scoped to exactly ``source_id``.
 
@@ -73,6 +75,8 @@ async def read_collection_capability(
     async def authorized() -> bool:
         """Re-read durable grant, connection, profile and source state; any drift denies the request."""
         if not await runtime.admission.lease_current():
+            return False
+        if authorize_extra is not None and not await authorize_extra():
             return False
         try:
             async with runtime.session_factory() as session:

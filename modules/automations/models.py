@@ -186,3 +186,22 @@ class AutomationCursor(Base):
     name: Mapped[str] = mapped_column(String(32), primary_key=True)
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     item_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+
+
+class AutomationWebhookCredential(Base):
+    """Hash-only bearer slot for one owner-configured inbound alias."""
+
+    __tablename__ = "automation_webhook_credentials"
+    __table_args__ = (
+        CheckConstraint("length(token_hash) = 64", name="ck_automation_webhook_credentials_hash"),
+        CheckConstraint("revision >= 1", name="ck_automation_webhook_credentials_revision"),
+        Index("ix_automation_webhook_credentials_expiry", "expires_at"),
+    )
+
+    owner_id: Mapped[int] = mapped_column(ForeignKey("owner.id", ondelete="CASCADE"), primary_key=True)
+    alias: Mapped[str] = mapped_column(String(40), primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -1,6 +1,6 @@
 # Umwelt-OS implementation status
 
-Updated: 2026-10-05 — Claude controller: P07–P10 code/build/review complete and squash-merged into develop. P11 starting; P12 remains. Deferred acceptance unchanged.
+Updated: 2026-10-05 — RESUMED by owner. P07–P10 code/build/review complete and squash-merged into develop (c0a27c1). P11-T1/T2 code/build/source review complete and composed through e8b02e7. P11 T3–T4, R08.1/P10 ingress, R07 port evidence, R12 consumers, R14/R15, P12/R16 and the deferred test stage remain.
 
 
 ## Current checkpoint — 2026-10-05
@@ -10,15 +10,18 @@ This live snapshot supersedes older current-action paragraphs; historical entrie
 | Area | Current status | Next required action |
 | --- | --- | --- |
 | P01–P06 | Production code/build/source review recorded complete; P05/P06 are in develop history. Runtime/provider acceptance remains deferred. | Preserve accepted code while composing later phases. |
-| P07 | Code/build/review complete; squash-merged into develop. Registry/MCP/harness/approvals, specialists + bounded supervisor handoff, browser-use (gated off), Agents UI, R08 MCP collection adapter (manual). | Open gates: browser S4 OmniRoute capability probe + isolation proof; R08.1 code remaining (n8n workflow template + collector-authenticated trigger, separate credential — N-5); MCP editor UI lands with P08; handoff unverified at runtime. |
-| P08 | Code/build/review complete; squash-merged into develop. Tasks/goals/topics, stories/trends, daily context + revisioned brief + notifications (en/vi), dashboard R10–R12, contextual day drawer on P06 chat, task/goal agent tools on P07 registry with approvals, MCP editor. | Deferred minors in SDD ledger; republish design-system artifact (tokens.json changed). |
+| P07 | Code/build/review complete; squash-merged into develop. Registry/MCP/harness/approvals, specialists + bounded supervisor handoff, browser-use (gated off), Agents UI, R08 MCP collection adapter (manual). | Open gates: browser S4 OmniRoute capability probe + isolation proof; R08.1 candidate9812196 includes schedule/credential/native editor; three source findings under repair before merge; handoff unverified at runtime. |
+| P08 | Code/build/review complete; squash-merged into develop. Tasks/goals/topics, stories/trends, daily context + revisioned brief + notifications (en/vi), dashboard R10–R12, contextual day drawer on P06 chat, task/goal agent tools on P07 registry with approvals, MCP editor. | Targeted R12 genuine text/table/video/highlight/watch/Telegram consumers still required; deferred minors in SDD ledger; republish design-system artifact. |
 | P09 | Code/build/review complete; squash-merged into develop. GitHub OAuth/collection, incremental sync + verified webhooks, deterministic mapping into entities/timeline, GitHub UI/project gadget; R13 native providers. | Live GitHub verification gate; deferred minors in SDD ledger. |
-| P10 | Code/build/review complete; squash-merged into develop. Automation rules, dispatch/scheduling with durable approvals, Automation Agent proposals, Settings UI, example rule pack, docs/automations.md. | Webhook trigger after n8n inbound receiver gate; deferred minors in SDD ledger. |
-| P10–P12 | Not implemented in the original plan ledger. | Automation, observability, hardening/backup/restore and final deferred validation after all production/reconciliation code. |
-| Repository rename | Primary is a real D:/Project/Umwelt-OS directory, not a junction; old primary path absent. Git lists 20 registered checkouts with new paths; all 19 linked .git registrations repaired successfully this checkpoint. Remote points to RadteamBaoDA/Umwelt-OS. Markdown/plan/owned skill naming updated. | Desktop saved project path still points at the former directory and reports isGitRepository=false; archived attachment/path metadata completion remains unverified. Finalize log has no SUCCESS, so do not treat old queued helper as completion. |
-| Execution | Only controller active; no implementation/review child agents running after restart/interruption. Production edits and composition index preserved. | Resume the three pending work streams from current bytes, not from scratch. |
+| P10 | Code/build/review complete; squash-merged into develop. Automation rules, dispatch/scheduling with durable approvals, Automation Agent proposals, Settings UI, example rule pack, docs/automations.md. | Authenticated inbound receiver candidate9812196 built and scoped auth reviewed; supplemental branch awaiting collector fixes/review/merge; runtime activation deferred. |
+| P11 | T1 code/build/source review complete (71fd47e repair); T2 code/build/source review complete through e8b02e7; T3 implementation active. | Complete T3 retention/lifecycle → T4 optional Langfuse + docs → whole-phase build/review/merge. |
+| R07/R12 | Real AnythingLLM source-port provenance unresolved; genuine gadget/Telegram data consumers remain incomplete. | R12 tree prepared/paused for collector pass; R07/R16 resolve source port and inventory honestly. |
+| R14/R15 | Not implemented: structured world observations/provider adapters and dual map/intelligence gadgets. | Implement/review/build after current ready tasks; required before tests. |
+| P12 | Production implementation not started. | Backup/restore, deletion safeguards, onboarding and release documentation after P11; all remaining reconciliation code before tests. |
+| Repository rename | Primary is a real D:/Project/Umwelt-OS directory, not a junction; old primary path absent. Linked Git registrations were repaired to renamed paths; additional isolated author trees created. Completed P07/P09/P10 manual integrations were unregistered, but physical cleanup remains incomplete. Remote points to RadteamBaoDA/Umwelt-OS. Markdown/plan/owned skill naming updated. | Desktop saved project path still points at the former directory and reports isGitRepository=false; archived attachment/path metadata completion remains unverified. Finalize log has no SUCCESS, so do not treat old queued helper as completion. |
+| Execution | Two Luna implementers: P11-T3 and collector R1 repair (three review findings); R12 tree paused pending collector source pass. T1/T2 source reviews passed. | Builds serialized; no tests before all production reconciliation; phase merge after build/review. |
 
-Current develop HEAD is 962035d (Add design system components and documentation), following 818b6af. No full P07/P08/P09 phase merge is established by the current checkpoint. Status files updated only; no commit, push, deploy, tests, lint, standalone typecheck or application/provider runtime validation performed in this status update. Git worktree repair changes Git path metadata, not production function logic.
+Current develop HEAD is c0a27c1 (P10), following 16f6831 (P09), c37e22e (P08) and 3dca811 (P07), verified from current Git history. Status files updated only; no commit, push, deploy, tests, lint, standalone typecheck or application/provider runtime validation performed in this status update. Git worktree repair changes Git path metadata, not production function logic.
 
 Markers: `[ ]` not started; `[~]` in progress; `[x]` complete; `[!]` blocked.
 
@@ -36,10 +39,10 @@ Markers: `[ ]` not started; `[~]` in progress; `[x]` complete; `[!]` blocked.
 - [x] Phase 5: T1-T4 code/build/review complete, merged to develop (`2be2846`), behavioral acceptance deferred.
 - [x] Phase 6: Ask/RAG, citations, AnythingLLM chat port and memory (T1-T4) complete; full four-image build passed; merged to develop; behavioral acceptance deferred.
 - [x] Phase 7 (code/build/review): T1–T4 + R08 adapter squash-merged into develop 2026-10-05; build exit0 + compileall clean; behavioral acceptance deferred. R08.1 schedule/trigger code and browser S4 gate open.
-- [~] Phase 8: Tasks/Goals backend and real UI, topics, Search UI, seed receipts, renderer metadata, MCP Settings UI and reviewed News story/trend/relevance source integrated canonical P08. News frontend 18/18 build passes; canonical integration build pending (Docker engine recovered). Actual News gadget/catalog mount source review closed and five paths integrated; author worktree archived with recoverable snapshot. Native task/goal tools and real proposal producer, daily context/brief/notifications, selected-day chat and remaining R11/R12 behavior still required.
-- [~] Phase 9: R13 + GitHub OAuth/S1 committed93686af; S2 webhook/hint/current-evidence code/build/source complete and committed c5c036b. Canonical frontend17pages/four-image integration build passed. Completed S2 author worktree archived. T3 project/event mapping and T4 presentation preflight active; phase not merged into develop, runtime acceptance deferred.
-- [ ] Phase 10: automation.
-- [ ] Phase 11: observability.
+- [x] Phase 8 code/build/review: merged into develop c37e22e; daily context/brief/notifications, dashboard, tasks/goals and contextual chat delivered. Behavioral acceptance deferred.
+- [x] Phase 9 code/build/review: merged into develop 16f6831; GitHub OAuth/sync/mapping/presentation and native providers delivered. Live/provider acceptance deferred.
+- [x] Phase 10 code/build/review: merged into develop c0a27c1; authenticated webhook receiver reconciliation remains active separately.
+- [~] Phase 11: T1 frozen source review and T2 implementation active in D:/Project/Umwelt-OS-p11; T3/T4 pending.
 - [ ] Phase 12: security, resource validation, backup/restore, and E2E hardening.
 
 Phase 0 verified on 2026-09-25: Ruff, mypy, pytest (15 passed, 1 integration test skipped in the unit run), a separate real-PostgreSQL owner-setup race test (1 passed), ESLint, TypeScript, Next.js production build, production Docker image builds, repeated Alembic migration, and disposable Compose/Playwright acceptance (2 passed). The Compose test project was removed with its own volumes after the run. The test host has 14 CPUs and 31 GiB RAM, so this does not validate capacity on the target 2-core/8-GB mini PC. No AI prompts or source data were sent. OmniRoute connectivity/model mappings, target deployment OS/architecture, mini-host resource measurements, Graphiti backend compatibility, and phases 1–12 remain to be validated in their owning phases.
@@ -443,3 +446,21 @@ Root prescribed build active; Sol finite R1–R6/source-direct-regression re-rev
 2026-10-05 continuation after repo folder transition: P07 browser S2/S3 and P09 accepted prerequisite composition resumed in renamed Umwelt-OS worktrees; P08 finite repair review remains active. Direct R4 PlanningEvidenceRef consumer mismatch is source-confirmed and needs one-file repair before producer acceptance; prior successful build is not behavioral closure. No new phase merge or completion; tests/runtime/provider acceptance remains deferred.
 
 2026-10-05 naming transition: README/spec/plans/owned skills now use Umwelt-OS. Actual primary-folder and desktop metadata relocation waits for app/CLI closure in a backed-up one-shot helper; inspect finalize SUCCESS before declaring path transition complete. Implementation agents interrupted for this requested transition; original phase plan remains active and unfinished.
+
+
+
+
+
+
+
+
+
+
+
+
+### Collector R08.1 / P10 supplemental complete — 2026-10-05
+- Implementation 9812196 and repair 3afc278: scheduled authenticated MCP collection, native source/tool/schedule/collection-grant configuration, and scoped inbound automation webhook credentials/ingress with durable dedupe.
+- Prescribed ./scripts/dev.ps1 build PASS; independent Sol scoped R1 source review PASS. All three findings closed: managed provisioning revision receipts, applied/desired activation fence for manual collect, and explicit editor409 conflict without stale-draft silent rebasing.
+- Accepted supplemental production composed into develop with this task-sized checkpoint commit. No tests, lint, standalone typecheck, provider/runtime probes or migration execution; runtime acceptance deferred.
+- R12 author tree fast-forwarded to accepted 3afc278 and implementation resumed. P11 T1/T2 accepted in phase branch; T3 active, T4 and whole-phase composition/review/build pending. R07 provenance/actual port, R14/R15 and P12/R16 remain mandatory before deferred tests.
+- Model selection confirmed by owner: gpt-6-luna implementation; gpt-6.1-sol review/planning. Primary physical checkout is D:/Project/Umwelt-OS; desktop still reports obsolete BBD-OS cwd, so commands use explicit real paths.

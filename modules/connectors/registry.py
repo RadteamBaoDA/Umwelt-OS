@@ -30,6 +30,15 @@ def validate(source: ConnectorSource) -> dict[str, Any]:
     """Validate active packaged connector settings and return a collector snapshot."""
     if source.status != "active":
         raise ValueError("Source is not active")
+    if source.type == "mcp":
+        from modules.connectors.mcp import validate as validate_mcp
+
+        config = validate_mcp(source)
+        return {
+            "source_id": str(source.id), "source_generation": source.generation,
+            "type": "mcp", "timezone": config.timezone,
+            "configuration": config.model_dump(mode="json"),
+        }
     if source.type not in SUPPORTED_TYPES:
         raise ValueError("This source type has no packaged connector")
     if source.provider is not None:

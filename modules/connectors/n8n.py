@@ -34,7 +34,7 @@ def workflow_name(source_id: UUID, operation_id: UUID) -> str:
 
 def workflow_webhook_path(source_id: UUID, source_type: str) -> str:
     """Build the source-scoped manual webhook path for a supported connector type."""
-    connector_type = {"api": "rest", "web": "url", "rss": "rss"}[source_type]
+    connector_type = {"api": "rest", "web": "url", "rss": "rss", "mcp": "mcp"}[source_type]
     return f"bbd-collect-{connector_type}-{source_id.hex}"
 
 
@@ -52,7 +52,12 @@ def build_workflow(
     native = source.provider in {"youtube", "arxiv", "huggingface", "github_releases", "github", "telegram"}
     if native and source.type != {"youtube": "rss", "arxiv": "rss"}.get(source.provider, "api"):
         raise ValueError("Source type does not match the registered provider")
-    filename = "github.json" if source.provider == "github" else "provider-fetch.json" if native else {"rss": "rss.json", "web": "url.json", "api": "rest.json"}.get(source.type)
+    filename = (
+        "mcp.json" if source.type == "mcp" else
+        "github.json" if source.provider == "github" else
+        "provider-fetch.json" if native else
+        {"rss": "rss.json", "web": "url.json", "api": "rest.json"}.get(source.type)
+    )
     if filename is None:
         raise ValueError("This source type has no packaged workflow")
     path = Path(__file__).resolve().parents[2] / "infrastructure" / "n8n" / "workflows" / filename
@@ -67,6 +72,7 @@ def build_workflow(
         "Acknowledge no changes",
         "Collect provider",
         "Collect GitHub repository",
+        "Collect MCP source",
     }
     for node in workflow["nodes"]:
         if node.get("name") == "Schedule":
@@ -101,7 +107,7 @@ def build_workflow(
         elif node.get("name") in collector_names:
             node.setdefault("credentials", {}).setdefault("httpHeaderAuth", {})
             node["credentials"]["httpHeaderAuth"].update(
-                {"id": collector_credential_id, "name": "BBD-OS source collector"}
+                {"id": collector_credential_id, "name": "BBD-OS MCP source collector" if source.type == "mcp" else "BBD-OS source collector"}
             )
         elif node.get("name") == "Fetch REST pages":
             if provider_credential_id:
@@ -128,6 +134,7 @@ def build_workflow(
                 .replace("__BBD_SOURCE_ID__", source_id)
                 .replace("__BBD_SOURCE_GENERATION__", str(source.generation))
                 .replace("__BBD_CONNECTOR_REVISION__", str(desired_revision))
+                .replace("__BBD_MCP_CONNECTION_ID__", str(source.configuration.get("connection_id", "")))
             )
         if isinstance(value, list):
             return [bind_source_id(item) for item in value]

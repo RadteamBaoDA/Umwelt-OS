@@ -41,6 +41,7 @@ export type McpNativeTool = {
   name: string; version: string; input_schema: Record<string, unknown>; output_schema: Record<string, unknown>;
   risk: string; permissions: string[]; module: string; timeout_seconds: number; max_result_bytes: number; schema_fingerprint: string;
 };
+export type McpCollectionConfig = { connection_id: string; calls: { grant_id: string; arguments: Record<string, unknown> }[]; schedule_interval_minutes: 15 | 30 | 60 | 360 | 1440; timezone: string };
 
 /** Calls a same-origin MCP management read without persisting response data in browser storage. */
 async function read<T>(path: string, signal?: AbortSignal): Promise<T> {
@@ -77,6 +78,10 @@ export function disableMcpConnection(id: string, revision: number, csrf: string)
 export function listMcpInboundClients(signal?: AbortSignal) { return read<{ items: McpInboundClient[] }>('/api/v1/mcp/inbound-clients', signal); }
 /** Loads the genuine native tool catalog; caller filters supported names and hashes. */
 export function listMcpNativeTools(signal?: AbortSignal) { return read<{ items: McpNativeTool[] }>('/api/v1/tools', signal); }
+/** Saves scheduled source collection using only grant identities already reviewed for this source. */
+export function saveMcpCollection(sourceId: string, generation: number, configuration: McpCollectionConfig, csrf: string) {
+  return write<{ source_id: string; source_generation: number; expected_revision: number; configuration: McpCollectionConfig }>(`/api/v1/connectors/sources/${encodeURIComponent(sourceId)}/mcp-collection`, csrf, 'PUT', { expected_generation: generation, configuration });
+}
 /** Issues an inbound token once; callers must not automatically retry ambiguous outcomes. */
 export function createMcpInboundClient(payload: { name: string; audience: string; tool_bindings: McpInboundClient['bindings']; source_ids: string[]; capabilities: string[]; expires_at: string }, csrf: string) {
   return write<{ client: McpInboundClient; token: string }>('/api/v1/mcp/inbound-clients', csrf, 'POST', payload);

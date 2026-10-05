@@ -70,6 +70,15 @@ Declared contract (`CONTRACT` in the module):
 - Pagination and history: one request per call per run, provider cursors are not followed, no backfill; every run appends
   observations, so unchanged items repeat with an identical version.
 
-Open gates: the n8n schedule that calls the collection API (workflow template, provisioning and a collector-authenticated
-trigger) is not provisioned, so collection is manual for now; the owner editor (`mcp-editor.tsx`) belongs to P08; the
-catalog entry lists both under `unavailable_operations`.
+MCP source collection configuration accepts `schedule_interval_minutes` (15, 30, 60, 360 or 1440) and an IANA
+`timezone`. Save the MCP source configuration, then activate its packaged workflow through the normal connector
+activation API. n8n receives a separate persistent `mcp:collect` credential; it cannot submit ingestion batches.
+Its `POST /api/v1/connectors/sources/{id}/mcp-collect` endpoint requires the active source generation, applied
+connector revision and configured connection ID, and rechecks the MCP token during each transport authorization.
+Connection and grant revisions are resolved from current owner-reviewed grants for every call. Pause or disable fences
+new calls, while already ingested observations remain until explicit source deletion.
+
+The catalog advertises scheduled and manual collection. In Data sources, the owner selects an enabled MCP connection,
+chooses active collection grants already reviewed for that exact source, supplies fixed JSON arguments, and saves or
+activates its bounded schedule. MCP connections and grant review remain in MCP settings. Runtime n8n credential
+provisioning and provider acceptance remain deferred validation gates.

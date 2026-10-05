@@ -16,6 +16,7 @@ import { useDisplayPreferences } from '@/core/query-provider';
 import { useGuardedNavigation } from '@/core/guarded-navigation';
 import { ProviderScope, type NativeProvider } from './provider-scope';
 import { GitHubSummary } from './github-summary';
+import { McpCollectionEditor } from './mcp-collection-editor';
 import {
   activateConnector,
   ConnectorCatalogEntry,
@@ -46,7 +47,7 @@ import {
 } from './api';
 
 const intervals = [15, 30, 60, 360, 1440] as const;
-const sourceTypes = { rss: 'rss', web: 'web', rest: 'api', youtube: 'rss', arxiv: 'rss', huggingface: 'api', github: 'api', github_releases: 'api', telegram: 'api' } as const;
+const sourceTypes = { rss: 'rss', web: 'web', rest: 'api', mcp: 'mcp', youtube: 'rss', arxiv: 'rss', huggingface: 'api', github: 'api', github_releases: 'api', telegram: 'api' } as const;
 type Provider = keyof typeof sourceTypes;
 const nativeProviders = new Set<Provider>(['youtube', 'arxiv', 'huggingface', 'github', 'github_releases', 'telegram']);
 
@@ -123,7 +124,7 @@ export function ConnectorEditor({
   const display = useDisplayPreferences();
   const { registerLeaveGuard } = useGuardedNavigation();
   const queryClient = useQueryClient();
-  const initialProvider = source?.provider && isProvider(source.provider) ? source.provider : source?.type === 'rss' ? 'rss' : source?.type === 'web' ? 'web' : 'rest';
+  const initialProvider = source?.provider && isProvider(source.provider) ? source.provider : source?.type === 'mcp' ? 'mcp' : source?.type === 'rss' ? 'rss' : source?.type === 'web' ? 'web' : 'rest';
   const [provider, setProvider] = useState<Provider>(initialProvider);
   const [name, setName] = useState(source?.name ?? '');
   const [sourceId, setSourceId] = useState(source?.id ?? '');
@@ -263,7 +264,7 @@ export function ConnectorEditor({
     setScopeResetEpoch((current) => current + 1);
     serverConfigurationRef.current = value;
     sourceGenerationRef.current = value.source_generation;
-    setProvider(value.provider && isProvider(value.provider) ? value.provider : value.source_type === 'rss' ? 'rss' : value.source_type === 'web' ? 'web' : 'rest');
+    setProvider(value.provider && isProvider(value.provider) ? value.provider : value.source_type === 'mcp' ? 'mcp' : value.source_type === 'rss' ? 'rss' : value.source_type === 'web' ? 'web' : 'rest');
     setConfiguration(value.configuration);
     setAuthMethod(value.auth_method);
     setAuthHeaderName(value.auth_header_name ?? 'Authorization');
@@ -933,6 +934,7 @@ export function ConnectorEditor({
       {configurationQuery.isPending && <p className="muted">{t('loading')}</p>}
       {configurationQuery.isError && <div className="error" role="alert">{t(errorText(configurationQuery.error) as 'conflict' | 'configurationInvalid' | 'serviceUnavailable' | 'sourceNameRequired' | 'actionFailed')} <Button className="secondary" onClick={() => configurationQuery.refetch()}>{t('retry')}</Button></div>}
       {configurationQuery.isSuccess && <>
+        {provider === 'mcp' ? <McpCollectionEditor sourceId={sourceId} sourceStatus={sourceStatus} onDraftChange={setDirty} onChanged={() => { void queryClient.invalidateQueries({ queryKey: connectorKeys.configuration(sourceId) }); void queryClient.invalidateQueries({ queryKey: connectorKeys.activation(sourceId) }); onChanged(); }} /> : <>
         <fieldset className="source-editor-fields" disabled={busyAction !== ''}>
         <div className="form source-editor-form">
           {nativeProviders.has(provider)
@@ -1061,6 +1063,7 @@ export function ConnectorEditor({
           {visibleActivationError === 'credential_delete_pending' && <p className="muted" role="status">{t('credentialPending')}</p>}
           {providerCredentialConfigured && sourceStatus === 'paused' && visibleActivationError !== 'deactivation_pending' && visibleActivationError !== 'credential_delete_pending' && <Button className="secondary" disabled={busyAction !== '' || dirty || Boolean(secret)} onClick={removeCredential}>{busyAction === 'remove' ? t('saving') : t('removeCredential')}</Button>}
         </section>}
+        </>}
       </>}
     </>}
   </section>;

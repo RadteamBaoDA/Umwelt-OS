@@ -1,15 +1,23 @@
 """Protected REST routes for automation rules and dry preview."""
 
+import asyncio
+import json
+import re
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, Request, Response, status
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.dependencies import require_owner, require_owner_write
-from core.auth.models import AuthSession
+from core.auth.models import AuthSession, Owner
 from core.database import get_session
 from modules.automations import public
+from modules.automations.execution import enqueue_trigger
+from modules.automations.models import AutomationTrigger, AutomationWebhookCredential
 from modules.automations.schemas import (
     AutomationCreate,
     AutomationPage,
@@ -28,6 +36,16 @@ router = APIRouter(prefix="/api/v1/automations", tags=["automations"])
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[AuthSession, Depends(require_owner)]
 OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]
+WEBHOOK_TOKEN_TTL = timedelta(days=90)
+WEBHOOK_BODY_LIMIT = 64 * 1024
+_EVENT_KEY = re.compile(r"^[\x21-\x7e]{1,128}$")
+
+
+class InboundEvent(BaseModel):
+    """Allow only the declared metadata field accepted by webhook trigger conditions."""
+
+    model_config = ConfigDict(extra="forbid")
+    event: str = Field(min_length=1, max_length=2000)
 
 
 def _error(code: int, name: str, message: str, details: dict | None = None) -> HTTPException:
@@ -80,6 +98,124 @@ async def get_capabilities(request: Request, owner: OwnerRead, response: Respons
     """Return editor options: trigger fields, action availability by owning module and webhook alias names."""
     response.headers["Cache-Control"] = "private, no-store"
     return public.capabilities(request.app.state.modules, request.app.state.settings)
+
+
+@router.post("/webhook-credentials/{alias}")
+async def issue_webhook_credential(
+    alias: Annotated[str, Path(pattern=r"^[a-z][a-z0-9_-]{0,39}$")],
+    request: Request, session: Session, owner: OwnerWrite, response: Response,
+) -> dict[str, object]:
+    """Rotate one alias token and show its random bearer exactly once to the authenticated owner."""
+    response.headers["Cache-Control"] = "private, no-store"
+    from modules.tools.mcp_credentials import issue_inbound_token
+
+    raw, digest, _prefix = issue_inbound_token()
+    await session.scalar(select(Owner).where(Owner.id == owner.owner_id).with_for_update())
+    row = await session.scalar(select(AutomationWebhookCredential).where(
+        AutomationWebhookCredential.owner_id == owner.owner_id,
+        AutomationWebhookCredential.alias == alias,
+    ).with_for_update())
+    if row is None:
+        row = AutomationWebhookCredential(
+            owner_id=owner.owner_id, alias=alias, token_hash=digest, revision=1,
+            expires_at=datetime.now(UTC) + WEBHOOK_TOKEN_TTL,
+        )
+        session.add(row)
+    else:
+        row.token_hash = digest
+        row.revision += 1
+        row.created_at = datetime.now(UTC)
+        row.expires_at = datetime.now(UTC) + WEBHOOK_TOKEN_TTL
+        row.revoked_at = None
+    await session.commit()
+    return {
+        "alias": alias, "token": raw, "revision": row.revision,
+        "expires_at": row.expires_at, "endpoint": f"/api/v1/automations/inbound/{alias}",
+    }
+
+
+@router.delete("/webhook-credentials/{alias}", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_webhook_credential(
+    alias: Annotated[str, Path(pattern=r"^[a-z][a-z0-9_-]{0,39}$")],
+    session: Session, owner: OwnerWrite,
+) -> Response:
+    """Immediately revoke one alias credential while retaining trigger and run history."""
+    row = await session.scalar(select(AutomationWebhookCredential).where(
+        AutomationWebhookCredential.owner_id == owner.owner_id,
+        AutomationWebhookCredential.alias == alias,
+    ).with_for_update())
+    if row is not None:
+        row.revoked_at = datetime.now(UTC)
+        await session.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/inbound/{alias}", status_code=status.HTTP_202_ACCEPTED)
+async def receive_inbound_webhook(
+    alias: Annotated[str, Path(pattern=r"^[a-z][a-z0-9_-]{0,39}$")],
+    request: Request, session: Session, response: Response,
+    token: Annotated[str | None, Header(alias="X-Umwelt-Webhook-Token")] = None,
+    event_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> dict[str, object]:
+    """Authenticate a configured alias, validate bounded metadata, then commit its durable dedupe inbox row.
+
+    This endpoint uses only the independent per-alias bearer, never the owner's browser session.
+    The durable inbox unique key absorbs provider retries; request bodies and tokens are not logged.
+    """
+    response.headers["Cache-Control"] = "no-store"
+    if not token or not event_key or not _EVENT_KEY.fullmatch(event_key):
+        raise HTTPException(status_code=401, detail="Webhook credentials are required")
+    if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
+        raise HTTPException(status_code=415, detail="Webhook requires application/json")
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            declared_length = int(content_length)
+            if declared_length < 0:
+                raise HTTPException(status_code=400, detail="Webhook content length is invalid")
+            if declared_length > WEBHOOK_BODY_LIMIT:
+                raise HTTPException(status_code=413, detail="Webhook body exceeds 64 KiB")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Webhook content length is invalid") from exc
+    if not request.app.state.modules.get("tools") or not request.app.state.modules["tools"].enabled:
+        raise HTTPException(status_code=503, detail="Automation webhooks are unavailable")
+    from modules.tools.mcp_credentials import verify_inbound_token
+
+    credential = await session.scalar(select(AutomationWebhookCredential).where(
+        AutomationWebhookCredential.owner_id == 1,
+        AutomationWebhookCredential.alias == alias,
+        AutomationWebhookCredential.revoked_at.is_(None),
+        AutomationWebhookCredential.expires_at > datetime.now(UTC),
+    ).with_for_update())
+    if credential is None or not verify_inbound_token(token, credential.token_hash):
+        raise HTTPException(status_code=401, detail="Webhook credentials are invalid or expired")
+    body = bytearray()
+    try:
+        async with asyncio.timeout(5):
+            async for chunk in request.stream():
+                if len(body) + len(chunk) > WEBHOOK_BODY_LIMIT:
+                    raise HTTPException(status_code=413, detail="Webhook body exceeds 64 KiB")
+                body.extend(chunk)
+    except TimeoutError as exc:
+        raise HTTPException(status_code=503, detail="Webhook ingress timed out") from exc
+    try:
+        payload = InboundEvent.model_validate(json.loads(body))
+    except (json.JSONDecodeError, UnicodeDecodeError, ValidationError) as exc:
+        raise HTTPException(status_code=422, detail="Webhook event payload is invalid") from exc
+    accepted = await enqueue_trigger(
+        session, 1, "webhook", f"{alias}:{event_key}",
+        {"event": payload.event}, hook=alias,
+    )
+    if not accepted:
+        prior = await session.scalar(select(AutomationTrigger).where(
+            AutomationTrigger.owner_id == 1,
+            AutomationTrigger.trigger_type == "webhook",
+            AutomationTrigger.event_key == f"{alias}:{event_key}",
+        ))
+        if prior is None or prior.payload != {"event": payload.event, "hook": alias}:
+            raise HTTPException(status_code=409, detail="Idempotency key was already used for another event")
+    await session.commit()
+    return {"accepted": accepted}
 
 
 # Declared before ``/{automation_id}`` so "preview" is never parsed as an ID.

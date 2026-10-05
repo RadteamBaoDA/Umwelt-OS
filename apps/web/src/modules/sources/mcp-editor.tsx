@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -23,7 +24,7 @@ import {
 } from './mcp-api';
 
 type Draft = { name: string; transport: 'streamable_http' | 'stdio'; endpoint: string; profile: string; auth: 'none' | 'bearer'; credentialAction: 'retain' | 'replace' | 'remove'; credential: string; timeout: string };
-type GrantDraft = { selected: boolean; sources: string[]; destinations: string; expires: string };
+type GrantDraft = { selected: boolean; purpose: 'chat' | 'collection'; sources: string[]; destinations: string; expires: string };
 type TokenView = { token: string; client: McpInboundClient } | null;
 type McpMessageKey = 'requestFailed' | 'sessionExpired' | 'conflict' | 'catalogFull' | 'invalidInput' | 'runtimeRefreshFailed' | 'transportUnavailable' | 'clipboardFailed' | 'inboundRequired' | 'grantScopeRequired' | 'reconciliationFailed' | 'tokenAckRequired';
 const supportedInbound = new Set(['search.query', 'knowledge.get_document', 'knowledge.list_documents']);
@@ -387,6 +388,8 @@ export function McpSettings() {
   /** Replaces grants only when every selected read grant has explicit source and destination scopes. */
   const saveGrants = () => {
     if (!selected || !discovery) return;
+    const invalidCollectionScope = Object.values(grantDrafts).some((value) => value.selected && value.purpose === 'collection' && value.sources.length !== 1);
+    if (invalidCollectionScope) { setError('grantScopeRequired'); return; }
     const invalidExpiry = Object.values(grantDrafts).some((value) => {
       if (!value.selected || !value.expires) return false;
       const time = new Date(value.expires).getTime();
@@ -396,7 +399,7 @@ export function McpSettings() {
     const selections: McpGrantChoice[] = discovery.capabilities.flatMap((item) => {
       const value = grantDrafts[item.id];
       if (!value?.selected || !['tool', 'resource'].includes(item.kind)) return [];
-      return [{ capability_id: item.id, descriptor_hash: item.descriptor_hash, purpose: 'chat', risk: 'READ_ONLY', source_ids: value.sources, destinations: value.destinations.split(',').map((entry) => entry.trim()).filter(Boolean), ...(value.expires ? { expires_at: new Date(value.expires).toISOString() } : {}) }];
+      return [{ capability_id: item.id, descriptor_hash: item.descriptor_hash, purpose: value.purpose, risk: 'READ_ONLY', source_ids: value.sources, destinations: value.purpose === 'collection' ? ['local'] : value.destinations.split(',').map((entry) => entry.trim()).filter(Boolean), ...(value.expires ? { expires_at: new Date(value.expires).toISOString() } : {}) }];
     });
     if (selections.some((item) => item.source_ids.length === 0 || item.source_ids.length > 100 || item.destinations.length === 0 || item.destinations.length > 8 || new Set(item.destinations).size !== item.destinations.length || item.destinations.some((value) => !value || value.length > 255) || item.destinations.reduce((sum, value) => sum + new TextEncoder().encode(value).length, 0) > 1024)) { setError('grantScopeRequired'); return; }
     if (selections.length === 0) { setConfirm({ action: 'save-empty-grants' }); return; }
@@ -448,7 +451,7 @@ export function McpSettings() {
         const { result, grants: savedGrants } = value as { result: McpDiscovery; grants: McpGrant[] };
         if (currentId.current !== result.connection_id) return;
         setDiscovery(result);
-        setGrantDrafts(Object.fromEntries(result.capabilities.map((item) => [item.id, { selected: false, sources: [], destinations: '', expires: '' }])));
+        setGrantDrafts(Object.fromEntries(result.capabilities.map((item) => [item.id, { selected: false, purpose: 'chat', sources: [], destinations: '', expires: '' }])));
         setGrantDirty(false); setGrants(savedGrants);
       });
       return;
@@ -468,7 +471,7 @@ export function McpSettings() {
     });
   };
   /** Updates only volatile descriptor grant draft state and marks it for navigation guarding. */
-  const updateGrant = (id: string, update: Partial<GrantDraft>) => { if (inputsFrozen || conflict) return; setGrantDirty(true); setGrantDrafts((values) => ({ ...values, [id]: { ...(values[id] ?? { selected: false, sources: [], destinations: '', expires: '' }), ...update } })); };
+  const updateGrant = (id: string, update: Partial<GrantDraft>) => { if (inputsFrozen || conflict) return; setGrantDirty(true); setGrantDrafts((values) => ({ ...values, [id]: { ...(values[id] ?? { selected: false, purpose: 'chat', sources: [], destinations: '', expires: '' }), ...update } })); };
   /** Identifies the only descriptor kinds that have a currently supported read-only chat dispatch path. */
   const supported = (item: NonNullable<typeof discovery>['capabilities'][number]) => ['tool', 'resource'].includes(item.kind);
   /** Reloads the server snapshot and discards local drafts after explicit owner confirmation. */
@@ -486,7 +489,7 @@ export function McpSettings() {
     if (!succeeded) { setReconciliationRequired(true); setError('reconciliationFailed'); return; }
     if (conflict && !hasDraftRef.current) setConflict(false);
   };
-  const canEnable = Boolean(selected && !editing && discovery && discovery.connection_id === selected.id && discovery.connection_revision === selected.revision && discovery.deployment_profile_hash === selected.deployment_profile_hash && selected.health === 'connected' && (selected.transport !== 'stdio' || Boolean(selected.deployment_profile_id && selected.deployment_profile_hash)) && grants.some((grant) => !grant.revoked_at && (!grant.expires_at || new Date(grant.expires_at).getTime() > Date.now()) && grant.connection_id === selected.id && grant.purpose === 'chat' && grant.risk === 'READ_ONLY' && grant.reviewed_connection_revision === selected.revision && grant.reviewed_profile_hash === selected.deployment_profile_hash && discovery.capabilities.some((capability) => capability.id === grant.capability_id && capability.descriptor_hash === grant.descriptor_hash)));
+  const canEnable = Boolean(selected && !editing && discovery && discovery.connection_id === selected.id && discovery.connection_revision === selected.revision && discovery.deployment_profile_hash === selected.deployment_profile_hash && selected.health === 'connected' && (selected.transport !== 'stdio' || Boolean(selected.deployment_profile_id && selected.deployment_profile_hash)) && grants.some((grant) => !grant.revoked_at && (!grant.expires_at || new Date(grant.expires_at).getTime() > Date.now()) && grant.connection_id === selected.id && ['chat', 'collection'].includes(grant.purpose) && grant.risk === 'READ_ONLY' && grant.source_ids.length > 0 && (grant.purpose !== 'collection' || grant.source_ids.length === 1) && grant.reviewed_connection_revision === selected.revision && grant.reviewed_profile_hash === selected.deployment_profile_hash && discovery.capabilities.some((capability) => capability.id === grant.capability_id && capability.descriptor_hash === grant.descriptor_hash)));
   const inputsFrozen = busy || loading || reconciliationRequired || conflict;
 
   return <section className="mt-8 border-t border-border pt-8 space-y-6" aria-labelledby="mcp-settings-title">
@@ -511,10 +514,10 @@ export function McpSettings() {
       {grants.length > 0 && <div><h4>{t('savedGrants')}</h4><ul className="record-list">{grants.map((grant) => <li key={grant.id} className="record-row"><strong>{t(grantPurposeMessageKey(grant.purpose))} · {t(grantRiskMessageKey(grant.risk))} · {grant.revoked_at ? t('revoked') : t('grantLive')}</strong><p className="muted">{t('reviewIdentity')}: r{grant.reviewed_connection_revision} · {grant.descriptor_hash} · {grant.destinations.join(', ')}</p></li>)}</ul><p className="muted">{t('rediscoverToReview')}</p></div>}
       {discovery && <div className="space-y-3"><h4>{t('descriptorReview')}</h4><p className="muted">{t('discoveryIdentity', { revision: discovery.connection_revision, schema: discovery.schema_set_hash, profile: discovery.deployment_profile_hash ?? t('notApplicable') })}</p>
         <p className="muted">{t('sourceScopeNote')} {t('scopeBoundsHelp')}</p>
-        {discovery.capabilities.map((item) => { const value = grantDrafts[item.id] ?? { selected: false, sources: [], destinations: '', expires: '' }; return <article key={item.id} className="rounded-md border border-border p-3 space-y-2"><div className="flex items-start gap-2"><Checkbox id={`grant-${item.id}`} checked={value.selected} disabled={inputsFrozen || !supported(item)} onCheckedChange={(checked) => updateGrant(item.id, { selected: Boolean(checked) })} /><Label htmlFor={`grant-${item.id}`}>{item.kind}: {item.remote_key}</Label><span className="muted">{supported(item) ? t('readOnlyGrant') : t('unsupportedKind')}</span></div><p className="muted">{t('descriptorHash')}: <code>{item.descriptor_hash}</code></p><pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-muted p-2 text-xs">{JSON.stringify(item.descriptor, null, 2)}</pre>{value.selected && supported(item) && <div className="grid gap-2 sm:grid-cols-2"><fieldset><legend>{t('sourceScopes')}</legend>{sources.map((source) => <label key={source.id} className="flex items-center gap-2"><Checkbox disabled={inputsFrozen} checked={value.sources.includes(source.id)} onCheckedChange={(checked) => updateGrant(item.id, { sources: checked ? [...value.sources, source.id] : value.sources.filter((id) => id !== source.id) })} />{source.name}</label>)}</fieldset><div><Label htmlFor={`dest-${item.id}`}>{t('destinations')}</Label><Input disabled={inputsFrozen} id={`dest-${item.id}`} value={value.destinations} placeholder={t('destinationPlaceholder')} onChange={(e) => updateGrant(item.id, { destinations: e.target.value })} /><Label htmlFor={`expire-${item.id}`}>{t('optionalExpiry')}</Label><Input disabled={inputsFrozen} id={`expire-${item.id}`} type="datetime-local" value={value.expires} onChange={(e) => updateGrant(item.id, { expires: e.target.value })} /><p className="muted">{t('inputTimeZone', { timezone: browserTimezone })}</p><p className="muted">{t('destinationPrivacy')}</p></div></div>}</article>; })}
+        {discovery.capabilities.map((item) => { const value = grantDrafts[item.id] ?? { selected: false, purpose: 'chat' as const, sources: [], destinations: '', expires: '' }; return <article key={item.id} className="rounded-md border border-border p-3 space-y-2"><div className="flex items-start gap-2"><Checkbox id={`grant-${item.id}`} checked={value.selected} disabled={inputsFrozen || !supported(item)} onCheckedChange={(checked) => updateGrant(item.id, { selected: Boolean(checked) })} /><Label htmlFor={`grant-${item.id}`}>{item.kind}: {item.remote_key}</Label><span className="muted">{supported(item) ? t('readOnlyGrant') : t('unsupportedKind')}</span></div><p className="muted">{t('descriptorHash')}: <code>{item.descriptor_hash}</code></p><pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-muted p-2 text-xs">{JSON.stringify(item.descriptor, null, 2)}</pre>{value.selected && supported(item) && <div className="grid gap-2 sm:grid-cols-2"><div><Label htmlFor={`purpose-${item.id}`}>{t('purposeSelection')}</Label><Select disabled={inputsFrozen} value={value.purpose} onValueChange={(purpose: 'chat' | 'collection') => updateGrant(item.id, { purpose })}><SelectTrigger id={`purpose-${item.id}`}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="chat">{t('purposeChat')}</SelectItem><SelectItem value="collection">{t('purposeCollection')}</SelectItem></SelectContent></Select></div><fieldset><legend>{t('sourceScopes')}</legend>{sources.map((source) => <label key={source.id} className="flex items-center gap-2"><Checkbox disabled={inputsFrozen} checked={value.sources.includes(source.id)} onCheckedChange={(checked) => updateGrant(item.id, { sources: checked ? [...value.sources, source.id] : value.sources.filter((id) => id !== source.id) })} />{source.name}</label>)}</fieldset><div>{value.purpose === 'collection' ? <p className="muted">{t('collectionDestination')}</p> : <><Label htmlFor={`dest-${item.id}`}>{t('destinations')}</Label><Input disabled={inputsFrozen} id={`dest-${item.id}`} value={value.destinations} placeholder={t('destinationPlaceholder')} onChange={(e) => updateGrant(item.id, { destinations: e.target.value })} /><p className="muted">{t('destinationPrivacy')}</p></>}<Label htmlFor={`expire-${item.id}`}>{t('optionalExpiry')}</Label><Input disabled={inputsFrozen} id={`expire-${item.id}`} type="datetime-local" value={value.expires} onChange={(e) => updateGrant(item.id, { expires: e.target.value })} /><p className="muted">{t('inputTimeZone', { timezone: browserTimezone })}</p></div>{value.purpose === 'collection' && <p className="muted sm:col-span-2">{t('collectionSourceLimit')}</p>}</div>}</article>; })}
         <Button disabled={inputsFrozen || !selected || Boolean(tokenView)} onClick={saveGrants}>{t('saveGrantReview')}</Button>
       </div>}
-      <p className="muted">{t('collectionUnavailable')}</p>
+      <p className="muted">{t('collectionUnavailable')} <Link className="underline" href="/settings/sources">{t('manageCollectionSources')}</Link></p>
       </div>}
     </section>
 

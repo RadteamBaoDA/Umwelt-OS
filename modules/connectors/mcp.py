@@ -18,8 +18,9 @@ import json
 import logging
 from typing import Any
 from uuid import UUID
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.realtime import commit_with_replay, make_source_change
@@ -91,6 +92,26 @@ class McpCollectionConfig(BaseModel):
 
     connection_id: UUID
     calls: list[McpCollectionCall] = Field(min_length=1, max_length=MAX_CALLS)
+    schedule_interval_minutes: int = Field(default=60, ge=15, le=1440)
+    timezone: str = Field(default="Asia/Ho_Chi_Minh", max_length=64)
+
+    @field_validator("schedule_interval_minutes")
+    @classmethod
+    def supported_interval(cls, value: int) -> int:
+        """Restrict n8n schedules to the bounded intervals supported by packaged sources."""
+        if value not in {15, 30, 60, 360, 1440}:
+            raise ValueError("unsupported MCP collection interval")
+        return value
+
+    @field_validator("timezone")
+    @classmethod
+    def valid_timezone(cls, value: str) -> str:
+        """Reject unknown timezone names before n8n receives a schedule."""
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError("timezone must be a valid IANA timezone") from exc
+        return value
 
 
 class McpCollectionError(Exception):
@@ -184,16 +205,19 @@ async def collect(
     runtime: tools.McpRuntime,
     session_factory: async_sessionmaker[AsyncSession],
     source_id: UUID,
+    expected_connector_revision: int,
+    expected_generation: int,
     owner_id: int = 1,
+    collector_token: str | None = None,
+    expected_connection_id: UUID | None = None,
 ) -> dict[str, Any]:
     """Run the source's allowlisted calls once and submit one fenced ingestion batch.
 
-    Invariants: each call re-resolves its grant fence, so a disabled connection or revoked grant
-    makes that call fail closed without any outbound request; a failed call never blocks the
-    others (it is listed in ``failed_calls``) and total failure records the source error code.
-    The batch uses native ingestion (no connector provisioning row), a one-run collector
-    credential minted and revoked here, and cursor chaining, so overlapping runs lose with HTTP
-    409 instead of interleaving. A retried request re-collects and appends new observations.
+    Invariants: each call re-resolves its grant and exact active provisioning revision, so a
+    disabled connection, revoked grant, or changed/disabled source fails closed before any
+    outbound request and again before accepting its result. A failed call never blocks others.
+    The ingestion credential is minted and revoked here; the batch carries the same revision
+    fence checked during collection and at final receipt. A retry re-collects observations.
     """
     async with session_factory() as session:
         source = await sources.get_connector_source(session, source_id)
@@ -203,31 +227,66 @@ async def collect(
             config = validate(source)
         except ValueError as exc:
             raise McpCollectionError("mcp_source_invalid") from exc
+        if source.generation != expected_generation:
+            raise McpCollectionError("mcp_source_stale")
+        if expected_connection_id is not None and config.connection_id != expected_connection_id:
+            raise McpCollectionError("mcp_connection_stale")
+        if not await _collection_fence(
+            session, source, expected_generation,
+            expected_connector_revision,
+        ):
+            raise McpCollectionError("mcp_source_stale")
         cursor_before = await ingestion.get_source_cursor(session, source_id)
     collected_at = datetime.now(UTC)
     records: list[dict[str, Any]] = []
     failed: list[str] = []
     for call in config.calls:
         try:
+            async def collector_current() -> bool:
+                """Recheck provisioning and optional n8n authority at every MCP request/result fence."""
+                async with session_factory() as session:
+                    current = await sources.get_connector_source(session, source_id)
+                    if current is None or not await _collection_fence(
+                        session, current,
+                        expected_generation,
+                        expected_connector_revision,
+                    ):
+                        return False
+                    return collector_token is None or await ingestion.collector_can_ingest(
+                        session, source_id, collector_token, scope="mcp:collect",
+                    )
+
             read = await tools.read_collection_capability(
                 runtime, owner_id, connection_id=config.connection_id, grant_id=call.grant_id,
                 source_id=source_id, source_generation=source.generation, arguments=call.arguments,
+                authorize_extra=collector_current,
             )
             records.extend(normalize(read, call.arguments, collected_at))
+        except McpCollectionError:
+            raise
         except Exception as exc:
+            if not await collector_current():
+                raise McpCollectionError(
+                    "mcp_collector_revoked" if collector_token is not None else "mcp_source_stale"
+                ) from exc
             # Only the exception type is logged: provider text may contain secrets or content.
             logger.warning("MCP collection call failed (%s)", type(exc).__name__)
             failed.append(str(call.grant_id))
     if len(failed) == len(config.calls):
+        if not await _fence_current(session_factory, source_id, expected_generation, expected_connector_revision):
+            raise McpCollectionError("mcp_source_stale")
         await _record_result(session_factory, source, "mcp_collection_failed")
         raise McpCollectionError("mcp_collection_failed")
     if not records:
+        if not await _fence_current(session_factory, source_id, expected_generation, expected_connector_revision):
+            raise McpCollectionError("mcp_source_stale")
         await _record_result(session_factory, source, None, no_changes=True)
         return {"status": "no_changes", "run_id": None, "batch_id": None, "failed_calls": failed}
     if len(records) > MAX_RECORDS:
         records = records[:MAX_RECORDS]
     batch = ReceiveBatch(
-        source_id=source_id, source_generation=source.generation, connector_revision=None,
+        source_id=source_id, source_generation=source.generation,
+        connector_revision=expected_connector_revision,
         batch_key="mcp:" + _digest(f"{source_id}:{source.generation}:{collected_at.isoformat()}"),
         cursor_before=cursor_before, cursor_after="mcp:" + collected_at.isoformat(),
         records=records,
@@ -235,6 +294,11 @@ async def collect(
     token: str | None = None
     try:
         async with session_factory() as session:
+            current = await sources.get_connector_source(session, source_id)
+            if current is None or not await _collection_fence(
+                session, current, expected_generation, expected_connector_revision,
+            ):
+                raise McpCollectionError("mcp_source_stale")
             token = await ingestion.create_collector_credential(session, source_id)
             receipt: Receipt = await ingestion.receive_connector_batch(session, batch, token)
     finally:
@@ -246,6 +310,34 @@ async def collect(
         "status": receipt.status, "run_id": receipt.run_id, "batch_id": receipt.batch_id,
         "failed_calls": failed,
     }
+
+
+async def _collection_fence(
+    session: AsyncSession,
+    source: ConnectorSource,
+    source_generation: int,
+    connector_revision: int,
+) -> bool:
+    """Require this active MCP source to retain the exact fully applied connector revision."""
+    from modules.connectors import provisioning
+
+    return await provisioning.require_collection_fence(
+        session, source, source_generation, connector_revision, lock=True,
+    )
+
+
+async def _fence_current(
+    session_factory: async_sessionmaker[AsyncSession],
+    source_id: UUID,
+    source_generation: int,
+    connector_revision: int,
+) -> bool:
+    """Check the current source generation and applied provisioning fence in a fresh session."""
+    async with session_factory() as session:
+        source = await sources.get_connector_source(session, source_id)
+        return source is not None and await _collection_fence(
+            session, source, source_generation, connector_revision,
+        )
 
 
 async def _record_result(

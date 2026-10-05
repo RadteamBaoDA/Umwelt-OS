@@ -107,7 +107,9 @@ def _digest(value: object) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-async def create_collector_credential(session: AsyncSession, source_id: UUID) -> str:
+async def create_collector_credential(
+    session: AsyncSession, source_id: UUID, *, scope: str = "ingestion:write",
+) -> str:
     """Rotate the source's ingestion credential and return its one-time token.
 
     Locks the source before revoking active credentials; only the token hash is
@@ -121,7 +123,11 @@ async def create_collector_credential(session: AsyncSession, source_id: UUID) ->
         (
             await session.scalars(
                 select(CollectorCredential)
-                .where(CollectorCredential.source_id == source_id, CollectorCredential.revoked_at.is_(None))
+                .where(
+                    CollectorCredential.source_id == source_id,
+                    CollectorCredential.scope == scope,
+                    CollectorCredential.revoked_at.is_(None),
+                )
                 .with_for_update()
             )
         ).all()
@@ -129,7 +135,9 @@ async def create_collector_credential(session: AsyncSession, source_id: UUID) ->
     for credential in credentials:
         credential.revoked_at = now
     token = secrets.token_urlsafe(32)
-    session.add(CollectorCredential(token_hash=hashlib.sha256(token.encode()).hexdigest(), source_id=source_id))
+    session.add(CollectorCredential(
+        token_hash=hashlib.sha256(token.encode()).hexdigest(), source_id=source_id, scope=scope,
+    ))
     await session.flush()
     return token
 
@@ -324,14 +332,16 @@ async def cancel_and_purge_source_ingestion(session: AsyncSession, source_id: UU
                           .values(revoked_at=datetime.now(UTC)))
 
 
-async def collector_can_ingest(session: AsyncSession, source_id: UUID, token: str) -> bool:
+async def collector_can_ingest(
+    session: AsyncSession, source_id: UUID, token: str, *, scope: str = "ingestion:write",
+) -> bool:
     """Check token scope, revocation state, and active connector status."""
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     credential_valid = bool(await session.scalar(
         select(CollectorCredential.token_hash).where(
             CollectorCredential.token_hash == token_hash,
             CollectorCredential.source_id == source_id,
-            CollectorCredential.scope == "ingestion:write",
+            CollectorCredential.scope == scope,
             CollectorCredential.revoked_at.is_(None),
         )
     ))

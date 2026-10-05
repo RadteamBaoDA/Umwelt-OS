@@ -23,6 +23,7 @@ export interface Automation extends Definition { id: string; name: string; enabl
 export interface CapabilityItem { type: string; module: string | null; available: boolean; reason: string | null; requires_approval: boolean; fields: Record<string, 'string' | 'number' | 'boolean'> }
 /** Editor options derived from the server schemas; webhook aliases are names only, never URLs. */
 export interface Capabilities { triggers: CapabilityItem[]; actions: CapabilityItem[]; webhook_aliases: string[] }
+export interface WebhookCredential { alias: string; token: string; revision: number; expires_at: string; endpoint: string }
 
 export interface PreviewResult { matched: boolean; reasons: Array<{ index: number; field: string; operator: string; outcome: string }>; planned_actions: Array<{ type: string; module: string; requires_approval: boolean }> }
 export interface RunAction { ordinal: number; type: string; status: string; attempts: number; error_code: string | null; result_reference: string | null; approval_expires_at: string | null }
@@ -42,6 +43,16 @@ export function listAutomations(): Promise<{ items: Automation[] }> { return api
 
 /** Reads trigger fields, action availability by owning module and webhook alias names. */
 export function getCapabilities(): Promise<Capabilities> { return apiRequest(`${base}/capabilities`); }
+
+/** Rotates one inbound alias bearer; plaintext is returned only by this protected call. */
+export function issueWebhookCredential(alias: string, csrfToken: string): Promise<WebhookCredential> {
+  return apiRequest(`${base}/webhook-credentials/${encodeURIComponent(alias)}`, { method: 'POST', headers: csrfHeaders(csrfToken) });
+}
+
+/** Revokes the alias token immediately; a replacement can be issued from the same owner form. */
+export function revokeWebhookCredential(alias: string, csrfToken: string): Promise<void> {
+  return apiRequest(`${base}/webhook-credentials/${encodeURIComponent(alias)}`, { method: 'DELETE', headers: csrfHeaders(csrfToken) });
+}
 
 /** Creates a rule; new rules start disabled so enabling is always a separate explicit step. */
 export function createAutomation(name: string, definition: Definition, csrfToken: string): Promise<Automation> {

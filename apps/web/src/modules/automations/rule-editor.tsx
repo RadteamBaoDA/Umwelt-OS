@@ -9,7 +9,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea';
 import { ApiError } from '@/core/api';
 import {
-  createAutomation, errorMessageKey, getCapabilities, patchAutomation, previewAutomation,
+  createAutomation, errorMessageKey, getCapabilities, issueWebhookCredential, patchAutomation,
+  previewAutomation, revokeWebhookCredential,
   type Action, type ActionType, type Automation, type Capabilities, type Condition, type Definition,
   type Operator, type PreviewResult, type Scalar, type Trigger, type TriggerType,
 } from './api';
@@ -51,6 +52,7 @@ function toDefinition(draft: Draft, caps: Capabilities): { definition?: Definiti
   const errors: string[] = [];
   const fields = caps.triggers.find((item) => item.type === draft.trigger.type)?.fields ?? {};
   if (draft.trigger.type === 'schedule' && !(draft.trigger.cron ?? '').trim()) errors.push('errCron');
+  if (draft.trigger.type === 'webhook' && !draft.trigger.hook) errors.push('errWebhookAlias');
   const conditions: Condition[] = draft.conditions.map((item) => {
     const kind = fields[item.field] ?? 'string';
     const parts = item.operator === 'in' ? item.value.split(',').map((part) => parseScalar(part, kind)) : [parseScalar(item.value, kind)];
@@ -85,6 +87,7 @@ export function RuleEditor({ rule, csrfToken, onDone }: { rule?: Automation; csr
   const [draft, setDraft] = useState<Draft>(() => initialDraft(rule));
   const [sample, setSample] = useState<Record<string, string>>({});
   const [preview, setPreview] = useState<PreviewResult | null>(null);
+  const [webhookCredential, setWebhookCredential] = useState<{ token: string; endpoint: string; expires_at: string } | null>(null);
   const [formErrors, setFormErrors] = useState<string[]>([]);
   const [cleared, setCleared] = useState(0);
 
@@ -111,6 +114,14 @@ export function RuleEditor({ rule, csrfToken, onDone }: { rule?: Automation; csr
       ? patchAutomation(rule.id, rule.revision, { name: draft.name.trim(), ...definition }, csrfToken)
       : createAutomation(draft.name.trim(), definition, csrfToken)),
     onSuccess: () => { void client.invalidateQueries({ queryKey: ['automations'] }); onDone(); },
+  });
+  const rotateWebhookCredential = useMutation({
+    mutationFn: (alias: string) => issueWebhookCredential(alias, csrfToken),
+    onSuccess: (credential) => setWebhookCredential(credential),
+  });
+  const revokeInboundCredential = useMutation({
+    mutationFn: (alias: string) => revokeWebhookCredential(alias, csrfToken),
+    onSuccess: () => setWebhookCredential(null),
   });
   const dry = useMutation({
     mutationFn: (definition: Definition) => {
@@ -164,13 +175,30 @@ export function RuleEditor({ rule, csrfToken, onDone }: { rule?: Automation; csr
         <SelectContent>{caps.data.triggers.map((item) => <SelectItem key={item.type} value={item.type} disabled={!item.available}>
           {t(`trigger_${item.type}`)}{item.available ? '' : ` · ${t('unavailable')}`}</SelectItem>)}</SelectContent>
       </Select>
-      {triggerCap && !triggerCap.available && <p role="status" className="text-sm text-destructive">{t(triggerCap.type === 'webhook' ? 'webhookUnavailable' : 'moduleDisabled')}</p>}
+      {triggerCap && !triggerCap.available && <p role="status" className="text-sm text-destructive">{t('moduleDisabled')}</p>}
       {draft.trigger.type === 'schedule' && <div className="grid gap-3 sm:grid-cols-2">
         <label className="block space-y-1 text-sm"><span>{t('cron')}</span><Input value={draft.trigger.cron ?? ''} onChange={(e) => setDraft({ ...draft, trigger: { ...draft.trigger, cron: e.target.value } })} /></label>
         <label className="block space-y-1 text-sm"><span>{t('timezone')}</span><Input value={draft.trigger.timezone ?? 'UTC'} onChange={(e) => setDraft({ ...draft, trigger: { ...draft.trigger, timezone: e.target.value } })} /></label>
         <p className="text-xs text-muted-foreground sm:col-span-2">{t('scheduleHelp')}</p></div>}
       {draft.trigger.type === 'task_due' && <label className="block space-y-1 text-sm"><span>{t('leadMinutes')}</span><Input type="number" min={0} max={10080} value={draft.trigger.lead_minutes ?? 0} onChange={(e) => setDraft({ ...draft, trigger: { ...draft.trigger, lead_minutes: Number(e.target.value) } })} /></label>}
       {draft.trigger.type === 'goal_deadline' && <label className="block space-y-1 text-sm"><span>{t('leadDays')}</span><Input type="number" min={0} max={365} value={draft.trigger.lead_days ?? 0} onChange={(e) => setDraft({ ...draft, trigger: { ...draft.trigger, lead_days: Number(e.target.value) } })} /></label>}
+      {draft.trigger.type === 'webhook' && <div className="space-y-2">
+        <label className="block space-y-1 text-sm"><span>{t('webhookAlias')}</span>
+          <Input aria-label={t('webhookAlias')} placeholder={t('webhookAliasHint')} maxLength={40}
+            value={draft.trigger.hook ?? ''} onChange={(e) => { setDraft({ ...draft, trigger: { ...draft.trigger, hook: e.target.value } }); setWebhookCredential(null); }} /></label>
+        <p className="text-xs text-muted-foreground">{t('webhookInboundHelp')}</p>
+        <Button type="button" variant="outline" disabled={!draft.trigger.hook || rotateWebhookCredential.isPending || revokeInboundCredential.isPending}
+          onClick={() => { if (draft.trigger.hook) { setWebhookCredential(null); rotateWebhookCredential.mutate(draft.trigger.hook); } }}>{t('rotateWebhookCredential')}</Button>
+        <Button type="button" variant="outline" disabled={!draft.trigger.hook || rotateWebhookCredential.isPending || revokeInboundCredential.isPending}
+          onClick={() => { if (draft.trigger.hook) { setWebhookCredential(null); revokeInboundCredential.mutate(draft.trigger.hook); } }}>{t('revokeWebhookCredential')}</Button>
+        {rotateWebhookCredential.isError && <p role="alert" className="text-sm text-destructive">{t('credentialIssueFailed')}</p>}
+        {revokeInboundCredential.isError && <p role="alert" className="text-sm text-destructive">{t('credentialRevokeFailed')}</p>}
+        {webhookCredential && <p role="status" className="break-all text-xs text-muted-foreground">
+          {t('webhookCredentialOnce')} <code>{webhookCredential.token}</code><br />
+          {t('webhookEndpoint')} <code>{webhookCredential.endpoint}</code><br />
+          {t('webhookCredentialExpires')} {new Date(webhookCredential.expires_at).toLocaleString()}
+        </p>}
+      </div>}
     </fieldset>
 
     <fieldset className="space-y-3 rounded-lg border border-border bg-surface p-4">

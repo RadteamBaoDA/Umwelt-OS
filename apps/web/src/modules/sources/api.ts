@@ -56,6 +56,8 @@ export type ConnectorConfig = {
   github_history_days?: number;
   telegram_chat_ids?: string[];
   history_mode?: 'returned_snapshot' | 'pending_updates';
+  connection_id?: string;
+  calls?: { grant_id: string; arguments: Record<string, unknown> }[];
 };
 export type ConnectorSettings = {
   expected_revision: number;
@@ -74,7 +76,7 @@ export type ConnectorActivation = {
 };
 export type ConnectorConfiguration = {
   source_id: string;
-  source_type: 'rss' | 'web' | 'api';
+  source_type: 'rss' | 'web' | 'api' | 'mcp';
   source_generation: number;
   provider: string | null;
   configuration: ConnectorConfig;
@@ -159,7 +161,7 @@ export function getConnectorCatalog(signal?: AbortSignal) {
 }
 
 /** Creates a connector with its immutable native provider identity, if any, using the source owner route. */
-export function createConnectorSource(type: 'rss' | 'web' | 'api', name: string, csrfToken: string, signal?: AbortSignal, provider?: string) {
+export function createConnectorSource(type: 'rss' | 'web' | 'api' | 'mcp', name: string, csrfToken: string, signal?: AbortSignal, provider?: string) {
   return apiRequest<Source>('/api/v1/sources', { method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify({ type, name, ...(provider ? { provider } : {}) }), signal });
 }
 

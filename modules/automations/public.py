@@ -110,9 +110,6 @@ def validate_webhook_targets(definition: AutomationDefinition, settings: Setting
 
 def validate_definition(definition: AutomationDefinition, registry: Mapping[str, Any], settings: Settings) -> None:
     """Run all save-time checks beyond schema shape (dependencies, webhook allowlist, loop pairs)."""
-    if definition.trigger.type == "webhook":
-        # Honest-unavailable: an authenticated inbound receiver (n8n, spec section 10) does not exist yet.
-        raise AutomationInvalid("webhook trigger is unavailable until an authenticated inbound receiver exists")
     pair = loop_guard(definition.trigger.model_dump(mode="json"), [a.model_dump(mode="json") for a in definition.actions])
     if pair:
         raise AutomationInvalid(f"trigger and actions form a self-triggering loop ({pair})")
@@ -301,19 +298,19 @@ def capabilities(registry: Mapping[str, Any], settings: Settings) -> Capabilitie
         """A type is usable when its owning module is registered and enabled (schedule has none)."""
         return module is None or (module in registry and registry[module].enabled)
 
+    try:
+        aliases = sorted(webhook_aliases(settings))
+    except ValueError:
+        aliases = []
     triggers = [CapabilityItem(
         type=name, module=TRIGGER_MODULE[name], fields=dict(TRIGGER_FIELDS[name]),
-        available=name != "webhook" and usable(TRIGGER_MODULE[name]),
-        reason="inbound_receiver_unavailable" if name == "webhook" else None if usable(TRIGGER_MODULE[name]) else "module_disabled",
+        available=usable(TRIGGER_MODULE[name]),
+        reason=None if usable(TRIGGER_MODULE[name]) else "module_disabled",
     ) for name in TRIGGER_FIELDS]
     actions = [CapabilityItem(
         type=name, module=module, available=usable(module), requires_approval=name in APPROVAL_ACTIONS,
         reason=None if usable(module) else "module_disabled",
     ) for name, module in ACTION_MODULE.items()]
-    try:
-        aliases = sorted(webhook_aliases(settings))
-    except ValueError:
-        aliases = []
     return CapabilitiesRead(triggers=triggers, actions=actions, webhook_aliases=aliases)
 
 

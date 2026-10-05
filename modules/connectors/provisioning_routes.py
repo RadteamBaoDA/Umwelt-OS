@@ -139,6 +139,24 @@ async def get_configuration(
     source_id: UUID, session: Session, _owner: OwnerRead
 ) -> ConnectorConfigurationRead:
     """Read a managed connector configuration for an authorized owner."""
+    source = await sources.get_connector_source(session, source_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="Source not found")
+    if source.type == "mcp":
+        row = await provisioning.activation_status(session, source_id)
+        configuration = dict(source.configuration or {})
+        configuration.setdefault("schedule_interval_minutes", 60)
+        configuration.setdefault("timezone", "Asia/Ho_Chi_Minh")
+        return ConnectorConfigurationRead(
+            source_id=source.id, source_type=source.type, provider=source.provider,
+            source_generation=source.generation, configuration=configuration,
+            expected_revision=row.desired_revision if row is not None else 0,
+            auth_method="none", auth_header_name=None,
+            desired_enabled=bool(row and row.desired_enabled),
+            activation_state=row.state if row is not None else "saved_not_active",
+            activation_error_code=row.error_code if row is not None else None,
+            provider_credential_configured=False, provider_credential_state=None,
+        )
     snapshot = await connector_owner.get_connector_configuration(session, source_id)
     if snapshot is None:
         raise HTTPException(status_code=404, detail="Source not found")
@@ -516,14 +534,18 @@ async def activate_source(
         collector = await provisioning.get_managed_credential(session, source_id, "collector")
         collector_token: str | None = None
         collector_binding = collector.resolved_binding if collector is not None else None
+        collector_scope = "mcp:collect" if source.type == "mcp" else "ingestion:write"
         if not (
             collector is not None and collector.state == "ready" and collector.credential_id
             and isinstance(collector_binding, dict)
             and collector_binding.get("source_generation") == source.generation
         ):
-            collector_token = await ingestion.create_collector_credential(session, source_id)
+            collector_token = await ingestion.create_collector_credential(
+                session, source_id, scope=collector_scope,
+            )
             collector_binding = {
                 "source_generation": source.generation,
+                "scope": collector_scope,
                 "token_fingerprint": secret_fingerprint(encryption_key, collector_token),
             }
         required, intent = prepare_credential_assignment(
