@@ -6,6 +6,7 @@ from uuid import UUID
 
 import httpx
 from cryptography.fernet import Fernet, InvalidToken
+from modules.connectors.public import NativeCredentialSnapshot
 
 
 class CredentialEncryptionUnavailable(RuntimeError):
@@ -74,6 +75,67 @@ def decrypt_credential_input(
     ):
         raise CredentialEncryptionUnavailable("Stored connector credential input binding is invalid")
     return payload["request"], payload["binding"]
+
+
+def encrypt_native_token(
+    key: str,
+    *,
+    source_id: UUID,
+    operation_id: UUID,
+    source_generation: int,
+    configuration_revision: int,
+    token: str,
+    verified_bot_id: str,
+) -> str:
+    """Encrypt a Telegram token with source, operation, revision, provider, bot, and fingerprint binding."""
+    raw = token.encode("utf-8")
+    if not 1 <= len(raw) <= 512 or any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in token):
+        raise ValueError("Telegram token is invalid")
+    if not verified_bot_id.isdecimal() or len(verified_bot_id) > 20:
+        raise ValueError("Telegram bot identity is invalid")
+    binding = {
+        "provider": "telegram",
+        "source_generation": source_generation,
+        "configuration_revision": configuration_revision,
+        "verified_bot_id": verified_bot_id,
+        "token_fingerprint": secret_fingerprint(key, token),
+    }
+    return encrypt_credential_input(
+        key,
+        source_id=source_id,
+        slot="native:telegram",
+        operation_id=operation_id,
+        request={"token": token},
+        binding=binding,
+    )
+
+
+def decrypt_native_token(key: str, credential: NativeCredentialSnapshot) -> str:
+    """Decrypt only a ready Telegram binding whose encrypted owner metadata matches every fence."""
+    if (
+        credential.state != "ready" or credential.encrypted_token is None
+        or credential.verified_bot_id is None
+    ):
+        raise CredentialEncryptionUnavailable("Stored native connector credential is unavailable")
+    request, binding = decrypt_credential_input(
+        key,
+        credential.encrypted_token,
+        source_id=credential.source_id,
+        slot="native:telegram",
+        operation_id=credential.operation_id,
+    )
+    token = request.get("token")
+    if (
+        not isinstance(token, str)
+        or binding.get("provider") != "telegram"
+        or binding.get("source_generation") != credential.source_generation
+        or binding.get("configuration_revision") != credential.configuration_revision
+        or binding.get("verified_bot_id") != credential.verified_bot_id
+        or credential.bound_bot_id != credential.verified_bot_id
+        or binding.get("token_fingerprint") != secret_fingerprint(key, token)
+    ):
+        raise CredentialEncryptionUnavailable("Stored native connector credential binding is invalid")
+    return token
 
 
 class CredentialOutcomeUnknown(RuntimeError):

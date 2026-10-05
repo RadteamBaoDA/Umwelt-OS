@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     session_lifetime_hours: int = Field(default=24, gt=0, le=720)
     google_client_id: str = ""
     google_client_secret: SecretStr = SecretStr("")
+    github_app_client_id: str = ""
+    github_app_client_secret: SecretStr = SecretStr("")
+    github_app_callback_url: str = ""
+    github_app_id: str = Field(default="", max_length=19, validation_alias="GITHUB_APP_ID")
+    github_app_webhook_secret: SecretStr = Field(default=SecretStr(""), validation_alias="GITHUB_APP_WEBHOOK_SECRET", repr=False)
+    github_webhook_receiver_revision: str = Field(default="1", min_length=1, max_length=64, validation_alias="GITHUB_WEBHOOK_RECEIVER_REVISION")
     omniroute_base_url: AnyHttpUrl | None = Field(default=None, repr=False)
     omniroute_api_key: SecretStr = SecretStr("")
     omniroute_models: dict[str, str] = Field(default_factory=dict, repr=False)
@@ -169,4 +175,12 @@ class Settings(BaseSettings):
         """Require the public origin to contain only scheme and host, without credentials, path, query, or fragment."""
         if value.path not in ("", "/") or value.query or value.fragment or value.username:
             raise ValueError("public_origin must contain only scheme and host")
+        return value
+
+    @field_validator("github_app_id")
+    @classmethod
+    def validate_github_app_id(cls, value: str) -> str:
+        """Accept only an optional positive signed-64-bit decimal GitHub App ID."""
+        if value and (not value.isdecimal() or value.startswith("0") or int(value) > 2**63 - 1):
+            raise ValueError("GITHUB_APP_ID must be a positive decimal ID")
         return value

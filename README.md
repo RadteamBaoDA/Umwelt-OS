@@ -29,6 +29,8 @@ PostgreSQL migrations run before API and worker startup. Their persistent data u
 
 See [development](docs/development.md), [deployment](docs/deployment.md), [privacy](docs/privacy.md), and [implementation status](docs/IMPLEMENTATION_STATUS.md).
 
+Packaged source collection and the native GitHub App OAuth ownership model are documented in [connectors](docs/connectors.md); GitHub OAuth credentials remain API-owned and do not pass through n8n.
+
 Optional Google sign-in uses server-side OAuth credentials. The account menu and its Google-link dialog use locally owned Radix-based shadcn source under `apps/web/src/components/ui`; run `npm ci` and `uv sync` to install the locked frontend and backend dependencies. See the [Google OAuth setup](docs/deployment.md#google-sign-in) and [open-source inventory](OSS_USED.md) for configuration and license details.
 
 The shared Button is adapted from the official [New York shadcn Button registry source](https://ui.shadcn.com/r/styles/new-york/button.json), using the installed Radix Slot, `cn` class merger and semantic theme tokens. Its supported variants and sizes are documented in `apps/web/src/components/ui/button.tsx`; `class-variance-authority` is pinned in the npm lockfile. Owner topic interests are available below Data sources in Settings and receive the authenticated workspace CSRF token.

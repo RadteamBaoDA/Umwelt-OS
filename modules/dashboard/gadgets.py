@@ -58,6 +58,8 @@ RENDERERS: tuple[RendererDescriptor, ...] = (
     RendererDescriptor("daily_brief", 1, 6, 4, "available", ("daily_brief",)),
     RendererDescriptor("weather", 1, 4, 3, "planned", ("weather",)),
     RendererDescriptor("research", 1, 4, 4, "planned", ("research",)),
+    # Reads the GitHub project summary and Timeline slice of one configured github source.
+    RendererDescriptor("github_project", 1, 6, 4, "available", ("github_project",)),
 )
 
 PRESETS: tuple[DashboardPreset, ...] = (

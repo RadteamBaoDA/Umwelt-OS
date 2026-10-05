@@ -142,6 +142,7 @@ def _connector_source(source: Source) -> ConnectorSource:
         status=source.status,
         generation=source.generation,
         configuration=deepcopy(source.configuration or {}),
+        provider=source.provider,
     )
 
 
@@ -412,7 +413,12 @@ async def list_gadget_sources(
 async def update_source(
     session: AsyncSession, source: Source, payload: SourcePatch
 ) -> Source | None:
-    """Apply a locked source patch, incrementing generation on lifecycle changes."""
+    """Apply a locked source patch and reconcile GitHub hint reservations on lifecycle changes.
+
+    Pausing or archiving fences collection before pending hints are terminalized in this same
+    transaction. Explicit reactivation rearms only hints whose current grant and provisioning
+    binding match the new source generation; it never resumes a stale OAuth binding.
+    """
     source = await session.scalar(
         select(Source)
         .where(Source.id == source.id)
@@ -437,6 +443,10 @@ async def update_source(
             source.retired_at = datetime.now(UTC) if next_status in {"paused", "archived"} else None
             if next_status in {"paused", "archived"}:
                 await _fence_connector_source(session, source)
+            if source.provider == "github":
+                await _reconcile_github_hint_lifecycle(
+                    session, source, active=next_status == "active",
+                )
     drafts = [make_source_change(source.id, source.generation, source.status)] if changed else []
     await commit_with_replay(session, drafts)
     await session.refresh(source)
@@ -446,7 +456,7 @@ async def update_source(
 async def pause_source_for_connector(
     session: AsyncSession, source_id: UUID
 ) -> ConnectorSource | None:
-    """Pause a connector source within the caller's transaction."""
+    """Pause and fence a connector source, disposing pending GitHub hints in caller transaction."""
     source = await _lock_source_row(session, source_id)
     if source is None or source.status == "archived":
         return None
@@ -455,6 +465,8 @@ async def pause_source_for_connector(
         source.status = "paused"
         source.retired_at = datetime.now(UTC)
     await _fence_connector_source(session, source)
+    if source.provider == "github":
+        await _reconcile_github_hint_lifecycle(session, source, active=False)
     await session.flush()
     return _connector_source(source)
 
@@ -462,7 +474,7 @@ async def pause_source_for_connector(
 async def archive_source(
     session: AsyncSession, source_id: UUID
 ) -> Source | None:
-    """Archive and fence a source, preventing future collection work."""
+    """Archive and fence a source, releasing its pending GitHub hint reservations."""
     source = await _lock_source_row(session, source_id)
     if source is None:
         return None
@@ -472,6 +484,8 @@ async def archive_source(
         source.status = "archived"
         source.retired_at = datetime.now(UTC)
     await _fence_connector_source(session, source)
+    if source.provider == "github":
+        await _reconcile_github_hint_lifecycle(session, source, active=False)
     drafts = [make_source_change(source.id, source.generation, source.status)] if changed else []
     await commit_with_replay(session, drafts)
     await session.refresh(source)
@@ -481,7 +495,7 @@ async def archive_source(
 async def start_source_purge(
     session: AsyncSession, source_id: UUID
 ) -> SourcePurgeOperation | None:
-    """Create or reuse durable purge work after archiving and fencing the source."""
+    """Create or reuse purge work after fencing and disposing source-owned GitHub hints."""
     source = await _lock_source_row(session, source_id)
     if source is None:
         return None
@@ -506,6 +520,8 @@ async def start_source_purge(
 
     operation.raw_uris = sorted(await documents.raw_uris(session, source_id))
     await _fence_connector_source(session, source)
+    if source.provider == "github":
+        await _reconcile_github_hint_lifecycle(session, source, active=False)
     now = datetime.now(UTC)
     event = DomainEvent(
         id=uuid4(), type="source.purge.requested", version=1, occurred_at=now,
@@ -535,4 +551,20 @@ async def _fence_connector_source(session: AsyncSession, source: Source) -> None
             generation=source.generation,
             local_only=source.local_only,
         ),
+    )
+
+
+async def _reconcile_github_hint_lifecycle(
+    session: AsyncSession, source: Source, *, active: bool,
+) -> None:
+    """Continue the held source/provisioning lifecycle transaction into GitHub hint ownership.
+
+    The connector owner acquires the GitHub grant before hints and capacity. A source is rearmed
+    only for an explicit activation carrying a current verified grant; access-loss pauses stay
+    paused until the owner reconnects and explicitly resumes the source.
+    """
+    from modules.connectors import public as connectors
+
+    await connectors.reconcile_github_source_hints_lifecycle(
+        session, source_id=source.id, source_generation=source.generation, active=active,
     )

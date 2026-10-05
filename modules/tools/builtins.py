@@ -266,6 +266,60 @@ async def _handle_sources_get_source(args: dict[str, Any], context: dict[str, An
     return item.__dict__ if item else None
 
 
+async def _handle_github_list_project_events(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    """List canonical GitHub issue, pull, commit and release events for one granted github source.
+
+    Scope and local-only privacy come from the registry principal and server destination via
+    ``get_tool_source``; events are read through the Timeline public API and every evidence
+    identity is captured as an output fence at the source's current generation.
+    """
+    from modules.sources import public as sources_public
+    from modules.timeline import public as timeline_public
+    from modules.timeline.schemas import TimelineQuery
+    _, source_ids, owner_all = _scope(context)
+    source_id = UUID(args["source_id"])
+    async with _resolve_session(context) as session:
+        source = await sources_public.get_tool_source(
+            session, source_id, source_ids=source_ids, owner_all=owner_all,
+            destination=_destination(context),
+        )
+        detached = await sources_public.get_connector_source(session, source_id) if source else None
+        if source is None or detached is None or detached.provider != "github":
+            _record_output_fences(context, [], {})
+            return {"items": [], "next_cursor": None}
+        page = await timeline_public.list_timeline(
+            session, TimelineQuery(source_id=source_id, type="github_"),
+            limit=args.get("limit", 20), cursor=args.get("cursor"),
+        )
+    # Document-level fences (chunk_id None) are revalidated by the Documents owner, like
+    # knowledge.get_document; one per document, so an edit that selects a new version denies the result.
+    # Evidence accumulates one row per version; keep only the highest (current) version per
+    # document in both the fence and the returned evidence so revalidation passes after edits.
+    current: dict[UUID, dict[str, Any]] = {}
+    for event in page.items:
+        for ref in event.evidence:
+            known = current.get(ref["document_id"])
+            if known is None or ref["version_number"] > known["version_number"]:
+                current[ref["document_id"]] = ref
+    unique = current
+    fences = [
+        ToolOutputFence(
+            document_id=ref["document_id"], document_version_id=ref["document_version_id"],
+            source_id=source.id, source_generation=source.generation,
+        ) for ref in unique.values()
+    ][:100]
+    _record_output_fences(context, fences, {source.id: source.generation})
+    items = [{
+        "id": event.id, "type": event.type, "title": event.title, "started_at": event.started_at,
+        "metadata": event.metadata,
+        "evidence": [{"document_id": ref["document_id"], "document_version_id": ref["document_version_id"],
+                      "canonical_url": ref["canonical_url"]}
+                     for ref in event.evidence
+                     if current[ref["document_id"]]["document_version_id"] == ref["document_version_id"]],
+    } for event in page.items]
+    return {"items": items, "next_cursor": page.next_cursor}
+
+
 def register_builtin_tools(registry: ToolRegistry, allowed_names: frozenset[str] | None = None) -> None:
     """Register implemented read tools contributed by enabled descriptors.
 
@@ -292,6 +346,9 @@ def register_builtin_tools(registry: ToolRegistry, allowed_names: frozenset[str]
         ("sources.get_source", "sources", _handle_sources_get_source,
          {"type": "object", "properties": {"source_id": {"type": "string", "format": "uuid"}}, "required": ["source_id"], "additionalProperties": False},
          {"type": ["object", "null"]}),
+        ("github.list_project_events", "tools", _handle_github_list_project_events,
+         {"type": "object", "properties": {"source_id": {"type": "string", "format": "uuid"}, "limit": {"type": "integer", "minimum": 1, "maximum": 50}, "cursor": {"type": "string", "maxLength": 256}}, "required": ["source_id"], "additionalProperties": False},
+         {"type": "object", "required": ["items", "next_cursor"], "properties": {"items": {"type": "array", "maxItems": 100}, "next_cursor": {"type": ["string", "null"]}}, "additionalProperties": False}),
     )
     for name, module, handler, input_schema, output_schema in definitions:
         if allowed_names is not None and name not in allowed_names:

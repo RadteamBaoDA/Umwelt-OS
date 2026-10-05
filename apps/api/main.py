@@ -22,6 +22,7 @@ from modules.sources.routes import router as sources_router
 from modules.connectors.routes import router as connectors_router
 from modules.tools.browser_control import router as browser_control_router
 from modules.connectors.provisioning_routes import router as connector_provisioning_router
+from modules.connectors.github.routes import router as github_oauth_router
 from modules.settings.routes import router as settings_router
 from modules.model_gateway.routes import router as model_gateway_router
 from modules.search.routes import router as search_router
@@ -121,6 +122,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(connectors_router)
     app.include_router(browser_control_router)
     app.include_router(connector_provisioning_router)
+    app.include_router(github_oauth_router)
     app.include_router(settings_router)
     app.include_router(model_gateway_router)
     app.include_router(search_router)

@@ -8,11 +8,179 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.realtime import ReplayDraft, commit_with_replay, make_source_change
-from modules.connectors.models import ConnectorManagedCredential, ConnectorProvisioning
+from modules.connectors.models import ConnectorManagedCredential, ConnectorNativeCredential, ConnectorProvisioning
+from modules.connectors.public import NativeCredentialSnapshot
 from modules.sources import public as sources
 from modules.sources.schemas import ConnectorSource, SourceFence
 
 _ALL_CREDENTIAL_SLOTS = ("collector", "manual_trigger", "provider")
+
+
+async def get_native_credential_snapshot(
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    source_generation: int,
+    connector_revision: int,
+) -> NativeCredentialSnapshot | None:
+    """Return only a native credential whose persisted generation and revision match current collection authority."""
+    source, row, _slots = await lock_connector(session, source_id, _ALL_CREDENTIAL_SLOTS)
+    if (
+        source is None or row is None or source.generation != source_generation
+        or row.desired_revision != connector_revision or row.source_generation != source_generation
+    ):
+        return None
+    native = await session.scalar(
+        select(ConnectorNativeCredential)
+        .where(ConnectorNativeCredential.source_id == source_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if native is None:
+        return None
+    if (
+        native.source_generation != source_generation
+        or native.configuration_revision != connector_revision
+    ):
+        return None
+    return NativeCredentialSnapshot(
+        source_id=native.source_id,
+        operation_id=native.operation_id,
+        source_generation=native.source_generation,
+        configuration_revision=native.configuration_revision,
+        verified_bot_id=native.verified_bot_id,
+        bound_bot_id=native.bound_bot_id,
+        encrypted_token=native.encrypted_token,
+        state=native.state,
+        validated_at=native.validated_at,
+    )
+
+
+async def get_retained_native_credential_snapshot(
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    source_generation: int,
+    connector_revision: int,
+) -> NativeCredentialSnapshot | None:
+    """Return a retained binding only under the active owner's requested source/revision fence.
+
+    Source, provisioning, managed slots, and native row are locked in the normal
+    connector order before an owner may decrypt or remotely revalidate a token.
+    A missing native row returns None; a stale source or revision raises ValueError.
+    """
+    source, row, _slots = await lock_connector(session, source_id, _ALL_CREDENTIAL_SLOTS)
+    if source is None or source.status != "active" or source.generation != source_generation:
+        raise ValueError("Connector credential fence is stale")
+    if row is None:
+        if connector_revision == 0:
+            return None
+        raise ValueError("Connector credential fence is stale")
+    if row.source_generation != source_generation or row.desired_revision != connector_revision:
+        raise ValueError("Connector credential fence is stale")
+    if row.state == "disabled" and row.error_code == "deactivation_pending":
+        raise ValueError("Connector deactivation is pending")
+    native = await session.scalar(
+        select(ConnectorNativeCredential)
+        .where(ConnectorNativeCredential.source_id == source_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if native is None:
+        return None
+    return NativeCredentialSnapshot(
+        source_id=native.source_id,
+        operation_id=native.operation_id,
+        source_generation=native.source_generation,
+        configuration_revision=native.configuration_revision,
+        verified_bot_id=native.verified_bot_id,
+        bound_bot_id=native.bound_bot_id,
+        encrypted_token=native.encrypted_token,
+        state=native.state,
+        validated_at=native.validated_at,
+    )
+
+
+async def save_native_credential(
+    session: AsyncSession,
+    *,
+    source_id: UUID,
+    operation_id: UUID,
+    source_generation: int,
+    connector_revision: int,
+    encrypted_token: str,
+    token_fingerprint: str,
+    verified_bot_id: str,
+    validated_at: datetime,
+) -> None:
+    """Persist a fully verified token only under current source and connector fences."""
+    source, row, _slots = await lock_connector(session, source_id, _ALL_CREDENTIAL_SLOTS)
+    if (
+        source is None or row is None or source.generation != source_generation
+        or row.source_generation != source_generation or row.desired_revision != connector_revision
+    ):
+        raise ValueError("Connector credential fence is stale")
+    native = await session.scalar(
+        select(ConnectorNativeCredential)
+        .where(ConnectorNativeCredential.source_id == source_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if native is not None and (
+        native.bound_bot_id not in (None, verified_bot_id)
+        or native.verified_bot_id not in (None, verified_bot_id)
+    ):
+        raise ValueError("Telegram bot identity cannot change for an existing source")
+    if native is None:
+        native = ConnectorNativeCredential(source_id=source_id, operation_id=operation_id)
+        session.add(native)
+    native.provider = "telegram"
+    native.operation_id = operation_id
+    native.source_generation = source_generation
+    native.configuration_revision = connector_revision
+    native.encrypted_token = encrypted_token
+    native.token_fingerprint = token_fingerprint
+    native.verified_bot_id = verified_bot_id
+    # Keep historical identity separate from the unique live reservation.
+    native.bound_bot_id = verified_bot_id
+    native.state = "ready"
+    native.validated_at = validated_at
+    native.error_code = None
+    await session.flush()
+
+
+async def revoke_native_credential(
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    source_generation: int,
+    connector_revision: int,
+    release_bot_reservation: bool = False,
+) -> None:
+    """Fence native token use and clear ciphertext, optionally releasing its unique bot identity."""
+    source, row, _slots = await lock_connector(session, source_id, _ALL_CREDENTIAL_SLOTS)
+    if source is None or row is None or source.generation != source_generation or row.desired_revision != connector_revision:
+        raise ValueError("Connector credential fence is stale")
+    native = await session.scalar(
+        select(ConnectorNativeCredential)
+        .where(ConnectorNativeCredential.source_id == source_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if native is None:
+        return
+    native.source_generation = source_generation
+    native.configuration_revision = connector_revision
+    native.operation_id = uuid4()
+    native.encrypted_token = None
+    native.token_fingerprint = None
+    native.validated_at = None
+    native.state = "revoked"
+    native.error_code = None
+    if release_bot_reservation:
+        # The unique active reservation is reusable; the source's bot binding is immutable.
+        native.verified_bot_id = None
+    await session.flush()
 
 
 @dataclass(frozen=True)
@@ -592,6 +760,92 @@ async def prepare_workflow_step(
     return True
 
 
+async def clear_retired_source_credentials(session: AsyncSession, source_id: UUID) -> None:
+    """Remove native credential and GitHub grant ciphertext of an archived or purging source.
+
+    Runs inside the caller's source/provisioning lock transaction, so it needs no generation
+    check (the source is already fenced). Telegram: ciphertext cleared and the unique active
+    bot reservation released so the same bot can be added again. GitHub: tokens cleared and the
+    grant marked revoked with an opaque code. No network revoke is attempted here, because
+    GitHub's revoke is app/user-wide and would break the owner's other sources of the same
+    account; the remaining peers can still revoke explicitly (cleared grants drop out of the
+    peer inventory). No token value is read, logged or returned.
+    """
+    from modules.connectors.models import GithubOAuthGrant
+
+    native = await session.scalar(
+        select(ConnectorNativeCredential).where(ConnectorNativeCredential.source_id == source_id)
+        .with_for_update().execution_options(populate_existing=True)
+    )
+    if native is not None and (native.state != "revoked" or native.verified_bot_id is not None):
+        native.operation_id = uuid4()
+        native.encrypted_token = None
+        native.token_fingerprint = None
+        native.validated_at = None
+        native.state = "revoked"
+        native.error_code = None
+        native.verified_bot_id = None
+    grant = await session.scalar(
+        select(GithubOAuthGrant).where(GithubOAuthGrant.source_id == source_id)
+        .with_for_update().execution_options(populate_existing=True)
+    )
+    if grant is not None and grant.encrypted_tokens is not None:
+        grant.state = "revoked"
+        grant.refresh_operation_id = None
+        if await github_grant_has_active_peer(session, grant):
+            # GitHub's revoke is app/user-wide; another live source still needs the account grant.
+            grant.encrypted_tokens = None
+            grant.error_code = "provider_revoke_skipped_source_deleted"
+        else:
+            # Last source of this GitHub account: keep the ciphertext only until the worker's
+            # best-effort remote revoke (outside this transaction) clears it, whatever the outcome.
+            grant.error_code = "provider_revoke_pending_source_deleted"
+    await session.flush()
+
+
+async def github_grant_has_active_peer(session: AsyncSession, grant: Any) -> bool:
+    """Return whether another non-archived source still holds tokens for the same GitHub user.
+
+    The peer scan is bounded (101 rows); an oversized inventory is treated as having a peer so
+    the shared account grant is never revoked from under live sources.
+    """
+    from modules.connectors.models import GithubOAuthGrant
+
+    peer_ids = list((await session.scalars(
+        select(GithubOAuthGrant.source_id).where(
+            GithubOAuthGrant.github_user_id == grant.github_user_id,
+            GithubOAuthGrant.source_id != grant.source_id,
+            GithubOAuthGrant.encrypted_tokens.is_not(None),
+        ).limit(101)
+    )).all())
+    if len(peer_ids) > 100:
+        return True
+    for peer_id in peer_ids:
+        peer = await sources.get_connector_source(session, peer_id)
+        if peer is not None and peer.status != "archived":
+            return True
+    return False
+
+
+async def finish_deleted_source_grant_revoke(
+    session: AsyncSession, source_id: UUID, outcome_code: str
+) -> None:
+    """Clear the retained ciphertext of a deleted source's grant and record the revoke outcome.
+
+    Always clears: a failed or impossible remote revoke never leaves token material at rest.
+    """
+    from modules.connectors.models import GithubOAuthGrant
+
+    grant = await session.scalar(
+        select(GithubOAuthGrant).where(GithubOAuthGrant.source_id == source_id)
+        .with_for_update().execution_options(populate_existing=True)
+    )
+    if grant is not None:
+        grant.encrypted_tokens = None
+        grant.error_code = outcome_code
+        await session.flush()
+
+
 async def fence_source_collection(
     session: AsyncSession, source: SourceFence
 ) -> bool:
@@ -604,6 +858,8 @@ async def fence_source_collection(
     row.source_generation = source.generation
     row.desired_enabled = False
     row.state = "disabled"
+    if source.status == "archived":
+        await clear_retired_source_credentials(session, source.id)
     activation = row.activation_intent
     if isinstance(activation, dict):
         unresolved = False
@@ -692,7 +948,12 @@ async def require_validation_fence(
     source_generation: int,
     revision: int,
 ) -> bool:
-    """Lock and check source generation plus desired connector revision for validation."""
+    """Lock active source/revision state, including the initial revision-zero state.
+
+    This allows an unsaved draft at revision zero while ensuring callers can
+    recheck the same authority after a network validation without holding locks
+    across that request.
+    """
     current_source = await sources.lock_source(session, source.id)
     if (
         current_source is None or current_source.status != "active"
@@ -707,11 +968,9 @@ async def require_validation_fence(
         .with_for_update()
         .execution_options(populate_existing=True)
     )
-    return bool(
-        row is not None
-        and row.source_generation == source_generation
-        and row.desired_revision == revision
-    )
+    if row is None:
+        return revision == 0
+    return row.source_generation == source_generation and row.desired_revision == revision
 
 
 async def claim_credential_operation(

@@ -515,6 +515,20 @@ async def schedule_extraction_work(session: AsyncSession, ready: Any, extractor_
             TimelineExtractionWork.prompt_version == prompt_version,
         ))
     await session.flush()
+    # GitHub events are produced deterministically by the connector mapper and are canonical;
+    # model extraction would only add duplicates. Terminal-block the work (an error code the
+    # recheck/requeue paths ignore) so every scheduler, including recovery, skips it.
+    from modules.sources import public as sources
+    detached = await sources.get_connector_source(session, ready.source_id)
+    if detached is not None and detached.provider == "github":
+        work = await session.scalar(select(TimelineExtractionWork).where(
+            TimelineExtractionWork.id == work_id).with_for_update())
+        if work is not None and work.status not in {"succeeded", "blocked"}:
+            work.status, work.error_code = "blocked", "deterministic_provider"
+            work.next_attempt_at = datetime.max.replace(tzinfo=UTC)
+            work.dependency_fingerprint = None
+            work.lease_owner = work.lease_expires_at = None
+            await session.flush()
     return work_id
 
 
@@ -903,6 +917,119 @@ async def publish_extracted_events(session: AsyncSession, *, work_id: UUID, leas
     for event, _proposal in published:
         await _schedule_temporal_event(session, event, ["extracted"])
     return True
+
+
+async def summarize_source_events(
+    session: AsyncSession, source_id: UUID, type_prefix: str
+) -> tuple[dict[str, int], datetime | None]:
+    """Count visible derived events per type for one source and return the latest observation time.
+
+    Applies the same visibility rule as timeline listing (not deleted, backed by exact evidence)
+    so counts never exceed what the Timeline can show. Read-only; no authorization of its own.
+    """
+    from sqlalchemy import func
+    escaped = type_prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    rows = (await session.execute(
+        select(Event.type, func.count(), func.max(Event.observed_at)).where(
+            Event.source_id == source_id, Event.deleted_at.is_(None), Event.origin == "derived",
+            Event.type.like(f"{escaped}%", escape="\\"),
+            Event.id.in_(select(EventEvidence.event_id).where(
+                EventEvidence.document_version_id.is_not(None), EventEvidence.chunk_id.is_not(None))),
+        ).group_by(Event.type)
+    )).all()
+    return {row[0]: int(row[1]) for row in rows}, max((row[2] for row in rows), default=None)
+
+
+async def publish_provider_event(
+    session: AsyncSession, *, source_id: UUID, source_generation: int, document_id: UUID,
+    document_version_id: UUID, chunk_ids: list[UUID], extraction_identity: str, record_key: str,
+    event_type: str, title: str, summary: str | None, started_at: datetime, observed_at: datetime,
+    metadata: dict[str, Any], participants: list[tuple[UUID, str]],
+) -> UUID | None:
+    """Idempotently publish one deterministic provider event with exact current evidence.
+
+    The event identity is ``(extraction_identity, sha256(record_key))``, so every
+    version of the same provider record updates one event instead of creating
+    duplicates. Owner-owned fields are never overwritten, owner-deleted events
+    stay deleted, and the revision/temporal change is scheduled only when a
+    field, the evidence set or a participant actually changed. The caller holds
+    the source/document fences and the outer transaction; this only flushes.
+    Returns None when the evidence is no longer the current ready version.
+    """
+    from hashlib import sha256
+    from sqlalchemy.dialects.postgresql import insert
+    refs = await documents.read_extraction_evidence_refs(
+        session, document_id=document_id, document_version_id=document_version_id,
+        source_id=source_id, source_generation=source_generation, chunk_ids=chunk_ids,
+    )
+    if refs is None:
+        return None
+    evidence = await _read_evidence_closure(session, [(item.document_version_id, item.chunk_id) for item in refs])
+    if len(evidence) != len(refs):
+        return None
+    canonical = await entities.get_entity_refs(session, [entity_id for entity_id, _ in participants], for_write=True)
+    candidate_hash = sha256(record_key.encode("utf-8")).hexdigest()
+    event = await session.scalar(select(Event).where(
+        Event.extraction_identity == extraction_identity, Event.candidate_hash == candidate_hash,
+    ).with_for_update())
+    if event is not None and event.deleted_at is not None:
+        return None
+    changed = event is None
+    if event is None:
+        event = Event(
+            source_id=source_id, type=event_type, title=title[:300], summary=summary,
+            confidence=1.0, metadata_json=metadata, origin="derived", date_precision="timed",
+            started_at=started_at, observed_at=observed_at, extraction_identity=extraction_identity,
+            candidate_hash=candidate_hash,
+        )
+        session.add(event)
+        await session.flush()
+    else:
+        owners = set(event.owner_fields)
+        desired = {"title": title[:300], "summary": summary, "type": event_type,
+                   "started_at": started_at, "observed_at": observed_at, "metadata_json": metadata}
+        updates = {name: value for name, value in desired.items()
+                   if name not in owners and getattr(event, name) != value}
+        for name, value in updates.items():
+            setattr(event, name, value)
+        if updates:
+            event.revision += 1
+            event.updated_at = datetime.now(UTC)
+            changed = True
+    for item in evidence:
+        inserted = await session.execute(insert(EventEvidence).values(
+            event_id=event.id, source_id=item.source_id, document_id=item.document_id,
+            document_version_id=item.document_version_id, chunk_id=item.chunk_id,
+            version_number=item.version_number, source_generation=source_generation,
+            extraction_identity=extraction_identity, candidate_hash=candidate_hash,
+            confidence=1.0, extracted_at=datetime.now(UTC), observed_at=item.observed_at,
+            title_snapshot=item.title, url_snapshot=item.canonical_url, evidence_metadata={},
+            excerpt=item.excerpt, metadata_is_version_snapshot=item.metadata_is_version_snapshot,
+        ).on_conflict_do_nothing(constraint="uq_timeline_event_evidence").returning(EventEvidence.id))
+        changed = changed or inserted.first() is not None
+    evidence_rows = list((await session.scalars(select(EventEvidence).where(
+        EventEvidence.event_id == event.id, EventEvidence.chunk_id.in_(chunk_ids),
+        EventEvidence.document_version_id == document_version_id,
+    ))).all())
+    for ref, (_, role) in zip(canonical, participants):
+        row = await session.scalar(select(EventParticipant).where(
+            EventParticipant.event_id == event.id, EventParticipant.entity_id == ref.canonical_id,
+            EventParticipant.role == role,
+        ).with_for_update())
+        if row is None:
+            row = EventParticipant(event_id=event.id, entity_id=ref.canonical_id, role=role,
+                                   metadata_json={}, origin="derived")
+            session.add(row)
+            await session.flush()
+            changed = True
+        for item in evidence_rows:
+            await session.execute(insert(ParticipantEvidence).values(
+                participant_id=row.id, event_evidence_id=item.id,
+            ).on_conflict_do_nothing(constraint="uq_timeline_participant_evidence"))
+    await session.flush()
+    if changed:
+        await _schedule_temporal_event(session, event, ["extracted"])
+    return event.id
 
 
 async def _schedule_temporal_event(session: AsyncSession, event: Event, fields: list[str], *, deleted: bool = False) -> None:

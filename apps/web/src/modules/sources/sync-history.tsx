@@ -20,7 +20,7 @@ function statusKey(status: string): 'runQueued' | 'runRunning' | 'runSucceeded' 
   return status === 'running' ? 'runRunning' : status === 'succeeded' ? 'runSucceeded' : status === 'needs_ocr' ? 'runNeedsOcr' : status === 'failed' ? 'runFailed' : 'runQueued';
 }
 
-/** Renders ingestion run history for the supplied source. */
+/** Renders bounded ingestion run history, preserving owner-reported stages, errors, and result counts for the selected source. */
 export function SyncHistory({ source }: { source: Source }) {
   const t = useTranslations('sources');
   const display = useDisplayPreferences();
@@ -66,6 +66,7 @@ export function SyncHistory({ source }: { source: Source }) {
     {current && renderRun(current, true)}
     {runs.map((run) => renderRun(run, false))}
     {!current && runs.length === 0 && <p className="muted">{t('noRuns')}</p>}
+    {['youtube', 'arxiv', 'huggingface', 'github_releases', 'telegram'].includes(source.provider ?? '') && <p className="muted">{t('providerHistoryCaveat')}</p>}
     <p className="muted">{t('embeddedStatus')}</p>
     {history.hasNextPage && <Button className="secondary" disabled={history.isFetchingNextPage} onClick={() => history.fetchNextPage()}>{t('loadMore')}</Button>}
     {(retry.error || history.isFetchNextPageError) && <p className="error" role="alert">{t('actionFailed')}</p>}

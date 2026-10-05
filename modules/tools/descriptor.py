@@ -17,7 +17,7 @@ class ToolsDescriptor:
     routes: tuple[str, ...] = ("/api/v1/tools", "/api/v1/mcp/connections", "/api/v1/mcp/inbound-clients", "/api/v1/mcp/")
     emitted_events: tuple[str, ...] = ()
     consumed_events: tuple[str, ...] = ()
-    tools: tuple[str, ...] = ("knowledge.get_document", "knowledge.list_documents", "search.query", "sources.list_sources", "sources.get_source", "webhook.send", "browser.read")
+    tools: tuple[str, ...] = ("knowledge.get_document", "knowledge.list_documents", "search.query", "sources.list_sources", "sources.get_source", "github.list_project_events", "webhook.send", "browser.read")
     navigation: tuple[dict[str, str], ...] = ()
     settings_schema: dict[str, object] | None = None
 

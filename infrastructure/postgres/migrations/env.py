@@ -25,7 +25,17 @@ from modules.ingestion.models import (
     SourceIngestionState,
     SourceObservation,
 )
-from modules.connectors.models import AgentBrowserGrant, ConnectorManagedCredential, ConnectorProvisioning
+from modules.connectors.models import (
+    AgentBrowserGrant,
+    ConnectorManagedCredential,
+    ConnectorNativeCredential,
+    ConnectorProvisioning,
+    GithubOAuthOperation,
+    GithubWebhookCapacity,
+    GithubWebhookDelivery,
+    GithubWebhookOutbox,
+    GithubSourceHint,
+)
 from modules.sources.models import Source, SourcePurgeOperation
 from modules.search.models import IndexGeneration, SearchIndexItem
 from modules.knowledge.entities.models import (
@@ -91,7 +101,10 @@ _ingestion_models = (
     SourceObservation,
 )
 _search_models = (IndexGeneration, SearchIndexItem)
-_connector_models = (AgentBrowserGrant, ConnectorProvisioning, ConnectorManagedCredential)
+_connector_models = (
+    AgentBrowserGrant, ConnectorProvisioning, ConnectorManagedCredential, ConnectorNativeCredential, GithubOAuthOperation,
+    GithubWebhookCapacity, GithubWebhookDelivery, GithubWebhookOutbox, GithubSourceHint,
+)
 _realtime_models = (ReplayHead, ReplayRecord)
 _dashboard_models = (
     Dashboard,

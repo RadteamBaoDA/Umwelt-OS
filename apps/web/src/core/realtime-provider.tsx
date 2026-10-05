@@ -364,6 +364,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
           client.invalidateQueries({ queryKey: ['connector-configuration', value.source_id] }),
           client.invalidateQueries({ queryKey: ['connector-activation', value.source_id] }),
           client.invalidateQueries({ queryKey: ['source-ingestion', value.source_id] }),
+          client.invalidateQueries({ queryKey: ['search'] }),
           ...(value.operation_id ? [client.invalidateQueries({ queryKey: ['operation', value.operation_id] })] : []),
           client.invalidateQueries({ queryKey: ['gadget-sources'] }),
           // Definitions expose source lifecycle warnings, so a source event invalidates the whole owner library.

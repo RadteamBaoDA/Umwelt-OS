@@ -18,6 +18,9 @@ from modules.knowledge.documents.schemas import (
     DocumentList,
     DocumentPatch,
     DocumentRead,
+    ProviderDocumentSnapshotList,
+    ProviderDocumentSnapshotRead,
+    ProviderSnapshotRequest,
     VersionList,
     VersionRead,
 )
@@ -29,6 +32,36 @@ router = APIRouter(
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[AuthSession, Depends(require_owner)]
 OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]
+
+
+@router.post("/provider-snapshots", response_model=list[ProviderDocumentSnapshotRead])
+async def read_provider_snapshots(
+    payload: ProviderSnapshotRequest, session: Session, _owner: OwnerRead
+) -> list[ProviderDocumentSnapshotRead]:
+    """Return exact immutable provider versions after owner-route authentication."""
+    try:
+        return await public.read_provider_snapshots(session, payload.version_ids)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="One or more provider versions are unavailable") from exc
+
+
+@router.get("/provider-snapshots", response_model=ProviderDocumentSnapshotList)
+async def list_provider_snapshots(
+    session: Session,
+    _owner: OwnerRead,
+    source_ids: Annotated[list[UUID], Query(min_length=1, max_length=100)],
+    channel_ids: Annotated[list[str] | None, Query(max_length=100)] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    cursor: Annotated[str | None, Query(max_length=1024)] = None,
+) -> ProviderDocumentSnapshotList:
+    """List current provider versions with owner authorization and keyset bounds."""
+    try:
+        return await public.list_provider_snapshots(
+            session, source_ids=source_ids, channel_ids=channel_ids,
+            limit=limit, cursor=cursor,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Provider snapshot query is invalid") from exc
 
 
 def as_document_read(document: Document) -> DocumentRead:

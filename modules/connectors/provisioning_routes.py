@@ -3,7 +3,9 @@ from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+import httpx
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.dependencies import require_owner, require_owner_write
@@ -15,11 +17,14 @@ from modules.connectors.activation import drive_activation, prepare_credential_a
 from modules.connectors.credentials import (
     CredentialEncryptionUnavailable,
     N8nCredentials,
+    decrypt_native_token,
+    encrypt_native_token,
     secret_fingerprint,
 )
 from modules.connectors.n8n import N8nApi
 from modules.connectors import public as connector_owner
-from modules.connectors.public import ConnectorConfig, validate_public_url
+from modules.connectors.public import ConnectorConfig, ProviderRateLimited, validate_public_url
+from modules.connectors.public import serialize_source_configuration
 from modules.ingestion import public as ingestion
 from modules.sources import public as sources
 from modules.sources.schemas import ConnectorSource
@@ -36,7 +41,7 @@ class ConnectorSettingsRequest(BaseModel):
 
     expected_revision: int = Field(ge=0)
     configuration: ConnectorConfig
-    auth_method: Literal["none", "http_header"] = "none"
+    auth_method: Literal["none", "http_header", "telegram_bot_token"] = "none"
     auth_header_name: str | None = Field(default=None, min_length=1, max_length=128)
 
     @model_validator(mode="after")
@@ -44,7 +49,7 @@ class ConnectorSettingsRequest(BaseModel):
         """Require a header name only when header authentication is selected."""
         if self.auth_method == "http_header" and not self.auth_header_name:
             raise ValueError("auth_header_name is required for header authentication")
-        if self.auth_method == "none" and self.auth_header_name is not None:
+        if self.auth_method != "http_header" and self.auth_header_name is not None:
             raise ValueError("auth_header_name requires header authentication")
         return self
 
@@ -52,6 +57,14 @@ class ConnectorSettingsRequest(BaseModel):
 class DraftValidationRequest(ConnectorSettingsRequest):
     """Add the source generation required to validate a connector draft."""
     expected_source_generation: int = Field(ge=1)
+    secret_action: Literal["keep", "replace"] = "keep"
+    secret: SecretStr | None = None
+
+    @model_validator(mode="after")
+    def validate_draft_secret(self) -> "DraftValidationRequest":
+        """Keep the draft token write-only and apply the same bounded syntax rule as activation."""
+        _validate_secret_action(self.secret_action, self.secret)
+        return self
 
 
 class ActivationRequest(BaseModel):
@@ -65,11 +78,21 @@ class ActivationRequest(BaseModel):
     @model_validator(mode="after")
     def validate_secret_action(self) -> "ActivationRequest":
         """Reject missing replacement secrets and secrets sent with keep."""
-        if self.secret_action == "replace" and (self.secret is None or not self.secret.get_secret_value()):
-            raise ValueError("A non-empty replacement secret is required")
-        if self.secret_action == "keep" and self.secret is not None:
-            raise ValueError("secret is only accepted for replacement")
+        _validate_secret_action(self.secret_action, self.secret)
         return self
+
+
+def _validate_secret_action(action: str, secret: SecretStr | None) -> None:
+    """Require replacement tokens to be nonempty, bounded UTF-8 without whitespace or controls."""
+    if action == "keep":
+        if secret is not None:
+            raise ValueError("secret is only accepted for replacement")
+        return
+    value = secret.get_secret_value() if secret is not None else ""
+    if not 1 <= len(value.encode("utf-8")) <= 512 or any(
+        character.isspace() or ord(character) < 32 or ord(character) == 127 for character in value
+    ):
+        raise ValueError("A valid replacement secret is required")
 
 
 class ActivationRead(BaseModel):
@@ -87,9 +110,10 @@ class ConnectorConfigurationRead(BaseModel):
     source_id: UUID
     source_type: str
     source_generation: int
-    configuration: ConnectorConfig
+    configuration: dict[str, object]
+    provider: str | None = None
     expected_revision: int
-    auth_method: Literal["none", "http_header"]
+    auth_method: Literal["none", "http_header", "telegram_bot_token"]
     auth_header_name: str | None
     desired_enabled: bool
     activation_state: str
@@ -105,7 +129,9 @@ class DraftValidationRead(BaseModel):
     expected_revision: int
     validated_at: datetime
     validation_status: Literal["valid"]
-    checks: tuple[Literal["configuration", "public_url_policy"], ...]
+    checks: tuple[Literal["configuration", "public_url_policy", "provider_identity", "provider_scope", "receive_mode"], ...]
+    verified_bot_id: str | None = Field(default=None, max_length=20)
+    scope_verified: bool | None = None
 
 
 @router.get("/{source_id}/configuration", response_model=ConnectorConfigurationRead)
@@ -121,8 +147,9 @@ async def get_configuration(
     return ConnectorConfigurationRead(
         source_id=snapshot.source_id,
         source_type=snapshot.source_type,
+        provider=snapshot.provider,
         source_generation=snapshot.source_generation,
-        configuration=ConnectorConfig.model_validate(snapshot.configuration),
+        configuration=snapshot.configuration,
         expected_revision=snapshot.expected_revision,
         auth_method=snapshot.auth_method,
         auth_header_name=snapshot.auth_header_name,
@@ -139,9 +166,15 @@ async def validate_draft_configuration(
     source_id: UUID,
     payload: DraftValidationRequest,
     session: Session,
+    request: Request,
     _owner: OwnerRead,
 ) -> DraftValidationRead:
-    """Validate draft settings only while the active source generation matches."""
+    """Validate a draft and recheck its source, revision, and Telegram bot binding afterward.
+
+    Retained-token reads lock source, provisioning, managed credentials, and the
+    native row before decryption. Locks are released for provider requests, then
+    reacquired to ensure the result still describes the requested active draft.
+    """
     source = await _source(session, source_id)
     if source.status != "active" or source.type not in registry.SUPPORTED_TYPES:
         raise HTTPException(status_code=409, detail="Active packaged connector required")
@@ -151,23 +184,98 @@ async def validate_draft_configuration(
     current_revision = row.desired_revision if row is not None else 0
     if payload.expected_revision != current_revision:
         raise HTTPException(status_code=409, detail="Connector configuration revision changed; reload before validating")
+    expected_auth = "telegram_bot_token" if source.provider == "telegram" else "none" if source.provider else None
+    if expected_auth is not None and payload.auth_method != expected_auth:
+        raise HTTPException(status_code=422, detail="Authentication mode does not match the provider")
+    if source.provider is None and payload.auth_method == "telegram_bot_token":
+        raise HTTPException(status_code=422, detail="Telegram authentication requires a Telegram source")
     if payload.auth_method == "http_header" and source.type != "api":
         raise HTTPException(status_code=422, detail="Header authentication is supported only for REST sources")
-    candidate = source.model_copy(update={
-        "configuration": payload.configuration.model_dump(mode="json", exclude_none=True)
-    })
+    try:
+        source_configuration = serialize_source_configuration(source, payload.configuration)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Draft provider configuration is invalid") from exc
+    candidate = source.model_copy(update={"configuration": source_configuration})
     try:
         data = registry.validate(candidate)
-        await validate_public_url(data["url"])
     except (KeyError, TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail="Draft connector configuration is invalid") from exc
+    checks: tuple[str, ...]
+    bot_id: str | None = None
+    scope_verified: bool | None = None
+    if source.provider == "telegram":
+        token: str
+        try:
+            previous = await provisioning.get_retained_native_credential_snapshot(
+                session, source_id, source_generation=source.generation,
+                connector_revision=payload.expected_revision,
+            )
+        except ValueError as exc:
+            await session.rollback()
+            raise HTTPException(status_code=409, detail="Connector configuration changed; reload before validating") from exc
+        if payload.secret_action == "replace":
+            token = payload.secret.get_secret_value() if payload.secret is not None else ""
+        else:
+            if previous is None or previous.state != "ready":
+                raise HTTPException(status_code=409, detail="A validated Telegram token is required")
+            key = request.app.state.settings.connector_credential_encryption_key.get_secret_value()
+            try:
+                token = decrypt_native_token(key, previous)
+            except CredentialEncryptionUnavailable as exc:
+                raise HTTPException(status_code=503, detail="Stored Telegram credential is unavailable") from exc
+        await session.rollback()
+        from modules.connectors.providers.telegram import validate_telegram_scope
+
+        try:
+            verified = await validate_telegram_scope(token, tuple(candidate.configuration["telegram_chat_ids"]))
+        except ProviderRateLimited as exc:
+            raise HTTPException(status_code=503, detail="Telegram provider rate limit reached") from exc
+        except (TimeoutError, httpx.TimeoutException) as exc:
+            raise HTTPException(status_code=503, detail="Telegram validation outcome is unknown") from exc
+        except (ValueError, httpx.HTTPError) as exc:
+            status = 503 if getattr(exc, "code", None) == "telegram_provider_unavailable" else 422
+            detail = "Telegram validation outcome is unknown" if status == 503 else "Telegram bot identity and channel scope could not be verified"
+            raise HTTPException(status_code=status, detail=detail) from exc
+        if not await provisioning.require_validation_fence(
+            session, source, payload.expected_source_generation, payload.expected_revision
+        ):
+            await session.rollback()
+            raise HTTPException(status_code=409, detail="Connector configuration changed during validation")
+        try:
+            current_native = await provisioning.get_retained_native_credential_snapshot(
+                session, source_id, source_generation=payload.expected_source_generation,
+                connector_revision=payload.expected_revision,
+            )
+        except ValueError as exc:
+            await session.rollback()
+            raise HTTPException(status_code=409, detail="Connector configuration changed during validation") from exc
+        if current_native is not None and current_native.bound_bot_id not in (None, verified.verified_bot_id):
+            await session.rollback()
+            raise HTTPException(status_code=409, detail="A different Telegram bot requires a new source")
+        await session.rollback()
+        bot_id = verified.verified_bot_id
+        scope_verified = True
+        checks = ("configuration", "provider_identity", "provider_scope", "receive_mode")
+    elif source.provider is not None:
+        checks = ("configuration", "provider_identity", "provider_scope", "receive_mode")
+        scope_verified = True
+    else:
+        if payload.auth_method == "http_header" and source.type != "api":
+            raise HTTPException(status_code=422, detail="Header authentication is supported only for REST sources")
+        try:
+            await validate_public_url(data["url"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail="Draft connector configuration is invalid") from exc
+        checks = ("configuration", "public_url_policy")
     return DraftValidationRead(
         source_id=source_id,
         source_generation=source.generation,
         expected_revision=payload.expected_revision,
         validated_at=datetime.now(UTC),
         validation_status="valid",
-        checks=("configuration", "public_url_policy"),
+        checks=checks,
+        verified_bot_id=bot_id,
+        scope_verified=scope_verified,
     )
 
 
@@ -204,9 +312,17 @@ async def put_configuration(
     pending = await provisioning.activation_status(session, source_id)
     if pending is not None and pending.state == "disabled" and pending.error_code == "deactivation_pending":
         raise HTTPException(status_code=409, detail="Wait for source deactivation to finish before saving")
+    expected_auth = "telegram_bot_token" if source.provider == "telegram" else "none" if source.provider else None
+    if expected_auth is not None and payload.auth_method != expected_auth:
+        raise HTTPException(status_code=422, detail="Authentication mode does not match the provider")
+    if source.provider is None and payload.auth_method == "telegram_bot_token":
+        raise HTTPException(status_code=422, detail="Telegram authentication requires a Telegram source")
     if payload.auth_method == "http_header" and source.type != "api":
         raise HTTPException(status_code=422, detail="Header authentication is supported only for REST sources")
-    source_configuration = payload.configuration.model_dump(mode="json", exclude_none=True)
+    try:
+        source_configuration = serialize_source_configuration(source, payload.configuration)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Provider configuration is invalid") from exc
     desired_configuration = dict(source_configuration)
     desired_configuration["auth_method"] = payload.auth_method
     if payload.auth_header_name:
@@ -214,7 +330,8 @@ async def put_configuration(
     candidate = source.model_copy(update={"configuration": source_configuration})
     try:
         data = registry.validate(candidate)
-        await validate_public_url(data["url"])
+        if "url" in data:
+            await validate_public_url(data["url"])
     except (KeyError, TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     saved_result = await connector_owner.save_connector_configuration(
@@ -244,7 +361,8 @@ async def validate_configuration(
     source = await _source(session, source_id)
     try:
         data = registry.validate(source)
-        await validate_public_url(data["url"])
+        if "url" in data:
+            await validate_public_url(data["url"])
     except (KeyError, TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail="Connector configuration is invalid") from exc
     row = await provisioning.activation_status(session, source_id)
@@ -316,6 +434,81 @@ async def activate_source(
         raise HTTPException(status_code=503, detail="Connector credential encryption is not configured") from exc
 
     activation_id = uuid4()
+    native_bot_id: str | None = None
+    if source.provider == "telegram":
+        from modules.connectors.providers.telegram import validate_telegram_scope
+
+        try:
+            previous = await provisioning.get_retained_native_credential_snapshot(
+                session, source_id, source_generation=source.generation,
+                connector_revision=payload.expected_revision,
+            )
+        except ValueError as exc:
+            await session.rollback()
+            raise HTTPException(status_code=409, detail="Connector configuration changed; reload before enabling") from exc
+        if payload.secret_action == "keep":
+            if previous is None or previous.state != "ready":
+                raise HTTPException(status_code=409, detail="A validated Telegram token is required")
+            try:
+                native_token = decrypt_native_token(encryption_key, previous)
+            except CredentialEncryptionUnavailable as exc:
+                raise HTTPException(status_code=503, detail="Stored Telegram credential is unavailable") from exc
+        else:
+            native_token = payload.secret.get_secret_value() if payload.secret else ""
+        await session.rollback()
+        try:
+            verified = await validate_telegram_scope(
+                native_token, tuple(source.configuration.get("telegram_chat_ids", ()))
+            )
+        except ProviderRateLimited as exc:
+            raise HTTPException(status_code=503, detail="Telegram provider rate limit reached") from exc
+        except (TimeoutError, httpx.TimeoutException) as exc:
+            raise HTTPException(status_code=503, detail="Telegram validation outcome is unknown") from exc
+        except (ValueError, httpx.HTTPError) as exc:
+            status = 503 if getattr(exc, "code", None) == "telegram_provider_unavailable" else 422
+            detail = "Telegram validation outcome is unknown" if status == 503 else "Telegram bot identity and channel scope could not be verified"
+            raise HTTPException(status_code=status, detail=detail) from exc
+        if previous is not None and previous.bound_bot_id not in (None, verified.verified_bot_id):
+            raise HTTPException(status_code=409, detail="A different Telegram bot requires a new source")
+        if not await provisioning.require_validation_fence(
+            session, source, source.generation, payload.expected_revision
+        ):
+            await session.rollback()
+            raise HTTPException(status_code=409, detail="Connector configuration changed during Telegram validation")
+        try:
+            current_native = await provisioning.get_retained_native_credential_snapshot(
+                session, source_id, source_generation=source.generation,
+                connector_revision=payload.expected_revision,
+            )
+        except ValueError as exc:
+            await session.rollback()
+            raise HTTPException(status_code=409, detail="Connector configuration changed during Telegram validation") from exc
+        if current_native is not None and current_native.bound_bot_id not in (None, verified.verified_bot_id):
+            await session.rollback()
+            raise HTTPException(status_code=409, detail="A different Telegram bot requires a new source")
+        await session.rollback()
+        native_bot_id = verified.verified_bot_id
+        ciphertext = encrypt_native_token(
+            encryption_key, source_id=source_id, operation_id=activation_id,
+            source_generation=source.generation, configuration_revision=payload.expected_revision,
+            token=native_token, verified_bot_id=native_bot_id,
+        )
+        try:
+            await provisioning.save_native_credential(
+                session, source_id=source_id, operation_id=activation_id,
+                source_generation=source.generation, connector_revision=payload.expected_revision,
+                encrypted_token=ciphertext, token_fingerprint=secret_fingerprint(encryption_key, native_token),
+                verified_bot_id=native_bot_id, validated_at=verified.validated_at,
+            )
+        except ValueError as exc:
+            await session.rollback()
+            raise HTTPException(status_code=409, detail="Telegram credential identity or revision changed") from exc
+        except IntegrityError as exc:
+            await session.rollback()
+            raise HTTPException(status_code=409, detail="Telegram bot identity is already reserved") from exc
+    elif payload.secret_action == "replace" and row.desired_configuration.get("auth_method") != "http_header":
+        raise HTTPException(status_code=422, detail="This provider does not accept a replacement token")
+
     try:
         credential_intents: dict[str, dict[str, object]] = {}
         required_credentials: dict[str, object] = {}
@@ -492,6 +685,19 @@ async def remove_provider_credential(
         raise HTTPException(status_code=409, detail="Connector configuration revision changed")
     saved_source, updated = saved
     updated.state = "disabled"
+    if source.provider == "telegram":
+        try:
+            await provisioning.revoke_native_credential(
+                session, source_id, source_generation=saved_source.generation,
+                connector_revision=updated.desired_revision, release_bot_reservation=True,
+            )
+        except ValueError as exc:
+            await session.rollback()
+            raise HTTPException(status_code=409, detail="Telegram credential revision changed") from exc
+        await commit_with_replay(session, [
+            make_source_change(saved_source.id, saved_source.generation, saved_source.status, connector_state=updated.state),
+        ])
+        return await _activation_read(session, source_id, updated)
     intent = await provisioning.create_delete_intent(
         session, source_id, "provider", updated.desired_revision
     )

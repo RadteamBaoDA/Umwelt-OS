@@ -12,6 +12,7 @@ export function EventDetail({ event, locale, timezone, entityNames }: {
   entityNames: ReadonlyMap<string, string>;
 }) {
   const t = useTranslations('timeline');
+  const gh = useTranslations('github');
   /** Formats date-only values as calendar dates without converting their day through a local zone. */
   function formatCalendarDate(value: string) {
     const [year, month, day] = value.split('-').map(Number);
@@ -56,6 +57,7 @@ export function EventDetail({ event, locale, timezone, entityNames }: {
     {!!event.participants.length && <section aria-label={t('participants')}><h3>{t('participants')}</h3><ul className="stack">{event.participants.map((participant) => <li key={`${participant.entity_id}:${participant.role}`}><Link href={`/knowledge/entities/${participant.entity_id}`}>{entityNames.get(participant.entity_id) ?? participant.entity_id}</Link> · {participant.role}</li>)}</ul></section>}
     {!!event.evidence.length && <section aria-label={t('evidence')}><h3>{t('evidence')}</h3><ul className="stack">{event.evidence.map((evidence) => <li key={`${evidence.document_version_id}:${evidence.chunk_id}`}>
       <Link href={`/knowledge/documents/${evidence.document_id}?version=${evidence.version_number}#cited-revision`}>{evidence.title}</Link>
+      {event.type.startsWith('github_') && evidence.canonical_url?.startsWith('https://github.com/') && <> · <a href={evidence.canonical_url} target="_blank" rel="noopener noreferrer">{gh('openOnGithub')}</a></>}
       <small className="muted">{evidence.metadata_is_version_snapshot ? t('metadataVersionSnapshot') : t('metadataCurrentFallback')}</small>
       <p className="muted">{t('evidenceObserved')} {formatDateTime(evidence.observed_at, locale, timezone)} · {t('sourceId')} {evidence.source_id}</p><blockquote>{evidence.excerpt}</blockquote>
     </li>)}</ul></section>}

@@ -39,8 +39,10 @@ PROFILE_LIMITS = {
 }
 NATIVE_READ_TOOLS = frozenset({
     "knowledge.get_document", "knowledge.list_documents", "search.query",
-    "sources.list_sources", "sources.get_source",
+    "sources.list_sources", "sources.get_source", "github.list_project_events",
 })
+# Offered by default only to the Project specialist and the Supervisor that routes to it.
+PROJECT_ONLY_TOOL = "github.list_project_events"
 SPECIALIST_GATES = {"research": "browser.read"}
 DOMAIN_UNAVAILABLE = {
     "project": "project_owner_tools_unavailable",
@@ -77,7 +79,8 @@ def _snapshot(
 ) -> dict[str, object]:
     """Build the secret-free profile view, retaining exact registry fingerprints as authority ceilings."""
     contracts = _tool_contracts(registry)
-    defaults = (NATIVE_READ_TOOLS | ({HANDOFF_TOOL} if profile_id == "supervisor" else frozenset())
+    defaults = NATIVE_READ_TOOLS - ({PROJECT_ONLY_TOOL} if profile_id not in {"project", "supervisor"} else frozenset())
+    defaults = (defaults | ({HANDOFF_TOOL} if profile_id == "supervisor" else frozenset())
                 | (INTERNAL_PROFILE_TOOLS if profile_id in INTERNAL_WRITE_PROFILES else frozenset()))
     selected = row.allowed_tools if row is not None else [
         contracts[name] for name in sorted(defaults) if name in contracts

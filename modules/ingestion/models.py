@@ -110,12 +110,23 @@ class ObservationNormalization(Base):
 
 
 class SourceIngestionState(Base):
-    """Store a source cursor and the active run lease that owns it."""
+    """Store the source cursor, pre-fetch collection reservation, and active ingestion-run lease; these ownership tokens are distinct."""
     __tablename__ = "source_ingestion_state"
+    __table_args__ = (
+        CheckConstraint(
+            "NOT (lease_run_id IS NOT NULL AND collection_lease_token IS NOT NULL)",
+            name="ck_source_ingestion_state_single_lease_owner",
+        ),
+        CheckConstraint(
+            "collection_lease_token IS NULL OR lease_expires_at IS NOT NULL",
+            name="ck_source_ingestion_state_collection_lease_expiry",
+        ),
+    )
 
     source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("sources.id", ondelete="CASCADE"), primary_key=True)
     cursor: Mapped[str | None] = mapped_column(Text)
     lease_run_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("ingestion_runs.id", ondelete="SET NULL"))
+    collection_lease_token: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 

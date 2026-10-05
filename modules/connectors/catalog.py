@@ -19,9 +19,12 @@ class CatalogEntry(BaseModel):
     supports_history: bool
     supports_edit: bool
     supports_delete: bool
-    availability: Literal["available", "planned", "unavailable"]
+    availability: Literal["implemented", "requires_credentials", "unsupported_operation", "planned", "unavailable", "available"]
     unavailable_reason: str | None = None
     unavailable_operations: tuple[str, ...] = ()
+    availability_reason: str | None = None
+    license_status: str | None = None
+    evidence_status: str | None = None
 
 
 _ENTRIES = (
@@ -90,13 +93,17 @@ _ENTRIES = (
         provider_id="github",
         label="GitHub",
         auth_methods=("oauth2",),
-        scope_fields=("repository", "resource_types"),
+        scope_fields=("github_owner", "github_repository", "include_issues", "include_pulls", "include_commits", "include_releases", "github_history_days"),
+        configuration_fields=("github_owner", "github_repository", "include_issues", "include_pulls", "include_commits", "include_releases", "github_history_days", "timezone", "schedule_interval_minutes"),
+        quota_limits={"requests_per_trigger": 1, "records_per_trigger": 100, "response_bytes_per_resource": 2_097_152},
+        history_description="One bounded page per trigger across selected resources; completed sweeps remain limited by the configured history horizon and page/object ceilings.",
         collection_modes=("scheduled", "manual"),
         supports_history=True,
         supports_edit=False,
         supports_delete=False,
-        availability="planned",
-        unavailable_reason="GitHub authorization and collection are delivered with P09-T1.",
+        availability="requires_credentials",
+        availability_reason="A GitHub App must be installed for the owner and grant read access to the selected repository resources.",
+        evidence_status="official_github_app_user_oauth",
     ),
     *(
         CatalogEntry(
@@ -115,6 +122,85 @@ _ENTRIES = (
             ("google_mail", "Gmail"),
             ("google_calendar", "Google Calendar"),
             ("google_drive", "Google Drive"),
+        )
+    ),
+    CatalogEntry(
+        provider_id="youtube", label="YouTube feeds", auth_methods=("none",),
+        scope_fields=("youtube_channel_id", "history_mode"),
+        configuration_fields=("youtube_channel_id", "history_mode", "timezone", "schedule_interval_minutes"),
+        quota_limits={"requests_per_trigger": 1, "records_per_trigger": 500},
+        history_description="Entries returned by the current YouTube channel feed.",
+        collection_modes=("scheduled", "manual"), supports_history=True, supports_edit=False,
+        supports_delete=False, availability="implemented", evidence_status="official_feed",
+    ),
+    CatalogEntry(
+        provider_id="arxiv", label="arXiv", auth_methods=("none",),
+        scope_fields=("arxiv_category", "history_mode"),
+        configuration_fields=("arxiv_category", "history_mode", "timezone", "schedule_interval_minutes"),
+        quota_limits={"requests_per_trigger": 1, "records_per_trigger": 500},
+        history_description="Metadata entries returned by the current category feed.",
+        collection_modes=("scheduled", "manual"), supports_history=True, supports_edit=False,
+        supports_delete=False, availability="implemented", evidence_status="official_feed",
+    ),
+    CatalogEntry(
+        provider_id="huggingface", label="Hugging Face models", auth_methods=("none",),
+        scope_fields=("huggingface_author", "history_mode"),
+        configuration_fields=("huggingface_author", "history_mode", "timezone", "schedule_interval_minutes"),
+        quota_limits={"requests_per_trigger": 1, "records_per_trigger": 100},
+        history_description="Public model metadata in one bounded author snapshot.",
+        collection_modes=("scheduled", "manual"), supports_history=True, supports_edit=True,
+        supports_delete=False, availability="implemented", evidence_status="official_api",
+    ),
+    CatalogEntry(
+        provider_id="github_releases", label="GitHub Releases", auth_methods=("none",),
+        scope_fields=("github_owner", "github_repository", "history_mode"),
+        configuration_fields=("github_owner", "github_repository", "history_mode", "timezone", "schedule_interval_minutes"),
+        quota_limits={"requests_per_trigger": 5, "records_per_trigger": 500},
+        history_description="Public releases from the five-page snapshot; older edits may not be detected.",
+        collection_modes=("scheduled", "manual"), supports_history=True, supports_edit=True,
+        supports_delete=False, availability="implemented", evidence_status="official_api",
+    ),
+    CatalogEntry(
+        provider_id="telegram", label="Telegram channels", auth_methods=("telegram_bot_token",),
+        scope_fields=("telegram_chat_ids", "history_mode"),
+        configuration_fields=("telegram_chat_ids", "history_mode", "timezone", "schedule_interval_minutes"),
+        quota_limits={"requests_per_trigger": 5, "updates_per_trigger": 500},
+        history_description="Authorized channel updates still available to the bot; edits are captured when received.",
+        collection_modes=("scheduled", "manual"), supports_history=True, supports_edit=True,
+        supports_delete=False, availability="requires_credentials",
+        availability_reason="A bot token and administrator access to every configured channel must be validated.",
+        evidence_status="official_bot_api",
+    ),
+    *(
+        CatalogEntry(
+            provider_id=provider_id, label=label, auth_methods=auth_methods,
+            scope_fields=(), collection_modes=(), supports_history=False,
+            supports_edit=False, supports_delete=False, availability=availability,
+            availability_reason=reason, history_description=None,
+            evidence_status=evidence,
+        )
+        for provider_id, label, auth_methods, availability, reason, evidence in (
+            ("google_news", "Google News feeds", ("none",), "planned", "Official feed construction is not established; use configured RSS only when an owner supplies a feed URL.", "unverified"),
+            ("reddit", "Reddit", ("oauth2",), "planned", "Provider OAuth, endpoint, licensing, and quota gates remain open.", "unverified"),
+            ("hacker_news", "Hacker News", ("none",), "planned", "A scoped adapter and evidence review remain open.", "unverified"),
+            ("mastodon", "Mastodon", ("oauth2",), "planned", "Instance, authorization, licensing, and quota gates remain open.", "unverified"),
+            ("bluesky", "Bluesky", ("oauth2",), "planned", "Authorization, licensing, and quota gates remain open.", "unverified"),
+            ("x", "X", ("oauth2",), "planned", "Authorized API/provider and quota evidence remain open.", "unverified"),
+            ("vietnamese_press", "Permitted Vietnamese press", ("none",), "planned", "Per-source permission and collection evidence are required.", "unverified"),
+            ("gdelt_government", "GDELT / government", ("none",), "planned", "Source-specific adapters and license evidence remain open.", "unverified"),
+            ("finance", "Finance", ("none",), "planned", "Provider scope and license evidence remain open.", "unverified"),
+            ("weather_disaster_climate", "Weather / disaster / climate", ("none",), "planned", "R14 owns the structured observation adapter.", "unverified"),
+            ("cyber_cve", "Cyber / CVE", ("none",), "planned", "Source scope and evidence review remain open.", "unverified"),
+            ("map_osint", "Map / OSINT", ("none",), "planned", "Source scope and evidence review remain open.", "unverified"),
+            ("browser", "Browser collection", ("none",), "unsupported_operation", "Browser execution remains an isolated capability gate.", "unverified"),
+            ("notes", "Notes", ("none",), "planned", "No owner-facing native notes adapter is registered.", "unverified"),
+            ("health", "Health", ("oauth2",), "planned", "No health provider adapter is registered.", "unverified"),
+            ("personal_finance", "Personal finance", ("oauth2",), "planned", "No personal finance provider adapter is registered.", "unverified"),
+            ("iot", "IoT", ("none",), "planned", "No IoT provider adapter is registered.", "unverified"),
+            ("notion", "Notion", ("oauth2",), "planned", "OAuth and collection capability remain open.", "unverified"),
+            ("slack", "Slack", ("oauth2",), "planned", "OAuth and collection capability remain open.", "unverified"),
+            ("home_assistant", "Home Assistant", ("http_header",), "planned", "Local trust boundary and supported scope remain open.", "unverified"),
+            ("mcp", "MCP", ("none",), "unsupported_operation", "MCP client/server capabilities are owned by the tools module.", "unverified"),
         )
     ),
 )

@@ -48,8 +48,11 @@ def build_workflow(
     manual_credential_id: str,
     provider_credential_id: str | None,
 ) -> dict[str, Any]:
-    """Bind packaged workflow settings and credentials to a source revision."""
-    filename = {"rss": "rss.json", "web": "url.json", "api": "rest.json"}.get(source.type)
+    """Bind packaged workflow settings and credentials to one source fence, selecting native dispatch by immutable provider."""
+    native = source.provider in {"youtube", "arxiv", "huggingface", "github_releases", "github", "telegram"}
+    if native and source.type != {"youtube": "rss", "arxiv": "rss"}.get(source.provider, "api"):
+        raise ValueError("Source type does not match the registered provider")
+    filename = "github.json" if source.provider == "github" else "provider-fetch.json" if native else {"rss": "rss.json", "web": "url.json", "api": "rest.json"}.get(source.type)
     if filename is None:
         raise ValueError("This source type has no packaged workflow")
     path = Path(__file__).resolve().parents[2] / "infrastructure" / "n8n" / "workflows" / filename
@@ -62,6 +65,8 @@ def build_workflow(
         "Collect bounded pages",
         "Submit acknowledged batch",
         "Acknowledge no changes",
+        "Collect provider",
+        "Collect GitHub repository",
     }
     for node in workflow["nodes"]:
         if node.get("name") == "Schedule":

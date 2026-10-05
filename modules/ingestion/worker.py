@@ -87,6 +87,21 @@ class ConnectorRetryError(OSError):
         self.retry_after = retry_after
 
 
+def _update_native_run_lease(state: SourceIngestionState | None, run_id: UUID, *, terminal: bool) -> None:
+    """Renew or release only this native run's source lease at slice boundaries.
+
+    A live fetch token or newer run is never changed; terminalization clears only
+    a matching run owner, while bounded retry/slice work refreshes its expiry.
+    """
+    if state is None or state.lease_run_id != run_id:
+        return
+    if terminal:
+        state.lease_run_id = None
+        state.lease_expires_at = None
+    else:
+        state.lease_expires_at = datetime.now(UTC) + COLLECTION_LEASE
+
+
 def _retry_after_seconds(response: httpx.Response) -> float | None:
     """Parse Retry-After seconds or date values, capped at 60 seconds."""
     value = response.headers.get("retry-after")
@@ -118,7 +133,20 @@ async def _collect_web_job(
     transaction before egress and rechecked before receipt publication. Network
     I/O runs only after those row locks and the database session are released.
     Missing, coercible (including bool), or stale revisions fail closed.
+
+    Generic-only preflight: the source provider is immutable after creation, so a
+    stale or directly queued crawl event cannot route a native source through the
+    browser collector; native providers are rejected before any external request.
     """
+    source_id = UUID(str(event.payload["source_id"]))
+    async with factory() as session:
+        source_view = await sources.get_connector_source(session, source_id)
+        from modules.connectors import public as connectors
+
+        if source_view is None:
+            raise ValueError("Crawl source is unavailable")
+        if connectors.is_native_provider(source_view.provider):
+            raise ValueError("Native provider collection is required")
     settings = cast(Settings, ctx["settings"])
     config = cast(dict[str, object], event.payload["configuration"])
     token = settings.browser_shared_token.get_secret_value()
@@ -327,6 +355,12 @@ async def _fail_ingestion_stage(
                 await session.commit()
             return
         source = await sources.lock_source(session, run_hint.source_id)
+        source_projection = (
+            await sources.get_connector_source(session, run_hint.source_id) if source is not None else None
+        )
+        from modules.connectors import public as connectors
+
+        native_source = source_projection is not None and connectors.is_native_provider(source_projection.provider)
         run = await session.scalar(select(IngestionRun).where(IngestionRun.id == run_id).with_for_update())
         stage = await session.scalar(
             select(IngestionStage).where(IngestionStage.id == stage_id).with_for_update()
@@ -365,7 +399,8 @@ async def process_ingestion_event(ctx: dict[str, object], event_id: str) -> None
     then rechecks source generation before completion. Timeout, OSError,
     OperationalError and connector retry hints schedule durable delays up to five
     attempts and raise ARQ Retry; other failures terminalize the stage. A stale
-    or inactive source is terminal rather than retried.
+    or inactive source is terminal rather than retried. Provider routing uses the
+    detached connector projection read while the source lifecycle lock is held.
     """
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     identifier = UUID(event_id)
@@ -381,6 +416,9 @@ async def process_ingestion_event(ctx: dict[str, object], event_id: str) -> None
             await session.commit()
             return
         source = await sources.lock_source(session, run_hint.source_id)
+        source_projection = (
+            await sources.get_connector_source(session, run_hint.source_id) if source is not None else None
+        )
         run = await session.scalar(select(IngestionRun).where(IngestionRun.id == run_id).with_for_update())
         stage = await session.scalar(
             select(IngestionStage).where(IngestionStage.id == stage_id).with_for_update()
@@ -390,7 +428,9 @@ async def process_ingestion_event(ctx: dict[str, object], event_id: str) -> None
             await session.commit()
             return
         if (
-            source is None or source.status != "active"
+            source is None or source_projection is None or source.status != "active"
+            or source_projection.status != source.status
+            or source_projection.generation != source.generation
             or source.generation != int(event.payload.get("source_generation", source.generation))
         ):
             stage.status = "failed"
@@ -525,13 +565,19 @@ async def process_ingestion_event(ctx: dict[str, object], event_id: str) -> None
         if run_hint is None:
             return
         source = await sources.lock_source(session, run_hint.source_id)
+        source_projection = (
+            await sources.get_connector_source(session, run_hint.source_id) if source is not None else None
+        )
+        from modules.connectors import public as connectors
+
+        native_source = source_projection is not None and connectors.is_native_provider(source_projection.provider)
         run = await session.scalar(select(IngestionRun).where(IngestionRun.id == run_id).with_for_update())
         stage = await session.scalar(
             select(IngestionStage).where(IngestionStage.id == stage_id).with_for_update()
         )
         if stage is None or run is None:
             return
-        if source is None or source.status != "active" or source.generation != int(event.payload.get("source_generation", -1)):
+        if source is None or source_projection is None or source.status != "active" or source.generation != int(event.payload.get("source_generation", -1)):
             stage.status = "failed"
             stage.error_code = "source_unavailable"
             run.status = "failed"
@@ -554,7 +600,9 @@ async def process_ingestion_event(ctx: dict[str, object], event_id: str) -> None
             None,
         )
         state = await session.get(SourceIngestionState, run.source_id, with_for_update=True)
-        if state is not None and state.lease_run_id == run.id:
+        if native_source:
+            _update_native_run_lease(state, run.id, terminal=run.status in {"succeeded", "failed"})
+        elif state is not None and state.lease_run_id == run.id:
             state.lease_run_id = None
             state.lease_expires_at = None
         event_row = await session.get(EventOutbox, identifier, with_for_update=True)
@@ -566,7 +614,18 @@ async def process_ingestion_event(ctx: dict[str, object], event_id: str) -> None
 
 
 async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None:
-    """Materialize one bounded slice of accepted observations, resuming from PostgreSQL progress."""
+    """Materialize one bounded slice and retain native collection ownership until terminal.
+
+    PostgreSQL progress makes each slice resumable. For native providers, the
+    matching source run lease is renewed while work remains and released only
+    when normalization or its owning run becomes terminal; generic ingestion
+    keeps its existing lease lifecycle. Provider validation uses the detached
+    connector projection obtained under the source lock. Telegram selection
+    time must agree across its persisted record, raw Bot API clock, and selected
+    observation column before current-version ordering is authorized. Source
+    ownership is locked before run, stage, and progress rows, and a newer token
+    or run is never modified.
+    """
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     identifier = UUID(event_id)
     run_id: UUID | None = None
@@ -587,6 +646,12 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
                 await session.commit()
                 return
             source = await sources.lock_source(session, run_hint.source_id)
+            source_projection = (
+                await sources.get_connector_source(session, run_hint.source_id) if source is not None else None
+            )
+            from modules.connectors import public as connectors
+
+            native_source = source_projection is not None and connectors.is_native_provider(source_projection.provider)
             run = await session.scalar(
                 select(IngestionRun).where(IngestionRun.id == run_id).with_for_update()
             )
@@ -600,6 +665,9 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
             generation = int(event.payload.get("source_generation", -1)) if event is not None else -1
             if (
                 source is None or source.status != "active" or source.generation != generation
+                or source_projection is None
+                or source_projection.status != source.status
+                or source_projection.generation != source.generation
                 or run is None or stage is None or event is None
                 or stage.stage_key != "normalize" or run.id != stage.run_id
             ):
@@ -612,12 +680,18 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
                 if event is not None:
                     event.status = "failed"
                 if run is not None and stage is not None:
+                    if native_source:
+                        state = await session.get(SourceIngestionState, run.source_id, with_for_update=True)
+                        _update_native_run_lease(state, run.id, terminal=True)
                     await _commit_ingestion_change(session, run, stage)
                 else:
                     await session.commit()
                 return
             if stage.status == "succeeded":
                 event.status = "delivered"
+                if native_source:
+                    state = await session.get(SourceIngestionState, run.source_id, with_for_update=True)
+                    _update_native_run_lease(state, run.id, terminal=True)
                 await session.commit()
                 return
 
@@ -625,6 +699,10 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
             stage.lease_expires_at = datetime.now(UTC) + timedelta(seconds=STAGE_TIMEOUT_SECONDS)
             stage.error_code = None
             run.status = "running"
+            if native_source:
+                # Keep the reservation alive across each bounded normalization slice.
+                state = await session.get(SourceIngestionState, run.source_id, with_for_update=True)
+                _update_native_run_lease(state, run.id, terminal=False)
             rows = list((await session.execute(
                 select(ObservationNormalization, SourceObservation)
                 .join(SourceObservation, SourceObservation.id == ObservationNormalization.observation_id)
@@ -656,7 +734,9 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
                         progress.error_code = "source_generation_changed"
                         processed += 1
                         continue
-                    record = IngestionRecord.model_validate(observation.payload)
+                    persisted_payload = dict(observation.payload)
+                    native_telegram_envelope = persisted_payload.pop("_native_telegram", None)
+                    record = IngestionRecord.model_validate(persisted_payload)
                     if record.provider_id != observation.provider_id:
                         raise ValueError("Provider identity does not match accepted observation")
                     accepted_hash = hashlib.sha256(json.dumps(
@@ -666,6 +746,62 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
                     if accepted_hash != observation.record_hash:
                         raise ValueError("Accepted observation hash does not match its payload")
                     raw_metadata = record.metadata
+                    provider_record = None
+                    telegram_order = None
+                    provider_raw = raw_metadata.get("provider_record")
+                    if provider_raw is not None:
+                        from modules.knowledge.documents.schemas import (
+                            ProviderRecordMetadata, TelegramDocumentOrder,
+                        )
+
+                        provider_record = ProviderRecordMetadata.model_validate(provider_raw)
+                        if (
+                            provider_record.identity != record.provider_id
+                            or provider_record.provider_version != record.version
+                            or provider_record.provider != source_projection.provider
+                        ):
+                            raise ValueError("Typed provider provenance does not match the accepted source record")
+                        provider_field_keys = {
+                            "youtube": ("author", "summary", "title", "tags", "published_at", "provider_updated_at"),
+                            "arxiv": ("author", "authors", "categories", "tags", "summary", "title", "published_at", "provider_updated_at"),
+                            "huggingface": ("author", "tags", "pipeline_tag", "created_at", "last_modified"),
+                            "github_releases": ("node_id", "name", "body", "html_url", "tag_name", "draft", "prerelease", "author", "created_at", "published_at"),
+                            "github": ("record_type", "node_id", "html_url"),
+                            "telegram": (),
+                        }[provider_record.provider]
+                        source_fields = dict(provider_record.source_fields)
+                        for key in provider_field_keys:
+                            if key in raw_metadata and raw_metadata[key] is not None:
+                                source_fields[key] = raw_metadata[key]
+                        provider_record_data = provider_record.model_dump(mode="json")
+                        provider_record_data["source_fields"] = source_fields
+                        provider_record = ProviderRecordMetadata.model_validate(provider_record_data)
+                        if provider_record.provider == "telegram":
+                            detail = provider_record.telegram
+                            from modules.ingestion.schemas import TelegramDeliveryProof, TelegramRawDelivery
+
+                            if not isinstance(native_telegram_envelope, dict) or detail is None:
+                                raise ValueError("Persisted Telegram raw delivery proof is missing")
+                            proof = TelegramDeliveryProof.model_validate(native_telegram_envelope.get("proof"))
+                            raw = TelegramRawDelivery.model_validate(native_telegram_envelope.get("raw_update"))
+                            ingestion_api.validate_telegram_record_delivery(
+                                record, provider_record, proof, raw,
+                            )
+                            if observation.observed_at != record.observed_at:
+                                raise ValueError(
+                                    "Persisted observation selection clock differs from verified Telegram clock"
+                                )
+                            provider_record_data = provider_record.model_dump(mode="json")
+                            provider_record_data["telegram"]["raw_update_sha256"] = proof.raw_update_sha256
+                            provider_record = ProviderRecordMetadata.model_validate(provider_record_data)
+                            telegram_order = TelegramDocumentOrder(
+                                bot_id=detail.bot_id, epoch=detail.epoch,
+                                update_id=detail.update_id,
+                            )
+                        elif native_telegram_envelope is not None:
+                            raise ValueError("Telegram delivery proof is not valid for this provider")
+                    elif source_projection.provider in {"youtube", "arxiv", "huggingface", "github_releases", "github", "telegram"}:
+                        raise ValueError("Native provider record metadata is missing")
                     title_value = raw_metadata.get("title")
                     title = title_value.strip()[:500] if isinstance(title_value, str) and title_value.strip() else record.provider_id[:500]
                     raw_url = raw_metadata.get("canonical_url", raw_metadata.get("url"))
@@ -706,6 +842,8 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
                         "published_at": published_at.isoformat() if published_at else None,
                         "content_type": content_type, "metadata": safe_metadata,
                     }
+                    if provider_record is not None:
+                        provenance["provider_record"] = provider_record.model_dump(mode="json")
                     if scope is not None:
                         provenance["provider_scope_discriminator"] = scope.discriminator
                     result = await documents.upsert_normalized_document(
@@ -727,6 +865,7 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
                             content_type=content_type,
                             content=record.content,
                             provenance=provenance,
+                            telegram_order=telegram_order,
                         ),
                     )
                     progress.disposition = {
@@ -806,6 +945,12 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
                         session, source.id, source.generation, datetime.now(UTC), None
                     )
             extras = [*knowledge_changes]
+            if native_source:
+                state = await session.get(SourceIngestionState, run.source_id, with_for_update=True)
+                _update_native_run_lease(
+                    state, run.id,
+                    terminal=(not pending_count or run.status in {"succeeded", "failed"}),
+                )
             if processed or not pending_count:
                 await _commit_ingestion_change(session, run, stage, tuple(extras))
             else:
@@ -841,6 +986,18 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
                         event.next_attempt_at = stage.next_attempt_at
                         run.status = "queued"
                     stage.lease_expires_at = None
+                    source_projection = await sources.get_connector_source(session, hint.source_id)
+                    from modules.connectors import public as connectors
+
+                    if source_projection is not None and connectors.is_native_provider(source_projection.provider):
+                        state = await session.get(SourceIngestionState, run.source_id, with_for_update=True)
+                        _update_native_run_lease(
+                            state, run.id,
+                            terminal=(
+                                stage.status == "failed"
+                                or run.status in {"succeeded", "failed"}
+                            ),
+                        )
                     await _commit_ingestion_change(session, run, stage)
         raise Retry(defer=delay) from exc
 

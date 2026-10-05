@@ -173,6 +173,10 @@ async def process_document_ready(ctx: dict[str, object], event_id: str) -> None:
         )
         from modules.knowledge.temporal import public as temporal
         await temporal.schedule_version(session, ready)
+        # Deterministic provider mapping (no model egress, so also valid for local-only
+        # sources) shares this transaction and the source/document fences held above.
+        from modules.connectors import public as connectors
+        await connectors.map_github_version(session, ready)
         if ready.local_only:
             await timeline.block_local_only_extraction_work(session, timeline_work_id)
         await mark_event_delivered(session, event_uuid)
@@ -221,6 +225,19 @@ async def recover_entity_extraction_work(ctx: dict[str, object]) -> int:
                 work.lease_owner = None
                 work.lease_expires_at = None
                 work.dependency_fingerprint = None
+            # Idempotent self-heal: re-run deterministic provider mapping for every ready
+            # current version (covers pre-T3 versions and earlier failed attempts).
+            from modules.connectors import public as connectors
+            # Own savepoint plus catch-all: an unexpected mapper error must neither wedge recovery
+            # for other sources nor roll back this version's extraction scheduling above.
+            try:
+                async with session.begin_nested():
+                    await connectors.map_github_version(session, current)
+            except Exception as exc:
+                logger.warning(
+                    "github mapping recovery failed for version %s (%s)",
+                    ref.document_version_id, type(exc).__name__,
+                )
             await session.commit()
     async with factory() as session:
         blocked_items = await entities.list_blocked_extraction_work(session, limit=25)

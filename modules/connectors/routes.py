@@ -1,12 +1,15 @@
-from typing import Annotated, Any
-from datetime import UTC, datetime
+from typing import Annotated, Any, Awaitable, Literal, TypeVar
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 import hashlib
+import asyncio
+import secrets
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from core.auth.dependencies import require_owner_write
 from core.auth.models import AuthSession
@@ -25,13 +28,29 @@ from modules.connectors.public import (
     update_agent_browser_grant_in_uow,
     validate_public_url,
     save_connector_configuration,
+    serialize_source_configuration,
+    is_native_provider,
+    ProviderRateLimited,
+    get_native_credential_snapshot,
+    wake_packaged_collection,
 )
 from modules.connectors import mcp as mcp_collection
 from modules.connectors import registry
 from modules.connectors import provisioning
-from modules.connectors.n8n import workflow_webhook_path
+from modules.connectors.github import oauth as github_oauth
+from modules.connectors.github.adapter import collect_github_segment
+from modules.connectors.github.schemas import GitHubHintClaimProof, project_github_source_config
+from modules.connectors.github.sync import validate_github_segment
+from modules.connectors.models import GithubOAuthGrant
 from modules.ingestion import public as ingestion
 from modules.ingestion.schemas import Receipt, ReceiveBatch
+from modules.ingestion.schemas import (
+    ConnectorCollectionLease,
+    NativeCollectionBatch,
+    NativeCollectionReceipt,
+    TelegramCursor,
+    classify_telegram_probe,
+)
 from modules.sources import public as sources
 from modules.sources.schemas import ConnectorSource
 
@@ -132,6 +151,79 @@ async def update_agent_browser_grant(
     return {"available": True, **scope.__dict__}
 
 
+class ProviderFetchRequest(BaseModel):
+    """Accept only source-generation and connector-revision fences from n8n."""
+    model_config = ConfigDict(extra="forbid")
+
+    source_generation: int = Field(ge=1)
+    connector_revision: int = Field(ge=1)
+
+
+class ProviderFetchRead(BaseModel):
+    """Expose durable provider receipt status without content, cursor, or credential material."""
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["succeeded", "queued", "no_changes", "rate_limited"]
+    batch_id: UUID | None = None
+    run_id: UUID | None = None
+    received_update_count: int = Field(ge=0, le=500)
+    record_count: int = Field(ge=0, le=500)
+    coverage: Literal["returned_snapshot", "pending_updates_only", "truncated"]
+    next_eligible_at: datetime | None = None
+
+    @field_validator("next_eligible_at")
+    @classmethod
+    def aware_deadline(cls, value: datetime | None) -> datetime | None:
+        """Reject naive retry times so clients do not misread provider deadlines."""
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("next_eligible_at must be timezone-aware")
+        return value.astimezone(UTC) if value is not None else None
+
+
+class ProviderAdmissionBusy(RuntimeError):
+    """Signal that the shared single-provider network permit is held by another collector."""
+
+
+_T = TypeVar("_T")
+
+
+async def _await_with_github_segment_deadline(
+    operation: Awaitable[_T], *, deadline: float | None
+) -> _T:
+    """Bound one pre-lease await by the shared GitHub segment deadline.
+
+    A missing deadline leaves other providers' admission behavior unchanged. When the
+    deadline expires, the awaited operation is cancelled and its caller rolls back;
+    after lease acquisition, the route releases only the exact active lease token.
+    """
+    if deadline is None:
+        return await operation
+    remaining = deadline - asyncio.get_running_loop().time()
+    if remaining <= 0:
+        raise TimeoutError
+    return await asyncio.wait_for(operation, timeout=remaining)
+
+
+async def _release_failed_collection(
+    session: AsyncSession,
+    lease: ConnectorCollectionLease,
+    *,
+    error_code: str,
+) -> None:
+    """Best-effort release after failure without masking the original outcome.
+
+    Rollback clears failed SQLAlchemy transaction state before the ingestion
+    owner checks the lease token. Cleanup is bounded; an unreleased reservation
+    still expires under its existing lease policy.
+    """
+    try:
+        async with asyncio.timeout(3):
+            await session.rollback()
+            await ingestion.release_connector_collection(session, lease, error_code=error_code)
+    except BaseException:
+        return
+
+
 async def _source(session: AsyncSession, source_id: UUID) -> ConnectorSource:
     """Load the connector source projection or raise HTTP 404."""
     source = await sources.get_connector_source(session, source_id)
@@ -152,17 +244,498 @@ async def _collector(
     return token
 
 
+async def _provider_cooldown(request: Request, provider: str) -> datetime | None:
+    """Read the fixed-provider shared retry deadline; Redis failure closes collection."""
+    try:
+        raw = await request.app.state.redis.get(f"connectors:provider:cooldown:{provider}")
+        if raw is None:
+            return None
+        milliseconds = int(raw)
+        return datetime.fromtimestamp(milliseconds / 1000, UTC) if milliseconds > 0 else None
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="provider_rate_state_unavailable") from exc
+
+
+async def _extend_provider_cooldown(request: Request, provider: str, deadline: datetime) -> datetime:
+    """Atomically retain the later UTC deadline across all sources using one fixed provider."""
+    if deadline.tzinfo is None or deadline.utcoffset() is None:
+        raise ValueError("Provider retry deadline must be timezone-aware")
+    deadline_ms = int(deadline.astimezone(UTC).timestamp() * 1000)
+    now_ms = int(datetime.now(UTC).timestamp() * 1000)
+    script = """
+local current = tonumber(redis.call('GET', KEYS[1]) or '0')
+local incoming = tonumber(ARGV[1])
+if incoming > current then
+  local ttl = incoming - tonumber(ARGV[2])
+  if ttl < 1 then ttl = 1 end
+  redis.call('SET', KEYS[1], ARGV[1], 'PX', ttl)
+  current = incoming
+end
+return current
+"""
+    try:
+        stored = int(await request.app.state.redis.eval(
+            script, 1, f"connectors:provider:cooldown:{provider}", deadline_ms, now_ms
+        ))
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="provider_rate_state_unavailable") from exc
+    return datetime.fromtimestamp(stored / 1000, UTC)
+
+
+async def _acquire_github_network_permit(request: Request) -> str | None:
+    """Acquire one cluster-shared GitHub network slot with an expiry beyond the segment deadline."""
+    token = secrets.token_urlsafe(24)
+    try:
+        acquired = await request.app.state.redis.set("connectors:provider:active:github", token, nx=True, ex=75)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="provider_admission_unavailable") from exc
+    return token if acquired else None
+
+
+async def _release_github_network_permit(request: Request, token: str) -> None:
+    """Release only the GitHub network slot still owned by this collector token."""
+    script = "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end"
+    try:
+        await request.app.state.redis.eval(script, 1, "connectors:provider:active:github", token)
+    except Exception:
+        # The bounded permit expires automatically; never release another collector's token.
+        return
+
+
+def _provider_fetch_read(receipt: NativeCollectionReceipt, next_eligible_at: datetime | None = None) -> ProviderFetchRead:
+    """Project the durable receipt into the content-free n8n wire response."""
+    return ProviderFetchRead(
+        status=receipt.status,
+        batch_id=receipt.batch_id,
+        run_id=receipt.run_id,
+        received_update_count=receipt.received_update_count,
+        record_count=receipt.record_count,
+        coverage=receipt.coverage,
+        next_eligible_at=next_eligible_at or receipt.next_eligible_at,
+    )
+
+
+@router.post("/{source_id}/provider-fetch", response_model=ProviderFetchRead)
+async def fetch_native_provider(
+    source_id: UUID,
+    payload: ProviderFetchRequest,
+    session: Session,
+    request: Request,
+    authorization: Annotated[str | None, Header()] = None,
+) -> ProviderFetchRead:
+    """Collect one bounded native page under bearer, source, revision, and durable lease fences.
+
+    Shared provider cooldowns return before reserving a lease. A provider retry
+    deadline releases the active reservation and returns rate_limited without
+    publishing ingestion receipt, cursor, or success health. Telegram pagination
+    updates active_lease after each accepted page so failures and cancellation can
+    release the current reservation rather than an already-consumed token. GitHub's
+    single 60-second segment deadline starts before connector fencing and covers
+    cooldown, admission, reservation, one selected GET, and receipt acceptance. A due durable
+    hint may select one current-object GET; only its proof and exact claim can acknowledge it.
+    GitHub requests decrypt only a source/revision-bound grant, hold one cluster-shared
+    network permit, and revalidate raw proof in Ingestion before durable acceptance.
+    """
+    collector_token = await _collector(session, source_id, authorization)
+    source = await _source(session, source_id)
+    segment_deadline = (
+        asyncio.get_running_loop().time() + 60 if source.provider == "github" else None
+    )
+    if not is_native_provider(source.provider):
+        raise HTTPException(status_code=409, detail="Native provider is not configured")
+    try:
+        registry.validate(source)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail="Provider configuration is invalid") from exc
+    try:
+        if not await _await_with_github_segment_deadline(
+            provisioning.require_collection_fence(
+                session, source, payload.source_generation,
+                payload.connector_revision, lock=True,
+            ),
+            deadline=segment_deadline,
+        ):
+            raise HTTPException(status_code=409, detail="Connector collection fence is stale")
+        await _await_with_github_segment_deadline(
+            session.rollback(), deadline=segment_deadline
+        )
+        now = datetime.now(UTC)
+        cooldown = await _await_with_github_segment_deadline(
+            _provider_cooldown(request, source.provider), deadline=segment_deadline
+        )
+        if cooldown is not None and cooldown > now:
+            return ProviderFetchRead(
+                status="rate_limited", batch_id=None, run_id=None,
+                received_update_count=0, record_count=0,
+                coverage="pending_updates_only" if source.provider == "telegram" else "returned_snapshot",
+                next_eligible_at=cooldown,
+            )
+        lease = await _await_with_github_segment_deadline(
+            ingestion.acquire_connector_collection(
+                session,
+                source_id=source_id,
+                source_generation=payload.source_generation,
+                connector_revision=payload.connector_revision,
+                collector_token=collector_token,
+            ),
+            deadline=segment_deadline,
+        )
+    except TimeoutError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=503, detail="Provider collection admission exceeded its deadline") from exc
+    active_lease = [lease]
+    github_binding: tuple[UUID, int] | None = None
+    github_permit_token: str | None = None
+    github_hint_claim = None
+    if source.provider == "github":
+        from modules.connectors import public as connectors
+
+        try:
+            github_hint_claim = await _await_with_github_segment_deadline(
+                connectors.claim_github_hint(
+                    session, source_id=source.id, source_generation=payload.source_generation,
+                    connector_revision=payload.connector_revision,
+                ),
+                deadline=segment_deadline,
+            )
+        except BaseException:
+            await _release_failed_collection(
+                session, active_lease[0], error_code="provider_collection_failed"
+            )
+            raise
+    try:
+        collection_timeout = (
+            asyncio.timeout_at(segment_deadline)
+            if segment_deadline is not None else asyncio.timeout(60)
+        )
+        async with collection_timeout:
+            if source.provider == "telegram":
+                receipt, eligible = await _collect_telegram_page(
+                    session, request, source, lease, collector_token, active_lease,
+                )
+                if isinstance(receipt, ProviderFetchRead):
+                    return receipt
+            else:
+                collected_at = datetime.now(UTC)
+                github_proof = None
+                github_validated = None
+                if source.provider in {"youtube", "arxiv"}:
+                    from modules.connectors.providers.feed_catalog import collect_provider_feed
+
+                    page = await collect_provider_feed(
+                        source, collected_at=collected_at,
+                        session_factory=request.app.state.session_factory,
+                    )
+                elif source.provider == "huggingface":
+                    from modules.connectors.providers.research import collect_huggingface_models
+
+                    page = await collect_huggingface_models(source, collected_at=collected_at)
+                elif source.provider == "github":
+                    from modules.connectors import public as connectors
+
+                    fence = await connectors.get_github_binding_fence(
+                        session, source.id, source_generation=payload.source_generation,
+                        connector_revision=payload.connector_revision, lock=True,
+                    )
+                    if fence is None:
+                        raise HTTPException(status_code=409, detail="GitHub grant is expired or requires reconnection")
+                    grant = await session.scalar(
+                        select(GithubOAuthGrant).where(GithubOAuthGrant.source_id == source.id).with_for_update()
+                    )
+                    if (
+                        grant is None or grant.state != "ready" or grant.encrypted_tokens is None
+                        or grant.source_generation != source.generation
+                        or grant.configuration_revision != payload.connector_revision
+                        or grant.expires_at is None or grant.expires_at <= datetime.now(UTC)
+                    ):
+                        raise HTTPException(status_code=409, detail="GitHub grant is expired or requires reconnection")
+                    token_revision = grant.token_revision
+                    grant_operation = grant.operation_id
+                    repo_id = grant.repository_id
+                    key = request.app.state.settings.connector_credential_encryption_key.get_secret_value()
+                    token_pair = github_oauth._open_token_cipher(
+                        key, grant.encrypted_tokens, source.id, grant.operation_id,
+                        grant.source_generation, grant.configuration_revision,
+                    )
+                    access_token = token_pair.get("access_token")
+                    if not isinstance(access_token, str) or not access_token:
+                        raise ValueError("github_grant_unavailable")
+                    github_binding = (grant_operation, token_revision)
+                    github_config = project_github_source_config(source.configuration)
+                    await session.rollback()
+                    async def before_github_request() -> None:
+                        """Recheck source, connector, grant and provider cooldown before the single GitHub GET."""
+                        cooldown_at = await _provider_cooldown(request, "github")
+                        if cooldown_at is not None and cooldown_at > datetime.now(UTC):
+                            raise ProviderRateLimited(cooldown_at)
+                        current_source = await sources.lock_source(session, source.id)
+                        valid_fence = bool(
+                            current_source is not None
+                            and current_source.status == "active"
+                            and current_source.generation == payload.source_generation
+                            and await provisioning.require_collection_fence(
+                                session, source, payload.source_generation,
+                                payload.connector_revision, lock=True,
+                            )
+                        )
+                        current_binding = await connectors.get_github_binding_fence(
+                            session, source.id, source_generation=payload.source_generation,
+                            connector_revision=payload.connector_revision, lock=True,
+                        ) if valid_fence else None
+                        await session.rollback()
+                        if not valid_fence or current_binding != fence:
+                            raise HTTPException(status_code=409, detail="GitHub source or grant changed during collection")
+                        nonlocal github_permit_token
+                        github_permit_token = await _acquire_github_network_permit(request)
+                        if github_permit_token is None:
+                            raise ProviderAdmissionBusy("GitHub provider slot is busy")
+
+                    github_proof = await collect_github_segment(
+                        github_config, access_token, fence=fence,
+                        cursor_before=lease.cursor_before, collected_at=collected_at,
+                        before_request=before_github_request,
+                        hint_claim=(
+                            GitHubHintClaimProof.model_validate(github_hint_claim.model_dump(mode="python"))
+                            if github_hint_claim is not None else None
+                        ),
+                    )
+                    github_validated = validate_github_segment(
+                        fence, github_config, lease.cursor_before, github_proof,
+                        collected_at=collected_at,
+                    )
+                    page = None
+                else:
+                    from modules.connectors.providers.social import collect_github_releases
+
+                    page = await collect_github_releases(source, collected_at=collected_at)
+                eligible = None
+                if page is not None and page.next_eligible_at is not None:
+                    eligible = await _extend_provider_cooldown(request, source.provider, page.next_eligible_at)
+                    # Rate limited pages never publish an ingestion receipt, cursor, or success health.
+                    await ingestion.release_connector_collection(
+                        session, lease, error_code="provider_rate_limited"
+                    )
+                    return ProviderFetchRead(
+                        status="rate_limited", batch_id=None, run_id=None,
+                        received_update_count=0, record_count=0,
+                        coverage=page.coverage, next_eligible_at=eligible,
+                    )
+                if github_binding is not None:
+                    current_source = await sources.lock_source(session, source.id)
+                    current_fence = False
+                    if current_source is not None and current_source.status == "active" and current_source.generation == payload.source_generation:
+                        current_fence = await provisioning.require_collection_fence(
+                            session, source, payload.source_generation, payload.connector_revision, lock=True
+                        )
+                    current_grant = await session.scalar(
+                        select(GithubOAuthGrant).where(GithubOAuthGrant.source_id == source.id).with_for_update()
+                    )
+                    if (
+                        current_source is None or current_source.status != "active"
+                        or current_source.generation != payload.source_generation
+                        or not current_fence
+                        or current_grant is None or current_grant.state != "ready"
+                        or current_grant.operation_id != github_binding[0]
+                        or current_grant.token_revision != github_binding[1]
+                        or current_grant.expires_at is None or current_grant.expires_at <= datetime.now(UTC)
+                    ):
+                        raise HTTPException(status_code=409, detail="GitHub grant or source changed during collection")
+                native_batch = NativeCollectionBatch(
+                    source_id=source.id,
+                    source_generation=source.generation,
+                    connector_revision=payload.connector_revision,
+                    lease_token=lease.token,
+                    cursor_before=lease.cursor_before,
+                    cursor_after=github_validated.cursor_after if github_validated is not None else lease.cursor_before,
+                    records=list(github_validated.records if github_validated is not None else page.records), telegram_deliveries=(),
+                    telegram_raw_deliveries=(), coverage=github_validated.coverage if github_validated is not None else page.coverage,
+                    github_segment=github_proof,
+                    collected_at=collected_at,
+                )
+                receipt = await ingestion.accept_native_collection(
+                    session, native_batch, collector_token=collector_token,
+                )
+                return _provider_fetch_read(receipt, eligible)
+        return _provider_fetch_read(receipt, eligible)
+    except ProviderAdmissionBusy:
+        eligible = datetime.now(UTC) + timedelta(seconds=1)
+        await _release_failed_collection(
+            session, active_lease[0], error_code="provider_admission_busy"
+        )
+        return ProviderFetchRead(
+            status="rate_limited", batch_id=None, run_id=None,
+            received_update_count=0, record_count=0,
+            coverage="returned_snapshot", next_eligible_at=eligible,
+        )
+    except ProviderRateLimited as exc:
+        deadline = await _extend_provider_cooldown(request, source.provider, exc.next_eligible_at)
+        await _release_failed_collection(
+            session, active_lease[0], error_code="provider_rate_limited"
+        )
+        return ProviderFetchRead(
+            status="rate_limited", batch_id=None, run_id=None,
+            received_update_count=0, record_count=0,
+            coverage="pending_updates_only" if source.provider == "telegram" else "returned_snapshot",
+            next_eligible_at=deadline,
+        )
+    except HTTPException:
+        await _release_failed_collection(
+            session, active_lease[0], error_code="provider_collection_failed"
+        )
+        raise
+    except (TimeoutError, httpx.HTTPError, ValueError) as exc:
+        await _release_failed_collection(
+            session, active_lease[0], error_code="provider_collection_failed"
+        )
+        raise HTTPException(status_code=503, detail="Provider collection failed") from exc
+    except BaseException:
+        await _release_failed_collection(
+            session, active_lease[0], error_code="provider_collection_failed"
+        )
+        raise
+    finally:
+        if github_permit_token is not None:
+            await _release_github_network_permit(request, github_permit_token)
+
+
+async def _collect_telegram_page(
+    session: AsyncSession,
+    request: Request,
+    source: ConnectorSource,
+    lease: ConnectorCollectionLease,
+    collector_token: str,
+    active_lease: list[ConnectorCollectionLease],
+) -> tuple[NativeCollectionReceipt | ProviderFetchRead, datetime | None]:
+    """Probe Telegram without an offset and continue only after durable page receipts.
+
+    Update active_lease whenever continuation reserves a new page; this lets the
+    route release the matching reservation on provider errors or cancellation.
+    A provider retry deadline is shared across Telegram sources and ends the run
+    without accepting a page or advancing its cursor.
+    """
+    from modules.connectors.credentials import decrypt_native_token
+    from modules.connectors.providers.telegram import fetch_telegram_updates, map_telegram_update
+
+    snapshot = await get_native_credential_snapshot(
+        session, source.id, source_generation=lease.source_generation,
+        connector_revision=lease.connector_revision,
+    )
+    if snapshot is None or snapshot.state != "ready" or not snapshot.encrypted_token or not snapshot.verified_bot_id:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="Native Telegram credential is not ready")
+    try:
+        token = decrypt_native_token(
+            request.app.state.settings.connector_credential_encryption_key.get_secret_value(), snapshot
+        )
+    except Exception as exc:
+        await session.rollback()
+        raise HTTPException(status_code=503, detail="Native Telegram credential is unavailable") from exc
+    await session.rollback()
+    cursor = await ingestion.read_telegram_collection_state(session, lease)
+    offset: int | None = None
+    total_updates = 0
+    total_transport_bytes = 0
+    last_receipt: NativeCollectionReceipt | None = None
+    for page_number in range(5):
+        remaining_bytes = 25 * 1024 * 1024 - total_transport_bytes
+        if remaining_bytes <= 0:
+            raise HTTPException(status_code=422, detail="Telegram trigger byte limit exceeded")
+        try:
+            page = await fetch_telegram_updates(
+                token, offset=offset,
+                remaining_bytes=min(10 * 1024 * 1024, remaining_bytes),
+            )
+        except ProviderRateLimited as exc:
+            deadline = await _extend_provider_cooldown(request, source.provider, exc.next_eligible_at)
+            await ingestion.release_connector_collection(
+                session, lease, error_code="provider_rate_limited"
+            )
+            return ProviderFetchRead(
+                status="rate_limited", batch_id=None, run_id=None,
+                received_update_count=0, record_count=0,
+                coverage="pending_updates_only", next_eligible_at=deadline,
+            ), deadline
+        if page.transport_bytes > remaining_bytes:
+            raise HTTPException(status_code=422, detail="Telegram trigger byte limit exceeded")
+        total_transport_bytes += page.transport_bytes
+        if total_updates + len(page.deliveries) > 500:
+            raise HTTPException(status_code=422, detail="Telegram trigger update limit exceeded")
+        total_updates += len(page.deliveries)
+        classification = classify_telegram_probe(
+            cursor, page.deliveries, received_at=page.collected_at,
+            verified_bot_id=snapshot.verified_bot_id,
+        )
+        if classification.conflict_code is not None:
+            raise HTTPException(status_code=409, detail="telegram_stream_conflict")
+        replay_ids = set(classification.replay_update_ids)
+        if page.deliveries and len(replay_ids) == len(page.deliveries):
+            await ingestion.release_connector_collection(session, lease, error_code=None)
+            if page_number == 4 or cursor is None or cursor.last_update_id >= 2**63 - 1:
+                return NativeCollectionReceipt(
+                    batch_id=None, run_id=None, status="succeeded", received_update_count=0,
+                    record_count=0, coverage="pending_updates_only", cursor_after=lease.cursor_before,
+                ), None
+            lease = await ingestion.acquire_connector_collection(
+                session, source_id=source.id, source_generation=lease.source_generation,
+                connector_revision=lease.connector_revision, collector_token=collector_token,
+            )
+            active_lease[0] = lease
+            offset = cursor.last_update_id + 1
+            continue
+        proof_by_id = {proof.update_id: proof for proof in classification.delivery_proofs}
+        records = [
+            record for delivery in page.deliveries if delivery.update_id not in replay_ids
+            if (record := map_telegram_update(
+                delivery.update, allowed_chat_ids=frozenset(source.configuration["telegram_chat_ids"]),
+                proof=proof_by_id[delivery.update_id], collected_at=page.collected_at,
+            )) is not None
+        ]
+        cursor_after = (
+            classification.cursor_after.model_dump_json()
+            if classification.cursor_after is not None else lease.cursor_before
+        )
+        native_batch = NativeCollectionBatch(
+            source_id=source.id, source_generation=lease.source_generation,
+            connector_revision=lease.connector_revision, lease_token=lease.token,
+            cursor_before=lease.cursor_before, cursor_after=cursor_after, records=records,
+            telegram_deliveries=classification.delivery_proofs,
+            telegram_raw_deliveries=page.deliveries, coverage="pending_updates_only",
+            collected_at=page.collected_at,
+        )
+        last_receipt = await ingestion.accept_native_collection(
+            session, native_batch, collector_token=collector_token,
+        )
+        if records or not page.deliveries or page_number == 4 or total_updates >= 500:
+            return last_receipt, None
+        cursor = classification.cursor_after
+        if cursor is None or cursor.last_update_id >= 2**63 - 1:
+            return last_receipt, None
+        lease = await ingestion.acquire_connector_collection(
+            session, source_id=source.id, source_generation=lease.source_generation,
+            connector_revision=lease.connector_revision, collector_token=collector_token,
+        )
+        active_lease[0] = lease
+        offset = cursor.last_update_id + 1
+    if last_receipt is None:
+        raise HTTPException(status_code=503, detail="Telegram collection did not produce a receipt")
+    return last_receipt, None
+
+
 @router.put("/{source_id}/configuration", response_model=ConnectorState)
 async def configure_source(
     source_id: UUID, payload: ConnectorConfigurationRequest, session: Session, _owner: OwnerWrite
 ) -> ConnectorState:
-    """Validate and persist connector settings using owner-write authorization."""
+    """Validate and persist generic RSS/Web/REST settings; named native sources use revisioned provider settings."""
     source = await _source(session, source_id)
+    if is_native_provider(source.provider):
+        raise HTTPException(status_code=409, detail="Use provider settings to configure a native source")
     if source.type not in registry.SUPPORTED_TYPES:
         raise HTTPException(status_code=422, detail="This source type has no packaged connector")
-    candidate = source.model_copy(
-        update={"configuration": payload.configuration.model_dump(mode="json", exclude_none=True)}
-    )
+    try:
+        source_configuration = serialize_source_configuration(source, payload.configuration)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Provider configuration is invalid") from exc
+    candidate = source.model_copy(update={"configuration": source_configuration})
     try:
         data = registry.validate(candidate)
     except ValueError as exc:
@@ -201,7 +774,11 @@ async def trigger_collection(
     request: Request,
     _owner: OwnerWrite,
 ) -> ManualSyncResult:
-    """Queue a manual collection run for an active supported connector."""
+    """Invoke the packaged n8n wake after source authorization and applied-revision checks.
+
+    The Connectors public owner repeats the source/provisioning fence and releases database locks
+    before network I/O. The actual provider fetch still uses n8n's packaged collector credential.
+    """
     source = await _source(session, source_id)
     settings = request.app.state.settings
     if source.type == mcp_collection.PROVIDER_ID:
@@ -221,49 +798,38 @@ async def trigger_collection(
     if source.status != "active" or source.type not in {"rss", "web", "api"}:
         raise HTTPException(status_code=409, detail="Active packaged connector required")
     provisioned = await provisioning.activation_status(session, source_id)
-    if (
-        provisioned is None
-        or provisioned.state != "active"
+    if (provisioned is None or provisioned.state != "active"
         or provisioned.applied_revision != provisioned.desired_revision
-        or provisioned.source_generation != source.generation
-    ):
+        or provisioned.source_generation != source.generation):
         raise HTTPException(status_code=409, detail="Enable this source from connector settings before collecting")
-    if not await provisioning.require_collection_fence(
-        session, source, source.generation, provisioned.desired_revision, lock=True
-    ):
+    revision = provisioned.desired_revision
+    if not await provisioning.require_collection_fence(session, source, source.generation, revision, lock=True):
         raise HTTPException(status_code=409, detail="Connector collection fence is stale")
-    await session.rollback()
-    token = settings.n8n_webhook_token.get_secret_value()
-    if not token:
+    if not is_native_provider(source.provider):
+        try:
+            data = registry.validate(source)
+            await validate_public_url(data["url"])
+        except (KeyError, ValueError, TypeError) as exc:
+            raise HTTPException(status_code=409, detail="Configure and validate the connector before syncing") from exc
+    result = await wake_packaged_collection(
+        session, source_id=source_id, source_generation=source.generation,
+        connector_revision=revision, settings=settings, timeout_seconds=75,
+    )
+    if result.outcome == "acknowledged":
+        return ManualSyncResult(run_id=result.run_id, batch_id=result.batch_id, status=result.status or "queued")
+    if result.outcome == "deferred":
+        raise HTTPException(status_code=409, detail="A collection wake is already pending")
+    if not settings.n8n_webhook_token.get_secret_value():
         raise HTTPException(status_code=503, detail="Manual n8n trigger authentication is not configured")
-    try:
-        data = registry.validate(source)
-        await validate_public_url(data["url"])
-    except (KeyError, ValueError, TypeError) as exc:
-        raise HTTPException(status_code=409, detail="Configure and validate the connector before syncing") from exc
-    try:
-        async with httpx.AsyncClient(timeout=75, trust_env=False) as client:
-            response = await client.post(
-                f"{str(settings.n8n_service_url).rstrip('/')}/webhook/{workflow_webhook_path(source_id, source.type)}",
-                json={
-                    "source_id": str(source_id),
-                    "source_generation": source.generation,
-                    "connector_revision": provisioned.desired_revision,
-                },
-                headers={"X-BBD-Webhook-Token": token},
-            )
-            response.raise_for_status()
-        return ManualSyncResult.model_validate(response.json())
-    except (httpx.HTTPError, ValueError) as exc:
-        if await sources.record_collection_result(
-            session, source_id, source.generation, datetime.now(UTC), "n8n_unavailable"
-        ):
-            current = await sources.lock_source(session, source_id)
-            drafts = [
-                make_source_change(current.id, current.generation, current.status)
-            ] if current is not None else []
-            await commit_with_replay(session, drafts)
-        raise HTTPException(status_code=503, detail="n8n collection workflow is unavailable or failed") from exc
+    if await sources.record_collection_result(
+        session, source_id, source.generation, datetime.now(UTC), "n8n_unavailable"
+    ):
+        current = await sources.lock_source(session, source_id)
+        drafts = [make_source_change(current.id, current.generation, current.status)] if current is not None else []
+        await commit_with_replay(session, drafts)
+    if result.outcome == "ambiguous":
+        raise HTTPException(status_code=503, detail="n8n collection wake outcome is unknown")
+    raise HTTPException(status_code=503, detail="n8n collection workflow is unavailable or failed")
 
 
 @router.post("/{source_id}/validate", response_model=ConnectorState)
@@ -273,9 +839,11 @@ async def validate_source(
     payload: CollectionFence,
     authorization: Annotated[str | None, Header()] = None,
 ) -> ConnectorState:
-    """Validate an authorized source's connector configuration and URL policy."""
+    """Validate only generic collector configuration; native providers use owner draft validation."""
     await _collector(session, source_id, authorization)
     source = await _source(session, source_id)
+    if is_native_provider(source.provider):
+        raise HTTPException(status_code=409, detail="native_collection_required")
     if not await provisioning.require_validation_fence(
         session, source, payload.source_generation, payload.connector_revision
     ):
@@ -309,9 +877,11 @@ async def preview_rss(
     connector_revision: int,
     authorization: Annotated[str | None, Header()] = None,
 ) -> ConnectorPreview:
-    """Fetch and return a bounded RSS preview for an authorized source."""
+    """Fetch a bounded generic RSS preview, excluding feeds owned by named native adapters."""
     await _collector(session, source_id, authorization)
     source = await _source(session, source_id)
+    if is_native_provider(source.provider):
+        raise HTTPException(status_code=409, detail="native_collection_required")
     if not await provisioning.require_collection_fence(
         session, source, source_generation, connector_revision, lock=True
     ):
@@ -358,9 +928,11 @@ async def receive_connector_batch(
     session: Session,
     authorization: Annotated[str | None, Header()] = None,
 ) -> Receipt:
-    """Accept a connector batch after bearer token and source fencing checks."""
+    """Accept only generic collector batches after bearer and revision checks; native writes use owner receipt APIs."""
     collector_token = await _collector(session, source_id, authorization)
     source = await _source(session, source_id)
+    if is_native_provider(source.provider):
+        raise HTTPException(status_code=409, detail="native_collection_required")
     if not await provisioning.require_collection_fence(
         session, source, payload.source_generation, payload.connector_revision, lock=True
     ):
@@ -391,9 +963,11 @@ async def acknowledge_no_changes(
     session: Session,
     authorization: Annotated[str | None, Header()] = None,
 ) -> ManualSyncResult:
-    """Record a successful collection that did not produce new observations."""
+    """Record only generic collector no-change status; native providers persist a native receipt and cursor atomically."""
     await _collector(session, source_id, authorization)
     source = await _source(session, source_id)
+    if is_native_provider(source.provider):
+        raise HTTPException(status_code=409, detail="native_collection_required")
     if not await provisioning.require_collection_fence(
         session, source, payload.source_generation, payload.connector_revision, lock=True
     ):
@@ -424,7 +998,7 @@ async def submit_crawl(
     await _collector(session, source_id, authorization)
     settings = request.app.state.settings
     source = await _source(session, source_id)
-    if source.type != "web" or not await provisioning.require_collection_fence(
+    if source.type != "web" or is_native_provider(source.provider) or not await provisioning.require_collection_fence(
         session, source, payload.source_generation, payload.connector_revision, lock=True
     ):
         raise HTTPException(status_code=409, detail="Active web source required")

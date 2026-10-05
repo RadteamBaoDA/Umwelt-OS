@@ -23,6 +23,7 @@ export const RENDERER_MIN_SIZES: Record<string, { minW: number; minH: number }> 
   daily_brief: { minW: 6, minH: 4 },
   weather: { minW: 4, minH: 3 },
   research: { minW: 4, minH: 4 },
+  github_project: { minW: 6, minH: 4 },
 };
 
 /** Default fallback minimum size if renderer is unlisted. */

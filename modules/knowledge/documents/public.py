@@ -2,6 +2,8 @@ import base64
 import binascii
 import hashlib
 from collections.abc import Sequence
+import json
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
@@ -21,7 +23,9 @@ from modules.knowledge.documents.models import (
 )
 from modules.knowledge.documents.schemas import (
     DocumentCreate, DocumentPatch, EvidenceReferenceRead, NormalizedDocumentInput,
-    NormalizedDocumentResult,
+    NormalizedDocumentResult, ProviderDocumentSnapshotList,
+    ProviderDocumentSnapshotRead, ProviderRecordMetadata, PROVIDER_IDS,
+    TelegramDocumentOrder,
 )
 from modules.sources import public as sources
 from modules.sources.models import Source
@@ -36,6 +40,164 @@ class ExtractionInputLimitError(ValueError):
     Scheduling owners may persist blocked work while acknowledging canonical
     readiness. Existing ValueError handlers retain their validation behavior.
     """
+
+
+def _provider_snapshot(
+    document: Document,
+    version: DocumentVersion,
+    source: Source,
+    provenance: NormalizedVersionProvenance | None,
+) -> ProviderDocumentSnapshotRead:
+    """Project immutable version provenance, marking legacy mutable fallback clearly."""
+    metadata = None
+    if provenance is not None:
+        raw_metadata = dict(provenance.provenance_json)
+        raw_provider = raw_metadata.get("provider_record")
+        if raw_provider is not None:
+            metadata = ProviderRecordMetadata.model_validate(raw_provider)
+        title = provenance.title
+        canonical_url = provenance.canonical_url
+        published_at = provenance.published_at
+        provider_id = provenance.provider_id
+        provider_version = provenance.provider_version
+        observed_at = provenance.selection_observed_at
+        received_at = provenance.received_at
+        collected_at = provenance.collected_at
+        snapshot = True
+    else:
+        title = document.title
+        canonical_url = document.canonical_url
+        published_at = document.published_at
+        provider_id = document.external_id or ""
+        provider_version = None
+        observed_at = version.observed_at
+        received_at = collected_at = None
+        snapshot = False
+    return ProviderDocumentSnapshotRead(
+        document_id=document.id,
+        document_version_id=version.id,
+        version_number=version.version_number,
+        source_id=source.id,
+        source_status=source.status,
+        provider_id=provider_id,
+        provider_version=provider_version,
+        title=title,
+        canonical_url=canonical_url,
+        published_at=published_at,
+        observed_at=observed_at,
+        received_at=received_at,
+        collected_at=collected_at,
+        excerpt=version.content[:1000],
+        provider_metadata=metadata,
+        metadata_is_version_snapshot=snapshot,
+    )
+
+
+def _encode_provider_cursor(created_at: datetime, document_id: UUID) -> str:
+    """Encode the stable descending document creation keyset as bounded base64 JSON."""
+    encoded = json.dumps(
+        [created_at.astimezone(UTC).isoformat(), str(document_id)], separators=(",", ":")
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(encoded).decode("ascii").rstrip("=")
+
+
+def _decode_provider_cursor(cursor: str) -> tuple[datetime, UUID]:
+    """Strictly decode one timestamp/UUID keyset cursor without accepting junk."""
+    if not cursor or len(cursor) > 1024:
+        raise ValueError("Invalid provider snapshot cursor")
+    try:
+        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
+        values = json.loads(raw)
+        if not isinstance(values, list) or len(values) != 2 or not all(isinstance(x, str) for x in values):
+            raise ValueError
+        created_at = datetime.fromisoformat(values[0])
+        if created_at.tzinfo is None or created_at.utcoffset() is None:
+            raise ValueError
+        document_id = UUID(values[1])
+        if _encode_provider_cursor(created_at, document_id) != cursor:
+            raise ValueError
+        return created_at.astimezone(UTC), document_id
+    except (ValueError, TypeError, json.JSONDecodeError, binascii.Error) as exc:
+        raise ValueError("Invalid provider snapshot cursor") from exc
+
+
+async def read_provider_snapshots(
+    session: AsyncSession, version_ids: list[UUID]
+) -> list[ProviderDocumentSnapshotRead]:
+    """Read exact immutable provider versions for an already owner-authenticated route.
+
+    This query is intentionally absent from agent, tool, and collector entry points;
+    a future agent surface must apply P07 grants before calling a suitable owner API.
+    Missing, deleted, archived, or duplicate versions fail as a whole request.
+    """
+    if not 1 <= len(version_ids) <= 100 or len(version_ids) != len(set(version_ids)):
+        raise ValueError("version_ids must contain 1 to 100 unique values")
+    rows = list((await session.execute(
+        select(Document, DocumentVersion, Source, NormalizedVersionProvenance)
+        .join(DocumentVersion, DocumentVersion.id.in_(version_ids))
+        .join(Source, Source.id == Document.source_id)
+        .outerjoin(NormalizedVersionProvenance, NormalizedVersionProvenance.document_version_id == DocumentVersion.id)
+        .where(Document.id == DocumentVersion.document_id, Source.provider.in_(PROVIDER_IDS))
+    )).all())
+    by_id = {version.id: _provider_snapshot(document, version, source, provenance)
+             for document, version, source, provenance in rows
+             if source.status in {"active", "paused"}}
+    if len(by_id) != len(version_ids):
+        raise ValueError("One or more provider document versions are unavailable")
+    return [by_id[version_id] for version_id in version_ids]
+
+
+async def list_provider_snapshots(
+    session: AsyncSession,
+    *,
+    source_ids: list[UUID],
+    channel_ids: list[str] | None = None,
+    limit: int = 50,
+    cursor: str | None = None,
+) -> ProviderDocumentSnapshotList:
+    """List current exact versions for an already owner-authenticated route.
+
+    Pagination is a bounded created-at/ID keyset; only typed source/channel scope
+    is read, and no agent/tool authorization is implied by this owner projection.
+    """
+    if not 1 <= len(source_ids) <= 100 or len(source_ids) != len(set(source_ids)):
+        raise ValueError("source_ids must contain 1 to 100 unique values")
+    if not 1 <= limit <= 100:
+        raise ValueError("limit must be between 1 and 100")
+    if channel_ids is not None and (
+        len(channel_ids) > 100 or len(channel_ids) != len(set(channel_ids))
+        or any(re.fullmatch(r"-?[1-9][0-9]{0,19}", item) is None for item in channel_ids)
+    ):
+        raise ValueError("channel_ids must contain at most 100 unique values")
+    statement = (
+        select(Document, DocumentVersion, Source, NormalizedVersionProvenance)
+        .join(Source, Source.id == Document.source_id)
+        .join(DocumentVersion, (DocumentVersion.document_id == Document.id)
+              & (DocumentVersion.version_number == Document.current_version))
+        .outerjoin(NormalizedVersionProvenance, NormalizedVersionProvenance.document_version_id == DocumentVersion.id)
+        .where(
+            Document.source_id.in_(source_ids),
+            Source.status.in_(("active", "paused")),
+            Source.provider.in_(PROVIDER_IDS),
+        )
+    )
+    if cursor is not None:
+        created_at, document_id = _decode_provider_cursor(cursor)
+        statement = statement.where(tuple_(Document.created_at, Document.id) < tuple_(created_at, document_id))
+    if channel_ids is not None:
+        statement = statement.where(
+            NormalizedVersionProvenance.provenance_json["provider_record"]["telegram"]["channel_id"].astext.in_(channel_ids)
+        )
+    rows = list((await session.execute(
+        statement.order_by(desc(Document.created_at), desc(Document.id)).limit(limit + 1)
+    )).all())
+    page = rows[:limit]
+    next_cursor = _encode_provider_cursor(page[-1][0].created_at, page[-1][0].id) if len(rows) > limit and page else None
+    return ProviderDocumentSnapshotList(
+        items=[_provider_snapshot(document, version, source, provenance)
+               for document, version, source, provenance in page],
+        next_cursor=next_cursor,
+    )
 
 
 @dataclass(frozen=True)
@@ -728,10 +890,38 @@ async def has_document_identity(session: AsyncSession, source_id: UUID, external
 async def upsert_normalized_document(
     session: AsyncSession, payload: NormalizedDocumentInput
 ) -> NormalizedDocumentResult:
-    """Persist one source-owned immutable normalized revision without committing."""
+    """Persist one source-owned immutable normalized revision without committing.
+
+    The source generation and provider provenance are checked before identity
+    allocation; source, normalized identity, and document rows serialize writers.
+    Generic providers select current content by observed time and accepted hash.
+    Telegram requires owner-validated order, rejects a conflicting equal rank,
+    and selects by observed time, epoch, then update ID. Version numbering remains
+    independently monotonic, and transaction commit/derived cleanup belongs to
+    the caller's ingestion completion boundary. The source-first lock returns a
+    narrow lifecycle fence; provider ownership comes from the detached source
+    projection, which must still match that fence before identity allocation.
+    """
     source = await sources.lock_source(session, payload.source_id)
     if source is None or source.status != "active" or source.generation != payload.expected_source_generation:
         raise ValueError("Normalized source generation is no longer active")
+    source_projection = await sources.get_connector_source(session, payload.source_id)
+    if (
+        source_projection is None
+        or source_projection.id != source.id
+        or source_projection.status != source.status
+        or source_projection.generation != source.generation
+    ):
+        # Provider/type/configuration belong to this detached owner projection;
+        # reject a stale or missing view while the source fence remains locked.
+        raise ValueError("Normalized source projection no longer matches its lifecycle fence")
+    provider_record = payload.provenance.get("provider_record")
+    if provider_record is not None:
+        typed_provider = ProviderRecordMetadata.model_validate(provider_record)
+        if source_projection.provider != typed_provider.provider:
+            raise ValueError("Provider provenance does not match the immutable source provider")
+    elif source_projection.provider == "telegram":
+        raise ValueError("Telegram normalization requires immutable delivery provenance")
 
     identity = await session.scalar(
         select(NormalizedDocumentIdentity)
@@ -810,11 +1000,36 @@ async def upsert_normalized_document(
         )
         if current_provenance is None:
             raise ValueError("Provider identity conflicts with an owner-authored current revision")
-    current_rank = (
-        (current_provenance.selection_observed_at, current_provenance.accepted_record_hash)
-        if current_provenance is not None else None
-    )
-    selected = current_rank is None or (payload.observed_at, payload.accepted_record_hash) > current_rank
+    if source_projection.provider == "telegram":
+        incoming_metadata = ProviderRecordMetadata.model_validate(provider_record)
+        incoming_telegram = incoming_metadata.telegram
+        if incoming_telegram is None or payload.telegram_order is None:
+            raise ValueError("Telegram version ordering proof is missing")
+        incoming_rank = (payload.observed_at, payload.telegram_order.epoch, payload.telegram_order.update_id)
+        current_rank = None
+        if current_provenance is not None:
+            current_metadata = ProviderRecordMetadata.model_validate(
+                current_provenance.provenance_json.get("provider_record")
+            )
+            current_telegram = current_metadata.telegram
+            if current_telegram is None or current_telegram.bot_id != incoming_telegram.bot_id:
+                raise ValueError("Telegram current version has an incompatible bot binding")
+            current_rank = (
+                current_provenance.selection_observed_at,
+                current_telegram.epoch,
+                current_telegram.update_id,
+            )
+        if current_rank == incoming_rank and current_provenance is not None:
+            if current_provenance.accepted_record_hash != payload.accepted_record_hash:
+                raise ValueError("Telegram delivery order has conflicting immutable content")
+            raise ValueError("Telegram delivery proof already exists with a different normalization version")
+        selected = current_rank is None or incoming_rank > current_rank
+    else:
+        current_rank = (
+            (current_provenance.selection_observed_at, current_provenance.accepted_record_hash)
+            if current_provenance is not None else None
+        )
+        selected = current_rank is None or (payload.observed_at, payload.accepted_record_hash) > current_rank
     max_number = await session.scalar(
         select(func.coalesce(func.max(DocumentVersion.version_number), 0))
         .where(DocumentVersion.document_id == document.id)
@@ -1254,6 +1469,19 @@ async def read_extraction_input(
         document_id=document_id, document_version_id=actual_version_id, source_id=source_id,
         source_generation=source_generation, local_only=local_only,
         observed_at=observed_at, chunks=tuple(ExtractionChunk(id=identifier, content=content) for identifier, content in chunks),
+    )
+
+
+async def get_first_chunk_id(session: AsyncSession, version_id: UUID) -> UUID | None:
+    """Return the first chunk ID of a version without reading any chunk content.
+
+    Deterministic provider mappers anchor evidence on the title chunk; unlike
+    ``read_extraction_input`` this has no chunk-count or byte ceiling, so an oversized
+    body cannot make a record unmappable.
+    """
+    return await session.scalar(
+        select(DocumentChunk.id).where(DocumentChunk.document_version_id == version_id)
+        .order_by(DocumentChunk.chunk_index).limit(1)
     )
 
 

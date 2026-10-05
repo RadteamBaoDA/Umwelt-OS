@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 SourceType = Literal[
     "rss", "web", "file", "github", "calendar", "email", "api", "mcp", "manual", "other"
@@ -11,12 +11,28 @@ SourceStatus = Literal["active", "paused", "archived"]
 
 
 class SourceCreate(BaseModel):
-    """Validate the type, name, and optional provider for a new source."""
+    """Validate a source type and keep registered provider identity immutable at creation."""
     model_config = ConfigDict(extra="forbid")
 
     type: SourceType
     name: str = Field(min_length=1, max_length=200)
     provider: str | None = Field(default=None, max_length=120)
+
+    @model_validator(mode="after")
+    def validate_provider_type(self) -> "SourceCreate":
+        """Require each registered provider to use its one supported source type."""
+        expected = {
+            "youtube": "rss",
+            "arxiv": "rss",
+            "huggingface": "api",
+            "github_releases": "api",
+            "telegram": "api",
+        }.get(self.provider)
+        if self.provider is not None and expected is None:
+            raise ValueError("Provider is not registered")
+        if expected is not None and self.type != expected:
+            raise ValueError("Source type does not match the registered provider")
+        return self
 
 
 class SourcePatch(BaseModel):
@@ -99,6 +115,7 @@ class ConnectorSource(BaseModel):
     status: str
     generation: int
     configuration: dict[str, object]
+    provider: str | None = None
 
 
 class SourceList(BaseModel):

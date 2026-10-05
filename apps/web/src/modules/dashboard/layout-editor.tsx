@@ -32,6 +32,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import { SOURCE_BACKED_RENDERERS, SourcePicker } from './source-picker';
 import { Label } from '@/components/ui/label';
 import {
   Select,
@@ -128,6 +129,7 @@ export function LayoutEditor({
   const [targetGroupId, setTargetGroupId] = useState<string>(activeGroupId || groups[0]?.id || '');
   const [selectedRenderer, setSelectedRenderer] = useState<string>('news_feed');
   const [newDefName, setNewDefName] = useState<string>('');
+  const [newDefSourceId, setNewDefSourceId] = useState<string | null>(null);
 
   // Queries for reusable definitions and renderers
   const definitionsQuery = useQuery({
@@ -152,7 +154,8 @@ export function LayoutEditor({
         {
           name: newDefName.trim() || `${selectedRenderer} gadget`,
           renderer: selectedRenderer,
-          source_ids: [],
+          // A chosen source is saved only for source-backed renderers.
+          source_ids: selectedRenderer in SOURCE_BACKED_RENDERERS && newDefSourceId ? [newDefSourceId] : [],
           scope: {},
           filters: {},
           highlight_rules: [],
@@ -463,6 +466,14 @@ export function LayoutEditor({
                     </SelectContent>
                   </Select>
                 </div>
+                {selectedRenderer in SOURCE_BACKED_RENDERERS && (
+                  <SourcePicker
+                    id="new-def-source"
+                    provider={SOURCE_BACKED_RENDERERS[selectedRenderer].provider}
+                    value={newDefSourceId}
+                    onChange={setNewDefSourceId}
+                  />
+                )}
               </div>
             )}
           </div>

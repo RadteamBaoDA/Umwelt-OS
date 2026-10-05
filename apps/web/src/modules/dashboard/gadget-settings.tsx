@@ -32,6 +32,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
+import { SOURCE_BACKED_RENDERERS, SourcePicker } from './source-picker';
 import {
   dashboardKeys,
   patchGadgetDefinition,
@@ -84,6 +85,7 @@ export function GadgetSettings({
   const [symbols, setSymbols] = useState<string>('');
   const [highlightRules, setHighlightRules] = useState<HighlightRule[]>([]);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [sourceId, setSourceId] = useState<string | null>(null);
 
   // New highlight rule subform state
   const [newRuleKeywords, setNewRuleKeywords] = useState<string>('');
@@ -99,6 +101,7 @@ export function GadgetSettings({
       setKeywords((def.filters?.keywords ?? []).join(', '));
       setExcludeKeywords((def.filters?.exclude_keywords ?? []).join(', '));
       setSymbols((def.scope?.symbols ?? []).join(', '));
+      setSourceId(def.source_ids?.[0] ?? null);
       setHighlightRules(def.highlight_rules ? [...def.highlight_rules] : []);
       setSaveError(null);
     }
@@ -140,6 +143,10 @@ export function GadgetSettings({
         instance.definition_id,
         {
           expected_revision: instance.definition.revision,
+          // Only source-backed renderers own a source selection; others keep theirs untouched.
+          ...(instance.definition.renderer in SOURCE_BACKED_RENDERERS
+            ? { source_ids: sourceId ? [sourceId] : [] }
+            : {}),
           filters: {
             limit: Math.max(1, Math.min(100, limit)),
             keywords: parsedKeywords.length > 0 ? parsedKeywords : undefined,
@@ -228,6 +235,15 @@ export function GadgetSettings({
               className="h-8 text-xs bg-muted/20"
             />
           </div>
+
+          {instance.definition.renderer in SOURCE_BACKED_RENDERERS && (
+            <SourcePicker
+              id="gadget-source"
+              provider={SOURCE_BACKED_RENDERERS[instance.definition.renderer].provider}
+              value={sourceId}
+              onChange={setSourceId}
+            />
+          )}
 
           {/* Limit & Scope row */}
           <div className="grid grid-cols-2 gap-3">

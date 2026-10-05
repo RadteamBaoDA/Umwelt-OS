@@ -14,6 +14,7 @@ import {
   ConnectorConfiguration,
   deactivateConnector,
   getConnectorActivation,
+  getGitHubWebhookStatus,
   getMonotonicConnectorConfiguration,
   getOperation,
   listSources,
@@ -37,6 +38,17 @@ function formatDate(value: string | null, locale: AppLocaleId, timezone: string,
 /** Maps a source or run status to the matching translation message key. */
 function statusKey(status: string): 'statusActive' | 'statusPaused' | 'statusArchived' {
   return status === 'paused' ? 'statusPaused' : status === 'archived' ? 'statusArchived' : 'statusActive';
+}
+
+/** Resolves registered provider IDs to translated names while preserving generic source labels. */
+function providerLabel(provider: string | null, t: ReturnType<typeof useTranslations<'sources'>>) {
+  if (!provider) return null;
+  const keys: Record<string, string> = {
+    youtube: 'providerYoutube', arxiv: 'providerArxiv', huggingface: 'providerHuggingface', github_releases: 'providerGithubReleases',
+    telegram: 'providerTelegram', rss: 'providerRss', web: 'providerWeb', rest: 'providerRest',
+  };
+  const key = keys[provider];
+  return key ? t(key as 'providerYoutube') : provider;
 }
 
 /** Formats a connector schedule interval as localized display text. */
@@ -149,7 +161,7 @@ function SourceEntry({
 
   return <li className="record-row source-record">
     <div className="record-content">
-      <div className="source-record-heading"><div><strong>{source.name}</strong><p className="muted">{source.type} · {t(statusKey(source.status))}</p></div>
+      <div className="source-record-heading"><div><strong>{source.name}</strong><p className="muted">{providerLabel(source.provider, t) ?? source.type} · {t(statusKey(source.status))}</p></div>
         {connector && <p className="source-activation-label">{t('activationState')}: {activation.isPending ? t('stateUnknown') : activation.isError ? t('stateUnknown') : t(({ queued: 'stateQueued', provisioning: 'stateProvisioning', active: 'active', saved_not_active: 'stateSavedNotActive', reconciliation_required: 'stateReconciliationRequired', disabled: 'stateDisabled' } as Record<string, string>)[activation.data.state] ?? 'stateUnknown')}{activation.data?.error_code ? ` · ${activation.data.error_code}` : ''}</p>}
       </div>
       {connector && <p className="muted">{t('schedule')}: {schedule}{timezone ? ` · ${timezone}` : ''}</p>}
@@ -172,8 +184,10 @@ function SourceEntry({
 }
 
 /** Loads sources and connector configuration, and coordinates selection changes with the active unsaved-draft guard. */
+/** Loads sources and shows the owner's secret-free GitHub receiver and backlog status. */
 export function SourceList() {
   const t = useTranslations('sources');
+  const display = useDisplayPreferences();
   const queryClient = useQueryClient();
   const { ensureSourcesDocument } = useGuardedNavigation();
   const [adding, setAdding] = useState(false);
@@ -196,6 +210,11 @@ export function SourceList() {
     getNextPageParam: (last) => last.next_cursor ?? undefined,
   });
   const items = sources.data?.pages.flatMap((page) => page.items) ?? [];
+  const githubWebhook = useQuery({
+    queryKey: ['github-webhook-status'],
+    queryFn: ({ signal }) => getGitHubWebhookStatus(signal),
+    refetchInterval: 30_000,
+  });
   const connectors = items.filter((source) => ['rss', 'web', 'api'].includes(source.type));
   const configurations = useQueries({ queries: connectors.map((source) => ({
     queryKey: connectorKeys.configuration(source.id),
@@ -208,6 +227,17 @@ export function SourceList() {
   const refresh = () => queryClient.invalidateQueries({ queryKey: sourceKeys.all });
 
   return <div className="sources-list">
+    <section className="sub-panel" aria-labelledby="github-webhook-heading">
+      <h2 id="github-webhook-heading">{t('githubWebhookStatus')}</h2>
+      {githubWebhook.isPending && <p className="muted">{t('loading')}</p>}
+      {githubWebhook.isError && <p className="error" role="alert">{t('githubWebhookUnavailable')} <Button className="secondary" onClick={() => githubWebhook.refetch()}>{t('retry')}</Button></p>}
+      {githubWebhook.data && <>
+        <p role="status">{t(githubWebhook.data.receiver_configured ? 'githubWebhookReady' : 'githubWebhookNotConfigured')} · {t('githubWebhookRevision', { revision: githubWebhook.data.receiver_revision })}</p>
+        <p className="muted">{t('githubWebhookBacklog', { pending: githubWebhook.data.pending_count, deliveries: githubWebhook.data.pending_deliveries, hints: githubWebhook.data.pending_hints, capacity: 100000 })}</p>
+        <p className="muted">{t('githubWebhookAttention', { count: githubWebhook.data.needs_attention })}</p>
+        {githubWebhook.data.oldest_pending_at && <p className="muted">{t('githubWebhookOldest', { time: formatDate(githubWebhook.data.oldest_pending_at, display.locale, display.timezone, t('never')) })}</p>}
+      </>}
+    </section>
     <div className="form-actions source-list-actions">
       <Button onClick={() => transition(null)}>{t('addConnector')}</Button>
       <Button className="secondary" onClick={() => transition(undefined, !adding)}>{t('addManual')}</Button>

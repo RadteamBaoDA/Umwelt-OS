@@ -6,6 +6,7 @@ import { BriefGadget } from './gadgets/brief-gadget';
 import { EntityGadget } from './gadgets/entity-gadget';
 import { FeedGadget } from './gadgets/feed-gadget';
 import { FinanceChart } from './gadgets/finance-chart';
+import { GithubProjectGadget } from './gadgets/github-project-gadget';
 import { GoalsGadget } from './gadgets/goals-gadget';
 import { MetricsChart } from './gadgets/metrics-chart';
 import { NewsFeed } from './gadgets/news-feed';
@@ -44,6 +45,7 @@ const GADGET_REGISTRY: Record<string, React.ComponentType<GadgetRendererProps>> 
   highlights: (props) => <WatchlistGadget instance={props.instance} />,
   finance_chart: (props) => <FinanceChart instance={props.instance} />,
   metrics_chart: (props) => <MetricsChart instance={props.instance} />,
+  github_project: (props) => <GithubProjectGadget instance={props.instance} />,
 };
 
 /**

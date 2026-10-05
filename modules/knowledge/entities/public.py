@@ -1365,6 +1365,33 @@ async def create_extracted_entity(session: AsyncSession, entity_type: str) -> UU
     return entity.id
 
 
+async def find_extraction_entity(
+    session: AsyncSession, *, extraction_identity: str, candidate_key: str
+) -> UUID | None:
+    """Return the canonical entity already bound to a deterministic extraction key, if any.
+
+    Deterministic mappers (for example GitHub) use this with
+    ``record_extraction_membership`` to stay idempotent: the first membership
+    creates the entity, later calls find it. The earliest membership wins so
+    the answer is stable; a merged entity is followed to its canonical ID. The
+    caller holds the source lock that serializes find-or-create.
+    """
+    entity_id = await session.scalar(
+        select(EntityEvidenceMembership.entity_id).where(
+            EntityEvidenceMembership.extraction_identity == extraction_identity,
+            EntityEvidenceMembership.candidate_key == candidate_key,
+        ).order_by(EntityEvidenceMembership.extracted_at, EntityEvidenceMembership.id).limit(1)
+    )
+    if entity_id is None:
+        return None
+    try:
+        return await resolve_canonical_entity_id(session, entity_id)
+    except LookupError:
+        # The owner deleted the entity: report "absent" so the mapper recreates it
+        # deterministically instead of failing every later record of the source.
+        return None
+
+
 async def record_extraction_membership(
     session: AsyncSession, *, entity_id: UUID, evidence_ref: ExtractionEvidenceRef,
     source_generation: int, extraction_identity: str, candidate_key: str,

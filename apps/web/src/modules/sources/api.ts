@@ -33,9 +33,9 @@ export type IngestionRun = {
 export type ConnectorConfig = {
   url?: string;
   feed_url?: string;
-  js_render: boolean;
-  max_pages: number;
-  max_depth: number;
+  js_render?: boolean;
+  max_pages?: number;
+  max_depth?: number;
   timeout_seconds: number;
   items_path?: string;
   id_field?: string;
@@ -44,14 +44,26 @@ export type ConnectorConfig = {
   updated_field?: string;
   timezone: string;
   schedule_interval_minutes: 15 | 30 | 60 | 360 | 1440;
+  youtube_channel_id?: string;
+  arxiv_category?: string;
+  huggingface_author?: string;
+  github_owner?: string;
+  github_repository?: string;
+  include_issues?: boolean;
+  include_pulls?: boolean;
+  include_commits?: boolean;
+  include_releases?: boolean;
+  github_history_days?: number;
+  telegram_chat_ids?: string[];
+  history_mode?: 'returned_snapshot' | 'pending_updates';
 };
 export type ConnectorSettings = {
   expected_revision: number;
   configuration: ConnectorConfig;
-  auth_method: 'none' | 'http_header';
+  auth_method: 'none' | 'http_header' | 'telegram_bot_token';
   auth_header_name?: string;
 };
-export type DraftValidationRequest = ConnectorSettings & { expected_source_generation: number };
+export type DraftValidationRequest = ConnectorSettings & { expected_source_generation: number; secret_action?: 'keep' | 'replace'; secret?: string };
 export type ConnectorActivation = {
   source_id: string;
   desired_revision: number;
@@ -64,9 +76,10 @@ export type ConnectorConfiguration = {
   source_id: string;
   source_type: 'rss' | 'web' | 'api';
   source_generation: number;
+  provider: string | null;
   configuration: ConnectorConfig;
   expected_revision: number;
-  auth_method: 'none' | 'http_header';
+  auth_method: 'none' | 'http_header' | 'telegram_bot_token';
   auth_header_name: string | null;
   desired_enabled: boolean;
   activation_state: string;
@@ -80,7 +93,9 @@ export type DraftValidation = {
   expected_revision: number;
   validated_at: string;
   validation_status: 'valid';
-  checks: ('configuration' | 'public_url_policy')[];
+  checks: ('configuration' | 'public_url_policy' | 'provider_identity' | 'provider_scope' | 'receive_mode')[];
+  verified_bot_id?: string | null;
+  scope_verified?: boolean | null;
 };
 export type ConnectorCatalogEntry = {
   provider_id: string;
@@ -94,8 +109,9 @@ export type ConnectorCatalogEntry = {
   supports_history: boolean;
   supports_edit: boolean;
   supports_delete: boolean;
-  availability: 'available' | 'planned' | 'unavailable';
-  unavailable_reason: string | null;
+  availability: 'available' | 'implemented' | 'requires_credentials' | 'unsupported_operation' | 'planned' | 'unavailable';
+  unavailable_reason?: string | null;
+  availability_reason?: string | null;
   unavailable_operations: string[];
 };
 export type SourceIngestion = { current_run: IngestionRun | null; items: IngestionRun[]; next_cursor: string | null };
@@ -103,6 +119,7 @@ export type PurgeOperation = { operation_id: string; source_id: string; status: 
 export const sourceKeys = { all: ['sources'] as const, list: ['sources', 'list'] as const, detail: (id: string) => ['sources', id] as const };
 export const connectorKeys = {
   catalog: ['connector-catalog'] as const,
+  githubWebhookStatus: ['github-webhook-status'] as const,
   configuration: (id: string) => ['connector-configuration', id] as const,
   activation: (id: string) => ['connector-activation', id] as const,
   ingestion: (id: string) => ['source-ingestion', id] as const,
@@ -141,9 +158,9 @@ export function getConnectorCatalog(signal?: AbortSignal) {
   return apiRequest<ConnectorCatalogEntry[]>('/api/v1/connectors/catalog', { signal });
 }
 
-/** Creates a typed connector source with the supplied name, CSRF token, and optional abort signal. */
-export function createConnectorSource(type: 'rss' | 'web' | 'api', name: string, csrfToken: string, signal?: AbortSignal) {
-  return apiRequest<Source>('/api/v1/sources', { method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify({ type, name }), signal });
+/** Creates a connector with its immutable native provider identity, if any, using the source owner route. */
+export function createConnectorSource(type: 'rss' | 'web' | 'api', name: string, csrfToken: string, signal?: AbortSignal, provider?: string) {
+  return apiRequest<Source>('/api/v1/sources', { method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify({ type, name, ...(provider ? { provider } : {}) }), signal });
 }
 
 /** Fetches the connector configuration and forwards an optional abort signal. */
@@ -192,7 +209,7 @@ export async function getMonotonicConnectorConfiguration(
     ?? [...fences].reverse().find((value) => value?.source_id === id) ?? incoming;
 }
 
-/** Submits a connector draft for validation and forwards an optional abort signal; it does not save the configuration. */
+/** Validates an unsaved connector draft; optional write-only Telegram replacement bytes are sent directly and never returned or cached here. */
 export function validateDraftConnector(id: string, settings: DraftValidationRequest, signal?: AbortSignal) {
   return apiRequest<DraftValidation>(`/api/v1/connectors/${id}/validate-draft`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(settings), signal });
 }
@@ -207,9 +224,74 @@ export function getConnectorActivation(id: string, signal?: AbortSignal) {
   return apiRequest<ConnectorActivation>(`/api/v1/connectors/${id}/activation`, { signal });
 }
 
-/** Activates a connector at the expected revision and either replaces or retains its credential according to the supplied secret. */
-export function activateConnector(id: string, expectedRevision: number, secret: string | undefined, csrfToken: string, signal?: AbortSignal) {
-  const secretAction = secret ? 'replace' : 'keep';
+export type GitHubPeer = { source_id: string; source_generation: number; configuration_revision: number; token_revision: number; state: string };
+export type GitHubStatus = { state: 'not_connected' | 'ready' | 'refreshing' | 'reconciliation_required' | 'revoked'; expires_at: string | null; error_code: string | null; coordinator_state: string; operation_id: string | null; coordinator_error_code: string | null; recovery_available: boolean; operation_kind: 'authorization' | 'refresh' | 'revoke' | null; operation_source_id: string | null; operation_source_generation: number | null; operation_configuration_revision: number | null; operation_state: string | null; sync: { history_days: number; scope_sha256: string | null; cursor_invalid: boolean; last_reset_at: string | null; gap_recorded: boolean; unverified_hints: number; reconcile_exhausted: number; resources: { resource: string; phase: string; page: number; next_page: number | null; sweep_revision: number; floor?: string; upper?: string; completed_upper: string | null; completed_sweep_revision: number; incomplete: boolean }[] } };
+
+export type GitHubWebhookStatus = {
+  receiver_configured: boolean;
+  receiver_revision: string;
+  digest_count: number;
+  pending_count: number;
+  pending_deliveries: number;
+  pending_hints: number;
+  needs_attention: number;
+  oldest_pending_at: string | null;
+};
+
+/** Reads secret-free GitHub receiver readiness and global durable backlog totals. */
+export function getGitHubWebhookStatus(signal?: AbortSignal) {
+  return apiRequest<GitHubWebhookStatus>('/api/v1/connectors/github/webhook-status', { signal });
+}
+
+/** Canonical mapped GitHub record counts for one source; live_verified is false unless a live check exists. */
+export type GitHubSummary = {
+  resource_counts: { repositories: number; issues: number; pull_requests: number; commits: number; releases: number };
+  live_verified: boolean;
+  last_event_at: string | null;
+};
+
+/** Reads canonical collected GitHub counts from the owner-only summary route. */
+export function getGitHubSummary(id: string, signal?: AbortSignal) {
+  return apiRequest<GitHubSummary>(`/api/v1/connectors/${id}/github/summary`, { signal });
+}
+
+/** Reads secret-free GitHub grant status and its access-token expiry for this source. */
+export function getGitHubStatus(id: string, signal?: AbortSignal) {
+  return apiRequest<GitHubStatus>(`/api/v1/connectors/${id}/github/status`, { signal });
+}
+
+/** Resets GitHub polling only for the current reviewed source revisions and scope digest. */
+export function resetGitHubSync(id: string, sourceGeneration: number, connectorRevision: number, scopeSha256: string, csrfToken: string, signal?: AbortSignal) {
+  return apiRequest<{ status: 'reset' }>(`/api/v1/connectors/${id}/github/sync/reset`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify({ expected_source_generation: sourceGeneration, expected_connector_revision: connectorRevision, expected_scope_sha256: scopeSha256 }), signal });
+}
+
+/** Starts browser-bound OAuth for the exact saved source and connector revisions. */
+export function startGitHubOAuth(id: string, sourceGeneration: number, expectedRevision: number, csrfToken: string, signal?: AbortSignal) {
+  return apiRequest<{ authorization_url: string }>(`/api/v1/connectors/${id}/github/oauth/start`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify({ expected_source_generation: sourceGeneration, expected_revision: expectedRevision }), signal });
+}
+
+/** Rotates the stored GitHub user grant through the owner-serialized server route. */
+export function refreshGitHubOAuth(id: string, csrfToken: string, signal?: AbortSignal) {
+  return apiRequest<{ state: string }>(`/api/v1/connectors/${id}/github/oauth/refresh`, { method: 'POST', headers: csrfHeaders(csrfToken), signal });
+}
+
+/** Retrieves the bounded, secret-free peer snapshot that the owner must review before disconnect. */
+export function getGitHubPeers(id: string, signal?: AbortSignal) {
+  return apiRequest<{ complete: boolean; peers: GitHubPeer[] }>(`/api/v1/connectors/${id}/github/peers`, { signal });
+}
+
+/** Submits the owner's reviewed peer snapshot for app/user-wide revocation. */
+export function disconnectGitHubOAuth(id: string, peers: GitHubPeer[], csrfToken: string, operationId?: string, signal?: AbortSignal) {
+  return apiRequest<{ state: string }>(`/api/v1/connectors/${id}/github/disconnect`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify({ reviewed_peers: peers.map(({ source_id, source_generation, configuration_revision, token_revision }) => ({ source_id, source_generation, configuration_revision, token_revision })), ...(operationId ? { operation_id: operationId } : {}) }), signal });
+}
+
+/** Acknowledges an exact owner-wide OAuth tombstone; the selected editor source does not replace the stored operation origin. */
+export function acknowledgeGitHubReconnect(id: string, operationId: string, csrfToken: string, signal?: AbortSignal) {
+  return apiRequest<{ state: string }>(`/api/v1/connectors/${id}/github/reconcile/reconnect`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify({ operation_id: operationId, acknowledge_unresolved_cleanup: true }), signal });
+}
+
+/** Activates a connector at the expected revision with an explicit keep or replace action; secret bytes are sent only in this request body. */
+export function activateConnector(id: string, expectedRevision: number, secretAction: 'keep' | 'replace', secret: string | undefined, csrfToken: string, signal?: AbortSignal) {
   return apiRequest<ConnectorActivation>(`/api/v1/connectors/${id}/activate`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify({ expected_revision: expectedRevision, secret_action: secretAction, ...(secret ? { secret } : {}) }), signal });
 }
 

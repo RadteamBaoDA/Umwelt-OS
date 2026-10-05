@@ -2,7 +2,7 @@
 
 | Package | Locked version | License | Use |
 | --- | --- | --- | --- |
-| [Authlib](https://github.com/authlib/authlib) | 1.8.0 | BSD-3-Clause | Server-side OpenID Connect discovery, authorization-code + PKCE flow, ID-token/JWKS validation for Google sign-in. |
+| [Authlib](https://github.com/authlib/authlib) | 1.8.0 | BSD-3-Clause | Server-side OpenID Connect discovery and Google sign-in validation, plus fixed-endpoint GitHub App OAuth code exchange and rotating-token refresh. |
 | [class-variance-authority](https://github.com/joe-bell/cva) | 0.7.1 | Apache-2.0 | Variant and size class selection for the repository-owned shared Button adapted from the official New York shadcn registry source. |
 | [backoff](https://github.com/litl/backoff) | 2.2.1 | MIT | Required dependency metadata for pinned PostHog; Graphiti telemetry is disabled before imports. Older release, with advisory review deferred. |
 | [FalkorDB Python client](https://github.com/FalkorDB/falkordb-py) | 1.2.0 | MIT | Graphiti's optional FalkorDB driver, isolated from ARQ Redis. `modules/knowledge/temporal/adapter.py` wraps its public driver path for bounds/redaction; no dependency source is modified. |

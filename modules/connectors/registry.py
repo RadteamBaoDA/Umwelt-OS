@@ -1,15 +1,29 @@
 from typing import Any
 from urllib.parse import urlsplit
 
-from modules.connectors.public import ConnectorConfig, DEFAULT_TIMEZONE, overlap_floor
+from modules.connectors.public import (
+    ConnectorConfig,
+    DEFAULT_TIMEZONE,
+    NATIVE_PROVIDERS,
+    PROVIDER_SOURCE_TYPES,
+    is_native_provider,
+    overlap_floor,
+)
 from modules.sources.schemas import ConnectorSource
 
 SUPPORTED_TYPES = {"rss", "web", "api"}
 
 
 def configuration(source: ConnectorSource) -> ConnectorConfig:
-    """Parse the detached source configuration into the shared connector contract."""
-    return ConnectorConfig.model_validate(source.configuration or {})
+    """Validate settings and apply the 30-second default only to native sources.
+
+    Generic connectors retain their historical 60-second default. Native
+    sources with an omitted stored timeout use the provider's 30-second bound.
+    """
+    config = ConnectorConfig.model_validate(source.configuration or {})
+    if is_native_provider(source.provider) and "timeout_seconds" not in (source.configuration or {}):
+        config = config.model_copy(update={"timeout_seconds": 30})
+    return config
 
 
 def validate(source: ConnectorSource) -> dict[str, Any]:
@@ -18,6 +32,49 @@ def validate(source: ConnectorSource) -> dict[str, Any]:
         raise ValueError("Source is not active")
     if source.type not in SUPPORTED_TYPES:
         raise ValueError("This source type has no packaged connector")
+    if source.provider is not None:
+        if source.provider not in NATIVE_PROVIDERS:
+            raise ValueError("Provider is not registered")
+        if source.type != PROVIDER_SOURCE_TYPES[source.provider]:
+            raise ValueError("Source type does not match the registered provider")
+        scope_fields = {
+            "youtube": {"youtube_channel_id"},
+            "arxiv": {"arxiv_category"},
+            "huggingface": {"huggingface_author"},
+            "github_releases": {"github_owner", "github_repository"},
+            "github": {"github_owner", "github_repository", "include_issues", "include_pulls", "include_commits", "include_releases", "github_history_days"},
+            "telegram": {"telegram_chat_ids"},
+        }[source.provider]
+        common = {"timezone", "schedule_interval_minutes", "timeout_seconds"}
+        expected_history = "pending_updates" if source.provider == "telegram" else "returned_snapshot"
+        raw_keys = set(source.configuration or {})
+        if raw_keys - scope_fields - common - {"history_mode"}:
+            raise ValueError("Provider configuration contains unsupported fields")
+        required_scope_fields = scope_fields - ({"github_history_days"} if source.provider == "github" else set())
+        if raw_keys & required_scope_fields != required_scope_fields or source.configuration.get("history_mode") != expected_history:
+            raise ValueError("Provider scope and history mode are required")
+        config = configuration(source)
+        if config.timeout_seconds > 30:
+            raise ValueError("Native provider request timeout cannot exceed 30 seconds")
+        if source.provider == "github_releases" and (not config.github_owner or not config.github_repository):
+            raise ValueError("GitHub owner and repository are required")
+        if source.provider == "github":
+            from modules.connectors.github.schemas import project_github_source_config
+
+            project_github_source_config(config.model_dump(exclude_none=True))
+        return {
+            "source_id": str(source.id),
+            "source_generation": source.generation,
+            "type": source.type,
+            "provider": source.provider,
+            "timezone": config.timezone or DEFAULT_TIMEZONE,
+            "configuration": config.model_dump(mode="json", exclude_none=True),
+        }
+    if set(source.configuration or {}) & {
+        "youtube_channel_id", "arxiv_category", "huggingface_author",
+        "github_owner", "github_repository", "include_issues", "include_pulls", "include_commits", "include_releases", "telegram_chat_ids", "history_mode",
+    }:
+        raise ValueError("Provider scope requires a registered source provider")
     config = configuration(source)
     required_url = config.feed_url if source.type == "rss" else config.url
     if required_url is None:
@@ -47,14 +104,15 @@ def health(source: ConnectorSource) -> dict[str, str]:
         validate(source)
     except ValueError:
         return {"status": "misconfigured", "connector": source.type}
-    return {"status": "ready", "connector": source.type}
+    return {"status": "ready", "connector": source.provider or source.type}
 
 
 def sync(source: ConnectorSource, cursor: str | None) -> dict[str, Any]:
     """Build the validated n8n dispatch payload and current cursor state."""
     from modules.connectors.n8n import workflow_state
 
-    return {**validate(source), **workflow_state(cursor)}
+    state = validate(source)
+    return state if is_native_provider(source.provider) else {**state, **workflow_state(cursor)}
 
 
 def normalize(record: dict[str, Any]) -> dict[str, Any]:
