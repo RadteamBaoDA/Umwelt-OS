@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 from sqlalchemy import select, update
@@ -199,6 +200,31 @@ async def purge_browser_results_in_uow(
     return int(result.rowcount or 0)
 
 
+async def purge_expired_browser_evidence(session: AsyncSession, *, limit: int = 200) -> int:
+    """Delete bounded expired terminal payloads only while evidence exists; retain job tombstones.
+
+    Filtering to jobs with child evidence prevents already-cleaned tombstones from consuming every
+    later batch. The evidence unique index begins with ``job_id`` and the job retention index
+    orders the eligibility scan by terminal status and expiry.
+    """
+    from sqlalchemy import delete, exists
+    from modules.tools.models import BrowserPageEvidence, BrowserReadJob
+
+    if not 1 <= limit <= 1000:
+        raise ValueError("Browser evidence cleanup limit must be between 1 and 1000")
+    now = datetime.now(UTC)
+    terminal = ("succeeded", "cancelled", "failed", "expired")
+    ids = tuple((await session.scalars(select(BrowserReadJob.id).where(
+        BrowserReadJob.expires_at <= now, BrowserReadJob.status.in_(terminal),
+        exists(select(BrowserPageEvidence.id).where(BrowserPageEvidence.job_id == BrowserReadJob.id)),
+    ).order_by(BrowserReadJob.expires_at, BrowserReadJob.id).limit(limit).with_for_update(skip_locked=True))).all())
+    if not ids:
+        return 0
+    result = await session.execute(delete(BrowserPageEvidence).where(BrowserPageEvidence.job_id.in_(ids)))
+    await session.flush()
+    return int(result.rowcount or 0)
+
+
 def webhook_aliases(settings: Any) -> set[str]:
     """Return the deployment-allowlisted, enabled HTTPS webhook aliases (never URLs or CIDRs).
 
@@ -241,6 +267,7 @@ __all__ = [
     "ToolDefinition", "ToolDestination", "ToolExecutionPrincipal", "ToolOutputFence",
     "ToolRegistry", "ToolResult", "ToolRisk", "revalidate_native_output_fences",
     "purge_browser_results_in_uow",
+    "purge_expired_browser_evidence",
     "CapabilityDescriptor", "CapabilityRead", "CredentialUpdate", "ConnectionDraft",
     "ConnectionRead", "ConnectionSave", "DiscoveryPersist", "DiscoveryRead", "ExecutionFence",
     "GrantChoice", "GrantRead", "GrantSelection", "InboundBinding", "InboundClientCreate",

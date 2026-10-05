@@ -11,8 +11,9 @@ from core.database import get_session
 from modules.knowledge.entities.public import RedirectedEntityConflict
 from modules.knowledge.relationships import public
 from modules.knowledge.relationships.schemas import EvidencePage, RelationshipCreate, RelationshipPage, RelationshipRead
+from modules.settings.public import module_dependency
 
-router = APIRouter(prefix="/api/v1/relationships", tags=["knowledge"])
+router = APIRouter(prefix="/api/v1/relationships", tags=["knowledge"], dependencies=[Depends(module_dependency("relationships"))])
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[AuthSession, Depends(require_owner)]
 OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]

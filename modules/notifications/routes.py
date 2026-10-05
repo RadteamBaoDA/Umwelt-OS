@@ -11,8 +11,9 @@ from core.auth.models import AuthSession
 from core.database import get_session
 from modules.notifications import public
 from modules.notifications.schemas import NotificationPage, NotificationPatch, NotificationRead
+from modules.settings.public import module_dependency
 
-router = APIRouter(prefix="/api/v1/notifications", tags=["notifications"])
+router = APIRouter(prefix="/api/v1/notifications", tags=["notifications"], dependencies=[Depends(module_dependency("notifications"))])
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[AuthSession, Depends(require_owner)]
 OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]

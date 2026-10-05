@@ -24,10 +24,12 @@ from modules.knowledge.documents.schemas import (
     VersionList,
     VersionRead,
 )
+from modules.settings.public import module_dependency
 
 router = APIRouter(
     prefix="/api/v1/documents",
     tags=["documents"],
+    dependencies=[Depends(module_dependency("documents"))],
 )
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[AuthSession, Depends(require_owner)]

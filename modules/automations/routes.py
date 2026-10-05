@@ -16,6 +16,7 @@ from core.auth.dependencies import require_owner, require_owner_write
 from core.auth.models import AuthSession, Owner
 from core.database import get_session
 from modules.automations import public
+from modules.settings.public import module_dependency
 from modules.automations.execution import enqueue_trigger
 from modules.automations.models import AutomationTrigger, AutomationWebhookCredential
 from modules.automations.schemas import (
@@ -32,7 +33,8 @@ from modules.automations.schemas import (
     RunRead,
 )
 
-router = APIRouter(prefix="/api/v1/automations", tags=["automations"])
+router = APIRouter(prefix="/api/v1/automations", tags=["automations"], dependencies=[Depends(module_dependency("automations"))])
+webhook_router = APIRouter(prefix="/api/v1/automations", tags=["automation-webhooks"])
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[AuthSession, Depends(require_owner)]
 OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]
@@ -150,7 +152,7 @@ async def revoke_webhook_credential(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.post("/inbound/{alias}", status_code=status.HTTP_202_ACCEPTED)
+@webhook_router.post("/inbound/{alias}", status_code=status.HTTP_202_ACCEPTED)
 async def receive_inbound_webhook(
     alias: Annotated[str, Path(pattern=r"^[a-z][a-z0-9_-]{0,39}$")],
     request: Request, session: Session, response: Response,
@@ -160,7 +162,8 @@ async def receive_inbound_webhook(
     """Authenticate a configured alias, validate bounded metadata, then commit its durable dedupe inbox row.
 
     This endpoint uses only the independent per-alias bearer, never the owner's browser session.
-    The durable inbox unique key absorbs provider retries; request bodies and tokens are not logged.
+    It reads persisted automation availability only after bearer validation. The durable inbox
+    unique key absorbs provider retries; request bodies and tokens are not logged.
     """
     response.headers["Cache-Control"] = "no-store"
     if not token or not event_key or not _EVENT_KEY.fullmatch(event_key):
@@ -177,8 +180,6 @@ async def receive_inbound_webhook(
                 raise HTTPException(status_code=413, detail="Webhook body exceeds 64 KiB")
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="Webhook content length is invalid") from exc
-    if not request.app.state.modules.get("tools") or not request.app.state.modules["tools"].enabled:
-        raise HTTPException(status_code=503, detail="Automation webhooks are unavailable")
     from modules.tools.mcp_credentials import verify_inbound_token
 
     credential = await session.scalar(select(AutomationWebhookCredential).where(
@@ -189,6 +190,12 @@ async def receive_inbound_webhook(
     ).with_for_update())
     if credential is None or not verify_inbound_token(token, credential.token_hash):
         raise HTTPException(status_code=401, detail="Webhook credentials are invalid or expired")
+    from modules.settings.public import module_is_enabled
+
+    # External trigger ingress uses its own bearer. Check persisted availability only after it
+    # authenticates, since this router deliberately has no owner-session/CSRF dependency.
+    if not await module_is_enabled(session, "automations"):
+        raise HTTPException(status_code=404, detail="Automation webhooks are unavailable")
     body = bytearray()
     try:
         async with asyncio.timeout(5):

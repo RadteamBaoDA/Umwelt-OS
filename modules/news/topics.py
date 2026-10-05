@@ -408,7 +408,9 @@ class TopicService:
         await delete_topic(self.session, owner_id, topic_id, expected_revision)
 
 
-router = APIRouter(prefix="/api/v1/topics", tags=["news"])
+from modules.settings.public import module_dependency
+
+router = APIRouter(prefix="/api/v1/topics", tags=["news"], dependencies=[Depends(module_dependency("news"))])
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[AuthSession, Depends(require_owner)]
 OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]

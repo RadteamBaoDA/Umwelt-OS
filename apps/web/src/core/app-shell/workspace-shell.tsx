@@ -13,7 +13,7 @@ import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
 import { CommandPalette } from '@/core/command-palette';
 import { ConnectionFooter } from '@/core/app-shell/connection-footer';
 import { useChatController } from '@/core/app-shell/chat-controller';
-import { detailDestinations, mainNavigation, settingsGroups } from '@/core/module-registry';
+import { detailDestinations, destinationEnabled, mainNavigation, settingsGroups, type ModuleAvailability } from '@/core/module-registry';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { useRealtime } from '@/core/realtime-provider';
 import { GoogleLink } from '@/modules/account/google-link';
@@ -45,6 +45,11 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
   const suppressMenuFocusRef = useRef(false);
   const sessionEndedRef = useRef(false);
   const session = useQuery({ queryKey: ['session'], queryFn: () => apiRequest<Session>('/api/v1/auth/session') });
+  const moduleAvailability = useQuery({
+    queryKey: ['module-lifecycle'],
+    queryFn: () => apiRequest<ModuleAvailability>('/api/v1/settings/modules'),
+    refetchOnWindowFocus: true,
+  });
   const generation = display.authGeneration;
   const preferences = useQuery({
     queryKey: ['owner-preferences'],
@@ -122,8 +127,11 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
   }
 
   const savedPreferences = preferences.data ?? display.confirmedPreferences ?? null;
+  const visibleMainNavigation = mainNavigation.filter((item) => destinationEnabled(item, moduleAvailability.data));
+  const visibleSettingsGroups = settingsGroups.filter((item) => destinationEnabled(item, moduleAvailability.data));
+  const visibleDetails = detailDestinations.filter((item) => destinationEnabled(item, moduleAvailability.data));
   const settingsActive = pathname.startsWith('/settings');
-  const active = mainNavigation.find((item) => item.id !== 'settings' && (pathname === item.href || pathname.startsWith(`${item.href}/`)))?.id ?? (settingsActive ? 'settings' : '');
+  const active = visibleMainNavigation.find((item) => item.id !== 'settings' && (pathname === item.href || pathname.startsWith(`${item.href}/`)))?.id ?? (settingsActive ? 'settings' : '');
   /** Opens the account or preferences surface selected by the menu action. */
   const openFromMenu = (dialog: 'account' | 'preferences') => {
     suppressMenuFocusRef.current = true;
@@ -176,7 +184,7 @@ function ChatTriggerButton() {
         <header className="topbar">
           <Link href="/app" className="brand-name">BBD-OS</Link>
           <div className="top-actions">
-            <ChatTriggerButton />
+            {visibleMainNavigation.some((item) => item.id === 'chat') && <ChatTriggerButton />}
             <CommandPalette />
             <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
               <DropdownMenuTrigger asChild>
@@ -197,12 +205,12 @@ function ChatTriggerButton() {
         </header>
         <div className="workspace">
           <nav className="workspace-nav" aria-label={t('mainNavigation')}>
-            {mainNavigation.map((item) => <Link key={item.id} href={item.href} aria-current={active === item.id ? 'page' : undefined}>{t(item.messageKey)}</Link>)}
+            {visibleMainNavigation.map((item) => <Link key={item.id} href={item.href} aria-current={active === item.id ? 'page' : undefined}>{t(item.messageKey)}</Link>)}
           </nav>
           {settingsActive && <nav className="settings-nav" aria-label={t('settings')}>
             <h2>{t('settings')}</h2>
-            {settingsGroups.map((item) => <Link key={item.id} href={item.href} aria-current={pathname === item.href ? 'page' : undefined}>{t(item.messageKey)}</Link>)}
-            <div className="settings-details">{detailDestinations.map((item) => <Link key={item.id} href={item.href}>{t(item.messageKey)}</Link>)}</div>
+            {visibleSettingsGroups.map((item) => <Link key={item.id} href={item.href} aria-current={pathname === item.href ? 'page' : undefined}>{t(item.messageKey)}</Link>)}
+            <div className="settings-details">{visibleDetails.map((item) => <Link key={item.id} href={item.href}>{t(item.messageKey)}</Link>)}</div>
           </nav>}
           <main className="workspace-main">{children}</main>
         </div>

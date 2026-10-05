@@ -8,6 +8,9 @@ calls a model, sends a webhook or creates a task: preview is pure evaluation.
 
 from __future__ import annotations
 
+from core.telemetry import RunMeta as _RunMeta
+from modules.automations.models import AutomationRun as _AutomationRun
+
 import hashlib
 import json
 from datetime import UTC, datetime
@@ -387,5 +390,24 @@ __all__ = [
     "create_automation", "decide_action", "delete_automation", "enqueue_trigger", "evaluate_conditions",
     "get_automation", "get_automation_conversation_id", "get_revision", "list_automations", "list_runs", "origin_for_reference", "preview",
     "start_manual",
-    "update_automation", "validate_definition",
+    "update_automation", "validate_definition", "list_run_meta", "get_run_meta_by_id",
 ]
+
+
+async def list_run_meta(session: AsyncSession, limit: int) -> list[_RunMeta]:
+    """Return at most ``limit`` (<=100) newest automation runs as metadata only (no payload, reason text excluded)."""
+    rows = await session.scalars(select(_AutomationRun).order_by(_AutomationRun.created_at.desc()).limit(min(limit, 100)))
+    return [_RunMeta(kind="automation", id=str(r.id), status=r.status, created_at=r.created_at,
+                     updated_at=r.updated_at, finished_at=r.finished_at,
+                     origin_run_id=str(r.origin_run_id) if r.origin_run_id else None)
+            for r in rows]
+
+
+async def get_run_meta_by_id(session: AsyncSession, run_id: UUID) -> _RunMeta | None:
+    """Return one metadata-only run projection by its indexed primary key."""
+    row = await session.get(_AutomationRun, run_id)
+    if row is None:
+        return None
+    return _RunMeta(kind="automation", id=str(row.id), status=row.status, created_at=row.created_at,
+                    updated_at=row.updated_at, finished_at=row.finished_at,
+                    origin_run_id=str(row.origin_run_id) if row.origin_run_id else None)

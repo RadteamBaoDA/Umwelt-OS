@@ -20,8 +20,9 @@ from modules.search.schemas import (
     SearchResponse,
 )
 from modules.tasks.schemas import TaskFilter
+from modules.settings.public import module_dependency
 
-router = APIRouter(prefix="/api/v1/search", tags=["search"])
+router = APIRouter(prefix="/api/v1/search", tags=["search"], dependencies=[Depends(module_dependency("search"))])
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[AuthSession, Depends(require_owner)]
 OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]

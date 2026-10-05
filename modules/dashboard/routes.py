@@ -23,8 +23,9 @@ from modules.dashboard.schemas import (
     PresetPreviewRead,
 )
 from modules.sources.schemas import GadgetSourceSelectionPage
+from modules.settings.public import module_dependency
 
-router = APIRouter(prefix="/api/v1", tags=["dashboard"])
+router = APIRouter(prefix="/api/v1", tags=["dashboard"], dependencies=[Depends(module_dependency("dashboard"))])
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[AuthSession, Depends(require_owner)]
 OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]

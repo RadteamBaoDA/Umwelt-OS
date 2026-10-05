@@ -27,8 +27,9 @@ from modules.memory.schemas import (
     MemorySupersedeRequest,
     MemoryUpdate,
 )
+from modules.settings.public import module_dependency
 
-router = APIRouter(tags=["memory"])
+router = APIRouter(tags=["memory"], dependencies=[Depends(module_dependency("memory"))])
 
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[AuthSession, Depends(require_owner)]

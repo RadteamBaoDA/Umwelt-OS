@@ -16,7 +16,9 @@ from core.config import Settings
 from core.model_gateway.schemas import AIExecutionConfig, AISettingsRead, AISettingsUpdate, ModelMapping, PrivacySettings
 from modules.settings.models import AISettingsRecord, legacy_aliases
 from modules.settings.models import OwnerPreferencesRecord
-from modules.settings.schemas import OwnerPreferencesRead, OwnerPreferencesUpdate
+from modules.settings.schemas import (
+    ModuleLifecycleRead, OwnerPreferencesRead, OwnerPreferencesUpdate, RetentionSettingsRead,
+)
 
 OWNER_ID = 1
 ALIASES = ("reasoning-large", "reasoning-small", "fast", "embedding", "reranker", "vision", "local-private")
@@ -315,6 +317,34 @@ async def read_owner_preferences(session: AsyncSession) -> OwnerPreferencesRead:
         locale=row.locale,
         timezone=row.timezone,
     )
+
+
+async def read_module_availability(session: AsyncSession) -> ModuleLifecycleRead:
+    """Return the persisted effective module view for cross-module owner boundaries."""
+    from modules.settings.lifecycle import read_module_lifecycle
+
+    return await read_module_lifecycle(session)
+
+
+async def read_retention_settings(session: AsyncSession) -> RetentionSettingsRead:
+    """Return the owner-approved retention policy through Settings' public projection."""
+    from modules.settings.lifecycle import read_retention_settings as _read_retention_settings
+
+    return await _read_retention_settings(session)
+
+
+async def module_is_enabled(session: AsyncSession, module_id: str) -> bool:
+    """Resolve current dependency-derived module availability for worker and tool dispatch."""
+    from modules.settings.lifecycle import module_is_enabled as _module_is_enabled
+
+    return await _module_is_enabled(session, module_id)
+
+
+def module_dependency(module_id: str):
+    """Build the owner-first request dependency for routes owned by another module."""
+    from modules.settings.lifecycle import module_dependency as _module_dependency
+
+    return _module_dependency(module_id)
 
 
 async def save_owner_preferences(

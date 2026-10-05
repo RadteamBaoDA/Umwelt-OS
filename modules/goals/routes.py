@@ -21,8 +21,9 @@ from modules.goals.schemas import (
     PlanAcceptanceResult,
     PlanProposal,
 )
+from modules.settings.public import module_dependency
 
-router = APIRouter(prefix="/api/v1/goals", tags=["goals"])
+router = APIRouter(prefix="/api/v1/goals", tags=["goals"], dependencies=[Depends(module_dependency("goals"))])
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[AuthSession, Depends(require_owner)]
 OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]

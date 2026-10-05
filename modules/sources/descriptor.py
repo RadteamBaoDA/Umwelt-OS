@@ -11,6 +11,7 @@ class SourceDescriptor:
     description: str = "Manage collection identities and source lifecycle."
     enabled: bool = True
     dependencies: tuple[str, ...] = ()
+    scheduled_jobs: tuple[str, ...] = ()
     provides: tuple[str, ...] = ("sources",)
     requires: tuple[str, ...] = ()
     routes: tuple[str, ...] = ("/api/v1/sources",)

@@ -1,0 +1,14 @@
+# Explicit overlay: include this file only when the owner enables the remote Langfuse profile.
+x-langfuse-environment: &langfuse-environment
+  BBD_LANGFUSE_ENABLED: ${BBD_LANGFUSE_ENABLED:-false}
+  BBD_TELEMETRY_EGRESS_APPROVED: ${BBD_TELEMETRY_EGRESS_APPROVED:-false}
+  BBD_LANGFUSE_BASE_URL: ${BBD_LANGFUSE_BASE_URL:-}
+  BBD_LANGFUSE_PUBLIC_KEY: ${BBD_LANGFUSE_PUBLIC_KEY:-}
+  BBD_LANGFUSE_SECRET_KEY: ${BBD_LANGFUSE_SECRET_KEY:-}
+
+services:
+  api:
+    environment: *langfuse-environment
+
+  worker:
+    environment: *langfuse-environment

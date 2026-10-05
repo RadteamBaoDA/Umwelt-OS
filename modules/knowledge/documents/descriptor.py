@@ -11,6 +11,7 @@ class DocumentDescriptor:
     description: str = "Store source-backed documents and immutable revisions."
     enabled: bool = True
     dependencies: tuple[str, ...] = ("sources",)
+    scheduled_jobs: tuple[str, ...] = ("process_document_ready",)
     provides: tuple[str, ...] = ("documents", "document_versions", "document_chunks")
     requires: tuple[str, ...] = ("sources",)
     routes: tuple[str, ...] = ("/api/v1/documents", "/api/v1/documents/upload", "/api/v1/documents/{id}/raw")

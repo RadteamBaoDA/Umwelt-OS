@@ -24,6 +24,7 @@ class BrowserReadJob(Base):
         CheckConstraint("actual_pages BETWEEN 0 AND 3 AND actual_bytes BETWEEN 0 AND 5242880", name="ck_browser_read_jobs_usage"),
         UniqueConstraint("run_id", "tool_slot", name="uq_browser_read_jobs_run_slot"),
         Index("ix_browser_read_jobs_owner_expiry", "owner_id", "expires_at"),
+        Index("ix_browser_read_jobs_retention", "status", "expires_at", "id"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)

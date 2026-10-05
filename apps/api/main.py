@@ -11,6 +11,9 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from core.auth.routes import router as auth_router
 from core.config import Settings
 from core.errors import install_error_handling
+from core.telemetry import install_log_redaction
+from modules.observability.routes import router as observability_router
+from modules.observability.operations_routes import router as operations_router
 from core.modules import register_modules
 from core.system.routes import router as system_router
 from modules.knowledge.documents.routes import router as documents_router
@@ -49,7 +52,7 @@ from modules.automations.tools import register_automation_tools
 from modules.tasks.tools import register_task_tools
 from modules.tools.public import McpAdmission, McpRuntime, create_inbound_mcp_bundle
 from modules.agents.routes import router as agents_router
-from modules.automations.routes import router as automations_router
+from modules.automations.routes import router as automations_router, webhook_router as automation_webhook_router
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -110,6 +113,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         https_only=app_settings.secure_cookies,
         same_site="lax",
     )
+    install_log_redaction()
     install_error_handling(app)
     app.include_router(auth_router)
     app.include_router(system_router)
@@ -136,9 +140,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(news_router)
     app.include_router(notifications_router)
     app.include_router(automations_router)
+    app.include_router(automation_webhook_router)
     app.include_router(chat_router)
     app.include_router(memory_router)
     app.include_router(agents_router)
+    app.include_router(observability_router)
+    app.include_router(operations_router)
     app.include_router(browser_jobs_router)
     app.state.modules = register_modules()
     tool_registry = ToolRegistry(module_registry=app.state.modules)

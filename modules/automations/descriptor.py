@@ -17,6 +17,7 @@ class AutomationsDescriptor:
         "tasks", "goals", "notifications", "dashboard", "agents", "tools", "sources",
         "knowledge.documents", "knowledge.entities", "knowledge.timeline",
     )
+    scheduled_jobs: tuple[str, ...] = ("process_automation_run",)
     provides: tuple[str, ...] = ("automation_rules",)
     requires: tuple[str, ...] = ("tasks", "notifications", "dashboard", "agents")
     routes: tuple[str, ...] = (

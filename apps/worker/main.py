@@ -1,7 +1,8 @@
-from typing import Any, ClassVar, cast
+from functools import wraps
+from typing import Any, Callable, ClassVar, cast
 
 from arq.connections import RedisSettings
-from arq.cron import cron
+from arq.cron import cron as _cron
 from sqlalchemy import delete, func, select
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import (
@@ -14,6 +15,7 @@ from redis.asyncio import Redis
 
 from core.auth.models import AuthSession
 from core.config import Settings
+from core.telemetry import install_log_redaction, instrument_job, set_process_role
 from core.system.health import ARQ_WORKER_HEALTH_KEY
 from modules.ingestion.dispatcher import dispatch_pending_work
 from modules.ingestion.worker import (
@@ -37,11 +39,43 @@ from modules.dashboard.worker import run_scheduled_brief
 from modules.chat.worker import process_chat_response, purge_expired_chat_runs
 from modules.agents.worker import compose_agent_registry, process_agent_run, reconcile_agent_dispatch
 from modules.automations.worker import process_automation_run, reconcile_automation_runs
+from modules.observability.maintenance import run_retention_maintenance
+from core.modules import register_modules, scheduled_job_owners
+
+_JOB_OWNERS = scheduled_job_owners(register_modules())
+
+
+def _gate_module_job(function: Callable[..., Any]) -> Callable[..., Any]:
+    """Refresh persisted module availability before dispatching a declared owner job."""
+    module_id = _JOB_OWNERS.get(function.__name__)
+    if module_id is None:
+        return function
+
+    @wraps(function)
+    async def guarded(ctx: dict[str, object], *args: Any, **kwargs: Any) -> Any:
+        """Leave durable queued work untouched while its owner module is disabled."""
+        factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+        from modules.settings.public import read_module_availability
+
+        async with factory() as session:
+            lifecycle = await read_module_availability(session)
+        if not next((item.enabled for item in lifecycle.modules if item.id == module_id), False):
+            return None
+        return await function(ctx, *args, **kwargs)
+
+    return guarded
+
+
+def cron(function: Callable[..., Any], *args: Any, **kwargs: Any) -> object:
+    """Attach a fresh persisted owner-module check to declared scheduled dispatch jobs."""
+    return _cron(_gate_module_job(function), *args, **kwargs)
 
 async def startup(ctx: dict[str, object]) -> None:
     """Load the bounded database pool and compose the worker-owned native/MCP agent registry."""
     settings = Settings()
     ctx["settings"] = settings
+    install_log_redaction()
+    set_process_role("worker")
     engine = create_async_engine(settings.database_url, pool_pre_ping=True, pool_size=2)
     ctx["session_factory"] = async_sessionmaker(engine, expire_on_commit=False)
     ctx["db_engine"] = engine
@@ -88,14 +122,22 @@ async def purge_expired_sessions(ctx: dict[str, object]) -> int:
 
 class WorkerSettings:
     """ARQ worker registration, recurring schedules, retry/concurrency bounds, and lifecycle hooks."""
+    # Queue delay / duration / outcome telemetry wraps only event-driven jobs (labelled by function
+    # name); cron polls stay unwrapped so no-op polls record and log nothing.
     functions: ClassVar[list[object]] = [
-        purge_expired_sessions, process_ingestion_event, process_normalize_event, process_uploaded_file, process_source_purge,
-        reconcile_connectors, process_document_ready, process_entity_extraction_work, process_timeline_extraction_work,
-        process_graph_operation, process_news_document_ready, process_chat_response, purge_expired_chat_runs,
-        process_agent_run, process_automation_run,
+        purge_expired_sessions, instrument_job(process_ingestion_event, success_return_outcome="returned"),
+        instrument_job(process_normalize_event, success_return_outcome="returned"),
+        instrument_job(process_uploaded_file, success_return_outcome="returned"), process_source_purge,
+        reconcile_connectors, instrument_job(process_document_ready, success_return_outcome="returned"),
+        instrument_job(process_entity_extraction_work),
+        instrument_job(process_timeline_extraction_work), instrument_job(process_graph_operation),
+        instrument_job(process_news_document_ready), instrument_job(process_chat_response), purge_expired_chat_runs,
+        instrument_job(process_agent_run, run_id_kind="agent_run_id"), instrument_job(process_automation_run),
     ]
+    functions = [_gate_module_job(function) for function in functions]
     cron_jobs: ClassVar[list[object]] = [
         cron(purge_expired_sessions, minute=0),
+        cron(run_retention_maintenance, minute=0),
         cron(cleanup_storage_orphans, minute=set(range(0, 60, 5))),
         cron(dispatch_pending_work, second=set(range(0, 60, 5)), run_at_start=True),
         cron(index_pending_chunks, minute=set(range(0, 60, 1))),

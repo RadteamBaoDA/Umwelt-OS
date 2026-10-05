@@ -16,6 +16,12 @@ async def reconcile_automation_runs(ctx: dict[str, Any]) -> int:
     passes only repeat work that the database already absorbs. Returns jobs enqueued.
     """
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    from modules.settings.public import module_is_enabled
+
+    async with factory() as session:
+        enabled = await module_is_enabled(session, "automations")
+    if not enabled:
+        return 0
     await scheduler.tick(factory)
     await producers.sweep(factory)
     await execution.fan_out_triggers(factory)

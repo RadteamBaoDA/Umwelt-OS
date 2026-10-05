@@ -22,8 +22,9 @@ from modules.tasks.schemas import (
     TaskUpdate,
     TaskView,
 )
+from modules.settings.public import module_dependency
 
-router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
+router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"], dependencies=[Depends(module_dependency("tasks"))])
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[AuthSession, Depends(require_owner)]
 OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]

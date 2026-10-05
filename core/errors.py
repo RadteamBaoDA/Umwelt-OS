@@ -7,6 +7,9 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from core.telemetry import bind_trace, count, observe_ms
+import time
+
 logger = logging.getLogger("bbd.api")
 
 def install_error_handling(app: FastAPI) -> None:
@@ -16,7 +19,20 @@ def install_error_handling(app: FastAPI) -> None:
     async def request_id(request: Request, call_next: Any) -> Any:
         """Attach a fresh request ID and apply no-store cache policy to API responses."""
         request.state.request_id = str(uuid4())
-        response = await call_next(request)
+        started = time.perf_counter()
+        status = 500
+        try:
+            with bind_trace(request_id=request.state.request_id):
+                response = await call_next(request)
+            status = response.status_code
+        finally:
+            # Label is the matched route template (e.g. /api/v1/sources/{source_id}), never the raw
+            # path, so cardinality is bounded by the route table; unmatched/mounted paths fold to one value.
+            route = request.scope.get("route")
+            template = getattr(route, "path", None) or "unmatched"
+            labels = {"method": request.method, "route": template}
+            observe_ms("api_request_ms", started, **labels)
+            count("api_requests_total", **labels, status_class=f"{status // 100}xx")
         response.headers["X-Request-ID"] = request.state.request_id
         if request.url.path.startswith("/api/v1/auth/"):
             response.headers["Cache-Control"] = "no-store"

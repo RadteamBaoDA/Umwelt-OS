@@ -1,5 +1,7 @@
 """Public module contracts and API boundary for the chat capability."""
 
+from sqlalchemy import select as _select
+from core.telemetry import RunMeta as _RunMeta
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from uuid import UUID
@@ -390,3 +392,21 @@ async def list_agent_run_ids_for_delete(
         statement = statement.where(AgentActivityLink.agent_run_id > after)
     return list((await session.scalars(statement.order_by(AgentActivityLink.agent_run_id).limit(50))).all())
 
+
+async def list_run_meta(session: AsyncSession, limit: int) -> list[_RunMeta]:
+    """Return at most ``limit`` (<=100) newest chat response runs as metadata only: no messages, errors text or context."""
+    rows = await session.scalars(_select(ResponseRun).order_by(ResponseRun.created_at.desc()).limit(min(limit, 100)))
+    return [_RunMeta(kind="chat", id=str(r.id), status=r.status, error_code=r.error_code,
+                     created_at=r.created_at, updated_at=r.updated_at, finished_at=r.completed_at,
+                     model_identity=r.model_name, token_usage=r.token_usage or None)
+            for r in rows]
+
+
+async def get_run_meta_by_id(session: AsyncSession, run_id: UUID) -> _RunMeta | None:
+    """Return one metadata-only response-run projection by its indexed primary key."""
+    row = await session.get(ResponseRun, run_id)
+    if row is None:
+        return None
+    return _RunMeta(kind="chat", id=str(row.id), status=row.status, error_code=row.error_code,
+                    created_at=row.created_at, updated_at=row.updated_at, finished_at=row.completed_at,
+                    model_identity=row.model_name, token_usage=row.token_usage or None)

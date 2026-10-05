@@ -13,6 +13,7 @@ class AgentDescriptor:
     description: str = "Bounded assistant and owner-configured specialist orchestration."
     enabled: bool = True
     dependencies: tuple[str, ...] = ("tools", "chat")
+    scheduled_jobs: tuple[str, ...] = ("process_agent_run",)
     provides: tuple[str, ...] = ("agent_runs",)
     requires: tuple[str, ...] = ("tool_registry",)
     routes: tuple[str, ...] = ("/api/v1/agents", "/api/v1/agents/profiles", "/api/v1/agent-runs")

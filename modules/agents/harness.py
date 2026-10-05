@@ -292,6 +292,15 @@ class HarnessContext:
     async def revalidate_principal(self, principal: ToolExecutionPrincipal) -> bool:
         """Recheck run lease, owner session, workflow versions, and exact current registry contracts."""
         try:
+            from core.modules import effective_modules, register_modules
+            from modules.settings.public import read_module_availability
+
+            async with self.session_factory() as availability_session:
+                lifecycle = await read_module_availability(availability_session)
+            disabled = {item.id for item in lifecycle.modules if item.explicitly_disabled}
+            self.registry.set_module_registry(effective_modules(disabled, register_modules()))
+            if not next((item.enabled for item in lifecycle.modules if item.id == "agents"), False):
+                return False
             row = await self._run_snapshot()
             if principal.actor_id != f"owner:{row.owner_id}" or not principal.is_owner:
                 return False

@@ -4,6 +4,9 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { commandDestinations } from '@/core/module-registry';
+import { destinationEnabled, type ModuleAvailability } from '@/core/module-registry';
+import { apiRequest } from '@/core/api';
+import { useQuery } from '@tanstack/react-query';
 import { useGuardedNavigation } from '@/core/guarded-navigation';
 
 /** Checks whether a key event originated in an editable control. */
@@ -19,7 +22,13 @@ export function CommandPalette() {
   const inputRef = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState('');
-  const actions = commandDestinations.filter((action) => t(action.messageKey).toLocaleLowerCase().includes(filter.toLocaleLowerCase()));
+  const moduleAvailability = useQuery({
+    queryKey: ['module-lifecycle'],
+    queryFn: () => apiRequest<ModuleAvailability>('/api/v1/settings/modules'),
+    refetchOnWindowFocus: true,
+  });
+  const actions = commandDestinations.filter((action) => destinationEnabled(action, moduleAvailability.data)
+    && t(action.messageKey).toLocaleLowerCase().includes(filter.toLocaleLowerCase()));
 
   useEffect(() => {
     /** Handles the palette shortcut only when the key event is not consumed by an editable control. */

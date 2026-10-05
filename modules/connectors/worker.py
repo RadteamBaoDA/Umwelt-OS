@@ -275,11 +275,16 @@ async def _resume_activation(
 async def reconcile_connectors(ctx: dict[str, object]) -> int:
     """Progress connector provisioning and one bounded GitHub hint dispatch pass."""
     settings = cast(Settings, ctx["settings"])
-    completed = await dispatch_github_webhooks(ctx)
+    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    from modules.settings.public import read_module_availability
+
+    async with factory() as availability_session:
+        lifecycle = await read_module_availability(availability_session)
+    enabled = next((item.enabled for item in lifecycle.modules if item.id == "connectors"), False)
+    completed = await dispatch_github_webhooks(ctx) if enabled else 0
     api_key = settings.n8n_api_key.get_secret_value()
     if not api_key:
         return completed
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     encryption_key = settings.connector_credential_encryption_key.get_secret_value()
     credentials = N8nCredentials(str(settings.n8n_service_url), api_key)
     api = N8nApi(str(settings.n8n_service_url), api_key)
@@ -337,6 +342,7 @@ async def reconcile_connectors(ctx: dict[str, object]) -> int:
                 row.workflow_operation.get("step", {}).get("request"),
             )
             for row in workflow_rows
+            if enabled or row.workflow_operation.get("step", {}).get("kind") == "delete"
         ]
         unknown_create_pending = [
             (
@@ -348,7 +354,7 @@ async def reconcile_connectors(ctx: dict[str, object]) -> int:
             )
             for row in unknown_create_rows
         ]
-        activation_pending = [row.source_id for row in activation_rows]
+        activation_pending = [row.source_id for row in activation_rows] if enabled else []
         await session.rollback()
 
     for source_id, slot, operation_id, kind in credentials_pending:

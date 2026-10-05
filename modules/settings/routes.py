@@ -12,7 +12,11 @@ from core.config import Settings
 from core.database import get_session
 from core.model_gateway.schemas import AISettingsRead, AISettingsUpdate, ConnectionDraft, ModelMapping, ModelSettingsRead, PrivacySettings
 from modules.settings import models, public
-from modules.settings.schemas import OwnerPreferencesRead, OwnerPreferencesUpdate
+from modules.settings.schemas import (
+    ModuleLifecycleRead, ModuleLifecycleUpdate, OwnerPreferencesRead, OwnerPreferencesUpdate,
+    RetentionSettingsRead, RetentionSettingsUpdate,
+)
+from modules.settings import lifecycle
 
 router = APIRouter(prefix="/api/v1/settings", tags=["settings"])
 Session = Annotated[AsyncSession, Depends(get_session)]
@@ -36,6 +40,35 @@ async def save_owner_preferences(
     saved = await public.save_owner_preferences(session, value)
     await session.commit()
     return saved
+
+
+@router.get("/retention", response_model=RetentionSettingsRead)
+async def read_retention(session: Session, _owner: OwnerRead) -> RetentionSettingsRead:
+    """Read the owner's trace-retention policy after owner authorization."""
+    return await lifecycle.read_retention_settings(session)
+
+
+@router.patch("/retention", response_model=RetentionSettingsRead)
+async def patch_retention(value: RetentionSettingsUpdate, session: Session, _owner: OwnerWrite) -> RetentionSettingsRead:
+    """Save a revision-fenced trace-retention policy; source and document history stay retained."""
+    result = await lifecycle.save_retention_settings(session, value)
+    await session.commit()
+    return result
+
+
+@router.get("/modules", response_model=ModuleLifecycleRead)
+async def read_modules(session: Session, _owner: OwnerRead) -> ModuleLifecycleRead:
+    """Read descriptor-derived module availability for owner controls."""
+    return await lifecycle.read_module_lifecycle(session)
+
+
+@router.patch("/modules", response_model=ModuleLifecycleRead)
+async def patch_module(value: ModuleLifecycleUpdate, session: Session, request: Request, _owner: OwnerWrite) -> ModuleLifecycleRead:
+    """Persist one dependency-aware module toggle and refresh this API process after commit."""
+    result = await lifecycle.save_module_lifecycle(session, value)
+    await session.commit()
+    lifecycle.sync_application_modules(request.app, result)
+    return result
 
 
 async def _read(session: AsyncSession, request: Request) -> AISettingsRead:

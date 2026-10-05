@@ -4,10 +4,10 @@
 
 - Product scope: canonical sections 165–166; original phase plans plus [R01–R16](2026-09-30-umwelt-os-spec-reconciliation.md).
 - Method: subagent-driven; code/build first, test stage only after all original and supplemental code/build/review completes.
-- Current action (2026-10-05 19:52): PAUSED by owner. No subagents running. P07–P10 squash-merged into develop; P11-T1 implemented on codex/umwelt-p11, review pending. Resume: re-dispatch P11-T1 review, then T2–T4, P12, deferred test stage. Implement Sonnet 5.5, review Opus 5.5.
+- Current action (2026-10-05): ACTIVE, owner resumed remaining plan. Parallel independent reviews at P11-T4 f3684a2, R12 R1 884d7bc, R14 R1 c6df508. develop remains 71b32aa. gpt-6-luna implementation (Luna6.1 unavailable); gpt-6.1-sol review/planning. Production builds only until all code/reviews close.
 - Baseline: original Phases 1–3 code/build/review complete; Phase 3 commit 4d0f774 is present in local main history. Runtime acceptance deferred.
 - Preserved historical draft: D:/Project/Umwelt-OS-phase-4 on codex/bbd-os-phase-4, with uncommitted entity/relationship code and 0007_entities.py. Verified backup retained; this is not the active implementation tree.
-- Active production tasks (2026-10-05 verified): isolated Luna P07 specialist S1 code/build/source complete and committed faa80d2, P08 native Tasks/Goals producer plus full Chat/privacy source review, and P09-T2 S2 complete and committed c5c036b; T3/T4 preflight. P07 registry/MCP/harness/approvals c934667 and P09 OAuth/S1 93686af are committed in canonical worktrees; develop818b6af has no new phase7/9 merge. P09 S2 partial frontend17pages PASS; P07 specialist canonical frontend20pages/four-image build PASS and finite source review closed; Docker engine recovered. Remaining P07 supervisor/browser/MCP collection, P08 dailycontext/brief/notifications/R11/R12, P09 mapping/presentation, P10-P12 and reconciliation are required. Deferred validation has not begun.
+- Active production tasks: P11-T4 review, R12/R14 scoped repair re-reviews; existing worktrees reused. Repairs/builds follow verdicts; Docker builds serialized.
 - Report completion immediately and commit/merge scoped completed work per owner authorization. No push/deploy/destructive owner-data operations.
 
 ## Phase checkpoints
@@ -25,7 +25,7 @@
 | 8 | [Ready](2026-09-25-umwelt-os-phase-8-today-daily-chat-tasks.md) | Code/build/review complete; squash-merged into develop | Deferred validation | codex/bbd-p08-dashboard 1e41d0d; final review fix-first → fixed (a453467, 1e41d0d) |
 | 9 | [Ready](2026-09-25-umwelt-os-phase-9-github-integration.md) | Code/build/review complete; squash-merged into develop | Deferred validation | integrate/p09 b470593; T3 review clean; T4 + phase final review fix-first → fixed (76731e5, 6629865, b470593) |
 | 10 | [Ready](2026-09-25-umwelt-os-phase-10-automation-workflows.md) | Code/build/review complete; squash-merged into develop | Deferred validation; webhook trigger after n8n inbound receiver gate | codex/umwelt-p10 deb5446; T1–T4 review clean; phase final review fix-first → fixed |
-| 11 | [Ready](2026-09-25-umwelt-os-phase-11-observability-operations.md) | T1 implemented, awaiting review (paused) | P11-T1 review | codex/umwelt-p11 5f29212 |
+| 11 | [Ready](2026-09-25-umwelt-os-phase-11-observability-operations.md) | Production code/build/source review complete a19d77b, phase squash integration | R12/R14 composition; deferred validation | T4 scoped PASS e7060ee; final whole-phase docs review PASS a19d77b; exact full build PASS |
 | 12 | [Ready](2026-09-25-umwelt-os-phase-12-hardening-release-acceptance.md) | Not started | P12-T1 | Not executed |
 
 ## External acceptance gates
@@ -1909,3 +1909,143 @@ Squash of codex/umwelt-p10 deb5446 (staged tree identical apart from controller 
 - Accepted supplemental production composed into develop with this task-sized checkpoint commit. No tests, lint, standalone typecheck, provider/runtime probes or migration execution; runtime acceptance deferred.
 - R12 author tree fast-forwarded to accepted 3afc278 and implementation resumed. P11 T1/T2 accepted in phase branch; T3 active, T4 and whole-phase composition/review/build pending. R07 provenance/actual port, R14/R15 and P12/R16 remain mandatory before deferred tests.
 - Model selection confirmed by owner: gpt-6-luna implementation; gpt-6.1-sol review/planning. Primary physical checkout is D:/Project/Umwelt-OS; desktop still reports obsolete BBD-OS cwd, so commands use explicit real paths.
+
+### R07 / R12 source integration checkpoint — 2026-10-05
+- Sol R07 preflight READY: ignored .superpowers/sdd/2026-10-05-r07-chat-port/preflight.md, verified upstream AnythingLLM 128a01575a50f0284aeca75a93399b6fb1db0328 and MIT license. Existing interaction patterns are not established copied-source provenance. Bounded actual port queued for scroll/composer/Markdown sanitization/copy feedback with exact notices.
+- Critical R12 Ask seam: UI kind/items context is persisted verbatim but worker consumes source_scope/selected_refs. R12 Luna assigned narrow Chat-owner validated exact-version translation/resolution with current policy/deletion fences; gadget-only context changes cannot close this contract.
+- P12-T1 Sol finite source preflight active for consistent encrypted backup/restore/export. Production work remains P11-T3 and R12; no deferred validation started.
+
+### Parallel production dispatch — 2026-10-05
+- Third Luna implementer r14_world_data dispatched from accepted develop71b32aa into separate Umwelt-OS-r14-world-data tree; native desktop path metadata remains stale, verified Git worktree fallback authorized.
+- Independent production owners: P11 retention/lifecycle; R12 genuine document/Telegram/highlight consumers and exact Chat context; R14 observations/provider normalization and finance/weather. Parent composes shared seams only after frozen source reviews. Docker builds serialized.
+- R14 official documentation snapshots saved ignored provider-evidence; Open-Meteo free/noncommercial/CC-BY4 conditions recorded. Alpha Vantage terms PDF saved but content not yet inspected; no license/activation proof claimed.
+- Sol P12-T1 preflight READY at ignored .superpowers/sdd/2026-10-05-p12-backup/preflight.md. P11 disable is not global backup quiesce; durable admission/journal, encrypted key recovery and isolated restore required. Unsupported active graph backup prevents complete recoverable-backup claim. P12 production remains queued after dependencies.
+
+### P11-T3 composed source freeze — 2026-10-05
+- Provisional production commit cbc8ec4; accepted collector9812196 cherry-picked as7fca5c3 with narrow connector-route import/module-gate conflict resolution, then accepted repair3afc278 as2ff4e2c cleanly.
+- T3 unshipped migration parents p10_automation_webhook_credentials; final source review will inspect composed overlap and migration chain. No shipped migration rewrite or whole-file ours/theirs resolution authorized.
+- Serialized Docker build slot granted to T3; generated process-only build POSTGRES_PASSWORD recipe supplied with finally restoration, no secret output/service starts. Full prescribed build/source verdict pending; no T3 completion or P11 develop merge claim.
+
+### P11-T3 build checkpoint — 2026-10-05
+- Composed source at2ff4e2c: prescribed frontend production compile/integrated TypeScript/static generation20/20 PASS.
+- Full build exited1 before Docker image compilation: listing workers for Build failed / EOF. Process-only build password restored in finally; no restart/service start/daemon probes.
+- One full prescribed build retry authorized under reserved T3 slot. Full build remains pending; infrastructure failure is not source acceptance or task completion. R12/R14 production continue independently.
+- P11-T3 full prescribed retry build PASS, exit0: Next production/integrated TypeScript20pages plus web/API/worker/migrate images Built. Temporary process environment restored. Source freeze/report and independent Sol review next; no runtime/tests/phase merge yet.
+
+### P11-T3 source review R1 required — 2026-10-05
+- Frozen2ff4e2c independent Sol verdict REQUEST CHANGES:7 material findings, report in P11 proper phase workspace/review-t3-result.md.
+- P1 independent bearer-only automation ingress inherited owner-session/CSRF router gate; P1 running automation subsequent action/final webhook lacks current persisted dependency fence.
+- P2 scheduled MCP/per-call/final receipt lifecycle gate missing; P2 browser retained cleaned tombstones starve later cleanup; P2 oldest protected agent runs starve later eligible traces; P2 maintenance imports private Settings retention ORM; P2 entities navigation uses wrong descriptor ID.
+- Luna scoped R1 dispatched preserving callback auth, durable paused/recovery rows, current generation/revision/activation fences and canonical evidence/history/ledger records. Affected prescribed build and scoped Sol re-review required. Full build PASS alone did not close source gate; T4 and P11 merge remain pending.
+
+### R12 build and composition seam — 2026-10-05
+- R12 author reports source-ready: bounded shared Documents source/channel projection, immutable-version read/bookmark, scoped text/table/video/Telegram, exact Chat context and independently scheduled highlight evaluation/durable notification dedupe. Full build and source review pending; Docker slot granted R12.
+- Source inspection finds run_scheduled_highlights new Dashboard cron. At composition with P11, add this job to Dashboard scheduled_jobs ownership so persisted module disable fences it; unknown jobs in P11 wrapper otherwise remain ungated. Redis rotating scan cursor is execution assistance, not canonical notification/dedupe state.
+- Planned unshipped migration composition: webhook -> accepted P11 retention -> R12 interactions -> R14 observations. Branch-local webhook parents are valid for independent builds; reparent only unshipped revisions when composing accepted source, no shipped ancestry rewrite.
+
+### R14 bounded quota ruling / R12 build — 2026-10-05
+- R14 fixes direct catalog mismatch: credential-free Open-Meteo must not require credentials. Its modeled current/hourly weather preserves forecast/model semantics, not sensor-measurement claims.
+- Ruling: tighter Alpha free-provider max5 symbols/daily schedule; reuse existing atomic Redis execution-admission budget and cooldown for manual/scheduled shared collector. Count all attempted GETs including retries before egress; HMAC/reference key only, no raw key/log. Redis is execution assistance, not canonical data/job/effect ledger; Redis loss/reset/external key usage prevent a global provider-allowance guarantee. Remote quota response is authoritative rate_limited, not successful empty data. No generic quota framework/table solely to imply that guarantee.
+- R12 first prescribed build stopped before compilation on missing next in fresh tree. Locked dependency install authorized; prescribed retry follows, generated process env restored. Full build/source review still pending.
+- R12 prescribed build PASS after locked npm ci and correcting duplicate unreadBadge locale keys found by integrated build TypeScript. Frontend/static generation and all four images built; no services/tests/runtime checks. Production commit/report/frozen diff pending, then independent Sol source review; no R12 completion/merge claim.
+
+### Serialized build/review queue — 2026-10-05
+- R14 author source-ready after provider quota/credential/missing-weather contract fixes; Docker build slot granted. No actual provider activation/query performed.
+- P11-T3 R1 seven-item source repair ready for finite self-pass; waits R14 build release before prescribed build. No source verdict yet.
+- R12 full build PASS; production commit/report/frozen diff being prepared for Sol review. Review queue remains scoped per task, not another audit of accepted phases.
+
+### R12 frozen handoff — 2026-10-05
+- R12 committed41daec2, clean, ignored implementation-report.md/production.patch in own task workspace.
+- Author disclosed small frontend cleanup AFTER successful prescribed build; frozen41 build gate therefore pending, queued after R14. Do not reuse earlier build as exact frozen-source acceptance. Then P11R1 build queue.
+- Sol R12 source review dispatch returned agent thread limit reached despite reviewer previously idle/completed; parent will retry after slot release, no duplicate review/source acceptance claim.
+
+### R14 prescribed build PASS; frozen handoff pending — 2026-10-05
+- Locked fresh dependencies installed; prescribed build PASS frontend/integrated TypeScript/four images after JSX closing-tag and nullable DTO contract repairs. Generated process password restored absent; no .env created, no services/provider/runtime/migration/tests/lint/standalone typecheck.
+- Source commit/report freeze pending; known provider-side Alpha quota-message mapping remains generic unavailable fetch failure instead of rate_limited. Record as open requirement for Sol review/batched repair, no complete-provider/task claim. Raw error content must not expose key.
+- R12 exact41daec2 rebuild now owns Docker slot; P11R1 next. Source reviewer retry after active thread release; no duplicated reviews.
+
+### Parallel frozen reviews — 2026-10-05
+- R12 exact41daec2 full prescribed rebuild PASS. Own scratch report/patch were mistakenly tracked; parent removed only those two from index, preserved local files and amended unpublished metadata commit to9f3efa2. Production diff41..9f empty; unrelated historical scratch reports left untouched. Source reviewer continues explicit41 freeze.
+- SolR12 source review active; separate gpt-6.1-sol p11_t3_r1_review spawned for scoped seven-finding repair at a07c3a0, base2ff4e2c. No duplicate whole-task/phase audit.
+- Luna prescribed P11R1 build againsta07 active under serialized slot. R14 frozen0c7374c fullbuildPASS with disclosed provider quota-classification gap; independent source review queued.
+
+### P11-T3 complete — code/build/source review — 2026-10-05
+- Original source2ff4e2c; scopedR1a07c3a0 closes all7accepted findings. Exact prescribedR1buildPASS frontend20pages/fourimages; independentSolscopedre-reviewPASS, no new materialrepairregression.
+- Retention progress, typed public Settings policy, independent webhook auth and persisted per-call/action/egress lifecycle fences corrected. Runtime/SQL/cleanupcost/concurrency/provider acceptance remains deferred; P11 phase not merged yet.
+- T4 Luna dispatched optional metadata-only Langfuse/defaultOFF/docs; source/build/wholephasecomposition gates follow.
+- R12 frozen41 SolREQUESTCHANGES8: JSONB UUIDserialization, wrong HighlightRule import, uncorrelated channel provenance, missing send-time generation/provider fencebeforeallmodel egress, highlightrevision/evidencecommit+dedupe, incompleteTelegramAsk/clocks/media, Table selectionversionupgrade, no durablechanged-version highlightprogress. Luna scopedR1 active; build/re-review required.
+- R14 frozen0c7374c exactbuildPASS; Sol independent source review active. R12 andT4 implement in separate trees, buildsserialized.
+
+### R14 source review R1 required — 2026-10-05
+- Sol frozen0c7374c verdict REQUEST CHANGES8; own ignored review-result.md records2P1 and6P2. P1 capturedgeneration/provider-scope currentread andnative APIprovider discriminator; P1 everyrequest authoritycallback/finalsend fence missing.
+- P2 deterministiccorrectionhistory A-B-A/rank/revision, unawaitedcredentialdelete, Alphaquota classification/cooldown, observationrealtime/resync/cacheaccess fencing, fabricatedproviderdelay/unknownzero, incompletefinance/weathercursorcoverage.
+- LunaR14 scopedR1 nowactive afterreviewthreadreleased. R12R1 andP11T4 continue separately; no mandatorytaskcompleteclaim or testsstage. Extra finitevalidation-note typedquery422 is included inrepair.
+
+### Owner stop after current agents — 2026-10-05
+- Owner requested: finish current agents, then stop and report/save implementation progress. No new tasks/phases/reviews/merges will be dispatched after current T4, R12R1 and R14R1 turns finish.
+- Current scope may complete prescribed serialized builds and own production commits/reports; all tests/runtime/provider probes remain deferred. Pending source reviews/whole-phase merge remain pending for a later resume.
+- This supersedes earlier continuous-execution authorization until owner resumes. Not paused yet: current authorized tasks are still finishing.
+
+### P11-T4 current-agent handoff — 2026-10-05
+- T4 production/config/docs committedf3684a2, clean. Exact prescribedbuildPASS frontend20pages/fourimages;7sourcehashes unchanged afterbuild, process-onlyenvironment restored, no .env/services/tests/runtime.
+- Optional remote metadata-only Langfuse export/defaultOFF implemented. Independent T4 source review and P11wholephasebuild/review/merge PENDING; no newreviewdispatch because owner requested stopaftercurrentagents.
+- T4agent finished/idle. R12R1 findings5/8durablehighlightprogress/dedupe remain part of alreadyassignedcurrenttask, notanotheragent/task. R14R1alsoactive. Dockerbuildslotfree afterT4; finishonlytheseexistingtasks thenpause/savefinalcheckpoint.
+
+## Final stop checkpoint — 2026-10-05 (owner instruction)
+
+- Existing agents finished: P11-T4 f3684a2; R12 R1 884d7bc; R14 R1 c6df508. Git HEAD/clean author worktrees checked by root.
+- Each prescribed scripts/dev.ps1 build PASS: frontend production compilation/integrated TypeScript and web/API/worker/migrate images. Process-only build passwords restored; no services or test/runtime probes.
+- P11 T1–T3 source review accepted. T4 independent review and P11 whole-phase review/build/merge remain pending.
+- R12/R14 authors report all eight findings addressed per scope; independent scoped re-reviews not dispatched due stop request. Neither scope is accepted or merged yet.
+- develop remains 71b32aa. P01–P10 delivered as recorded; collector supplemental accepted. R07 actual source port, R15, P12/R16 and deferred tests/acceptance remain.
+- PAUSED: no new implementation/review/merge. Preserve P11/R12/R14 worktrees. Saved detailed snapshot: ../../IMPLEMENTATION_CHECKPOINT.md; no additional status-only commit.
+
+
+## Owner resume — remaining plan, 2026-10-05
+
+New goal explicitly resumes remaining approved tasks, parallel isolated agents, phase merges to develop, batched phase status commits. Dispatched three independent Sol source reviews in existing P11/R12/R14 trees. No production changes/build/merge yet. Model ruling: Luna6.1 is not exposed; retain previously authorized gpt-6-luna implementation, gpt-6.1-sol review. Preserve unrelated AGENTS/CLAUDE edits and UX deletions. Old pause snapshots remain historical.
+
+
+## Resume review outcomes — 2026-10-05
+
+- P11-T4 f3684a2: REQUEST CHANGES, two P2: total export deadline/status-only streaming; effective overlay activation boundary. Report in P11 ignored phase11/resume-t4-review.md.
+- R12 R1 884d7bc: REQUEST CHANGES, actual model send/retry fence still absent; 100-fence page exceeds 32 validator bound; capped notification progress starves later matches. Five original items closed, three partial. Preexisting generator-await issue separate; generic missing-chunk regression observation needs scoped ruling.
+- R14 R1 c6df508: REQUEST CHANGES, A-B-A Documents/Observations current-version mismatch; provider final-send recheck absent; mounted document deletion values persist. Five original findings + query validation closed, others partial/open.
+- R12 retained Luna implementer resumed with exact findings, production-code only; Docker build waits explicit slot. T4/R14 implementer dispatch attempts returned agent thread limit reached; retry when slot releases, do not duplicate source tasks.
+- No merge/build/runtime/tests in this review turn. Goal remains ACTIVE; review acceptance unproven, findings must close before phase integration.
+
+### Live repair checkpoint — 2026-10-05
+R12 Luna confirmed running and editing source; granted serialized build slot when repairs ready. No source completion/build/commit yet. T4 Sol repair planning brief dispatched; Luna repair dispatch still denied by agent thread limit. R14 remains pending repair. No new merge/tests/runtime checks.
+
+
+### Parallel Luna repair checkpoint — 2026-10-05
+P11-T4 fresh Luna p11_t4_fix2 dispatched successfully after capacity release, existing phase tree; waits R12 build slot. R12 four-source repair diff underway (gateway/chat/highlights/Documents), source author confirms real async-generator and per-attempt fences plus bounded highlight pages. No build/commit acceptance yet. R14 dispatch still capped; do not duplicate tasks. Preserve all owner changes.
+
+
+### R12 round2 build/commit and P11 build slot — 2026-10-05
+
+- R12 repair 0522cc4: four intended production sources committed, tracked clean. Prescribed ./scripts/dev.ps1 build exit0 (Next production/integrated TS/static generation + four Docker images); process env restored, no services/tests/runtime checks. Root Git HEAD/clean verified.
+- Fixes: actual async-generator use; per-attempt before_send plus after_send selected-evidence lock lifetime; highlights bounded3 docs×32rules96 without skip-causing cap and explicit validation bound; broad reader omission contract restored. Author report is not independent acceptance.
+- Sol r12_r2_review dispatched scoped884d7bc..0522cc4; no full original re-review. Report due in own ignored task folder.
+- P11-T4 p11_t4_fix2 four-file source ready with fallback direct call/config traces; Docker slot granted after R12 release. Build/commit pending.
+- R14 repair dispatch still reaches thread cap; remains queued, no merge. Goal ACTIVE.
+
+### R12 accepted and next independent source port — 2026-10-05
+R12 scoped round2 Sol APPROVE at0522cc4, all resumed blockers/reader regression closed, no material repair regression. Exact source/build accepted; runtime deferred and migration/highlight lifecycle composition pending. R14 Luna r14_r2_fix dispatched in existing tree, code first waits P11 Docker slot. Native create_worktree still fails Not a git repository due stale desktop path; new isolated R07 tree created by Git from accepted R12 source0522cc4, preserving exact Chat context backend. No R07 implementation dispatched yet.
+
+
+### P11-T4 repair frozen — 2026-10-05
+Luna repair e7060ee (four intended source/config/docs files), root verified HEAD and clean tracked worktree. Prescribed build PASS Next/integrated TS20pages/four Docker images; process env restored, no services/tests/runtime probes. Total deadline/status-only response and effective base Compose OFF repaired by author. Ignored report/diff/buildlog retained; scoped re-review and whole-phase review still pending. R14 owns next build slot. R12 0522cc4 independently scoped source-approved; phase composition pending. No develop merge/status-only commit.
+
+
+P11_completion_review (Sol) dispatched scoped T4 + separate whole-P11 source review at e7060ee. R07 source-port tree prepared0522cc4; Luna dispatch still denied by capacity. R14 source repairs active and owns next Docker build. No merge yet.
+
+
+### P11 final functional source review closed; documentation repair — 2026-10-05
+Sol T4 scoped PASS at e7060ee. Whole-P11 source review no new material functional composition regression; requires12 adjacent JSDoc in5 authored frontend files (exact ignored resume-whole-phase-review.md). Luna p11_t4_fix2 resumed comment-only; R14 confirmed no build started and holds before build. P11 docs repair now owns serialized build slot. Accepted runtime gates remain deferred; no merge yet.
+
+
+## P11 phase delivery — 2026-10-05
+
+Final accepted phase source a19d77b; original T1-T3 accepted, T4 final scoped PASS, whole-phase functional review no new material regressions,12JSDoc repaired/buildPASS/final reviewPASS. Applied approved production delta to develop as phase squash, preserving all owner status/AGENTS/CLAUDE/UX changes. Source equality confirmed against accepted phase excluding owner/status/UX and unrelated tests; no production difference. New independent test commit5326ab0 appeared during integration and is preserved, along with unrelated coverage/scratch; this team's build-only rule unchanged. One phase-sized code+status commit follows, no push/deploy/test runs. R14 owns buildslot, author buildPASS pending commit/re-review; R12 accepted0522cc4 pending compose after phase merge.
+

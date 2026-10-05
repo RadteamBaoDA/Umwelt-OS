@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import desc, select, tuple_
+from sqlalchemy import Integer, case, cast, desc, func, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +20,20 @@ from modules.sources.schemas import (
     SourceFence,
     SourcePatch,
 )
+
+
+async def observability_quality_summary(session: AsyncSession, *, now: datetime | None = None) -> dict[str, int]:
+    """Count stale active scheduled sources using configured cadence and source-type defaults."""
+    now = now or datetime.now(UTC)
+    cadence = cast(Source.configuration["schedule_interval_minutes"].astext, Integer)
+    default_cadence = case((Source.type == "rss", 15), else_=30)
+    stale_sources = int(await session.scalar(select(func.count()).select_from(Source).where(
+        Source.status == "active",
+        Source.type.in_(("rss", "web", "api")),
+        func.coalesce(Source.last_success_at, Source.created_at)
+        < now - func.make_interval(0, 0, 0, 0, 0, 0, func.coalesce(cadence, default_cadence) * 120),
+    )) or 0)
+    return {"stale_sources": stale_sources}
 
 
 @dataclass(frozen=True)
@@ -175,6 +189,16 @@ async def get_source_fence(session: AsyncSession, source_id: UUID) -> SourceFenc
     return SourceFence(
         id=source.id, status=source.status, generation=source.generation, local_only=source.local_only
     )
+
+
+def ingestion_lifecycle_projection():
+    """Return the minimal source lifecycle read projection for ingestion retry aggregation.
+
+    Cross-module callers may correlate ingestion-owned retry records against the
+    current source identity, status, and generation. Configuration and content
+    remain private, and this projection grants no write authority.
+    """
+    return select(Source.id, Source.status, Source.generation)
 
 
 async def lock_source(session: AsyncSession, source_id: UUID) -> SourceFence | None:

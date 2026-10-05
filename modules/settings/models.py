@@ -62,6 +62,39 @@ class OwnerPreferencesRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
+
+class RetentionSettingsRecord(Base):
+    """Persist revisioned trace retention while raw-source and document history remain retained."""
+
+    __tablename__ = "retention_settings"
+    __table_args__ = (
+        CheckConstraint("owner_id = 1", name="ck_retention_settings_single_owner"),
+        CheckConstraint("configuration_revision > 0", name="ck_retention_settings_revision"),
+        CheckConstraint("agent_trace_days BETWEEN 1 AND 3650", name="ck_retention_settings_trace_days"),
+    )
+
+    owner_id: Mapped[int] = mapped_column(ForeignKey("owner.id", ondelete="CASCADE"), primary_key=True)
+    configuration_revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    agent_trace_days: Mapped[int] = mapped_column(Integer, nullable=False, server_default="90")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class ModuleLifecycleRecord(Base):
+    """Persist only owner-requested disables; descriptor dependencies compute effective availability."""
+
+    __tablename__ = "module_lifecycle_settings"
+    __table_args__ = (
+        CheckConstraint("owner_id = 1", name="ck_module_lifecycle_single_owner"),
+        CheckConstraint("configuration_revision > 0", name="ck_module_lifecycle_revision"),
+    )
+
+    owner_id: Mapped[int] = mapped_column(ForeignKey("owner.id", ondelete="CASCADE"), primary_key=True)
+    configuration_revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    disabled_modules: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
 ALIASES = ("reasoning-large", "reasoning-small", "fast", "embedding", "reranker", "vision", "local-private")
 _MAPPINGS = "bbd:settings:model-mappings"
 

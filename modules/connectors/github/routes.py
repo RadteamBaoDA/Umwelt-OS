@@ -53,8 +53,9 @@ async def receive_github_webhook(request: Request, session: Session) -> JSONResp
     """Authenticate exact GitHub request bytes, bound parsing, then durably admit a source-less delivery.
 
     The route intentionally has no owner-session dependency. It verifies HMAC before JSON parsing,
-    persists only a digest and extracted identifiers, and acknowledges only after the delivery and
-    dispatch slot commit. Event content is a hint; current API reads and grants remain authoritative.
+    checks persisted connector availability only after signature validation, and acknowledges only
+    after the digest, extracted identifiers, and dispatch slot commit. Event content is a hint;
+    current API reads and grants remain authoritative.
     """
     settings: Settings = request.app.state.settings
     app_id = settings.github_app_id
@@ -98,6 +99,10 @@ async def receive_github_webhook(request: Request, session: Session) -> JSONResp
     except (ValueError, TypeError, RecursionError) as exc:
         raise HTTPException(status_code=400, detail="GitHub webhook payload is invalid") from exc
     from modules.connectors import public as connectors
+    from modules.settings.public import module_is_enabled
+
+    if not await module_is_enabled(session, "connectors"):
+        raise HTTPException(status_code=404, detail="Webhook unavailable")
 
     receipt = await connectors.persist_verified_github_delivery(session, delivery)
     code = 202 if receipt.disposition == "received" else 200

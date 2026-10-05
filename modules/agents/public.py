@@ -1,5 +1,6 @@
 """Owner-scoped agent run creation, lookup, and cancellation contracts."""
 
+from core.telemetry import RunMeta as _RunMeta
 from collections.abc import Callable
 import asyncio
 import hashlib
@@ -911,5 +912,91 @@ __all__ = [
     "create_profile_run_in_uow", "list_runs", "create_run", "get_run", "get_run_for_owner",
     "get_approval", "list_conversation_approvals", "request_cancel", "request_cancel_for_owner",
     "purge_conversation_actions",
-    "purge_agent_runs",
+    "purge_agent_runs", "list_run_meta", "get_run_meta_by_id",
 ]
+
+
+async def list_run_meta(session: AsyncSession, limit: int) -> list[_RunMeta]:
+    """Return at most ``limit`` (<=100) newest agent runs as metadata only; unknown token usage is None, never 0."""
+    rows = await session.scalars(select(AgentRun).order_by(AgentRun.created_at.desc()).limit(min(limit, 100)))
+    return [_RunMeta(kind="agent", id=str(r.id), status=r.status, error_code=r.error_code,
+                     created_at=r.created_at, updated_at=r.updated_at, finished_at=r.completed_at,
+                     token_usage=None if r.token_usage_unknown else r.token_usage)
+            for r in rows]
+
+
+async def get_run_meta_by_id(session: AsyncSession, run_id: UUID) -> _RunMeta | None:
+    """Return one metadata-only run projection by its indexed primary key."""
+    row = await session.get(AgentRun, run_id)
+    if row is None:
+        return None
+    return _RunMeta(kind="agent", id=str(row.id), status=row.status, error_code=row.error_code,
+                    created_at=row.created_at, updated_at=row.updated_at, finished_at=row.completed_at,
+                    token_usage=None if row.token_usage_unknown else row.token_usage)
+
+
+async def redact_expired_agent_traces(session: AsyncSession, *, cutoff: datetime, limit: int = 100) -> int:
+    """Redact a bounded batch of old terminal run payloads while preserving canonical outcomes and action ledgers.
+
+    Runs with unresolved approvals or reserved, in-flight, or review-required effects are excluded
+    before LIMIT so they cannot starve later eligible runs, then their ledgers are locked and
+    rechecked. The caller owns transaction commit.
+    """
+    if not 1 <= limit <= 500:
+        raise ValueError("Retention batch size must be between 1 and 500")
+    unresolved_approvals = select(AgentApproval.run_id).where(
+        AgentApproval.run_id == AgentRun.id,
+        AgentApproval.status.in_({"pending", "approved", "requires_review"}),
+    ).exists()
+    unresolved_effects = select(AgentEffect.run_id).where(
+        AgentEffect.run_id == AgentRun.id,
+        AgentEffect.state.in_({"reserved", "in_flight", "requires_review"}),
+    ).exists()
+    candidates = list((await session.scalars(select(AgentRun).where(
+        AgentRun.status.in_(TERMINAL_STATUSES), AgentRun.completed_at < cutoff,
+        AgentRun.trace_redacted_at.is_(None), ~unresolved_approvals, ~unresolved_effects,
+    ).order_by(AgentRun.completed_at, AgentRun.id).limit(limit).with_for_update(skip_locked=True))).all())
+    if not candidates:
+        return 0
+    run_ids = [row.id for row in candidates]
+    # Lock and recheck child ledgers after the run locks; writers serialize their action changes
+    # through the same AgentRun row, so an unresolved effect cannot race trace redaction.
+    unresolved_approval_runs = set((await session.scalars(select(AgentApproval.run_id).where(
+        AgentApproval.run_id.in_(run_ids),
+        AgentApproval.status.in_({"pending", "approved", "requires_review"}),
+    ).with_for_update())).all())
+    unresolved_effect_runs = set((await session.scalars(select(AgentEffect.run_id).where(
+        AgentEffect.run_id.in_(run_ids),
+        AgentEffect.state.in_({"reserved", "in_flight", "requires_review"}),
+    ).with_for_update())).all())
+    now = datetime.now(UTC)
+    redacted = 0
+    eligible_ids: list[UUID] = []
+    for row in candidates:
+        if row.id in unresolved_approval_runs or row.id in unresolved_effect_runs:
+            continue
+        row.prompt = ""
+        row.answer = None
+        row.activities = []
+        row.profile_snapshot = None
+        row.source_fences = {}
+        row.trace_redacted_at = now
+        eligible_ids.append(row.id)
+        for table in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
+            await session.execute(text(f"DELETE FROM {table} WHERE thread_id = :thread_id"),
+                                  {"thread_id": row.checkpoint_thread_id})
+        redacted += 1
+    if eligible_ids:
+        # Keep action identity, hashes, state, outcome and provider idempotency keys;
+        # remove only resolved argument/effect payloads and their source trace details.
+        await session.execute(update(AgentToolCall).where(
+            AgentToolCall.run_id.in_(eligible_ids),
+        ).values(arguments={}, evidence_refs=[]))
+        await session.execute(update(AgentApproval).where(
+            AgentApproval.run_id.in_(eligible_ids),
+        ).values(arguments=None, source_fences={}))
+        await session.execute(update(AgentEffect).where(
+            AgentEffect.run_id.in_(eligible_ids),
+        ).values(payload=None))
+    await session.flush()
+    return redacted

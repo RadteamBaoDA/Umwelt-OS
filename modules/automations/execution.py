@@ -150,10 +150,10 @@ async def enqueue_trigger(
 
 
 def dependencies_missing(rev: AutomationRevision) -> list[str]:
-    """Module ids this revision needs that are not registered and enabled right now.
+    """Return build-time descriptor gaps used while planning and validating owner decisions.
 
-    Descriptors are static, so this is cheap; it is checked at plan time and again before every
-    action so a module disabled after save stops queued work (grant revalidation).
+    Effect admission uses ``_action_modules_enabled`` so persisted owner disables are refreshed
+    for the exact action immediately before execution.
     """
     if "registry" not in _modules_cache:
         from core.modules import register_modules  # lazy: core.modules imports module descriptors
@@ -162,6 +162,14 @@ def dependencies_missing(rev: AutomationRevision) -> list[str]:
     registry = _modules_cache["registry"]
     needed = {TRIGGER_MODULE[rev.trigger["type"]]} | {ACTION_MODULE[a["type"]] for a in rev.actions}
     return sorted(m for m in needed if m is not None and (m not in registry or not registry[m].enabled))
+
+
+async def _action_modules_enabled(session: AsyncSession, action_type: str) -> bool:
+    """Read persisted automation and exact action-owner availability at effect admission."""
+    if not await settings_public.module_is_enabled(session, "automations"):
+        return False
+    target = ACTION_MODULE[action_type]
+    return target is None or await settings_public.module_is_enabled(session, target)
 
 
 async def origin_for_reference(session: AsyncSession, reference: str) -> tuple[UUID, UUID, int] | None:
@@ -468,7 +476,7 @@ async def _mark(
 
 
 async def _action_step(ctx: dict[str, Any], run_id: UUID, ordinal: int) -> str:
-    """Advance one action and return ``succeeded|failed|dropped|awaiting_approval|requires_review|retry``.
+    """Advance one action, durably pausing when its persisted owner module is disabled.
 
     Resumable: every row state is handled, so calling this after a crash converges. The fence is
     checked before every start; ``in_flight`` found here means a previous attempt may have written
@@ -499,8 +507,9 @@ async def _action_step(ctx: dict[str, Any], run_id: UUID, ordinal: int) -> str:
         stale = None
         if not await _fence_current(session, run, share=True):
             stale = "stale_revision"
-        elif dependencies_missing(rev):
-            stale = "dependency_unavailable"
+        elif not await _action_modules_enabled(session, spec["type"]):
+            # Preserve the approved durable action for dispatch after its owner is re-enabled.
+            return "paused"
         elif state == "approved" and _destination_stale(settings, spec, row.destination_revision):
             stale = "stale_destination"
         if stale is not None:
@@ -532,13 +541,30 @@ async def _action_step(ctx: dict[str, Any], run_id: UUID, ordinal: int) -> str:
             return await _generate_brief(ctx, run, row)
         session_hash, destination = row.approved_session_hash, row.destination_revision
         if kind == "call_webhook":
-            row.approved_session_hash = None  # the webhook path needs no owner session
+            row.approved_session_hash = None  # restore only if the final pre-send lifecycle fence pauses
         # run_agent keeps the digest until success: its idempotent start may be re-attempted.
         row.status = "in_flight"  # point of no return: committed before the external call
         await session.commit()
     if kind == "run_agent":
         return await _start_agent(ctx, run, ordinal, spec, session_hash, rev.name)
-    return await _send_webhook(ctx, run, ordinal, spec, factory, destination)
+    return await _send_webhook(ctx, run, ordinal, spec, factory, destination, session_hash)
+
+
+async def _restore_paused_action(
+    factory: async_sessionmaker[AsyncSession], run_id: UUID, ordinal: int, *,
+    status: str, session_hash: str | None, decrement_attempt: bool = True,
+) -> None:
+    """Return an unsent effect to its durable resumable state when lifecycle blocks admission."""
+    async with factory() as session:
+        row = await session.scalar(select(AutomationRunAction).where(
+            AutomationRunAction.run_id == run_id, AutomationRunAction.ordinal == ordinal,
+        ).with_for_update())
+        if row is not None and row.status in {"pending", "in_flight"}:
+            row.status, row.error_code = status, None
+            row.approved_session_hash = session_hash
+            if decrement_attempt:
+                row.attempts = max(row.attempts - 1, 0)
+            await session.commit()
 
 
 async def _in_database_action(
@@ -592,6 +618,12 @@ async def _generate_brief(ctx: dict[str, Any], run: AutomationRun, row: Automati
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     try:
         async with factory() as session:
+            if not await _action_modules_enabled(session, row.action_type):
+                await session.rollback()
+                await _restore_paused_action(
+                    factory, run.id, row.ordinal, status="pending", session_hash=None,
+                )
+                return "paused"
             schedule = await dashboard.read_schedule(session, run.owner_id)
             day = datetime.now(UTC).astimezone(ZoneInfo(schedule.timezone)).date()
             brief = await dashboard.generate_brief(
@@ -646,6 +678,12 @@ async def _start_agent(
         return "failed"
     try:
         async with factory() as session:
+            if not await _action_modules_enabled(session, spec["type"]):
+                await session.rollback()
+                await _restore_paused_action(
+                    factory, run.id, ordinal, status="approved", session_hash=session_hash,
+                )
+                return "paused"
             config = await settings_public.get_ai_execution_config(
                 session, cast(Settings, ctx["settings"]), cast(Redis, ctx["redis"]))
             profile_id = spec["profile_id"]
@@ -676,7 +714,7 @@ async def _start_agent(
 
 async def _send_webhook(
     ctx: dict[str, Any], run: AutomationRun, ordinal: int, spec: Mapping[str, Any],
-    factory: async_sessionmaker[AsyncSession], destination: str | None,
+    factory: async_sessionmaker[AsyncSession], destination: str | None, session_hash: str | None,
 ) -> str:
     """Send the approved webhook once through the shared SSRF-safe transport (row is already in_flight).
 
@@ -686,10 +724,15 @@ async def _send_webhook(
     write began is ``requires_review`` and is never replayed.
     """
     settings = cast(Settings, ctx["settings"])
+    lifecycle_blocked = False
 
     async def still_current() -> bool:
-        """Re-check the rule fence and the approved destination digest immediately before the write."""
+        """Re-check persisted owner modules, rule revision, and destination just before the write."""
+        nonlocal lifecycle_blocked
         async with factory() as session:
+            if not await _action_modules_enabled(session, spec["type"]):
+                lifecycle_blocked = True
+                return False
             return await _fence_current(session, run) and not _destination_stale(settings, spec, destination)
 
     body = {
@@ -712,6 +755,12 @@ async def _send_webhook(
     if outcome == "unsent":
         async with factory() as session:
             current = await _fence_current(session, run)
+            modules_enabled = await _action_modules_enabled(session, spec["type"])
+        if lifecycle_blocked or not modules_enabled:
+            await _restore_paused_action(
+                factory, run.id, ordinal, status="approved", session_hash=session_hash,
+            )
+            return "paused"
         if not current or _destination_stale(settings, spec, destination):
             await _mark(factory, run.id, ordinal, "skipped", "stale_revision" if not current else "stale_destination")
             return "dropped"
@@ -728,6 +777,12 @@ async def _settle(factory: async_sessionmaker[AsyncSession], run_id: UUID, outco
         if outcome == "awaiting_approval":
             run.status = "awaiting_approval"
             run.attempts = max(run.attempts - 1, 0)  # waiting for the owner is not a failed pass
+        elif outcome == "paused":
+            # Module lifecycle pauses work durably without consuming retries or clearing pending actions.
+            run.status = "queued"
+            run.attempts = max(run.attempts - 1, 0)
+            run.next_attempt_at = datetime.now(UTC) + timedelta(seconds=60)
+            run.dispatched_at = None
         elif outcome == "retry":
             run.status = "queued"
             run.dispatched_at = None

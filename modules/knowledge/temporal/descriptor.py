@@ -13,6 +13,7 @@ class TemporalDescriptor:
     description: str = "Synchronize evidence-backed temporal graph projections with durable recovery."
     enabled: bool = True
     dependencies: tuple[str, ...] = ("knowledge.documents", "knowledge.entities", "knowledge.relationships", "knowledge.timeline")
+    scheduled_jobs: tuple[str, ...] = ("process_graph_operation",)
     provides: tuple[str, ...] = ("graph_status", "graph_reconciliation", "knowledge_changes")
     requires: tuple[str, ...] = ("document_versions", "entities", "relationships", "events")
     routes: tuple[str, ...] = ("/api/v1/system/graph", "/api/v1/knowledge/changes")

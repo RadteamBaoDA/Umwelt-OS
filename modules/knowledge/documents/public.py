@@ -30,6 +30,15 @@ from modules.knowledge.documents.schemas import (
 from modules.sources import public as sources
 from modules.sources.models import Source
 
+
+async def observability_quality_summary(session: AsyncSession) -> dict[str, int]:
+    """Return document-owned aggregate counts without exposing document metadata."""
+    document_count = int(await session.scalar(select(func.count()).select_from(Document)) or 0)
+    orphan_chunks = int(await session.scalar(select(func.count()).select_from(DocumentChunk).outerjoin(
+        DocumentVersion, DocumentVersion.id == DocumentChunk.document_version_id,
+    ).where(DocumentVersion.id.is_(None))) or 0)
+    return {"document_count": document_count, "orphan_chunks": orphan_chunks}
+
 EXTRACTION_CHUNK_LIMIT = 100
 EXTRACTION_INPUT_BYTES = 64_000
 

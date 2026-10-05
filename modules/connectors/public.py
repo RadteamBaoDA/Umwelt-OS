@@ -22,6 +22,14 @@ from modules.connectors.models import (
 )
 from modules.ingestion.schemas import IngestionRecord, TelegramRawDelivery
 
+
+async def observability_queue_summary(session: AsyncSession) -> dict[str, dict[str, int]]:
+    """Return connector-owned provisioning counts without workflow or credential data."""
+    counts = dict((await session.execute(
+        select(ConnectorProvisioning.state, func.count()).group_by(ConnectorProvisioning.state)
+    )).all())
+    return {"connector_provisioning": counts}
+
 DEFAULT_TIMEZONE = "Asia/Ho_Chi_Minh"
 DEFAULT_OVERLAP = timedelta(days=1)
 NATIVE_PROVIDERS = frozenset({"youtube", "arxiv", "huggingface", "github_releases", "github", "telegram"})

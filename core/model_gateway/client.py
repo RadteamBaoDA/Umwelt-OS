@@ -2,8 +2,9 @@ import asyncio
 import json
 import logging
 import secrets
+import time
 from collections.abc import Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import aclosing, asynccontextmanager
 from collections.abc import AsyncIterator
 from typing import Any, cast
 
@@ -14,6 +15,7 @@ from redis.exceptions import RedisError
 from core.model_gateway.cache import capability_key
 from core.model_gateway.policy import may_send
 from core.model_gateway.schemas import ModelMapping, RequestPolicy
+from core.telemetry import record_model_call
 from core.model_gateway.transport import EndpointNetworkPolicyError, approved_http_client
 
 _LEASE_PREFIX = "bbd:model-gateway:slot:"
@@ -175,7 +177,15 @@ class ModelGateway:
                     raise ModelGatewayError("Model gateway returned an invalid response")
             raise ModelGatewayError("Model gateway request failed")
 
-        return await self._with_slot(send)
+        # Telemetry only: labels are capability and configured alias; model name is identity, never a label.
+        started = time.perf_counter()
+        try:
+            response = await self._with_slot(send)
+        except BaseException:
+            record_model_call(capability, alias, started, False)
+            raise
+        record_model_call(capability, alias, started, True, response, mapping.model)
+        return response
 
     async def discover_models(self) -> list[str]:
         """List model IDs from the configured gateway while holding capacity and enforcing endpoint policy."""
@@ -221,6 +231,32 @@ class ModelGateway:
         )
 
     async def stream(self, alias: str, mapping: ModelMapping | None, policy: RequestPolicy, messages: list[dict[str, Any]], probe: bool = False) -> AsyncIterator[str]:
+        """Stream chat completions unchanged while recording model-call, first-token and total latency and provider usage.
+
+        Telemetry is observational: lines are yielded as received, errors/cancellation propagate and are
+        recorded as outcome=error, and missing usage stays null.
+        """
+        started = time.perf_counter()
+        first_ms: float | None = None
+        usage: Any = None
+        ok = False
+        try:
+            async with aclosing(self._stream_inner(alias, mapping, policy, messages, probe)) as inner:
+                async for line in inner:
+                    if first_ms is None:
+                        first_ms = (time.perf_counter() - started) * 1000
+                    if '"usage"' in line and usage is None:
+                        try:
+                            usage = json.loads(line[6:]).get("usage")
+                        except (ValueError, AttributeError):
+                            usage = None
+                    yield line
+            ok = True
+        finally:
+            record_model_call("streaming", alias, started, ok, {"usage": usage} if usage else None,
+                              mapping.model if mapping else None, first_ms)
+
+    async def _stream_inner(self, alias: str, mapping: ModelMapping | None, policy: RequestPolicy, messages: list[dict[str, Any]], probe: bool = False) -> AsyncIterator[str]:
         """Stream chat completions after policy and capability checks; retry only before any chunk is emitted."""
         if not may_send(policy, alias, mapping, self.destination_id, bool(self.api_key), "streaming") or self.base_url is None or mapping is None:
             raise PrivacyPolicyDenied("Model request denied by privacy policy")

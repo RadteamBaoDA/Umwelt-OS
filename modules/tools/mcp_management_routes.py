@@ -14,8 +14,9 @@ from core.config import Settings
 from core.database import get_session
 from modules.tools import mcp_repository as repository
 from modules.tools.mcp_schemas import ConnectionDraft, ConnectionSave, GrantSelection, InboundClientCreate
+from modules.settings.public import module_dependency
 
-router = APIRouter(prefix="/api/v1/mcp", tags=["mcp-management"])
+router = APIRouter(prefix="/api/v1/mcp", tags=["mcp-management"], dependencies=[Depends(module_dependency("tools"))])
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[AuthSession, Depends(require_owner)]
 OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]

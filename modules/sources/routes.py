@@ -10,10 +10,12 @@ from core.auth.models import AuthSession
 from core.database import get_session
 from modules.sources import public
 from modules.sources.schemas import OperationRead, SourceCreate, SourceList, SourcePatch, SourceRead
+from modules.settings.public import module_dependency
 
 router = APIRouter(
     prefix="/api/v1/sources",
     tags=["sources"],
+    dependencies=[Depends(module_dependency("sources"))],
 )
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[AuthSession, Depends(require_owner)]

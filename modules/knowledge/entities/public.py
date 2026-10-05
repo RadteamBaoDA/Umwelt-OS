@@ -30,6 +30,8 @@ from modules.knowledge.entities.models import (
     EntityExtractionWork,
     EntityExtractionResult,
 )
+
+
 from modules.knowledge.entities.schemas import (
     EntityTemporalNodeSeed, EntityHistoryItem, EntityHistoryPage,
     AliasCreate,
@@ -53,6 +55,17 @@ from modules.knowledge.entities.schemas import (
     EntityRelationshipReviewResult,
     canonicalize_name,
 )
+
+
+async def observability_quality_summary(session: AsyncSession) -> dict[str, int]:
+    """Return entity-owned unresolved and failed-extraction counts only."""
+    unresolved = int(await session.scalar(select(func.count()).select_from(Entity).where(
+        and_(Entity.canonical_name.is_(None), Entity.name.is_(None))
+    )) or 0)
+    failed_extraction = int(await session.scalar(select(func.count()).select_from(EntityExtractionWork).where(
+        EntityExtractionWork.status == "failed"
+    )) or 0)
+    return {"unresolved_entities": unresolved, "failed_extraction": failed_extraction}
 
 
 async def get_temporal_node_seeds(

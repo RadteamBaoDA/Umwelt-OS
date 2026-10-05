@@ -20,8 +20,9 @@ from modules.tools.browser_public import (
 from sqlalchemy import select
 import httpx
 from modules.tools.browser_public import derive_browser_job_token
+from modules.settings.public import module_dependency
 
-router = APIRouter(prefix="/api/v1/tools", tags=["tools"])
+router = APIRouter(prefix="/api/v1/tools", tags=["tools"], dependencies=[Depends(module_dependency("tools"))])
 browser_jobs_router = APIRouter(prefix="/api/v1/agent-browser-jobs", tags=["agent-browser-jobs"])
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[AuthSession, Depends(require_owner)]

@@ -13,6 +13,7 @@ class NewsDescriptor:
     description: str = "Owner-managed topic interests with story clustering and explainable relevance scoring."
     enabled: bool = True
     dependencies: tuple[str, ...] = ()
+    scheduled_jobs: tuple[str, ...] = ("process_news_document_ready",)
     provides: tuple[str, ...] = ("news", "topics")
     requires: tuple[str, ...] = ()
     routes: tuple[str, ...] = (

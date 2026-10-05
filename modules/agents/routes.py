@@ -20,8 +20,9 @@ from modules.agents.internal_writes import INTERNAL_DESTINATION, INTERNAL_WRITE_
 from modules.tools.webhook import load_webhook_profiles
 from modules.agents.specialists import get_profile, list_profiles, update_profile_in_uow
 from modules.settings import public as settings_public
+from modules.settings.public import module_dependency
 
-router = APIRouter(tags=["agents"])
+router = APIRouter(tags=["agents"], dependencies=[Depends(module_dependency("agents"))])
 logger = logging.getLogger(__name__)
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[AuthSession, Depends(require_owner)]

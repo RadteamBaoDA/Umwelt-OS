@@ -13,8 +13,9 @@ from core.database import get_session
 from modules.news.schemas import StoryDetail, StoryFilter, StoryPage, TrendFilter, TrendPage
 from modules.news.stories import get_story, list_stories
 from modules.news.trends import list_trends
+from modules.settings.public import module_dependency
 
-router = APIRouter(prefix="/api/v1", tags=["news"])
+router = APIRouter(prefix="/api/v1", tags=["news"], dependencies=[Depends(module_dependency("news"))])
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[AuthSession, Depends(require_owner)]
 

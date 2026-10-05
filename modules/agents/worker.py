@@ -388,6 +388,17 @@ async def process_agent_run(ctx: dict[str, object], run_id: str, dispatch_genera
     engine = cast(AsyncEngine, ctx["db_engine"])
     redis = cast(Redis, ctx["redis"])
     registry = cast(ToolRegistry, ctx["agent_tool_registry"])
+    async with session_factory() as availability_session:
+        from modules.settings.public import read_module_availability
+
+        availability = await read_module_availability(availability_session)
+        # Worker process state can outlive owner updates made through another API process.
+        from core.modules import effective_modules, register_modules
+
+        disabled = {item.id for item in availability.modules if item.explicitly_disabled}
+        registry.set_module_registry(effective_modules(disabled, register_modules()))
+        if not next((module.enabled for module in availability.modules if module.id == "agents"), False):
+            return
     try:
         parsed_id = UUID(run_id)
     except ValueError:
@@ -519,6 +530,11 @@ async def reconcile_agent_dispatch(ctx: dict[str, object]) -> int:
     session_factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     engine = cast(AsyncEngine, ctx["db_engine"])
     redis = cast(Redis, ctx["redis"])
+    async with session_factory() as availability_session:
+        from modules.settings.public import read_module_availability
+
+        availability = await read_module_availability(availability_session)
+        agents_enabled = next((module.enabled for module in availability.modules if module.id == "agents"), False)
     await expire_pending_approvals(session_factory, MAX_RECONCILE_ROWS)
     async with session_factory() as session:
         stale_ids = list((await session.scalars(
@@ -552,6 +568,8 @@ async def reconcile_agent_dispatch(ctx: dict[str, object]) -> int:
     if rows:
         _activity_reconcile_cursor = rows[-1][0]
     async with session_factory() as session:
+        if not agents_enabled:
+            return 0
         queued = list((await session.execute(
             select(AgentRun.id, AgentRun.dispatch_generation)
             .where(AgentRun.status == "queued", AgentRun.cancel_requested.is_(False))

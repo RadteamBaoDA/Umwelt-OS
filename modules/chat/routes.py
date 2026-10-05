@@ -20,6 +20,7 @@ from core.auth.models import AuthSession
 from core.database import get_session
 from modules.chat.models import Conversation, Message, ResponseRun, StreamEvent
 from modules.chat import public as chat_public
+from modules.settings.public import module_dependency
 from modules.chat.schemas import (
     CancelResponse,
     ConversationCreate,
@@ -35,7 +36,7 @@ from modules.chat.worker import CANCEL_KEY_PREFIX, run_response_generation
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["chat"])
+router = APIRouter(tags=["chat"], dependencies=[Depends(module_dependency("chat"))])
 
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[AuthSession, Depends(require_owner)]

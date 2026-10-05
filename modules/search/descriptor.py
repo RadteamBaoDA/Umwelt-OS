@@ -11,6 +11,7 @@ class SearchDescriptor:
     description: str = "Search current document chunks with lexical and permitted vector retrieval."
     enabled: bool = True
     dependencies: tuple[str, ...] = ("knowledge.documents",)
+    scheduled_jobs: tuple[str, ...] = ("index_pending_chunks",)
     provides: tuple[str, ...] = ("search",)
     requires: tuple[str, ...] = ("document_chunks",)
     routes: tuple[str, ...] = ("/api/v1/search",)

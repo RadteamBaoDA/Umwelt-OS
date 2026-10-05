@@ -1,6 +1,7 @@
 import hashlib
 import json
 import secrets
+from core.telemetry import RunMeta as _RunMeta
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
@@ -9,8 +10,9 @@ from typing import Literal
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
-from sqlalchemy import String, case, cast, delete, func, select, tuple_, update
+from sqlalchemy import String, and_, case, cast, delete, func, not_, or_, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from core.events import DomainEvent
 from core.pagination import decode_cursor, encode_cursor
@@ -35,6 +37,8 @@ from modules.ingestion.schemas import (
 from modules.knowledge.documents import public as documents
 from modules.sources import public as sources
 from modules.sources.schemas import ConnectorSource
+
+_RUN_RETRY_ORDER = {"receive": 0, "collect_web": 1, "normalize": 2, "parse_file": 3}
 
 
 @dataclass(frozen=True)
@@ -1491,10 +1495,9 @@ async def retry_run(
         return run
     if all(stage.status == "succeeded" for stage in stages):
         return run
-    retry_order = {"receive": 0, "collect_web": 1, "normalize": 2, "parse_file": 3}
     failed = sorted(
         (stage for stage in stages if stage.status == "failed"),
-        key=lambda stage: (retry_order.get(stage.stage_key, 100), stage.stage_key),
+        key=lambda stage: (_RUN_RETRY_ORDER.get(stage.stage_key, 100), stage.stage_key),
     )
     if not failed:
         return run
@@ -1609,3 +1612,99 @@ async def list_terminal_runs_after(
     return [(r.updated_at, r.id, f"{r.id}:{r.status}",
              {"source_id": str(r.source_id), "status": r.status, "new_items": int(counts.get(r.batch_id, 0))})
             for r in rows]
+
+
+async def list_run_meta(session: AsyncSession, limit: int) -> list[_RunMeta]:
+    """Return at most ``limit`` (<=100) newest ingestion runs as metadata only: ID, status, error code, timestamps."""
+    rows = await session.scalars(select(IngestionRun).order_by(IngestionRun.created_at.desc()).limit(min(limit, 100)))
+    return [_RunMeta(kind="ingestion", id=str(r.id), status=r.status, error_code=r.error_code,
+                     created_at=r.created_at, updated_at=r.updated_at,
+                     finished_at=r.updated_at if r.status in {"succeeded", "failed", "needs_ocr"} else None)
+            for r in rows]
+
+
+async def observability_quality_summary(session: AsyncSession) -> dict[str, int | float]:
+    """Return ingestion-owned duplicate and failed-run aggregates without exposing payloads."""
+    normalized, duplicates = (await session.execute(select(
+        func.count().filter(ObservationNormalization.disposition.in_(("normalized", "duplicate"))),
+        func.count().filter(ObservationNormalization.disposition == "duplicate"),
+    ))).one()
+    failed_runs = int(await session.scalar(select(func.count()).select_from(IngestionRun).where(
+        IngestionRun.status == "failed"
+    )) or 0)
+    return {"duplicate_rate": float(duplicates or 0) / int(normalized or 1), "failed_ingestion": failed_runs}
+
+
+async def observability_queue_summary(session: AsyncSession, *, now: datetime | None = None) -> dict[str, object]:
+    """Return durable ingestion counts and retries eligible under the retry owner's latest-event rules."""
+    now = now or datetime.now(UTC)
+    source_lifecycle = sources.ingestion_lifecycle_projection().subquery("source_lifecycle")
+    stage_counts = dict((await session.execute(
+        select(IngestionStage.status, func.count()).group_by(IngestionStage.status)
+    )).all())
+    active_stage = aliased(IngestionStage)
+    active_stage_exists = select(1).select_from(active_stage).where(
+        active_stage.run_id == IngestionStage.run_id,
+        active_stage.status.in_(("pending", "queued", "running", "retrying")),
+    ).exists()
+    failed_progress_exists = select(1).where(
+        ObservationNormalization.stage_id == IngestionStage.id,
+        ObservationNormalization.disposition == "failed",
+    ).exists()
+    latest_event = aliased(EventOutbox)
+    latest_event_id = (select(latest_event.id).where(
+        latest_event.payload["stage_id"].astext == cast(IngestionStage.id, String),
+    ).order_by(latest_event.created_at.desc()).limit(1).correlate(IngestionStage).scalar_subquery())
+    latest_event_matches = select(1).select_from(EventOutbox).where(
+        EventOutbox.id == latest_event_id,
+        EventOutbox.payload["source_generation"].astext == cast(source_lifecycle.c.generation, String),
+    ).exists()
+    active_collection_exists = select(1).select_from(SourceIngestionState).where(
+        SourceIngestionState.source_id == source_lifecycle.c.id,
+        SourceIngestionState.collection_lease_token.is_not(None),
+        or_(SourceIngestionState.lease_expires_at.is_(None), SourceIngestionState.lease_expires_at > now),
+    ).exists()
+    other_run_lease_exists = select(1).select_from(SourceIngestionState).where(
+        SourceIngestionState.source_id == source_lifecycle.c.id,
+        SourceIngestionState.lease_run_id.is_not(None),
+        SourceIngestionState.lease_run_id != IngestionRun.id,
+        or_(SourceIngestionState.lease_expires_at.is_(None), SourceIngestionState.lease_expires_at > now),
+    ).exists()
+    failed_candidate = aliased(IngestionStage)
+    retry_order = case(*((IngestionStage.stage_key == key, rank)
+                         for key, rank in _RUN_RETRY_ORDER.items()), else_=100)
+    candidate_order = case(*((failed_candidate.stage_key == key, rank)
+                             for key, rank in _RUN_RETRY_ORDER.items()), else_=100)
+    earlier_failed_exists = select(1).select_from(failed_candidate).where(
+        failed_candidate.run_id == IngestionStage.run_id,
+        failed_candidate.status == "failed",
+        or_(candidate_order < retry_order,
+            and_(candidate_order == retry_order, failed_candidate.stage_key < IngestionStage.stage_key)),
+    ).exists()
+    retryable = int(await session.scalar(
+        select(func.count()).select_from(IngestionStage)
+        .join(IngestionRun, IngestionRun.id == IngestionStage.run_id)
+        .join(source_lifecycle, source_lifecycle.c.id == IngestionRun.source_id)
+        .where(
+            IngestionStage.status == "failed", source_lifecycle.c.status == "active",
+            not_(active_stage_exists), not_(earlier_failed_exists), latest_event_matches,
+            or_(IngestionStage.stage_key != "normalize", not_(failed_progress_exists)),
+            not_(active_collection_exists),
+            or_(IngestionStage.stage_key.not_in(("receive", "collect_web")), not_(other_run_lease_exists)),
+        )
+    ) or 0)
+    event_delivery = dict((await session.execute(
+        select(EventOutbox.status, func.count()).group_by(EventOutbox.status)
+    )).all())
+    return {"ingestion_stages": stage_counts, "retryable_ingestion_stages": retryable,
+            "event_delivery": event_delivery}
+
+
+async def get_run_meta_by_id(session: AsyncSession, run_id: UUID) -> _RunMeta | None:
+    """Return one metadata-only ingestion-run projection by its indexed primary key."""
+    row = await session.get(IngestionRun, run_id)
+    if row is None:
+        return None
+    return _RunMeta(kind="ingestion", id=str(row.id), status=row.status, error_code=row.error_code,
+                    created_at=row.created_at, updated_at=row.updated_at,
+                    finished_at=row.updated_at if row.status in {"succeeded", "failed", "needs_ocr"} else None)

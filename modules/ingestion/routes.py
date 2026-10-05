@@ -13,15 +13,18 @@ from modules.ingestion import public
 from modules.connectors import public as connectors
 from modules.ingestion.files import validate_upload
 from modules.ingestion.schemas import CollectorCredentialRead, Receipt, ReceiveBatch, RetryRunRequest, RunRead, SourceIngestionRead, StageRead
+from modules.settings.public import module_dependency, module_is_enabled
 
 router = APIRouter(prefix="/api/v1/ingestion", tags=["ingestion"])
-documents_router = APIRouter(prefix="/api/v1/documents", tags=["documents"])
+documents_router = APIRouter(prefix="/api/v1/documents", tags=["documents"],
+                             dependencies=[Depends(module_dependency("ingestion"))])
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[AuthSession, Depends(require_owner)]
 OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]
 
 
-@router.post("/sources/{source_id}/collector-credential", response_model=CollectorCredentialRead)
+@router.post("/sources/{source_id}/collector-credential", response_model=CollectorCredentialRead,
+             dependencies=[Depends(module_dependency("ingestion"))])
 async def issue_collector_credential(
     source_id: UUID,
     session: Session,
@@ -50,11 +53,13 @@ async def receive_batch(
         session, payload.source_id, token
     ):
         raise HTTPException(status_code=401, detail="Collector authentication required")
+    if not await module_is_enabled(session, "ingestion"):
+        raise HTTPException(status_code=404, detail="Ingestion unavailable")
     batch, run = await public.receive_batch(session, payload, token)
     return Receipt(batch_id=batch.id, run_id=run.id, status=run.status)
 
 
-@router.get("/runs/{run_id}", response_model=RunRead)
+@router.get("/runs/{run_id}", response_model=RunRead, dependencies=[Depends(module_dependency("ingestion"))])
 async def get_run(run_id: UUID, session: Session, _owner: OwnerRead) -> RunRead:
     """Return owner-only run and stage state or 404 when the run is absent."""
     result = await public.get_run(session, run_id)
@@ -72,7 +77,8 @@ async def get_run(run_id: UUID, session: Session, _owner: OwnerRead) -> RunRead:
     )
 
 
-@router.get("/sources/{source_id}/runs", response_model=SourceIngestionRead)
+@router.get("/sources/{source_id}/runs", response_model=SourceIngestionRead,
+            dependencies=[Depends(module_dependency("ingestion"))])
 async def list_source_runs(
     source_id: UUID,
     session: Session,
@@ -87,7 +93,8 @@ async def list_source_runs(
     return result
 
 
-@router.post("/runs/{run_id}/retry", response_model=Receipt, status_code=202)
+@router.post("/runs/{run_id}/retry", response_model=Receipt, status_code=202,
+             dependencies=[Depends(module_dependency("ingestion"))])
 async def retry_run(run_id: UUID, payload: RetryRunRequest, session: Session, _owner: OwnerWrite) -> Receipt:
     """Retry one owner-selected stage and return its durable run identity."""
     run = await public.retry_run(session, run_id, payload.stage_key)

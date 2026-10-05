@@ -3,6 +3,7 @@ import { storyMessages } from '@/modules/news/story-messages';
 import { dailyMessages, notificationMessages } from '@/modules/dashboard/daily-messages';
 import { githubMessages } from '@/modules/dashboard/github-messages';
 import { automationMessages } from '@/modules/automations/messages';
+import { observabilityMessages } from '@/modules/observability/messages';
 
 const catalogParts = {
   'en-us': {
@@ -927,6 +928,7 @@ const catalogParts = {
 export const messages = {
   'en-us': {
     ...catalogParts['en-us'],
+    observability: observabilityMessages['en-us'],
     mcp: mcpCatalog['en-us'],
     news: storyMessages['en-us'],
     daily: dailyMessages['en-us'],
@@ -1158,6 +1160,7 @@ export const messages = {
   },
   'vi-vi': {
     ...catalogParts['vi-vi'],
+    observability: observabilityMessages['vi-vi'],
     mcp: mcpCatalog['vi-vi'],
     news: storyMessages['vi-vi'],
     daily: dailyMessages['vi-vi'],

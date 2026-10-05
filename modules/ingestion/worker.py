@@ -41,6 +41,8 @@ from modules.ingestion.schemas import IngestionRecord
 from modules.sources import public as sources
 from core.chunking import chunk_text
 
+from core.telemetry import count, set_trace, timed
+
 logger = logging.getLogger("bbd.worker")
 STAGE_TIMEOUT_SECONDS = 120
 MAX_STAGE_ATTEMPTS = 5
@@ -60,6 +62,10 @@ async def _commit_ingestion_change(
         session,
         [make_ingestion_change(run.source_id, run.id, run.status, stage.stage_key, stage.status), *extras],
     )
+    if stage.status in {"succeeded", "failed"}:
+        count("ingestion_stages_total", stage=stage.stage_key, outcome=stage.status)
+    if run.status in {"succeeded", "failed"}:
+        count("ingestion_runs_total", outcome=run.status)
 
 
 async def _refresh_run_status(session: AsyncSession, run: IngestionRun) -> None:
@@ -392,6 +398,7 @@ async def _fail_ingestion_stage(
         await _commit_ingestion_change(session, run, stage, extras)
 
 
+@timed("ingestion_stage_ms", stage="collect")
 async def process_ingestion_event(ctx: dict[str, object], event_id: str) -> None:
     """Process one durable ingestion stage with a committed lease and source fence.
 
@@ -410,6 +417,7 @@ async def process_ingestion_event(ctx: dict[str, object], event_id: str) -> None
             return
         run_id = UUID(str(event.payload["run_id"]))
         stage_id = UUID(str(event.payload["stage_id"]))
+        set_trace(ingestion_run_id=str(run_id))
         run_hint = await session.get(IngestionRun, run_id)
         if run_hint is None:
             event.status = "failed"
@@ -613,6 +621,7 @@ async def process_ingestion_event(ctx: dict[str, object], event_id: str) -> None
         await _commit_ingestion_change(session, run, stage, extras)
 
 
+@timed("ingestion_stage_ms", stage="normalize")
 async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None:
     """Materialize one bounded slice and retain native collection ownership until terminal.
 
@@ -716,6 +725,8 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
             )).all())
             used_bytes = 0
             processed = 0
+            processed_documents = 0
+            failed_documents = 0
             knowledge_changes = []
             from modules.ingestion import public as ingestion_api
             for progress, observation in rows:
@@ -871,6 +882,10 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
                     progress.disposition = {
                         "normalized": "normalized", "duplicate": "duplicate", "tombstoned": "skipped",
                     }[result.disposition]
+                    if progress.disposition == "failed":
+                        failed_documents += 1
+                    else:
+                        processed_documents += 1
                     progress.error_code = "document_deleted" if result.disposition == "tombstoned" else None
                     progress.document_id = result.document_id
                     progress.document_version_id = result.document_version_id
@@ -895,6 +910,7 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
                 except (ValueError, TypeError):
                     progress.disposition = "failed"
                     progress.error_code = "invalid_normalization_record"
+                    failed_documents += 1
                 processed += 1
 
             pending_count = int(await session.scalar(
@@ -955,6 +971,10 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
                 await _commit_ingestion_change(session, run, stage, tuple(extras))
             else:
                 await _commit_ingestion_change(session, run, stage)
+            if processed_documents:
+                count("ingestion_documents_total", processed_documents, outcome="processed")
+            if failed_documents:
+                count("ingestion_documents_total", failed_documents, outcome="failed")
     except OperationalError as exc:
         if run_id is None or stage_id is None:
             raise Retry(defer=delay) from exc
@@ -1003,6 +1023,7 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
 
 
 @bounded_heavy_work
+@timed("ingestion_stage_ms", stage="extract")
 async def process_uploaded_file(ctx: dict[str, object], event_id: str) -> None:
     """Parse one staged upload after committing processing state and its lease.
 
@@ -1139,6 +1160,7 @@ async def process_uploaded_file(ctx: dict[str, object], event_id: str) -> None:
                 session, run, stage,
                 tuple(extras),
             )
+            count("ingestion_documents_total", outcome="processed")
     except Exception as exc:
         async with factory() as session:
             source = await sources.lock_source(session, source_id)
@@ -1178,6 +1200,7 @@ async def process_uploaded_file(ctx: dict[str, object], event_id: str) -> None:
                     session, run, stage,
                     tuple(extras),
                 )
+                count("ingestion_documents_total", outcome="failed")
             else:
                 await session.commit()
 

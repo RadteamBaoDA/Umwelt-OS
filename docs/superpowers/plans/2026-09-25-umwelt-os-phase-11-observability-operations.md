@@ -12,7 +12,7 @@
 
 **Entry gate:** Phases 1–10 already emit run IDs, events, status and timing.
 
-**Implementation status:** In progress (2026-10-05): T1 code/build/source review complete through repair 71fd47e and composed; T2 complete through e8b02e7; T3 active; T4 pending. Runtime acceptance remains deferred.
+**Implementation status:** Production code/build/source review complete (2026-10-05), accepted source a19d77b; phase integration into develop. Runtime/provider/capacity acceptance deferred.
 
 Code stage: implement production code and run affected production builds only. Do not create or modify test files, or run tests, lint, standalone typecheck, audits, or non-build acceptance checks. Begin deferred behavioral acceptance only after all Phase 1-12 production code is complete.
 
@@ -90,7 +90,7 @@ Concrete contract/configuration shape (illustrative IDs/timestamps are test data
 **Interfaces — consumes/produces:** GET/PATCH /settings/retention; defaults agent traces 90 days,raw sources retain,document history retain; maintenance run summaries include deleted counts and next eligible time. Module disable removes schedules/navigation/tools while preserving data.
 
 
-- [ ] **P11-T3.3 — Implement the minimal production behavior.** Use indexed timestamps and configured cutoffs for bounded cleanup batches. Delete expired telemetry and temporary data in bounded batches, with indexes and time limits; never run blocking vacuum/full-database maintenance from a UI request. Emit no log for unchanged polls/zero work; warn on actionable failure and debug on actual maintenance. Disable modules through descriptor dependency checks so dependents become unavailable consistently without cascade deletion.
+- [x] **P11-T3.3 — Implement the minimal production behavior.** Use indexed timestamps and configured cutoffs for bounded cleanup batches. Delete expired telemetry and temporary data in bounded batches, with indexes and time limits; never run blocking vacuum/full-database maintenance from a UI request. Emit no log for unchanged polls/zero work; warn on actionable failure and debug on actual maintenance. Disable modules through descriptor dependency checks so dependents become unavailable consistently without cascade deletion.
 
 Concrete contract/configuration shape (illustrative IDs/timestamps are test data, not production defaults):
 
@@ -98,9 +98,9 @@ Concrete contract/configuration shape (illustrative IDs/timestamps are test data
 {"agent_trace_days":90,"raw_source_retention":"retain","document_history_retention":"retain"}
 ```
 
-- [ ] **P11-T3.4 - Build the affected deliverable.** Run `./scripts/dev.ps1 build` (or `make build`); fix production build failures before proceeding.
+- [x] **P11-T3.4 - Build the affected deliverable.** Run `./scripts/dev.ps1 build` (or `make build`); fix production build failures before proceeding.
 
-- [ ] **P11-T3.5 - Record build evidence and continue.** Record changed files, exact build command/result, review findings and unresolved gates in `EXECUTION.md`; then continue.
+- [x] **P11-T3.5 - Record build evidence and continue.** Record changed files, exact build command/result, review findings and unresolved gates in `EXECUTION.md`; then continue.
 
 ## Task P11-T4: Optional Langfuse profile and operations documentation
 
@@ -109,7 +109,7 @@ Concrete contract/configuration shape (illustrative IDs/timestamps are test data
 **Interfaces — consumes/produces:** Optional Langfuse integration is configured by deployment profile; public application APIs and core persistence are unchanged when unavailable. Egress of telemetry containing content requires explicit owner policy.
 
 
-- [ ] **P11-T4.3 — Implement the minimal production behavior.** Keep Langfuse off on the base 8GB deployment. Pin integration dependency only if profile implemented; provide scrubbed trace summaries and owner-selected content policy. Record measurements with and without optional telemetry. Document troubleshooting from UI error to run to correlation ID, health boundaries and no-op logging semantics.
+- [x] **P11-T4.3 — Implement the minimal production behavior.** Keep Langfuse off on the base 8GB deployment. Pin integration dependency only if profile implemented; provide scrubbed trace summaries and owner-selected content policy. Record measurements with and without optional telemetry. Document troubleshooting from UI error to run to correlation ID, health boundaries and no-op logging semantics.
 
 Concrete contract/configuration shape (illustrative IDs/timestamps are test data, not production defaults):
 
@@ -117,9 +117,9 @@ Concrete contract/configuration shape (illustrative IDs/timestamps are test data
 {"telemetry_sink":"disabled","content_capture":false}
 ```
 
-- [ ] **P11-T4.4 - Build the affected deliverable.** Run `./scripts/dev.ps1 build` (or `make build`); fix production build failures before proceeding.
+- [x] **P11-T4.4 - Build the affected deliverable.** Run `./scripts/dev.ps1 build` (or `make build`); fix production build failures before proceeding.
 
-- [ ] **P11-T4.5 - Record build evidence and continue.** Record changed files, exact build command/result, review findings and unresolved gates in `EXECUTION.md`; then continue.
+- [x] **P11-T4.5 - Record build evidence and continue.** Record changed files, exact build command/result, review findings and unresolved gates in `EXECUTION.md`; then continue.
 
 ## Phase Build and Handoff
 
@@ -146,4 +146,14 @@ Run behavioral, integration, UI, live-service, recovery, and capacity checks onl
 - [x] Implementation and live/hardware verification are not claimed complete by this plan.
 
 
+
+
+## Owner-requested pause checkpoint — 2026-10-05
+
+T4 production implementation and prescribed build completed in f3684a2, clean worktree. Optional remote metadata-only Langfuse export defaults OFF; content capture OFF. T4.3 deployment measurements remain deferred; T4 source review and whole-phase acceptance/merge remain pending. Build/task evidence saved in EXECUTION.md and the ignored phase11/P11-T4-final-report.md. Do not continue to P12 until owner resumes.
+
+
+## Final production completion — 2026-10-05
+
+T4 two exporter/config fixes e7060ee scopedPASS; whole-phase12JSDoc repair a19d77b exact buildPASS and final reviewPASS. Production scope integrated via phase-sized squash, no runtime acceptance implied; deployment measurements remain deferred. Prior pause entries historical. Full source/report evidence in EXECUTION.md and ignored phase11 reports.
 

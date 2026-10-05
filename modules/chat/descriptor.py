@@ -13,6 +13,7 @@ class ChatDescriptor:
     description: str = "Persistent conversations, grounded model answer generation, and replayable SSE streaming."
     enabled: bool = True
     dependencies: tuple[str, ...] = ("knowledge.documents", "knowledge.entities")
+    scheduled_jobs: tuple[str, ...] = ("process_chat_response",)
     provides: tuple[str, ...] = ("conversations", "chat_stream", "grounded_answers")
     requires: tuple[str, ...] = ("document_versions", "document_chunks")
     routes: tuple[str, ...] = ("/api/v1/conversations", "/api/v1/responses")

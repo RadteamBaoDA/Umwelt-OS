@@ -1,6 +1,7 @@
 """Central module registration and capability dependency validation."""
 
 from collections.abc import Iterable
+from dataclasses import replace
 from typing import Any
 
 from modules.dashboard.descriptor import descriptor as dashboard
@@ -21,11 +22,14 @@ from modules.memory.descriptor import descriptor as memory
 from modules.tools.descriptor import descriptor as tools
 from modules.agents.descriptor import descriptor as agents
 from modules.automations.descriptor import descriptor as automations
+from modules.observability.descriptor import descriptor as observability
+from modules.ingestion.descriptor import descriptor as ingestion
+from modules.connectors.descriptor import descriptor as connectors
 
 
 def register_modules(descriptors: Iterable[Any] = (sources, documents, entities, relationships, timeline, search, temporal,
         dashboard, tasks, goals, news, notifications, chat, memory, tools, agents,
-        automations)) -> dict[str, Any]:
+        automations, observability, ingestion, connectors)) -> dict[str, Any]:
     """Build the descriptor registry and reject duplicate IDs or missing dependencies.
 
     Args:
@@ -47,3 +51,27 @@ def register_modules(descriptors: Iterable[Any] = (sources, documents, entities,
                 f"Module {descriptor.id} has missing dependencies: {', '.join(sorted(missing))}"
             )
     return registry
+
+
+def effective_modules(disabled: Iterable[str], descriptors: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Return descriptor copies with explicit disables and unavailable dependencies applied transitively."""
+    registry = descriptors or register_modules()
+    unavailable = set(disabled)
+    changed = True
+    while changed:
+        changed = False
+        for module_id, descriptor in registry.items():
+            if module_id not in unavailable and (
+                not descriptor.enabled or any(dependency in unavailable for dependency in descriptor.dependencies)
+            ):
+                unavailable.add(module_id)
+                changed = True
+    return {module_id: replace(descriptor, enabled=module_id not in unavailable)
+            for module_id, descriptor in registry.items()}
+
+
+def scheduled_job_owners(descriptors: dict[str, Any] | None = None) -> dict[str, str]:
+    """Map declared worker entry points to their owning module for persisted dispatch gates."""
+    registry = descriptors or register_modules()
+    return {job_name: module_id for module_id, descriptor in registry.items()
+            for job_name in getattr(descriptor, "scheduled_jobs", ())}

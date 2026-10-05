@@ -42,6 +42,9 @@ services:
       context: .
       dockerfile: infrastructure/docker/api.Dockerfile
     env_file: .env
+    environment:
+      # env_file can retain owner opt-in values; base deployment must force remote export off.
+      BBD_LANGFUSE_ENABLED: "false"
     init: true
     volumes:
       - app-data:/data
@@ -65,6 +68,9 @@ services:
       dockerfile: infrastructure/docker/api.Dockerfile
     command: ["arq", "apps.worker.main.WorkerSettings"]
     env_file: .env
+    environment:
+      # Keep API and worker disabled unless the explicit observability overlay is included.
+      BBD_LANGFUSE_ENABLED: "false"
     init: true
     volumes:
       - app-data:/data

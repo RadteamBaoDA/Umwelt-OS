@@ -245,15 +245,15 @@ async def collect(
             async def collector_current() -> bool:
                 """Recheck provisioning and optional n8n authority at every MCP request/result fence."""
                 async with session_factory() as session:
-                    current = await sources.get_connector_source(session, source_id)
-                    if current is None or not await _collection_fence(
-                        session, current,
-                        expected_generation,
-                        expected_connector_revision,
+                    if collector_token is not None and not await ingestion.collector_can_ingest(
+                        session, source_id, collector_token, scope="mcp:collect",
                     ):
                         return False
-                    return collector_token is None or await ingestion.collector_can_ingest(
-                        session, source_id, collector_token, scope="mcp:collect",
+                    current = await sources.get_connector_source(session, source_id)
+                    if current is None:
+                        return False
+                    return await _collection_fence(
+                        session, current, expected_generation, expected_connector_revision,
                     )
 
             read = await tools.read_collection_capability(
@@ -318,12 +318,18 @@ async def _collection_fence(
     source_generation: int,
     connector_revision: int,
 ) -> bool:
-    """Require this active MCP source to retain the exact fully applied connector revision."""
-    from modules.connectors import provisioning
+    """Require both live execution owners plus the exact active/applied source revision.
 
-    return await provisioning.require_collection_fence(
-        session, source, source_generation, connector_revision, lock=True,
-    )
+    Callers use this at admission, each provider request/result callback and before final receipt.
+    """
+    from modules.connectors import provisioning
+    from modules.settings.public import module_is_enabled
+
+    return (await module_is_enabled(session, "connectors")
+            and await module_is_enabled(session, "tools")
+            and await provisioning.require_collection_fence(
+                session, source, source_generation, connector_revision, lock=True,
+            ))
 
 
 async def _fence_current(

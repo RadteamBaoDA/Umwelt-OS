@@ -30,6 +30,7 @@ class AgentRun(Base):
         CheckConstraint("length(workflow_version) BETWEEN 1 AND 40", name="ck_agent_runs_workflow_version"),
         Index("ix_agent_runs_dispatch", "status", "updated_at"),
         Index("ix_agent_runs_owner_created", "owner_id", "created_at", "id"),
+        Index("ix_agent_runs_trace_retention", "trace_redacted_at", "status", "completed_at", "id"),
         UniqueConstraint("owner_id", "auth_session_hash", "client_request_id", name="uq_agent_runs_session_request"),
     )
 
@@ -78,6 +79,7 @@ class AgentRun(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    trace_redacted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class AgentToolCall(Base):
@@ -119,6 +121,7 @@ class AgentApproval(Base):
         CheckConstraint("status IN ('pending','approved','denied','expired','cancelled','requires_review')", name="ck_agent_approvals_status"),
         CheckConstraint("octet_length(arguments::text) <= 64000", name="ck_agent_approvals_argument_bytes"),
         Index("ix_agent_approvals_owner_state_expiry", "owner_id", "status", "expires_at"),
+        Index("ix_agent_approvals_retention", "run_id", "status"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -150,6 +153,7 @@ class AgentEffect(Base):
         CheckConstraint("state IN ('reserved','in_flight','succeeded','failed','requires_review')", name="ck_agent_effects_state"),
         CheckConstraint("payload IS NULL OR octet_length(payload::text) <= 64000", name="ck_agent_effects_payload_bytes"),
         Index("ix_agent_effects_run_created", "run_id", "created_at"),
+        Index("ix_agent_effects_retention", "run_id", "state"),
     )
 
     action_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)

@@ -53,6 +53,7 @@ from modules.ingestion.schemas import (
 )
 from modules.sources import public as sources
 from modules.sources.schemas import ConnectorSource
+from modules.settings.public import module_dependency
 
 router = APIRouter(prefix="/api/v1/connectors/sources", tags=["connectors"])
 Session = Annotated[AsyncSession, Depends(get_session)]
@@ -99,7 +100,7 @@ class McpScheduledCollectionRequest(BaseModel):
     connection_id: UUID
 
 
-@router.put("/{source_id}/mcp-collection")
+@router.put("/{source_id}/mcp-collection", dependencies=[Depends(module_dependency("connectors"))])
 async def configure_mcp_collection(
     source_id: UUID, payload: McpCollectionRequest, session: Session, _owner: OwnerWrite
 ) -> dict[str, Any]:
@@ -179,7 +180,7 @@ async def collect_mcp_scheduled(
     return ManualSyncResult.model_validate(result)
 
 
-@router.get("/{source_id}/agent-browser-grant")
+@router.get("/{source_id}/agent-browser-grant", dependencies=[Depends(module_dependency("connectors"))])
 async def read_agent_browser_grant(
     source_id: UUID, session: Session, _owner: OwnerWrite
 ) -> dict[str, object]:
@@ -190,7 +191,7 @@ async def read_agent_browser_grant(
     return {"available": True, **scope.__dict__}
 
 
-@router.put("/{source_id}/agent-browser-grant")
+@router.put("/{source_id}/agent-browser-grant", dependencies=[Depends(module_dependency("connectors"))])
 async def update_agent_browser_grant(
     source_id: UUID,
     payload: AgentBrowserGrantPatch,
@@ -303,6 +304,10 @@ async def _collector(
         session, source_id, token
     ):
         raise HTTPException(status_code=401, detail="Source collector authentication required")
+    from modules.settings.public import module_is_enabled
+
+    if not await module_is_enabled(session, "connectors"):
+        raise HTTPException(status_code=404, detail="Connector collection unavailable")
     return token
 
 
@@ -315,6 +320,10 @@ async def _mcp_collector(
         session, source_id, token, scope="mcp:collect",
     ):
         raise HTTPException(status_code=401, detail="MCP collector authentication required")
+    from modules.settings.public import module_is_enabled
+
+    if not await module_is_enabled(session, "connectors") or not await module_is_enabled(session, "tools"):
+        raise HTTPException(status_code=404, detail="MCP collection unavailable")
     return token
 
 
@@ -795,7 +804,8 @@ async def _collect_telegram_page(
     return last_receipt, None
 
 
-@router.put("/{source_id}/configuration", response_model=ConnectorState)
+@router.put("/{source_id}/configuration", response_model=ConnectorState,
+            dependencies=[Depends(module_dependency("connectors"))])
 async def configure_source(
     source_id: UUID, payload: ConnectorConfigurationRequest, session: Session, _owner: OwnerWrite
 ) -> ConnectorState:
@@ -841,7 +851,8 @@ async def configure_source(
     return ConnectorState(**result)
 
 
-@router.post("/{source_id}/collect", response_model=ManualSyncResult, status_code=202)
+@router.post("/{source_id}/collect", response_model=ManualSyncResult, status_code=202,
+             dependencies=[Depends(module_dependency("connectors"))])
 async def trigger_collection(
     source_id: UUID,
     session: Session,

@@ -11,6 +11,7 @@ class EntityDescriptor:
     description: str = "Store owner-managed entities and exact evidence memberships."
     enabled: bool = True
     dependencies: tuple[str, ...] = ("knowledge.documents",)
+    scheduled_jobs: tuple[str, ...] = ("process_entity_extraction_work",)
     provides: tuple[str, ...] = ("entities", "entity_evidence")
     requires: tuple[str, ...] = ("document_versions", "document_chunks")
     routes: tuple[str, ...] = ("/api/v1/entities",)

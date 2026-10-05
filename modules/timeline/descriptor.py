@@ -12,6 +12,7 @@ class TimelineDescriptor:
     description: str = "Store owner-correctable events with explicit occurrence and evidence provenance."
     enabled: bool = True
     dependencies: tuple[str, ...] = ("knowledge.documents", "knowledge.entities")
+    scheduled_jobs: tuple[str, ...] = ("process_timeline_extraction_work",)
     provides: tuple[str, ...] = ("events", "timeline")
     requires: tuple[str, ...] = ("document_versions", "document_chunks", "entities")
     routes: tuple[str, ...] = ("/api/v1/events", "/api/v1/timeline")

@@ -9,6 +9,9 @@ import time
 from typing import Any
 from fastapi.encoders import jsonable_encoder
 
+from uuid import uuid4
+
+from core.telemetry import bind_trace, count, observe_ms
 from core.tools.policy import ToolPolicy
 from core.tools.schemas import ToolDefinition, ToolExecutionPrincipal, ToolResult, ToolRisk
 from core.tools.validator import check_json_schema, validate_json_schema
@@ -115,7 +118,45 @@ class ToolRegistry:
             for dependency in getattr(descriptor, "dependencies", ())
         )
 
+    async def _refresh_module_registry(self, context: dict[str, Any]) -> bool:
+        """Refresh persisted dependency closure at a tool admission or post-queue dispatch boundary."""
+        factory = context.get("session_factory")
+        if not callable(factory):
+            return False
+        try:
+            from core.modules import effective_modules, register_modules
+            from modules.settings.public import read_module_availability
+
+            async with factory() as session:
+                lifecycle = await read_module_availability(session)
+            disabled = {item.id for item in lifecycle.modules if item.explicitly_disabled}
+            self.set_module_registry(effective_modules(disabled, register_modules()))
+            return True
+        except Exception:
+            return False
+
     async def invoke_tool(
+        self,
+        name: str,
+        args: dict[str, Any],
+        principal: ToolExecutionPrincipal,
+        *,
+        version: str | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> ToolResult:
+        """Dispatch via ``_invoke_tool`` and record tool duration/outcome (label: registered tool name only)."""
+        started = time.perf_counter()
+        # Single dispatch point: bind a per-call ID (caller-supplied or fresh), reset on exit.
+        call_id = str((context or {}).get("tool_call_id") or uuid4())
+        with bind_trace(tool_call_id=call_id):
+            result = await self._invoke_tool(name, args, principal, version=version, context=context)
+        # Unknown names fold to one label so callers cannot inflate cardinality.
+        label = name if name in self._tools else "unknown"
+        observe_ms("tool_call_ms", started, tool=label)
+        count("tool_calls_total", tool=label, outcome="ok" if result.success else (result.error_code or "error"))
+        return result
+
+    async def _invoke_tool(
         self,
         name: str,
         args: dict[str, Any],
@@ -139,6 +180,8 @@ class ToolRegistry:
         definition = self.get_tool(name, version)
         if definition is None or name not in self._handlers:
             return ToolResult(success=False, error="Unknown tool or version", error_code="tool_unavailable")
+        if not await self._refresh_module_registry(context or {}):
+            return ToolResult(success=False, error="Module availability could not be refreshed", error_code="tool_unavailable")
         if name not in principal.allowed_tools or not self._module_enabled(definition.module):
             return ToolResult(success=False, error="Tool is unavailable for this principal", error_code="forbidden")
         if not set(definition.permissions).issubset(principal.capabilities):
@@ -185,6 +228,7 @@ class ToolRegistry:
                         await principal_revalidator(principal)
                         if callable(principal_revalidator) else False
                     )
+                    module_state_current = await self._refresh_module_registry(execution_context)
                     queued_definition = self._tools.get(name)
                     try:
                         queued_approval = bool(
@@ -198,6 +242,7 @@ class ToolRegistry:
                     current_handler = self._handlers.get(name)
                     if (
                         not principal_current
+                        or not module_state_current
                         or registered is None
                         or registered.version != definition.version
                         or self._fingerprints.get(name) != definition.schema_fingerprint

@@ -20,8 +20,9 @@ from modules.knowledge.entities.schemas import (
 )
 from modules.knowledge.public import KnowledgeService
 from modules.knowledge.relationships.schemas import NeighborPage
+from modules.settings.public import module_dependency
 
-router = APIRouter(tags=["knowledge"])
+router = APIRouter(tags=["knowledge"], dependencies=[Depends(module_dependency("entities"))])
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[AuthSession, Depends(require_owner)]
 OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]
