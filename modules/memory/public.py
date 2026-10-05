@@ -5,6 +5,7 @@ import logging
 from typing import Any
 from uuid import UUID
 
+from fastapi import HTTPException
 from redis.asyncio import Redis
 from sqlalchemy import delete, desc, func, or_, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -16,6 +17,7 @@ from modules.memory.schemas import (
     MemoryCandidatePage,
     MemoryCandidateRead,
     MemoryCreate,
+    MemoryExportPrivacy,
     MemoryPage,
     MemoryPrivacyConfig,
     MemoryPrivacyUpdate,
@@ -33,6 +35,28 @@ from modules.memory.selection import (
 logger = logging.getLogger(__name__)
 
 CACHE_KEY_MEMORIES_ACTIVE = "cache:memory:active"
+
+
+async def read_export_privacy(session: AsyncSession) -> MemoryExportPrivacy:
+    """Read only the history-retention value and its persisted-row snapshot fence."""
+    row = (await session.execute(
+        select(
+            MemoryPrivacyRecord.store_conversation_history,
+            MemoryPrivacyRecord.updated_at,
+        ).where(MemoryPrivacyRecord.owner_id == 1)
+    )).one_or_none()
+    if row is None:
+        # Match MemoryService.get_privacy_config without inserting defaults or committing.
+        return MemoryExportPrivacy(
+            store_conversation_history=True, persisted=False, updated_at=None,
+        )
+    store_history, updated_at = row
+    if (type(store_history) is not bool or not isinstance(updated_at, datetime)
+            or updated_at.tzinfo is None or updated_at.utcoffset() is None):
+        raise HTTPException(status_code=503, detail="Memory export privacy state is invalid")
+    return MemoryExportPrivacy(
+        store_conversation_history=store_history, persisted=True, updated_at=updated_at,
+    )
 
 
 def _to_memory_read(item: Memory) -> MemoryRead:
