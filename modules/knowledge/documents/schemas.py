@@ -4,7 +4,7 @@ from typing import Any, Literal
 import re
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, model_validator
 
 MAX_CONTENT_BYTES = 1_048_576
 MAX_METADATA_BYTES = 65_536
@@ -287,6 +287,107 @@ class ProviderDocumentSnapshotList(BaseModel):
     """Return a bounded current-version owner snapshot page."""
     model_config = ConfigDict(extra="forbid")
     items: list[ProviderDocumentSnapshotRead]
+    next_cursor: str | None
+
+
+class GadgetTelegramMediaRead(BaseModel):
+    """Expose Telegram media kind and caption without provider file identifiers."""
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["photo", "video", "audio", "voice", "document", "animation", "sticker", "other"]
+    caption: str | None = Field(default=None, max_length=4096)
+    count: int = Field(ge=1, le=100)
+
+
+class GadgetTelegramRecordRead(BaseModel):
+    """Expose channel and message display metadata without bot or delivery internals."""
+    model_config = ConfigDict(extra="forbid")
+    channel_id: str
+    message_id: str
+    thread_id: str | None
+    reply_to_message_id: str | None
+    channel_label: str | None
+    channel_username: str | None
+    edited_received: bool
+    published_at: datetime
+    edited_at: datetime | None
+    media: list[GadgetTelegramMediaRead] = Field(max_length=20)
+
+
+class GadgetProviderMetadataRead(BaseModel):
+    """Expose only typed provider fields needed to render owner dashboard records."""
+    model_config = ConfigDict(extra="forbid")
+    provider: Literal["youtube", "arxiv", "huggingface", "github_releases", "github", "telegram"]
+    source_fields: dict[str, Any]
+    telegram: GadgetTelegramRecordRead | None = None
+
+
+class GadgetDocumentProjectionRead(BaseModel):
+    """Bounded current-version document data for source-scoped dashboard consumers."""
+    model_config = ConfigDict(extra="forbid")
+    document_id: UUID
+    document_version_id: UUID
+    version_number: int = Field(ge=1)
+    source_id: UUID
+    title: str = Field(max_length=500)
+    canonical_url: str | None
+    published_at: datetime | None
+    observed_at: datetime
+    excerpt: str = Field(max_length=2000)
+    provider_metadata: GadgetProviderMetadataRead | None
+    metadata_is_version_snapshot: bool
+    read_at: datetime | None
+    bookmarked_at: datetime | None
+
+
+class GadgetDocumentSelectionFence(BaseModel):
+    """Bind one exact selected version to its accepted source generation and provider scope."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    document_id: UUID
+    document_version_id: UUID
+    source_id: UUID
+    source_generation: int = Field(ge=0)
+    source_type: str = Field(min_length=1, max_length=64)
+    provider: str | None = Field(default=None, max_length=64)
+    local_only: bool
+    scope_discriminator: str | None = Field(default=None, min_length=64, max_length=64)
+
+
+class GadgetHighlightProjectionPage(BaseModel):
+    """Return one bounded current-version scan page and its durable immutable-version cursor."""
+    model_config = ConfigDict(extra="forbid")
+    items: list[GadgetDocumentProjectionRead] = Field(max_length=100)
+    selection_fences: list[GadgetDocumentSelectionFence] = Field(max_length=100)
+    cursor_created_at: datetime | None
+    cursor_version_id: UUID | None
+    has_more: bool
+
+
+class GadgetDocumentInteractionPatch(BaseModel):
+    """Set durable read/bookmark state for a selected current version."""
+    model_config = ConfigDict(extra="forbid")
+    read: StrictBool | None = None
+    bookmarked: StrictBool | None = None
+
+    @model_validator(mode="after")
+    def require_interaction_change(self) -> "GadgetDocumentInteractionPatch":
+        """Require at least one state field to avoid ambiguous empty writes."""
+        if self.read is None and self.bookmarked is None:
+            raise ValueError("At least one interaction state is required")
+        return self
+
+
+class GadgetDocumentInteractionRead(BaseModel):
+    """Return durable interaction timestamps for one exact version."""
+    model_config = ConfigDict(extra="forbid")
+    document_version_id: UUID
+    read_at: datetime | None
+    bookmarked_at: datetime | None
+
+
+class GadgetDocumentProjectionList(BaseModel):
+    """Page a bounded set of current document projections for owner dashboard use."""
+    model_config = ConfigDict(extra="forbid")
+    items: list[GadgetDocumentProjectionRead]
     next_cursor: str | None
 
 

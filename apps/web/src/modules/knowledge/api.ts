@@ -9,6 +9,22 @@ export type Document = {
 };
 export type DocumentVersion = { id: string; document_id: string; version_number: number; content: string; content_hash: string; observed_at: string; created_at: string };
 export type DocumentPage = { items: Document[]; next_cursor: string | null };
+export type GadgetDocumentProjection = {
+  document_id: string; document_version_id: string; version_number: number; source_id: string;
+  title: string; canonical_url: string | null; published_at: string | null; observed_at: string;
+  excerpt: string; metadata_is_version_snapshot: boolean;
+  read_at: string | null; bookmarked_at: string | null;
+  provider_metadata: {
+    provider: string;
+    source_fields: Record<string, unknown>;
+    telegram?: {
+      channel_id: string; message_id: string; thread_id: string | null; reply_to_message_id: string | null;
+      channel_label: string | null; channel_username: string | null; edited_received: boolean;
+      published_at: string; edited_at: string | null;
+      media: { kind: 'photo' | 'video' | 'audio' | 'voice' | 'document' | 'animation' | 'sticker' | 'other'; caption: string | null; count: number }[];
+    } | null;
+  } | null;
+};
 export type VersionPage = { items: DocumentVersion[]; next_cursor: string | null };
 export type Entity = { id: string; type: string; name: string | null; canonical_name: string | null; description: string | null; name_origin: string | null; description_origin: string | null; metadata: Record<string, unknown>; revision: number; first_seen_at: string | null; last_seen_at: string | null; created_at: string; updated_at: string; aliases: { id: string; entity_id: string; alias: string; source_id: string | null; confirmed: boolean; origin: string; confidence: number | null; created_at: string }[] };
 export type EntityPage = { items: Entity[]; next_cursor: string | null };
@@ -24,7 +40,26 @@ export type GraphStatus = { mapping_id: string; document_version_id: string; epi
 export type EntityTimelineResult = { canonical_entity_id: string; timeline: import('@/modules/timeline/api').TimelinePageResult; graph_statuses: GraphStatus[] };
 
 /** Lists documents from the knowledge API in pages of 50 and appends the opaque cursor when provided. */
-export function listDocuments(cursor?: string) { return apiRequest<DocumentPage>(`/api/v1/documents?limit=50${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`); }
+export function listDocuments(cursor?: string, sourceId?: string) { const query = new URLSearchParams({ limit: '50' }); if (cursor) query.set('cursor', cursor); if (sourceId) query.set('source_id', sourceId); return apiRequest<DocumentPage>(`/api/v1/documents?${query}`); }
+/** Reads current active source records through the owner-validated dashboard projection. */
+export function listGadgetDocumentProjections(sourceIds: string[], channelIds: string[] = []) {
+  const query = new URLSearchParams({ limit: '100' });
+  for (const sourceId of [...new Set(sourceIds)].slice(0, 32)) query.append('source_ids', sourceId);
+  for (const channelId of [...new Set(channelIds)].slice(0, 32)) query.append('channel_ids', channelId);
+  return apiRequest<{ items: GadgetDocumentProjection[]; next_cursor: string | null }>(`/api/v1/documents/dashboard-projections?${query}`);
+}
+/** Persist read/bookmark state for one current immutable version. */
+export function setGadgetDocumentInteraction(
+  documentId: string,
+  versionNumber: number,
+  payload: { read?: boolean; bookmarked?: boolean },
+  csrfToken: string,
+) {
+  return apiRequest<{ document_version_id: string; read_at: string | null; bookmarked_at: string | null }>(
+    `/api/v1/documents/${documentId}/versions/${versionNumber}/interaction`,
+    { method: 'PUT', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify(payload) },
+  );
+}
 /** Fetches the document with the supplied ID from the knowledge API. */
 export function getDocument(id: string) { return apiRequest<Document>(`/api/v1/documents/${id}`); }
 /** Fetches the requested numbered document version. */

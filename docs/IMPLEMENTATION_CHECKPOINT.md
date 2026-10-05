@@ -1,23 +1,23 @@
 # Umwelt-OS — Implementation checkpoint
 
-Ngày: 2026-10-05. **ACTIVE: owner đã yêu cầu tiếp tục plan**. Đang review song song P11-T4/R12 R1/R14 R1 trên worktree hiện có; chưa merge mới. Stop checkpoint phía dưới là lịch sử.
+Ngày: 2026-10-05. **ACTIVE**. P11 integrated c58a56e. R12 composition active; R14 source7086167 accepted/composition pending; R07 Luna actual source port active. Older pause/fix entries below are history.
 
 ## Nhánh tích hợp
 
-- Checkout thật: `D:/Project/Umwelt-OS`, nhánh `develop`, HEAD `71b32aa`.
+- Checkout thật: `D:/Project/Umwelt-OS`, nhánh `develop`, HEAD `c58a56e`.
 - P07 `3dca811`, P08 `c37e22e`, P09 `16f6831`, P10 `c0a27c1` đã merge; P01–P06 được ghi nhận delivery trước đó.
 - Collector R08.1 / P10 supplemental đã code/build/source review PASS và tích hợp tại `71b32aa`.
-- Không push/deploy. Chưa merge P11/R12/R14. Runtime/provider/capacity acceptance chưa được chứng minh bằng build.
+- Không push/deploy. P11 đã merge; R12/R14 chưa merge. Runtime/provider/capacity acceptance chưa được chứng minh bằng build.
 
 ## Task hiện tại
 
 | Scope | Source / commit | Code / build / review | Trạng thái |
 | --- | --- | --- | --- |
-| P11 T1–T3 | P11 branch, T3 R1 `a07c3a0` | Code + prescribed build + independent source review PASS | Hoàn tất production scope; chưa merge phase |
-| P11 T4 | `f3684a2`, clean | Code + exact prescribed build PASS | Agent đã xong; source review + whole P11 review/build/merge pending |
-| R12 consumers | R1 `884d7bc`, clean | Production code + prescribed build PASS; author reports 8 findings addressed | Agent đã dừng; independent scoped re-review và merge pending |
-| R14 observations | R1 `c6df508`, clean | Production code + prescribed build PASS; author reports 8 findings addressed | Agent đã dừng; independent scoped re-review và merge pending |
-| R07 actual AnythingLLM port | Upstream/MIT preflight có bằng chứng | Chưa port actual source | Pending sau R12; không coi interaction-pattern adaptation là source port |
+| P11 T1–T3 | Integrated c58a56e | Code/build/source review PASS | Production integrated; runtime acceptance deferred |
+| P11 T4 | Accepted a19d77b; integrated c58a56e | Exact build + scoped/whole-phase/final docs review PASS | Production integrated; runtime acceptance deferred |
+| R12 consumers | Accepted 0522cc4 | Code/build/scoped review PASS | Compose P11: four conflicts resolved; migration/cron/descriptor edits underway, final build/review pending |
+| R14 observations | Accepted 7086167 | Code/build/scoped review PASS, clean author tree | Composition after R12 pending |
+| R07 actual AnythingLLM port | Own worktree, accepted R12 base0522cc4 | Actual upstream/MIT preflight read; Luna source implementation active | Build/review/composition pending |
 | R15 maps/intelligence | Preflight | Chưa implement | globe.gl / deck.gl shared layers, evidence co-occurrence; CII v8 phải unavailable khi chưa đủ method/data/license |
 | P12 / R16 | Backup preflight; deletion owner localization preliminary | Chưa implement production | Backup/restore/export, deletion/recovery, onboarding, capacity/release/OSS inventories |
 
@@ -83,4 +83,30 @@ Luna repair e7060ee (four intended source/config/docs files), root verified HEAD
 ## Current production checkpoint — 2026-10-05
 
 P11 a19d77b production code/build/final independent review accepted and phase squash integration. R12 0522cc4 independently accepted, composition pending. R14 round2 buildPASS pending freeze/re-review. R07 isolated tree prepared, implement dispatch queued; R15/P12/R16 remain. External develop test commit5326ab0 preserved; this team did not run tests. Earlier tables/pause entries are historical; use this latest checkpoint.
+
+
+### P11 integration commit confirmed — 2026-10-05
+Root developc58a56e phase-sized squash (98files code+batchedstatus), preserves unrelated owner edits/deletions and external test5326ab0. R12 Luna composition dispatched in existing consumer tree: merge develop narrow conflicts, reparent interactions afterP11retention, register highlightcron ownership, exact build/review pending. R14 author buildPASS final freeze pending; R07 worktree prepared dispatch cap persists. GoalACTIVE; no push/deploy or test runs by this team.
+
+
+### R14 accepted / R07 actual implementation started — 2026-10-05
+R14 scoped source re-review ACCEPT7086167: all3round2findings closed, no material repair regression, docs compliant; exact prescribed author buildPASS and clean source. Migration/composition/runtime gates remain. Fresh Luna r07_implement dispatched in prepared R07 worktree0522cc4, actual upstream source port per evidence/preflight; no new merge. R12 Luna composition continues4narrow source conflicts, owns next buildslot. Root developc58a56e. No tests/runtime/providers/push/deploy by this team.
+
+
+
+### Current source work / verified agent wait — 2026-10-05
+Live agents collector_trigger_implement and r07_implement confirmed running. R12 migration source descends from P11retention and highlightcron declaration present; author final ownership edits/staging/build/freeze pending. R07 verified accepted R12 already supplies exact-version dispatch/fences, preserves it; tracing real citation reader mapping and required durable edit/regenerate contracts before UI source port. No task acceptance from work-in-progress. R14 source7086167 remains accepted/composition pending. No new merge/build/test evidence in this checkpoint.
+
+
+### R12 composed source frozen — 2026-10-05
+Merge12f165d parents0522cc4+c58a56e, root HEAD/clean verified; no tests/AGENTS/CLAUDE delivery diff versusdevelop. Exact prescribed build exit0 captured, frontend/static/integratedTS/fourimages PASS; processpassword restored/no services/tests/otherchecks. Scoped integration report covers4conflicts, lifecyclecron/Docsdependency/routes/descriptors, migrationchain webhook->P11retention->R12interactions->highlightprogress. Sol r12_composition_review dispatched, acceptance pending. No new develop merge. R07 Luna source active; R14 accepted7086167 awaits composedR12 dependency.
+
+
+### R12 composition review requires one repair — 2026-10-05
+Sol12f165d composition review REQUESTCHANGES oneP2: later duplicate _mcp_collector shadows credential-first P11connectors/tools availability gate at ingress. Downstream providerIO remains fenced; no outbound bypass claim. Other reviewed composition seams preserve behavior. Retained Luna author resumed minimal duplicate-helper removal, exact prescribed rebuild and scopedcommit; Docker slot granted. Independent scoped re-review follows repair freeze. R07 source implementation remains active; R14 acceptedsource7086167 awaits finalR12composition. No developmerge/tests/runtimechecks.
+
+
+## R12 production integration — 2026-10-05
+
+Accepted source d60d01a after composition12f165d: full prescribed build exit0, original scoped review and composition review accepted; final oneP2 duplicate-helper fix independently closed. Root applied production-only squash delta (35files) and verified exact reviewed production source equality, excluding owner/status/UX and independent tests. Root now has unrelated external testc4a5275, preserved; this team did not run/modify tests. Migrationchain webhook->P11retention->R12interactions->highlightprogress; lifecyclecron/Docsdependency/routes integrated. One large-task code+status commit follows, no push/deploy/runtime/provider acceptance. R14 accepted7086167 now eligible for composition; R07 actual source port active with append-only idempotent edit/regenerate ruling.
 

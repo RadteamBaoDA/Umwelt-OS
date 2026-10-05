@@ -32,7 +32,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
-import { SOURCE_BACKED_RENDERERS, SourcePicker } from './source-picker';
+import { MULTI_SOURCE_RENDERERS, SOURCE_BACKED_RENDERERS, SourceMultiPicker, SourcePicker } from './source-picker';
 import {
   dashboardKeys,
   patchGadgetDefinition,
@@ -86,6 +86,8 @@ export function GadgetSettings({
   const [highlightRules, setHighlightRules] = useState<HighlightRule[]>([]);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [sourceId, setSourceId] = useState<string | null>(null);
+  const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([]);
+  const [channelIds, setChannelIds] = useState('');
 
   // New highlight rule subform state
   const [newRuleKeywords, setNewRuleKeywords] = useState<string>('');
@@ -102,6 +104,8 @@ export function GadgetSettings({
       setExcludeKeywords((def.filters?.exclude_keywords ?? []).join(', '));
       setSymbols((def.scope?.symbols ?? []).join(', '));
       setSourceId(def.source_ids?.[0] ?? null);
+      setSelectedSourceIds([...(def.source_ids ?? [])].slice(0, 32));
+      setChannelIds((def.scope?.channel_ids ?? []).join(', '));
       setHighlightRules(def.highlight_rules ? [...def.highlight_rules] : []);
       setSaveError(null);
     }
@@ -146,7 +150,9 @@ export function GadgetSettings({
           // Only source-backed renderers own a source selection; others keep theirs untouched.
           ...(instance.definition.renderer in SOURCE_BACKED_RENDERERS
             ? { source_ids: sourceId ? [sourceId] : [] }
-            : {}),
+            : MULTI_SOURCE_RENDERERS.has(instance.definition.renderer)
+              ? { source_ids: selectedSourceIds }
+              : {}),
           filters: {
             limit: Math.max(1, Math.min(100, limit)),
             keywords: parsedKeywords.length > 0 ? parsedKeywords : undefined,
@@ -155,6 +161,9 @@ export function GadgetSettings({
           scope: {
             ...instance.definition.scope,
             symbols: parsedSymbols.length > 0 ? parsedSymbols : undefined,
+            ...(instance.definition.renderer === 'telegram_feed'
+              ? { channel_ids: channelIds.split(',').map((item) => item.trim()).filter(Boolean) }
+              : {}),
           },
           highlight_rules: highlightRules,
         },
@@ -181,7 +190,7 @@ export function GadgetSettings({
     if (parsed.length === 0) return;
 
     const rule: HighlightRule = {
-      id: `rule-${Date.now()}`,
+      id: crypto.randomUUID(),
       keywords: parsed,
       severity: newRuleSeverity,
       notify: newRuleNotify,
@@ -243,6 +252,26 @@ export function GadgetSettings({
               value={sourceId}
               onChange={setSourceId}
             />
+          )}
+          {MULTI_SOURCE_RENDERERS.has(instance.definition.renderer) && (
+            <SourceMultiPicker
+              id="gadget-sources"
+              provider={instance.definition.renderer === 'telegram_feed' ? 'telegram' : instance.definition.renderer === 'video_panel' ? 'youtube' : undefined}
+              value={selectedSourceIds}
+              onChange={setSelectedSourceIds}
+            />
+          )}
+          {instance.definition.renderer === 'telegram_feed' && (
+            <div className="space-y-1.5">
+              <Label htmlFor="gadget-channel-ids" className="text-xs font-semibold">{t('telegramChannels')}</Label>
+              <Input
+                id="gadget-channel-ids"
+                value={channelIds}
+                onChange={(event) => setChannelIds(event.target.value)}
+                placeholder="-1001234567890, 123456789"
+                className="h-8 text-xs font-mono"
+              />
+            </div>
           )}
 
           {/* Limit & Scope row */}

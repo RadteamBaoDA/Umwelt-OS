@@ -18,12 +18,17 @@ from core.chunking import chunk_text
 from core.realtime import ReplayDraft, commit_with_replay, make_knowledge_change
 from core.tools.schemas import ToolDestination, ToolOutputFence
 from modules.knowledge.documents.models import (
-    Document, DocumentChunk, DocumentVersion, NormalizedDocumentIdentity,
+    Document, DocumentChunk, DocumentInteraction, DocumentVersion, NormalizedDocumentIdentity,
     NormalizedVersionProvenance,
 )
 from modules.knowledge.documents.schemas import (
     DocumentCreate, DocumentPatch, EvidenceReferenceRead, NormalizedDocumentInput,
-    NormalizedDocumentResult, ProviderDocumentSnapshotList,
+    NormalizedDocumentResult, GadgetDocumentInteractionPatch, GadgetDocumentInteractionRead,
+    GadgetDocumentProjectionList, GadgetDocumentProjectionRead,
+    GadgetDocumentSelectionFence,
+    GadgetHighlightProjectionPage,
+    GadgetProviderMetadataRead, GadgetTelegramMediaRead, GadgetTelegramRecordRead,
+    ProviderDocumentSnapshotList,
     ProviderDocumentSnapshotRead, ProviderRecordMetadata, PROVIDER_IDS,
     TelegramDocumentOrder,
 )
@@ -311,6 +316,7 @@ class NewsDocumentProjection:
     normalization_version: int | None
     chunk_count: int
     chunks_truncated: bool
+    provider_metadata: ProviderRecordMetadata | None
 
 
 @dataclass(frozen=True)
@@ -328,6 +334,56 @@ async def get_news_document_projection(
     This read excludes deleted, paused, replaced, or incomplete versions and caps
     chunks at 100. Legacy/manual documents remain readable with explicitly
     non-snapshot metadata provenance rather than inferred historical metadata.
+    """
+    components = await _current_document_components(
+        session, document_id, expected_source_generation=expected_source_generation,
+    )
+    if components is None:
+        return None
+    document, version, source, provenance = components
+    chunk_rows = list((await session.execute(
+        select(DocumentChunk.id, DocumentChunk.chunk_index, DocumentChunk.content)
+        .where(DocumentChunk.document_version_id == version.id)
+        .order_by(DocumentChunk.chunk_index, DocumentChunk.id).limit(101)
+    )).all())
+    if not chunk_rows:
+        return None
+    chunk_count = len(chunk_rows) if len(chunk_rows) <= 100 else int(await session.scalar(
+        select(func.count()).select_from(DocumentChunk).where(DocumentChunk.document_version_id == version.id)
+    ) or 0)
+    chunks_truncated = len(chunk_rows) > 100
+    chunk_rows = chunk_rows[:100]
+    return NewsDocumentProjection(
+        document_id=document.id, document_version_id=version.id, version_number=version.version_number,
+        source_id=source.id, current_source_generation=source.generation, source_name=source.name,
+        source_type=source.type, provider=source.provider, local_only=source.local_only,
+        canonical_url=provenance.canonical_url if provenance else document.canonical_url,
+        content_hash=version.content_hash,
+        provider_item_id=(document.external_id[:512] if document.external_id else None),
+        scope_discriminator=(provenance.provenance_json.get("provider_scope_discriminator") if provenance else None),
+        title=provenance.title if provenance else document.title,
+        published_at=provenance.published_at if provenance else document.published_at,
+        observed_at=provenance.selection_observed_at if provenance else (document.observed_at or version.observed_at),
+        created_at=version.created_at,
+        chunks=tuple(NewsChunkProjection(id=identifier, index=index, content=content[:20_000]) for identifier, index, content in chunk_rows),
+        metadata_is_version_snapshot=provenance is not None,
+        accepted_record_hash=provenance.accepted_record_hash if provenance else None,
+        normalization_version=provenance.normalization_version if provenance else None,
+        chunk_count=chunk_count, chunks_truncated=chunks_truncated,
+        provider_metadata=(
+            ProviderRecordMetadata.model_validate(provenance.provenance_json["provider_record"])
+            if provenance and provenance.provenance_json.get("provider_record") is not None else None
+        ),
+    )
+
+
+async def _current_document_components(
+    session: AsyncSession, document_id: UUID, *, expected_source_generation: int | None = None,
+) -> tuple[Document, DocumentVersion, Source, NormalizedVersionProvenance | None] | None:
+    """Resolve one active current revision and verify its accepted provider scope without reading chunks.
+
+    The Documents owner uses this shared gate for content projections and exact selections so a
+    normalized record cannot inherit a new source generation or mutable provider configuration.
     """
     row = (await session.execute(
         select(Document, DocumentVersion, Source)
@@ -380,36 +436,58 @@ async def get_news_document_projection(
             # establish their current scope and must not use mutable legacy fields.
             return None
         provenance = None
-    chunk_rows = list((await session.execute(
-        select(DocumentChunk.id, DocumentChunk.chunk_index, DocumentChunk.content)
-        .where(DocumentChunk.document_version_id == version.id)
-        .order_by(DocumentChunk.chunk_index, DocumentChunk.id).limit(101)
-    )).all())
-    if not chunk_rows:
-        return None
-    chunk_count = len(chunk_rows) if len(chunk_rows) <= 100 else int(await session.scalar(
-        select(func.count()).select_from(DocumentChunk).where(DocumentChunk.document_version_id == version.id)
-    ) or 0)
-    chunks_truncated = len(chunk_rows) > 100
-    chunk_rows = chunk_rows[:100]
-    return NewsDocumentProjection(
-        document_id=document.id, document_version_id=version.id, version_number=version.version_number,
-        source_id=source.id, current_source_generation=source.generation, source_name=source.name,
-        source_type=source.type, provider=source.provider, local_only=source.local_only,
-        canonical_url=provenance.canonical_url if provenance else (document.canonical_url if not provenance_rows else None),
-        content_hash=version.content_hash,
-        provider_item_id=(document.external_id[:512] if document.external_id else None),
-        scope_discriminator=(provenance.provenance_json.get("provider_scope_discriminator") if provenance else None),
-        title=provenance.title if provenance else (document.title if not provenance_rows else "Untitled"),
-        published_at=provenance.published_at if provenance else (document.published_at if not provenance_rows else None),
-        observed_at=provenance.selection_observed_at if provenance else (document.observed_at or version.observed_at),
-        created_at=version.created_at,
-        chunks=tuple(NewsChunkProjection(id=identifier, index=index, content=content[:20_000]) for identifier, index, content in chunk_rows),
-        metadata_is_version_snapshot=provenance is not None,
-        accepted_record_hash=provenance.accepted_record_hash if provenance else None,
-        normalization_version=provenance.normalization_version if provenance else None,
-        chunk_count=chunk_count, chunks_truncated=chunks_truncated,
-    )
+    return document, version, source, provenance
+
+
+async def validate_gadget_document_selection_fences(
+    session: AsyncSession, fences: tuple[GadgetDocumentSelectionFence, ...], *,
+    lock_rows: bool = True, max_documents: int = 32,
+) -> bool:
+    """Revalidate exact selected versions and provider policy before content or remote use.
+
+    Selection count, source count, and lock order are bounded. Source rows are share-locked in UUID
+    order before document rows; accepted provenance is then checked against the live provider scope.
+    Locks remain held by the caller's transaction until its next commit or rollback.
+    """
+    if (
+        not fences or len(fences) > max_documents or max_documents > 100
+        or len({item.document_id for item in fences}) != len(fences)
+        or len({item.source_id for item in fences}) > 32
+    ):
+        raise ValueError("Selection fences exceed their bounded unique-document or source limit")
+    source_ids = sorted({item.source_id for item in fences}, key=str)
+    document_ids = sorted({item.document_id for item in fences}, key=str)
+    if lock_rows:
+        # Scope/configuration writers lock Source before changing documents; keep the same order here.
+        locked_sources = (await session.scalars(
+            select(Source).where(Source.id.in_(source_ids)).order_by(Source.id).with_for_update(read=True)
+        )).all()
+        if len(locked_sources) != len(source_ids):
+            return False
+        locked_documents = (await session.scalars(
+            select(Document).where(Document.id.in_(document_ids)).order_by(Document.id).with_for_update(read=True)
+        )).all()
+        if len(locked_documents) != len(document_ids):
+            return False
+    for fence in fences:
+        components = await _current_document_components(
+            session, fence.document_id, expected_source_generation=fence.source_generation,
+        )
+        if components is None:
+            return False
+        _document, version, source, provenance = components
+        accepted_scope = provenance.provenance_json.get("provider_scope_discriminator") if provenance else None
+        if (
+            version.id != fence.document_version_id
+            or source.id != fence.source_id
+            or source.generation != fence.source_generation
+            or source.type != fence.source_type
+            or source.provider != fence.provider
+            or source.local_only != fence.local_only
+            or accepted_scope != fence.scope_discriminator
+        ):
+            return False
+    return True
 
 
 async def news_retained_observation_allowed(
@@ -564,10 +642,16 @@ async def news_current_scope_status(
 async def list_news_document_projections(
     session: AsyncSession, *, source_ids: tuple[UUID, ...], limit: int = 50,
     cursor: str | None = None, observed_since: datetime | None = None,
+    channel_ids: tuple[str, ...] | None = None,
 ) -> tuple[list[NewsDocumentProjection], str | None]:
     """Page bounded current ready versions from explicitly authorized active sources."""
     if not source_ids or len(source_ids) > 32 or len(set(source_ids)) != len(source_ids) or not 1 <= limit <= 100:
         raise ValueError("News source page must contain 1 to 32 unique sources and a bounded limit")
+    if channel_ids is not None and (
+        len(channel_ids) > 32 or len(set(channel_ids)) != len(channel_ids)
+        or any(re.fullmatch(r"-?[1-9][0-9]{0,19}", item) is None for item in channel_ids)
+    ):
+        raise ValueError("Channel scope must contain at most 32 unique numeric identifiers")
     statement = (
         select(Document.id, Document.created_at)
         .join(DocumentVersion, DocumentVersion.document_id == Document.id)
@@ -580,6 +664,15 @@ async def list_news_document_projections(
     )
     if observed_since is not None:
         statement = statement.where(func.coalesce(Document.observed_at, DocumentVersion.observed_at) >= observed_since)
+    if channel_ids is not None:
+        statement = statement.where(
+            Source.provider == "telegram",
+            select(NormalizedVersionProvenance.id).where(
+                NormalizedVersionProvenance.document_version_id == DocumentVersion.id,
+                NormalizedVersionProvenance.source_generation == Source.generation,
+                NormalizedVersionProvenance.provenance_json["provider_record"]["telegram"]["channel_id"].astext.in_(channel_ids),
+            ).exists(),
+        )
     if cursor:
         created_at, document_cursor = _decode_news_projection_cursor(cursor)
         statement = statement.where(tuple_(Document.created_at, Document.id) < (created_at, document_cursor))
@@ -590,9 +683,198 @@ async def list_news_document_projections(
     for document_id, _created_at in rows:
         item = await get_news_document_projection(session, document_id)
         if item is not None and item.source_id in source_ids:
+            if channel_ids is not None and (
+                item.provider_metadata is None
+                or item.provider_metadata.provider != "telegram"
+                or item.provider_metadata.telegram is None
+                or item.provider_metadata.telegram.channel_id not in channel_ids
+            ):
+                continue
             projections.append(item)
     next_cursor = _encode_news_projection_cursor(rows[-1][1], rows[-1][0]) if more and rows else None
     return projections, next_cursor
+
+
+async def list_gadget_document_projections(
+    session: AsyncSession, *, owner_id: int, source_ids: tuple[UUID, ...], limit: int = 50,
+    cursor: str | None = None, channel_ids: tuple[str, ...] | None = None,
+) -> GadgetDocumentProjectionList:
+    """Return active, current, ready source records as a small dashboard projection page.
+
+    Documents retains source-generation and provider-scope validation. Only short excerpts and
+    typed immutable provider fields leave this owner boundary; full text stays out of dashboard APIs.
+    """
+    projections, next_cursor = await list_news_document_projections(
+        session, source_ids=source_ids, limit=limit, cursor=cursor,
+        channel_ids=channel_ids,
+    )
+    version_ids = [item.document_version_id for item in projections]
+    interaction_rows = (await session.scalars(
+        select(DocumentInteraction).where(
+            DocumentInteraction.owner_id == owner_id,
+            DocumentInteraction.document_version_id.in_(version_ids),
+        )
+    )).all() if version_ids else []
+    interactions = {row.document_version_id: row for row in interaction_rows}
+    items = [
+        _as_gadget_document_projection(
+            item, interactions.get(item.document_version_id),
+        )
+        for item in projections
+    ]
+    return GadgetDocumentProjectionList(items=items, next_cursor=next_cursor)
+
+
+def _as_gadget_document_projection(
+    item: NewsDocumentProjection, interaction: DocumentInteraction | None = None,
+) -> GadgetDocumentProjectionRead:
+    """Project typed current source fields while omitting provider secrets and raw media handles."""
+    provider_metadata = item.provider_metadata
+    safe_provider_metadata = None
+    if provider_metadata is not None:
+        safe_telegram = None
+        if provider_metadata.telegram is not None:
+            detail = provider_metadata.telegram
+            safe_telegram = GadgetTelegramRecordRead(
+                channel_id=detail.channel_id,
+                message_id=detail.message_id,
+                thread_id=detail.thread_id,
+                reply_to_message_id=detail.reply_to_message_id,
+                channel_label=detail.channel_label,
+                channel_username=detail.channel_username,
+                edited_received=detail.edited_received,
+                published_at=detail.published_at,
+                edited_at=detail.edited_at,
+                media=[GadgetTelegramMediaRead(
+                    kind=media.kind, caption=media.caption, count=media.count,
+                ) for media in detail.media],
+            )
+        safe_provider_metadata = GadgetProviderMetadataRead(
+            provider=provider_metadata.provider,
+            source_fields=provider_metadata.source_fields,
+            telegram=safe_telegram,
+        )
+    return GadgetDocumentProjectionRead(
+        document_id=item.document_id,
+        document_version_id=item.document_version_id,
+        version_number=item.version_number,
+        source_id=item.source_id,
+        title=item.title,
+        canonical_url=item.canonical_url,
+        published_at=item.published_at,
+        observed_at=item.observed_at,
+        excerpt="\n\n".join(chunk.content for chunk in item.chunks)[:2000],
+        provider_metadata=safe_provider_metadata,
+        metadata_is_version_snapshot=item.metadata_is_version_snapshot,
+        read_at=interaction.read_at if interaction else None,
+        bookmarked_at=interaction.bookmarked_at if interaction else None,
+    )
+
+
+async def list_gadget_highlight_projection_page(
+    session: AsyncSession, *, source_ids: tuple[UUID, ...], limit: int = 100,
+    cursor_created_at: datetime | None = None, cursor_version_id: UUID | None = None,
+) -> GadgetHighlightProjectionPage:
+    """Page current accepted evidence by immutable-version creation order for durable highlight scans.
+
+    New revisions of old documents receive new version IDs/timestamps and enter the forward scan.
+    The cursor advances over candidate versions even when current-scope validation rejects one.
+    """
+    if (
+        not source_ids or len(source_ids) > 32 or len(set(source_ids)) != len(source_ids)
+        or not 1 <= limit <= 100
+        or (cursor_created_at is None) != (cursor_version_id is None)
+    ):
+        raise ValueError("Highlight projection page has an invalid source set, limit, or version cursor")
+    statement = (
+        select(Document.id, DocumentVersion.id, DocumentVersion.created_at)
+        .join(DocumentVersion, DocumentVersion.document_id == Document.id)
+        .join(Source, Source.id == Document.source_id)
+        .where(
+            Document.source_id.in_(source_ids),
+            Document.current_version == DocumentVersion.version_number,
+            Document.extraction_status.in_(("ready", "succeeded")),
+            Source.status == "active",
+            select(DocumentChunk.id).where(DocumentChunk.document_version_id == DocumentVersion.id).exists(),
+        )
+    )
+    if cursor_created_at is not None and cursor_version_id is not None:
+        statement = statement.where(
+            tuple_(DocumentVersion.created_at, DocumentVersion.id) > (cursor_created_at, cursor_version_id)
+        )
+    rows = list((await session.execute(
+        statement.order_by(DocumentVersion.created_at, DocumentVersion.id).limit(limit + 1)
+    )).all())
+    has_more = len(rows) > limit
+    candidates = rows[:limit]
+    items: list[GadgetDocumentProjectionRead] = []
+    fences: list[GadgetDocumentSelectionFence] = []
+    for document_id, version_id, _created_at in candidates:
+        projection = await get_news_document_projection(session, document_id)
+        if (
+            projection is None or projection.document_version_id != version_id
+            or projection.source_id not in source_ids
+        ):
+            continue
+        items.append(_as_gadget_document_projection(projection))
+        fences.append(GadgetDocumentSelectionFence(
+            document_id=projection.document_id,
+            document_version_id=projection.document_version_id,
+            source_id=projection.source_id,
+            source_generation=projection.current_source_generation,
+            source_type=projection.source_type,
+            provider=projection.provider,
+            local_only=projection.local_only,
+            scope_discriminator=projection.scope_discriminator,
+        ))
+    last = candidates[-1] if candidates else None
+    return GadgetHighlightProjectionPage(
+        items=items,
+        selection_fences=fences,
+        cursor_created_at=last[2] if last else None,
+        cursor_version_id=last[1] if last else None,
+        has_more=has_more,
+    )
+
+
+async def set_gadget_document_interaction(
+    session: AsyncSession, *, owner_id: int, document_id: UUID, version_number: int,
+    payload: GadgetDocumentInteractionPatch,
+) -> GadgetDocumentInteractionRead | None:
+    """Persist exact-version read/bookmark state only while that version is active and current."""
+    # Serialize a first insert and competing read/bookmark changes against this document row.
+    document = await session.scalar(
+        select(Document).where(Document.id == document_id).with_for_update()
+    )
+    if document is None:
+        return None
+    projection = await get_news_document_projection(session, document_id)
+    if projection is None or projection.version_number != version_number:
+        return None
+    row = await session.get(
+        DocumentInteraction, (owner_id, projection.document_version_id),
+    )
+    now = datetime.now(UTC)
+    read_at = (now if payload.read else None) if payload.read is not None else (row.read_at if row else None)
+    bookmarked_at = (now if payload.bookmarked else None) if payload.bookmarked is not None else (row.bookmarked_at if row else None)
+    if read_at is None and bookmarked_at is None:
+        if row is not None:
+            await session.delete(row)
+    elif row is None:
+        row = DocumentInteraction(
+            owner_id=owner_id, document_version_id=projection.document_version_id,
+            read_at=read_at, bookmarked_at=bookmarked_at,
+        )
+        session.add(row)
+    else:
+        row.read_at = read_at
+        row.bookmarked_at = bookmarked_at
+        row.updated_at = now
+    await session.commit()
+    return GadgetDocumentInteractionRead(
+        document_version_id=projection.document_version_id,
+        read_at=read_at, bookmarked_at=bookmarked_at,
+    )
 
 
 def _encode_news_projection_cursor(created_at: datetime, document_id: UUID) -> str:
@@ -1885,6 +2167,8 @@ async def read_chat_evidence_chunks(
     refs: list[tuple[UUID, UUID]],
     *,
     require_active_source: bool = True,
+    require_current_version: bool = False,
+    selection_fences: tuple[GadgetDocumentSelectionFence, ...] | None = None,
 ) -> list[ChatEvidenceChunk]:
     """Read bounded detached evidence chunks with exact content and source privacy fence.
 
@@ -1895,23 +2179,30 @@ async def read_chat_evidence_chunks(
     Permissions & Deletion checks:
         Enforces unique references bounded to 100 items. When require_active_source is True,
         restricts to Source.status == 'active'. Revalidates NormalizedVersionProvenance for
-        immutable revision metadata snapshots. Read-only projection; no write-through modifications.
+        immutable revision metadata snapshots. Exact gadget selections pass server-derived source
+        fences, which are checked and locked before content chunks are read.
 
     Args:
         session: Active database session.
         refs: Unique list of (document_version_id, chunk_id) tuples.
         require_active_source: Whether to filter out chunks belonging to inactive sources.
+        selection_fences: Server-derived source generation and provider-scope checks, when selected.
 
     Returns:
         List of detached ChatEvidenceChunk DTOs in the order of valid matching refs.
 
     Raises:
-        ValueError: If refs list exceeds 100 items or contains duplicates.
+        ValueError: If refs list exceeds 100 items or contains duplicates. Exact selected reads also
+            fail when a requested reference is missing instead of silently shrinking the selection.
     """
     if len(refs) > 100 or len(set(refs)) != len(refs):
         raise ValueError("Evidence references must be unique and contain at most 100 items")
     if not refs:
         return []
+    if selection_fences is not None and not await validate_gadget_document_selection_fences(
+        session, selection_fences,
+    ):
+        raise ValueError("Selected document version or source privacy scope is stale")
 
     statement = (
         select(Document, DocumentVersion, DocumentChunk, Source)
@@ -1922,9 +2213,13 @@ async def read_chat_evidence_chunks(
     )
     if require_active_source:
         statement = statement.where(Source.status == "active")
+    if require_current_version:
+        statement = statement.where(Document.current_version == DocumentVersion.version_number)
 
     rows = (await session.execute(statement)).all()
     if not rows:
+        if selection_fences is not None:
+            raise ValueError("Evidence reference is missing or unavailable")
         return []
 
     provenance_rows = (await session.scalars(
@@ -1957,6 +2252,9 @@ async def read_chat_evidence_chunks(
             observed_at=ver.observed_at,
             published_at=doc.published_at,
         )
+
+    if selection_fences is not None and set(by_ref) != set(refs):
+        raise ValueError("One or more exact selected evidence chunks are unavailable")
 
     # Return matching items in the caller's requested order, omitting any deleted/missing refs.
     return [by_ref[ref] for ref in refs if ref in by_ref]

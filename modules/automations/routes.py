@@ -16,7 +16,7 @@ from core.auth.dependencies import require_owner, require_owner_write
 from core.auth.models import AuthSession, Owner
 from core.database import get_session
 from modules.automations import public
-from modules.settings.public import module_dependency
+from modules.settings.public import module_dependency, module_is_enabled
 from modules.automations.execution import enqueue_trigger
 from modules.automations.models import AutomationTrigger, AutomationWebhookCredential
 from modules.automations.schemas import (
@@ -190,8 +190,6 @@ async def receive_inbound_webhook(
     ).with_for_update())
     if credential is None or not verify_inbound_token(token, credential.token_hash):
         raise HTTPException(status_code=401, detail="Webhook credentials are invalid or expired")
-    from modules.settings.public import module_is_enabled
-
     # External trigger ingress uses its own bearer. Check persisted availability only after it
     # authenticates, since this router deliberately has no owner-session/CSRF dependency.
     if not await module_is_enabled(session, "automations"):

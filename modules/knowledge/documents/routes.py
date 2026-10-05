@@ -18,6 +18,9 @@ from modules.knowledge.documents.schemas import (
     DocumentList,
     DocumentPatch,
     DocumentRead,
+    GadgetDocumentProjectionList,
+    GadgetDocumentInteractionPatch,
+    GadgetDocumentInteractionRead,
     ProviderDocumentSnapshotList,
     ProviderDocumentSnapshotRead,
     ProviderSnapshotRequest,
@@ -29,7 +32,7 @@ from modules.settings.public import module_dependency
 router = APIRouter(
     prefix="/api/v1/documents",
     tags=["documents"],
-    dependencies=[Depends(module_dependency("documents"))],
+    dependencies=[Depends(module_dependency("knowledge.documents"))],
 )
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[AuthSession, Depends(require_owner)]
@@ -101,6 +104,43 @@ async def list_documents(
     """Return a bounded owner-only document page and continuation cursor."""
     items, next_cursor = await public.list_documents(session, limit, cursor, source_id)
     return DocumentList(items=[as_document_read(item) for item in items], next_cursor=next_cursor)
+
+
+@router.get("/dashboard-projections", response_model=GadgetDocumentProjectionList)
+async def list_dashboard_projections(
+    session: Session,
+    owner: OwnerRead,
+    source_ids: Annotated[list[UUID], Query(min_length=1, max_length=32)],
+    channel_ids: Annotated[list[str] | None, Query(max_length=32)] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    cursor: Annotated[str | None, Query(max_length=1024)] = None,
+) -> GadgetDocumentProjectionList:
+    """Return current source-scoped records through the Documents owner projection."""
+    try:
+        return await public.list_gadget_document_projections(
+            session, owner_id=owner.owner_id, source_ids=tuple(source_ids), limit=limit, cursor=cursor,
+            channel_ids=tuple(channel_ids) if channel_ids is not None else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Dashboard projection scope is invalid") from exc
+
+
+@router.put("/{document_id}/versions/{version_number}/interaction", response_model=GadgetDocumentInteractionRead)
+async def set_dashboard_document_interaction(
+    document_id: UUID,
+    version_number: Annotated[int, Path(ge=1, le=2_147_483_647)],
+    payload: GadgetDocumentInteractionPatch,
+    session: Session,
+    owner: OwnerWrite,
+) -> GadgetDocumentInteractionRead:
+    """Set durable owner read/bookmark state for an active exact current document version."""
+    result = await public.set_gadget_document_interaction(
+        session, owner_id=owner.owner_id, document_id=document_id,
+        version_number=version_number, payload=payload,
+    )
+    if result is None:
+        raise HTTPException(status_code=409, detail="Document version is stale or unavailable")
+    return result
 
 
 @router.post("", response_model=DocumentRead, status_code=201)

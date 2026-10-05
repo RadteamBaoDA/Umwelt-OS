@@ -318,7 +318,7 @@ async def _collection_fence(
     source_generation: int,
     connector_revision: int,
 ) -> bool:
-    """Require both live execution owners plus the exact active/applied source revision.
+    """Require live connector/tool owners plus the exact active/applied source revision.
 
     Callers use this at admission, each provider request/result callback and before final receipt.
     """

@@ -14,7 +14,13 @@ class DocumentDescriptor:
     scheduled_jobs: tuple[str, ...] = ("process_document_ready",)
     provides: tuple[str, ...] = ("documents", "document_versions", "document_chunks")
     requires: tuple[str, ...] = ("sources",)
-    routes: tuple[str, ...] = ("/api/v1/documents", "/api/v1/documents/upload", "/api/v1/documents/{id}/raw")
+    routes: tuple[str, ...] = (
+        "/api/v1/documents",
+        "/api/v1/documents/upload",
+        "/api/v1/documents/{id}/raw",
+        "/api/v1/documents/dashboard-projections",
+        "/api/v1/documents/{document_id}/versions/{version_number}/interaction",
+    )
     emitted_events: tuple[str, ...] = ()
     consumed_events: tuple[str, ...] = ()
     tools: tuple[str, ...] = ("knowledge.get_document", "knowledge.list_documents")

@@ -21,6 +21,7 @@ from modules.dashboard.schemas import (
     PresetApplyRequest, PresetPreviewRequest, DashboardSummary, DashboardDetail,
     DashboardGroupRead, GadgetDefinitionRead, RendererRead, DashboardPresetRead,
     PresetPreviewRead,
+    DashboardHighlightRead,
 )
 from modules.sources.schemas import GadgetSourceSelectionPage
 from modules.settings.public import module_dependency
@@ -171,6 +172,15 @@ async def get_definition(definition_id: UUID, session: Session, owner: OwnerRead
     if result is None:
         raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Definition not found", "details": {}})
     return result
+
+
+@router.get("/gadget-definitions/{definition_id}/highlights", response_model=list[DashboardHighlightRead])
+async def evaluate_highlights(
+    definition_id: UUID, session: Session, owner: OwnerRead, response: Response,
+) -> list[DashboardHighlightRead]:
+    """Evaluate one owner's bounded highlight definition and persist deduped requested alerts."""
+    _no_store(response)
+    return await _call(public.evaluate_gadget_highlights(session, owner.owner_id, definition_id))
 
 
 @router.patch("/gadget-definitions/{definition_id}", response_model=GadgetDefinitionRead)

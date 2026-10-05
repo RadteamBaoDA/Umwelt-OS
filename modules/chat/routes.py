@@ -402,12 +402,13 @@ async def send_message(
     session.add(user_msg)
     await session.flush()
 
+    resolved_context = await chat_public.resolve_gadget_context(session, payload.context)
     response_run = ResponseRun(
         conversation_id=conversation_id,
         user_message_id=user_msg.id,
         client_request_id=payload.client_request_id,
         status="pending",
-        retrieval_context=payload.context or {},
+        retrieval_context=resolved_context,
     )
     session.add(response_run)
 

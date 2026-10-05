@@ -1,8 +1,8 @@
 # Umwelt-OS — Detailed task report
 
-Snapshot: 2026-10-05. PAUSED by owner. No active agents/tasks. Current develop HEAD: 71b32aa.
+Snapshot: 2026-10-05. ACTIVE. P01–P11 production delivery integrated in develop c58a56e; P12 not implemented. R12 0522cc4 accepted source/build/scoped review, composition with P11 active; R14 round2 build PASS pending final freeze/re-review; R07 tree prepared pending implementation capacity. Historical detailed rows below are superseded by this snapshot.
 
-Completion below means production code/build/source review, not runtime acceptance. Original plan: 49 tasks across P01–P12. P01–P10: 40 recorded delivered/integrated; P11 T1–T3: 3 source-accepted but phase not integrated; P11 T4: 1 code/build done pending review; P12: 5 not implemented. Supplemental R tasks are separate, overlapping feature scopes and must not be added as a product completion percentage.
+Completion means production code/build/source review, not runtime acceptance. Original49 tasks:44 P01–P11 production delivered/integrated;5 P12 not implemented. Supplemental scopes R07/R12/R14/R15/R16 still require closure; no product completion percentage is asserted.
 
 ## 1. Done — original tasks integrated
 
@@ -99,3 +99,13 @@ Build PASS proves packaging/compilation only. No tests, lint, standalone typeche
 5. Deferred test/runtime/provider/capacity/restore stage, then release gate.
 
 Sources: IMPLEMENTATION_CHECKPOINT.md; IMPLEMENTATION_STATUS.md; superpowers/plans/EXECUTION.md; phase plans and reconciliation plan. Older ledger entries are history and may be superseded by the final pause snapshot.
+
+## Latest phase integration — 2026-10-05
+
+P11 squash c58a56e follows independently added test5326ab0 and collector71b32aa. Source a19d77b full prescribed build and final independent reviews accepted; reviewed production/config/docs integrated identically, root owner changes preserved. R12 composition active in own tree; R14 final commit/re-review pending; R07 prepared tree but dispatch capacity limited. No test/runtime/provider/capacity acceptance by this team.
+
+
+## R12 final delivery update — 2026-10-05
+
+R12 source d60d01a original + composed build/source reviews accepted; production delta integrated with P11 lifecycle, migration and exact evidence consumers. R14 accepted7086167 awaits composition; R07 genuine port/actions/navigation active; R15/P12/R16 pending. External test commits preserved, no test executions by this team.
+

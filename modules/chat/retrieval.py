@@ -22,6 +22,7 @@ from modules.chat.schemas import (
     MAX_CONTEXT_BUDGET_BYTES,
     MAX_ENTITY_SCOPE,
     MAX_RETRIEVAL_LIMIT,
+    MAX_SELECTED_REFS,
     TemporalContextItem,
 )
 from modules.knowledge.documents import public as documents_public
@@ -192,23 +193,41 @@ async def build_context(
     collected_refs: list[tuple[UUID, UUID]] = []
     hit_scores: dict[tuple[UUID, UUID], float] = {}
 
-    # 1. Search retrieval
-    try:
-        search_req = SearchRequest(
-            query=request.query,
-            filters=SearchFilters(source_ids=request.source_scope),
-            mode=request.mode if request.allow_hybrid else "lexical",
-            limit=min(request.limit, MAX_RETRIEVAL_LIMIT),
-        )
-        search_res = await search_public.search(session, redis, settings, search_req)
-        warnings.extend(search_res.warnings)
-        for hit in search_res.items:
-            ref = (hit.document_version_id, hit.chunk_id)
-            collected_refs.append(ref)
-            hit_scores[ref] = hit.score
-    except Exception as exc:
-        logger.error("Search retrieval failed in build_context: %s", exc)
-        warnings.append("Search retrieval encountered an error")
+    if request.selected_only:
+        fence_by_document = {item.document_id: item for item in request.selection_fences}
+        if not request.selection_fences or len(fence_by_document) != len(request.selection_fences):
+            raise ValueError("Exact gadget retrieval requires unique server-derived selection fences")
+        if not request.selected_refs or len(request.selected_refs) > MAX_SELECTED_REFS:
+            raise ValueError("Exact gadget retrieval requires bounded selected evidence references")
+        for selected in request.selected_refs:
+            fence = fence_by_document.get(selected.document_id)
+            if (
+                selected.document_id is None or selected.source_id is None or fence is None
+                or selected.document_version_id != fence.document_version_id
+                or selected.source_id != fence.source_id
+            ):
+                raise ValueError("Selected evidence reference does not match its captured source fence")
+        if {item.document_id for item in request.selected_refs} != set(fence_by_document):
+            raise ValueError("Selected source fences do not exactly cover the requested documents")
+
+    # Exact gadget selections must never silently expand into a source-wide search.
+    if not request.selected_only:
+        try:
+            search_req = SearchRequest(
+                query=request.query,
+                filters=SearchFilters(source_ids=request.source_scope),
+                mode=request.mode if request.allow_hybrid else "lexical",
+                limit=min(request.limit, MAX_RETRIEVAL_LIMIT),
+            )
+            search_res = await search_public.search(session, redis, settings, search_req)
+            warnings.extend(search_res.warnings)
+            for hit in search_res.items:
+                ref = (hit.document_version_id, hit.chunk_id)
+                collected_refs.append(ref)
+                hit_scores[ref] = hit.score
+        except Exception as exc:
+            logger.error("Search retrieval failed in build_context: %s", exc)
+            warnings.append("Search retrieval encountered an error")
 
     # 2. Selected references from request
     for sel in request.selected_refs:
@@ -219,7 +238,7 @@ async def build_context(
 
     # 3. Entity context resolution
     entity_summaries: list[EntityContextItem] = []
-    for entity_id in request.entity_ids[:MAX_ENTITY_SCOPE]:
+    for entity_id in (() if request.selected_only else request.entity_ids[:MAX_ENTITY_SCOPE]):
         try:
             canonical_id = await entities_public.resolve_canonical_entity_id(session, entity_id)
             entity_data = await entities_public.get_entity(session, canonical_id)
@@ -272,7 +291,7 @@ async def build_context(
 
     # 4. Temporal context resolution
     temporal_summaries: list[TemporalContextItem] = []
-    if request.date_context:
+    if request.date_context and not request.selected_only:
         try:
             date_from: date | None = None
             date_to: date | None = None
@@ -333,7 +352,9 @@ async def build_context(
     # 5. Read full evidence chunks from document owner
     unique_refs = list(dict.fromkeys(collected_refs))[:100]
     chunks = await documents_public.read_chat_evidence_chunks(
-        session, unique_refs, require_active_source=True
+        session, unique_refs, require_active_source=True,
+        require_current_version=request.selected_only,
+        selection_fences=tuple(request.selection_fences) if request.selected_only else None,
     )
 
     evidence_items: list[EvidenceItem] = []
@@ -373,11 +394,17 @@ async def build_context(
             break
         budgeted_items.append(item)
         total_bytes += item_bytes
+    if request.selected_only and len(budgeted_items) != len(evidence_items):
+        raise ValueError("The exact selected evidence exceeds the bounded chat context budget")
 
     # 7. Apply configured permitted reranking
-    reranked_items, rerank_status, rerank_warnings = await _apply_configured_reranking(
-        session, redis, settings, request.query, budgeted_items
-    )
+    if request.selected_only:
+        # Exact gadget selections are not sent to a separate reranker destination.
+        reranked_items, rerank_status, rerank_warnings = budgeted_items, "skipped", []
+    else:
+        reranked_items, rerank_status, rerank_warnings = await _apply_configured_reranking(
+            session, redis, settings, request.query, budgeted_items
+        )
     warnings.extend(rerank_warnings)
 
     # 8. Snapshot source fences
@@ -407,6 +434,7 @@ async def build_context(
         has_sufficient_evidence=has_sufficient,
         total_evidence_bytes=total_bytes,
         fence_snapshot=fence_snapshot,
+        selection_fences=request.selection_fences if request.selected_only else [],
     )
 
 
@@ -415,6 +443,7 @@ async def revalidate_context_fence(
     context: AnswerContext,
     *,
     destination: str = "remote",
+    require_current_versions: bool = False,
 ) -> tuple[bool, list[str]]:
     """Revalidate that retrieved evidence remains permitted and active prior to outbound egress.
 
@@ -431,6 +460,14 @@ async def revalidate_context_fence(
         Tuple of (is_valid: bool, list of rejection reason strings).
     """
     reasons: list[str] = []
+
+    selection_valid = True
+    if context.selection_fences:
+        selection_valid = await documents_public.validate_gadget_document_selection_fences(
+            session, tuple(context.selection_fences),
+        )
+        if not selection_valid:
+            reasons.append("One or more exact selected document versions or provider scopes are stale")
 
     # 1. Recheck source status and generations
     for source_id_str, expected in context.fence_snapshot.items():
@@ -459,9 +496,15 @@ async def revalidate_context_fence(
     # 2. Recheck document chunks existence
     refs = [(item.document_version_id, item.chunk_id) for item in context.evidence]
     if refs:
-        existing_chunks = await documents_public.read_chat_evidence_chunks(
-            session, refs, require_active_source=True
-        )
+        try:
+            existing_chunks = await documents_public.read_chat_evidence_chunks(
+                session, refs, require_active_source=True,
+                require_current_version=require_current_versions,
+                selection_fences=tuple(context.selection_fences) if context.selection_fences else None,
+            )
+        except ValueError:
+            existing_chunks = []
+            reasons.append("One or more exact selected evidence references are unavailable")
         existing_keys = {(c.document_version_id, c.chunk_id) for c in existing_chunks}
         for item in context.evidence:
             key = (item.document_version_id, item.chunk_id)

@@ -35,7 +35,7 @@ from modules.knowledge.entities.worker import (
 from modules.timeline.worker import process_timeline_extraction_work, recover_timeline_extraction_work
 from modules.knowledge.temporal.worker import process_graph_operation, recover_graph_work
 from modules.news.worker import process_news_document_ready, recover_news_work
-from modules.dashboard.worker import run_scheduled_brief
+from modules.dashboard.worker import run_scheduled_brief, run_scheduled_highlights
 from modules.chat.worker import process_chat_response, purge_expired_chat_runs
 from modules.agents.worker import compose_agent_registry, process_agent_run, reconcile_agent_dispatch
 from modules.automations.worker import process_automation_run, reconcile_automation_runs
@@ -147,6 +147,7 @@ class WorkerSettings:
         cron(recover_graph_work, second=set(range(0, 60, 5)), run_at_start=True),
         cron(recover_news_work, minute=set(range(0, 60, 1)), run_at_start=True),
         cron(run_scheduled_brief, minute=set(range(0, 60, 1)), run_at_start=True),
+        cron(run_scheduled_highlights, minute=set(range(0, 60, 1)), run_at_start=True),
         cron(purge_expired_chat_runs, minute=set(range(0, 60, 15))),
         cron(reconcile_agent_dispatch, second=set(range(0, 60, 5)), run_at_start=True),
         cron(reconcile_automation_runs, second=set(range(0, 60, 5)), run_at_start=True),

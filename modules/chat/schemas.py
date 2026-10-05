@@ -5,6 +5,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
+from modules.knowledge.documents.schemas import GadgetDocumentSelectionFence
 
 MAX_RETRIEVAL_LIMIT = 50
 MAX_SOURCE_SCOPE = 100
@@ -24,6 +25,18 @@ class SelectedEvidenceRef(BaseModel):
     document_version_id: UUID
     chunk_id: UUID
     document_id: UUID | None = None
+    source_id: UUID | None = None
+
+
+class SelectedDocumentVersion(BaseModel):
+    """Identify one exact current document version selected by an owner gadget."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    source_id: UUID = Field(alias="sourceId")
+    document_id: UUID = Field(alias="documentId")
+    document_version_id: UUID = Field(alias="documentVersionId")
+    chunk_id: UUID | None = Field(default=None, alias="chunkId")
 
 
 class Citation(BaseModel):
@@ -107,6 +120,8 @@ class AnswerContextRequest(BaseModel):
     date_context: datetime | date | str | None = None
     timezone: str | None = None
     selected_refs: list[SelectedEvidenceRef] = Field(default_factory=list, max_length=MAX_SELECTED_REFS)
+    selected_only: bool = False
+    selection_fences: list[GadgetDocumentSelectionFence] = Field(default_factory=list, max_length=32)
     limit: int = Field(default=20, ge=1, le=MAX_RETRIEVAL_LIMIT)
     context_budget_bytes: int = Field(
         default=DEFAULT_CONTEXT_BUDGET_BYTES, ge=1000, le=MAX_CONTEXT_BUDGET_BYTES
@@ -133,6 +148,7 @@ class AnswerContext(BaseModel):
     has_sufficient_evidence: bool = False
     total_evidence_bytes: int = 0
     fence_snapshot: dict[str, Any] = Field(default_factory=dict)
+    selection_fences: list[GadgetDocumentSelectionFence] = Field(default_factory=list, max_length=32)
     policy: dict[str, Any] | None = None
 
 

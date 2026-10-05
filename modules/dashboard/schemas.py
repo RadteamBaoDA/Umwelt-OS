@@ -259,6 +259,20 @@ class DashboardWarning(StrictConfiguration):
     setup_group: str | None = None
 
 
+class DashboardHighlightRead(StrictConfiguration):
+    """Expose one explainable current-version match for a configured highlight rule."""
+    document_id: UUID
+    document_version_id: UUID
+    source_id: UUID
+    title: str
+    observed_at: datetime
+    rule_id: UUID
+    matched_keywords: list[str] = Field(max_length=16)
+    severity: Literal["info", "warning", "critical"]
+    notify: StrictBool
+    reason: str = Field(max_length=1000)
+
+
 class DashboardGroupRead(StrictConfiguration):
     """Expose one dashboard-owned group and its ordering fields."""
 

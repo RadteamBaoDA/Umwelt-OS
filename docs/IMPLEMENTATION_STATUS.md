@@ -1,6 +1,6 @@
 # Umwelt-OS implementation status
 
-Updated: 2026-10-05 — ACTIVE. P11 final source a19d77b code/build/scoped + whole-phase review accepted; production source integrated into develop index. R12 0522cc4 accepted pending composition; R14 round2 build PASS/final commit pending. Independent develop test commit5326ab0 preserved; this team did not run tests.
+Updated: 2026-10-05 — ACTIVE. P11 integratedc58a56e; R12 composed/build/review accepted d60d01a, production integration now. R14 accepted7086167 composition next; R07 Luna actual source port active. No runtime/provider/capacity acceptance.
 
 
 ## Current checkpoint — 2026-10-05
@@ -15,7 +15,7 @@ This live snapshot supersedes older current-action paragraphs; historical entrie
 | P09 | Code/build/review complete; squash-merged into develop. GitHub OAuth/collection, incremental sync + verified webhooks, deterministic mapping into entities/timeline, GitHub UI/project gadget; R13 native providers. | Live GitHub verification gate; deferred minors in SDD ledger. |
 | P10 | Code/build/review complete; merged to develop. Authenticated inbound webhook supplemental accepted in71b32aa after three source fixes/build/review. | Runtime activation and external-effect acceptance deferred. |
 | P11 | T1–T4 code/build/source review complete at a19d77b; approved production source integrated, task-sized squash commit follows. | Deferred runtime acceptance; compose R12/R14 next. |
-| R07/R12 | R07 isolated worktree prepared. R12 round2 0522cc4 build/scoped review PASS; phase composition pending. | Close R12 fixes/build/re-review before integration and bounded R07 port. |
+| R07/R12 | R12 exact source d60d01a code/build/scoped+composition review accepted and integrated. R07 actual source port active in own tree. | R07 durable actions/citation navigation/source provenance, build/review/composition; runtime deferred. |
 | R14/R15 | R14 Luna round2 actively fixing correction/current evidence consistency, final-send gate and mounted deletion invalidation; R15 not started. | Close R14 fixes/build/re-review and composition, then dual maps/intelligence. |
 | P12 | Production not started; backup/restore/export source preflight ready. | Implement durable quiesce/encrypted backup/isolated restore, deletion, onboarding and release after dependencies; runtime restore/capacity deferred. |
 | Repository rename | Primary is a real D:/Project/Umwelt-OS directory, not a junction; old primary path absent. Linked Git registrations were repaired to renamed paths; additional isolated author trees created. Completed P07/P09/P10 manual integrations were unregistered, but physical cleanup remains incomplete. Remote points to RadteamBaoDA/Umwelt-OS. Markdown/plan/owned skill naming updated. | Desktop saved project path still points at the former directory and reports isGitRepository=false; archived attachment/path metadata completion remains unverified. Finalize log has no SUCCESS, so do not treat old queued helper as completion. |
@@ -589,4 +589,27 @@ Sol T4 scoped PASS at e7060ee. Whole-P11 source review no new material functiona
 ## P11 completed production delivery — 2026-10-05
 
 Accepted source a19d77b: T1–T3 prior review accepted; T4 repairs e7060ee scoped PASS; whole-phase review only12JSDoc findings, repaired a19d77b with exact prescribed build PASS and final scoped Sol PASS. Root applied production-only squash delta preserving root status/owner edits. All production/config/docs outside owner status and unrelated files match accepted phase source exactly; build evidence frontend20pages/fourimages retained. No runtime/SQL/provider/capacity claim. Concurrent external develop test commit5326ab0 and coverage/scratch files preserved; this team did not execute tests. R12 accepted0522cc4 needs migration/cron composition; R14 repair build PASS pending freeze/re-review. No push/deploy.
+
+
+### R14 round2 final freeze — 2026-10-05
+Author source7086167 exact5 production files, root Git HEAD/clean confirmed. Prescribed buildPASS; no post-build source edits; processpassword restored/no.env/services/tests/runtime checks. Retained Sol reviewer resume_r14_review resumed scoped c6df508..7086167 three findings, report pending. R12 composition owns free buildslot. No new merge; developc58a56e. R07 prepared tree awaits capacity; remaining R15/P12/R16.
+
+
+### R14 accepted / R07 actual implementation started — 2026-10-05
+R14 scoped source re-review ACCEPT7086167: all3round2findings closed, no material repair regression, docs compliant; exact prescribed author buildPASS and clean source. Migration/composition/runtime gates remain. Fresh Luna r07_implement dispatched in prepared R07 worktree0522cc4, actual upstream source port per evidence/preflight; no new merge. R12 Luna composition continues4narrow source conflicts, owns next buildslot. Root developc58a56e. No tests/runtime/providers/push/deploy by this team.
+
+
+
+### R12 composed source frozen — 2026-10-05
+Merge12f165d parents0522cc4+c58a56e, root HEAD/clean verified; no tests/AGENTS/CLAUDE delivery diff versusdevelop. Exact prescribed build exit0 captured, frontend/static/integratedTS/fourimages PASS; processpassword restored/no services/tests/otherchecks. Scoped integration report covers4conflicts, lifecyclecron/Docsdependency/routes/descriptors, migrationchain webhook->P11retention->R12interactions->highlightprogress. Sol r12_composition_review dispatched, acceptance pending. No new develop merge. R07 Luna source active; R14 accepted7086167 awaits composedR12 dependency.
+
+
+### R12 composition review requires one repair — 2026-10-05
+Sol12f165d composition review REQUESTCHANGES oneP2: later duplicate _mcp_collector shadows credential-first P11connectors/tools availability gate at ingress. Downstream providerIO remains fenced; no outbound bypass claim. Other reviewed composition seams preserve behavior. Retained Luna author resumed minimal duplicate-helper removal, exact prescribed rebuild and scopedcommit; Docker slot granted. Independent scoped re-review follows repair freeze. R07 source implementation remains active; R14 acceptedsource7086167 awaits finalR12composition. No developmerge/tests/runtimechecks.
+
+
+## R12 production integration — 2026-10-05
+
+Accepted source d60d01a after composition12f165d: full prescribed build exit0, original scoped review and composition review accepted; final oneP2 duplicate-helper fix independently closed. Root applied production-only squash delta (35files) and verified exact reviewed production source equality, excluding owner/status/UX and independent tests. Root now has unrelated external testc4a5275, preserved; this team did not run/modify tests. Migrationchain webhook->P11retention->R12interactions->highlightprogress; lifecyclecron/Docsdependency/routes integrated. One large-task code+status commit follows, no push/deploy/runtime/provider acceptance. R14 accepted7086167 now eligible for composition; R07 actual source port active with append-only idempotent edit/regenerate ruling.
+
 

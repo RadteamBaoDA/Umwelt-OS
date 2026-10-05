@@ -2,6 +2,7 @@ from datetime import datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -78,6 +79,23 @@ class DocumentVersion(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class DocumentInteraction(Base):
+    """Persist owner read and bookmark state against one immutable document version."""
+    __tablename__ = "document_interactions"
+    __table_args__ = (
+        CheckConstraint("read_at IS NOT NULL OR bookmarked_at IS NOT NULL", name="ck_document_interactions_nonempty"),
+        Index("ix_document_interactions_owner_read", "owner_id", "read_at"),
+    )
+
+    owner_id: Mapped[int] = mapped_column(ForeignKey("owner.id", ondelete="CASCADE"), primary_key=True)
+    document_version_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("document_versions.id", ondelete="CASCADE"), primary_key=True
+    )
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    bookmarked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
 
 class NormalizedDocumentIdentity(Base):

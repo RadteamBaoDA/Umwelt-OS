@@ -230,18 +230,25 @@ class ModelGateway:
             alias, mapping, policy, "chat", "chat/completions", payload, probe, before_send
         )
 
-    async def stream(self, alias: str, mapping: ModelMapping | None, policy: RequestPolicy, messages: list[dict[str, Any]], probe: bool = False) -> AsyncIterator[str]:
-        """Stream chat completions unchanged while recording model-call, first-token and total latency and provider usage.
+    async def stream(
+        self, alias: str, mapping: ModelMapping | None, policy: RequestPolicy,
+        messages: list[dict[str, Any]], probe: bool = False, *,
+        after_send: Callable[[], Awaitable[None]] | None = None,
+    ) -> AsyncIterator[str]:
+        """Stream with telemetry and a per-attempt lock release after request opening.
 
-        Telemetry is observational: lines are yielded as received, errors/cancellation propagate and are
-        recorded as outcome=error, and missing usage stays null.
+        ``self.before_send`` runs immediately before every request attempt. ``after_send`` runs as
+        soon as request creation succeeds or fails so callers can release short-lived send locks.
+        Telemetry is observational; errors and cancellation propagate, and missing usage stays null.
         """
         started = time.perf_counter()
         first_ms: float | None = None
         usage: Any = None
         ok = False
         try:
-            async with aclosing(self._stream_inner(alias, mapping, policy, messages, probe)) as inner:
+            async with aclosing(self._stream_inner(
+                alias, mapping, policy, messages, probe, after_send=after_send,
+            )) as inner:
                 async for line in inner:
                     if first_ms is None:
                         first_ms = (time.perf_counter() - started) * 1000
@@ -256,8 +263,12 @@ class ModelGateway:
             record_model_call("streaming", alias, started, ok, {"usage": usage} if usage else None,
                               mapping.model if mapping else None, first_ms)
 
-    async def _stream_inner(self, alias: str, mapping: ModelMapping | None, policy: RequestPolicy, messages: list[dict[str, Any]], probe: bool = False) -> AsyncIterator[str]:
-        """Stream chat completions after policy and capability checks; retry only before any chunk is emitted."""
+    async def _stream_inner(
+        self, alias: str, mapping: ModelMapping | None, policy: RequestPolicy,
+        messages: list[dict[str, Any]], probe: bool = False, *,
+        after_send: Callable[[], Awaitable[None]] | None = None,
+    ) -> AsyncIterator[str]:
+        """Open each fenced request attempt, then stream without retrying emitted chunks."""
         if not may_send(policy, alias, mapping, self.destination_id, bool(self.api_key), "streaming") or self.base_url is None or mapping is None:
             raise PrivacyPolicyDenied("Model request denied by privacy policy")
         if not probe:
@@ -285,13 +296,16 @@ class ModelGateway:
                     try:
                         if self.before_send is not None:
                             await self.before_send()
-                        stream = await client.chat.completions.create(
-                            model=mapping.model,
-                            messages=messages,
-                            stream=True,
-                        )
+                        try:
+                            stream = await client.chat.completions.create(
+                                model=mapping.model,
+                                messages=messages,
+                                stream=True,
+                            )
+                        finally:
+                            if after_send is not None:
+                                await after_send()
                         async for chunk in stream:
-                            # Retrying after a yielded chunk would duplicate part of the response for the caller.
                             emitted = True
                             yield f"data: {json.dumps(chunk.model_dump(mode='json', exclude_none=True))}"
                         yield "data: [DONE]"

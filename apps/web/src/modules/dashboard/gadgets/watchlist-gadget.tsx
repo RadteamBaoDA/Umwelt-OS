@@ -12,10 +12,12 @@ import {
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import React, { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import type { GadgetInstance, HighlightRule } from '../api';
+import { evaluateGadgetHighlights } from '../api';
 
 /** Single monitored rule or target symbol entry on the watchlist table. */
 export interface WatchlistItem {
@@ -57,11 +59,27 @@ export function WatchlistGadget({
   const daily = useTranslations('daily');
   const display = useDisplayPreferences();
 
-  const [items, setItems] = useState<WatchlistItem[]>(initialItems);
   const [filterQuery, setFilterQuery] = useState<string>('');
 
   const definition = instance.definition;
   const highlightRules: HighlightRule[] = definition.highlight_rules ?? [];
+  const matchesQuery = useQuery({
+    queryKey: ['dashboard-highlights', definition.id, definition.revision],
+    enabled: (definition.renderer === 'highlights' || definition.renderer === 'watch_rules')
+      && definition.source_ids.length > 0 && highlightRules.length > 0,
+    queryFn: () => evaluateGadgetHighlights(definition.id),
+  });
+  const items: WatchlistItem[] = initialItems.length ? initialItems : (matchesQuery.data ?? []).map((match) => ({
+    id: `${match.document_version_id}:${match.rule_id}`,
+    target: match.title,
+    targetType: 'keyword',
+    condition: match.matched_keywords.join(', '),
+    status: match.severity === 'critical' ? 'alert' : 'matched',
+    severity: match.severity,
+    lastMatchedAt: match.observed_at,
+    matchReason: match.reason,
+    matchCount: 1,
+  }));
 
   // Filter items by search query
   const filteredItems = items.filter((item) => {
@@ -108,7 +126,10 @@ export function WatchlistGadget({
       </div>
 
       {/* Empty State */}
-      {filteredItems.length === 0 && (
+      {matchesQuery.isPending && highlightRules.length > 0 && definition.source_ids.length > 0 && <p role="status" className="text-sm text-muted-foreground">{t('gadgetDataLoading')}</p>}
+      {matchesQuery.isError && <p role="alert" className="text-sm text-destructive">{t('gadgetDataLoadFailed')}</p>}
+      {!(matchesQuery.isPending && highlightRules.length > 0 && definition.source_ids.length > 0)
+        && !matchesQuery.isError && filteredItems.length === 0 && (
         <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-muted-foreground">
           <ShieldAlert className="w-8 h-8 mb-2 opacity-50" />
           <p className="text-xs font-semibold text-foreground mb-1">{daily('watchlistEmpty')}</p>

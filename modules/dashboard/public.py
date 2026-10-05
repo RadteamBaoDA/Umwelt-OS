@@ -40,6 +40,7 @@ from modules.dashboard.schemas import (
     DashboardGroupRead,
     DashboardSummary,
     GadgetDefinitionRead,
+    DashboardHighlightRead,
     RendererRead,
     DashboardPresetRead,
     PresetPreviewRead,
@@ -54,12 +55,144 @@ from modules.dashboard.schemas import (
     MAX_DEFINITIONS_PER_OWNER,
     MAX_GROUPS_PER_DASHBOARD,
     MAX_INSTANCES_PER_DASHBOARD,
+    MAX_RULES_PER_DEFINITION,
 )
 from modules.sources.schemas import GadgetSourceSelectionPage
 from modules.sources import public as sources
 
 MAX_REVISION = 9_007_199_254_740_991
 DASHBOARD_QUOTA_LOCK_NAMESPACE = 4_603_202
+MAX_HIGHLIGHT_NOTIFICATIONS_PER_TRANSACTION = 100
+# A document can match every configured rule; keep a whole page below the insertion cap so advancing
+# its cursor never drops an eligible rule/version notification.
+HIGHLIGHT_SCAN_PAGE_LIMIT = max(
+    1, MAX_HIGHLIGHT_NOTIFICATIONS_PER_TRANSACTION // MAX_RULES_PER_DEFINITION,
+)
+HIGHLIGHT_MATCHES_PER_PAGE_MAX = HIGHLIGHT_SCAN_PAGE_LIMIT * MAX_RULES_PER_DEFINITION
+
+
+async def evaluate_gadget_highlights(
+    session: AsyncSession, owner_id: int, definition_id: UUID, *, emit_notifications: bool = False,
+) -> list[DashboardHighlightRead]:
+    """Evaluate current evidence and durably page scans with at most 96 rule/version matches.
+
+    Scheduled pages hold at most three documents and the schema caps each definition at 32 rules.
+    The resulting 3-by-32 ceiling keeps every matching notification in the same cursor transaction.
+    """
+    from modules.dashboard.highlights import evaluate_highlights
+    from modules.dashboard.models import GadgetHighlightProgress
+    from modules.knowledge.documents import public as documents
+    from modules.dashboard.schemas import HighlightRule
+    from modules.notifications.public import NotificationEmit, emit
+
+    if emit_notifications:
+        # Definition writers serialize on this row. Keep it locked through evidence validation,
+        # notification inserts, and cursor commit so edits cannot race an old scan into emission.
+        definition = await session.scalar(select(GadgetDefinition).where(
+            GadgetDefinition.id == definition_id, GadgetDefinition.owner_id == owner_id,
+        ).with_for_update())
+        if definition is None:
+            raise DashboardMissing
+        if definition.renderer not in {"highlights", "watch_rules"}:
+            raise ValueError("Renderer does not support highlight evaluation")
+        source_ids = tuple(UUID(str(value)) for value in definition.source_ids[:32])
+        rules = [HighlightRule.model_validate(rule) for rule in definition.highlight_rules]
+        if len(rules) > MAX_RULES_PER_DEFINITION:
+            raise ValueError("Highlight rule count exceeds the validated definition bound")
+        raw_item_scope = definition.scope.get("source_item_ids", [])
+        item_scope = {str(value) for value in raw_item_scope} if isinstance(raw_item_scope, list) else set()
+        if not source_ids or not rules:
+            return []
+        rules_fingerprint = hashlib.sha256(json.dumps(
+            {"source_ids": [str(value) for value in source_ids], "scope": sorted(item_scope),
+             "rules": [rule.model_dump(mode="json") for rule in rules]},
+            sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        ).encode("utf-8")).hexdigest()
+        progress = await session.get(GadgetHighlightProgress, definition.id, with_for_update=True)
+        if progress is None:
+            progress = GadgetHighlightProgress(
+                definition_id=definition.id, definition_revision=definition.revision,
+                rules_fingerprint=rules_fingerprint,
+            )
+            session.add(progress)
+            await session.flush()
+        elif (
+            progress.definition_revision != definition.revision
+            or progress.rules_fingerprint != rules_fingerprint
+        ):
+            progress.definition_revision = definition.revision
+            progress.rules_fingerprint = rules_fingerprint
+            progress.cursor_created_at = None
+            progress.cursor_version_id = None
+        page = await documents.list_gadget_highlight_projection_page(
+            session, source_ids=source_ids, limit=HIGHLIGHT_SCAN_PAGE_LIMIT,
+            cursor_created_at=progress.cursor_created_at,
+            cursor_version_id=progress.cursor_version_id,
+        )
+        if len(page.items) * len(rules) > HIGHLIGHT_MATCHES_PER_PAGE_MAX:
+            raise RuntimeError("Highlight scan page exceeds its notification coverage bound")
+        if page.selection_fences and not await documents.validate_gadget_document_selection_fences(
+            session, tuple(page.selection_fences), lock_rows=True,
+            max_documents=HIGHLIGHT_SCAN_PAGE_LIMIT,
+        ):
+            raise RuntimeError("Dashboard highlight evidence changed during notification evaluation")
+        progress.cursor_created_at = page.cursor_created_at if page.has_more else None
+        progress.cursor_version_id = page.cursor_version_id if page.has_more else None
+
+        matches: list[DashboardHighlightRead] = []
+        for item in page.items:
+            if item_scope and str(item.document_id) not in item_scope:
+                continue
+            for match in evaluate_highlights(item.excerpt, rules):
+                matches.append(DashboardHighlightRead(
+                    document_id=item.document_id, document_version_id=item.document_version_id,
+                    source_id=item.source_id, title=item.title, observed_at=item.observed_at,
+                    rule_id=match.rule_id, matched_keywords=list(match.matched_keywords),
+                    severity=match.severity, notify=match.notify, reason=match.reason,
+                ))
+                if match.notify:
+                    await emit(session, owner_id, NotificationEmit(
+                        dedupe_key=(
+                            f"highlight:{definition.id}:{definition.revision}:"
+                            f"{rules_fingerprint}:{match.rule_id}:{item.document_version_id}"
+                        ),
+                        kind="dashboard_highlight", title=item.title[:300],
+                        body=match.reason[:1000],
+                        params={"severity": match.severity, "definition_id": str(definition.id),
+                                "definition_revision": definition.revision},
+                        link="/dashboard",
+                    ))
+        # Progress and notifications form one transaction: a retry can neither skip an alert nor
+        # advance beyond a page whose notifications were not committed.
+        await session.commit()
+        return matches[:100]
+
+    definition = await get_definition(session, owner_id, definition_id)
+    if definition is None:
+        raise DashboardMissing
+    if definition.renderer not in {"highlights", "watch_rules"}:
+        raise ValueError("Renderer does not support highlight evaluation")
+    source_ids = tuple(definition.source_ids[:32])
+    if not source_ids:
+        return []
+    projection_page = await documents.list_gadget_document_projections(
+        session, owner_id=owner_id, source_ids=source_ids, limit=100,
+    )
+    rules = [HighlightRule.model_validate(rule) for rule in definition.highlight_rules]
+    raw_item_scope = definition.scope.get("source_item_ids", [])
+    item_scope = {str(value) for value in raw_item_scope} if isinstance(raw_item_scope, list) else set()
+    matches = []
+    for item in projection_page.items:
+        if item_scope and str(item.document_id) not in item_scope:
+            continue
+        for match in evaluate_highlights(item.excerpt, rules):
+            matches.append(DashboardHighlightRead(
+                document_id=item.document_id, document_version_id=item.document_version_id,
+                source_id=item.source_id, title=item.title, observed_at=item.observed_at,
+                rule_id=match.rule_id, matched_keywords=list(match.matched_keywords),
+                severity=match.severity, notify=match.notify, reason=match.reason,
+            ))
+    return matches[:100]
 
 
 class DashboardConflict(Exception):

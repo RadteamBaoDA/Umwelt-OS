@@ -53,6 +53,13 @@ export type GadgetScope = {
   map_layer_ids?: string[];
 };
 
+/** Explainable match against one immutable current document version. */
+export type DashboardHighlightMatch = {
+  document_id: string; document_version_id: string; source_id: string; title: string;
+  observed_at: string; rule_id: string; matched_keywords: string[];
+  severity: 'info' | 'warning' | 'critical'; notify: boolean; reason: string;
+};
+
 /** Simple bounded text filters and strict integer item limit. */
 export type GadgetFilters = {
   keywords?: string[];
@@ -324,6 +331,11 @@ export function listGadgetSources(limit = 50, cursor?: string, signal?: AbortSig
   const query = new URLSearchParams({ limit: String(limit) });
   if (cursor) query.set('cursor', cursor);
   return apiRequest<GadgetSourcePage>(`/api/v1/gadget-sources?${query}`, { signal });
+}
+
+/** Evaluates configured rules and returns bounded exact-version matches. */
+export function evaluateGadgetHighlights(definitionId: string) {
+  return apiRequest<DashboardHighlightMatch[]>(`/api/v1/gadget-definitions/${definitionId}/highlights`);
 }
 
 /** Lists the static preset catalog without applying or creating anything. */

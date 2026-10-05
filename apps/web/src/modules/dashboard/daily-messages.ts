@@ -41,8 +41,8 @@ export const dailyMessages = {
     addRule: 'Add rule',
     watchlistEmpty: 'Watchlist empty',
     watchlistEmptyDetail: 'No active watch rules or condition triggers configured for this gadget.',
-    videoStream: 'Video media stream',
-    streamCount: '{count, plural, one {# stream} other {# streams}}',
+    videoStream: 'YouTube records',
+    streamCount: '{count, plural, one {# record} other {# records}}',
     freshnessUnknown: 'Freshness unknown',
   },
   'vi-vi': {
@@ -86,8 +86,8 @@ export const dailyMessages = {
     addRule: 'Thêm quy tắc',
     watchlistEmpty: 'Danh sách theo dõi trống',
     watchlistEmptyDetail: 'Chưa có quy tắc theo dõi hoặc điều kiện kích hoạt nào được cấu hình cho tiện ích này.',
-    videoStream: 'Luồng video',
-    streamCount: '{count, plural, other {# luồng}}',
+    videoStream: 'Bản ghi YouTube',
+    streamCount: '{count, plural, other {# bản ghi}}',
     freshnessUnknown: 'Chưa rõ độ mới',
   },
 } as const;

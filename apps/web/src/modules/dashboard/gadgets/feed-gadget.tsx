@@ -1,9 +1,8 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Bookmark,
-  CheckCheck,
   ExternalLink,
   Eye,
   FileText,
@@ -18,7 +17,9 @@ import React, { useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
-import { documentKeys, listDocuments, type Document } from '@/modules/knowledge/api';
+import { useChatController } from '@/core/app-shell/chat-controller';
+import { documentKeys, listGadgetDocumentProjections, setGadgetDocumentInteraction } from '@/modules/knowledge/api';
+import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import type { GadgetInstance } from '../api';
 
 /** Feed item model supporting documents, news articles, and telegram messages. */
@@ -30,7 +31,17 @@ export interface FeedStreamItem {
   excerpt?: string;
   timestamp: string;
   url?: string | null;
-  unread: boolean;
+  channelLabel?: string | null;
+  messageId?: string | null;
+  versionNumber?: number;
+  sourceId?: string;
+  documentVersionId?: string;
+  publishedAt?: string | null;
+  collectedAt?: string | null;
+  editedAt?: string | null;
+  media?: { kind: string; caption: string | null; count: number }[];
+  read?: boolean;
+  bookmarked?: boolean;
 }
 
 /** Props for the FeedGadget component. */
@@ -62,6 +73,26 @@ export function getFeedSourceIcon(type: FeedStreamItem['sourceType']): React.Rea
   }
 }
 
+type SelectedTelegramIdentity = {
+  sourceId: string;
+  documentId: string;
+  documentVersionId: string;
+  versionNumber: number;
+};
+
+/** Keep provider-supplied links on explicit web schemes and Telegram hosts. */
+function safeFeedUrl(value: string | null, telegram: boolean): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    if (telegram ? url.protocol !== 'https:' : !['https:', 'http:'].includes(url.protocol)) return null;
+    if (telegram && !['t.me', 'www.t.me'].includes(url.hostname)) return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Standard Feed Stream gadget template.
  * Displays real-time or polled items from news feeds, RSS channels, Telegram messages,
@@ -77,9 +108,15 @@ export function FeedGadget({
 }: FeedGadgetProps) {
   const t = useTranslations('dashboard');
   const display = useDisplayPreferences();
+  const session = useWorkspaceSession();
+  const { openDrawer } = useChatController();
+  const queryClient = useQueryClient();
 
   const definition = instance.definition;
   const rendererType = definition.renderer;
+  const isTelegram = rendererType === 'telegram_feed';
+  const sourceIds = [...new Set(definition.source_ids)].slice(0, 32);
+  const channelIds = rendererType === 'telegram_feed' ? (definition.scope.channel_ids ?? []).slice(0, 32) : [];
 
   // Determine source type from renderer
   const defaultSourceType: FeedStreamItem['sourceType'] =
@@ -89,18 +126,24 @@ export function FeedGadget({
       ? 'news'
       : 'document';
 
-  // Local unread items tracking
-  const [readStateMap, setReadStateMap] = useState<Record<string, boolean>>({});
   const [onlyUnread, setOnlyUnread] = useState<boolean>(false);
+  const [selectedTelegram, setSelectedTelegram] = useState<Record<string, SelectedTelegramIdentity>>({});
 
   // Query documents as live feed items
   const docsQuery = useQuery({
-    queryKey: documentKeys.all,
+    queryKey: [...documentKeys.all, 'gadget', sourceIds, channelIds],
     queryFn: async () => {
-      const page = await listDocuments();
-      return page.items;
+      if (sourceIds.length === 0) return { items: [], next_cursor: null };
+      return listGadgetDocumentProjections(sourceIds, channelIds);
     },
     staleTime: 30_000,
+  });
+  const interactionMutation = useMutation({
+    mutationFn: (change: { id: string; versionNumber: number; read?: boolean; bookmarked?: boolean }) =>
+      setGadgetDocumentInteraction(change.id, change.versionNumber, {
+        read: change.read, bookmarked: change.bookmarked,
+      }, session.csrfToken),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: documentKeys.all }),
   });
 
   // Transform raw documents or initial items into standard FeedStreamItem objects
@@ -109,45 +152,41 @@ export function FeedGadget({
       return initialItems;
     }
 
-    const docs = docsQuery.data ?? [];
-    return docs.map((doc) => {
-      const isLocallyRead = readStateMap[doc.id] ?? false;
+    const docs = docsQuery.data?.items ?? [];
+    return docs.flatMap((doc) => {
+      const telegram = doc.provider_metadata?.provider === 'telegram' ? doc.provider_metadata.telegram : null;
+      if (isTelegram && !telegram) return [];
       return {
-        id: doc.id,
+        id: doc.document_id,
         title: doc.title,
         sourceType: defaultSourceType,
-        author: doc.author,
-        excerpt:
-          typeof doc.metadata?.summary === 'string'
-            ? doc.metadata.summary
-            : `Document version ${doc.current_version} • Hash ${doc.content_hash.slice(0, 8)}`,
-        timestamp: doc.published_at || doc.observed_at || doc.created_at,
-        url: doc.canonical_url,
-        unread: !isLocallyRead,
+        author: typeof telegram?.channel_label === 'string' ? telegram.channel_label : null,
+        channelLabel: typeof telegram?.channel_label === 'string' ? telegram.channel_label : null,
+        messageId: typeof telegram?.message_id === 'string' ? telegram.message_id : null,
+        excerpt: doc.excerpt,
+        timestamp: doc.published_at || doc.observed_at,
+        sourceId: doc.source_id,
+        documentVersionId: doc.document_version_id,
+        publishedAt: telegram?.published_at ?? doc.published_at,
+        collectedAt: doc.observed_at,
+        editedAt: telegram?.edited_at ?? null,
+        media: telegram?.media ?? [],
+        url: safeFeedUrl(doc.canonical_url, isTelegram),
+        read: !!doc.read_at,
+        bookmarked: !!doc.bookmarked_at,
+        versionNumber: doc.version_number,
       };
     });
-  }, [initialItems, docsQuery.data, readStateMap, defaultSourceType]);
+  }, [initialItems, docsQuery.data, defaultSourceType, isTelegram]);
 
-  // Mark all as read handler
-  const handleMarkAllRead = () => {
-    const nextMap: Record<string, boolean> = {};
-    for (const item of feedItems) {
-      nextMap[item.id] = true;
-    }
-    setReadStateMap(nextMap);
-    onUnreadCountChange?.(0);
-  };
-
-  // Toggle single item read status
-  const handleToggleItemRead = (itemId: string) => {
-    setReadStateMap((prev) => ({
-      ...prev,
-      [itemId]: !prev[itemId],
-    }));
-  };
-
-  const unreadCount = feedItems.filter((i) => !readStateMap[i.id]).length;
-  const displayedItems = onlyUnread ? feedItems.filter((i) => !readStateMap[i.id]) : feedItems;
+  const unreadCount = feedItems.filter((i) => !i.read).length;
+  const selectedTelegramItems = Object.values(selectedTelegram);
+  const currentTelegramItems = new Map(feedItems.map((item) => [item.id, item]));
+  const staleTelegramSelections = selectedTelegramItems.filter((item) =>
+    currentTelegramItems.get(item.documentId)?.documentVersionId !== item.documentVersionId,
+  );
+  const displayedItems = onlyUnread ? feedItems.filter((i) => !i.read) : feedItems;
+  React.useEffect(() => onUnreadCountChange?.(unreadCount), [onUnreadCountChange, unreadCount]);
 
   return (
     <div className="flex flex-col h-full bg-card text-card-foreground p-3 space-y-3 overflow-hidden">
@@ -163,28 +202,30 @@ export function FeedGadget({
                 : 'text-muted-foreground hover:text-foreground'
             }`}
           >
-            {onlyUnread ? 'Unread only' : 'All items'} ({feedItems.length})
+            {onlyUnread ? t('unreadOnly') : t('allFeedItems')} ({feedItems.length})
           </button>
           {unreadCount > 0 && (
             <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-primary/20 text-primary">
-              {unreadCount} unread
+            {t('unreadCount', { count: unreadCount })}
             </span>
+          )}
+          {isTelegram && (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={selectedTelegramItems.length === 0}
+              onClick={() => openDrawer({ context: {
+                kind: 'selection',
+                items: selectedTelegramItems.map(({ sourceId, documentId, documentVersionId }) => ({
+                  sourceId, documentId, documentVersionId,
+                })),
+              } })}
+            >{t('askAboutSelected', { count: selectedTelegramItems.length })}</Button>
           )}
         </div>
 
         <div className="flex items-center gap-1">
-          {unreadCount > 0 && (
-            <button
-              type="button"
-              onClick={handleMarkAllRead}
-              className="text-[11px] font-medium text-muted-foreground hover:text-foreground flex items-center gap-1 mr-1"
-              title="Mark all items as read"
-            >
-              <CheckCheck className="w-3.5 h-3.5" />
-              <span>Mark read</span>
-            </button>
-          )}
-
           <button
             type="button"
             onClick={() => docsQuery.refetch()}
@@ -197,6 +238,10 @@ export function FeedGadget({
           </button>
         </div>
       </div>
+
+      {isTelegram && staleTelegramSelections.length > 0 && (
+        <p role="status" className="text-xs text-muted-foreground">{t('selectionChanged', { count: staleTelegramSelections.length })}</p>
+      )}
 
       {/* Loading Skeleton */}
       {docsQuery.isLoading && feedItems.length === 0 && (
@@ -211,11 +256,11 @@ export function FeedGadget({
       {!docsQuery.isLoading && displayedItems.length === 0 && (
         <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-muted-foreground">
           <Newspaper className="w-8 h-8 mb-2 opacity-50" />
-          <p className="text-xs font-semibold text-foreground mb-1">Feed stream empty</p>
+            <p className="text-xs font-semibold text-foreground mb-1">{t('feedEmptyTitle')}</p>
           <p className="text-[11px] max-w-xs text-muted-foreground">
             {onlyUnread
-              ? 'You have caught up with all unread items.'
-              : 'Incoming items from your configured sources will appear here.'}
+              ? t('feedCaughtUp')
+              : t('feedEmptyDetail')}
           </p>
         </div>
       )}
@@ -224,7 +269,7 @@ export function FeedGadget({
       {displayedItems.length > 0 && (
         <div className="flex-1 overflow-y-auto space-y-2 min-h-0 pr-0.5">
           {displayedItems.map((item) => {
-            const isRead = !!readStateMap[item.id];
+            const isRead = !!item.read;
             const formattedTime = formatDateTime(
               item.timestamp,
               display.locale,
@@ -256,10 +301,41 @@ export function FeedGadget({
 
                   {!isRead && (
                     <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-primary/20 text-primary uppercase tracking-wider shrink-0">
-                      Unread
+                      {t('unreadBadge')}
                     </span>
                   )}
                 </div>
+
+                {isTelegram && (item.channelLabel || item.messageId) && (
+                  <p className="text-[10px] text-muted-foreground">
+                    {[item.channelLabel, item.messageId ? t('telegramMessageId', { id: item.messageId }) : null].filter(Boolean).join(' · ')}
+                  </p>
+                )}
+
+                {isTelegram && item.documentVersionId && item.sourceId && (
+                  <label className="inline-flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                    <input
+                      type="checkbox"
+                      aria-label={t('selectRecord', { title: item.title })}
+                      checked={Boolean(selectedTelegram[item.id])}
+                      onChange={(event) => setSelectedTelegram((current) => {
+                        if (!event.target.checked) {
+                          const next = { ...current };
+                          delete next[item.id];
+                          return next;
+                        }
+                        if (Object.keys(current).length >= 32) return current;
+                        return { ...current, [item.id]: {
+                          sourceId: item.sourceId!,
+                          documentId: item.id,
+                          documentVersionId: item.documentVersionId!,
+                          versionNumber: item.versionNumber!,
+                        } };
+                      })}
+                    />
+                    {t('selectRow')}
+                  </label>
+                )}
 
                 {item.excerpt && (
                   <p className="text-[11px] text-muted-foreground line-clamp-2 leading-relaxed">
@@ -267,18 +343,56 @@ export function FeedGadget({
                   </p>
                 )}
 
+                {isTelegram && item.media && item.media.length > 0 && (
+                  <ul aria-label={t('telegramMedia')} className="space-y-1 text-[10px] text-muted-foreground">
+                    {item.media.map((media, index) => (
+                      <li key={`${media.kind}:${index}`}>
+                        {t('telegramMediaPlaceholder', { kind: t(`telegramMediaKind_${media.kind}`), count: media.count })}
+                        {media.caption ? ` · ${media.caption}` : ''}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
                 {/* Footer metadata & actions */}
                 <div className="flex items-center justify-between text-[10px] text-muted-foreground pt-1 border-t border-border/40">
-                  <span className="font-mono">{formattedTime}</span>
+                  {isTelegram ? (
+                    <div className="space-y-0.5">
+                      {item.publishedAt && <p>{t('telegramPublishedAt', { time: formatDateTime(item.publishedAt, display.locale, display.timezone) })}</p>}
+                      {item.collectedAt && <p>{t('telegramCollectedAt', { time: formatDateTime(item.collectedAt, display.locale, display.timezone) })}</p>}
+                      {item.editedAt && <p>{t('telegramEditedAt', { time: formatDateTime(item.editedAt, display.locale, display.timezone) })}</p>}
+                    </div>
+                  ) : <span className="font-mono">{formattedTime}</span>}
 
                   <div className="flex items-center gap-2">
-                    <button
+                    {isTelegram && item.documentVersionId && item.sourceId && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 px-1.5 text-[10px]"
+                        onClick={() => openDrawer({ context: { kind: 'selection', items: [{
+                          sourceId: item.sourceId!, documentId: item.id,
+                          documentVersionId: item.documentVersionId!,
+                        }] } })}
+                      >{t('askAboutMessage')}</Button>
+                    )}
+                    {item.versionNumber !== undefined && <button
                       type="button"
-                      onClick={() => handleToggleItemRead(item.id)}
+                      disabled={interactionMutation.isPending}
+                      onClick={() => interactionMutation.mutate({ id: item.id, versionNumber: item.versionNumber!, read: !item.read })}
                       className="hover:text-foreground font-medium transition-colors"
                     >
-                      {isRead ? 'Mark unread' : 'Mark read'}
-                    </button>
+                      {isRead ? t('markUnread') : t('markRead')}
+                    </button>}
+                    {item.versionNumber !== undefined && <button
+                      type="button"
+                      disabled={interactionMutation.isPending}
+                      onClick={() => interactionMutation.mutate({ id: item.id, versionNumber: item.versionNumber!, bookmarked: !item.bookmarked })}
+                      aria-pressed={!!item.bookmarked}
+                      className="hover:text-foreground"
+                      title={item.bookmarked ? t('removeBookmark') : t('bookmark')}
+                    ><Bookmark className="h-3.5 w-3.5" fill={item.bookmarked ? 'currentColor' : 'none'} /></button>}
 
                     {item.url && (
                       <a
@@ -287,7 +401,7 @@ export function FeedGadget({
                         rel="noopener noreferrer"
                         className="inline-flex items-center gap-0.5 hover:text-primary font-medium"
                       >
-                        <span>Source</span>
+                        <span>{t('sourceLink')}</span>
                         <ExternalLink className="w-2.5 h-2.5" />
                       </a>
                     )}
@@ -296,7 +410,7 @@ export function FeedGadget({
                       href={`/knowledge/documents/${item.id}`}
                       className="hover:text-primary font-medium"
                     >
-                      Detail
+                      {t('detailLink')}
                     </Link>
                   </div>
                 </div>

@@ -98,6 +98,30 @@ class GadgetDefinition(Base):
     )
 
 
+class GadgetHighlightProgress(Base):
+    """Durable immutable-version scan cursor bound to one definition revision and rule set."""
+
+    __tablename__ = "gadget_highlight_progress"
+    __table_args__ = (
+        CheckConstraint("definition_revision >= 1", name="ck_gadget_highlight_progress_revision"),
+        CheckConstraint(
+            "(cursor_created_at IS NULL) = (cursor_version_id IS NULL)",
+            name="ck_gadget_highlight_progress_cursor_pair",
+        ),
+    )
+
+    definition_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("gadget_definitions.id", ondelete="CASCADE"), primary_key=True
+    )
+    definition_revision: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    rules_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    cursor_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cursor_version_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
 class GadgetInstance(Base):
     """Place one reusable definition into a dashboard-owned group with a local title/order."""
 
