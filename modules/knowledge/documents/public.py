@@ -741,6 +741,17 @@ async def create_document(session: AsyncSession, payload: DocumentCreate) -> Doc
     return document
 
 
+async def document_metadata(session: AsyncSession, document_ids: list[UUID]) -> dict[UUID, tuple[str, str | None]]:
+    """Return ``{document_id: (title, mime_type)}`` for the given ids (metadata only, never content).
+
+    Read-only batch projection for the automations producer sweep; callers pass at most one
+    sweep page of ids. Unknown ids are simply absent.
+    """
+    rows = await session.execute(select(Document.id, Document.title, Document.mime_type).where(
+        Document.id.in_(document_ids)))
+    return {row[0]: (row[1], row[2]) for row in rows.all()}
+
+
 async def get_document(session: AsyncSession, document_id: UUID) -> Document | None:
     """Fetch a document by primary key without applying additional visibility filters."""
     return await session.get(Document, document_id)

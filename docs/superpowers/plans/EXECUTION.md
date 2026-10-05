@@ -24,7 +24,7 @@
 | 7 | [Ready](2026-09-25-umwelt-os-phase-7-agent-harness-tools.md) | Code/build/review complete; squash-merged into develop | Deferred validation; R08.1 n8n template + collector trigger; browser S4 gate | integrate/p07 a64e3d3 (merge 5f66e5e + fixes 2cd1d5e, handoff/R08 a64e3d3); final re-review ready-to-merge |
 | 8 | [Ready](2026-09-25-umwelt-os-phase-8-today-daily-chat-tasks.md) | Code/build/review complete; squash-merged into develop | Deferred validation | codex/bbd-p08-dashboard 1e41d0d; final review fix-first → fixed (a453467, 1e41d0d) |
 | 9 | [Ready](2026-09-25-umwelt-os-phase-9-github-integration.md) | Code/build/review complete; squash-merged into develop | Deferred validation | integrate/p09 b470593; T3 review clean; T4 + phase final review fix-first → fixed (76731e5, 6629865, b470593) |
-| 10 | [Ready](2026-09-25-umwelt-os-phase-10-automation-workflows.md) | T1 complete; T2 implementing | P10-T2 dispatch/scheduling → T3 UI → T4 rule pack | codex/umwelt-p10 (D:/Project/Umwelt-OS-p10); T1 bbed66b+feb418f review clean |
+| 10 | [Ready](2026-09-25-umwelt-os-phase-10-automation-workflows.md) | Code/build/review complete; squash-merged into develop | Deferred validation; webhook trigger after n8n inbound receiver gate | codex/umwelt-p10 deb5446; T1–T4 review clean; phase final review fix-first → fixed |
 | 11 | [Ready](2026-09-25-umwelt-os-phase-11-observability-operations.md) | Not started | P11-T1 | Not executed |
 | 12 | [Ready](2026-09-25-umwelt-os-phase-12-hardening-release-acceptance.md) | Not started | P12-T1 | Not executed |
 
@@ -1803,17 +1803,17 @@ Squash of integrate/p07 (a64e3d3). Whole-phase review: I4 + 2 must-fix minors �
 ### Phase 8 merged into develop — 2026-10-05
 Squash of codex/bbd-p08-dashboard 1e41d0d (staged tree identical). Since 845cfb0: P07 seams (purge cascade, root ChatController, MCP editor), 7895187 task/goal agent tools on P07 ToolRegistry (INTERNAL_WRITE, approval-bound via run_approved_write, Personal/Planning only, never in handoff child), a453467 final-review fixes (new-conversation activation regression, primary vs accent tokens, tokens.json mirror, chart-1..5 tokens, unbind deleted day chats), 1e41d0d primary-foreground contrast. Alembic head p08_notification_params. Build exit0 + compileall clean. GitNexus detect_changes(staged): CRITICAL, 398 changed / 137 affected flows / 157 files — expected for full phase on shared chat/harness/approval paths; index stale at 209a016 inflates P07 flows; covered by whole-phase Opus review. Ruling: task/goal tools are P08 scope (not P10). Open: republish design-system artifact.
 
-## Live task board — updated 2026-10-05 18:40 (Claude controller)
+## Live task board — updated 2026-10-05 19:35 (Claude controller)
 
-develop HEAD: P09 squash ← c37e22e (P08) ← 3dca811 (P07) ← 209a016. Uncommitted on develop: owner AGENTS.md/CLAUDE.md edits.
+develop HEAD: P10 squash ← 16f6831 (P09) ← c37e22e (P08) ← 3dca811 (P07) ← 209a016. Uncommitted on develop: owner AGENTS.md/CLAUDE.md edits.
 
 | Phase | Worktree / branch | State | Active task | Next |
 | --- | --- | --- | --- | --- |
 | P07 | merged | Done (3dca811) | — | Deferred validation; open gates: browser S4 probe, R08.1 n8n template + collector trigger |
 | P08 | merged | Done (c37e22e) | — | Deferred validation; republish design-system artifact (tokens.json changed) |
 | P09 | merged | Done (squash on develop) | — | Deferred validation; GitHub live verification gate |
-| P10 | D:/Project/Umwelt-OS-p10 · codex/umwelt-p10 | T1 complete; T2 implemented (ae87e64) | T2 Opus review | T2 fixes → merge develop (re-parent p10_automations onto p09_github_webhook_hints) → T3 UI → T4 rule pack |
-| P11 | — | Not started | — | Entry gate: P01–P10 emit run IDs/events/status |
+| P10 | merged | Done (squash on develop) | — | Deferred validation; webhook trigger gate (n8n inbound receiver) |
+| P11 | D:/Project/Umwelt-OS-p11 · codex/umwelt-p11 | Starting | P11-T1 structured traces, metrics, data minimization | T2 ops screens → T3 retention/lifecycle → T4 Langfuse profile + docs |
 | P12 | — | Not started | — | After P11 |
 | Test stage | — | Not started | — | After all P01–P12 + reconciliation code |
 
@@ -1821,3 +1821,6 @@ Rulings this session (detail in .superpowers/sdd/*/progress.md): reuse Codex wor
 
 ### Phase 9 merged into develop — 2026-10-05
 Squash of integrate/p09 b470593 (staged tree identical). History: 37f0c40 merge of codex/bbd-p09-providers c5c036b (T1 OAuth/collection, T2 sync/webhooks, R13 native providers) onto develop (P07); T3 e89b24b/c25a61e deterministic GitHub mapping (repo/item entities, part_of, timeline events by provider record id; github LLM timeline extraction skipped; project-only read tool github.list_project_events), review fixes ab667ad (current-version fences, profile-only tool, metadata-only oversized bodies, savepoint, recovery hook), 794d338 (isolated recovery failures); 85140b7 merge develop (P08; r13 re-parented onto p08_notification_params); T4 bdd88ad (GitHub summary API, github_project gadget, Timeline 'Open on GitHub'); final review fixes 76731e5 (gadget source picker, local token clear on delete + peer lists, Telegram credential release, webhook digest capacity reclaim 30d, live notice, en/vi keys), 6629865 (best-effort remote revoke when last peer deleted), b470593 (revoke serialized through GithubOAuthCoordinator). Alembic head p09_github_webhook_hints. Build exit0 + compileall clean each commit. Rulings: no per-source remote revoke (GitHub revoke account-wide); oversized bodies → metadata-only events. Deferred minors in SDD ledger. No tests/lint/typecheck/runtime.
+
+### Phase 10 merged into develop — 2026-10-05
+Squash of codex/umwelt-p10 deb5446 (staged tree identical apart from controller status docs). T1 bbed66b/feb418f: discriminated trigger/action schema, deterministic conditions (eq/ne/in/gt/gte/lt/lte), immutable revisions, dependency + webhook-alias validation, model-free dry preview. T2 ae87e64, 8ab8dc3 (merge develop/P09; p10_automations re-parented onto p09_github_webhook_hints), 23074c7, 6f96aa2, 2b4c09a, 33ee6a4: durable run/action ledger with dedupe (automation_id, revision, trigger key), revision fence, origin/depth loop guard (max 5), cooldown/cap/cron floor, cursor-sweep producers with 30s lag window for new_document/connector_sync_result/new_event/entity_changed plus task_due/goal_deadline due sweeps, profile agent runs in per-rule conversation, destination-bound owner approvals (separate automation ledger — ruling), bounded retries, restart recovery; webhook trigger unavailable until authenticated inbound receiver (n8n gate). T3 353c667/023f2ac: Automation Agent proposals (approval-gated, saved disabled), schema-backed Settings UI with preview/run history/Run now/approvals, flat model-facing tool schema. T4 1a10b76/deb5446: disabled fictional example rule pack, single brief schedule owner with explicit transfer, docs/automations.md, localized conflict/validation codes. Alembic head p10_automation_runs. Build exit0 + compileall clean every commit. No tests/lint/typecheck/runtime.

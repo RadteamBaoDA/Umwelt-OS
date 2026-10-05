@@ -12,7 +12,7 @@ from core.model_gateway.schemas import AIExecutionConfig
 from core.tools import ToolRegistry, ToolRisk
 from modules.agents.handoff import HANDOFF_TOOL
 from modules.agents.internal_writes import (
-    INTERNAL_PROFILE_TOOLS, INTERNAL_WRITE_PROFILES, is_internal_write,
+    AUTOMATION_PROFILE_TOOLS, INTERNAL_PROFILE_TOOLS, INTERNAL_WRITE_PROFILES, is_internal_write,
 )
 from modules.agents.models import AgentProfile, AgentProfileRevision
 from modules.agents.schemas import AgentProfilePatch, AgentProfileRead, AgentProfileTool
@@ -30,7 +30,7 @@ DEFAULT_PROMPTS = {
     "project": "Help with project information found in selected knowledge sources. Do not present generic documents as structured project records when no project owner tool is registered.",
     "news": "Answer news-related questions only from sources actually returned by registered tools. Do not fabricate headlines or imply live news coverage when its adapter is unavailable.",
     "planning": "Help the owner plan from available evidence and the owner's tasks and goals. Any task or goal change is only a proposal: request the write tool and wait for the owner's approval card; never claim a change happened before it is approved.",
-    "automation": "Automation is unavailable until its owning Phase 10 workflow capability is registered.",
+    "automation": "Help the owner design automation rules (trigger, conditions, actions). Use automations.list to avoid duplicates, then propose a rule with automations.create and wait for the owner approval card; an approved proposal is saved DISABLED and only the owner can enable it. Never claim a rule is active, and do not propose webhook triggers or unlisted webhook aliases.",
 }
 AUTOMATION_PROFILE_ID = "automation"
 PROFILE_LIMITS = {
@@ -47,7 +47,6 @@ SPECIALIST_GATES = {"research": "browser.read"}
 DOMAIN_UNAVAILABLE = {
     "project": "project_owner_tools_unavailable",
     "news": "news_owner_tools_unavailable",
-    "automation": "phase_10_automation_unavailable",
 }
 
 
@@ -81,7 +80,8 @@ def _snapshot(
     contracts = _tool_contracts(registry)
     defaults = NATIVE_READ_TOOLS - ({PROJECT_ONLY_TOOL} if profile_id not in {"project", "supervisor"} else frozenset())
     defaults = (defaults | ({HANDOFF_TOOL} if profile_id == "supervisor" else frozenset())
-                | (INTERNAL_PROFILE_TOOLS if profile_id in INTERNAL_WRITE_PROFILES else frozenset()))
+                | (INTERNAL_PROFILE_TOOLS if profile_id in INTERNAL_WRITE_PROFILES else frozenset())
+                | (AUTOMATION_PROFILE_TOOLS if profile_id == AUTOMATION_PROFILE_ID else frozenset()))
     selected = row.allowed_tools if row is not None else [
         contracts[name] for name in sorted(defaults) if name in contracts
     ]
@@ -96,7 +96,7 @@ def _snapshot(
         unavailable.append("bounded_supervisor_handoff_unavailable")
     if profile_id in DOMAIN_UNAVAILABLE:
         unavailable.append(DOMAIN_UNAVAILABLE[profile_id])
-    profile_enabled = row.enabled if row is not None else profile_id != AUTOMATION_PROFILE_ID
+    profile_enabled = row.enabled if row is not None else True
     if not valid_tools:
         unavailable.append("registered_read_tools_unavailable")
     capability = "unavailable" if not valid_tools or not profile_enabled else "partial" if unavailable else "available"
@@ -109,6 +109,7 @@ def _snapshot(
         "available_tools": [item for name, item in sorted(contracts.items())
                              if (name != "webhook.send" or profile_id in {"supervisor", "research"})
                              and (name not in INTERNAL_PROFILE_TOOLS or profile_id in INTERNAL_WRITE_PROFILES)
+                             and (name not in AUTOMATION_PROFILE_TOOLS or profile_id == AUTOMATION_PROFILE_ID)
                              and (name != HANDOFF_TOOL or profile_id == "supervisor")],
         "source_ids": list(row.source_ids) if row is not None else [],
         "capability": capability, "unavailable_reasons": sorted(set(unavailable)),
@@ -203,8 +204,8 @@ async def update_profile_in_uow(
         raise HTTPException(status_code=422, detail="This profile cannot use task or goal tools")
     if HANDOFF_TOOL in {item["name"] for item in chosen} and profile_id != "supervisor":
         raise HTTPException(status_code=422, detail="Only the Supervisor profile may delegate")
-    if profile_id == AUTOMATION_PROFILE_ID and patch.enabled:
-        raise HTTPException(status_code=409, detail="Automation profiles are unavailable until Phase 10")
+    if {item["name"] for item in chosen} & AUTOMATION_PROFILE_TOOLS and profile_id != AUTOMATION_PROFILE_ID:
+        raise HTTPException(status_code=422, detail="This profile cannot use automation tools")
     if patch.source_ids:
         from modules.sources.public import list_tool_sources
 

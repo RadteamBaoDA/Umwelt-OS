@@ -77,6 +77,10 @@ from modules.chat.models import AgentActivityLink, Conversation, Message, Respon
 from modules.memory.models import Memory, MemoryCandidate, MemoryPrivacyRecord
 from modules.tools.models import BrowserPageEvidence, BrowserReadJob
 from modules.agents.models import AgentApproval, AgentEffect, AgentRun, AgentToolCall
+from modules.automations.models import (
+    Automation, AutomationCursor, AutomationRevision, AutomationRun, AutomationRunAction, AutomationSchedule,
+    AutomationTrigger,
+)
 
 _auth_models = (AuthSession, Owner)
 _demo_seed_models = (DemoSeedReceipt,)
@@ -85,6 +89,10 @@ _chat_models = (Conversation, Message, ResponseRun, StreamEvent, AgentActivityLi
 _memory_models = (Memory, MemoryCandidate, MemoryPrivacyRecord)
 _browser_read_models = (BrowserReadJob, BrowserPageEvidence)
 _agent_models = (AgentRun, AgentToolCall, AgentApproval, AgentEffect)
+_automation_models = (
+    Automation, AutomationRevision, AutomationTrigger, AutomationSchedule, AutomationRun, AutomationRunAction,
+    AutomationCursor,
+)
 _library_models = (
 
     Source, SourcePurgeOperation, Document, DocumentVersion, DocumentChunk,

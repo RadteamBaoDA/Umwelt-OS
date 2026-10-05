@@ -1902,3 +1902,20 @@ async def _clear_unsupported_derived_fields(session: AsyncSession, entity_ids: s
                 entity.description_origin = None
             if changed:
                 entity.revision += 1
+
+
+async def list_changed_entities_after(
+    session: AsyncSession, position: tuple[datetime, UUID] | None, limit: int = 100,
+) -> list[tuple[datetime, UUID, str, dict[str, str]]]:
+    """Read-only cursor page of entities by ``(updated_at, id)`` for the automations sweep.
+
+    The key combines id and ``updated_at`` so every change is a distinct trigger event. Payload
+    carries id, type and a created/updated marker only.
+    """
+    stmt = select(Entity)
+    if position is not None:
+        stmt = stmt.where(tuple_(Entity.updated_at, Entity.id) > tuple_(*position))
+    rows = (await session.scalars(stmt.order_by(Entity.updated_at, Entity.id).limit(limit))).all()
+    return [(r.updated_at, r.id, f"{r.id}:{r.updated_at.isoformat()}",
+             {"entity_id": str(r.id), "entity_type": r.type,
+              "change": "created" if r.revision == 1 else "updated"}) for r in rows]

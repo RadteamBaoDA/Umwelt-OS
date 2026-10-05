@@ -45,9 +45,11 @@ from modules.tools.webhook import register_webhook_tool
 from modules.tools.browser import register_browser_tool
 from modules.agents.handoff import register_handoff_tool
 from modules.goals.tools import register_goal_tools
+from modules.automations.tools import register_automation_tools
 from modules.tasks.tools import register_task_tools
 from modules.tools.public import McpAdmission, McpRuntime, create_inbound_mcp_bundle
 from modules.agents.routes import router as agents_router
+from modules.automations.routes import router as automations_router
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -133,6 +135,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(topics_router)
     app.include_router(news_router)
     app.include_router(notifications_router)
+    app.include_router(automations_router)
     app.include_router(chat_router)
     app.include_router(memory_router)
     app.include_router(agents_router)
@@ -148,6 +151,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         register_handoff_tool(tool_registry, frozenset(declared_tools))
         register_task_tools(tool_registry, frozenset(declared_tools))
         register_goal_tools(tool_registry, frozenset(declared_tools))
+        register_automation_tools(tool_registry, frozenset(declared_tools))
     app.state.tool_registry = tool_registry
     if app.state.modules["tools"].enabled:
         app.include_router(tools_router)

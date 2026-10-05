@@ -199,7 +199,45 @@ async def purge_browser_results_in_uow(
     return int(result.rowcount or 0)
 
 
+def webhook_aliases(settings: Any) -> set[str]:
+    """Return the deployment-allowlisted, enabled HTTPS webhook aliases (never URLs or CIDRs).
+
+    Raises:
+        ValueError: If the deployment WEBHOOK_PROFILES manifest is malformed.
+    """
+    from modules.tools.webhook import load_webhook_profiles
+
+    return set(load_webhook_profiles(settings))
+
+
+def webhook_profile_revision(settings: Any, alias: str) -> str | None:
+    """Return the digest of an alias's enabled deployment profile (URL, origin, CIDRs), or None.
+
+    Approvals bind this value so a changed destination invalidates them (like P07's
+    ``destination_revision``).
+
+    Raises:
+        ValueError: If the deployment WEBHOOK_PROFILES manifest is malformed.
+    """
+    from modules.tools.webhook import load_webhook_profiles
+
+    profile = load_webhook_profiles(settings).get(alias)
+    return profile.revision if profile is not None else None
+
+
+async def send_webhook_once(
+    settings: Any, alias: str, payload: dict[str, Any], *, idempotency_key: str,
+    headers: dict[str, str], before_send: Any,
+) -> str:
+    """Send one allowlisted webhook for a caller-owned no-replay ledger (see ``webhook.send_once``)."""
+    from modules.tools.webhook import send_once
+
+    return await send_once(
+        settings, alias, payload, idempotency_key=idempotency_key, headers=headers, before_send=before_send)
+
+
 __all__ = [
+    "send_webhook_once", "webhook_aliases", "webhook_profile_revision",
     "ToolDefinition", "ToolDestination", "ToolExecutionPrincipal", "ToolOutputFence",
     "ToolRegistry", "ToolResult", "ToolRisk", "revalidate_native_output_fences",
     "purge_browser_results_in_uow",

@@ -2,6 +2,7 @@ import mcpCatalog from '@/modules/sources/mcp-messages.json';
 import { storyMessages } from '@/modules/news/story-messages';
 import { dailyMessages, notificationMessages } from '@/modules/dashboard/daily-messages';
 import { githubMessages } from '@/modules/dashboard/github-messages';
+import { automationMessages } from '@/modules/automations/messages';
 
 const catalogParts = {
   'en-us': {
@@ -928,6 +929,7 @@ export const messages = {
     news: storyMessages['en-us'],
     daily: dailyMessages['en-us'],
     github: githubMessages['en-us'],
+    automations: automationMessages['en-us'],
     notifications: notificationMessages['en-us'],
     taskGoal: {
   "tasksTitle": "Tasks",
@@ -1158,6 +1160,7 @@ export const messages = {
     news: storyMessages['vi-vi'],
     daily: dailyMessages['vi-vi'],
     github: githubMessages['vi-vi'],
+    automations: automationMessages['vi-vi'],
     notifications: notificationMessages['vi-vi'],
     taskGoal: {
   "tasksTitle": "Công việc",

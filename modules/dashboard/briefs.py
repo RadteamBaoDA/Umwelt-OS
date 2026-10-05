@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 
 from redis.asyncio import Redis
 from sqlalchemy import func, select, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import Settings
@@ -249,6 +250,41 @@ async def save_schedule(session: AsyncSession, owner_id: int, value: BriefSchedu
     return value
 
 
+class BriefSlotOwned(Exception):
+    """Raised when another automation already owns the daily brief slot."""
+
+
+async def read_slot_owner(session: AsyncSession, owner_id: int) -> dict[str, object]:
+    """Return the schedule-ownership record for the logical job ``daily_brief``."""
+    row = await session.get(BriefScheduleRow, owner_id)
+    return {
+        "logical_job": "daily_brief",
+        "schedule_owner": row.schedule_owner if row else "internal_brief",
+        "automation_id": row.automation_id if row else None,
+    }
+
+
+async def claim_brief_slot(session: AsyncSession, owner_id: int, automation_id: UUID) -> None:
+    """Transfer the daily brief slot to ``automation_id`` inside the caller's transaction (no commit).
+
+    Invariant: one scheduler owner per logical job. The schedule row is created if absent, then
+    locked, so concurrent claims serialize; a different automation holding the slot is refused.
+    The internal cron skips while ``schedule_owner == 'automation'``.
+    """
+    await session.execute(pg_insert(BriefScheduleRow).values(owner_id=owner_id).on_conflict_do_nothing())
+    row = await session.scalar(select(BriefScheduleRow).where(BriefScheduleRow.owner_id == owner_id).with_for_update())
+    if row.schedule_owner == "automation" and row.automation_id != automation_id:
+        raise BriefSlotOwned
+    row.schedule_owner, row.automation_id = "automation", automation_id
+
+
+async def release_brief_slot(session: AsyncSession, owner_id: int, automation_id: UUID) -> None:
+    """Return the slot to the internal cron if (and only if) ``automation_id`` holds it; no commit."""
+    row = await session.scalar(select(BriefScheduleRow).where(BriefScheduleRow.owner_id == owner_id).with_for_update())
+    if row is not None and row.automation_id == automation_id:
+        row.schedule_owner, row.automation_id = "internal_brief", None
+
+
 async def run_due_brief(
     session: AsyncSession, owner_id: int, *, settings: Settings, redis: Redis, now: datetime | None = None
 ) -> BriefRead | None:
@@ -260,6 +296,8 @@ async def run_due_brief(
     schedule = await read_schedule(session, owner_id)
     if not schedule.enabled:
         return None
+    if (await read_slot_owner(session, owner_id))["schedule_owner"] != "internal_brief":
+        return None  # an enabled automation owns the daily_brief slot (single scheduler owner)
     local = (now or datetime.now(UTC)).astimezone(ZoneInfo(schedule.timezone))
     if (local.hour, local.minute) < (schedule.hour, schedule.minute):
         return None

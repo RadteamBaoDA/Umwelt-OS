@@ -1,6 +1,6 @@
 # Umwelt-OS implementation status
 
-Updated: 2026-10-05 — Claude controller: P07, P08, P09 code/build/review complete and squash-merged into develop. P10 in progress (T1 done, T2 in review). P11–P12 remain. Deferred acceptance unchanged.
+Updated: 2026-10-05 — Claude controller: P07–P10 code/build/review complete and squash-merged into develop. P11 starting; P12 remains. Deferred acceptance unchanged.
 
 
 ## Current checkpoint — 2026-10-05
@@ -13,6 +13,7 @@ This live snapshot supersedes older current-action paragraphs; historical entrie
 | P07 | Code/build/review complete; squash-merged into develop. Registry/MCP/harness/approvals, specialists + bounded supervisor handoff, browser-use (gated off), Agents UI, R08 MCP collection adapter (manual). | Open gates: browser S4 OmniRoute capability probe + isolation proof; R08.1 code remaining (n8n workflow template + collector-authenticated trigger, separate credential — N-5); MCP editor UI lands with P08; handoff unverified at runtime. |
 | P08 | Code/build/review complete; squash-merged into develop. Tasks/goals/topics, stories/trends, daily context + revisioned brief + notifications (en/vi), dashboard R10–R12, contextual day drawer on P06 chat, task/goal agent tools on P07 registry with approvals, MCP editor. | Deferred minors in SDD ledger; republish design-system artifact (tokens.json changed). |
 | P09 | Code/build/review complete; squash-merged into develop. GitHub OAuth/collection, incremental sync + verified webhooks, deterministic mapping into entities/timeline, GitHub UI/project gadget; R13 native providers. | Live GitHub verification gate; deferred minors in SDD ledger. |
+| P10 | Code/build/review complete; squash-merged into develop. Automation rules, dispatch/scheduling with durable approvals, Automation Agent proposals, Settings UI, example rule pack, docs/automations.md. | Webhook trigger after n8n inbound receiver gate; deferred minors in SDD ledger. |
 | P10–P12 | Not implemented in the original plan ledger. | Automation, observability, hardening/backup/restore and final deferred validation after all production/reconciliation code. |
 | Repository rename | Primary is a real D:/Project/Umwelt-OS directory, not a junction; old primary path absent. Git lists 20 registered checkouts with new paths; all 19 linked .git registrations repaired successfully this checkpoint. Remote points to RadteamBaoDA/Umwelt-OS. Markdown/plan/owned skill naming updated. | Desktop saved project path still points at the former directory and reports isGitRepository=false; archived attachment/path metadata completion remains unverified. Finalize log has no SUCCESS, so do not treat old queued helper as completion. |
 | Execution | Only controller active; no implementation/review child agents running after restart/interruption. Production edits and composition index preserved. | Resume the three pending work streams from current bytes, not from scratch. |

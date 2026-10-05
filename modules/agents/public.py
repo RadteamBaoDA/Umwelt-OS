@@ -891,8 +891,20 @@ async def request_cancel_for_owner(
     return result
 
 
+async def current_profile_revision(
+    session: AsyncSession, owner_id: int, profile_id: str, registry: ToolRegistry, config: Any,
+) -> int:
+    """Return the selected profile's current revision (for a caller that pins ``expected_profile_revision``).
+
+    Raises ``HTTPException`` 404 for an unknown profile, exactly like the profile read route.
+    """
+    from modules.agents.specialists import get_profile
+
+    return (await get_profile(session, owner_id, profile_id, registry, config)).revision
+
+
 __all__ = [
-    "APPROVAL_PROMPT_VERSION", "APPROVAL_WORKFLOW_TOOLS", "APPROVAL_WORKFLOW_VERSION", "CHECKPOINT_SCHEMA_VERSION",
+    "current_profile_revision", "APPROVAL_PROMPT_VERSION", "APPROVAL_WORKFLOW_TOOLS", "APPROVAL_WORKFLOW_VERSION", "CHECKPOINT_SCHEMA_VERSION",
     "PROMPT_VERSION", "WORKFLOW_TOOLS", "WORKFLOW_VERSION",
     "SPECIALIST_CHECKPOINT_SCHEMA_VERSION", "SPECIALIST_PROMPT_VERSION", "SPECIALIST_WORKFLOW_VERSION",
     "BrowserRunAuthorization", "reserve_browser_run_budget_in_uow", "revalidate_browser_run_authority",

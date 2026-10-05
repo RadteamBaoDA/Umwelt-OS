@@ -14,7 +14,7 @@ from typing import Sequence
 from uuid import UUID, uuid4, uuid5
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import select
+from sqlalchemy import DateTime, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.pagination import decode_cursor, encode_cursor
@@ -387,3 +387,26 @@ class TaskService:
     async def delete_task(self, owner_id: int, task_id: UUID, expected_revision: int) -> None:
         """Soft-delete a task through the revision-fenced public contract."""
         await delete_task(self.session, owner_id, task_id, expected_revision)
+
+
+async def list_due_within(
+    session: AsyncSession, owner_id: int, lead: timedelta, grace: timedelta, limit: int = 100,
+) -> list[tuple[UUID, str, str, float, UUID | None]]:
+    """Open tasks whose due moment is within ``lead`` ahead or ``grace`` behind now (bounded).
+
+    Returns ``(task_id, status, due_marker, hours_until_due, goal_id)`` for the automations due sweep. Date-only
+    due dates count as the start of that UTC day.
+    """
+    now = datetime.now(UTC)
+    start, end = now - grace, now + lead
+    stmt = select(Task).where(
+        Task.owner_id == owner_id, Task.deleted_at.is_(None), Task.status.notin_(("done", "cancelled")),
+        or_(Task.due_at.between(start, end), Task.due_date.between(start.date(), end.date())),
+    ).order_by(func.coalesce(Task.due_at, cast(Task.due_date, DateTime(timezone=True))), Task.id).limit(limit)
+    result = []
+    for task in (await session.scalars(stmt)).all():
+        due = task.due_at or datetime.combine(task.due_date, datetime.min.time(), tzinfo=UTC)
+        if not start <= due <= end:
+            continue  # the date-only prefilter is coarse
+        result.append((task.id, task.status, due.isoformat(), (due - now).total_seconds() / 3600, task.goal_id))
+    return result

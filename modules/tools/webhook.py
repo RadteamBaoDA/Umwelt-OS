@@ -173,3 +173,48 @@ async def _send_webhook(arguments: dict[str, Any], context: dict[str, Any]) -> T
         return ToolResult(success=False, error="Webhook delivery failed", error_code="execution_failed")
     finally:
         await transport.aclose()
+
+
+async def send_once(
+    settings: Settings, alias: str, payload: dict[str, Any], *, idempotency_key: str,
+    headers: dict[str, str], before_send: Any,
+) -> str:
+    """Send at most one credential-free POST for a caller that owns its own no-replay ledger.
+
+    Used by automation actions, whose approval and effect state live in the automation run ledger
+    (P07 approvals are bound to agent runs). The same deployment alias allowlist, pinned transport,
+    private-CIDR rules, single request, no redirects and size budgets as ``webhook.send`` apply.
+    ``before_send`` is awaited after DNS and immediately before the socket write; returning False
+    aborts with nothing sent. Returns ``"succeeded"`` (2xx), ``"unsent"`` (rejected or failed before
+    the write, safe to treat as not delivered) or ``"ambiguous"`` (may have reached the receiver:
+    non-2xx, timeout or cancellation after the write began; the caller must never replay it).
+    """
+    from httpx2 import AsyncClient, Timeout
+
+    profile = load_webhook_profiles(settings).get(alias)
+    if profile is None:
+        return "unsent"
+    started = False
+
+    async def fenced_send() -> bool:
+        """Run the caller fence after DNS and record whether the write was allowed to begin."""
+        nonlocal started
+        started = bool(await before_send())
+        return started
+
+    budget = McpOperationNetworkBudget(
+        deadline=time.monotonic() + 30, max_requests=1, max_request_bytes=64_000,
+        max_response_bytes=8_192, max_inflight_requests=1, before_request=fenced_send,
+    )
+    transport = McpPinnedHttpTransport(profile.endpoint, budget, approved_destination_cidrs={profile.origin: profile.cidrs})
+    try:
+        async with AsyncClient(transport=transport, follow_redirects=False, timeout=Timeout(30)) as client:
+            response = await client.post(
+                profile.endpoint, json=payload, headers={**headers, "Idempotency-Key": idempotency_key})
+            await response.aread()
+            return "succeeded" if 200 <= response.status_code < 300 else "ambiguous"
+    except Exception:
+        # CancelledError is not caught here: the caller's committed in-flight row stays review-only.
+        return "ambiguous" if started else "unsent"
+    finally:
+        await transport.aclose()

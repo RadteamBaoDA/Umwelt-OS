@@ -480,3 +480,22 @@ class GoalService:
     async def accept_plan(self, owner_id: int, goal_id: UUID, proposal: PlanProposal) -> PlanAcceptanceResult:
         """Accept or replay one owner-approved proposal through the public UoW."""
         return await accept_plan(self.session, owner_id, goal_id, proposal)
+
+
+async def list_deadlines_within(
+    session: AsyncSession, owner_id: int, lead_days: int, limit: int = 100,
+) -> list[tuple[UUID, str, str, int, float]]:
+    """Active goals whose deadline is within ``lead_days`` ahead (or up to one day past), bounded.
+
+    Returns ``(goal_id, status, deadline_marker, days_until_deadline, progress)`` for the due sweep.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import select
+
+    today = datetime.now(UTC).date()
+    rows = (await session.scalars(select(Goal).where(
+        Goal.owner_id == owner_id, Goal.status == "active", Goal.deadline.is_not(None),
+        Goal.deadline.between(today - timedelta(days=1), today + timedelta(days=lead_days)),
+    ).order_by(Goal.deadline, Goal.id).limit(limit))).all()
+    return [(g.id, g.status, g.deadline.isoformat(), (g.deadline - today).days, float(g.progress)) for g in rows]

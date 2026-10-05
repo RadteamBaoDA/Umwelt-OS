@@ -11,6 +11,7 @@ import { apiRequest, csrfHeaders } from '@/core/api';
 import { apiFailureKey } from '@/core/api-failure-key';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { AgentSettingsWorkspace } from '@/modules/agents/agent-settings';
+import { AutomationSettings } from '@/modules/automations/rule-list';
 
 type Mapping = { model: string; version: string | null; destination: 'unknown' | 'remote' };
 type Privacy = { allow_remote_reasoning: boolean; allow_remote_embeddings: boolean; allow_remote_web_search: boolean; reasoning_destinations: string[]; embedding_destinations: string[]; web_search_destinations: string[] };
@@ -184,5 +185,5 @@ export function AISettingsWorkspace() {
       {save.error && <p className="error" role="alert">{t(apiFailureKey(save.error) ?? 'saveFailed')}</p>}{probe.error && <p className="error" role="alert">{t(apiFailureKey(probe.error) ?? 'probeFailed')}</p>}{draftProbe.data && <p className="muted" role="status">{t('draftProbe')} {draftProbe.data.capability} {draftProbe.data.result}; {t('draftProbeUnstored')}</p>}{draftProbe.error && <p className="error" role="alert">{t(apiFailureKey(draftProbe.error) ?? 'draftProbeFailed')}</p>}
       <div className="form-actions"><Button type="submit" disabled={save.isPending || !dirty}>{t('saveButton')}</Button><Button type="button" className="secondary" disabled={save.isPending || !dirty} onClick={() => { sessionStorage.removeItem(draftStorageKey); setDraft(null); setGatewayKey(''); setGatewayAction('unchanged'); setSearchKey(''); setSearchAction('unchanged'); setRestoredSecret(false); save.reset(); draftProbe.reset(); discover.reset(); }}>{t('cancelChanges')}</Button></div>
     </form>
-  </section><AgentSettingsWorkspace /></>;
+  </section><AgentSettingsWorkspace /><AutomationSettings /></>;
 }

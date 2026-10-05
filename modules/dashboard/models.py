@@ -210,9 +210,18 @@ class BriefSchedule(Base):
     __tablename__ = "brief_schedules"
     __table_args__ = (
         CheckConstraint("hour BETWEEN 0 AND 23 AND minute BETWEEN 0 AND 59", name="ck_brief_schedules_time"),
+        CheckConstraint(
+            "schedule_owner IN ('internal_brief','automation') AND "
+            "((schedule_owner = 'automation') = (automation_id IS NOT NULL))",
+            name="ck_brief_schedules_owner",
+        ),
     )
 
     owner_id: Mapped[int] = mapped_column(ForeignKey("owner.id", ondelete="CASCADE"), primary_key=True)
+    # P10 single-owner invariant for logical job "daily_brief": exactly one of the internal cron
+    # (schedule_owner="internal_brief", automation_id NULL) or one automation owns the slot.
+    schedule_owner: Mapped[str] = mapped_column(String(16), nullable=False, server_default="internal_brief")
+    automation_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     hour: Mapped[int] = mapped_column(Integer, nullable=False, server_default="7")
     minute: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")

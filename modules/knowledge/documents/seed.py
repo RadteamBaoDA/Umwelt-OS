@@ -8,11 +8,13 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from core.config import Settings
+from core.modules import register_modules
+from modules.automations.seed import ensure_demo_automations
 from modules.knowledge.documents.models import Document, DocumentVersion
 from modules.knowledge.documents.public import content_hash
 from modules.sources import public as sources
 from core.auth.public import get_demo_owner_id
-from core.demo_seed import P08_DEMO_NAMESPACE, claim_demo_seed, record_demo_seed_receipt
+from core.demo_seed import P08_DEMO_NAMESPACE, P10_DEMO_NAMESPACE, claim_demo_seed, record_demo_seed_receipt
 from modules.goals.public import ensure_demo_goals
 from modules.news.public import ensure_demo_topics
 from modules.tasks.public import ensure_demo_tasks
@@ -62,6 +64,10 @@ async def seed_demo(session: AsyncSession) -> SeedReport:
             p08_created = goals_created + tasks_created + topics_created
             p08_existing = goals_existing + tasks_existing + topics_existing
             await record_demo_seed_receipt(session, owner_id, P08_DEMO_NAMESPACE)
+        if await claim_demo_seed(session, owner_id, P10_DEMO_NAMESPACE):
+            # Disabled fictional automation examples; the receipt stops edited/deleted ones returning.
+            p08_created += await ensure_demo_automations(session, owner_id, register_modules(), Settings())
+            await record_demo_seed_receipt(session, owner_id, P10_DEMO_NAMESPACE)
         inserted = await sources.ensure_demo_source(session, SOURCE_ID, DEMO_NAMESPACE)
         if not inserted:
             document_count = await session.scalar(

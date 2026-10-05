@@ -1305,3 +1305,30 @@ async def _hide_unsupported(session: AsyncSession, event_ids: list[UUID]) -> Non
             await session.execute(delete(EventParticipant).where(
                 EventParticipant.event_id == event_id, EventParticipant.origin == "derived",
             ))
+
+
+async def list_changed_events_after(
+    session: AsyncSession, position: tuple[datetime, UUID] | None, limit: int = 100,
+) -> list[tuple[datetime, UUID, str, dict[str, Any] | None]]:
+    """Read-only cursor page of timeline events by ``(updated_at, id)`` for the automations sweep.
+
+    The key combines event id and revision so an owner revision is a new trigger event. Payload
+    carries type, source id and importance only (no title or summary). Soft-deleted events stay in
+    the page with a None payload so the cursor advances past them without offering them.
+    """
+    stmt = select(Event)
+    if position is not None:
+        stmt = stmt.where(tuple_(Event.updated_at, Event.id) > tuple_(*position))
+    rows = (await session.scalars(stmt.order_by(Event.updated_at, Event.id).limit(limit))).all()
+    result = []
+    for r in rows:
+        if r.deleted_at is not None:
+            result.append((r.updated_at, r.id, f"{r.id}:{r.revision}", None))
+            continue
+        payload: dict[str, Any] = {"event_type": r.type}
+        if r.source_id is not None:
+            payload["source_id"] = str(r.source_id)
+        if r.importance_score is not None:
+            payload["importance"] = float(r.importance_score)
+        result.append((r.updated_at, r.id, f"{r.id}:{r.revision}", payload))
+    return result

@@ -12,7 +12,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from redis.asyncio import Redis
-from sqlalchemy import delete, desc, func, select, update
+from sqlalchemy import delete, desc, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.auth.dependencies import SESSION_COOKIE, require_owner, require_owner_write
@@ -115,6 +115,8 @@ async def list_conversations(
         await session.scalars(
             select(Conversation)
             .where(Conversation.archived == archived)
+            # Per-rule automation threads stay reachable from automation run detail, not the Chat list.
+            .where(or_(Conversation.context_kind.is_(None), Conversation.context_kind != "automation"))
             .order_by(desc(Conversation.pinned), desc(Conversation.updated_at))
             .offset(offset)
             .limit(limit)

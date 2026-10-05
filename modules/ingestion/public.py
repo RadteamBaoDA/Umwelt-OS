@@ -1558,3 +1558,44 @@ async def retry_run(
     )
     await session.refresh(run)
     return run
+
+
+async def list_ready_events_after(
+    session: AsyncSession, position: tuple[datetime, UUID] | None, limit: int = 100,
+) -> list[tuple[datetime, UUID, str, dict[str, str] | None]]:
+    """Read-only cursor page of ``document.version.ready`` outbox rows for the automations sweep.
+
+    Ordered by ``(created_at, id)`` strictly after ``position``; returns ``(ts, id, key, payload)``
+    with metadata ids only (source and document id). It never changes delivery status, so the single outbox consumer is
+    unaffected.
+    """
+    stmt = select(EventOutbox).where(EventOutbox.type == "document.version.ready")
+    if position is not None:
+        stmt = stmt.where(tuple_(EventOutbox.created_at, EventOutbox.id) > tuple_(*position))
+    rows = (await session.scalars(stmt.order_by(EventOutbox.created_at, EventOutbox.id).limit(limit))).all()
+    # A malformed row keeps its slot with a None payload so the sweep cursor still advances past it.
+    return [(r.created_at, r.id, str(r.id),
+             {"source_id": str(r.payload["source_id"]), "document_id": str(r.payload["document_id"])}
+             if "source_id" in r.payload and "document_id" in r.payload else None) for r in rows]
+
+
+async def list_terminal_runs_after(
+    session: AsyncSession, position: tuple[datetime, UUID] | None, limit: int = 100,
+) -> list[tuple[datetime, UUID, str, dict[str, str]]]:
+    """Read-only cursor page of ingestion runs in a terminal state for connector sync results.
+
+    Ordered by ``(updated_at, id)``; the key combines run id and status so a later status change
+    is a new event. Payload carries source id, status and the collected-observation count only.
+    """
+    stmt = select(IngestionRun).where(IngestionRun.status.in_(("succeeded", "failed", "needs_ocr")))
+    if position is not None:
+        stmt = stmt.where(tuple_(IngestionRun.updated_at, IngestionRun.id) > tuple_(*position))
+    rows = (await session.scalars(stmt.order_by(IngestionRun.updated_at, IngestionRun.id).limit(limit))).all()
+    # new_items = observations collected in the run's batch (one grouped count for the page).
+    counts = dict((await session.execute(
+        select(SourceObservation.batch_id, func.count()).where(
+            SourceObservation.batch_id.in_([r.batch_id for r in rows])).group_by(SourceObservation.batch_id)
+    )).all()) if rows else {}
+    return [(r.updated_at, r.id, f"{r.id}:{r.status}",
+             {"source_id": str(r.source_id), "status": r.status, "new_items": int(counts.get(r.batch_id, 0))})
+            for r in rows]

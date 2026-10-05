@@ -17,14 +17,17 @@ from core.tools import ToolResult
 # Fixed approval destination; the revision only changes if this contract itself changes.
 INTERNAL_DESTINATION = ("local", "1")
 
-INTERNAL_WRITE_TOOLS = frozenset({
+TASK_GOAL_WRITE_TOOLS = frozenset({
     "tasks.create", "tasks.update", "tasks.complete", "tasks.delete",
     "goals.create", "goals.update", "goals.delete",
 })
+# The Automation Agent proposes a DISABLED draft rule; enabling it is a separate owner action.
+AUTOMATION_PROFILE_TOOLS = frozenset({"automations.create", "automations.list"})
+INTERNAL_WRITE_TOOLS = TASK_GOAL_WRITE_TOOLS | {"automations.create"}
 # Profiles whose plan says they use task/goal tools; every other profile never sees them.
 INTERNAL_WRITE_PROFILES = frozenset({"personal", "planning"})
 INTERNAL_READ_TOOLS = frozenset({"tasks.list", "goals.list", "goals.get"})
-INTERNAL_PROFILE_TOOLS = INTERNAL_WRITE_TOOLS | INTERNAL_READ_TOOLS
+INTERNAL_PROFILE_TOOLS = TASK_GOAL_WRITE_TOOLS | INTERNAL_READ_TOOLS
 
 
 def is_internal_write(definition: Any) -> bool:

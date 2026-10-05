@@ -117,7 +117,7 @@ export function AgentSettingsWorkspace() {
           <h3 className="font-semibold text-foreground">{t(profileTitleKeys[draft.id] ?? 'agentProfileKnowledge')}</h3>
           {draft.unavailable_reasons.map((reason) => <p key={reason} className="text-sm text-muted-foreground">{t((reasonKeys[reason] ?? 'agentUnavailableReason') as 'agentUnavailableReason', { reason })}</p>)}
           <label className="flex items-center gap-2 text-sm text-foreground">
-            <Checkbox checked={draft.enabled} disabled={draft.id === 'automation'} onCheckedChange={(checked) => setDraft({ ...draft, enabled: checked === true })} />
+            <Checkbox checked={draft.enabled} onCheckedChange={(checked) => setDraft({ ...draft, enabled: checked === true })} />
             {t('agentEnabled')}
           </label>
           <label className="block space-y-1 text-sm">

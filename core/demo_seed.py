@@ -11,6 +11,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from core.database import Base
 
 P08_DEMO_NAMESPACE = "bbd-os.demo.phase-8"
+P10_DEMO_NAMESPACE = "bbd-os.demo.phase-10"
 
 
 class DemoSeedBusy(RuntimeError):
@@ -39,7 +40,7 @@ class DemoSeedReceipt(Base):
 
 def demo_seed_id(kind: str, identity: str) -> UUID:
     """Return the stable UUID for one P08 fixture identity using its shared namespace path."""
-    if kind not in {"goal", "milestone", "task", "topic"} or not 1 <= len(identity) <= 128:
+    if kind not in {"goal", "milestone", "task", "topic", "automation"} or not 1 <= len(identity) <= 128:
         raise ValueError("Invalid P08 demo seed identity")
     return uuid5(NAMESPACE_URL, f"{P08_DEMO_NAMESPACE}/{kind}/{identity}")
 

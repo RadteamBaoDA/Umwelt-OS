@@ -36,6 +36,7 @@ from modules.news.worker import process_news_document_ready, recover_news_work
 from modules.dashboard.worker import run_scheduled_brief
 from modules.chat.worker import process_chat_response, purge_expired_chat_runs
 from modules.agents.worker import compose_agent_registry, process_agent_run, reconcile_agent_dispatch
+from modules.automations.worker import process_automation_run, reconcile_automation_runs
 
 async def startup(ctx: dict[str, object]) -> None:
     """Load the bounded database pool and compose the worker-owned native/MCP agent registry."""
@@ -91,7 +92,7 @@ class WorkerSettings:
         purge_expired_sessions, process_ingestion_event, process_normalize_event, process_uploaded_file, process_source_purge,
         reconcile_connectors, process_document_ready, process_entity_extraction_work, process_timeline_extraction_work,
         process_graph_operation, process_news_document_ready, process_chat_response, purge_expired_chat_runs,
-        process_agent_run,
+        process_agent_run, process_automation_run,
     ]
     cron_jobs: ClassVar[list[object]] = [
         cron(purge_expired_sessions, minute=0),
@@ -106,6 +107,7 @@ class WorkerSettings:
         cron(run_scheduled_brief, minute=set(range(0, 60, 1)), run_at_start=True),
         cron(purge_expired_chat_runs, minute=set(range(0, 60, 15))),
         cron(reconcile_agent_dispatch, second=set(range(0, 60, 5)), run_at_start=True),
+        cron(reconcile_automation_runs, second=set(range(0, 60, 5)), run_at_start=True),
     ]
     redis_settings = RedisSettings.from_dsn(Settings().redis_url)
 

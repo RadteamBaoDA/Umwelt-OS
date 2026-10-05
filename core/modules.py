@@ -20,10 +20,12 @@ from modules.chat.descriptor import descriptor as chat
 from modules.memory.descriptor import descriptor as memory
 from modules.tools.descriptor import descriptor as tools
 from modules.agents.descriptor import descriptor as agents
+from modules.automations.descriptor import descriptor as automations
 
 
 def register_modules(descriptors: Iterable[Any] = (sources, documents, entities, relationships, timeline, search, temporal,
-        dashboard, tasks, goals, news, notifications, chat, memory, tools, agents)) -> dict[str, Any]:
+        dashboard, tasks, goals, news, notifications, chat, memory, tools, agents,
+        automations)) -> dict[str, Any]:
     """Build the descriptor registry and reject duplicate IDs or missing dependencies.
 
     Args:

@@ -765,16 +765,21 @@ async def apply_preset(session: AsyncSession, owner_id: int, preset_id: str, pay
 # Stable seams for P10 automation: daily context and briefs are consumed through this module only.
 from modules.dashboard.briefs import (  # noqa: E402
     BriefEmpty,
+    BriefSlotOwned,
     BriefUnavailable,
+    claim_brief_slot,
     generate_brief,
     latest_brief,
     list_briefs,
     read_schedule,
+    read_slot_owner,
+    release_brief_slot,
 )
 from modules.dashboard.context import build_daily_context  # noqa: E402
 from modules.dashboard.daily_schemas import BriefRead, DailyContext  # noqa: E402
 
 __all__ = [
     "BriefEmpty", "BriefRead", "BriefUnavailable", "DailyContext", "build_daily_context",
-    "generate_brief", "latest_brief", "list_briefs", "read_schedule",
+    "BriefSlotOwned", "claim_brief_slot", "generate_brief", "latest_brief", "list_briefs", "read_schedule",
+    "read_slot_owner", "release_brief_slot",
 ]

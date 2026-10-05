@@ -294,6 +294,13 @@ async def read_brief_schedule(session: Session, owner: OwnerRead, response: Resp
     return await briefs.read_schedule(session, owner.owner_id)
 
 
+@router.get("/briefs/schedule/ownership")
+async def read_brief_schedule_ownership(session: Session, owner: OwnerRead, response: Response) -> dict[str, object]:
+    """Read which scheduler (internal cron or one automation) owns the daily brief slot."""
+    _no_store(response)
+    return await briefs.read_slot_owner(session, owner.owner_id)
+
+
 @router.put("/briefs/schedule", response_model=BriefSchedule)
 async def save_brief_schedule(payload: BriefSchedule, session: Session, owner: OwnerWrite, response: Response) -> BriefSchedule:
     """Save the daily brief schedule consumed by the ARQ cron."""
