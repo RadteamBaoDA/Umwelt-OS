@@ -176,10 +176,14 @@ class SourceList(BaseModel):
 
 
 class OperationRead(BaseModel):
-    """Expose the status and timestamps of a source operation."""
+    """Expose source purge status and the last bounded Documents aggregate receipt."""
     operation_id: UUID
     source_id: UUID
     status: Literal["queued", "running", "succeeded", "failed"]
     error_code: str | None
+    documents_status: Literal["queued", "deleted", "failed", "unavailable"]
+    pending_child_count: int | None
+    failed_child_count: int | None
+    pending_owner_codes: list[str]
     created_at: datetime
     updated_at: datetime

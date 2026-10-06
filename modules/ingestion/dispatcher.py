@@ -13,6 +13,7 @@ WORKER_BY_EVENT = {
     "document.file.uploaded": "process_uploaded_file",
     "document.cleanup.requested": "process_document_cleanup",
     "source.purge.requested": "process_source_purge",
+    "source.purge.progressed": "process_source_purge",
     "ingestion.stage.requested": "process_ingestion_event",
     "connector.crawl.requested": "process_ingestion_event",
     "ingestion.normalize.requested": "process_normalize_event",

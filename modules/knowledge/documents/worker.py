@@ -22,17 +22,20 @@ _CONTINUATION_DELAY = timedelta(seconds=1)
 async def process_document_cleanup(ctx: dict[str, object], event_id: str) -> None:
     """Advance one bounded raw and Chat copy-cleanup page after canonical deletion commits.
 
-    The event payload contains only an operation ID. Documents locks and unlinks the exact raw
-    URI when present, then passes one bounded detached evidence-reference scope to Chat for
-    Chat-only mutation. A deterministic cursor and both stage outcomes commit with their
-    receipts; incomplete pages return the existing outbox event to pending. Aggregate copied
-    evidence stays running after Chat completes because Memory, Agents, dashboard briefs, and
-    other copy owners remain unintegrated. Errors preserve deletion tombstones and expose
-    bounded retry status.
+    The event payload contains only a Documents receipt ID. Documents locks the exact raw URI
+    before the receipt, checks surviving references, and unlinks only a contained unshared path;
+    it then passes one bounded detached evidence-reference page to Chat. Terminal receipts are
+    rechecked after locking, and raw/Chat cursor state plus deterministic Source progress events
+    commit atomically. Incomplete work reuses its child event with a bounded retry; copied status
+    remains running until every owner stage is integrated. Failure handlers compare the locked
+    receipt's raw/Chat cursor progress with this attempt's starting snapshot before changing it.
+    Recovery without that snapshot leaves event delivery untouched; the dispatcher reclaims stale
+    queued work after its bounded interval instead of overwriting a newer delivery schedule.
     """
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     settings = cast(Settings, ctx["settings"])
     identifier = UUID(event_id)
+    attempt_progress: tuple[str, str, str, str, object] | None = None
 
     try:
         async with factory() as session:
@@ -63,6 +66,25 @@ async def process_document_cleanup(ctx: dict[str, object], event_id: str) -> Non
             ).with_for_update().execution_options(populate_existing=True))
             if operation is None:
                 await ingestion.set_event_delivery(session, identifier, "failed")
+                await session.commit()
+                return
+
+            cursor_snapshot = (
+                dict(operation.copied_cursor)
+                if isinstance(operation.copied_cursor, dict)
+                else operation.copied_cursor
+            )
+            attempt_progress = (
+                operation.raw_status,
+                operation.evidence_scope_status,
+                operation.chat_status,
+                operation.copied_status,
+                cursor_snapshot,
+            )
+
+            if operation.raw_status in {"not_present", "retained_shared", "succeeded"} and operation.chat_status == "succeeded":
+                # Duplicate deliveries must not reopen a receipt whose required active stages finished.
+                await ingestion.set_event_delivery(session, identifier, "delivered")
                 await session.commit()
                 return
 
@@ -143,6 +165,12 @@ async def process_document_cleanup(ctx: dict[str, object], event_id: str) -> Non
                 operation.error_code = operation.copied_error_code
                 next_attempt_at = next_attempt_at or datetime.now(UTC) + _RETRY_DELAY
 
+            if operation.chat_status in {"succeeded", "failed"}:
+                await documents.publish_source_cleanup_wakeup(
+                    session, operation,
+                    progress_key=f"raw={operation.raw_status};chat={operation.chat_status}",
+                )
+
             if operation.raw_status == "failed" or operation.chat_status == "failed":
                 operation.status = "failed"
             else:
@@ -170,20 +198,53 @@ async def process_document_cleanup(ctx: dict[str, object], event_id: str) -> Non
                 await ingestion.set_event_delivery(session, identifier, "failed")
                 await session.commit()
                 return
-            operation = await session.scalar(select(DocumentCleanupOperation).where(
+            operation_hint = await session.scalar(select(DocumentCleanupOperation).where(
+                DocumentCleanupOperation.id == operation_id,
+            ))
+            if operation_hint is None:
+                await ingestion.set_event_delivery(session, identifier, "failed")
+                await session.commit()
+                return
+            if operation_hint.raw_uri and operation_hint.raw_status not in {
+                "not_present", "retained_shared", "succeeded",
+            }:
+                await documents.lock_raw_uri_identity(session, operation_hint.raw_uri)
+            recovery_operation = await session.scalar(select(DocumentCleanupOperation).where(
                 DocumentCleanupOperation.id == operation_id,
             ).with_for_update().execution_options(populate_existing=True))
-            if operation is not None:
-                operation.copied_cursor = None
-                operation.chat_status = "failed"
-                operation.chat_error_code = "chat_cursor_reset"
-                operation.copied_status = "failed"
-                operation.copied_error_code = "chat_cursor_reset"
-                operation.status = "failed"
-                operation.error_code = "chat_cursor_reset"
-            await ingestion.set_event_delivery(
-                session, identifier, "pending", next_attempt_at=datetime.now(UTC) + _RETRY_DELAY,
+            progress_unchanged = (
+                recovery_operation is not None
+                and attempt_progress is not None
+                and recovery_operation.raw_status == attempt_progress[0]
+                and recovery_operation.evidence_scope_status == attempt_progress[1]
+                and recovery_operation.chat_status == attempt_progress[2]
+                and recovery_operation.copied_status == attempt_progress[3]
+                and recovery_operation.copied_cursor == attempt_progress[4]
             )
+            if recovery_operation is not None and progress_unchanged and recovery_operation.chat_status != "succeeded":
+                recovery_operation.copied_cursor = None
+                recovery_operation.chat_status = "failed"
+                recovery_operation.chat_error_code = "chat_cursor_reset"
+                recovery_operation.copied_status = "failed"
+                recovery_operation.copied_error_code = "chat_cursor_reset"
+                recovery_operation.status = "failed"
+                recovery_operation.error_code = "chat_cursor_reset"
+                await documents.publish_source_cleanup_wakeup(
+                    session, recovery_operation,
+                    progress_key=f"raw={recovery_operation.raw_status};chat={recovery_operation.chat_status}",
+                )
+                await ingestion.set_event_delivery(
+                    session, identifier, "pending", next_attempt_at=datetime.now(UTC) + _RETRY_DELAY,
+                )
+            elif (
+                progress_unchanged
+                and recovery_operation is not None
+                and recovery_operation.raw_status not in {"not_present", "retained_shared", "succeeded"}
+            ):
+                await ingestion.set_event_delivery(
+                    session, identifier, "pending", next_attempt_at=datetime.now(UTC) + _RETRY_DELAY,
+                )
+            # Unknown snapshots, missing receipts and terminal stages do not own a delivery rewrite.
             await session.commit()
     except Exception as exc:
         logger.warning("Document copied-evidence cleanup deferred (%s)", type(exc).__name__)
@@ -197,17 +258,50 @@ async def process_document_cleanup(ctx: dict[str, object], event_id: str) -> Non
                 await ingestion.set_event_delivery(session, identifier, "failed")
                 await session.commit()
                 return
-            operation = await session.scalar(select(DocumentCleanupOperation).where(
+            operation_hint = await session.scalar(select(DocumentCleanupOperation).where(
+                DocumentCleanupOperation.id == operation_id,
+            ))
+            if operation_hint is None:
+                await ingestion.set_event_delivery(session, identifier, "failed")
+                await session.commit()
+                return
+            if operation_hint.raw_uri and operation_hint.raw_status not in {
+                "not_present", "retained_shared", "succeeded",
+            }:
+                await documents.lock_raw_uri_identity(session, operation_hint.raw_uri)
+            recovery_operation = await session.scalar(select(DocumentCleanupOperation).where(
                 DocumentCleanupOperation.id == operation_id,
             ).with_for_update().execution_options(populate_existing=True))
-            if operation is not None:
-                operation.chat_status = "failed"
-                operation.chat_error_code = "chat_cleanup_failed"
-                operation.copied_status = "failed"
-                operation.copied_error_code = "chat_cleanup_failed"
-                operation.status = "failed"
-                operation.error_code = "chat_cleanup_failed"
-            await ingestion.set_event_delivery(
-                session, identifier, "pending", next_attempt_at=datetime.now(UTC) + _RETRY_DELAY,
+            progress_unchanged = (
+                recovery_operation is not None
+                and attempt_progress is not None
+                and recovery_operation.raw_status == attempt_progress[0]
+                and recovery_operation.evidence_scope_status == attempt_progress[1]
+                and recovery_operation.chat_status == attempt_progress[2]
+                and recovery_operation.copied_status == attempt_progress[3]
+                and recovery_operation.copied_cursor == attempt_progress[4]
             )
+            if recovery_operation is not None and progress_unchanged and recovery_operation.chat_status != "succeeded":
+                recovery_operation.chat_status = "failed"
+                recovery_operation.chat_error_code = "chat_cleanup_failed"
+                recovery_operation.copied_status = "failed"
+                recovery_operation.copied_error_code = "chat_cleanup_failed"
+                recovery_operation.status = "failed"
+                recovery_operation.error_code = "chat_cleanup_failed"
+                await documents.publish_source_cleanup_wakeup(
+                    session, recovery_operation,
+                    progress_key=f"raw={recovery_operation.raw_status};chat={recovery_operation.chat_status}",
+                )
+                await ingestion.set_event_delivery(
+                    session, identifier, "pending", next_attempt_at=datetime.now(UTC) + _RETRY_DELAY,
+                )
+            elif (
+                progress_unchanged
+                and recovery_operation is not None
+                and recovery_operation.raw_status not in {"not_present", "retained_shared", "succeeded"}
+            ):
+                await ingestion.set_event_delivery(
+                    session, identifier, "pending", next_attempt_at=datetime.now(UTC) + _RETRY_DELAY,
+                )
+            # Unknown snapshots, missing receipts and terminal stages do not own a delivery rewrite.
             await session.commit()

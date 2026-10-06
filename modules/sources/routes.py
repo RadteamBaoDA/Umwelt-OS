@@ -78,7 +78,7 @@ async def delete_source(
     _owner: OwnerWrite,
     with_data: bool = False,
 ) -> Response:
-    """Archive a source or queue its data purge and return HTTP 204/202."""
+    """Archive a source or queue a bounded identity-safe purge with its current owner progress."""
     if with_data:
         operation = await public.start_source_purge(session, source_id)
         if operation is None:
@@ -90,6 +90,10 @@ async def delete_source(
                 source_id=operation.source_id,
                 status=operation.status,
                 error_code=operation.error_code,
+                documents_status=operation.documents_status,
+                pending_child_count=operation.pending_child_count,
+                failed_child_count=operation.failed_child_count,
+                pending_owner_codes=operation.pending_owner_codes,
                 created_at=operation.created_at,
                 updated_at=operation.updated_at,
             ).model_dump(mode="json"),

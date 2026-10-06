@@ -47,16 +47,25 @@ class Source(Base):
 
 
 class SourcePurgeOperation(Base):
-    """Track durable source purge progress and the raw object URIs to remove."""
+    """Track source canonical deletion and truthful owner-stage cleanup progress."""
     __tablename__ = "source_purge_operations"
     __table_args__ = (
         CheckConstraint("status IN ('queued', 'running', 'succeeded', 'failed')", name="ck_source_purge_operations_status"),
+        CheckConstraint(
+            "documents_status IN ('queued', 'deleted', 'failed', 'unavailable')",
+            name="ck_source_purge_operations_documents_status",
+        ),
         Index("ix_source_purge_operations_status_created", "status", "created_at"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("sources.id", ondelete="RESTRICT"), nullable=False)
     generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    # The legacy URI JSON remains for compatibility repair; new work never populates it.
+    documents_status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="queued")
+    pending_child_count: Mapped[int | None] = mapped_column(Integer)
+    failed_child_count: Mapped[int | None] = mapped_column(Integer)
+    pending_owner_codes: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default="[]")
     raw_uris: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default="[]")
     status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="queued")
     error_code: Mapped[str | None] = mapped_column(String(64))
