@@ -98,36 +98,58 @@ function findFreeCoordinates(
   return { x: 0, y: 0 };
 }
 
+const MAX_LAYOUT_ROWS = 100_000;
+
+type MobileProjection = { placements: DashboardPlacement[]; unavailable: boolean };
+
 /**
- * Projects only contract-invalid mobile rectangles into a deterministic, non-overlapping stack.
- * Valid user-authored widths and positions remain unchanged; callers keep repairs local until an
- * explicit Save submits the layout.
+ * Projects repairable invalid mobile rectangles into a deterministic bounded stack. Valid
+ * user-authored widths and positions remain unchanged; callers keep repairs local until an explicit
+ * Save submits the layout. Returns an unavailable result when renderer minimums cannot fit the
+ * stored grid or row ceiling, or the source placements do not cover the dashboard instances.
  *
  * @param placements Saved or draft mobile rectangles.
- * @param instances Dashboard instances used to retain renderer minimum heights.
+ * @param instances Dashboard instances and their renderer minimum sizes.
  * @param columns Stored mobile column count.
- * @returns Full-width integer placements without overlap.
+ * @returns Valid full-width stack, unchanged valid placements, or an unavailable result.
  */
 function projectMobilePlacements(
   placements: DashboardPlacement[],
   instances: GadgetInstance[],
   columns: number,
-): DashboardPlacement[] {
-  const minimumHeights = new Map(instances.map((instance) => [
+): MobileProjection {
+  const minimumSizes = new Map(instances.map((instance) => [
     instance.id,
-    RENDERER_MIN_SIZES[instance.definition.renderer]?.minH ?? 3,
+    RENDERER_MIN_SIZES[instance.definition.renderer] ?? { minW: 4, minH: 3 },
   ]));
-  const minimumWidths = new Map(instances.map((instance) => [
-    instance.id,
-    RENDERER_MIN_SIZES[instance.definition.renderer]?.minW ?? 4,
-  ]));
+  const unavailable = (): MobileProjection => ({ placements: [], unavailable: true });
+  if (!Number.isInteger(columns) || columns < 1 || columns > 20
+    || [...minimumSizes.values()].some(({ minW }) => minW > columns)) {
+    return unavailable();
+  }
+
+  const placementIds = new Set(placements.map((placement) => placement.instance_id));
+  if (placements.length !== instances.length || placementIds.size !== placements.length
+    || instances.some((instance) => !placementIds.has(instance.id))) {
+    return unavailable();
+  }
+
+  const ordered = [...placements].sort((a, b) =>
+    a.y - b.y || a.x - b.x || (a.instance_id < b.instance_id ? -1 : a.instance_id > b.instance_id ? 1 : 0),
+  );
+  const minimumRows = ordered.reduce(
+    (total, placement) => total + (minimumSizes.get(placement.instance_id)?.minH ?? 3),
+    0,
+  );
+  if (minimumRows > MAX_LAYOUT_ROWS) return unavailable();
+
   const hasOverlap = placements.some((placement, index) =>
     placements.slice(index + 1).some((other) => doPlacementsOverlap(placement, other)),
   );
   const withinContract = Number.isInteger(columns) && columns >= 1 && columns <= 20
     && placements.every((placement) => {
-      const minimumHeight = minimumHeights.get(placement.instance_id) ?? 3;
-      const minimumWidth = minimumWidths.get(placement.instance_id) ?? 4;
+      const minimumSize = minimumSizes.get(placement.instance_id);
+      if (!minimumSize) return false;
       return Number.isInteger(placement.x)
         && Number.isInteger(placement.y)
         && Number.isInteger(placement.w)
@@ -135,26 +157,48 @@ function projectMobilePlacements(
         && placement.x >= 0
         && placement.y >= 0
         && placement.x + placement.w <= columns
-        && placement.y + placement.h <= 100_000
-        && placement.w >= minimumWidth
+        && placement.y + placement.h <= MAX_LAYOUT_ROWS
+        && placement.w >= minimumSize.minW
         && placement.w <= 20
-        && placement.h >= minimumHeight
-        && placement.h <= 100_000;
+        && placement.h >= minimumSize.minH
+        && placement.h <= MAX_LAYOUT_ROWS;
     });
   if (withinContract && !hasOverlap) {
-    return placements;
+    return { placements, unavailable: false };
   }
 
-  const ordered = [...placements].sort((a, b) =>
-    a.y - b.y || a.x - b.x || (a.instance_id < b.instance_id ? -1 : a.instance_id > b.instance_id ? 1 : 0),
-  );
   let nextY = 0;
-  return ordered.map((placement) => {
-    const h = Math.max(placement.h, minimumHeights.get(placement.instance_id) ?? 3);
-    const y = Math.max(placement.y, nextY);
-    nextY = y + h;
-    return { ...placement, x: 0, y, w: columns, h };
+  const projected = ordered.map((placement, index) => {
+    const minimumHeight = minimumSizes.get(placement.instance_id)?.minH ?? 3;
+    const remainingMinimumRows = ordered.slice(index + 1).reduce(
+      (total, next) => total + (minimumSizes.get(next.instance_id)?.minH ?? 3),
+      0,
+    );
+    const availableHeight = MAX_LAYOUT_ROWS - nextY - remainingMinimumRows;
+    const h = Math.max(minimumHeight, Math.min(placement.h, availableHeight));
+    const projectedPlacement = { ...placement, x: 0, y: nextY, w: columns, h };
+    nextY += h;
+    return projectedPlacement;
   });
+  const validProjection = projected.every((placement) => {
+    const minimumSize = minimumSizes.get(placement.instance_id);
+    return minimumSize !== undefined
+      && Number.isInteger(placement.x)
+      && Number.isInteger(placement.y)
+      && Number.isInteger(placement.w)
+      && Number.isInteger(placement.h)
+      && placement.x >= 0
+      && placement.y >= 0
+      && placement.x + placement.w <= columns
+      && placement.y + placement.h <= MAX_LAYOUT_ROWS
+      && placement.w >= minimumSize.minW
+      && placement.h >= minimumSize.minH;
+  }) && !projected.some((placement, index) =>
+    projected.slice(index + 1).some((other) => doPlacementsOverlap(placement, other)),
+  );
+  return validProjection
+    ? { placements: projected, unavailable: false }
+    : unavailable();
 }
 
 /**
@@ -237,14 +281,23 @@ export function DashboardPage() {
   const activeDashboard = activeDashboardQuery.data ?? null;
   const currentBreakpoint = isMobile ? 'mobile' : 'desktop';
   const layoutColumns = activeDashboard?.layouts[currentBreakpoint].columns ?? 20;
+  const mobileProjection = useMemo(
+    () => activeDashboard
+      ? projectMobilePlacements(
+          activeDashboard.layouts.mobile.items,
+          activeDashboard.instances,
+          activeDashboard.layouts.mobile.columns,
+        )
+      : { placements: [], unavailable: false },
+    [activeDashboard],
+  );
+  const mobileProjectionUnavailable = currentBreakpoint === 'mobile' && mobileProjection.unavailable;
+  const canEditLayout = !mobileProjectionUnavailable;
+  const editMode = isEditMode && canEditLayout;
   const savedPlacements = useMemo(() => {
     if (!activeDashboard) return [];
-    const layout = activeDashboard.layouts[currentBreakpoint];
-    const placements = layout?.items ?? [];
-    return currentBreakpoint === 'mobile'
-      ? projectMobilePlacements(placements, activeDashboard.instances, layout?.columns ?? 20)
-      : placements;
-  }, [activeDashboard, currentBreakpoint]);
+    return currentBreakpoint === 'mobile' ? mobileProjection.placements : activeDashboard.layouts.desktop.items;
+  }, [activeDashboard, currentBreakpoint, mobileProjection.placements]);
 
   // Sync draft placements from saved placements when not dirty
   useEffect(() => {
@@ -305,6 +358,7 @@ export function DashboardPage() {
   const saveLayoutMutation = useMutation({
     mutationFn: async () => {
       if (!activeDashboard) throw new Error('No active dashboard');
+      if (mobileProjectionUnavailable) throw new Error(t('mobileLayoutUnavailable'));
       setSaveError(null);
       return replaceDashboardLayout(
         activeDashboard.id,
@@ -651,7 +705,7 @@ export function DashboardPage() {
           )}
 
           {/* Add Group button in edit mode */}
-          {isEditMode && activeDashboard && (
+          {editMode && activeDashboard && (
             <button
               type="button"
               onClick={() => setAddGroupOpen(true)}
@@ -680,6 +734,7 @@ export function DashboardPage() {
           {/* View / Edit Mode Toggle Button */}
           <Button
             type="button"
+            disabled={!canEditLayout && !isEditMode}
             onClick={() => {
               if (isEditMode) {
                 requestExitEdit();
@@ -706,8 +761,14 @@ export function DashboardPage() {
         </div>
       </div>
 
+      {mobileProjectionUnavailable && (
+        <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          {t('mobileLayoutUnavailable')}
+        </p>
+      )}
+
       {/* Layout Editor Toolbar (visible in Edit Mode) */}
-      {isEditMode && (
+      {editMode && (
         <LayoutEditor
           isDirty={isDirty}
           isSaving={saveLayoutMutation.isPending}
@@ -762,6 +823,7 @@ export function DashboardPage() {
             <Button
               type="button"
               className="text-xs"
+              disabled={!canEditLayout}
               onClick={() => {
                 setIsEditMode(true);
               }}
@@ -782,10 +844,10 @@ export function DashboardPage() {
       ) : (
         <DashboardGrid
           instances={visibleInstances}
-          placements={visiblePlacements}
+          placements={mobileProjectionUnavailable ? [] : visiblePlacements}
           columns={layoutColumns}
           breakpoint={currentBreakpoint}
-          isEditMode={isEditMode}
+          isEditMode={editMode}
           onLayoutChange={pushHistory}
           onRemoveInstance={handleRemoveInstance}
           onConfigureInstance={(inst) => {
