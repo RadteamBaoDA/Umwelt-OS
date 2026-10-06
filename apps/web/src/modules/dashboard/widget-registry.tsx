@@ -74,17 +74,17 @@ export const GADGET_READING_BODY_FLOORS: Record<string, number> = {
   // MetricsChart: h-[140px] plot + p-3, two space-y-3 gaps, fixed chart header and range controls.
   finance_chart: 276, metrics_chart: 276,
   github_project: 204,
-  // MapGadget uses a root-font-scaled 12rem plot and bounded header, status, evidence, and attribution chrome.
-  weather: 204, map: 368, intelligence_panel: 180,
+  // MapGadget reserves 12rem for its plot plus 18rem for bounded root-font-scaled chrome and spacing.
+  weather: 204, map: 482, intelligence_panel: 180,
 };
 
-/** Resolves an explicit bounded reading floor; unknown renderers use the common body baseline. */
+/** Resolves a source-backed body floor, scaling MapGadget's bounded chrome and minimum plot with root text size. */
 export function getGadgetReadingBodyFloor(rendererId: string): number {
   if (rendererId === 'map') {
     const rootFontSize = typeof document === 'undefined'
       ? 16
       : Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
-    return 12 * rootFontSize + 176;
+    return 30 * rootFontSize + 2;
   }
   return GADGET_READING_BODY_FLOORS[rendererId] ?? 180;
 }

@@ -542,6 +542,19 @@ export function DashboardPage() {
   });
   const layoutOperationPending = saveLayoutMutation.isPending || membershipMutationsPending > 0;
 
+  /** Checks bounded space before a quick definition or instance can be created. */
+  const canAddGadgetInstance = useCallback((renderer: string): boolean => {
+    if (!activeDashboard || layoutOperationPending || membershipOperationCountRef.current > 0) return false;
+    const minimum = RENDERER_MIN_SIZES[renderer] ?? { minW: 4, minH: 3 };
+    const width = currentBreakpoint === 'mobile' ? layoutColumns : Math.min(minimum.minW, layoutColumns);
+    const height = currentBreakpoint === 'mobile' && gridMetrics
+      ? Math.max(minimum.minH, Math.ceil((getGadgetReadingBodyFloor(renderer) + gridMetrics.frameHeaderHeight + 2 + 12) / gridMetrics.stride))
+      : minimum.minH;
+    if (findFreeCoordinates(draftPlacements, width, height, layoutColumns)) return true;
+    setSaveError(t('noFreeDashboardSpace'));
+    return false;
+  }, [activeDashboard, currentBreakpoint, draftPlacements, gridMetrics, layoutColumns, layoutOperationPending, t]);
+
   /** Reconciles an already-committed membership response without rebinding its local draft owner. */
   const reconcileMembershipDashboard = useCallback((requestedDashboardId: string, updated: Dashboard) => {
     if (updated.id === requestedDashboardId) {
@@ -772,19 +785,6 @@ export function DashboardPage() {
       setNewGroupName('');
     },
   });
-
-  /** Checks bounded space before a quick definition or instance can be created. */
-  const canAddGadgetInstance = useCallback((renderer: string): boolean => {
-    if (!activeDashboard || layoutOperationPending || membershipOperationCountRef.current > 0) return false;
-    const minimum = RENDERER_MIN_SIZES[renderer] ?? { minW: 4, minH: 3 };
-    const width = currentBreakpoint === 'mobile' ? layoutColumns : Math.min(minimum.minW, layoutColumns);
-    const height = currentBreakpoint === 'mobile' && gridMetrics
-      ? Math.max(minimum.minH, Math.ceil((getGadgetReadingBodyFloor(renderer) + gridMetrics.frameHeaderHeight + 2 + 12) / gridMetrics.stride))
-      : minimum.minH;
-    if (findFreeCoordinates(draftPlacements, width, height, layoutColumns)) return true;
-    setSaveError(t('noFreeDashboardSpace'));
-    return false;
-  }, [activeDashboard, currentBreakpoint, draftPlacements, gridMetrics, layoutColumns, layoutOperationPending, t]);
 
   /** Captures owner identity before membership creation; late results cannot rebind another layout. */
   const handleAddGadgetInstance = useCallback(

@@ -82,13 +82,13 @@ export function MapGadget({ instance, isEditMode = false }: { instance: GadgetIn
 
   return <section className="flex h-full min-h-0 flex-col gap-2 overflow-hidden bg-card p-3 text-card-foreground">
     <header className="flex shrink-0 items-center justify-between gap-2 border-b border-border pb-2">
-      <div><h2 className="text-sm font-semibold">{instance.title || t('mapTitle')}</h2><p className="text-xs text-muted-foreground">{t('mapRange', { days })}</p></div>
-      <span className="text-xs text-muted-foreground">{engine === 'globe' ? t('mapGlobeEngine') : t('mapFlatEngine')}</span>
+      <div className="min-w-0 flex-1"><h2 aria-label={instance.title || t('mapTitle')} title={instance.title || t('mapTitle')} className="line-clamp-2 break-words text-sm font-semibold">{instance.title || t('mapTitle')}</h2><p className="line-clamp-2 break-words text-xs text-muted-foreground">{t('mapRange', { days })}</p></div>
+      <span aria-label={engine === 'globe' ? t('mapGlobeEngine') : t('mapFlatEngine')} title={engine === 'globe' ? t('mapGlobeEngine') : t('mapFlatEngine')} className="line-clamp-2 max-w-[40%] min-w-0 shrink text-right text-xs text-muted-foreground break-words">{engine === 'globe' ? t('mapGlobeEngine') : t('mapFlatEngine')}</span>
     </header>
-    {!precise && <p role="status" className="text-xs text-muted-foreground">{t('mapPreciseDisabled')}</p>}
-    {precise && sourceIds.length === 0 && <p role="status" className="text-xs text-muted-foreground">{t('mapSourceRequired')}</p>}
-    {precise && sourceIds.length > 0 && observations.isPending && <p role="status" className="text-xs text-muted-foreground">{t('observationLoading')}</p>}
-    {observations.isError && <p role="alert" className="text-xs text-destructive">{t('observationLoadFailed')}</p>}
+    {!precise && <p role="status" className="line-clamp-2 shrink-0 break-words text-xs text-muted-foreground">{t('mapPreciseDisabled')}</p>}
+    {precise && sourceIds.length === 0 && <p role="status" className="line-clamp-2 shrink-0 break-words text-xs text-muted-foreground">{t('mapSourceRequired')}</p>}
+    {precise && sourceIds.length > 0 && observations.isPending && <p role="status" className="line-clamp-2 shrink-0 break-words text-xs text-muted-foreground">{t('observationLoading')}</p>}
+    {observations.isError && <p role="alert" className="line-clamp-2 shrink-0 break-words text-xs text-destructive">{t('observationLoadFailed')}</p>}
     <div ref={plotRef} role="group" className="relative min-h-48 shrink-0 flex-1 overflow-hidden rounded border border-border" aria-label={t('mapPlotLabel')}>
       {canRenderEngine && engine === 'globe'
         ? <Suspense fallback={<p role="status" className="p-2 text-xs text-muted-foreground">{t('mapRendererLoading')}</p>}><GlobeMap features={points} selectedFeatureId={selectedFeatureId} onSelectFeature={selectFeature} width={size.width} height={size.height} visible={visible} interactive={!isEditMode} /></Suspense>
@@ -96,8 +96,8 @@ export function MapGadget({ instance, isEditMode = false }: { instance: GadgetIn
       {selected && <p className="absolute bottom-2 left-2 max-w-[90%] rounded bg-card/90 px-2 py-1 text-xs">{selected.metric} · {selected.value ?? t('weatherMissingValue')} {selected.unit} · {selected.region ?? selected.provider}<span className="block">{t('mapSourceIdentity')}: {selected.source_id} · {t('mapQuality')}: {selected.quality}</span>{selected.document_version_number ? <Link className="underline" href={`/knowledge/documents/${selected.document_id}?version=${selected.document_version_number}#cited-revision`}>{t('mapOpenRevision', { version: selected.document_version_number })}</Link> : <span>{t('mapRevisionUnavailable')}</span>}</p>}
     </div>
     <div className="flex min-h-0 flex-1 flex-col">
-      <h3 className="text-xs font-semibold">{t('mapEvidenceList', { count: features.length })}</h3>
-      {!points.length && precise && !observations.isPending && <p role="status" className="py-2 text-xs text-muted-foreground">{activeLayer?.reason === 'privacy_opt_in_required' ? t('mapPreciseDisabled') : activeLayer?.reason === 'no_source_selected' ? t('mapSourceRequired') : activeLayer?.enabled === false ? t('mapObservationLayerDisabled') : t('observationEmpty')}</p>}
+      <h3 className="line-clamp-2 break-words text-xs font-semibold">{t('mapEvidenceList', { count: features.length })}</h3>
+      {!points.length && precise && !observations.isPending && <p role="status" className="line-clamp-2 shrink-0 break-words py-2 text-xs text-muted-foreground">{activeLayer?.reason === 'privacy_opt_in_required' ? t('mapPreciseDisabled') : activeLayer?.reason === 'no_source_selected' ? t('mapSourceRequired') : activeLayer?.enabled === false ? t('mapObservationLayerDisabled') : t('observationEmpty')}</p>}
       <ul className="min-h-0 flex-1 divide-y divide-border overflow-y-auto" aria-label={t('mapEvidenceListLabel')}>
         {features.map((feature) => <li key={feature.feature_id}>
           <button type="button" onClick={() => setSelectedFeatureId(feature.feature_id)} aria-pressed={feature.feature_id === selectedFeatureId} className="flex w-full items-start justify-between gap-2 py-1.5 text-left text-xs hover:bg-muted/30">
@@ -106,9 +106,9 @@ export function MapGadget({ instance, isEditMode = false }: { instance: GadgetIn
           </button>
         </li>)}
       </ul>
-      {observations.hasNextPage && <button type="button" disabled={observations.isFetchingNextPage} onClick={() => void observations.fetchNextPage()} className="self-start py-1 text-xs text-primary underline disabled:opacity-50">{observations.isFetchingNextPage ? t('observationLoading') : t('mapLoadMore')}</button>}
-      {(observations.data?.pages.some((page) => page.truncated) || ((observations.data?.pages.length ?? 0) >= 5 && Boolean(observations.data?.pages.at(-1)?.next_cursor))) && <p role="status" className="text-xs text-muted-foreground">{t('observationTruncated')}</p>}
+      {observations.hasNextPage && <button type="button" disabled={observations.isFetchingNextPage} onClick={() => void observations.fetchNextPage()} className="line-clamp-2 max-w-full self-start break-words py-1 text-xs text-primary underline disabled:opacity-50">{observations.isFetchingNextPage ? t('observationLoading') : t('mapLoadMore')}</button>}
+      {(observations.data?.pages.some((page) => page.truncated) || ((observations.data?.pages.length ?? 0) >= 5 && Boolean(observations.data?.pages.at(-1)?.next_cursor))) && <p role="status" className="line-clamp-2 shrink-0 break-words text-xs text-muted-foreground">{t('observationTruncated')}</p>}
     </div>
-    <p className="text-[10px] text-muted-foreground"><a className="underline" href="https://open-meteo.com/" target="_blank" rel="noreferrer">{t('openMeteoAttribution')}</a> · {t('mapNoRemoteTiles')}</p>
+    <p className="line-clamp-2 shrink-0 break-words text-[10px] text-muted-foreground"><a className="underline" href="https://open-meteo.com/" target="_blank" rel="noreferrer">{t('openMeteoAttribution')}</a> · {t('mapNoRemoteTiles')}</p>
   </section>;
 }
