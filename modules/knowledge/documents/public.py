@@ -2231,6 +2231,7 @@ async def _read_evidence_ref_rows(
         .join(DocumentChunk, DocumentChunk.document_version_id == DocumentVersion.id)
         .join(Source, Source.id == Document.source_id)
         .where(tuple_(DocumentVersion.id, DocumentChunk.id).in_(refs))
+        .execution_options(populate_existing=True)
     )).all()
     provenance_rows = (await session.scalars(
         select(NormalizedVersionProvenance).where(

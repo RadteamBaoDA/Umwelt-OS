@@ -84,6 +84,7 @@ from modules.automations.models import (
     Automation, AutomationCursor, AutomationRevision, AutomationRun, AutomationRunAction, AutomationSchedule,
     AutomationTrigger,
 )
+from modules.backup.models import BackupActivity, BackupControl, BackupOperation
 
 _auth_models = (AuthSession, Owner)
 _demo_seed_models = (DemoSeedReceipt,)
@@ -96,6 +97,7 @@ _automation_models = (
     Automation, AutomationRevision, AutomationTrigger, AutomationSchedule, AutomationRun, AutomationRunAction,
     AutomationCursor,
 )
+_backup_models = (BackupControl, BackupOperation, BackupActivity)
 _library_models = (
 
     Source, SourcePurgeOperation, Document, DocumentVersion, DocumentChunk,

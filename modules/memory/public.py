@@ -1,11 +1,16 @@
 """Public contract and service interface for selective memory, candidates, and privacy management."""
 
 from datetime import UTC, datetime
+import base64
+import binascii
+import hashlib
+import json
 import logging
 from typing import Any
 from uuid import UUID
 
 from fastapi import HTTPException
+from core.auth.models import Owner
 from redis.asyncio import Redis
 from sqlalchemy import delete, desc, func, or_, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -18,6 +23,12 @@ from modules.memory.schemas import (
     MemoryCandidateRead,
     MemoryCreate,
     MemoryExportPrivacy,
+    MemoryExportFence,
+    MemoryExportFenceValidation,
+    MemoryExportPage,
+    MemoryExportProvenance,
+    MemoryExportRead,
+    MemoryCandidateExportRead,
     MemoryPage,
     MemoryPrivacyConfig,
     MemoryPrivacyUpdate,
@@ -35,6 +46,229 @@ from modules.memory.selection import (
 logger = logging.getLogger(__name__)
 
 CACHE_KEY_MEMORIES_ACTIVE = "cache:memory:active"
+MEMORY_EXPORT_PAGE_MAX_BYTES = 16_777_216
+
+
+def _encode_memory_export_cursor(
+    owner_id: int, record_kind: str, snapshot_at: datetime, created_at: datetime, identifier: UUID,
+) -> str:
+    """Bind keyset position to owner, record kind and fixed export cutoff."""
+    value = json.dumps(
+        [owner_id, record_kind, snapshot_at.isoformat(), created_at.isoformat(), str(identifier)],
+        separators=(",", ":"),
+    ).encode()
+    return base64.urlsafe_b64encode(value).decode().rstrip("=")
+
+
+def _decode_memory_export_cursor(
+    cursor: str, owner_id: int, record_kind: str,
+) -> tuple[datetime, datetime, UUID]:
+    """Validate canonical owner-bound cursor fields before continuing a memory export."""
+    try:
+        if len(cursor) > 512 or "=" in cursor:
+            raise ValueError
+        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
+        if base64.urlsafe_b64encode(raw).decode().rstrip("=") != cursor:
+            raise ValueError
+        values = json.loads(raw)
+        if not isinstance(values, list) or len(values) != 5 or values[:2] != [owner_id, record_kind]:
+            raise ValueError
+        snapshot_at, created_at = datetime.fromisoformat(values[2]), datetime.fromisoformat(values[3])
+        if any(item.tzinfo is None or item.utcoffset() is None for item in (snapshot_at, created_at)):
+            raise ValueError
+        identifier = UUID(values[4])
+        if (snapshot_at.isoformat() != values[2] or created_at.isoformat() != values[3]
+                or created_at > snapshot_at or snapshot_at > datetime.now(UTC)
+                or str(identifier) != values[4]
+                or _encode_memory_export_cursor(owner_id, record_kind, snapshot_at, created_at, identifier) != cursor):
+            raise ValueError
+        return snapshot_at, created_at, identifier
+    except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError, binascii.Error) as exc:
+        raise HTTPException(status_code=422, detail="Memory export cursor is invalid") from exc
+
+
+def _memory_export_provenance(value: object) -> MemoryExportProvenance | None:
+    """Project only documented provenance identifiers from arbitrary retained JSON."""
+    if not isinstance(value, dict):
+        return None
+    allowed = {"conversation_id", "message_id", "source_id", "document_id", "document_version_id", "chunk_id", "origin"}
+    return MemoryExportProvenance.model_validate({key: item for key, item in value.items() if key in allowed})
+
+
+def _memory_export_read(item: Memory) -> MemoryExportRead:
+    """Project one retained memory record without its arbitrary JSON provenance keys."""
+    return MemoryExportRead(
+        id=item.id, content=item.content, type=item.memory_type,
+        provenance=_memory_export_provenance(item.provenance), confidence=item.confidence,
+        reason=item.reason, status=item.status, is_manual=item.is_manual,
+        superseded_by_id=item.superseded_by_id, candidate_id=item.candidate_id,
+        created_at=item.created_at, updated_at=item.updated_at,
+        invalidated_at=item.invalidated_at, forgotten_at=item.forgotten_at,
+    )
+
+
+def _candidate_export_read(item: MemoryCandidate) -> MemoryCandidateExportRead:
+    """Project one retained review candidate without arbitrary JSON provenance keys."""
+    return MemoryCandidateExportRead(
+        id=item.id, content=item.content, type=item.memory_type,
+        provenance=_memory_export_provenance(item.provenance), confidence=item.confidence,
+        novelty_score=item.novelty_score, usefulness_score=item.usefulness_score,
+        reason=item.reason, status=item.status, rejection_reason=item.rejection_reason,
+        created_at=item.created_at, updated_at=item.updated_at, evaluated_at=item.evaluated_at,
+    )
+
+
+async def _memory_export_source_fence(
+    session: AsyncSession, row: Memory | MemoryCandidate,
+) -> dict[str, object]:
+    """Require exact retained owner evidence for copied content and capture source generation.
+
+    Manual owner content without a document/source link remains independently exportable. A
+    model-derived copy with unsupported, partial, removed, or purging provenance fails closed.
+    """
+    from modules.knowledge.documents import public as documents_public
+    from modules.sources import public as sources_public
+    from modules.sources.schemas import SourceExportFence
+
+    raw = row.provenance if isinstance(row.provenance, dict) else {}
+    allowed = {"source", "conversation_id", "message_id", "source_id", "document_id",
+               "document_version_id", "chunk_id", "origin"}
+    provenance = _memory_export_provenance(raw)
+    is_manual = row.is_manual if isinstance(row, Memory) else raw.get("origin") == "manual"
+    doc_keys = ("document_id", "document_version_id", "chunk_id")
+    has_any_doc = any(raw.get(key) is not None for key in doc_keys)
+    if has_any_doc and not all(raw.get(key) is not None for key in doc_keys):
+        raise HTTPException(status_code=409, detail="Memory export cannot verify incomplete document provenance")
+    linked_doc = has_any_doc
+    source_value = raw.get("source_id")
+    if source_value is not None and provenance is None:
+        raise HTTPException(status_code=409, detail="Memory export cannot verify source provenance")
+    source_id = provenance.source_id if provenance else None
+    document_id = provenance.document_id if provenance else None
+    version_id = provenance.document_version_id if provenance else None
+    chunk_id = provenance.chunk_id if provenance else None
+    if linked_doc:
+        if document_id is None or version_id is None or chunk_id is None:
+            raise HTTPException(status_code=409, detail="Memory export cannot verify document provenance")
+        try:
+            refs = await documents_public.read_evidence_refs(session, [(version_id, chunk_id)])
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail="Memory evidence was removed or is being purged") from exc
+        if (len(refs) != 1 or refs[0].document_id != document_id
+                or source_id is not None and refs[0].source_id != source_id):
+            raise HTTPException(status_code=409, detail="Memory evidence was removed or is being purged")
+        source_id = refs[0].source_id
+    if not linked_doc and not is_manual:
+        raise HTTPException(status_code=409, detail="Memory export cannot verify copied-content provenance")
+    if raw.keys() - allowed and not is_manual:
+        raise HTTPException(status_code=409, detail="Memory export cannot verify copied-content provenance")
+    if source_id is None:
+        return {}
+    source = await sources_public.get_source_fence(session, source_id)
+    if source is None or not await sources_public.filter_export_eligible_sources(
+        session, [SourceExportFence(source_id=source_id, generation=source.generation)],
+    ):
+        raise HTTPException(status_code=409, detail="Memory source evidence was removed or is being purged")
+    return {key: value for key, value in {
+        "source_id": source.id,
+        "source_generation": source.generation,
+        "document_id": document_id,
+        "document_version_id": version_id,
+        "chunk_id": chunk_id,
+    }.items() if value is not None}
+
+
+def _memory_export_scope(record_kind: str, snapshot_at: datetime) -> tuple[object, ...]:
+    """Select only records created and last changed by the immutable page cutoff."""
+    if record_kind == "memories":
+        return (Memory.status != "forgotten", Memory.created_at <= snapshot_at, Memory.updated_at <= snapshot_at)
+    return (MemoryCandidate.created_at <= snapshot_at, MemoryCandidate.updated_at <= snapshot_at)
+
+
+async def _memory_export_count(session: AsyncSession, record_kind: str, snapshot_at: datetime) -> int:
+    """Count the retained owner inventory at one fixed cutoff for page and final checks."""
+    model = Memory if record_kind == "memories" else MemoryCandidate
+    return int(await session.scalar(
+        select(func.count()).select_from(model).where(*_memory_export_scope(record_kind, snapshot_at))
+    ) or 0)
+
+
+async def export_page(
+    session: AsyncSession, *, owner_id: int, record_kind: str, limit: int = 50, cursor: str | None = None,
+) -> MemoryExportPage:
+    """Return a bounded owner memory/candidate page with a fixed cutoff and content fences."""
+    if owner_id != 1 or record_kind not in {"memories", "candidates"} or not 1 <= limit <= 100:
+        raise ValueError("Memory export owner, kind or page limit is invalid")
+    if await session.scalar(select(Owner.id).where(Owner.id == owner_id)) is None:
+        raise HTTPException(status_code=404, detail="Owner not found")
+    if cursor is None:
+        snapshot_at, position = datetime.now(UTC), None
+    else:
+        snapshot_at, position_at, position_id = _decode_memory_export_cursor(cursor, owner_id, record_kind)
+        position = (position_at, position_id)
+    model = Memory if record_kind == "memories" else MemoryCandidate
+    statement = select(model).where(*_memory_export_scope(record_kind, snapshot_at))
+    if position is not None:
+        statement = statement.where(tuple_(model.created_at, model.id) > position)
+    rows = list((await session.scalars(
+        statement.order_by(model.created_at, model.id).limit(limit + 1)
+        .execution_options(populate_existing=True)
+    )).all())
+    has_more, rows = len(rows) > limit, rows[:limit]
+    items = [_memory_export_read(row) if record_kind == "memories" else _candidate_export_read(row) for row in rows]
+    item_bytes = [item.model_dump_json().encode("utf-8") for item in items]
+    payload_bytes = 2 + sum(map(len, item_bytes)) + max(0, len(items) - 1)
+    if payload_bytes > MEMORY_EXPORT_PAGE_MAX_BYTES:
+        raise ValueError("Memory export page exceeds its byte bound")
+    fences = []
+    for row, raw in zip(rows, item_bytes, strict=True):
+        provenance_fence = await _memory_export_source_fence(session, row)
+        fences.append(MemoryExportFence(
+            record_kind="memory" if record_kind == "memories" else "candidate", id=row.id,
+            created_at=row.created_at, updated_at=row.updated_at,
+            content_digest=hashlib.sha256(raw).hexdigest(), **provenance_fence,
+        ))
+    return MemoryExportPage(
+        owner_id=owner_id, record_kind=record_kind, snapshot_at=snapshot_at,
+        snapshot_count=await _memory_export_count(session, record_kind, snapshot_at),
+        items=items, fences=fences, payload_bytes=payload_bytes,
+        max_payload_bytes=MEMORY_EXPORT_PAGE_MAX_BYTES,
+        next_cursor=_encode_memory_export_cursor(owner_id, record_kind, snapshot_at, rows[-1].created_at, rows[-1].id)
+        if has_more and rows else None,
+    )
+
+
+async def validate_export_fences(
+    session: AsyncSession, *, owner_id: int, record_kind: str, snapshot_at: datetime,
+    expected_snapshot_count: int, fences: list[MemoryExportFence],
+) -> MemoryExportFenceValidation:
+    """Recheck retained owner rows, exact portable content and inventory count before publication."""
+    if owner_id != 1 or record_kind not in {"memories", "candidates"} or len(fences) > 100:
+        raise ValueError("Memory export validation input is invalid")
+    if await session.scalar(select(Owner.id).where(Owner.id == owner_id)) is None:
+        return MemoryExportFenceValidation(valid=False, reason="owner_unavailable", observed_snapshot_count=0)
+    observed = await _memory_export_count(session, record_kind, snapshot_at)
+    if observed != expected_snapshot_count:
+        return MemoryExportFenceValidation(valid=False, reason="snapshot_count_changed", observed_snapshot_count=observed)
+    model = Memory if record_kind == "memories" else MemoryCandidate
+    for fence in fences:
+        row = await session.scalar(select(model).where(
+            model.id == fence.id, *_memory_export_scope(record_kind, snapshot_at),
+        ).execution_options(populate_existing=True))
+        if row is None or row.created_at != fence.created_at or row.updated_at != fence.updated_at:
+            return MemoryExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
+        item = _memory_export_read(row) if record_kind == "memories" else _candidate_export_read(row)
+        digest = hashlib.sha256(item.model_dump_json().encode("utf-8")).hexdigest()
+        if digest != fence.content_digest:
+            return MemoryExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
+        try:
+            source_fence = await _memory_export_source_fence(session, row)
+        except HTTPException:
+            return MemoryExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
+        expected_source_fence = fence.model_dump(exclude={"record_kind", "id", "created_at", "updated_at", "content_digest"}, exclude_none=True)
+        if source_fence != expected_source_fence:
+            return MemoryExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
+    return MemoryExportFenceValidation(valid=True, reason="valid", observed_snapshot_count=observed)
 
 
 async def read_export_privacy(session: AsyncSession) -> MemoryExportPrivacy:
@@ -380,6 +614,11 @@ class MemoryService:
         """
         rec = await self.session.get(MemoryPrivacyRecord, 1)
         if rec is None:
+            # Some read routes create these defaults, so fence the insert just like
+            # a user write before it becomes part of the snapshot boundary.
+            from modules.settings.public import admit_write
+
+            await admit_write(self.session, "memory_privacy_default")
             rec = MemoryPrivacyRecord(
                 owner_id=1,
                 store_conversation_history=True,

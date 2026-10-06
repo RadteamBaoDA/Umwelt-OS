@@ -4,6 +4,7 @@ import { dailyMessages, notificationMessages } from '@/modules/dashboard/daily-m
 import { githubMessages } from '@/modules/dashboard/github-messages';
 import { automationMessages } from '@/modules/automations/messages';
 import { observabilityMessages } from '@/modules/observability/messages';
+import { exportMessages } from '@/modules/settings/export-messages';
 
 const catalogParts = {
   'en-us': {
@@ -1023,6 +1024,7 @@ export const messages = {
   'en-us': {
     ...catalogParts['en-us'],
     observability: observabilityMessages['en-us'],
+    exports: exportMessages['en-us'],
     mcp: mcpCatalog['en-us'],
     news: storyMessages['en-us'],
     daily: dailyMessages['en-us'],
@@ -1255,6 +1257,7 @@ export const messages = {
   'vi-vi': {
     ...catalogParts['vi-vi'],
     observability: observabilityMessages['vi-vi'],
+    exports: exportMessages['vi-vi'],
     mcp: mcpCatalog['vi-vi'],
     news: storyMessages['vi-vi'],
     daily: dailyMessages['vi-vi'],

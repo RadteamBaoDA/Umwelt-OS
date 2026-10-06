@@ -119,6 +119,11 @@ async def upload_document(
         suffix, mime_type, original_name = validate_upload(
             upload.filename, upload.content_type, upload.file
         )
+        # The raw blob is published before the owner row is flushed, so take a fresh
+        # global admission lock immediately before crossing the filesystem boundary.
+        from modules.settings.public import admit_write
+
+        await admit_write(session, "raw_file_publication", str(source_id))
         document_id = uuid4()
         raw_uri, size, digest = await save_upload(
             settings.data_dir, upload, document_id, suffix, settings.upload_max_bytes

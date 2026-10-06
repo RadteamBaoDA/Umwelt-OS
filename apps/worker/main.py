@@ -66,9 +66,44 @@ def _gate_module_job(function: Callable[..., Any]) -> Callable[..., Any]:
     return guarded
 
 
+def _gate_backup_job(function: Callable[..., Any]) -> Callable[..., Any]:
+    """Durably register worker execution before owner claims or external effects, then close it."""
+    @wraps(function)
+    async def guarded(ctx: dict[str, object], *args: Any, **kwargs: Any) -> Any:
+        """Leave denied durable jobs for their owner recovery poll instead of executing them."""
+        factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+        from modules.backup.public import BackupAdmissionDenied
+        from modules.settings.public import register_activity, finish_activity
+
+        work_id = str(args[0]) if args and isinstance(args[0], (str, int)) else None
+        try:
+            async with factory() as session:
+                receipt = await register_activity(session, function.__name__, work_id)
+                await session.commit()
+        except BackupAdmissionDenied:
+            # Owner durable rows remain the source of truth; dispatch/recovery polls will retry.
+            return None
+
+        try:
+            result = await function(ctx, *args, **kwargs)
+        except BaseException:
+            async with factory() as session:
+                # Handler exit only closes this admission lease. Any unresolved external effect
+                # must remain visible in its owner's durable journal and block snapshot there.
+                await finish_activity(session, receipt)
+                await session.commit()
+            raise
+        async with factory() as session:
+            await finish_activity(session, receipt)
+            await session.commit()
+        return result
+
+    return guarded
+
+
 def cron(function: Callable[..., Any], *args: Any, **kwargs: Any) -> object:
-    """Attach a fresh persisted owner-module check to declared scheduled dispatch jobs."""
-    return _cron(_gate_module_job(function), *args, **kwargs)
+    """Attach both fresh owner-module and global backup admission checks to worker schedules."""
+    return _cron(_gate_backup_job(_gate_module_job(function)), *args, **kwargs)
 
 async def startup(ctx: dict[str, object]) -> None:
     """Load the bounded database pool and compose the worker-owned native/MCP agent registry."""
@@ -135,6 +170,7 @@ class WorkerSettings:
         instrument_job(process_agent_run, run_id_kind="agent_run_id"), instrument_job(process_automation_run),
     ]
     functions = [_gate_module_job(function) for function in functions]
+    functions = [_gate_backup_job(function) for function in functions]
     cron_jobs: ClassVar[list[object]] = [
         cron(purge_expired_sessions, minute=0),
         cron(run_retention_maintenance, minute=0),

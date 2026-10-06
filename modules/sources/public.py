@@ -1,13 +1,20 @@
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
+import base64
+import binascii
+import hashlib
+import json
+from typing import Any
 from uuid import UUID, uuid4
 
+from fastapi import HTTPException
 from sqlalchemy import Integer, case, cast, desc, func, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.pagination import decode_cursor, encode_cursor
+from core.auth.models import Owner
 from core.events import DomainEvent
 from core.realtime import commit_with_replay, make_source_change
 from core.tools.schemas import ToolDestination
@@ -19,7 +26,144 @@ from modules.sources.schemas import (
     SourceCreate,
     SourceFence,
     SourcePatch,
+    SourceExportFence,
+    SourceMetadataExportFence,
+    SourceMetadataExportPage,
+    SourceMetadataExportValidation,
+    SourceRead,
 )
+
+
+def _encode_source_export_cursor(snapshot_at: datetime, created_at: datetime, identifier: UUID) -> str:
+    """Bind a canonical source metadata keyset position to one fixed owner snapshot."""
+    payload = json.dumps(
+        [1, "sources", snapshot_at.isoformat(), created_at.isoformat(), str(identifier)],
+        separators=(",", ":"),
+    ).encode()
+    return base64.urlsafe_b64encode(payload).decode().rstrip("=")
+
+
+def _decode_source_export_cursor(cursor: str) -> tuple[datetime, datetime, UUID]:
+    """Reject oversized, noncanonical, cross-dataset, or future source export cursors."""
+    try:
+        if len(cursor) > 512 or "=" in cursor:
+            raise ValueError
+        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
+        if base64.urlsafe_b64encode(raw).decode().rstrip("=") != cursor:
+            raise ValueError
+        values = json.loads(raw)
+        if not isinstance(values, list) or len(values) != 5 or values[:2] != [1, "sources"]:
+            raise ValueError
+        snapshot_at, created_at = datetime.fromisoformat(values[2]), datetime.fromisoformat(values[3])
+        identifier = UUID(values[4])
+        if (any(value.tzinfo is None or value.utcoffset() is None for value in (snapshot_at, created_at))
+                or snapshot_at.isoformat() != values[2] or created_at.isoformat() != values[3]
+                or created_at > snapshot_at or snapshot_at > datetime.now(UTC)
+                or str(identifier) != values[4]
+                or _encode_source_export_cursor(snapshot_at, created_at, identifier) != cursor):
+            raise ValueError
+        return snapshot_at, created_at, identifier
+    except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError, binascii.Error) as exc:
+        raise HTTPException(status_code=422, detail="Source export cursor is invalid") from exc
+
+
+def _source_export_scope(snapshot_at: datetime) -> tuple[object, ...]:
+    """Select source rows retained at the fixed cutoff without unfinished data purges."""
+    return (
+        Source.created_at <= snapshot_at,
+        Source.updated_at <= snapshot_at,
+        Source.id.in_(export_eligible_source_ids()),
+    )
+
+
+def _source_export_columns():
+    """Return only credential-free fields supported by the current SourceRead DTO."""
+    return (
+        Source.id, Source.type, Source.name, Source.provider, Source.status, Source.local_only,
+        Source.last_sync_at, Source.last_success_at, Source.last_error_at, Source.last_error_code,
+        Source.collected_at, Source.indexed_at, Source.collection_error_code,
+        Source.processing_error_code, Source.generation, Source.retired_at,
+        Source.created_at, Source.updated_at,
+    )
+
+
+def _source_export_read(row: Any) -> SourceRead:
+    """Build one safe source record from explicit columns, never loading connector configuration."""
+    return SourceRead(**row._mapping)
+
+
+async def export_page(
+    session: AsyncSession, *, owner_id: int, record_kind: str, limit: int = 50, cursor: str | None = None,
+) -> SourceMetadataExportPage:
+    """Return a bounded source metadata export, excluding all provider configuration and secrets."""
+    if owner_id != 1 or record_kind != "sources" or not 1 <= limit <= 100:
+        raise ValueError("Source export owner, kind or page limit is invalid")
+    if await session.scalar(select(Owner.id).where(Owner.id == owner_id)) is None:
+        raise HTTPException(status_code=404, detail="Owner not found")
+    if cursor is None:
+        snapshot_at, position = datetime.now(UTC), None
+    else:
+        snapshot_at, position_at, position_id = _decode_source_export_cursor(cursor)
+        position = (position_at, position_id)
+    snapshot_count = int(await session.scalar(
+        select(func.count()).select_from(Source).where(*_source_export_scope(snapshot_at))
+    ) or 0)
+    statement = select(*_source_export_columns()).where(*_source_export_scope(snapshot_at))
+    if position is not None:
+        statement = statement.where(tuple_(Source.created_at, Source.id) > position)
+    rows = list((await session.execute(
+        statement.order_by(Source.created_at, Source.id).limit(limit + 1)
+    )).all())
+    has_more, rows = len(rows) > limit, rows[:limit]
+    items = [_source_export_read(row) for row in rows]
+    encoded_items = [item.model_dump_json().encode("utf-8") for item in items]
+    payload_bytes = 2 + sum(map(len, encoded_items)) + max(0, len(items) - 1)
+    if payload_bytes > 16_777_216:
+        raise HTTPException(status_code=413, detail="Source export page exceeds its byte bound")
+    fences = [SourceMetadataExportFence(
+        source_id=row.id, created_at=row.created_at, updated_at=row.updated_at,
+        generation=row.generation, content_digest=hashlib.sha256(raw).hexdigest(),
+    ) for row, raw in zip(rows, encoded_items, strict=True)]
+    return SourceMetadataExportPage(
+        owner_id=owner_id, record_kind="sources", snapshot_at=snapshot_at,
+        snapshot_count=snapshot_count, items=items, fences=fences,
+        payload_bytes=payload_bytes,
+        next_cursor=_encode_source_export_cursor(snapshot_at, rows[-1].created_at, rows[-1].id)
+        if has_more and rows else None,
+    )
+
+
+async def validate_export_fences(
+    session: AsyncSession, *, owner_id: int, record_kind: str, snapshot_at: datetime,
+    expected_snapshot_count: int, fences: list[SourceMetadataExportFence],
+) -> SourceMetadataExportValidation:
+    """Recheck source eligibility, generation, row content, and fixed-cutoff inventory."""
+    if owner_id != 1 or record_kind != "sources" or len(fences) > 100:
+        raise ValueError("Source export validation input is invalid")
+    if await session.scalar(select(Owner.id).where(Owner.id == owner_id)) is None:
+        return SourceMetadataExportValidation(valid=False, reason="owner_unavailable", observed_snapshot_count=0)
+    observed = int(await session.scalar(
+        select(func.count()).select_from(Source).where(*_source_export_scope(snapshot_at))
+    ) or 0)
+    if observed != expected_snapshot_count:
+        return SourceMetadataExportValidation(valid=False, reason="snapshot_count_changed", observed_snapshot_count=observed)
+    source_fences = [SourceExportFence(source_id=item.source_id, generation=item.generation) for item in fences]
+    if len(await filter_export_eligible_sources(session, source_fences)) != len(source_fences):
+        return SourceMetadataExportValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
+    for fence in fences:
+        row = (await session.execute(
+            select(*_source_export_columns()).where(
+                Source.id == fence.source_id, *_source_export_scope(snapshot_at),
+            )
+        )).one_or_none()
+        if row is None:
+            return SourceMetadataExportValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
+        item = _source_export_read(row)
+        if (item.generation != fence.generation or item.created_at != fence.created_at
+                or item.updated_at != fence.updated_at
+                or hashlib.sha256(item.model_dump_json().encode("utf-8")).hexdigest() != fence.content_digest):
+            return SourceMetadataExportValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
+    return SourceMetadataExportValidation(valid=True, reason="valid", observed_snapshot_count=observed)
 
 
 async def observability_quality_summary(session: AsyncSession, *, now: datetime | None = None) -> dict[str, int]:
@@ -183,7 +327,9 @@ async def get_source_fence(session: AsyncSession, source_id: UUID) -> SourceFenc
     Fields: id, status, generation, local_only
     Permissions & Deletion checks: Read-only projection; returns None if source does not exist.
     """
-    source = await session.get(Source, source_id)
+    source = await session.scalar(select(Source).where(
+        Source.id == source_id,
+    ).execution_options(populate_existing=True))
     if source is None:
         return None
     return SourceFence(
