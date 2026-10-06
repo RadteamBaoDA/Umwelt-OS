@@ -14,6 +14,7 @@ from sqlalchemy import (
     String,
     Text,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -35,6 +36,9 @@ class Memory(Base):
         Index("ix_memories_memory_type", "memory_type"),
         Index("ix_memories_created_at", "created_at"),
         Index("ix_memories_is_manual", "is_manual"),
+        # Whole-Source purge selects exact provenance.source_id equality and candidate linkage.
+        Index("ix_memories_provenance_source_id", text("(provenance ->> 'source_id')"), "id"),
+        Index("ix_memories_candidate_id", "candidate_id"),
         CheckConstraint(
             "status IN ('active', 'invalidated', 'superseded', 'forgotten')",
             name="ck_memories_status",
@@ -95,6 +99,7 @@ class MemoryCandidate(Base):
     __table_args__ = (
         Index("ix_memory_candidates_status", "status"),
         Index("ix_memory_candidates_created_at", "created_at"),
+        Index("ix_memory_candidates_provenance_source_id", text("(provenance ->> 'source_id')"), "id"),
         CheckConstraint(
             "status IN ('pending', 'accepted', 'rejected', 'superseded', 'expired')",
             name="ck_memory_candidates_status",

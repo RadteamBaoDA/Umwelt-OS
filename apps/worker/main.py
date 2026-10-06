@@ -25,7 +25,9 @@ from modules.ingestion.worker import (
     process_ingestion_event,
     process_uploaded_file,
 )
-from modules.sources.worker import process_source_purge
+from modules.sources.worker import (
+    process_source_memory_coverage, process_source_purge, reconcile_source_coverage,
+)
 from modules.search.indexing import index_pending_chunks
 from modules.connectors.worker import reconcile_connectors
 from modules.knowledge.entities.worker import (
@@ -169,7 +171,7 @@ class WorkerSettings:
         purge_expired_sessions, instrument_job(process_ingestion_event, success_return_outcome="returned"),
         instrument_job(process_normalize_event, success_return_outcome="returned"),
         instrument_job(process_uploaded_file, success_return_outcome="returned"), process_source_purge,
-        process_document_cleanup,
+        process_source_memory_coverage, process_document_cleanup,
         reconcile_connectors, instrument_job(process_document_ready, success_return_outcome="returned"),
         instrument_job(process_entity_extraction_work),
         instrument_job(process_timeline_extraction_work), instrument_job(process_graph_operation),
@@ -188,6 +190,7 @@ class WorkerSettings:
         cron(reconcile_document_memory_cleanup, second=set(range(0, 60, 5)), run_at_start=True),
         cron(reconcile_document_agent_cleanup, second=set(range(0, 60, 5)), run_at_start=True),
         cron(reconcile_document_copied_stage_cleanup, second=set(range(0, 60, 5)), run_at_start=True),
+        cron(reconcile_source_coverage, second={0, 30}, run_at_start=True),
         cron(recover_entity_extraction_work, minute=set(range(0, 60, 1))),
         cron(recover_timeline_extraction_work, minute=set(range(0, 60, 1))),
         cron(recover_graph_work, second=set(range(0, 60, 5)), run_at_start=True),

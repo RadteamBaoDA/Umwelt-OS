@@ -10,7 +10,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
-from sqlalchemy import Integer, Select, case, cast, desc, func, select, tuple_
+from sqlalchemy import Integer, Select, and_, case, cast, desc, func, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -787,6 +787,68 @@ async def start_source_purge(
     return operation
 
 
+# Source-local Memory coverage that can never improve without new evidence: durable unavailable.
+SOURCE_MEMORY_TERMINAL_CODES = frozenset({"evidence_identity_unavailable", "legacy_provenance_unresolved"})
+
+
+def _open_coverage_operations() -> tuple[object, ...]:
+    """Select canonical-complete operations whose full-copy status can still change.
+
+    Terminal-unavailable Memory coverage is excluded so a permanent gap never starves queued work
+    or hot-loops; it only reopens through a new, explicit purge decision.
+    """
+    return (
+        SourcePurgeOperation.documents_status == "deleted",
+        SourcePurgeOperation.status != "succeeded",
+        ~and_(
+            SourcePurgeOperation.memory_status == "failed",
+            SourcePurgeOperation.memory_error_code.in_(SOURCE_MEMORY_TERMINAL_CODES),
+        ),
+    )
+
+
+async def list_source_purge_observer_ids(
+    session: AsyncSession, source_id: UUID, *, after: UUID | None = None, limit: int = 100,
+) -> tuple[UUID, ...]:
+    """Return <=100 exact unfinished purge operation IDs for one Source, keyset by ID.
+
+    Documents uses this detached identity list to wake observers of a historical (unlinked)
+    receipt without touching Source models. No ordering of unrelated operations is exposed.
+    """
+    if not 1 <= limit <= 100:
+        raise ValueError("Source observer page size must be between 1 and 100")
+    statement = select(SourcePurgeOperation.id).where(
+        SourcePurgeOperation.source_id == source_id, *_open_coverage_operations(),
+    )
+    if after is not None:
+        statement = statement.where(SourcePurgeOperation.id > after)
+    return tuple((await session.scalars(statement.order_by(SourcePurgeOperation.id).limit(limit))).all())
+
+
+async def pending_source_coverage_ids(
+    session: AsyncSession, *, after: UUID | None = None, limit: int = 100,
+) -> tuple[UUID, ...]:
+    """Return one bounded keyset page of purge operations needing coverage reconciliation."""
+    if not 1 <= limit <= 100:
+        raise ValueError("Source coverage reconciliation page size must be between 1 and 100")
+    statement = select(SourcePurgeOperation.id).where(*_open_coverage_operations())
+    if after is not None:
+        statement = statement.where(SourcePurgeOperation.id > after)
+    return tuple((await session.scalars(statement.order_by(SourcePurgeOperation.id).limit(limit))).all())
+
+
+async def source_data_purge_exists(session: AsyncSession, source_id: UUID) -> bool:
+    """Report whether any data purge (in any state) ever fenced this Source.
+
+    Export eligibility reopens when a purge succeeds; copied-evidence producers must not, so they
+    use this durable fence instead. Callers hold the Source lock, which serializes this read with
+    ``start_source_purge``.
+    """
+    return await session.scalar(
+        select(SourcePurgeOperation.id).where(SourcePurgeOperation.source_id == source_id).limit(1)
+    ) is not None
+
+
 async def read_source_purge_operation(
     session: AsyncSession,
     operation_id: UUID,
@@ -810,6 +872,8 @@ async def read_source_purge_operation(
         pending_child_count=operation.pending_child_count,
         failed_child_count=operation.failed_child_count,
         pending_owner_codes=list(operation.pending_owner_codes),
+        memory_status=operation.memory_status,
+        memory_error_code=operation.memory_error_code,
         created_at=operation.created_at,
         updated_at=operation.updated_at,
     )

@@ -65,6 +65,27 @@ class DocumentMemoryCleanupProgress:
     unresolved_reason: str | None
 
 
+@dataclass(frozen=True)
+class SourceCopiedEvidenceScope:
+    """Detached whole-Source purge scope; carries no Document identity or Source row."""
+
+    operation_id: UUID
+    source_id: UUID
+    generation: int
+
+
+@dataclass(frozen=True)
+class SourceMemoryCleanupProgress:
+    """Describe one bounded Source-local Memory sweep page without exposing copied content."""
+
+    complete: bool
+    next_cursor: str | None
+    processed: int
+    unresolved_count: int
+    reason: str | None
+    changed: bool
+
+
 def _encode_memory_export_cursor(
     owner_id: int, record_kind: str, snapshot_at: datetime, created_at: datetime, identifier: UUID,
 ) -> str:
@@ -234,9 +255,11 @@ async def _memory_export_source_fence(
         source_id = doc_evidence.source_id
     if source_id is not None:
         source = await sources_public.get_source_fence(session, source_id)
+        # Export eligibility reopens when a purge succeeds, so source-only copies also need the
+        # durable fence: once any data purge exists, no new Source-tied copy may be admitted.
         eligible = bool(source and await sources_public.filter_export_eligible_sources(
             session, [SourceExportFence(source_id=source_id, generation=source.generation)],
-        ))
+        ) and not await sources_public.source_data_purge_exists(session, source_id))
         if not eligible:
             if not manual_memory:
                 raise HTTPException(status_code=409, detail="Memory source evidence was removed or is being purged")
@@ -444,7 +467,7 @@ async def _lock_live_provenance_evidence(
         source = await sources_public.lock_source(session, source_id)
         eligible = bool(source and await sources_public.filter_export_eligible_sources(
             session, [SourceExportFence(source_id=source_id, generation=source.generation)],
-        ))
+        ) and not await sources_public.source_data_purge_exists(session, source_id))
         if not eligible:
             raise HTTPException(status_code=409, detail="Memory source evidence is removed or unavailable")
 
@@ -739,6 +762,159 @@ async def purge_document_copied_evidence_page(
         scrubbed_candidates=scrubbed_candidates,
         unresolved_count=unresolved,
         unresolved_reason=_DOCUMENT_MEMORY_UNRESOLVED_REASON if unresolved else None,
+    )
+
+
+def _source_memory_cursor(scope: SourceCopiedEvidenceScope, kind: str, after: UUID | None) -> str:
+    """Encode a canonical version/operation/source/generation/kind/after keyset position."""
+    value = json.dumps(
+        [1, str(scope.operation_id), str(scope.source_id), scope.generation, kind,
+         str(after) if after else None],
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+
+
+def _decode_source_memory_cursor(cursor: str, scope: SourceCopiedEvidenceScope) -> tuple[str, UUID | None]:
+    """Reject malformed or cross-operation/source/generation Source Memory continuation tokens."""
+    try:
+        if len(cursor) > 1024 or "=" in cursor:
+            raise ValueError
+        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
+        if base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=") != cursor:
+            raise ValueError
+        payload = json.loads(raw)
+        if (not isinstance(payload, list) or len(payload) != 6 or payload[0] != 1
+                or payload[1:4] != [str(scope.operation_id), str(scope.source_id), scope.generation]
+                or payload[4] not in {"memories", "candidates"}):
+            raise ValueError
+        after = UUID(payload[5]) if payload[5] is not None else None
+        if _source_memory_cursor(scope, payload[4], after) != cursor:
+            raise ValueError
+        return payload[4], after
+    except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError, binascii.Error) as exc:
+        raise ValueError("Source Memory cleanup cursor is invalid") from exc
+
+
+def _scrub_manual_source_provenance(provenance: object) -> dict[str, object]:
+    """Remove only revoked Source/Document annotations from verified-manual provenance."""
+    result = dict(provenance) if isinstance(provenance, dict) else {}
+    for key in ("source_id", "document_id", "document_version_id", "chunk_id"):
+        result.pop(key, None)
+    return result
+
+
+def _source_progress(
+    scope: SourceCopiedEvidenceScope, kind: str, last: UUID | None, *, complete: bool,
+    processed: int, unresolved: int, changed: bool,
+) -> SourceMemoryCleanupProgress:
+    """Build one page result; an incomplete page carries the cursor bound to its position."""
+    return SourceMemoryCleanupProgress(
+        complete=complete,
+        next_cursor=None if complete else _source_memory_cursor(scope, kind, last),
+        processed=processed,
+        unresolved_count=unresolved,
+        reason=_DOCUMENT_MEMORY_UNRESOLVED_REASON if unresolved else None,
+        changed=changed,
+    )
+
+
+async def purge_source_copied_evidence_page(
+    session: AsyncSession,
+    scope: SourceCopiedEvidenceScope,
+    *,
+    cursor: str | None = None,
+    limit: int = 100,
+) -> SourceMemoryCleanupProgress:
+    """Flush one bounded Memory/Candidate sweep for a whole purged Source.
+
+    Selection is exact owner-local ``provenance.source_id`` equality plus Memory rows whose linked
+    candidate carries that identity; no text inference, and unrelated or opaque records are never
+    scanned into this Source's uncertainty. Memories and candidates are separate keyset pages
+    (<=``limit`` rows with a one-row lookahead) bound by the cursor to version/operation/source/
+    generation/kind/after; locks are plain ``FOR UPDATE`` so the cursor never skips a held row.
+    Whole-Source identity suffices to revoke a classified source-derived (non-manual) record:
+    content/reason/provenance are erased and a stable tombstone is retained, along with its linked
+    candidate. Verified-manual records keep their independent content and lose only Source/Document
+    annotations, exactly as the accepted Document page classifies ``is_manual`` records; a linked
+    candidate is swept with the rest of the Source's candidates. The caller owns
+    the transaction, privacy/Source/operation locks, stage receipt, commit and cache eviction.
+    """
+    if not 1 <= limit <= 100:
+        raise ValueError("Source Memory cleanup page size must be between 1 and 100")
+    kind, after = _decode_source_memory_cursor(cursor, scope) if cursor else ("memories", None)
+    source_text = str(scope.source_id)
+    now = datetime.now(UTC)
+    changed = False
+    unresolved = processed = 0
+
+    if kind == "memories":
+        linked_candidates = select(MemoryCandidate.id).where(
+            MemoryCandidate.provenance["source_id"].astext == source_text,
+        )
+        statement = select(Memory).where(or_(
+            Memory.provenance["source_id"].astext == source_text,
+            Memory.candidate_id.in_(linked_candidates),
+        )).order_by(Memory.id).limit(limit + 1)
+        if after is not None:
+            statement = statement.where(Memory.id > after)
+        rows = list((await session.scalars(
+            statement.with_for_update().execution_options(populate_existing=True)
+        )).all())
+        has_more = len(rows) > limit
+        rows = rows[:limit]
+        for item in rows:
+            own = isinstance(item.provenance, dict) and (
+                _provenance_uuid(item.provenance.get("source_id")) == scope.source_id)
+            candidate = None
+            if item.candidate_id is not None:
+                candidate = await session.scalar(select(MemoryCandidate).where(
+                    MemoryCandidate.id == item.candidate_id,
+                ).with_for_update().execution_options(populate_existing=True))
+            candidate_linked = candidate is not None and isinstance(candidate.provenance, dict) and (
+                _provenance_uuid(candidate.provenance.get("source_id")) == scope.source_id)
+            if item.is_manual is True:
+                # Same rule as the accepted Document page: manual is independent, strip annotations only.
+                if own:
+                    item.provenance = _scrub_manual_source_provenance(item.provenance)
+                    item.updated_at = now
+                    changed = True
+            elif own or candidate_linked:
+                _scrub_derived_memory(item, now)
+                if candidate is not None and (candidate.content or candidate.status != "expired"):
+                    _scrub_candidate(candidate, now)
+                changed = True
+            processed += 1
+        if has_more:
+            return _source_progress(
+                scope, "memories", rows[-1].id, complete=False,
+                processed=processed, unresolved=unresolved, changed=changed,
+            )
+        kind, after = "candidates", None
+        if processed >= limit:
+            return _source_progress(
+                scope, kind, None, complete=False,
+                processed=processed, unresolved=unresolved, changed=changed,
+            )
+
+    remaining = limit - processed
+    statement = select(MemoryCandidate).where(
+        MemoryCandidate.provenance["source_id"].astext == source_text,
+    ).order_by(MemoryCandidate.id).limit(remaining + 1)
+    if after is not None:
+        statement = statement.where(MemoryCandidate.id > after)
+    candidates = list((await session.scalars(
+        statement.with_for_update().execution_options(populate_existing=True)
+    )).all())
+    has_more = len(candidates) > remaining
+    candidates = candidates[:remaining]
+    for candidate in candidates:
+        _scrub_candidate(candidate, now)
+        changed = True
+        processed += 1
+    return _source_progress(
+        scope, "candidates", candidates[-1].id if candidates else after, complete=not has_more,
+        processed=processed, unresolved=unresolved, changed=changed,
     )
 
 

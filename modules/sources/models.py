@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, func
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
@@ -55,7 +55,26 @@ class SourcePurgeOperation(Base):
             "documents_status IN ('queued', 'deleted', 'failed', 'unavailable')",
             name="ck_source_purge_operations_documents_status",
         ),
+        CheckConstraint(
+            "memory_status IN ('queued', 'running', 'succeeded', 'failed')",
+            name="ck_source_purge_operations_memory_status",
+        ),
+        CheckConstraint(
+            "memory_cursor IS NULL OR octet_length(memory_cursor::text) <= 4096",
+            name="ck_source_purge_operations_memory_cursor_bound",
+        ),
+        CheckConstraint("memory_unresolved_count >= 0", name="ck_source_purge_operations_memory_unresolved"),
         Index("ix_source_purge_operations_status_created", "status", "created_at"),
+        Index("ix_source_purge_operations_source_id", "source_id", "id"),
+        # Coverage reconciliation: unfinished Source-local Memory work, excluding terminal unavailable rows.
+        Index(
+            "ix_source_purge_operations_memory_reconcile", "id",
+            postgresql_where=text(
+                "documents_status = 'deleted' AND (memory_status IN ('queued', 'running') "
+                "OR memory_cache_pending OR (memory_status = 'failed' AND memory_error_code "
+                "NOT IN ('evidence_identity_unavailable', 'legacy_provenance_unresolved')))"
+            ),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -67,6 +86,15 @@ class SourcePurgeOperation(Base):
     failed_child_count: Mapped[int | None] = mapped_column(Integer)
     pending_owner_codes: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default="[]")
     raw_uris: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    # Source-local Memory copied-evidence coverage (independent of per-Document receipts). It starts
+    # queued: no historical operation is ever presumed clean. Unavailable is durable ``failed`` with
+    # evidence_identity_unavailable / legacy_provenance_unresolved and is never retried automatically.
+    memory_status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="queued")
+    memory_error_code: Mapped[str | None] = mapped_column(String(64))
+    memory_cursor: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    memory_unresolved_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    memory_cache_pending: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    coverage_reopened: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="queued")
     error_code: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

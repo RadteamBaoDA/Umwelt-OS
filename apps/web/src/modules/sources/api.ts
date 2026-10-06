@@ -133,6 +133,8 @@ export type PurgeOperation = {
   pending_child_count: number | null;
   failed_child_count: number | null;
   pending_owner_codes: string[];
+  memory_status: 'queued' | 'running' | 'succeeded' | 'failed';
+  memory_error_code: string | null;
   created_at: string;
   updated_at: string;
 };

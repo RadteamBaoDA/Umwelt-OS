@@ -195,6 +195,8 @@ class DocumentCleanupOperation(Base):
             postgresql_where=text("agent_status IN ('queued', 'running')"),
         ),
         Index("ix_document_cleanup_source_purge_id", "source_purge_operation_id", "id"),
+        # Source-wide historical coverage aggregates by exact source, including NULL/older linkage.
+        Index("ix_document_cleanup_source_id_id", "source_id", "id"),
         Index(
             "uq_document_cleanup_source_purge_document",
             "source_purge_operation_id", "document_id", unique=True,

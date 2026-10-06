@@ -85,7 +85,12 @@ class DocumentCleanupEvidenceScope:
 
 @dataclass(frozen=True)
 class SourceCleanupProgress:
-    """Expose bounded Documents-owned aggregate counts without receipt identities."""
+    """Expose bounded Documents-owned aggregate counts without receipt identities.
+
+    ``child_count``/``pending_count``/``failed_count`` describe receipts linked to the asking
+    Source operation. ``historical_*`` describe every other retained same-source receipt (NULL or
+    older linkage). ``all_required_complete`` requires both populations to be fully complete.
+    """
 
     child_count: int
     capture_complete: bool
@@ -93,6 +98,10 @@ class SourceCleanupProgress:
     failed_count: int
     all_required_complete: bool
     pending_owner_codes: tuple[str, ...]
+    historical_count: int = 0
+    historical_pending_count: int = 0
+    historical_failed_count: int = 0
+    active_copy_work: bool = False
 
 
 async def pending_document_memory_cleanup_ids(
@@ -1775,15 +1784,20 @@ async def source_cleanup_progress(
     session: AsyncSession,
     source_purge_operation_id: UUID,
     *,
+    source_id: UUID,
     capture_recorded: bool,
 ) -> SourceCleanupProgress:
-    """Aggregate child stages in Documents and return counts, never a child-ID snapshot.
+    """Aggregate every retained same-source receipt in one SQL statement; return counts only.
 
-    The Source owner supplies its durable capture receipt because only that owner can
-    distinguish a successfully empty Source from a legacy operation whose rows vanished.
-    This query is read-only and does not lock child receipts while Source is held. Memory cache
-    eviction is an independent pending obligation and remains visible until its postcommit retry
-    clears the durable marker.
+    The Source owner verified that ``source_id`` owns the operation and supplies its durable
+    capture receipt, because only that owner can tell a truly empty Source from a legacy
+    operation whose rows vanished. The query is an exact ``source_id`` index aggregate (one output
+    row, fixed columns); each receipt is counted once whether it is linked to this operation,
+    linked to an older one, or unlinked, and no receipt is mutated, reparented or locked. Row
+    work grows with retained receipt history for the Source (capacity unverified). Every stage is
+    read afresh: a stage that is pending or failed is never cached as complete. A receipt whose
+    captured evidence identities are unavailable is failed; one still ``capturing`` is pending.
+    Memory cache eviction is an independent pending obligation until its postcommit retry clears it.
     """
     failed = or_(
         DocumentCleanupOperation.evidence_scope_status == "unavailable",
@@ -1795,6 +1809,7 @@ async def source_cleanup_progress(
         DocumentCleanupOperation.brief_status == "failed",
         DocumentCleanupOperation.copied_status == "failed",
     )
+    scope_pending = DocumentCleanupOperation.evidence_scope_status == "capturing"
     raw_pending = DocumentCleanupOperation.raw_status.not_in(
         ("not_present", "retained_shared", "succeeded", "failed")
     )
@@ -1812,25 +1827,38 @@ async def source_cleanup_progress(
     pending = or_(
         DocumentCleanupOperation.memory_cache_pending.is_(True),
         and_(~failed, or_(
-            raw_pending, chat_pending, memory_pending, agent_pending,
+            scope_pending, raw_pending, chat_pending, memory_pending, agent_pending,
             materialization_pending, brief_pending, copy_pending,
         )),
     )
+    linked = DocumentCleanupOperation.source_purge_operation_id == source_purge_operation_id
+    # NULL linkage must count as historical: ``NOT (NULL = x)`` is NULL, so test it explicitly.
+    unlinked = or_(
+        DocumentCleanupOperation.source_purge_operation_id.is_(None),
+        DocumentCleanupOperation.source_purge_operation_id != source_purge_operation_id,
+    )
+    receipt_id = DocumentCleanupOperation.id
+    memory_waiting_expr = or_(
+        and_(~failed, memory_pending), DocumentCleanupOperation.memory_cache_pending.is_(True),
+    )
     row = (await session.execute(select(
-        func.count(DocumentCleanupOperation.id),
-        func.sum(case((pending, 1), else_=0)),
-        func.sum(case((failed, 1), else_=0)),
-        func.sum(case((and_(~failed, raw_pending), 1), else_=0)),
-        func.sum(case((and_(~failed, chat_pending), 1), else_=0)),
-        func.sum(case((or_(and_(~failed, memory_pending), DocumentCleanupOperation.memory_cache_pending.is_(True)), 1), else_=0)),
-        func.sum(case((and_(~failed, agent_pending), 1), else_=0)),
-        func.sum(case((and_(~failed, materialization_pending), 1), else_=0)),
-        func.sum(case((and_(~failed, brief_pending), 1), else_=0)),
-    ).where(
-        DocumentCleanupOperation.source_purge_operation_id == source_purge_operation_id,
-    ))).one()
-    (child_count, pending_count, failed_count, raw_waiting, chat_waiting, memory_waiting, agent_waiting,
-     materialization_waiting, brief_waiting) = (int(value or 0) for value in row)
+        func.count(receipt_id).filter(linked),
+        func.count(receipt_id).filter(unlinked),
+        func.count(receipt_id).filter(linked, pending),
+        func.count(receipt_id).filter(linked, failed),
+        func.count(receipt_id).filter(unlinked, pending),
+        func.count(receipt_id).filter(unlinked, failed),
+        func.count(receipt_id).filter(and_(~failed, raw_pending)),
+        func.count(receipt_id).filter(and_(~failed, chat_pending)),
+        func.count(receipt_id).filter(memory_waiting_expr),
+        func.count(receipt_id).filter(and_(~failed, agent_pending)),
+        func.count(receipt_id).filter(and_(~failed, materialization_pending)),
+        func.count(receipt_id).filter(and_(~failed, brief_pending)),
+        func.count(receipt_id).filter(linked, ~failed, or_(raw_pending, chat_pending)),
+    ).where(DocumentCleanupOperation.source_id == source_id))).one()
+    (child_count, historical_count, pending_count, failed_count, historical_pending, historical_failed,
+     raw_waiting, chat_waiting, memory_waiting, agent_waiting, materialization_waiting, brief_waiting,
+     linked_active) = (int(value or 0) for value in row)
     owners: list[str] = []
     if not capture_recorded:
         owners.append("documents")
@@ -1846,9 +1874,11 @@ async def source_cleanup_progress(
         owners.extend(("notifications", "automations"))
     if brief_waiting:
         owners.append("dashboard")
-    # Complete only when every required stage of every child receipt succeeded; a terminal
+    # Complete only when every required stage of every retained receipt succeeded; a terminal
     # unavailable stage is failed (counted above), never relabeled complete.
-    all_required_complete = capture_recorded and pending_count == 0 and failed_count == 0
+    all_required_complete = (
+        capture_recorded and pending_count + historical_pending == 0 and failed_count + historical_failed == 0
+    )
     return SourceCleanupProgress(
         child_count=child_count,
         capture_complete=capture_recorded,
@@ -1856,6 +1886,10 @@ async def source_cleanup_progress(
         failed_count=failed_count,
         all_required_complete=all_required_complete,
         pending_owner_codes=tuple(owners),
+        historical_count=historical_count,
+        historical_pending_count=historical_pending,
+        historical_failed_count=historical_failed,
+        active_copy_work=bool(linked_active),
     )
 
 
@@ -1865,31 +1899,42 @@ async def publish_source_cleanup_wakeup(
     *,
     progress_key: str,
 ) -> None:
-    """Publish an idempotent Source aggregate event for one durable child-stage transition.
+    """Publish idempotent Source aggregate events for one durable child-stage transition.
 
-    The child receipt transaction owns this outbox change. The payload identifies only the
-    Source purge operation, so this path never locks or reads a Source row under a URI lock.
+    The child receipt transaction owns this outbox change. Payloads identify only Source purge
+    operations, so this path never locks Source rows or Sources models under a URI lock. The
+    linked operation (if any) keeps its original deterministic event ID. Every other unfinished
+    same-source operation, including historical NULL linkage, is found through the Sources public
+    observer seam (<=100 exact IDs; unfinished coverage first) and receives a stable
+    observer-specific UUID. Observers beyond the first page are not dropped: Sources' persisted
+    coverage reconciler re-arms every unfinished operation independently of these hints.
     The caller supplies a bounded ASCII status/revision token with no content data while holding
-    the child receipt lock; deriving a distinct UUID deduplicates repeated transitions without
+    the child receipt lock; deriving distinct UUIDs deduplicates repeated transitions without
     allowing an older observer to consume a newer wakeup.
     """
-    if operation.source_purge_operation_id is None:
-        return
     if not re.fullmatch(r"[a-z0-9:_;=-]{1,128}", progress_key):
         raise ValueError("Source cleanup progress key must be a bounded lowercase status token")
-    event_id = uuid5(operation.id, f"source-purge-progress:{progress_key}")
     from modules.ingestion import public as ingestion
 
-    prior = await ingestion.get_event_delivery(session, event_id)
-    if prior is None:
-        await ingestion.publish_event(session, DomainEvent(
-            id=event_id,
-            type="source.purge.progressed",
-            version=1,
-            occurred_at=datetime.now(UTC),
-            producer="modules.knowledge.documents",
-            payload={"operation_id": str(operation.source_purge_operation_id)},
-        ))
+    linked = operation.source_purge_operation_id
+    targets: list[tuple[UUID, UUID]] = []
+    if linked is not None:
+        targets.append((linked, uuid5(operation.id, f"source-purge-progress:{progress_key}")))
+    for observer_id in await sources.list_source_purge_observer_ids(session, operation.source_id, limit=100):
+        if observer_id != linked:
+            targets.append((observer_id, uuid5(
+                operation.id, f"source-purge-progress:{observer_id}:{progress_key}",
+            )))
+    for target_id, event_id in targets:
+        if await ingestion.get_event_delivery(session, event_id) is None:
+            await ingestion.publish_event(session, DomainEvent(
+                id=event_id,
+                type="source.purge.progressed",
+                version=1,
+                occurred_at=datetime.now(UTC),
+                producer="modules.knowledge.documents",
+                payload={"operation_id": str(target_id)},
+            ))
 
 
 async def create_document(session: AsyncSession, payload: DocumentCreate) -> Document:

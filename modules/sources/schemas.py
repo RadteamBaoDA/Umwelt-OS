@@ -185,5 +185,8 @@ class OperationRead(BaseModel):
     pending_child_count: int | None
     failed_child_count: int | None
     pending_owner_codes: list[str]
+    # Source-local Memory coverage stage; error codes are fixed allowlisted tokens, never content.
+    memory_status: Literal["queued", "running", "succeeded", "failed"] = "queued"
+    memory_error_code: str | None = None
     created_at: datetime
     updated_at: datetime

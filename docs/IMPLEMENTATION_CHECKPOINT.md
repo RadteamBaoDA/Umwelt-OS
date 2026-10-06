@@ -1,5 +1,5 @@
 <!-- current-implementation-snapshot:start -->
-## Current implementation snapshot — 2026-10-06 18:10 — ACTIVE (resumed)
+## Current implementation snapshot — 2026-10-06 18:30 — ACTIVE (resumed)
 
 Owner revoked stop and authorized continuation. Controller Claude Opus 5.5; implementers Sonnet 5.5, reviewers Opus 5.5. Verified develop `2c06b07`. Tests/runtime remain deferred per plan. SDD ledger: `.superpowers/sdd/2026-09-25-umwelt-os-phase-12-hardening-release-acceptance/progress.md`.
 
@@ -8,8 +8,8 @@ Owner revoked stop and authorized continuation. Controller Claude Opus 5.5; impl
 | Integrated | P01–P11, R01–R15, accepted reconciliation; P12 backup/recovery `5212def`, square Dashboard `a2a2cc2`, portable exports `bce670b`, Chat cleanup `f6da2e2`, Document receipt UI `4416843`, Source cleanup `fe601bc`, mobile Dashboard `98365a1`, Memory cleanup `84c25df`, expiry cleanup `32a6ccc`, demo/seed/reset `655331b`, R16 branding `44cf45a` |
 | Wave 1 DONE | Agent stage integrated `2c06b07`; Notifications/Automations owner `1350085` and saved-brief owner `dbc5b14` accepted by Opus |
 | Wave 2 DONE | Materialization + saved-brief Documents stages, migration `p12_copied_stage_cleanup` (efe8ca7): Opus ACCEPT after 2 fix rounds, build PASS, integrated this commit. GitNexus risk CRITICAL (28 files, 58 flows) — runtime/tests deferred |
-| Wave 3 NEXT | Source historical receipts + Source-local Memory coverage |
-| Wave 4 ACTIVE | P12-T5/R16 release/OSS docs (branch codex/umwelt-p12-release-docs), parallel |
+| Wave 3 DONE | Source historical receipts + Source-local Memory coverage, migration `p12_source_coverage` (562a54c): Opus ACCEPT after P1 write-fence fix, build PASS, integrated this commit. GitNexus risk CRITICAL (14 files, 61 flows) |
+| Wave 4 | Release/OSS docs `6ca2aa8` accepted; final pass fills migration head `p12_source_coverage` + P3s, then merge |
 | Wave 5 | Whole-branch final review |
 | Deferred acceptance | Tests/runtime, live providers, restore, 2-core/8GiB capacity, release acceptance |
 <!-- current-implementation-snapshot:end -->

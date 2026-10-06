@@ -105,6 +105,8 @@ function PurgeProgress({ operationId }: { operationId: string }) {
   const pendingOwners = [...new Set(operation.data.pending_owner_codes.map((code) => ownerLabels.get(code) ?? t('cleanupOwnerOther')))].slice(0, 9);
   return <div>
     <p role="status">{operation.data.status}{operation.data.error_code ? ` · ${operation.data.error_code}` : ''}</p>
+    {operation.data.memory_status === 'failed' && (operation.data.memory_error_code === 'legacy_provenance_unresolved' || operation.data.memory_error_code === 'evidence_identity_unavailable')
+      && <p className="error" role="alert">{t('cleanupMemoryUnavailable')}</p>}
     {pendingOwners.length > 0 && <p className="muted">{t('cleanupPendingOwnerStages', { owners: pendingOwners.join(', ') })}</p>}
     {refreshButton}
   </div>;
