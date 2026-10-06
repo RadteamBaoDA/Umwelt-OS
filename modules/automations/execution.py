@@ -25,6 +25,7 @@ import asyncio
 import hashlib
 import json
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID, uuid4, uuid5
@@ -81,6 +82,22 @@ _modules_cache: dict[str, Any] = {}
 _TERMINAL_RUN = ("succeeded", "failed", "skipped", "dropped", "requires_review")
 
 
+@dataclass(frozen=True)
+class AutomationCleanupProgress:
+    """Return bounded cleanup progress keyed by operation and stable owner-row classifications.
+
+    Provisional unavailable IDs may be resolved by later reference pages; only IDs in
+    ``unavailable_ids`` are terminal for the caller's operation. No copied payload is exposed.
+    """
+
+    next_cursor: UUID | None
+    complete: bool
+    changed_count: int
+    operation_id: UUID
+    provisional_unavailable_ids: tuple[UUID, ...] = ()
+    unavailable_ids: tuple[UUID, ...] = ()
+
+
 class RunMissing(Exception):
     """Raised for an absent or foreign-owned run or rule."""
 
@@ -119,22 +136,39 @@ def loop_guard(trigger: Mapping[str, Any], actions: list[Mapping[str, Any]]) -> 
 async def enqueue_trigger(
     session: AsyncSession, owner_id: int, trigger_type: str, event_key: str, payload: Mapping[str, Any],
     *, hook: str | None = None, origin_automation_id: UUID | None = None, origin_run_id: UUID | None = None,
-    depth: int = 0,
+    depth: int = 0, document_id: UUID | None = None, document_version_id: UUID | None = None,
 ) -> bool:
     """Offer one trigger event to the automation inbox inside the producer's transaction.
 
     ``event_key`` must be the producer's stable event id; re-offering it is a no-op (returns False),
     which is the first dedupe layer. ``payload`` carries only metadata fields declared for the
-    trigger (see ``TRIGGER_FIELDS``) and never content. Events caused by an automation must pass
-    their ``origin_*`` ids and the causing run's ``depth``. Nothing is committed here.
+    trigger (see ``TRIGGER_FIELDS``) and never content. Exact new-document provenance is kept in
+    private sidecars outside this condition payload and is revalidated against the ready-event receipt,
+    Documents and Source retention fence. Nothing is committed here.
 
     Raises:
-        ValueError: Unknown trigger, bad key, undeclared payload field or missing webhook hook.
+        ValueError: Unknown trigger, bad key, undeclared payload field, missing hook or invalid provenance.
     """
     if trigger_type not in TRIGGER_FIELDS or trigger_type == "schedule":
         raise ValueError("trigger type cannot be offered by a producer")
     if not 1 <= len(event_key) <= 200 or not 0 <= depth <= 50:
         raise ValueError("invalid event key or depth")
+    if trigger_type == "new_document":
+        if document_id is None or document_version_id is None:
+            raise ValueError("new-document triggers require exact private evidence provenance")
+        try:
+            event_id = UUID(event_key)
+        except (TypeError, ValueError):
+            raise ValueError("new-document event key must be its canonical outbox UUID") from None
+        if str(event_id) != event_key:
+            raise ValueError("new-document event key must be its canonical outbox UUID")
+        if not await _retained_document_evidence_current(
+            session, payload, event_id=event_id, document_id=document_id,
+            document_version_id=document_version_id,
+        ):
+            raise ValueError("new-document provenance no longer matches retained evidence")
+    elif document_id is not None or document_version_id is not None:
+        raise ValueError("Document provenance is valid only for new-document triggers")
     validate_sample(trigger_type, dict(payload))
     stored = dict(payload)
     if trigger_type == "webhook":
@@ -144,6 +178,7 @@ async def enqueue_trigger(
     result = await session.execute(
         insert(AutomationTrigger).values(
             id=uuid4(), owner_id=owner_id, trigger_type=trigger_type, event_key=event_key, payload=stored,
+            document_id=document_id, document_version_id=document_version_id,
             depth=depth, origin_automation_id=origin_automation_id, origin_run_id=origin_run_id, status="pending")
         .on_conflict_do_nothing(constraint="uq_automation_triggers_event").returning(AutomationTrigger.id))
     return result.scalar_one_or_none() is not None
@@ -221,14 +256,33 @@ async def plan_run(
     session: AsyncSession, *, owner_id: int, rev: AutomationRevision, trigger_type: str, trigger_key: str,
     trigger_event_id: str | None, slot: datetime | None, payload: Mapping[str, Any], depth: int,
     origin_automation_id: UUID | None, origin_run_id: UUID | None, apply_conditions: bool = True,
+    document_id: UUID | None = None, document_version_id: UUID | None = None,
 ) -> UUID | None:
     """Create the queued (or recorded-skipped) run for one trigger, or None when nothing is created.
 
     None means conditions did not match or this identity already exists (duplicate event, retry or
-    double slot). The insert is ON CONFLICT DO NOTHING on ``uq_automation_runs_identity`` so two
-    concurrent planners cannot both succeed. Action rows are created up front (<= 10) so every
+    double slot or exact Document evidence was unavailable). Document sidecars stay outside the
+    condition payload. The insert is ON CONFLICT DO NOTHING on ``uq_automation_runs_identity`` so
+    two concurrent planners cannot both succeed. Action rows are created up front (<= 10) so every
     outcome has a durable slot. The caller commits.
     """
+    if trigger_type == "new_document":
+        if document_id is None or document_version_id is None:
+            return None
+        event_token = trigger_key.removeprefix("event:")
+        try:
+            event_id = UUID(event_token)
+        except (TypeError, ValueError):
+            return None
+        if (trigger_key != f"event:{event_id}" or trigger_event_id != str(event_id)):
+            return None
+        if not await _retained_document_evidence_current(
+            session, payload, event_id=event_id, document_id=document_id,
+            document_version_id=document_version_id,
+        ):
+            return None
+    elif document_id is not None or document_version_id is not None:
+        raise ValueError("Document provenance is valid only for new-document runs")
     if apply_conditions and rev.conditions and not evaluate(rev.conditions, dict(payload))[0]:
         return None
     now = datetime.now(UTC)
@@ -240,7 +294,8 @@ async def plan_run(
             trigger_type=trigger_type, trigger_key=trigger_key, trigger_event_id=trigger_event_id,
             scheduled_slot=slot, depth=min(depth, 50), origin_automation_id=origin_automation_id,
             origin_run_id=origin_run_id, status="skipped" if reason else "queued", reason=reason,
-            payload=dict(payload), attempts=0, dispatch_generation=0, next_attempt_at=run_at,
+            payload=dict(payload), document_id=document_id, document_version_id=document_version_id,
+            document_evidence_revoked=False, attempts=0, dispatch_generation=0, next_attempt_at=run_at,
             finished_at=now if reason else None)
         .on_conflict_do_nothing(constraint="uq_automation_runs_identity").returning(AutomationRun.id))
     if result.scalar_one_or_none() is None:
@@ -271,18 +326,424 @@ async def run_exists(session: AsyncSession, rev: AutomationRevision, trigger_key
         AutomationRun.trigger_key == trigger_key).limit(1)) is not None
 
 
+async def _retained_document_evidence_current(
+    session: AsyncSession, payload: Mapping[str, Any], *, event_id: UUID,
+    document_id: UUID, document_version_id: UUID,
+) -> bool:
+    """Hold the Source lifecycle lock while proving exact retained Document/version ownership.
+
+    Source is locked before re-reading Documents, matching canonical deletion and mutation order.
+    Paused and connector-only archived sources remain eligible; unfinished or failed with-data
+    purges fail closed. The original ready-event receipt proves historical identity; its generation
+    may predate a pause, so current Source generation is captured separately and compared only to
+    the current retained-version fence. The caller holds its transaction through publication.
+    """
+    try:
+        source_id = UUID(str(payload.get("source_id")))
+    except (TypeError, ValueError):
+        return False
+    from modules.sources import public as sources
+    from modules.knowledge.documents import public as documents
+    from modules.ingestion import public as ingestion
+
+    proof = await ingestion.resolve_ready_event_provenance(session, event_id)
+    if (proof is None or proof.document_id != document_id or proof.document_version_id != document_version_id
+            or proof.source_id != source_id):
+        return False
+
+    fence = await sources.lock_retained_evidence_source(session, source_id)
+    if fence is None:
+        return False
+    version_fence = (await documents.review_version_fences(session, [document_version_id])).get(document_version_id)
+    return (
+        version_fence is not None
+        and version_fence.document_id == document_id
+        and version_fence.source_id == source_id == fence.id
+        and version_fence.current_source_generation == fence.generation
+    )
+
+
+async def _trigger_evidence_current(session: AsyncSession, event: AutomationTrigger) -> bool:
+    """Require exact ready-event provenance and a locked retained-Source fence before inbox fan-out."""
+    if event.document_evidence_revoked:
+        return False
+    if (event.document_id is None) != (event.document_version_id is None):
+        return False
+    try:
+        validate_sample("new_document", event.payload)
+    except (TypeError, ValueError):
+        return False
+    try:
+        source_id = UUID(str(event.payload.get("source_id")))
+    except (ValueError, TypeError):
+        return False
+    try:
+        event_id = UUID(event.event_key)
+    except (ValueError, TypeError):
+        return False
+    if str(event_id) != event.event_key:
+        return False
+    if event.document_id is not None and event.document_version_id is not None:
+        return await _retained_document_evidence_current(
+            session, event.payload, event_id=event_id, document_id=event.document_id,
+            document_version_id=event.document_version_id,
+        )
+    from modules.ingestion import public as ingestion
+
+    proof = await ingestion.resolve_ready_event_provenance(session, event_id)
+    if proof is None or proof.source_id != source_id:
+        return False
+    if not await _retained_document_evidence_current(
+        session, event.payload, event_id=event_id, document_id=proof.document_id,
+        document_version_id=proof.document_version_id,
+    ):
+        return False
+    event.document_id, event.document_version_id = proof.document_id, proof.document_version_id
+    return True
+
+
+def _scrub_document_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Remove only condition metadata copied from the Document and its Source."""
+    return {key: value for key, value in payload.items() if key not in {
+        "title", "mime_type", "source_type", "source_id",
+    }}
+
+
+async def _run_evidence_current(session: AsyncSession, run: AutomationRun) -> bool:
+    """Require exact ready-event lineage and a locked retained-Source fence before run action admission."""
+    if run.trigger_type != "new_document":
+        return True
+    if run.document_evidence_revoked or (run.document_id is None) != (run.document_version_id is None):
+        return False
+    if run.document_id is None or run.document_version_id is None:
+        event_id: UUID | None = None
+        if run.trigger_event_id is not None:
+            try:
+                candidate = UUID(run.trigger_event_id)
+                if str(candidate) == run.trigger_event_id:
+                    event_id = candidate
+            except (ValueError, TypeError):
+                pass
+        if event_id is None and run.trigger_key.startswith("event:"):
+            token = run.trigger_key.removeprefix("event:")
+            try:
+                candidate = UUID(token)
+                if str(candidate) == token and run.trigger_key == f"event:{candidate}":
+                    event_id = candidate
+            except (ValueError, TypeError):
+                pass
+        if event_id is None or run.trigger_key != f"event:{event_id}" or run.trigger_event_id != str(event_id):
+            return False
+        from modules.ingestion import public as ingestion
+
+        proof = await ingestion.resolve_ready_event_provenance(session, event_id)
+        if proof is None:
+            return False
+        try:
+            if UUID(str(run.payload.get("source_id"))) != proof.source_id:
+                return False
+        except (ValueError, TypeError):
+            return False
+        if not await _retained_document_evidence_current(
+            session, run.payload, event_id=event_id, document_id=proof.document_id,
+            document_version_id=proof.document_version_id,
+        ):
+            return False
+        run.document_id, run.document_version_id = proof.document_id, proof.document_version_id
+        return True
+
+    event_id: UUID | None = None
+    if run.trigger_event_id is not None:
+        try:
+            candidate = UUID(run.trigger_event_id)
+            if str(candidate) == run.trigger_event_id:
+                event_id = candidate
+        except (TypeError, ValueError):
+            pass
+    if (event_id is None or run.trigger_key != f"event:{event_id}"
+            or run.trigger_event_id != str(event_id)):
+        return False
+    return await _retained_document_evidence_current(
+        session, run.payload, event_id=event_id, document_id=run.document_id,
+        document_version_id=run.document_version_id,
+    )
+
+
+async def _legacy_event_matches_cleanup(
+    session: AsyncSession, event_id: UUID, *, document_id: UUID, source_id: UUID,
+    version_ids: tuple[UUID, ...],
+) -> Any | None:
+    """Use Ingestion's strict outbox resolver to classify one pre-sidecar event against a receipt."""
+    from modules.ingestion import public as ingestion
+
+    proof = await ingestion.resolve_ready_event_provenance(
+        session, event_id, document_id=document_id, source_id=source_id,
+        accepted_version_ids=version_ids,
+    )
+    return proof
+
+
+async def _event_belongs_elsewhere(session: AsyncSession, event_key: str | None, *, document_id: UUID) -> bool:
+    """True only when a strict canonical ready event provably resolves to a different Document."""
+    from modules.ingestion import public as ingestion
+
+    try:
+        event_id = UUID(event_key or "")
+    except (ValueError, TypeError):
+        return False
+    if str(event_id) != event_key:
+        return False
+    # Retained-receipt fallback: an event of an already-deleted other Document is still foreign, not unresolved.
+    proof = await ingestion.resolve_ready_event_provenance(session, event_id, allow_retained_receipt=True)
+    return proof is not None and proof.document_id != document_id
+
+
+async def scrub_document_triggers(
+    session: AsyncSession, *, operation_id: UUID, document_id: UUID, source_id: UUID,
+    version_ids: tuple[UUID, ...], final_reference_page: bool = False,
+    after: UUID | None = None, limit: int = 100,
+) -> AutomationCleanupProgress:
+    """Scrub one stable keyset page of exact new-document inbox copies without committing.
+
+    Direct rows use private sidecars plus exact ready-event receipt; legacy rows require an exact UUID
+    outbox receipt and version in the detached cleanup scope. Unresolved row IDs are provisional until
+    the caller marks its last reference page. The caller retains operation and both cursor positions.
+    """
+    if not 1 <= limit <= 100 or len(version_ids) > 100:
+        raise ValueError("Automation trigger cleanup exceeds its page bound")
+    statement = select(AutomationTrigger).where(AutomationTrigger.trigger_type == "new_document")
+    if after is not None:
+        statement = statement.where(AutomationTrigger.id > after)
+    rows = list((await session.scalars(
+        statement.order_by(AutomationTrigger.id).limit(limit).with_for_update()
+    )).all())
+    complete = len(rows) < limit
+    changed = 0
+    provisional: list[UUID] = []
+    unavailable: list[UUID] = []
+    for event in rows:
+        if event.document_evidence_revoked:
+            continue
+        matched = (
+            event.document_id == document_id and event.document_version_id is not None
+            and event.payload.get("source_id") == str(source_id)
+        )
+        proven_version = event.document_version_id if matched else None
+        if matched:
+            try:
+                event_id = UUID(event.event_key)
+                proof = await _legacy_event_matches_cleanup(
+                    session, event_id, document_id=document_id, source_id=source_id, version_ids=version_ids,
+                ) if str(event_id) == event.event_key else None
+            except (ValueError, TypeError):
+                proof = None
+            matched = proof is not None and proof.document_version_id == event.document_version_id
+        if not matched and event.document_id is None and event.document_version_id is None:
+            try:
+                event_id = UUID(event.event_key)
+                if str(event_id) == event.event_key:
+                    proof = await _legacy_event_matches_cleanup(
+                        session, event_id, document_id=document_id, source_id=source_id, version_ids=version_ids,
+                    )
+                    matched = proof is not None
+                    proven_version = proof.document_version_id if proof is not None else None
+            except (ValueError, TypeError):
+                matched = False
+        if not matched:
+            # Rows proven to belong to another Document (sidecar or resolvable ready event) are skipped;
+            # only this Document's unmatched rows and genuinely undecidable legacy rows are reported.
+            if event.document_id is not None and event.document_id != document_id:
+                continue
+            if (event.document_id is None and event.document_version_id is None
+                    and await _event_belongs_elsewhere(session, event.event_key, document_id=document_id)):
+                continue
+            (unavailable if final_reference_page else provisional).append(event.id)
+            continue
+        event.document_id = document_id
+        event.document_version_id = proven_version
+        event.document_evidence_revoked = True
+        event.payload = _scrub_document_payload(event.payload)
+        event.status = "processed"
+        changed += 1
+    if changed:
+        await session.flush()
+    return AutomationCleanupProgress(
+        rows[-1].id if rows else after, complete, changed, operation_id, tuple(provisional), tuple(unavailable),
+    )
+
+
+async def scrub_document_runs(
+    session: AsyncSession, *, operation_id: UUID, document_id: UUID, source_id: UUID,
+    version_ids: tuple[UUID, ...], final_reference_page: bool = False,
+    after: UUID | None = None, limit: int = 100,
+) -> AutomationCleanupProgress:
+    """Scrub one bounded exact run-payload page while retaining action results and effect uncertainty.
+
+    Paged receipts require the caller to retain both evidence-page and run-ID cursor positions.
+    """
+    if not 1 <= limit <= 100 or len(version_ids) > 100:
+        raise ValueError("Automation run cleanup exceeds its page bound")
+    statement = select(AutomationRun).where(AutomationRun.trigger_type == "new_document")
+    if after is not None:
+        statement = statement.where(AutomationRun.id > after)
+    rows = list((await session.scalars(
+        statement.order_by(AutomationRun.id).limit(limit).with_for_update()
+    )).all())
+    complete = len(rows) < limit
+    changed = 0
+    from modules.automations.models import AutomationRunAction
+
+    provisional: list[UUID] = []
+    unavailable: list[UUID] = []
+    for run in rows:
+        if run.document_evidence_revoked:
+            continue
+        matched = (
+            run.document_id == document_id and run.document_version_id is not None
+            and run.payload.get("source_id") == str(source_id)
+        )
+        proven_version = run.document_version_id if matched else None
+        event_id: UUID | None = None
+        if matched:
+            try:
+                event_id = UUID(run.trigger_event_id or "")
+                proof = await _legacy_event_matches_cleanup(
+                    session, event_id, document_id=document_id, source_id=source_id, version_ids=version_ids,
+                ) if str(event_id) == run.trigger_event_id and run.trigger_key == f"event:{event_id}" else None
+            except (ValueError, TypeError):
+                proof = None
+            matched = proof is not None and proof.document_version_id == run.document_version_id
+        if not matched and run.document_id is None and run.document_version_id is None:
+            event_id = None
+            if run.trigger_event_id is not None:
+                try:
+                    candidate = UUID(run.trigger_event_id)
+                    if str(candidate) == run.trigger_event_id:
+                        event_id = candidate
+                except (ValueError, TypeError):
+                    pass
+            # The run formatter stores the original event ID twice; require the exact pair.
+            if event_id is None and run.trigger_key.startswith("event:"):
+                token = run.trigger_key.removeprefix("event:")
+                try:
+                    candidate = UUID(token)
+                    if str(candidate) == token and run.trigger_key == f"event:{candidate}":
+                        event_id = candidate
+                except (ValueError, TypeError):
+                    pass
+            if event_id is not None and run.trigger_key == f"event:{event_id}" and run.trigger_event_id == str(event_id):
+                proof = await _legacy_event_matches_cleanup(
+                    session, event_id, document_id=document_id, source_id=source_id, version_ids=version_ids,
+                )
+                matched = proof is not None
+                proven_version = proof.document_version_id if proof is not None else None
+        if run.document_id is not None and run.document_id != document_id:
+            continue
+        if (not matched and run.document_id is None and run.document_version_id is None
+                and event_id is not None
+                and await _event_belongs_elsewhere(session, str(event_id), document_id=document_id)):
+            continue
+        contradictory = (
+            run.document_id == document_id and run.document_version_id is not None
+            and run.document_version_id not in version_ids
+        )
+        if contradictory:
+            (unavailable if final_reference_page else provisional).append(run.id)
+            continue
+        if not matched:
+            (unavailable if final_reference_page else provisional).append(run.id)
+            continue
+        actions = list((await session.scalars(
+            select(AutomationRunAction).where(AutomationRunAction.run_id == run.id)
+            .order_by(AutomationRunAction.ordinal).with_for_update()
+        )).all())
+        run.document_id = document_id
+        run.document_version_id = proven_version
+        run.document_evidence_revoked = True
+        run.payload = _scrub_document_payload(run.payload)
+        uncertain = any(action.status in {"in_flight", "requires_review"} for action in actions)
+        for action in actions:
+            if action.status in {"pending", "approved", "awaiting_approval"}:
+                action.status, action.error_code, action.approved_session_hash = (
+                    "skipped", "document_evidence_revoked", None,
+                )
+            elif action.status == "in_flight":
+                action.status, action.error_code = "requires_review", "document_evidence_revoked"
+        if uncertain:
+            run.status, run.reason, run.finished_at = (
+                "requires_review", "document_evidence_revoked", datetime.now(UTC),
+            )
+        elif run.status in {"queued", "running", "awaiting_approval"}:
+            run.status, run.reason, run.finished_at = (
+                "dropped", "document_evidence_revoked", datetime.now(UTC),
+            )
+        changed += 1
+    if changed:
+        await session.flush()
+    return AutomationCleanupProgress(
+        rows[-1].id if rows else after, complete, changed, operation_id, tuple(provisional), tuple(unavailable),
+    )
+
+
 async def fan_out_triggers(factory: async_sessionmaker[AsyncSession]) -> int:
     """Turn pending inbox events into runs, one event at a time under row locks.
 
     The inbox row is marked processed in the same transaction as the runs it produced, so a crash
-    re-reads the event and the run identity index absorbs the repeat. Returns runs created.
+    re-reads the event and the run identity index absorbs the repeat. Exact Document provenance is
+    revalidated before planning; unavailable events are scrubbed and made ineligible. A detached
+    bounded page discovers and prelocks proved Source IDs in UUID order before inbox row locks; if a
+    new page member requires an unheld Source, the batch is rolled back and retried later.
     """
     created = 0
     async with factory() as session:
+        # Discover the bounded page without owner locks, then acquire its Source fences in UUID order.
+        detached = (await session.scalars(
+            select(AutomationTrigger).where(AutomationTrigger.status == "pending")
+            .order_by(AutomationTrigger.created_at).limit(100)
+        )).all()
+        source_ids: set[UUID] = set()
+        for candidate in detached:
+            if candidate.trigger_type != "new_document" or candidate.document_evidence_revoked:
+                continue
+            try:
+                event_id = UUID(candidate.event_key)
+            except (TypeError, ValueError):
+                continue
+            if str(event_id) != candidate.event_key:
+                continue
+            from modules.ingestion import public as ingestion
+            proof = await ingestion.resolve_ready_event_provenance(session, event_id)
+            if proof is not None:
+                source_ids.add(proof.source_id)
+        from modules.sources import public as sources
+        for source_id in sorted(source_ids, key=str):
+            await sources.lock_retained_evidence_source(session, source_id)
         events = (await session.scalars(
             select(AutomationTrigger).where(AutomationTrigger.status == "pending")
-            .order_by(AutomationTrigger.created_at).limit(100).with_for_update(skip_locked=True))).all()
+            .order_by(AutomationTrigger.created_at).limit(100).with_for_update(skip_locked=True)
+            .execution_options(populate_existing=True))).all()
+        # A producer may have inserted a new page member between discovery and row locking. Do not
+        # discover and acquire its Source fence while holding inbox locks; defer the whole batch.
         for event in events:
+            if event.trigger_type != "new_document" or event.document_evidence_revoked:
+                continue
+            try:
+                event_id = UUID(event.event_key)
+            except (TypeError, ValueError):
+                continue
+            if str(event_id) != event.event_key:
+                continue
+            from modules.ingestion import public as ingestion
+            proof = await ingestion.resolve_ready_event_provenance(session, event_id)
+            if proof is not None and proof.source_id not in source_ids:
+                await session.rollback()
+                return 0
+        for event in events:
+            if event.trigger_type == "new_document" and not await _trigger_evidence_current(session, event):
+                event.status = "processed"
+                event.document_evidence_revoked = True
+                event.payload = _scrub_document_payload(event.payload)
+                continue
             for rev in await live_rules(session, event.trigger_type):
                 if event.trigger_type == "webhook" and rev.trigger.get("hook") != event.payload.get("hook"):
                     continue
@@ -290,6 +751,7 @@ async def fan_out_triggers(factory: async_sessionmaker[AsyncSession]) -> int:
                     session, owner_id=event.owner_id, rev=rev, trigger_type=event.trigger_type,
                     trigger_key=f"event:{event.event_key}", trigger_event_id=event.event_key, slot=None,
                     payload=event.payload, depth=event.depth + 1,
+                    document_id=event.document_id, document_version_id=event.document_version_id,
                     origin_automation_id=event.origin_automation_id, origin_run_id=event.origin_run_id)
                 created += run_id is not None
             event.status = "processed"
@@ -412,9 +874,9 @@ async def decide_action(
     """Record the owner's decision on one action waiting for approval.
 
     Approval is bound to the action definition of the cited revision (``approval_hash``), expires
-    after 24 hours and is void if the rule changed, was paused or deleted (revision fence). On
-    approve the owner session digest is kept only until the worker performs the action. Deny
-    ends the run. Nothing is executed here; the worker does that after the commit.
+    after 24 hours and is void if the rule changed, was paused or deleted (revision fence). Document
+    trigger evidence is revalidated before either decision. On approve the owner session digest is
+    kept only until the worker performs the action. Nothing is executed here; the worker acts after commit.
 
     Raises:
         RunMissing: Unknown run or action.
@@ -437,6 +899,8 @@ async def decide_action(
         problem = ("approval_expired", "Approval expired")
     elif spec is None or row.approval_hash != _approval_hash(run, ordinal, spec, row.destination_revision):
         problem = ("approval_mismatch", "Approval no longer matches the action")
+    elif not await _run_evidence_current(session, run):
+        problem = ("document_evidence_unavailable", "Document trigger evidence is no longer available")
     elif not await _fence_current(session, run):
         problem = ("stale_revision", "Rule changed after this run was queued")
     elif _destination_stale(settings, spec, row.destination_revision):
@@ -444,7 +908,9 @@ async def decide_action(
     elif dependencies_missing(rev):
         problem = ("dependency_unavailable", "A required module is unavailable")
     if problem is not None:
-        dropped = problem[0] in ("stale_revision", "stale_destination", "dependency_unavailable")
+        dropped = problem[0] in (
+            "stale_revision", "stale_destination", "dependency_unavailable", "document_evidence_unavailable",
+        )
         row.status, row.error_code = ("skipped" if dropped else "failed"), problem[0]
         _finish(run, "dropped" if dropped else "failed", problem[0])
         await _skip_pending(session, run.id, problem[0])
@@ -465,13 +931,24 @@ async def _mark(
     factory: async_sessionmaker[AsyncSession], run_id: UUID, ordinal: int, status: str,
     code: str | None = None, reference: str | None = None,
 ) -> None:
-    """Persist one action outcome in its own short transaction (also clears any session digest)."""
+    """Persist an action outcome after locking its run then action, preserving revocation review state."""
     async with factory() as session:
+        run = await session.get(AutomationRun, run_id, with_for_update=True)
         row = await session.scalar(select(AutomationRunAction).where(
             AutomationRunAction.run_id == run_id, AutomationRunAction.ordinal == ordinal).with_for_update())
         if row is not None:
-            row.status, row.error_code, row.result_reference = status, code, reference
-            row.approved_session_hash = None
+            if run is not None and (run.document_evidence_revoked or run.status == "requires_review"):
+                if row.status != "succeeded":
+                    row.status = "requires_review"
+                    row.error_code = "document_evidence_revoked" if run.document_evidence_revoked else (
+                        row.error_code or "run_requires_review"
+                    )
+                if reference is not None:
+                    row.result_reference = reference
+                row.approved_session_hash = None
+            else:
+                row.status, row.error_code, row.result_reference = status, code, reference
+                row.approved_session_hash = None
             await session.commit()
 
 
@@ -479,8 +956,8 @@ async def _action_step(ctx: dict[str, Any], run_id: UUID, ordinal: int) -> str:
     """Advance one action, durably pausing when its persisted owner module is disabled.
 
     Resumable: every row state is handled, so calling this after a crash converges. The fence is
-    checked before every start; ``in_flight`` found here means a previous attempt may have written
-    and is converted to review-only, never re-run.
+    checked before every start, including exact Document trigger evidence. A revoked in-flight action
+    remains review-only because the external effect may already have happened; it is never replayed.
     """
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     async with factory() as session:
@@ -495,6 +972,19 @@ async def _action_step(ctx: dict[str, Any], run_id: UUID, ordinal: int) -> str:
             return "succeeded"
         if state in ("failed", "denied", "skipped"):
             return "failed"
+        if not await _run_evidence_current(session, run):
+            if state in {"in_flight", "requires_review"}:
+                # The dispatch boundary may already have been crossed; retain uncertainty and never replay it.
+                row.status, row.error_code = "requires_review", "document_evidence_unavailable"
+                _finish(run, "requires_review", "document_evidence_unavailable")
+                await _skip_pending(session, run.id, "document_evidence_unavailable")
+                await session.commit()
+                return "requires_review"
+            row.status, row.error_code = "skipped", "document_evidence_unavailable"
+            _finish(run, "dropped", "document_evidence_unavailable")
+            await _skip_pending(session, run.id, "document_evidence_unavailable")
+            await session.commit()
+            return "dropped"
         # run_agent is idempotent (client_request_id), so an interrupted one is simply attempted again.
         if state == "requires_review" or (state == "in_flight" and spec["type"] != "run_agent"):
             row.status, row.error_code = "requires_review", row.error_code or "ambiguous_after_restart"
@@ -556,9 +1046,18 @@ async def _restore_paused_action(
 ) -> None:
     """Return an unsent effect to its durable resumable state when lifecycle blocks admission."""
     async with factory() as session:
+        run = await session.get(AutomationRun, run_id, with_for_update=True)
         row = await session.scalar(select(AutomationRunAction).where(
             AutomationRunAction.run_id == run_id, AutomationRunAction.ordinal == ordinal,
         ).with_for_update())
+        if run is not None and (run.document_evidence_revoked or run.status == "requires_review"):
+            if row is not None and row.status == "in_flight":
+                row.status = "requires_review"
+                row.error_code = "document_evidence_revoked" if run.document_evidence_revoked else (
+                    row.error_code or "run_requires_review"
+                )
+                await session.commit()
+            return
         if row is not None and row.status in {"pending", "in_flight"}:
             row.status, row.error_code = status, None
             row.approved_session_hash = session_hash
@@ -614,7 +1113,7 @@ async def _transient(factory: async_sessionmaker[AsyncSession], run_id: UUID, or
 
 
 async def _generate_brief(ctx: dict[str, Any], run: AutomationRun, row: AutomationRunAction) -> str:
-    """Generate the daily brief via the dashboard public API; safe to retry (force=False dedupes)."""
+    """Generate through Dashboard only while the persisted trigger evidence remains eligible."""
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     try:
         async with factory() as session:
@@ -624,6 +1123,11 @@ async def _generate_brief(ctx: dict[str, Any], run: AutomationRun, row: Automati
                     factory, run.id, row.ordinal, status="pending", session_hash=None,
                 )
                 return "paused"
+            current_run = await session.get(AutomationRun, run.id)
+            if current_run is None or not await _run_evidence_current(session, current_run):
+                await session.rollback()
+                await _mark(factory, run.id, row.ordinal, "skipped", "document_evidence_unavailable")
+                return "dropped"
             schedule = await dashboard.read_schedule(session, run.owner_id)
             day = datetime.now(UTC).astimezone(ZoneInfo(schedule.timezone)).date()
             brief = await dashboard.generate_brief(
@@ -665,7 +1169,8 @@ async def _start_agent(
 ) -> str:
     """Start the approved P07 profile run through ``create_profile_run_in_uow`` (row is already in_flight).
 
-    The run uses the rule's ``profile_id`` at its current revision in the rule's Automation Chat
+    Persisted Document trigger evidence is rechecked before Agent creation. The run uses the rule's
+    ``profile_id`` at its current revision in the rule's Automation Chat
     conversation, so P07 approvals inside it work. ``client_request_id`` derives from
     (run, ordinal) and the owner-session scope, so a retry after a crash returns the same agent run
     rather than a second one; that is why this action is safe to resume. A rejection raised before
@@ -678,6 +1183,11 @@ async def _start_agent(
         return "failed"
     try:
         async with factory() as session:
+            current_run = await session.get(AutomationRun, run.id, with_for_update=True)
+            if current_run is None or not await _run_evidence_current(session, current_run):
+                await session.rollback()
+                await _mark(factory, run.id, ordinal, "skipped", "document_evidence_unavailable")
+                return "dropped"
             if not await _action_modules_enabled(session, spec["type"]):
                 await session.rollback()
                 await _restore_paused_action(
@@ -689,6 +1199,7 @@ async def _start_agent(
             profile_id = spec["profile_id"]
             revision = await agents.current_profile_revision(session, run.owner_id, profile_id, registry, config)
             conversation_id = await _automation_conversation(session, run.automation_id, rule_name)
+            # The producer's title/condition metadata is never passed into the remote agent prompt.
             started = await agents.create_profile_run_in_uow(
                 session, run.owner_id, session_hash, profile_id,
                 ProfileRunStart(
@@ -718,22 +1229,50 @@ async def _send_webhook(
 ) -> str:
     """Send the approved webhook once through the shared SSRF-safe transport (row is already in_flight).
 
-    The body is metadata only (rule, run, revision, depth). Origin and depth go out as headers so a
-    receiver that calls back into an inbound hook continues the same causal chain. The revision
-    fence runs again after DNS and just before the socket write; a non-2xx or timeout after the
-    write began is ``requires_review`` and is never replayed.
+    The body is metadata only (rule, run, revision, depth), with no Document condition payload or
+    title. Origin and depth go out as headers so a receiver that calls back into an inbound hook
+    continues the same causal chain. Persisted evidence, revision and destination are checked after
+    DNS and just before the socket write; a non-2xx or timeout after write begins is ``requires_review``.
     """
     settings = cast(Settings, ctx["settings"])
     lifecycle_blocked = False
+    evidence_blocked = False
+    publication_session: AsyncSession | None = None
 
     async def still_current() -> bool:
-        """Re-check persisted owner modules, rule revision, and destination just before the write."""
-        nonlocal lifecycle_blocked
-        async with factory() as session:
+        """Hold evidence and rule fences until the transport's immediate socket-write boundary completes."""
+        nonlocal lifecycle_blocked, evidence_blocked, publication_session
+        if publication_session is not None:
+            await publication_session.rollback()
+            await publication_session.close()
+            publication_session = None
+        session = factory()
+        try:
             if not await _action_modules_enabled(session, spec["type"]):
                 lifecycle_blocked = True
+                await session.rollback()
+                await session.close()
                 return False
-            return await _fence_current(session, run) and not _destination_stale(settings, spec, destination)
+            persisted = await session.get(AutomationRun, run.id)
+            if persisted is None or not await _run_evidence_current(session, persisted):
+                evidence_blocked = True
+                await session.rollback()
+                await session.close()
+                return False
+            valid = (
+                await _fence_current(session, persisted, share=True)
+                and not _destination_stale(settings, spec, destination)
+            )
+            if not valid:
+                await session.rollback()
+                await session.close()
+                return False
+            publication_session = session
+            return True
+        except Exception:
+            await session.rollback()
+            await session.close()
+            raise
 
     body = {
         "event": spec["event"], "automation_id": str(run.automation_id), "run_id": str(run.id),
@@ -749,10 +1288,17 @@ async def _send_webhook(
     except asyncio.CancelledError:
         await asyncio.shield(_mark(factory, run.id, ordinal, "requires_review", "cancelled_in_flight"))
         raise
+    finally:
+        if publication_session is not None:
+            await publication_session.rollback()
+            await publication_session.close()
     if outcome == "succeeded":
         await _mark(factory, run.id, ordinal, "succeeded", None, f"webhook:{run.id}:{ordinal}")
         return "succeeded"
     if outcome == "unsent":
+        if evidence_blocked:
+            await _mark(factory, run.id, ordinal, "skipped", "document_evidence_unavailable")
+            return "dropped"
         async with factory() as session:
             current = await _fence_current(session, run)
             modules_enabled = await _action_modules_enabled(session, spec["type"])
@@ -774,6 +1320,13 @@ async def _settle(factory: async_sessionmaker[AsyncSession], run_id: UUID, outco
     """Move the run to the status implied by the last action outcome and persist it."""
     async with factory() as session:
         run = await session.get(AutomationRun, run_id, with_for_update=True)
+        if run is None:
+            return "dropped"
+        if run.document_evidence_revoked or run.status == "requires_review":
+            if run.document_evidence_revoked:
+                _finish(run, "requires_review", "document_evidence_revoked")
+            await session.commit()
+            return run.status
         if outcome == "awaiting_approval":
             run.status = "awaiting_approval"
             run.attempts = max(run.attempts - 1, 0)  # waiting for the owner is not a failed pass

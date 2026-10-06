@@ -31,10 +31,31 @@ class BriefRead(BaseModel):
     timezone: str
     revision: int
     status: Literal["current", "stale"]
+    lineage_status: Literal["captured", "unavailable"] = "unavailable"
     content: str
     citations: list[dict[str, Any]]
     model_alias: str
     generated_at: datetime
+
+
+class BriefCleanupProgress(BaseModel):
+    """Report one flush-only bounded page of copied briefs affected by a Document cleanup."""
+
+    processed_count: int = Field(ge=0, le=100)
+    scrubbed_count: int = Field(ge=0, le=100)
+    next_cursor: UUID | None = None
+
+
+class BriefLegacyCoverage(BaseModel):
+    """Report one bounded page of legacy briefs whose Document dependencies cannot be proven.
+
+    These rows have no full-prompt manifest, so exact sidecar cleanup cannot see them. Their
+    stored prose is opaque and unverifiable: a stage consumer must account for each unique
+    ``candidate_ids`` entry (stable across retries) and finish unavailable, never clean.
+    """
+
+    candidate_ids: list[UUID] = Field(default_factory=list, max_length=100)
+    next_cursor: UUID | None = None
 
 
 class DailyWidget(BaseModel):

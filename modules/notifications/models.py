@@ -4,7 +4,7 @@ from datetime import datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy import DateTime, ForeignKey, Index, String, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
@@ -18,6 +18,7 @@ class Notification(Base):
     __table_args__ = (
         UniqueConstraint("owner_id", "dedupe_key", name="uq_notifications_dedupe"),
         Index("ix_notifications_owner_created", "owner_id", "created_at"),
+        Index("ix_notifications_copied_document", "document_id", "id"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -29,5 +30,9 @@ class Notification(Base):
     params: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False, server_default="{}")
     body: Mapped[str | None] = mapped_column(String(2000))
     link: Mapped[str | None] = mapped_column(String(300))
+    # Private sidecar: copied dashboard titles must remain addressable after Document cascades.
+    document_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    document_version_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    copied_evidence_revoked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

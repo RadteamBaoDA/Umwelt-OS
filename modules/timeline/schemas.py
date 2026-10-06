@@ -360,6 +360,30 @@ class EventPage(BaseModel):
     next_cursor: str | None
 
 
+class BriefEventEvidence(BaseModel):
+    """Identify one exact timeline support usable in a bounded saved-brief dependency."""
+
+    document_id: UUID
+    document_version_id: UUID
+    chunk_id: UUID
+    source_id: UUID
+
+
+class BriefEventSupport(BaseModel):
+    """Classify one live event fact as independently authored or exactly document-supported."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    event_id: UUID
+    title: str
+    event_type: str
+    origin: Literal["manual", "derived"]
+    source_ids: list[UUID] = Field(max_length=100)
+    evidence: list[BriefEventEvidence] = Field(max_length=100)
+    complete: bool
+    independent: bool
+
+
 class CorrelationSignalRead(BaseModel):
     """Expose one timed, region-scoped canonical event with exact live evidence IDs only."""
     signal_id: UUID

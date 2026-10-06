@@ -20,7 +20,7 @@ from core.auth.models import Owner
 from modules.knowledge.entities import public as entities
 from modules.timeline.models import Event, EventAudit, EventEvidence, EventParticipant, EventSuppression, ParticipantEvidence
 from modules.timeline.schemas import (
-    CorrelationSignalPage, CorrelationSignalRead, EventCreate, EventPage, EventPatch,
+    BriefEventSupport, CorrelationSignalPage, CorrelationSignalRead, EventCreate, EventPage, EventPatch,
     EventRead, TimelinePage, TimelineQuery,
     TimelineExportEvidence, TimelineExportFence, TimelineExportFenceValidation,
     TimelineExportPage, TimelineExportParticipant, TimelineExportRead,
@@ -375,6 +375,78 @@ async def list_event_evidence(session: AsyncSession, event_id: UUID) -> list[dic
         return None
     result = await _event_read(session, await session.get(Event, event_id))
     return result.evidence if result else None
+
+
+async def lock_brief_events(session: AsyncSession, event_ids: list[UUID]) -> set[UUID]:
+    """Share-lock a bounded event set in canonical UUID order for Dashboard capture.
+
+    Missing or deleted events are omitted; subsequent support reads decide
+    whether each fact remains eligible. Sorted acquisition avoids deadlocks when
+    a prompt contains several timeline facts.
+    """
+    ids = sorted(set(event_ids), key=str)
+    if len(ids) > 40:
+        raise ValueError("Dashboard brief event lock set exceeds its fact limit")
+    if not ids:
+        return set()
+    locked = await session.scalars(
+        select(Event.id).where(Event.id.in_(ids), Event.deleted_at.is_(None))
+        .order_by(Event.id).with_for_update(read=True)
+    )
+    return set(locked)
+
+
+async def brief_event_support(
+    session: AsyncSession, event_id: UUID, *, expected_title: str | None,
+    expected_source_ids: list[str], lock_fact: bool = False,
+) -> BriefEventSupport:
+    """Return complete exact evidence or actual evidence-free manual origin for a brief fact.
+
+    At most 100 support references are returned. The caller may request a shared
+    event-row lock after it has acquired canonical source and document locks, so
+    owner edits cannot race Dashboard model egress or final persistence.
+    """
+    statement = select(Event).where(Event.id == event_id, Event.deleted_at.is_(None))
+    if lock_fact:
+        statement = statement.with_for_update(read=True, of=Event)
+    event = await session.scalar(statement.execution_options(populate_existing=True))
+    unavailable = BriefEventSupport(
+        event_id=event_id, title=expected_title or "", event_type="", origin="manual",
+        source_ids=[], evidence=[], complete=False, independent=False,
+    )
+    if event is None or (expected_title is not None and event.title != expected_title):
+        return unavailable
+    evidence_rows = list((await session.scalars(select(EventEvidence).where(
+        EventEvidence.event_id == event.id,
+    ).order_by(EventEvidence.id).limit(101))).all())
+    if not evidence_rows:
+        independent = event.origin == "manual" and not expected_source_ids
+        return BriefEventSupport(
+            event_id=event.id, title=event.title, event_type=event.type, origin=event.origin,
+            source_ids=[], evidence=[], complete=independent, independent=independent,
+        )
+    if len(evidence_rows) > 100 or any(
+        row.document_version_id is None or row.chunk_id is None for row in evidence_rows
+    ):
+        return unavailable.model_copy(update={"origin": event.origin})
+    pairs = [(row.document_version_id, row.chunk_id) for row in evidence_rows]
+    refs = await documents.read_evidence_refs(session, pairs)
+    if len(refs) != len(pairs):
+        return unavailable.model_copy(update={"origin": event.origin})
+    support = [
+        {"document_id": ref.document_id, "document_version_id": ref.document_version_id,
+         "chunk_id": ref.chunk_id, "source_id": ref.source_id}
+        for ref in refs
+    ]
+    source_ids = sorted({ref["source_id"] for ref in support}, key=str)
+    expected = sorted(set(expected_source_ids))
+    if ([str(value) for value in source_ids] != expected
+            or len({(ref["document_id"], ref["document_version_id"], ref["chunk_id"]) for ref in support}) != len(support)):
+        return unavailable.model_copy(update={"origin": event.origin})
+    return BriefEventSupport(
+        event_id=event.id, title=event.title, event_type=event.type, origin=event.origin,
+        source_ids=source_ids, evidence=support, complete=True, independent=False,
+    )
 
 
 async def list_correlation_signals(

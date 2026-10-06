@@ -99,6 +99,27 @@ class StoryDetail(BaseModel):
     incomplete_reasons: list[str] = Field(default_factory=list, max_length=8)
 
 
+class BriefStoryEvidence(BaseModel):
+    """Identify one exact story support usable in a bounded saved-brief dependency."""
+
+    document_id: UUID
+    document_version_id: UUID
+    chunk_id: UUID
+    source_id: UUID
+
+
+class BriefStorySupport(BaseModel):
+    """Return a current story fact and its complete exact support set for Dashboard capture."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    story_id: UUID
+    title: str
+    source_ids: list[UUID] = Field(max_length=100)
+    evidence: list[BriefStoryEvidence] = Field(max_length=100)
+    complete: bool
+
+
 class TrendFilter(BaseModel):
     """Bound trend reads to an owner-selected set of source IDs."""
 

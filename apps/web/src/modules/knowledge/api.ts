@@ -18,7 +18,7 @@ export type DocumentDeletionReceipt = {
   graph_status: 'tombstoned';
   raw_status: 'queued' | 'not_present' | 'retained_shared' | 'succeeded' | 'failed';
   evidence_scope_status: 'capturing' | 'captured' | 'unavailable';
-  copied_status: 'queued' | 'running' | 'failed';
+  copied_status: 'queued' | 'running' | 'succeeded' | 'failed';
   chat_status: 'queued' | 'running' | 'succeeded' | 'failed';
   chat_error_code: string | null;
   memory_status: 'queued' | 'running' | 'succeeded' | 'failed';
@@ -29,6 +29,12 @@ export type DocumentDeletionReceipt = {
   agent_error_code: string | null;
   agent_unresolved_count: number;
   agent_waiting_for_lease: boolean;
+  materialization_status: 'queued' | 'running' | 'succeeded' | 'failed';
+  materialization_error_code: string | null;
+  materialization_unresolved_count: number;
+  brief_status: 'queued' | 'running' | 'succeeded' | 'failed';
+  brief_error_code: string | null;
+  brief_unresolved_count: number;
   immediate_access_revoked: true;
   error_code: string | null;
   copied_error_code: string | null;

@@ -11,6 +11,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
+    Index,
     Integer,
     String,
     Text,
@@ -203,8 +204,9 @@ class GadgetPlacement(Base):
 class DailyBrief(Base):
     """One immutable saved brief revision for a local date; regeneration appends, never overwrites.
 
-    ``status`` flips to ``stale`` (never deleted) when cited evidence disappears so the saved
-    historical text stays distinct from lists refreshed from current records.
+    ``status`` flips to ``stale`` when captured document evidence disappears. The evidence
+    cleanup physically scrubs aggregate prose and citation labels when any captured dependency
+    is deleted, because those fields cannot be safely decomposed by support.
     """
 
     __tablename__ = "daily_briefs"
@@ -212,6 +214,12 @@ class DailyBrief(Base):
         CheckConstraint("revision >= 1", name="ck_daily_briefs_revision"),
         CheckConstraint("status IN ('current', 'stale')", name="ck_daily_briefs_status"),
         CheckConstraint("jsonb_typeof(citations) = 'array'", name="ck_daily_briefs_citations_array"),
+        CheckConstraint(
+            "(evidence_capture_version IS NULL AND evidence_capture_status IS NULL AND evidence_fact_count IS NULL) OR "
+            "(evidence_capture_version = 1 AND evidence_capture_status IN ('captured','unavailable') "
+            "AND evidence_fact_count BETWEEN 1 AND 40)",
+            name="ck_daily_briefs_evidence_capture",
+        ),
         UniqueConstraint("owner_id", "brief_date", "timezone", "revision", name="uq_daily_briefs_revision"),
     )
 
@@ -226,6 +234,46 @@ class DailyBrief(Base):
     citations: Mapped[list[dict[str, object]]] = mapped_column(JSONB, nullable=False, server_default="[]")
     model_alias: Mapped[str] = mapped_column(String(32), nullable=False)
     generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    evidence_capture_version: Mapped[int | None] = mapped_column(Integer)
+    evidence_capture_status: Mapped[str | None] = mapped_column(String(16))
+    evidence_fact_count: Mapped[int | None] = mapped_column(Integer)
+
+
+class DailyBriefEvidence(Base):
+    """Capture every prompted fact's exact document supports without canonical FKs.
+
+    One row per support and one null-support marker for a truly independent fact
+    preserve full prompt lineage after canonical Document cascades.
+    """
+
+    __tablename__ = "daily_brief_evidence"
+    __table_args__ = (
+        CheckConstraint("fact_ref BETWEEN 1 AND 40", name="ck_daily_brief_evidence_fact_ref"),
+        CheckConstraint("support_index BETWEEN 0 AND 99", name="ck_daily_brief_evidence_support_index"),
+        CheckConstraint("fact_kind IN ('tasks','goals','stories','events')", name="ck_daily_brief_evidence_fact_kind"),
+        CheckConstraint("fact_hash ~ '^[0-9a-f]{64}$'", name="ck_daily_brief_evidence_fact_hash"),
+        CheckConstraint(
+            "(document_id IS NULL AND document_version_id IS NULL AND chunk_id IS NULL AND source_id IS NULL) OR "
+            "(document_id IS NOT NULL AND document_version_id IS NOT NULL AND chunk_id IS NOT NULL AND source_id IS NOT NULL)",
+            name="ck_daily_brief_evidence_document_tuple",
+        ),
+        UniqueConstraint("brief_id", "fact_ref", "support_index", name="uq_daily_brief_evidence_fact_support"),
+        Index("ix_daily_brief_evidence_document_brief", "document_id", "brief_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    brief_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("daily_briefs.id", ondelete="CASCADE"), nullable=False,
+    )
+    fact_ref: Mapped[int] = mapped_column(Integer, nullable=False)
+    fact_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    fact_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    fact_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    support_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    document_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    document_version_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    chunk_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    source_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
 
 
 class BriefSchedule(Base):

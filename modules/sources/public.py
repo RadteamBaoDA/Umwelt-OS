@@ -400,6 +400,31 @@ async def lock_source(session: AsyncSession, source_id: UUID) -> SourceFence | N
     )
 
 
+async def lock_retained_evidence_source(session: AsyncSession, source_id: UUID) -> SourceFence | None:
+    """Share-lock a source while confirming retained data remains eligible for owner reads/effects.
+
+    Paused and connector-only archived sources remain eligible. A queued, running, or failed
+    with-data purge revokes eligibility immediately, even while immutable document rows linger.
+    The PostgreSQL ``FOR SHARE`` lock is compatible with other evidence readers but conflicts with
+    Source lifecycle ``FOR UPDATE`` mutations. Acquire bounded Source sets in UUID order before
+    Documents or mutable owner rows, then hold this lock through the caller's publication commit.
+    """
+    source = await session.scalar(
+        select(Source).where(Source.id == source_id).with_for_update(read=True)
+        .execution_options(populate_existing=True)
+    )
+    if source is None:
+        return None
+    eligible_ids = await filter_export_eligible_sources(
+        session, [SourceExportFence(source_id=source.id, generation=source.generation)],
+    )
+    if source.id not in eligible_ids:
+        return None
+    return SourceFence(
+        id=source.id, status=source.status, generation=source.generation, local_only=source.local_only,
+    )
+
+
 async def filter_active_source_ids(session: AsyncSession, source_ids: Sequence[UUID]) -> tuple[UUID, ...]:
     """Return only owner sources that are active and still eligible for current reads."""
     if not source_ids or len(source_ids) > 32:

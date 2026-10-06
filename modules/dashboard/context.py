@@ -102,6 +102,7 @@ async def _events_widget(session: AsyncSession, day: date, timezone: str) -> Dai
         items=[{
             "id": str(item.id), "title": item.title, "type": item.type, "origin": item.origin,
             "source_id": str(item.source_id) if item.source_id else None,
+            "source_ids": sorted({str(evidence["source_id"]) for evidence in item.evidence}),
             "started_at": item.started_at.isoformat() if item.started_at else None,
             "occurred_date": item.occurred_date.isoformat() if item.occurred_date else None,
         } for item in page.items],

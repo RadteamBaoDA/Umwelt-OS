@@ -1,4 +1,4 @@
-"""Documents-owned bounded cleanup consumer for raw files and Chat evidence copies."""
+"""Documents-owned bounded cleanup consumer for raw files and copied-evidence owner stages."""
 
 from datetime import UTC, datetime, timedelta
 import hashlib
@@ -25,6 +25,12 @@ _RETRY_DELAY = timedelta(seconds=30)
 _CONTINUATION_DELAY = timedelta(seconds=1)
 _MEMORY_RECONCILE_LIMIT = 100
 _agent_reconcile_cursor: UUID | None = None
+_copied_stage_reconcile_cursor: UUID | None = None
+# Failures with these codes are truthful terminal limitations (unavailable lineage); they never retry.
+_COPIED_STAGE_TERMINAL_CODES = frozenset({
+    "evidence_identity_unavailable", "legacy_provenance_unresolved", "legacy_coverage_unavailable",
+})
+_MATERIALIZATION_PHASES = ("notifications", "triggers", "runs")
 
 
 def _source_cleanup_progress_key(operation: DocumentCleanupOperation, stage: str) -> str:
@@ -45,6 +51,12 @@ def _source_cleanup_progress_key(operation: DocumentCleanupOperation, stage: str
         operation.agent_error_code,
         operation.agent_unresolved_count,
         operation.agent_waiting_for_lease,
+        operation.materialization_status,
+        operation.materialization_error_code,
+        operation.materialization_unresolved_count,
+        operation.brief_status,
+        operation.brief_error_code,
+        operation.brief_unresolved_count,
     )
     fingerprint = hashlib.sha256(
         json.dumps(state, separators=(",", ":"), ensure_ascii=True).encode(),
@@ -74,6 +86,14 @@ def _attempt_progress_snapshot(operation: DocumentCleanupOperation) -> tuple[obj
         dict(operation.agent_cursor) if isinstance(operation.agent_cursor, dict) else operation.agent_cursor,
         operation.agent_unresolved_count,
         operation.agent_waiting_for_lease,
+        operation.materialization_status,
+        operation.materialization_error_code,
+        dict(operation.materialization_cursor) if isinstance(operation.materialization_cursor, dict) else operation.materialization_cursor,
+        operation.materialization_unresolved_count,
+        operation.brief_status,
+        operation.brief_error_code,
+        dict(operation.brief_cursor) if isinstance(operation.brief_cursor, dict) else operation.brief_cursor,
+        operation.brief_unresolved_count,
     )
 
 
@@ -188,6 +208,175 @@ async def _advance_memory_cleanup(
     return progress.changed, True
 
 
+def _copied_stage_terminal(status: str, error_code: str | None) -> bool:
+    """Return whether a materialization/brief stage is finished, including unavailable limits."""
+    return status == "succeeded" or (status == "failed" and error_code in _COPIED_STAGE_TERMINAL_CODES)
+
+
+def _optional_uuid(value: object, label: str) -> UUID | None:
+    """Parse one stored cursor component, rejecting anything but a canonical UUID string or null."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"Stored {label} cursor is malformed")
+    parsed = UUID(value)
+    if str(parsed) != value:
+        raise ValueError(f"Stored {label} cursor is malformed")
+    return parsed
+
+
+async def _advance_materialization_cleanup(
+    session: AsyncSession, operation: DocumentCleanupOperation,
+) -> bool:
+    """Flush one Notifications/Automations page for this receipt and return whether it is terminal.
+
+    Runs inside the caller's privacy -> receipt lock transaction; owner hooks only lock their own
+    rows (stable UUID keyset, <=100) and never the already-deleted Document. The private cursor
+    ``{v, phase, reference_after, owner_after}`` walks notifications, then automation triggers, then
+    automation runs for each <=100-identity reference page; it is independent of the Chat, Memory
+    and Agent cursors. Owner "unavailable" IDs (only reported on the final reference page) add to
+    ``materialization_unresolved_count``; that count and the cursor commit together, so a retry
+    cannot double count. Unresolved legacy lineage ends ``failed`` and is never relabeled clean.
+    """
+    if operation.evidence_scope_status != "captured":
+        operation.materialization_status = "failed"
+        operation.materialization_error_code = "evidence_identity_unavailable"
+        operation.materialization_cursor = None
+        return True
+    state = operation.materialization_cursor or {
+        "v": 1, "phase": "notifications", "reference_after": None, "owner_after": None,
+    }
+    if (not isinstance(state, dict) or set(state) != {"v", "phase", "reference_after", "owner_after"}
+            or state["v"] != 1 or state["phase"] not in _MATERIALIZATION_PHASES):
+        raise ValueError("Stored materialization cleanup cursor is malformed")
+    phase = str(state["phase"])
+    reference_after = _optional_uuid(state["reference_after"], "materialization reference")
+    owner_after = _optional_uuid(state["owner_after"], "materialization owner")
+    scope = await documents.list_document_cleanup_evidence_scope(
+        session, operation.id, after=reference_after, limit=100,
+    )
+    if scope is None:
+        raise ValueError("Document cleanup evidence scope is unavailable")
+    version_ids = tuple(dict.fromkeys(ref.document_version_id for ref in scope.references))
+    final_page = scope.next_cursor is None
+    if phase == "notifications":
+        from modules.notifications import public as notifications
+
+        progress = await notifications.scrub_document_evidence(
+            session, operation_id=operation.id, document_id=scope.document_id,
+            version_ids=version_ids, final_reference_page=final_page, after=owner_after, limit=100,
+        )
+    else:
+        from modules.automations import public as automations
+
+        hook = automations.scrub_document_triggers if phase == "triggers" else automations.scrub_document_runs
+        progress = await hook(
+            session, operation_id=operation.id, document_id=scope.document_id,
+            source_id=scope.source_id, version_ids=version_ids,
+            final_reference_page=final_page, after=owner_after, limit=100,
+        )
+    # Only terminal (final-page) unavailable rows are reported; provisional IDs are revisited later.
+    operation.materialization_unresolved_count += len(progress.unavailable_ids)
+    operation.materialization_status = "running"
+    if not progress.complete:
+        if progress.next_cursor is None:
+            raise ValueError("Materialization cleanup page is incomplete without a continuation cursor")
+        operation.materialization_cursor = {
+            "v": 1, "phase": phase,
+            "reference_after": str(reference_after) if reference_after else None,
+            "owner_after": str(progress.next_cursor),
+        }
+        return False
+    if phase != "runs":
+        operation.materialization_cursor = {
+            "v": 1, "phase": _MATERIALIZATION_PHASES[_MATERIALIZATION_PHASES.index(phase) + 1],
+            "reference_after": str(reference_after) if reference_after else None, "owner_after": None,
+        }
+        return False
+    if scope.next_cursor is not None:
+        operation.materialization_cursor = {
+            "v": 1, "phase": "notifications",
+            "reference_after": str(scope.next_cursor), "owner_after": None,
+        }
+        return False
+    operation.materialization_cursor = None
+    if operation.materialization_unresolved_count:
+        operation.materialization_status = "failed"
+        operation.materialization_error_code = "legacy_provenance_unresolved"
+    else:
+        operation.materialization_status = "succeeded"
+        operation.materialization_error_code = None
+    return True
+
+
+async def _advance_brief_cleanup(
+    session: AsyncSession, operation: DocumentCleanupOperation,
+) -> bool:
+    """Flush one Dashboard saved-brief page for this receipt and return whether it is terminal.
+
+    Dashboard keys captured prompt dependencies by the detached ``document_id`` alone, so the
+    stage needs neither the evidence reference pages nor a live Document. Phase ``sidecars`` scrubs
+    briefs whose captured manifest names the Document; phase ``legacy`` then reports (read-only)
+    briefs with prose but no manifest, whose Document dependencies are unknowable. Each legacy
+    brief adds one to ``brief_unresolved_count`` and the stage ends ``failed`` with
+    ``legacy_coverage_unavailable``: reads already withhold such briefs, but they are never
+    reported clean and the terminal code prevents a retry loop. Only legacy briefs generated at or
+    after the receipt's recorded earliest-version time count (earlier ones cannot mention the
+    Document); an unknown time (historical receipt) counts them all. The cursor is ``{v, phase, after}``.
+    """
+    state = operation.brief_cursor or {"v": 1, "phase": "sidecars", "after": None}
+    if (not isinstance(state, dict) or set(state) != {"v", "phase", "after"}
+            or state["v"] != 1 or state["phase"] not in {"sidecars", "legacy"}):
+        raise ValueError("Stored brief cleanup cursor is malformed")
+    phase = str(state["phase"])
+    after = _optional_uuid(state["after"], "brief")
+    from modules.dashboard import public as dashboard
+
+    operation.brief_status = "running"
+    if phase == "sidecars":
+        progress = await dashboard.clean_document_brief_evidence(
+            session, operation.document_id, after_brief_id=after, limit=100,
+        )
+        operation.brief_cursor = {
+            "v": 1, "phase": "sidecars" if progress.next_cursor else "legacy",
+            "after": str(progress.next_cursor) if progress.next_cursor else None,
+        }
+        return False
+    coverage = await dashboard.legacy_brief_coverage(
+        session, after_brief_id=after, limit=100, not_before=operation.earliest_version_created_at,
+    )
+    operation.brief_unresolved_count += len(coverage.candidate_ids)
+    if coverage.next_cursor is not None:
+        operation.brief_cursor = {"v": 1, "phase": "legacy", "after": str(coverage.next_cursor)}
+        return False
+    operation.brief_cursor = None
+    if operation.brief_unresolved_count:
+        operation.brief_status = "failed"
+        operation.brief_error_code = "legacy_coverage_unavailable"
+    else:
+        operation.brief_status = "succeeded"
+        operation.brief_error_code = None
+    return True
+
+
+def _fail_copied_stage(
+    operation: DocumentCleanupOperation, stage: str, code: str, *, reset: bool,
+) -> None:
+    """Record a retryable failure of one materialization/brief stage; a reset also restarts its cursor.
+
+    A cursor reset zeroes the stage's unresolved count because the restart recounts from scratch.
+    """
+    setattr(operation, f"{stage}_status", "failed")
+    setattr(operation, f"{stage}_error_code", code)
+    if reset:
+        setattr(operation, f"{stage}_cursor", None)
+        setattr(operation, f"{stage}_unresolved_count", 0)
+    operation.copied_status = "failed"
+    operation.copied_error_code = code
+    operation.status = "failed"
+    operation.error_code = code
+
+
 async def _evict_memory_cache_after_commit(
     factory: async_sessionmaker[AsyncSession], redis: Redis, operation_id: UUID, event_id: UUID,
 ) -> None:
@@ -213,11 +402,15 @@ async def _evict_memory_cache_after_commit(
             if (operation.raw_status in {"not_present", "retained_shared", "succeeded"}
                     and operation.chat_status == "succeeded"
                     and operation.memory_status in {"succeeded", "failed"}
-                    and operation.agent_status in {"succeeded", "failed"}):
+                    and operation.agent_status in {"succeeded", "failed"}
+                    and _copied_stage_terminal(operation.materialization_status, operation.materialization_error_code)
+                    and _copied_stage_terminal(operation.brief_status, operation.brief_error_code)):
                 await ingestion.set_event_delivery(session, event_id, "delivered")
             elif (operation.raw_status in {"not_present", "retained_shared", "succeeded"}
                     and operation.chat_status == "succeeded"
-                    and (operation.memory_status == "running" or operation.agent_status == "running")):
+                    and (operation.memory_status == "running" or operation.agent_status == "running"
+                         or not _copied_stage_terminal(operation.materialization_status, operation.materialization_error_code)
+                         or not _copied_stage_terminal(operation.brief_status, operation.brief_error_code))):
                 await ingestion.set_event_delivery(
                     session, event_id, "pending",
                     next_attempt_at=datetime.now(UTC) + _CONTINUATION_DELAY,
@@ -275,6 +468,45 @@ async def reconcile_document_agent_cleanup(ctx: dict[str, object]) -> int:
             operation_ids = await documents.pending_document_agent_cleanup_ids(session, limit=100)
         if operation_ids:
             _agent_reconcile_cursor = operation_ids[-1]
+        enqueued = 0
+        for operation_id in operation_ids:
+            event_id = uuid5(operation_id, "document-cleanup-requested")
+            event = await ingestion.get_event_delivery(session, event_id)
+            if event is None:
+                await ingestion.publish_event(session, DomainEvent(
+                    id=event_id, type="document.cleanup.requested", version=1,
+                    occurred_at=now, producer="modules.knowledge.documents",
+                    payload={"operation_id": str(operation_id)},
+                ))
+                enqueued += 1
+            elif event.status in {"delivered", "failed"}:
+                await ingestion.set_event_delivery(session, event_id, "pending", next_attempt_at=now)
+                enqueued += 1
+        if enqueued:
+            await session.commit()
+        else:
+            await session.rollback()
+        return enqueued
+
+
+async def reconcile_document_copied_stage_cleanup(ctx: dict[str, object]) -> int:
+    """Fairly scan one bounded UUID page of receipts with a nonterminal materialization/brief stage.
+
+    Reopens a delivered or failed deterministic cleanup event idempotently and preserves the
+    schedule of a pending one. Terminal unavailable stages are excluded by the Documents query.
+    """
+    global _copied_stage_reconcile_cursor
+    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    now = datetime.now(UTC)
+    async with factory() as session:
+        operation_ids = await documents.pending_document_copied_stage_cleanup_ids(
+            session, after=_copied_stage_reconcile_cursor, limit=100,
+        )
+        if not operation_ids and _copied_stage_reconcile_cursor is not None:
+            _copied_stage_reconcile_cursor = None
+            operation_ids = await documents.pending_document_copied_stage_cleanup_ids(session, limit=100)
+        if operation_ids:
+            _copied_stage_reconcile_cursor = operation_ids[-1]
         enqueued = 0
         for operation_id in operation_ids:
             event_id = uuid5(operation_id, "document-cleanup-requested")
@@ -438,6 +670,8 @@ async def process_document_cleanup(ctx: dict[str, object], event_id: str) -> Non
             agent_terminal = operation.agent_status in {"succeeded", "failed"}
             if (operation.raw_status in {"not_present", "retained_shared", "succeeded"}
                     and operation.chat_status == "succeeded" and memory_terminal and agent_terminal
+                    and _copied_stage_terminal(operation.materialization_status, operation.materialization_error_code)
+                    and _copied_stage_terminal(operation.brief_status, operation.brief_error_code)
                     and not operation.memory_cache_pending):
                 # Duplicate deliveries must not reopen a receipt whose required active stages finished.
                 await ingestion.set_event_delivery(session, identifier, "delivered")
@@ -586,6 +820,19 @@ async def process_document_cleanup(ctx: dict[str, object], event_id: str) -> Non
                     if not terminal:
                         next_attempt_at = next_attempt_at or datetime.now(UTC) + _CONTINUATION_DELAY
 
+            # Materialization (Notifications/Automations) and saved-brief stages keep their own
+            # cursors and run under the same privacy -> receipt locks; one page each per delivery.
+            if not _copied_stage_terminal(operation.materialization_status, operation.materialization_error_code):
+                attempt_stage = "materialization"
+                operation.materialization_error_code = None
+                if not await _advance_materialization_cleanup(session, operation):
+                    next_attempt_at = next_attempt_at or datetime.now(UTC) + _CONTINUATION_DELAY
+            if not _copied_stage_terminal(operation.brief_status, operation.brief_error_code):
+                attempt_stage = "brief"
+                operation.brief_error_code = None
+                if not await _advance_brief_cleanup(session, operation):
+                    next_attempt_at = next_attempt_at or datetime.now(UTC) + _CONTINUATION_DELAY
+
             if operation.raw_status == "failed":
                 operation.error_code = operation.error_code or "file_cleanup_failed"
                 next_attempt_at = next_attempt_at or datetime.now(UTC) + _RETRY_DELAY
@@ -601,23 +848,43 @@ async def process_document_cleanup(ctx: dict[str, object], event_id: str) -> Non
                 operation.copied_error_code = operation.agent_error_code or "agent_cleanup_failed"
                 operation.error_code = operation.copied_error_code
 
+            for stage in ("materialization", "brief"):
+                if getattr(operation, f"{stage}_status") == "failed":
+                    operation.copied_error_code = getattr(operation, f"{stage}_error_code") or f"{stage}_cleanup_failed"
+                    operation.error_code = operation.copied_error_code
+
+            local_failed = (
+                operation.raw_status == "failed" or operation.chat_status == "failed"
+                or operation.memory_status == "failed" or operation.agent_status == "failed"
+                or operation.materialization_status == "failed" or operation.brief_status == "failed"
+            )
+            if local_failed:
+                operation.status = "failed"
+                operation.copied_status = "failed"
+            elif (operation.raw_status in {"not_present", "retained_shared", "succeeded"}
+                    and operation.chat_status == "succeeded" and operation.memory_status == "succeeded"
+                    and not operation.memory_cache_pending and operation.agent_status == "succeeded"
+                    and operation.materialization_status == "succeeded"
+                    and operation.brief_status == "succeeded"):
+                # Aggregate success only when every required owner stage genuinely completed.
+                operation.status = "succeeded"
+                operation.copied_status = "succeeded"
+                operation.copied_error_code = None
+                operation.error_code = None
+            else:
+                operation.status = "running"
+                operation.copied_status = "running"
+
             if (operation.chat_status in {"succeeded", "failed"}
                     or operation.memory_status in {"succeeded", "failed"}
-                    or operation.agent_status in {"succeeded", "failed"}):
+                    or operation.agent_status in {"succeeded", "failed"}
+                    or operation.materialization_status in {"succeeded", "failed"}
+                    or operation.brief_status in {"succeeded", "failed"}):
+                # Published after the aggregate is final so Source observes the settled state.
                 await documents.publish_source_cleanup_wakeup(
                     session, operation,
                     progress_key=_source_cleanup_progress_key(operation, "aggregate"),
                 )
-
-            if (operation.raw_status == "failed" or operation.chat_status == "failed"
-                    or operation.memory_status == "failed" or operation.agent_status == "failed"):
-                operation.status = "failed"
-            else:
-                # Other copied-evidence owners are not implemented by this worker.
-                operation.status = "running"
-            local_failed = (operation.raw_status == "failed" or operation.chat_status == "failed"
-                            or operation.memory_status == "failed" or operation.agent_status == "failed")
-            operation.copied_status = "failed" if local_failed else "running"
 
             if operation.memory_cache_pending:
                 evict_after_commit = operation.id
@@ -659,21 +926,7 @@ async def process_document_cleanup(ctx: dict[str, object], event_id: str) -> Non
             progress_unchanged = (
                 recovery_operation is not None
                 and attempt_progress is not None
-                and recovery_operation.raw_status == attempt_progress[0]
-                and recovery_operation.evidence_scope_status == attempt_progress[1]
-                and recovery_operation.chat_status == attempt_progress[2]
-                and recovery_operation.copied_status == attempt_progress[3]
-                and recovery_operation.copied_cursor == attempt_progress[4]
-                and recovery_operation.memory_status == attempt_progress[5]
-                and recovery_operation.memory_error_code == attempt_progress[6]
-                and recovery_operation.memory_cursor == attempt_progress[7]
-                and recovery_operation.memory_unresolved_count == attempt_progress[8]
-                and recovery_operation.memory_cache_pending == attempt_progress[9]
-                and recovery_operation.agent_status == attempt_progress[10]
-                and recovery_operation.agent_error_code == attempt_progress[11]
-                and recovery_operation.agent_cursor == attempt_progress[12]
-                and recovery_operation.agent_unresolved_count == attempt_progress[13]
-                and recovery_operation.agent_waiting_for_lease == attempt_progress[14]
+                and _attempt_progress_snapshot(recovery_operation) == attempt_progress
             )
             if (recovery_operation is not None and progress_unchanged and attempt_stage == "agent"
                     and recovery_operation.agent_status != "succeeded"
@@ -690,6 +943,16 @@ async def process_document_cleanup(ctx: dict[str, object], event_id: str) -> Non
                 await documents.publish_source_cleanup_wakeup(
                     session, recovery_operation,
                     progress_key=_source_cleanup_progress_key(recovery_operation, "agent-recovery"),
+                )
+                await ingestion.set_event_delivery(
+                    session, identifier, "pending", next_attempt_at=datetime.now(UTC) + _RETRY_DELAY,
+                )
+            elif (recovery_operation is not None and progress_unchanged
+                    and attempt_stage in {"materialization", "brief"}):
+                _fail_copied_stage(recovery_operation, attempt_stage, f"{attempt_stage}_cursor_reset", reset=True)
+                await documents.publish_source_cleanup_wakeup(
+                    session, recovery_operation,
+                    progress_key=_source_cleanup_progress_key(recovery_operation, f"{attempt_stage}-recovery"),
                 )
                 await ingestion.set_event_delivery(
                     session, identifier, "pending", next_attempt_at=datetime.now(UTC) + _RETRY_DELAY,
@@ -765,21 +1028,7 @@ async def process_document_cleanup(ctx: dict[str, object], event_id: str) -> Non
             progress_unchanged = (
                 recovery_operation is not None
                 and attempt_progress is not None
-                and recovery_operation.raw_status == attempt_progress[0]
-                and recovery_operation.evidence_scope_status == attempt_progress[1]
-                and recovery_operation.chat_status == attempt_progress[2]
-                and recovery_operation.copied_status == attempt_progress[3]
-                and recovery_operation.copied_cursor == attempt_progress[4]
-                and recovery_operation.memory_status == attempt_progress[5]
-                and recovery_operation.memory_error_code == attempt_progress[6]
-                and recovery_operation.memory_cursor == attempt_progress[7]
-                and recovery_operation.memory_unresolved_count == attempt_progress[8]
-                and recovery_operation.memory_cache_pending == attempt_progress[9]
-                and recovery_operation.agent_status == attempt_progress[10]
-                and recovery_operation.agent_error_code == attempt_progress[11]
-                and recovery_operation.agent_cursor == attempt_progress[12]
-                and recovery_operation.agent_unresolved_count == attempt_progress[13]
-                and recovery_operation.agent_waiting_for_lease == attempt_progress[14]
+                and _attempt_progress_snapshot(recovery_operation) == attempt_progress
             )
             if (recovery_operation is not None and progress_unchanged and attempt_stage == "agent"
                     and recovery_operation.agent_status != "succeeded"
@@ -794,6 +1043,16 @@ async def process_document_cleanup(ctx: dict[str, object], event_id: str) -> Non
                 await documents.publish_source_cleanup_wakeup(
                     session, recovery_operation,
                     progress_key=_source_cleanup_progress_key(recovery_operation, "agent-recovery"),
+                )
+                await ingestion.set_event_delivery(
+                    session, identifier, "pending", next_attempt_at=datetime.now(UTC) + _RETRY_DELAY,
+                )
+            elif (recovery_operation is not None and progress_unchanged
+                    and attempt_stage in {"materialization", "brief"}):
+                _fail_copied_stage(recovery_operation, attempt_stage, f"{attempt_stage}_cleanup_failed", reset=False)
+                await documents.publish_source_cleanup_wakeup(
+                    session, recovery_operation,
+                    progress_key=_source_cleanup_progress_key(recovery_operation, f"{attempt_stage}-recovery"),
                 )
                 await ingestion.set_event_delivery(
                     session, identifier, "pending", next_attempt_at=datetime.now(UTC) + _RETRY_DELAY,

@@ -102,12 +102,14 @@ async def evaluate_gadget_highlights(
 
     Scheduled pages hold at most three documents and the schema caps each definition at 32 rules.
     The resulting 3-by-32 ceiling keeps every matching notification in the same cursor transaction.
+    Highlight notification titles carry exact private Document/version provenance; Notifications
+    rechecks the selected current version and keeps that provenance out of its public DTO.
     """
     from modules.dashboard.highlights import evaluate_highlights
     from modules.dashboard.models import GadgetHighlightProgress
     from modules.knowledge.documents import public as documents
     from modules.dashboard.schemas import HighlightRule
-    from modules.notifications.public import NotificationEmit, emit
+    from modules.notifications.public import NotificationEmit, NotificationEvidence, emit
 
     if emit_notifications:
         # Definition writers serialize on this row. Keep it locked through evidence validation,
@@ -185,6 +187,8 @@ async def evaluate_gadget_highlights(
                         params={"severity": match.severity, "definition_id": str(definition.id),
                                 "definition_revision": definition.revision},
                         link="/dashboard",
+                    ), evidence=NotificationEvidence(
+                        document_id=item.document_id, document_version_id=item.document_version_id,
                     ))
         # Progress and notifications form one transaction: a retry can neither skip an alert nor
         # advance beyond a page whose notifications were not committed.
@@ -633,37 +637,18 @@ def _newer_export_definition_exists(owner_id: int, snapshot_at: datetime):
 
 async def _brief_export_eligibility(
     session: AsyncSession, row: DailyBrief,
-    cache: dict[tuple[object, str], dict[tuple[str, str], tuple[str, tuple[str, ...], int]]],
 ) -> bool:
-    """Require each immutable citation's actual fact kind/id/title/source set to remain current.
+    """Allow export only when captured prompt lineage remains structurally and currently valid.
 
-    Rebuild current widgets only, excluding saved brief/history presentation. The normal fact policy
-    drops deleted, paused, or local-only sources; matching identity, title and current numbered
-    reference prevents stale citation labels from being copied into the portable record.
+    Historical independent facts remain exportable; current story/event support is
+    revalidated by the manifest checker without comparing unrelated dashboard facts.
     """
     citations = _brief_export_citations(row)
-    if citations is None:
-        return False
-    key = (row.brief_date, row.timezone)
-    fact_by_identity = cache.get(key)
-    if fact_by_identity is None:
-        widgets = await context.build_daily_widgets(
-            session, row.owner_id, row.brief_date, row.timezone,
-        )
-        facts = await briefs._facts(session, widgets)
-        fact_by_identity = {
-            (str(item["kind"]), str(item["id"])): (
-                str(item["title"]), tuple(str(source_id) for source_id in item["source_ids"]),
-                reference,
-            )
-            for reference, item in enumerate(facts, start=1)
-        }
-        cache[key] = fact_by_identity
-    for citation in citations:
-        current = fact_by_identity.get((citation["kind"], citation["id"]))
-        if current != (citation["title"], tuple(citation["source_ids"]), citation["ref"]):
-            return False
-    return True
+    return bool(
+        citations is not None
+        and row.status == "current"
+        and await briefs._captured_inputs_match(session, row, lock=False)
+    )
 
 
 def _brief_export_citations(row: DailyBrief) -> list[dict[str, Any]] | None:
@@ -698,6 +683,9 @@ def _brief_export_row_digest(row: DailyBrief) -> str:
         "revision": row.revision, "status": row.status, "content": row.content,
         "citations": row.citations, "model_alias": row.model_alias,
         "generated_at": row.generated_at.isoformat(),
+        "evidence_capture_version": row.evidence_capture_version,
+        "evidence_capture_status": row.evidence_capture_status,
+        "evidence_fact_count": row.evidence_fact_count,
     }
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True,
                                      separators=(",", ":")).encode("utf-8")).hexdigest()
@@ -727,12 +715,13 @@ async def _brief_export_page(
         .execution_options(populate_existing=True)
     )).all())
     has_more, rows = len(rows) > limit, rows[:limit]
-    fact_cache: dict[tuple[object, str], dict[tuple[str, str], tuple[str, tuple[str, ...], int]]] = {}
     items: list[DailyBriefExport] = []
     fences: list[BriefExportFence] = []
     omitted_count = 0
+    # Lock-free eligibility: export spans many pages in one transaction, so it must not accumulate
+    # locks; `_brief_export_validation` rejects anything that changed after this scan.
     for row in rows:
-        eligible = await _brief_export_eligibility(session, row, fact_cache)
+        eligible = await _brief_export_eligibility(session, row)
         fences.append(BriefExportFence(
             id=row.id, generated_at=row.generated_at, revision=row.revision,
             content_digest=_brief_export_row_digest(row), eligible=eligible,
@@ -774,14 +763,13 @@ async def _brief_export_validation(
     observed = int(await session.scalar(select(func.count()).select_from(DailyBrief).where(*scope)) or 0)
     if observed != expected_snapshot_count:
         return BriefExportValidation(valid=False, reason="snapshot_count_changed", observed_snapshot_count=observed)
-    fact_cache: dict[tuple[object, str], dict[tuple[str, str], tuple[str, tuple[str, ...], int]]] = {}
     for fence in fences:
         row = await session.scalar(select(DailyBrief).where(
             DailyBrief.id == fence.id, *scope,
         ).execution_options(populate_existing=True))
         if row is None:
             return BriefExportValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
-        eligible = await _brief_export_eligibility(session, row, fact_cache)
+        eligible = await _brief_export_eligibility(session, row)
         if (row.generated_at != fence.generated_at or row.revision != fence.revision
                 or eligible != fence.eligible or _brief_export_row_digest(row) != fence.content_digest):
             return BriefExportValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
@@ -1445,7 +1433,9 @@ from modules.dashboard.briefs import (  # noqa: E402
     BriefSlotOwned,
     BriefUnavailable,
     claim_brief_slot,
+    clean_document_brief_evidence,
     generate_brief,
+    legacy_brief_coverage,
     latest_brief,
     list_briefs,
     read_schedule,
@@ -1458,5 +1448,5 @@ from modules.dashboard.daily_schemas import BriefRead, DailyContext  # noqa: E40
 __all__ = [
     "BriefEmpty", "BriefRead", "BriefUnavailable", "DailyContext", "build_daily_context",
     "BriefSlotOwned", "claim_brief_slot", "generate_brief", "latest_brief", "list_briefs", "read_schedule",
-    "read_slot_owner", "release_brief_slot",
+    "read_slot_owner", "release_brief_slot", "clean_document_brief_evidence", "legacy_brief_coverage",
 ]

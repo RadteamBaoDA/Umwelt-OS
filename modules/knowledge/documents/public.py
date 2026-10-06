@@ -133,6 +133,27 @@ async def pending_document_agent_cleanup_ids(
     )).all())
 
 
+async def pending_document_copied_stage_cleanup_ids(
+    session: AsyncSession, *, after: UUID | None = None, limit: int = 100,
+) -> tuple[UUID, ...]:
+    """Return receipts whose materialization or saved-brief stage still needs event reconciliation.
+
+    Terminal failures (unavailable lineage) are excluded so legacy gaps never hot-loop; retryable
+    failures are rescheduled by their own durable event, not by this partial-index scan.
+    """
+    if not 1 <= limit <= 100:
+        raise ValueError("Copied-stage reconciliation page size must be between 1 and 100")
+    statement = select(DocumentCleanupOperation.id).where(or_(
+        DocumentCleanupOperation.materialization_status.in_({"queued", "running"}),
+        DocumentCleanupOperation.brief_status.in_({"queued", "running"}),
+    ))
+    if after is not None:
+        statement = statement.where(DocumentCleanupOperation.id > after)
+    return tuple((await session.scalars(
+        statement.order_by(DocumentCleanupOperation.id).limit(limit)
+    )).all())
+
+
 def _encode_document_export_cursor(
     owner_id: int, record_kind: str, snapshot_at: datetime, position_at: datetime, position_id: UUID,
 ) -> str:
@@ -1689,6 +1710,10 @@ async def capture_document_cleanup_evidence(session: AsyncSession, operation: Do
     does not create an unbounded Python snapshot. The child identities intentionally have no
     foreign keys back to evidence rows and remain readable until the cleanup receipt is removed.
     """
+    # DB-recorded bound for legacy brief coverage; read before the canonical rows are deleted.
+    operation.earliest_version_created_at = await session.scalar(
+        select(func.min(DocumentVersion.created_at)).where(DocumentVersion.document_id == operation.document_id)
+    )
     identity_columns = ["id", "operation_id", "document_version_id", "chunk_id", "reference_kind"]
     await session.execute(insert(DocumentCleanupEvidenceReference).from_select(
         identity_columns,
@@ -1766,6 +1791,8 @@ async def source_cleanup_progress(
         DocumentCleanupOperation.chat_status == "failed",
         DocumentCleanupOperation.memory_status == "failed",
         DocumentCleanupOperation.agent_status == "failed",
+        DocumentCleanupOperation.materialization_status == "failed",
+        DocumentCleanupOperation.brief_status == "failed",
         DocumentCleanupOperation.copied_status == "failed",
     )
     raw_pending = DocumentCleanupOperation.raw_status.not_in(
@@ -1777,12 +1804,17 @@ async def source_cleanup_progress(
         DocumentCleanupOperation.memory_cache_pending.is_(True),
     )
     agent_pending = DocumentCleanupOperation.agent_status.not_in(("succeeded", "failed"))
+    materialization_pending = DocumentCleanupOperation.materialization_status.not_in(("succeeded", "failed"))
+    brief_pending = DocumentCleanupOperation.brief_status.not_in(("succeeded", "failed"))
     copy_pending = DocumentCleanupOperation.copied_status != "succeeded"
     # Cache eviction is a separate durable Memory obligation, including while a prior
     # content-cleanup stage is terminally failed and awaits its retryable postcommit work.
     pending = or_(
         DocumentCleanupOperation.memory_cache_pending.is_(True),
-        and_(~failed, or_(raw_pending, chat_pending, memory_pending, agent_pending, copy_pending)),
+        and_(~failed, or_(
+            raw_pending, chat_pending, memory_pending, agent_pending,
+            materialization_pending, brief_pending, copy_pending,
+        )),
     )
     row = (await session.execute(select(
         func.count(DocumentCleanupOperation.id),
@@ -1792,12 +1824,13 @@ async def source_cleanup_progress(
         func.sum(case((and_(~failed, chat_pending), 1), else_=0)),
         func.sum(case((or_(and_(~failed, memory_pending), DocumentCleanupOperation.memory_cache_pending.is_(True)), 1), else_=0)),
         func.sum(case((and_(~failed, agent_pending), 1), else_=0)),
+        func.sum(case((and_(~failed, materialization_pending), 1), else_=0)),
+        func.sum(case((and_(~failed, brief_pending), 1), else_=0)),
     ).where(
         DocumentCleanupOperation.source_purge_operation_id == source_purge_operation_id,
     ))).one()
-    child_count, pending_count, failed_count, raw_waiting, chat_waiting, memory_waiting, agent_waiting = (
-        int(value or 0) for value in row
-    )
+    (child_count, pending_count, failed_count, raw_waiting, chat_waiting, memory_waiting, agent_waiting,
+     materialization_waiting, brief_waiting) = (int(value or 0) for value in row)
     owners: list[str] = []
     if not capture_recorded:
         owners.append("documents")
@@ -1809,10 +1842,13 @@ async def source_cleanup_progress(
         owners.append("memory")
     if agent_waiting:
         owners.append("agents")
-    if child_count:
-        # These owner contracts are deliberately pending until their own cleanup stages exist.
-        owners.extend(("dashboard", "notifications", "automations"))
-    all_required_complete = capture_recorded and child_count == 0
+    if materialization_waiting:
+        owners.extend(("notifications", "automations"))
+    if brief_waiting:
+        owners.append("dashboard")
+    # Complete only when every required stage of every child receipt succeeded; a terminal
+    # unavailable stage is failed (counted above), never relabeled complete.
+    all_required_complete = capture_recorded and pending_count == 0 and failed_count == 0
     return SourceCleanupProgress(
         child_count=child_count,
         capture_complete=capture_recorded,
@@ -2585,7 +2621,7 @@ async def _capture_source_document_cleanup(
         [
             "id", "source_id", "document_id", "source_purge_operation_id", "raw_uri",
             "record_status", "graph_status", "raw_status", "evidence_scope_status",
-            "copied_status", "chat_status", "status",
+            "copied_status", "chat_status", "status", "earliest_version_created_at",
         ],
         select(
             func.gen_random_uuid(), Document.source_id, Document.id,
@@ -2593,6 +2629,8 @@ async def _capture_source_document_cleanup(
             literal("deleted"), literal("tombstoned"),
             case(((Document.raw_uri.is_not(None) & (Document.raw_uri != "")), "queued"), else_="not_present"),
             literal("capturing"), literal("queued"), literal("queued"), literal("queued"),
+            select(func.min(DocumentVersion.created_at))
+            .where(DocumentVersion.document_id == Document.id).scalar_subquery(),
         ).where(Document.source_id == source_id),
     ))
 
@@ -3077,6 +3115,23 @@ async def review_version_locator(session: AsyncSession, version_id: UUID) -> tup
         .where(DocumentVersion.id == version_id)
     )).one_or_none()
     return (row[0], row[1]) if row else None
+
+
+async def cleanup_evidence_version_document(session: AsyncSession, version_id: UUID) -> UUID | None:
+    """Return the Document that owned a version, from the retained cleanup evidence of a deleted Document.
+
+    Fallback for callers whose live ``review_version_locator`` no longer resolves a version. Reads only
+    immutable receipt references (no lock), so it cannot invert the privacy -> receipt -> owner order.
+    """
+    return await session.scalar(
+        select(DocumentCleanupOperation.document_id)
+        .join(DocumentCleanupEvidenceReference, DocumentCleanupEvidenceReference.operation_id == DocumentCleanupOperation.id)
+        .where(
+            DocumentCleanupEvidenceReference.document_version_id == version_id,
+            DocumentCleanupEvidenceReference.reference_kind == "version",
+        )
+        .limit(1)
+    )
 
 
 async def review_version_fences(

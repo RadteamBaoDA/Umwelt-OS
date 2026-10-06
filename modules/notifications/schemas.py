@@ -1,5 +1,6 @@
 """Validated DTOs for notification emission and owner reads."""
 
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -26,6 +27,14 @@ class NotificationEmit(BaseModel):
         if value is not None and (not value.startswith("/") or value.startswith("//") or "\\" in value):
             raise ValueError("link must be a relative in-app path")
         return value
+
+
+@dataclass(frozen=True)
+class NotificationEvidence:
+    """Private exact Document identity attached only to a copied notification title."""
+
+    document_id: UUID
+    document_version_id: UUID
 
 
 class NotificationRead(BaseModel):

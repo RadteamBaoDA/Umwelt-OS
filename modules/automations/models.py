@@ -74,6 +74,7 @@ class AutomationTrigger(Base):
         CheckConstraint("status IN ('pending','processed')", name="ck_automation_triggers_status"),
         CheckConstraint("depth BETWEEN 0 AND 50", name="ck_automation_triggers_depth"),
         Index("ix_automation_triggers_pending", "status", "created_at"),
+        Index("ix_automation_triggers_document", "document_id", "id"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -81,6 +82,10 @@ class AutomationTrigger(Base):
     trigger_type: Mapped[str] = mapped_column(String(32), nullable=False)
     event_key: Mapped[str] = mapped_column(String(200), nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    # Private provenance stays outside the condition payload whitelist and survives inbox processing.
+    document_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    document_version_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    document_evidence_revoked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     depth: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     origin_automation_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     origin_run_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
@@ -123,6 +128,7 @@ class AutomationRun(Base):
         CheckConstraint("depth BETWEEN 1 AND 50", name="ck_automation_runs_depth"),
         Index("ix_automation_runs_dispatch", "status", "next_attempt_at"),
         Index("ix_automation_runs_rule", "automation_id", "created_at"),
+        Index("ix_automation_runs_document", "document_id", "id"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -139,6 +145,10 @@ class AutomationRun(Base):
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="queued")
     reason: Mapped[str | None] = mapped_column(String(48))
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    # Private provenance tracks the copied condition metadata through run admission and cleanup.
+    document_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    document_version_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    document_evidence_revoked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     dispatch_generation: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

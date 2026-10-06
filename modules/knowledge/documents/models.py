@@ -168,7 +168,7 @@ class DocumentCleanupOperation(Base):
         CheckConstraint("graph_status = 'tombstoned'", name="ck_document_cleanup_graph_status"),
         CheckConstraint("raw_status IN ('queued', 'not_present', 'retained_shared', 'succeeded', 'failed')", name="ck_document_cleanup_raw_status"),
         CheckConstraint("evidence_scope_status IN ('capturing', 'captured', 'unavailable')", name="ck_document_cleanup_evidence_scope_status"),
-        CheckConstraint("copied_status IN ('queued', 'running', 'failed')", name="ck_document_cleanup_copied_status"),
+        CheckConstraint("copied_status IN ('queued', 'running', 'succeeded', 'failed')", name="ck_document_cleanup_copied_status"),
         CheckConstraint("chat_status IN ('queued', 'running', 'succeeded', 'failed')", name="ck_document_cleanup_chat_status"),
         CheckConstraint("copied_cursor IS NULL OR octet_length(copied_cursor::text) <= 4096", name="ck_document_cleanup_copied_cursor_bound"),
         CheckConstraint("memory_status IN ('queued', 'running', 'succeeded', 'failed')", name="ck_document_cleanup_memory_status"),
@@ -177,7 +177,19 @@ class DocumentCleanupOperation(Base):
         CheckConstraint("agent_status IN ('queued', 'running', 'succeeded', 'failed')", name="ck_document_cleanup_agent_status"),
         CheckConstraint("agent_cursor IS NULL OR octet_length(agent_cursor::text) <= 4096", name="ck_document_cleanup_agent_cursor_bound"),
         CheckConstraint("agent_unresolved_count >= 0", name="ck_document_cleanup_agent_unresolved_nonnegative"),
+        CheckConstraint("materialization_status IN ('queued', 'running', 'succeeded', 'failed')", name="ck_document_cleanup_materialization_status"),
+        CheckConstraint("materialization_cursor IS NULL OR octet_length(materialization_cursor::text) <= 4096", name="ck_document_cleanup_materialization_cursor_bound"),
+        CheckConstraint("materialization_unresolved_count >= 0", name="ck_document_cleanup_materialization_unresolved_nonnegative"),
+        CheckConstraint("brief_status IN ('queued', 'running', 'succeeded', 'failed')", name="ck_document_cleanup_brief_status"),
+        CheckConstraint("brief_cursor IS NULL OR octet_length(brief_cursor::text) <= 4096", name="ck_document_cleanup_brief_cursor_bound"),
+        CheckConstraint("brief_unresolved_count >= 0", name="ck_document_cleanup_brief_unresolved_nonnegative"),
         Index("ix_document_cleanup_status_created", "status", "created_at"),
+        Index(
+            "ix_document_cleanup_copied_stages_reconcile", "id",
+            postgresql_where=text(
+                "materialization_status IN ('queued', 'running') OR brief_status IN ('queued', 'running')"
+            ),
+        ),
         Index(
             "ix_document_cleanup_agent_reconcile", "id",
             postgresql_where=text("agent_status IN ('queued', 'running')"),
@@ -218,6 +230,18 @@ class DocumentCleanupOperation(Base):
     agent_cursor: Mapped[dict[str, object] | None] = mapped_column(JSONB)
     agent_unresolved_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     agent_waiting_for_lease: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    # Notifications/Automations copied-metadata stage; its cursor is private to that stage.
+    materialization_status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="queued")
+    materialization_error_code: Mapped[str | None] = mapped_column(String(64))
+    materialization_cursor: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    materialization_unresolved_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    # Dashboard saved-brief stage; unresolved counts legacy briefs whose prompt lineage is unknowable.
+    brief_status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="queued")
+    brief_error_code: Mapped[str | None] = mapped_column(String(64))
+    brief_cursor: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    brief_unresolved_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    # DB-recorded earliest version time captured before canonical deletion; NULL = unknown (historical).
+    earliest_version_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="queued")
     error_code: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

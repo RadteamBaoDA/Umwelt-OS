@@ -28,6 +28,7 @@ from modules.automations.conditions import TRIGGER_FIELDS, evaluate, validate_sa
 from modules.automations.execution import (
     ACTION_MODULE,
     TRIGGER_MODULE,
+    AutomationCleanupProgress,
     RunConflict,
     RunMissing,
     decide_action,
@@ -35,6 +36,8 @@ from modules.automations.execution import (
     list_runs,
     loop_guard,
     origin_for_reference,
+    scrub_document_runs,
+    scrub_document_triggers,
     start_manual,
 )
 from modules.automations.models import Automation, AutomationRevision, AutomationRunAction
@@ -401,6 +404,7 @@ async def preview(session: AsyncSession, owner_id: int, request: PreviewRequest)
 
 __all__ = [
     "AutomationConflict", "AutomationInvalid", "PauseBeforeBriefEdit", "capabilities", "AutomationMissing", "RunConflict", "RunMissing",
+    "AutomationCleanupProgress", "scrub_document_runs", "scrub_document_triggers",
     "create_automation", "decide_action", "delete_automation", "enqueue_trigger", "evaluate_conditions",
     "get_automation", "get_automation_conversation_id", "get_revision", "list_automations", "list_runs", "origin_for_reference", "preview",
     "start_manual",

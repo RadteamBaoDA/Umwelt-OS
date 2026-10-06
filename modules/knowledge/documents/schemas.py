@@ -62,7 +62,7 @@ class DocumentDeletionRead(BaseModel):
     graph_status: Literal["tombstoned"]
     raw_status: Literal["queued", "not_present", "retained_shared", "succeeded", "failed"]
     evidence_scope_status: Literal["capturing", "captured", "unavailable"]
-    copied_status: Literal["queued", "running", "failed"]
+    copied_status: Literal["queued", "running", "succeeded", "failed"]
     chat_status: Literal["queued", "running", "succeeded", "failed"]
     chat_error_code: str | None = Field(default=None, max_length=64)
     memory_status: Literal["queued", "running", "succeeded", "failed"]
@@ -73,6 +73,12 @@ class DocumentDeletionRead(BaseModel):
     agent_error_code: str | None = Field(default=None, max_length=64)
     agent_unresolved_count: int = Field(ge=0)
     agent_waiting_for_lease: bool
+    materialization_status: Literal["queued", "running", "succeeded", "failed"]
+    materialization_error_code: str | None = Field(default=None, max_length=64)
+    materialization_unresolved_count: int = Field(ge=0)
+    brief_status: Literal["queued", "running", "succeeded", "failed"]
+    brief_error_code: str | None = Field(default=None, max_length=64)
+    brief_unresolved_count: int = Field(ge=0)
     immediate_access_revoked: Literal[True] = True
     error_code: str | None = Field(default=None, max_length=64)
     copied_error_code: str | None = Field(default=None, max_length=64)

@@ -51,6 +51,18 @@ class NewsDocumentReadyEvent:
     valid_payload: bool
 
 
+@dataclass(frozen=True)
+class ReadyDocumentProvenance:
+    """Detached proof joining one retained ready event to its exact Document version."""
+
+    event_id: UUID
+    source_id: UUID
+    document_id: UUID
+    document_version_id: UUID
+    source_generation: int
+    version_number: int
+
+
 async def lock_news_document_ready_event(
     session: AsyncSession, event_id: UUID,
 ) -> NewsDocumentReadyEvent | None:
@@ -1577,21 +1589,114 @@ async def retry_run(
 
 async def list_ready_events_after(
     session: AsyncSession, position: tuple[datetime, UUID] | None, limit: int = 100,
-) -> list[tuple[datetime, UUID, str, dict[str, str] | None]]:
+) -> list[tuple[datetime, UUID, str, dict[str, str | int] | None]]:
     """Read-only cursor page of ``document.version.ready`` outbox rows for the automations sweep.
 
-    Ordered by ``(created_at, id)`` strictly after ``position``; returns ``(ts, id, key, payload)``
-    with metadata ids only (source and document id). It never changes delivery status, so the single outbox consumer is
-    unaffected.
+    Ordered by ``(created_at, id)`` strictly after ``position``; returns a validated private metadata
+    projection including the immutable version identity, never content. It never changes delivery
+    status, so the single outbox consumer is unaffected.
     """
+    if not 1 <= limit <= 100:
+        raise ValueError("Ready-event page size must be between 1 and 100")
     stmt = select(EventOutbox).where(EventOutbox.type == "document.version.ready")
     if position is not None:
         stmt = stmt.where(tuple_(EventOutbox.created_at, EventOutbox.id) > tuple_(*position))
     rows = (await session.scalars(stmt.order_by(EventOutbox.created_at, EventOutbox.id).limit(limit))).all()
     # A malformed row keeps its slot with a None payload so the sweep cursor still advances past it.
-    return [(r.created_at, r.id, str(r.id),
-             {"source_id": str(r.payload["source_id"]), "document_id": str(r.payload["document_id"])}
-             if "source_id" in r.payload and "document_id" in r.payload else None) for r in rows]
+    return [(row.created_at, row.id, str(row.id), _ready_document_payload(row)) for row in rows]
+
+
+def _ready_document_payload(event: EventOutbox) -> dict[str, str | int] | None:
+    """Validate the exact bounded producer payload used by document-ready events."""
+    payload = event.payload
+    fields = {"source_id", "document_id", "document_version_id", "source_generation", "version_number"}
+    if (
+        event.type != "document.version.ready" or event.version != 1
+        or event.producer != "modules.knowledge.documents"
+        or not isinstance(payload, dict) or set(payload) != fields
+    ):
+        return None
+    if (
+        any(not isinstance(payload[name], str) or len(payload[name]) != 36 for name in (
+            "source_id", "document_id", "document_version_id",
+        ))
+        or type(payload["source_generation"]) is not int
+        or not 1 <= payload["source_generation"] <= 2_147_483_647
+        or type(payload["version_number"]) is not int
+        or not 1 <= payload["version_number"] <= 2_147_483_647
+    ):
+        return None
+    try:
+        if len(json.dumps(payload, separators=(",", ":"), ensure_ascii=False)) > 512:
+            return None
+    except (TypeError, ValueError):
+        return None
+    try:
+        source_id, document_id, version_id = (UUID(payload[name]) for name in (
+            "source_id", "document_id", "document_version_id",
+        ))
+    except (ValueError, TypeError):
+        return None
+    generation, version_number = payload["source_generation"], payload["version_number"]
+    if (
+        str(source_id) != payload["source_id"] or str(document_id) != payload["document_id"]
+        or str(version_id) != payload["document_version_id"]
+        or type(generation) is not int or generation < 1
+        or type(version_number) is not int or version_number < 1
+    ):
+        return None
+    return {
+        "source_id": str(source_id), "document_id": str(document_id),
+        "document_version_id": str(version_id), "source_generation": generation,
+        "version_number": version_number,
+    }
+
+
+async def resolve_ready_event_provenance(
+    session: AsyncSession, event_id: UUID, *, document_id: UUID | None = None,
+    source_id: UUID | None = None, accepted_version_ids: tuple[UUID, ...] = (),
+    allow_retained_receipt: bool = False,
+) -> ReadyDocumentProvenance | None:
+    """Resolve one strict historical event against a live Documents locator or detached cleanup receipt.
+
+    Detached version IDs are accepted only when the caller supplies both receipt-owned document and
+    source IDs. The bounded receipt path remains usable after canonical rows have cascaded away.
+    """
+    if len(accepted_version_ids) > 100:
+        raise ValueError("Ready-event receipt membership exceeds its bound")
+    if (document_id is None) != (source_id is None):
+        raise ValueError("Ready-event receipt matching requires both document and source IDs")
+    event = await session.get(EventOutbox, event_id)
+    if event is None:
+        return None
+    payload = _ready_document_payload(event)
+    if payload is None:
+        return None
+    event_source = UUID(payload["source_id"])
+    event_document = UUID(payload["document_id"])
+    version_id = UUID(payload["document_version_id"])
+    if document_id is not None:
+        if (
+            event_document != document_id or event_source != source_id
+            or version_id not in accepted_version_ids
+        ):
+            return None
+    else:
+        from modules.knowledge.documents import public as documents
+
+        locator = await documents.review_version_locator(session, version_id)
+        if locator is None and allow_retained_receipt:
+            # Opt-in for foreign-ownership classification: a deleted Document's version resolves from its
+            # retained cleanup receipt (lock-free); the payload is trusted only if the receipt names the same Document.
+            if await documents.cleanup_evidence_version_document(session, version_id) != event_document:
+                return None
+        elif locator is None or locator[0] != event_document or locator[1] != event_source:
+            return None
+    return ReadyDocumentProvenance(
+        event_id=event.id, source_id=event_source, document_id=event_document,
+        document_version_id=version_id, source_generation=payload["source_generation"],
+        version_number=payload["version_number"],
+    )
 
 
 async def list_terminal_runs_after(

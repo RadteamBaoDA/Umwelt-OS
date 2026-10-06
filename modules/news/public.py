@@ -10,6 +10,10 @@ The explicit fictional seed export is flush-only and leaves transaction ownershi
 to the document-seed coordinator.
 """
 
+from uuid import UUID
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from modules.news.topics import (
     TopicConflict,
     TopicCreate,
@@ -32,7 +36,7 @@ from modules.news.topics import (
 from modules.news.seed import ensure_demo_topics
 from modules.news.relevance import score_relevance
 from modules.news.schemas import (
-    CorrelationBucketRead, CorrelationCoverageRead, CorrelationQuery, CorrelationResult,
+    BriefStorySupport, CorrelationBucketRead, CorrelationCoverageRead, CorrelationQuery, CorrelationResult,
     CiiUnavailableRead, RelevanceRead, StoryDetail, StoryFilter, StoryPage, StoryRead,
     TrendFilter, TrendPage, TrendRead,
 )
@@ -50,5 +54,54 @@ __all__ = [
     "TrendFilter", "TrendPage", "TrendRead", "cluster_observation", "get_story",
     "list_stories", "list_trends", "process_news_document_ready", "recover_news_work",
     "score_relevance", "CorrelationBucketRead", "CorrelationCoverageRead", "CorrelationQuery",
-    "CorrelationResult", "CiiUnavailableRead", "build_correlations",
+    "CorrelationResult", "CiiUnavailableRead", "build_correlations", "brief_story_support",
 ]
+
+
+async def brief_story_support(
+    session: AsyncSession, owner_id: int, story_id: UUID, *,
+    expected_title: str | None, expected_source_ids: list[str],
+) -> BriefStorySupport:
+    """Resolve the exact complete live support set for one Dashboard story fact.
+
+    The bounded detail reader supplies at most 100 canonical document/version/chunk
+    identities. A continuation, omitted support, stale projection, or mismatch with
+    the widget snapshot returns ``complete=False`` without truncating lineage.
+    """
+    if (not 1 <= len(expected_source_ids) <= 32
+            or len(expected_source_ids) != len(set(expected_source_ids))):
+        return BriefStorySupport(
+            story_id=story_id, title=expected_title or "", source_ids=[], evidence=[], complete=False,
+        )
+    try:
+        source_ids = tuple(UUID(value) for value in expected_source_ids)
+    except (TypeError, ValueError):
+        return BriefStorySupport(
+            story_id=story_id, title=expected_title or "", source_ids=[], evidence=[], complete=False,
+        )
+    detail = await get_story(session, owner_id, story_id, source_ids, evidence_limit=100)
+    story = detail.story if detail else None
+    if (story is None or detail.evidence_cursor is not None or story.incomplete_reasons
+            or (expected_title is not None and story.title != expected_title)
+            or story.evidence_count != len(story.evidence)
+            or not story.evidence or len(story.evidence) > 100):
+        return BriefStorySupport(
+            story_id=story_id, title=expected_title or "", source_ids=[], evidence=[], complete=False,
+        )
+    source_set = sorted({item.source_id for item in story.evidence}, key=str)
+    if source_set != sorted(source_ids, key=str):
+        return BriefStorySupport(
+            story_id=story_id, title=expected_title or "", source_ids=[], evidence=[], complete=False,
+        )
+    refs = [
+        {"document_id": item.document_id, "document_version_id": item.document_version_id,
+         "chunk_id": item.chunk_id, "source_id": item.source_id}
+        for item in story.evidence
+    ]
+    if len({(ref["document_id"], ref["document_version_id"], ref["chunk_id"]) for ref in refs}) != len(refs):
+        return BriefStorySupport(
+            story_id=story_id, title=expected_title or "", source_ids=[], evidence=[], complete=False,
+        )
+    return BriefStorySupport(
+        story_id=story_id, title=story.title, source_ids=source_set, evidence=refs, complete=True,
+    )
