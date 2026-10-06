@@ -32,7 +32,7 @@ When implementation is requested, use **superpowers:subagent-driven-development*
 
 For frontend work, also load [umwelt-os-ui-system](../umwelt-os-ui-system/SKILL.md) and follow [DESIGN_SYSTEM.md](../../../docs/DESIGN_SYSTEM.md). These owner-selected shadcn/Recharts, theme, locale, dialog and chat-surface decisions govern older UI examples in phase plans.
 
-Record task ID, prerequisite evidence, affected contracts/files, build commands/results, review findings, unresolved gates, and next task in `EXECUTION.md`. Keep one task active. During the Phase 1–12 implementation stage, implement production code and run builds only: do not create, modify or run tests, lint, or typecheck. Start the test stage after all phase code is complete. Follow the master plan and continue authorized ready work without repeated scope approval.
+Record task ID, prerequisite evidence, affected contracts/files, build commands/results, review findings, unresolved gates, and next task in `EXECUTION.md`. Keep each implementer on one finite task; independent tasks may run concurrently in isolated worktrees under the controller, with shared builds serialized. During the Phase 1–12 implementation stage, implement production code and run builds only: do not create, modify or run tests, lint, or typecheck. Start the test stage after all phase code is complete. Follow the master plan and continue authorized ready work without repeated scope approval.
 
 During implementation, run `./scripts/dev.ps1 build` on Windows or `make build` on Linux/macOS. Do not create, modify or run tests, lint or typecheck until all original Phase 1-12 and reconciliation production code is complete; then follow the deferred validation stage in the master plan. CI push/pull-request runs install dependencies and build only; manually dispatch its deferred-validation stage only after that gate.
 
@@ -43,7 +43,7 @@ During implementation, run `./scripts/dev.ps1 build` on Windows or `make build` 
 - Freezing the next task in this skill: always reread the ledger and reconcile with current code.
 - Equating mocks or larger-host checks with acceptance: keep live-provider, graph, browser, n8n, target-hardware and restore gates explicit; continue independent work.
 - Rebuilding completed Phase 0 or re-planning approved scope: use current evidence and phase dependencies.
-- Respect the current owner authorization: commit completed phases and merge Phase 1 into main after implementation and review; do not push or deploy.
+- Respect the current owner authorization: commit accepted large task/phase milestones and merge their isolated worktrees into develop, batching checkpoint files with accepted source. Do not push, deploy or merge main without the applicable current direction.
 
 
 ## Code documentation required by the owner

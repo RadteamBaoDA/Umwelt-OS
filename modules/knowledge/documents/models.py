@@ -174,7 +174,14 @@ class DocumentCleanupOperation(Base):
         CheckConstraint("memory_status IN ('queued', 'running', 'succeeded', 'failed')", name="ck_document_cleanup_memory_status"),
         CheckConstraint("memory_cursor IS NULL OR octet_length(memory_cursor::text) <= 4096", name="ck_document_cleanup_memory_cursor_bound"),
         CheckConstraint("memory_unresolved_count >= 0", name="ck_document_cleanup_memory_unresolved_nonnegative"),
+        CheckConstraint("agent_status IN ('queued', 'running', 'succeeded', 'failed')", name="ck_document_cleanup_agent_status"),
+        CheckConstraint("agent_cursor IS NULL OR octet_length(agent_cursor::text) <= 4096", name="ck_document_cleanup_agent_cursor_bound"),
+        CheckConstraint("agent_unresolved_count >= 0", name="ck_document_cleanup_agent_unresolved_nonnegative"),
         Index("ix_document_cleanup_status_created", "status", "created_at"),
+        Index(
+            "ix_document_cleanup_agent_reconcile", "id",
+            postgresql_where=text("agent_status IN ('queued', 'running')"),
+        ),
         Index("ix_document_cleanup_source_purge_id", "source_purge_operation_id", "id"),
         Index(
             "uq_document_cleanup_source_purge_document",
@@ -206,6 +213,11 @@ class DocumentCleanupOperation(Base):
     memory_cursor: Mapped[dict[str, object] | None] = mapped_column(JSONB)
     memory_unresolved_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     memory_cache_pending: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    agent_status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="queued")
+    agent_error_code: Mapped[str | None] = mapped_column(String(64))
+    agent_cursor: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    agent_unresolved_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    agent_waiting_for_lease: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="queued")
     error_code: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-This repository implements Phase 0 of the single-user, self-hosted Personal Intelligence OS. The approved product and engineering specification remains `specs/personal-intelligence-os-spec-v2.md`; delivery and later-phase status are tracked in `docs/IMPLEMENTATION_STATUS.md`.
+This repository implements the single-user, self-hosted Personal Intelligence OS through a modular production codebase. The approved product and engineering specification remains `specs/personal-intelligence-os-spec-v2.md`; delivery and later-phase status are tracked in `docs/IMPLEMENTATION_STATUS.md`.
 
 Follow the specification when adding code:
 - `apps/web/`: Next.js, React, and TypeScript frontend.
@@ -16,7 +16,7 @@ Keep module internals private; integrate through public contracts or events. Cre
 
 ## Build, Test, and Development Commands
 
-Use `make setup`, `make dev`, `make stop`, `make migrate`, `make seed`, `make lint`, `make typecheck`, `make test`, and `make build` on macOS/Linux. Windows PowerShell equivalents are `./scripts/dev.ps1 <task>`. `test` creates a uniquely named disposable Compose project and removes only its own volumes. `seed` explicitly creates fictional Phase 1 demo data; `reset`, `backup`, and `restore` are not implemented yet.
+Use `make setup`, `make dev`, `make stop`, `make migrate`, `make seed`, `make lint`, `make typecheck`, `make test`, and `make build` on macOS/Linux. Windows PowerShell equivalents are `./scripts/dev.ps1 <task>`. `test` creates a uniquely named disposable Compose project and removes only its own volumes. `seed` explicitly creates fictional Phase 1/8/10/12 demo data under privacy and stable-owner receipt controls. Named development workspace reset and backup/isolated restore/recovery commands are implemented; their operational acceptance is separate. Follow `docs/development.md` and `docs/backup-recovery.md`; never run these state-changing commands during the production code/build-only stage.
 
 ## Coding Style & Naming Conventions
 
@@ -36,7 +36,7 @@ Cross-module reads use owner `public.py` DTO/query contracts. A narrowly scoped 
 
 ## Commit & Pull Request Guidelines
 
-There is no commit history or established message convention. Use concise, imperative subjects, such as `docs: clarify ingestion contracts`. PRs should describe scope, reference relevant specification sections or issues, list validation results, and include screenshots for UI changes.
+Use concise, imperative subjects, such as `docs: clarify ingestion contracts`. PRs should describe scope, reference relevant specification sections or issues, list validation results, and include screenshots for UI changes.
 
 ## Security & Configuration
 
@@ -45,7 +45,7 @@ Never commit secrets or personal data. Provide placeholder configuration in `.en
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **Umwelt-OS** (4566 symbols, 11750 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **Umwelt-OS** (8335 symbols, 22100 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
@@ -154,3 +154,7 @@ To check whether embeddings exist, inspect `.gitnexus/meta.json` — the `stats.
 - Comment-only work must preserve application logic, public signatures and schema operations. Historical migration documentation may describe operations; it must not change revision IDs, ancestry or database behavior.
 - Include documentation compliance in each agent handoff and source review. GitNexus impact/change-scope rules and code/build-only validation still apply.
 - Update status/checkpoint files as work proceeds, but commit status documentation only with a large completed task or phase; do not make a standalone docs commit for every progress update.
+
+## Execution context after repository rename
+
+The repository folder is `D:/Project/Umwelt-OS`. This chat can still inject the obsolete `D:/Project/BBD-OS` as its default cwd. On this host, pass the assigned checkout's actual absolute path in `workdir` on every shell tool call, using forward slashes; implementations in worktrees must use their assigned worktree path. Do not run against the injected/default BBD-OS path or create a shortcut/junction to make it work. A process-creation error267 at the old cwd does not prove the host or Docker is unavailable. Retry with the explicit assigned path before attempting unrelated worktree recovery or asking the user to reconnect.

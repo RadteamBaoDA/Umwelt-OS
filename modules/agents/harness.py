@@ -60,14 +60,17 @@ APPROVAL_SYSTEM_PROMPT = (
 class HarnessState(TypedDict):
     """JSON checkpoint state; legacy read-only snapshots may omit slots and recover them by call ID.
 
-    Source identities travel separately from tool payloads. Missing slot state is accepted only for
-    the exact legacy read-only workflow, whose outstanding calls must match persisted assistant IDs.
+    Source identities travel separately from tool payloads. ``pending_source_fences`` freezes the
+    model-input context shared by one returned call group before sibling results extend the run sink.
+    Missing provenance is accepted only as legacy-unavailable; it is never replaced with an empty fence.
     """
 
     prompt: str
     messages: list[dict[str, Any]]
     pending_tool_calls: list[dict[str, str]]
     tool_slots: NotRequired[list[int]]
+    pending_source_fences: NotRequired[dict[str, Any] | None]
+    source_provenance_available: NotRequired[bool]
     tool_index: int
     source_fences: dict[str, Any]
     answer: str | None
@@ -243,6 +246,7 @@ class HarnessContext:
             expected_schema = SPECIALIST_CHECKPOINT_SCHEMA_VERSION if self.profile_snapshot is not None else CHECKPOINT_SCHEMA_VERSION
             if (
                 row is None or row.owner_id != self.owner_id or row.status != "running" or row.cancel_requested
+                or row.evidence_revoked
                 or row.claim_generation != self.claim_generation
                 or row.workflow_version != self.workflow_version or row.prompt_version != self.prompt_version
                 or row.checkpoint_schema_version != expected_schema
@@ -288,6 +292,7 @@ class HarnessContext:
                 raise RunCancelled("Owner session is no longer valid")
         await self.assert_lease()
         return detached
+
 
     async def revalidate_principal(self, principal: ToolExecutionPrincipal) -> bool:
         """Recheck run lease, owner session, workflow versions, and exact current registry contracts."""
@@ -581,30 +586,77 @@ class HarnessContext:
         }
 
 
+async def _lock_native_output_fences_for_publication(
+    session: AsyncSession,
+    session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]],
+    encoded: dict[str, Any],
+    principal: ToolExecutionPrincipal,
+) -> bool:
+    """Hold privacy→Source→Document fences through a later Agent publication commit.
+
+    The ordinary Tools revalidation uses short independent read sessions, so by itself it cannot
+    serialize a successful check with hard deletion. Acquire canonical owner locks before AgentRun
+    locks, then revalidate while those locks remain held through the caller's transaction commit.
+    """
+    fences = HarnessContext.decode_fences(encoded)
+    records = fences["records"]
+    generations = fences["source_generations"]
+    if len(records) > 100 or len(generations) > 100:
+        return False
+    if not records and not generations:
+        return await revalidate_native_output_fences(
+            session_factory, fences, principal, destination_kind="remote",
+        )
+    from modules.memory.public import lock_export_privacy
+    from modules.sources import public as sources
+    from modules.knowledge.documents import public as documents
+
+    await lock_export_privacy(session)
+    for source_id, generation in sorted(generations.items(), key=lambda item: str(item[0])):
+        source = await sources.lock_source(session, source_id)
+        if source is None or source.status != "active" or source.generation != generation:
+            return False
+    document_ids = sorted({item.document_id for item in records}, key=str)
+    if await documents.lock_document_ids(session, document_ids) != document_ids:
+        return False
+    return await revalidate_native_output_fences(
+        session_factory, fences, principal, destination_kind="remote",
+    )
+
+
 async def _reserve_step(
     context: HarnessContext, *, tool_name: str | None = None, tool_ordinal: int | None = None,
     tool_definition: Any = None, arguments: dict[str, Any] | None = None,
+    input_source_fences: dict[str, Any] | None = None,
     legacy_readonly_slot: bool = False,
 ) -> AgentRun:
-    """Consume one durable budget unit, reusing its stable slot on replay without double-counting."""
+    """Consume one budget unit and bind a new durable call slot to its frozen model-input evidence.
+
+    A replay must present the same captured context for a classified slot. Legacy checkpoints with
+    no group snapshot remain explicitly unavailable instead of being assigned an empty dependency set.
+    """
     await context.assert_lease()
     async with context.session_factory() as session:
         row = await session.scalar(select(AgentRun).where(AgentRun.id == context.run_id).with_for_update())
         if (
-            row is None or row.status != "running" or row.cancel_requested
+            row is None or row.status != "running" or row.cancel_requested or row.evidence_revoked
             or row.claim_generation != context.claim_generation
         ):
             raise RunCancelled("Run was cancelled or reclaimed")
         if row.steps >= MAX_STEPS or context.remaining_active() <= 0:
             raise RunLimitReached("Run step or active-time budget exhausted")
-        existing_call = await session.scalar(select(AgentToolCall.id).where(
+        existing = await session.scalar(select(AgentToolCall).where(
             AgentToolCall.run_id == context.run_id, AgentToolCall.ordinal == tool_ordinal,
         )) if tool_ordinal is not None else None
+        existing_call = existing.id if existing is not None else None
         recover_legacy_reservation = (
             legacy_readonly_slot and existing_call is None and tool_ordinal is not None
             and row.tool_calls >= tool_ordinal
         )
         if tool_name is not None and tool_ordinal is not None:
+            if existing is not None and existing.input_provenance_version == 1:
+                if input_source_fences is None or existing.input_source_fences != input_source_fences:
+                    raise RunIncompatible("Tool slot model-input evidence changed")
             if (existing_call is None and not recover_legacy_reservation
                     and row.tool_calls != tool_ordinal - 1):
                 raise RunIncompatible("Persisted tool counter has no matching durable action slot")
@@ -622,6 +674,8 @@ async def _reserve_step(
                 tool_version=tool_definition.version if tool_definition else None,
                 schema_fingerprint=tool_definition.schema_fingerprint if tool_definition else None,
                 arguments=arguments or {}, status="started",
+                input_source_fences=input_source_fences,
+                input_provenance_version=1 if input_source_fences is not None else None,
             ))
         await session.commit()
         session.expunge(row)
@@ -691,7 +745,9 @@ async def run_specialist_handoff(
     tool-call rows so a replay of this same slot is not a second use. The specialist is stateless
     here: if a worker segment is cut mid-handoff, replay re-runs the read-only specialist and
     its budget is charged again, never skipped. Effects are not offered to the specialist, so
-    no approval can be bypassed. Source scope is the intersection of both profiles.
+    no approval can be bypassed. Source scope is the intersection of both profiles. The specialist
+    inherits the frozen parent input fences because its request text was model-generated from them;
+    unknown legacy lineage remains unavailable through the child call slots.
     """
     from fastapi import HTTPException
 
@@ -700,6 +756,13 @@ async def run_specialist_handoff(
     parent_snapshot = parent.profile_snapshot
     if (parent.handoff_depth != 0 or parent_snapshot is None or parent_snapshot.get("id") != "supervisor"
             or len(state["pending_tool_calls"]) != 1):
+        raise HandoffRefused("forbidden")
+    frozen_parent_fences = state.get("pending_source_fences")
+    if (
+        frozen_parent_fences is None
+        or frozen_parent_fences != state.get("source_fences")
+        or state.get("source_provenance_available", True) is not True
+    ):
         raise HandoffRefused("forbidden")
     specialist, request_text = arguments["specialist"], arguments["request"]
     if specialist not in HANDOFF_TARGETS:
@@ -733,9 +796,12 @@ async def run_specialist_handoff(
         parent, snapshot, frozenset(item["name"] for item in tools),
         {item["name"]: {"version": item["version"], "fingerprint": item["fingerprint"]} for item in tools},
     )
+    inherited_fences = frozen_parent_fences
     child_state: dict[str, Any] = {
         "prompt": request_text, "messages": [], "pending_tool_calls": [], "tool_slots": [],
-        "tool_index": 0, "source_fences": {"records": [], "source_generations": {}},
+        "tool_index": 0,
+        "source_fences": inherited_fences or {"records": [], "source_generations": {}},
+        "source_provenance_available": inherited_fences is not None,
         "answer": None, "segment_steps": 0, "segment_done": False,
         "token_usage": None, "token_usage_unknown": False, "profile_id": specialist,
         "profile_revision_hash": digest, "owner_record_state": "authorized",
@@ -906,6 +972,11 @@ def build_workflow(context: HarnessContext, checkpointer: Any) -> Any:
             return {
                 "messages": [*state["messages"], assistant], "pending_tool_calls": normalized,
                 "tool_index": 0,
+                # Freeze this model request's context before any returned sibling call extends it.
+                "pending_source_fences": (
+                    state["source_fences"]
+                    if normalized and state.get("source_provenance_available", True) else None
+                ),
                 "tool_slots": list(range(row.tool_calls + 1, row.tool_calls + len(normalized) + 1)),
                 "answer": answer, "segment_steps": segment_steps,
                 "segment_done": False, "token_usage": next_tokens,
@@ -995,6 +1066,7 @@ def build_workflow(context: HarnessContext, checkpointer: Any) -> Any:
         row = await _reserve_step(
             context, tool_name=request["name"], tool_ordinal=ordinal,
             tool_definition=definition, arguments=arguments,
+            input_source_fences=state.get("pending_source_fences"),
             legacy_readonly_slot=legacy_readonly_slot,
         )
         expected = context.tool_contracts.get(request["name"], {})
@@ -1054,12 +1126,17 @@ def build_workflow(context: HarnessContext, checkpointer: Any) -> Any:
                     action_id = action_identity(context.run_id, ordinal)
                     approval = await approval_for_slot(context.session_factory, context.run_id, ordinal)
                     if approval is None:
+                        # Old checkpoints lack the frozen group field; their cumulative sink is
+                        # retained as conservative historical provenance, never as a clean marker.
+                        approval_fences = state.get("pending_source_fences")
+                        if approval_fences is None:
+                            approval_fences = state["source_fences"]
                         approval = await create_pending_approval(
                             context.session_factory, run_id=context.run_id, owner_id=row.owner_id,
                             auth_session_hash=row.auth_session_hash, claim_generation=context.claim_generation,
                             ordinal=ordinal, definition=definition, arguments=arguments,
                             destination_id=approval_destination[0], destination_revision=approval_destination[1],
-                            source_fences=state["source_fences"],
+                            source_fences=approval_fences,
                             expiry_hours=context.settings.approval_expiry_hours,
                         )
                         async with context.session_factory() as session:
@@ -1212,10 +1289,28 @@ def build_workflow(context: HarnessContext, checkpointer: Any) -> Any:
                 "content": json.dumps(result_payload, ensure_ascii=False, separators=(",", ":")),
             })
         async with context.session_factory() as session:
+            if exact and not forced_error and not pause_for_review:
+                try:
+                    fences_current = await _lock_native_output_fences_for_publication(
+                        session, context.session_factory, encoded_sink,
+                        context.owner_principal(state, destination),
+                    )
+                except (TypeError, ValueError, KeyError, RunCancelled):
+                    fences_current = False
+                if not fences_current:
+                    # Canonical locks make this final check serialize with hard deletion.
+                    result_payload = {"error": "forbidden"}
+                    call_status, error_code, evidence_refs = "denied", "forbidden", ()
+                    encoded_sink = state["source_fences"]
+                    if tool_messages and tool_messages[-1].get("tool_call_id") == request["call_id"]:
+                        tool_messages[-1]["content"] = json.dumps(
+                            result_payload, separators=(",", ":"),
+                        )
             run = await session.scalar(select(AgentRun).where(AgentRun.id == context.run_id).with_for_update())
             if (
                 run is None or run.owner_id != context.owner_id or run.status != "running"
                 or run.claim_generation != context.claim_generation or run.cancel_requested
+                or run.evidence_revoked
             ):
                 raise RunCancelled("Run was cancelled before tool publication")
             # Approval invalidation takes run→approval→effect→call; publication must lock
@@ -1234,28 +1329,15 @@ def build_workflow(context: HarnessContext, checkpointer: Any) -> Any:
             ):
                 raise RunCancelled("Chat link expired before tool publication")
             await context.assert_lease()
-            if exact and not forced_error and not pause_for_review:
-                try:
-                    fences_current = await revalidate_native_output_fences(
-                        context.session_factory, context.decode_fences(encoded_sink),
-                        context.owner_principal(state, destination), destination_kind="remote",
-                    )
-                except (TypeError, ValueError, KeyError):
-                    fences_current = False
-                if not fences_current:
-                    # Stale source output is never persisted as a successful tool result or evidence.
-                    result_payload = {"error": "forbidden"}
-                    call_status, error_code, evidence_refs = "denied", "forbidden", ()
-                    encoded_sink = state["source_fences"]
-                    if tool_messages and tool_messages[-1].get("tool_call_id") == request["call_id"]:
-                        tool_messages[-1]["content"] = json.dumps(
-                            result_payload, separators=(",", ":"),
-                        )
             if stored_call is not None:
                 stored_call.status = call_status
                 stored_call.error_code = error_code
                 stored_call.evidence_refs = list(evidence_refs)
                 stored_call.completed_at = datetime.now(UTC)
+            if exact and not forced_error and not pause_for_review:
+                # Publish provenance before the saver can checkpoint this result; cleanup queries
+                # the durable run fence even if worker segment accounting has not run yet.
+                run.source_fences = encoded_sink
             entries = list(run.activities)
             entries.append({
                 "kind": "tool", "status": call_status, "tool_name": request["name"][:160],

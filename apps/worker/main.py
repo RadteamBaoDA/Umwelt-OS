@@ -33,7 +33,10 @@ from modules.knowledge.entities.worker import (
     process_entity_extraction_work,
     recover_entity_extraction_work,
 )
-from modules.knowledge.documents.worker import process_document_cleanup, reconcile_document_memory_cleanup
+from modules.knowledge.documents.worker import (
+    process_document_cleanup, reconcile_document_agent_cleanup,
+    reconcile_document_memory_cleanup,
+)
 from modules.timeline.worker import process_timeline_extraction_work, recover_timeline_extraction_work
 from modules.knowledge.temporal.worker import process_graph_operation, recover_graph_work
 from modules.news.worker import process_news_document_ready, recover_news_work
@@ -183,6 +186,7 @@ class WorkerSettings:
         cron(index_pending_chunks, minute=set(range(0, 60, 1))),
         cron(reconcile_connectors, second=set(range(0, 60, 5)), run_at_start=True),
         cron(reconcile_document_memory_cleanup, second=set(range(0, 60, 5)), run_at_start=True),
+        cron(reconcile_document_agent_cleanup, second=set(range(0, 60, 5)), run_at_start=True),
         cron(recover_entity_extraction_work, minute=set(range(0, 60, 1))),
         cron(recover_timeline_extraction_work, minute=set(range(0, 60, 1))),
         cron(recover_graph_work, second=set(range(0, 60, 5)), run_at_start=True),

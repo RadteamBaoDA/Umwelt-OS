@@ -20,7 +20,7 @@ Source deletion retains its atomic limit of 10,000 Documents; an over-limit sour
 
 Create a Google OAuth web client, add the exact `PUBLIC_ORIGIN` to its authorized JavaScript origins, and register `<PUBLIC_ORIGIN>/api/v1/auth/google/callback` as an authorized redirect URI. Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` in the server `.env`; the secret is consumed by the API through Compose `env_file` and is never sent to the browser. Sign-in requests only `openid`, `email`, and `profile`. Gmail collection requires separate consent when the Gmail source is configured. Google login is available only after an owner has linked that identity from Account settings; it never creates the owner or links by email.
 
-The design target is a 2-core, 8 GB host with remote AI inference. Phase 0 has not yet been measured on a complete deployment, so this target is not a capacity guarantee. OmniRoute credentials only configure a future gateway and are not connectivity-tested in this phase. Graph, n8n, and browser services are not installed yet.
+The design target is a 2-core, 8 GiB host with remote AI inference. Capacity on that target remains unverified; development-host builds do not establish a capacity guarantee. OmniRoute settings and optional graph, n8n, and browser capabilities have production implementations, but live connectivity, enabled-profile operation, isolated recovery, and provider acceptance remain separate pending gates. Consult the [release checklist](release-checklist.md) and [implementation status](IMPLEMENTATION_STATUS.md) for the current integration boundary before deploying.
 
 ## Optional Langfuse telemetry
 

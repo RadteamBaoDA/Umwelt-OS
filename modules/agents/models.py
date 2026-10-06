@@ -31,6 +31,7 @@ class AgentRun(Base):
         Index("ix_agent_runs_dispatch", "status", "updated_at"),
         Index("ix_agent_runs_owner_created", "owner_id", "created_at", "id"),
         Index("ix_agent_runs_trace_retention", "trace_redacted_at", "status", "completed_at", "id"),
+        Index("ix_agent_runs_source_fences_gin", "source_fences", postgresql_using="gin"),
         UniqueConstraint("owner_id", "auth_session_hash", "client_request_id", name="uq_agent_runs_session_request"),
     )
 
@@ -54,6 +55,8 @@ class AgentRun(Base):
     allowed_tools: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
     tool_contracts: Mapped[dict[str, dict[str, str]]] = mapped_column(JSONB, nullable=False)
     source_fences: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False, default=dict)
+    # This durable denial survives any later selective scrub of the evidence fence itself.
+    evidence_revoked: Mapped[bool] = mapped_column(nullable=False, default=False)
     # Retain the original link requirement after Chat's cascading link row is deleted.
     chat_link_required: Mapped[bool] = mapped_column(nullable=False, default=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
@@ -83,7 +86,7 @@ class AgentRun(Base):
 
 
 class AgentToolCall(Base):
-    """Keep bounded tool identity, immutable arguments, and outcome under the owning run."""
+    """Keep bounded tool identity, immutable arguments, and exact model-input evidence provenance."""
 
     __tablename__ = "agent_tool_calls"
     __table_args__ = (
@@ -91,7 +94,18 @@ class AgentToolCall(Base):
         CheckConstraint("ordinal BETWEEN 1 AND 10", name="ck_agent_tool_calls_ordinal"),
         CheckConstraint("status IN ('started','approval_pending','succeeded','denied','failed')", name="ck_agent_tool_calls_status"),
         CheckConstraint("octet_length(arguments::text) <= 64000", name="ck_agent_tool_calls_argument_bytes"),
+        CheckConstraint(
+            "input_provenance_version IS NULL OR input_provenance_version = 1",
+            name="ck_agent_tool_calls_input_provenance_version",
+        ),
+        CheckConstraint(
+            "(input_provenance_version IS NULL AND input_source_fences IS NULL) OR "
+            "(input_provenance_version = 1 AND input_source_fences IS NOT NULL "
+            "AND octet_length(input_source_fences::text) <= 64000)",
+            name="ck_agent_tool_calls_input_provenance_shape",
+        ),
         Index("ix_agent_tool_calls_run", "run_id", "ordinal"),
+        Index("ix_agent_tool_calls_input_fences_gin", "input_source_fences", postgresql_using="gin"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -103,6 +117,9 @@ class AgentToolCall(Base):
     tool_version: Mapped[str | None] = mapped_column(String(40))
     schema_fingerprint: Mapped[str | None] = mapped_column(String(64))
     arguments: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    # NULL means legacy provenance was never captured; an empty strict fence is evidence-free.
+    input_source_fences: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    input_provenance_version: Mapped[int | None] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     error_code: Mapped[str | None] = mapped_column(String(32))
     evidence_refs: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
@@ -122,6 +139,7 @@ class AgentApproval(Base):
         CheckConstraint("octet_length(arguments::text) <= 64000", name="ck_agent_approvals_argument_bytes"),
         Index("ix_agent_approvals_owner_state_expiry", "owner_id", "status", "expires_at"),
         Index("ix_agent_approvals_retention", "run_id", "status"),
+        Index("ix_agent_approvals_source_fences_gin", "source_fences", postgresql_using="gin"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -143,6 +161,33 @@ class AgentApproval(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class AgentEvidenceCleanup(Base):
+    """Retain an operation-scoped revocation and lease-finalization receipt for one run."""
+
+    __tablename__ = "agent_evidence_cleanups"
+    __table_args__ = (
+        UniqueConstraint("operation_id", "run_id", name="uq_agent_evidence_cleanups_operation_run"),
+        CheckConstraint("state IN ('pending','finalized','unavailable')", name="ck_agent_evidence_cleanups_state"),
+        CheckConstraint("matched_identity IS NULL OR octet_length(matched_identity::text) <= 2048", name="ck_agent_evidence_cleanups_identity_bytes"),
+        Index("ix_agent_evidence_cleanups_operation_state_run", "operation_id", "state", "run_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    operation_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    run_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False,
+    )
+    source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    document_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    scope_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    # First exact immutable version/chunk identity that proved this run matched the operation.
+    # NULL records an operation-level coverage gate where no exact run dependency was proven.
+    matched_identity: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    state: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    finalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class AgentEffect(Base):

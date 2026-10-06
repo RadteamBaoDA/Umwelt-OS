@@ -69,6 +69,10 @@ class DocumentDeletionRead(BaseModel):
     memory_error_code: str | None = Field(default=None, max_length=64)
     memory_unresolved_count: int = Field(ge=0)
     memory_cache_pending: bool
+    agent_status: Literal["queued", "running", "succeeded", "failed"]
+    agent_error_code: str | None = Field(default=None, max_length=64)
+    agent_unresolved_count: int = Field(ge=0)
+    agent_waiting_for_lease: bool
     immediate_access_revoked: Literal[True] = True
     error_code: str | None = Field(default=None, max_length=64)
     copied_error_code: str | None = Field(default=None, max_length=64)

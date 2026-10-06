@@ -1,8 +1,11 @@
-# Open-source inventory
+# Open-source and source-available inventory
+
+Inventory reconciliation is in progress. Entries below document identified dependencies and copied source; direct application packages, runtime images and redistributed notices are being reconciled before the final release gate. This is not a complete transitive license audit.
 
 | Package | Locked version | License | Use |
 | --- | --- | --- | --- |
 | [AnythingLLM frontend source slices](https://github.com/Mintplex-Labs/anything-llm/tree/128a01575a50f0284aeca75a93399b6fb1db0328) | `128a01575a50f0284aeca75a93399b6fb1db0328` | MIT | Bounded adaptations of upstream scroll, composer input, markdown/sanitizer, and copy-feedback regions in `apps/web/src/modules/chat`; exact originals, local changes, and hashes are recorded in `docs/anythingllm-port.md` and `.superpowers/sdd/r07/source-regions.md`. No upstream transport, backend, provider code, CSS, or assets are included. |
+| [age / age-keygen host CLI](https://github.com/FiloSottile/age) | Operator-installed; not bundled or lockfile-pinned | BSD-3-Clause ([upstream license](https://github.com/FiloSottile/age/blob/main/LICENSE)) | Standard age recipient encryption and protected identity verification for backup/isolated restore in `modules/backup/host.py`, integrated at `5212def`. The binary version and operational compatibility must be recorded during deferred restore acceptance; no source or binary is redistributed by this repository. |
 | [Authlib](https://github.com/authlib/authlib) | 1.8.0 | BSD-3-Clause | Server-side OpenID Connect discovery and Google sign-in validation, plus fixed-endpoint GitHub App OAuth code exchange and rotating-token refresh. |
 | [class-variance-authority](https://github.com/joe-bell/cva) | 0.7.1 | Apache-2.0 | Variant and size class selection for the repository-owned shared Button adapted from the official New York shadcn registry source. |
 | [DOMPurify](https://github.com/cure53/DOMPurify) | 3.4.16 | MPL-2.0 OR Apache-2.0 | Browser-side sanitization of rendered Chat markdown in `apps/web/src/modules/chat/chat-markdown.tsx`; Apache-2.0 notice from the locked npm package is reproduced in `THIRD_PARTY_NOTICES.md`. |
@@ -12,6 +15,7 @@
 | [Graphiti Core](https://github.com/getzep/graphiti) | 0.30.2 | Apache-2.0 | `modules/knowledge/temporal/adapter.py` injects controlled LLM/embed/rerank clients and wraps the Falkor driver; no Graphiti package source is modified. |
 | [itsdangerous](https://github.com/pallets/itsdangerous) | 2.2.0 | BSD-3-Clause | Required by Starlette `SessionMiddleware` for signed session-cookie support. |
 | [Radix UI](https://github.com/radix-ui/primitives) | 1.6.7 | MIT | Primitives used by the account DropdownMenu and Dialog. |
+| [n8n community container](https://github.com/n8n-io/n8n/tree/n8n%402.5.2) | 2.5.2 (`n8nio/n8n:2.5.2`) | Source-available Sustainable Use License; enterprise-marked files have separate terms ([exact release license](https://github.com/n8n-io/n8n/blob/n8n%402.5.2/LICENSE.md)) | Optional packaged connector/schedule runtime. `infrastructure/docker/n8n-connectors.Dockerfile` adds the network firewall/entrypoint without modifying n8n application source; native Settings uses supported server APIs. Approved use is the personal single-owner self-hosted deployment. |
 | [next-intl](https://github.com/amannn/next-intl) | 4.14.8 | MIT | English and Vietnamese interface catalogs and locale context. |
 | [next-themes](https://github.com/pacocoursey/next-themes) | 0.4.6 | MIT | System-aware light/dark theme class bootstrap. |
 | [markdown-it](https://github.com/markdown-it/markdown-it) | 15.0.2 | MIT | Markdown rendering for saved and streaming Chat message content in `apps/web/src/modules/chat/chat-markdown.tsx`; package notice is reproduced in `THIRD_PARTY_NOTICES.md`. |
@@ -24,7 +28,7 @@
 | [HTTPX](https://github.com/encode/httpx) | 0.28.1 | BSD-3-Clause | OpenAI SDK HTTP transport with DNS result CIDR approval, numeric-IP pinning, and proxy/redirect denial at the OmniRoute boundary. |
 | [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) | 2.3.0 | MIT | Maintained Model Context Protocol client/server SDK used for the remote MCP transport and typed protocol operations. |
 | [MCP Types](https://github.com/modelcontextprotocol/python-sdk/tree/main/src/mcp-types) | 2.3.0 | MIT | Typed protocol models required by the MCP Python SDK. |
-| [LangGraph](https://github.com/langchain-ai/langgraph/tree/1.2.12/libs/langgraph) | 1.2.12 | MIT | Runs the single bounded read-only assistant graph; orchestration uses the existing ModelGateway and ToolRegistry. |
+| [LangGraph](https://github.com/langchain-ai/langgraph/tree/1.2.12/libs/langgraph) | 1.2.12 | MIT | Runs bounded checkpointed Agent workflows, specialist handoffs and approved effects through the existing ModelGateway and ToolRegistry. |
 | [LangGraph Checkpoint](https://github.com/langchain-ai/langgraph/tree/1.2.12/libs/checkpoint) | 4.1.0 | MIT | Defines the pinned checkpoint saver serialization contract. |
 | [LangGraph Checkpoint Postgres](https://github.com/langchain-ai/langgraph/tree/1.2.12/libs/checkpoint-postgres) | 3.1.2 | MIT | Persists graph checkpoints through AsyncPostgresSaver; its exact schema is installed by Alembic, not startup setup. |
 | [Psycopg](https://github.com/psycopg/psycopg) | 3.3.3 | LGPL-3.0-or-later | Async PostgreSQL checkpoint connection and bundled binary implementation. |
@@ -75,3 +79,57 @@ The shadcn components are repository-owned source in `apps/web/src/components/ui
 `apps/web/src/components/ui/textarea.tsx` adopts the Tailwind v4 New York Textarea from the official shadcn registry item ([source](https://ui.shadcn.com/r/styles/new-york-v4/textarea.json), MIT), retaining the repository's `cn` helper and required local JSDoc.
 
 Google sign-in requests only `openid`, `email`, and `profile`; it does not grant Gmail access.
+
+## Product references
+
+[WorldMonitor](https://github.com/koala73/worldmonitor/) and [GOIES](https://github.com/tanu-1403/GOIES) are design references for the world-data dashboard. They are not installed dependencies or copied-source components in the current integrated inventory. The local intelligence projections and CII method are described in [intelligence-methods.md](docs/intelligence-methods.md); do not represent them as imported WorldMonitor scores. Any later source reuse requires its exact revision, local paths, modifications and license notices to be recorded here before delivery.
+
+The actual adapted Chat source is AnythingLLM, with revision and local modifications recorded in [anythingllm-port.md](docs/anythingllm-port.md) and the table above. Backup host tooling is inventoried above from accepted source at `5212def`. Docker Compose v2.24 or newer is required for the override syntax; age/age-keygen are separately installed operator tools rather than bundled application dependencies. Their actual host version/restore compatibility remains a deferred acceptance record.
+
+## Direct application runtime dependencies
+
+These additions use exact lockfile versions and matching installed distribution/package metadata. License labels describe the top-level package; bundled native/transitive notices still require release reconciliation. Source links follow the local package metadata.
+
+| Package | Locked version | License | Use |
+| --- | --- | --- | --- |
+| [Alembic](https://github.com/sqlalchemy/alembic/) | 1.20.0 | MIT | Serialized PostgreSQL schema migrations. |
+| [argon2-cffi](https://github.com/hynek/argon2-cffi) | 25.1.0 | MIT | Owner password hashing. |
+| [ARQ](https://github.com/python-arq/arq) | 0.28.0 | MIT | Bounded worker execution; PostgreSQL retains durable intents. |
+| [asyncpg](https://github.com/MagicStack/asyncpg) | 0.31.0 | Apache-2.0 | Async PostgreSQL application driver. |
+| [FastAPI](https://github.com/fastapi/fastapi) | 0.141.1 | MIT | Owner-authenticated API services. |
+| [pypdf](https://github.com/py-pdf/pypdf) | 6.19.0 | BSD-3-Clause | Imported PDF text parsing. |
+| [pydantic-settings](https://github.com/pydantic/pydantic-settings) | 2.15.0 | MIT | Typed protected server configuration. |
+| [python-multipart](https://github.com/Kludex/python-multipart) | 0.0.32 | Apache-2.0 | API multipart upload handling. |
+| [python-docx](https://github.com/python-openxml/python-docx) | 1.2.0 | MIT | Imported DOCX parsing. |
+| [Redis Python client](https://github.com/redis/redis-py) | 5.3.1 | MIT | Queue/cache client; distinct from Redis server licensing. |
+| [SQLAlchemy](https://github.com/sqlalchemy/sqlalchemy) | 2.1.0 | MIT | Application persistence and transaction/query contracts. |
+| [structlog](https://github.com/hynek/structlog) | 25.5.0 | MIT OR Apache-2.0 | Structured application logging. |
+| [tiktoken](https://github.com/openai/tiktoken) | 0.14.0 | MIT License | Bounded document token/chunk accounting. |
+| [Uvicorn](https://github.com/Kludex/uvicorn) | 0.54.0 | BSD-3-Clause | API ASGI server. |
+| [OpenAI Python SDK](https://github.com/openai/openai-python) | 2.54.0 | Apache-2.0 | OpenAI-compatible OmniRoute transport; gateway retains policy ownership. |
+| [cryptography](https://github.com/pyca/cryptography) | 50.0.2 | Apache-2.0 OR BSD-3-Clause | Protected connector/settings credentials. |
+| [@hookform/resolvers](https://github.com/react-hook-form/resolvers) | 5.9.1 | MIT | Form schema integration. |
+| [@tanstack/react-query](https://github.com/TanStack/query) | 5.103.2 | MIT | Authenticated client query/mutation caching. |
+| [Next.js](https://github.com/vercel/next.js) | 16.3.6 | MIT | Frontend application framework and server. |
+| [React](https://github.com/react/react) | 19.3.0 | MIT | Frontend component/runtime rendering. |
+| [React DOM](https://github.com/react/react) | 19.3.0 | MIT | Browser DOM rendering. |
+| [react-hook-form](https://github.com/react-hook-form/react-hook-form) | 7.88.0 | MIT | Native Settings and application forms. |
+| [Zod](https://github.com/colinhacks/zod) | 4.6.5 | MIT | Frontend schema validation. |
+| [Zustand](https://github.com/pmndrs/zustand) | 5.0.15 | MIT | Direct application state dependency; separate from nested4.x. |
+## Runtime image and optional browser inventory
+
+| Component | Source version/reference | Notice state |
+| --- | --- | --- |
+| PostgreSQL with pgvector | pgvector/pgvector:0.8.6-pg16-bookworm | PostgreSQL, pgvector and Debian bundle notices pending; tag specifies PostgreSQL major16, not exact patched version. |
+| Redis server | redis:7.4.11-alpine | Server/Alpine bundle notices pending; Redis client license above does not describe the server. |
+| Python base | python:3.12.14-slim-bookworm | Interpreter and Debian bundle notices pending. |
+| Node base | node:24.20.0-alpine3.23 | Node and Alpine bundle notices pending. |
+| Firewall build base | alpine:3.22 | Copied firewall artifact/component notices pending. |
+| Beautiful Soup | 4.15.0 | Optional browser runtime; license/source/notice metadata reconciliation pending. |
+| Crawlee | 1.10.2 | Optional browser runtime; license/source/notice metadata reconciliation pending. |
+| Playwright Python | 1.63.0 | Optional browser runtime; license/source/notice metadata reconciliation pending. Chromium binary revision is separate. |
+
+Base tags above are recorded from source and have no digest pin in the referenced Dockerfiles/Compose. They do not prove the resolved image contents. Optional Chromium binary notices, application transitive dependencies, development/build tooling and redistribution notice coverage remain release gates.
+
+Build tooling: Tailwind CSS and @tailwindcss/postcss4.3.3 have matching MIT package metadata; uv0.12.11 is the Dockerfile installer reference. Hatchling is constrained by pyproject to>=1.27,<2 but has no resolved version recorded in uv.lock. Build tools are separate from application runtime; their full notice reconciliation remains pending.
+Native license/notice texts for the24 additional direct runtime packages above are preserved in THIRD_PARTY_NOTICES.md (28 files, exact source paths and SHA-256 hashes). This closes those specific notice-copy gaps; optional browser, container and remaining transitive/build inventory reconciliation is still pending.

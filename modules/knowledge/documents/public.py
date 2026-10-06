@@ -117,6 +117,22 @@ async def pending_document_memory_cleanup_ids(
     )).all())
 
 
+async def pending_document_agent_cleanup_ids(
+    session: AsyncSession, *, after: UUID | None = None, limit: int = 100,
+) -> tuple[UUID, ...]:
+    """Return cleanup receipts whose Agent owner stage needs event reconciliation."""
+    if not 1 <= limit <= 100:
+        raise ValueError("Agent cleanup reconciliation page size must be between 1 and 100")
+    statement = select(DocumentCleanupOperation.id).where(
+        DocumentCleanupOperation.agent_status.in_({"queued", "running"}),
+    )
+    if after is not None:
+        statement = statement.where(DocumentCleanupOperation.id > after)
+    return tuple((await session.scalars(
+        statement.order_by(DocumentCleanupOperation.id).limit(limit)
+    )).all())
+
+
 def _encode_document_export_cursor(
     owner_id: int, record_kind: str, snapshot_at: datetime, position_at: datetime, position_id: UUID,
 ) -> str:
@@ -1749,6 +1765,7 @@ async def source_cleanup_progress(
         DocumentCleanupOperation.raw_status == "failed",
         DocumentCleanupOperation.chat_status == "failed",
         DocumentCleanupOperation.memory_status == "failed",
+        DocumentCleanupOperation.agent_status == "failed",
         DocumentCleanupOperation.copied_status == "failed",
     )
     raw_pending = DocumentCleanupOperation.raw_status.not_in(
@@ -1759,12 +1776,13 @@ async def source_cleanup_progress(
         DocumentCleanupOperation.memory_status != "succeeded",
         DocumentCleanupOperation.memory_cache_pending.is_(True),
     )
+    agent_pending = DocumentCleanupOperation.agent_status.not_in(("succeeded", "failed"))
     copy_pending = DocumentCleanupOperation.copied_status != "succeeded"
     # Cache eviction is a separate durable Memory obligation, including while a prior
     # content-cleanup stage is terminally failed and awaits its retryable postcommit work.
     pending = or_(
         DocumentCleanupOperation.memory_cache_pending.is_(True),
-        and_(~failed, or_(raw_pending, chat_pending, memory_pending, copy_pending)),
+        and_(~failed, or_(raw_pending, chat_pending, memory_pending, agent_pending, copy_pending)),
     )
     row = (await session.execute(select(
         func.count(DocumentCleanupOperation.id),
@@ -1773,10 +1791,11 @@ async def source_cleanup_progress(
         func.sum(case((and_(~failed, raw_pending), 1), else_=0)),
         func.sum(case((and_(~failed, chat_pending), 1), else_=0)),
         func.sum(case((or_(and_(~failed, memory_pending), DocumentCleanupOperation.memory_cache_pending.is_(True)), 1), else_=0)),
+        func.sum(case((and_(~failed, agent_pending), 1), else_=0)),
     ).where(
         DocumentCleanupOperation.source_purge_operation_id == source_purge_operation_id,
     ))).one()
-    child_count, pending_count, failed_count, raw_waiting, chat_waiting, memory_waiting = (
+    child_count, pending_count, failed_count, raw_waiting, chat_waiting, memory_waiting, agent_waiting = (
         int(value or 0) for value in row
     )
     owners: list[str] = []
@@ -1788,9 +1807,11 @@ async def source_cleanup_progress(
         owners.append("chat")
     if memory_waiting:
         owners.append("memory")
+    if agent_waiting:
+        owners.append("agents")
     if child_count:
         # These owner contracts are deliberately pending until their own cleanup stages exist.
-        owners.extend(("agents", "dashboard", "notifications", "automations"))
+        owners.extend(("dashboard", "notifications", "automations"))
     all_required_complete = capture_recorded and child_count == 0
     return SourceCleanupProgress(
         child_count=child_count,

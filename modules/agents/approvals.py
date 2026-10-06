@@ -54,6 +54,7 @@ async def create_pending_approval(
             raise HTTPException(status_code=409, detail="A live Chat link is required for approval")
         run = await session.scalar(select(AgentRun).where(AgentRun.id == run_id).with_for_update())
         if (run is None or run.owner_id != owner_id or run.status != "running" or run.cancel_requested
+                or run.evidence_revoked
                 or run.claim_generation != claim_generation or run.auth_session_hash != auth_session_hash):
             raise HTTPException(status_code=409, detail="Agent action is no longer current")
         row = await session.scalar(select(AgentApproval).where(
@@ -107,6 +108,7 @@ async def verify_approved_action(
                 or row.owner_id != owner_id or row.auth_session_hash != auth_session_hash
                 or run.owner_id != owner_id or run.auth_session_hash != auth_session_hash
                 or run.claim_generation != claim_generation or run.status != "running" or run.cancel_requested
+                or run.evidence_revoked
                 or row.status != "approved" or row.expires_at <= datetime.now(UTC)
                 or effect.state != "reserved" or effect.payload is None
                 or row.tool_name != definition.name or row.tool_version != definition.version
@@ -161,7 +163,7 @@ async def reserve_effect_before_send(
         now = datetime.now(UTC)
         if (run is None or approval is None or effect is None or run.owner_id != owner_id
                 or run.auth_session_hash != auth_session_hash or run.status != "running"
-                or run.cancel_requested or run.claim_generation != claim_generation
+                or run.cancel_requested or run.evidence_revoked or run.claim_generation != claim_generation
                 or approval.run_id != run_id or approval.owner_id != owner_id
                 or approval.auth_session_hash != auth_session_hash or approval.status != "approved"
                 or approval.expires_at <= now or effect.state != "reserved" or effect.payload is None
@@ -314,7 +316,7 @@ async def decision(
         effect = await session.scalar(select(AgentEffect).where(
             AgentEffect.action_id == candidate.action_id,
         ).with_for_update())
-    if run is None or row is None or run.cancel_requested or run.status == "cancelled":
+    if run is None or row is None or run.cancel_requested or run.evidence_revoked or run.status == "cancelled":
         raise HTTPException(status_code=409, detail="Agent run is no longer active")
     if row.status in {"approved", "denied"}:
         if row.status == ("approved" if approve else "denied"):
@@ -406,7 +408,7 @@ async def _cancel_stale_action(
                 session, candidate.run_id, candidate.owner_id, candidate.auth_session_hash,
             )):
         raise HTTPException(status_code=404, detail="Approval not found")
-    if run is None or row is None or run.cancel_requested or run.status == "cancelled":
+    if run is None or row is None or run.cancel_requested or run.evidence_revoked or run.status == "cancelled":
         raise HTTPException(status_code=409, detail="Agent run is no longer active")
     if row.status != "pending" or run.status != "waiting_approval":
         raise HTTPException(status_code=409, detail="Approval is no longer awaiting a decision")
@@ -437,7 +439,7 @@ async def expire_pending_approvals(session_factory: SessionFactory, limit: int =
                 continue
             row.status, row.resolved_at = "expired", datetime.now(UTC)
             await _resume_denied(session, run, row, "approval_expired")
-            if run.status == "waiting_approval" and not run.cancel_requested:
+            if run.status == "waiting_approval" and not run.cancel_requested and not run.evidence_revoked:
                 run.status, run.dispatch_generation = "queued", run.dispatch_generation + 1
                 run.updated_at = datetime.now(UTC)
             expired += 1

@@ -3,7 +3,6 @@
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-import hashlib
 import logging
 import math
 from typing import Any, AsyncIterator, cast
@@ -22,6 +21,7 @@ from modules.agents.harness import (
     MAX_ACTIVE_SECONDS, HarnessContext, RunCancelled, RunIncompatible, RunLimitReached, StrictJsonSerializer,
     build_workflow,
 )
+from modules.agents.leases import agent_run_lease_key
 from modules.agents.models import AgentApproval, AgentEffect, AgentRun, AgentToolCall
 from modules.agents.public import (
     APPROVAL_PROMPT_VERSION, APPROVAL_WORKFLOW_VERSION, CHECKPOINT_SCHEMA_VERSION,
@@ -48,9 +48,8 @@ _activity_reconcile_cursor: UUID | None = None
 
 
 def _advisory_key(run_id: UUID) -> int:
-    """Derive a signed PostgreSQL advisory-lock key scoped to this run identifier."""
-    raw = int.from_bytes(hashlib.blake2b(run_id.bytes, digest_size=8, person=b"bbd-agent").digest(), "big")
-    return raw if raw < 2**63 else raw - 2**64
+    """Return the shared lease key used by the worker and copied-evidence cleanup."""
+    return agent_run_lease_key(run_id)
 
 
 @asynccontextmanager
@@ -88,7 +87,7 @@ async def _claim_run(
     async with session_factory() as session:
         row = await session.scalar(select(AgentRun).where(AgentRun.id == run_id).with_for_update())
         if (
-            row is None or row.status != "queued" or row.cancel_requested
+            row is None or row.status != "queued" or row.cancel_requested or row.evidence_revoked
             or row.dispatch_generation != dispatch_generation
         ):
             return None
@@ -123,7 +122,7 @@ async def _account_segment(
         row.active_seconds = min(MAX_ACTIVE_SECONDS, row.active_seconds + elapsed)
         row.claim_started_at = None
         row.updated_at = datetime.now(UTC)
-        if state is not None:
+        if state is not None and not row.evidence_revoked:
             if state.get("token_usage") is not None:
                 row.token_usage = state["token_usage"]
             row.token_usage_unknown = (
@@ -153,7 +152,8 @@ async def _account_segment(
             .where(AgentToolCall.run_id == context.run_id, AgentToolCall.status == "started")
             .values(status="failed", error_code="segment_interrupted", completed_at=datetime.now(UTC))
         )
-        if row.cancel_requested:
+        if row.cancel_requested or row.evidence_revoked:
+            row.cancel_requested = True
             row.status = "cancelled"
             row.completed_at = datetime.now(UTC)
             row.activities = [*row.activities[-63:], {
@@ -235,7 +235,7 @@ async def _finish_run(
                 row.token_usage = state["token_usage"]
             row.token_usage_unknown = row.token_usage_unknown or bool(state.get("token_usage_unknown", False))
         row.token_usage_unknown = row.token_usage_unknown or context.unobservable_model_usage
-        if row.cancel_requested or status == "cancelled":
+        if row.cancel_requested or row.evidence_revoked or status == "cancelled":
             row.status, row.error_code = "cancelled", None
         else:
             row.status, row.error_code = status, error_code

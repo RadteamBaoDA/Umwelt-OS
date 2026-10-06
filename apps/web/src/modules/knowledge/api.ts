@@ -25,6 +25,10 @@ export type DocumentDeletionReceipt = {
   memory_error_code: string | null;
   memory_unresolved_count: number;
   memory_cache_pending: boolean;
+  agent_status: 'queued' | 'running' | 'succeeded' | 'failed';
+  agent_error_code: string | null;
+  agent_unresolved_count: number;
+  agent_waiting_for_lease: boolean;
   immediate_access_revoked: true;
   error_code: string | null;
   copied_error_code: string | null;

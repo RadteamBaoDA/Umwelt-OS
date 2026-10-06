@@ -59,7 +59,10 @@ export function DocumentDeletionReceiptPanel({ operationId }: { operationId: str
   const receipt = operation.data?.operation_id === operationId ? operation.data : undefined;
   const scopeUnavailable = receipt?.evidence_scope_status === 'unavailable';
   const memoryUnresolved = receipt?.memory_error_code === 'legacy_provenance_unresolved';
-  const summary = memoryUnresolved
+  const agentUnresolved = receipt?.agent_status === 'failed' && receipt.agent_unresolved_count > 0;
+  const summary = agentUnresolved
+    ? t('documentDeletionAgentUnresolved')
+    : memoryUnresolved
     ? t('documentDeletionMemoryUnresolved')
     : scopeUnavailable
     ? t('documentDeletionScopeFailure')
@@ -76,9 +79,11 @@ export function DocumentDeletionReceiptPanel({ operationId }: { operationId: str
   return <section aria-labelledby="document-deletion-title" className="rounded-lg border border-border bg-card p-4 text-card-foreground shadow-sm">
     <h1 id="document-deletion-title" className="text-lg font-semibold">{t('documentDeletionTitle')}</h1>
     {receipt?.immediate_access_revoked === true && <p className="mt-2 text-sm text-muted-foreground">{t('documentDeletionAccessRevoked')}</p>}
-    <p className="mt-3" role={receipt?.status === 'failed' || scopeUnavailable || memoryUnresolved ? 'alert' : 'status'} aria-live={receipt?.status === 'failed' || scopeUnavailable || memoryUnresolved ? 'assertive' : 'polite'}>{summary}</p>
+    <p className="mt-3" role={receipt?.status === 'failed' || scopeUnavailable || memoryUnresolved || agentUnresolved ? 'alert' : 'status'} aria-live={receipt?.status === 'failed' || scopeUnavailable || memoryUnresolved || agentUnresolved ? 'assertive' : 'polite'}>{summary}</p>
     {receipt?.memory_unresolved_count ? <p className="mt-2 text-sm text-destructive" role="alert">{t('documentDeletionMemoryUnresolvedCount', { count: receipt.memory_unresolved_count })}</p> : null}
     {receipt?.memory_cache_pending && <p className="mt-2 text-sm text-muted-foreground" role="status">{t('documentDeletionMemoryCachePending')}</p>}
+    {receipt?.agent_unresolved_count ? <p className="mt-2 text-sm text-destructive" role="alert">{t('documentDeletionAgentUnresolvedCount', { count: receipt.agent_unresolved_count })}</p> : null}
+    {receipt?.agent_waiting_for_lease && <p className="mt-2 text-sm text-muted-foreground" role="status">{t('documentDeletionAgentLeasePending')}</p>}
     {operation.isPending && <p className="mt-2 text-sm text-muted-foreground" role="status">{t('documentDeletionLoading')}</p>}
     {operation.isError && <p className="mt-2 text-sm text-destructive" role="alert">{receipt ? t('documentDeletionRefreshFailed') : t('documentDeletionStatusUnavailable')}</p>}
     {automaticRefreshPaused && receipt && (receipt.status === 'queued' || receipt.status === 'running') && <p className="mt-2 text-sm text-muted-foreground" role="status">{t('documentDeletionAutomaticRefreshPaused')}</p>}
@@ -90,6 +95,7 @@ export function DocumentDeletionReceiptPanel({ operationId }: { operationId: str
         <div className="rounded-md border border-border p-3"><dt className="text-sm font-medium">{t('documentDeletionCopied')}</dt><dd className="mt-1 text-sm text-muted-foreground">{stageLabel(receipt.copied_status)}</dd></div>
         <div className="rounded-md border border-border p-3"><dt className="text-sm font-medium">{t('documentDeletionChat')}</dt><dd className="mt-1 text-sm text-muted-foreground">{stageLabel(receipt.chat_status)}</dd></div>
         <div className="rounded-md border border-border p-3"><dt className="text-sm font-medium">{t('documentDeletionMemory')}</dt><dd className="mt-1 text-sm text-muted-foreground">{stageLabel(receipt.memory_status)}</dd></div>
+        <div className="rounded-md border border-border p-3"><dt className="text-sm font-medium">{t('documentDeletionAgent')}</dt><dd className="mt-1 text-sm text-muted-foreground">{stageLabel(receipt.agent_status)}</dd></div>
       </dl>
     </>}
     <div className="mt-4 flex flex-wrap gap-3">

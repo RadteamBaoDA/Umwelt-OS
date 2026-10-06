@@ -1,6 +1,6 @@
 # Umwelt-OS
 
-Umwelt-OS is a self-hosted Personal Intelligence OS. Phase 0 provides the private owner account, service status, database migrations, a small background worker, and the local deployment foundation. It does not collect sources, call AI models, or run graph, n8n, or browser services yet.
+Umwelt-OS is a self-hosted Personal Intelligence OS for collecting world and personal data, exploring retained knowledge, and arranging a live gadget dashboard with an AI chat drawer and full Chat page. The current integrated production source includes owner/Google authentication, native connector and MCP settings, ingestion and search, knowledge/timeline views, remote AI through OmniRoute, agent/action safeguards, dashboard editing, finance/weather observations, and privacy-aware Chat history. These are code/build/source-review deliveries; live providers, recovery, mobile/accessibility and target-host acceptance remain deferred. Backup/admission/recovery, portable saved gadget/eligible retained brief/schedule exports, and bounded Chat copied-evidence cleanup are integrated. Document deletion receipt UI, Source canonical/linked-child cleanup, and mobile/full Dashboard reconciliation are also integrated. Remaining copied owners, historical/Source-local deletion coverage and final release work remain in progress; mobile/accessibility runtime acceptance is deferred. Read the [execution ledger](docs/superpowers/plans/EXECUTION.md) and [implementation status](docs/IMPLEMENTATION_STATUS.md) for exact task evidence.
 
 ## Start locally
 
@@ -27,9 +27,9 @@ PostgreSQL migrations run before API and worker startup. Their persistent data u
 
 ## OmniRoute and privacy
 
-`OMNIROUTE_BASE_URL` and `OMNIROUTE_API_KEY` are optional placeholders. Phase 0 reports whether the gateway is configured but does not verify connectivity or send prompts. Provider/model calls and source ingestion are deferred to later phases. Review [privacy](docs/privacy.md) and [deployment](docs/deployment.md) before enabling remote access or adding connectors.
+`OMNIROUTE_BASE_URL` and `OMNIROUTE_API_KEY` are optional placeholders. The production model gateway uses the OpenAI-compatible OmniRoute endpoint and applies owner privacy and source policy before remote requests. Configured credentials do not establish provider connectivity, supported capabilities, or runtime acceptance. Collection adapters and Chat/agent calls require their own enabled configuration and consent. Review [privacy](docs/privacy.md) and [deployment](docs/deployment.md) before enabling remote access or adding connectors.
 
-See [development](docs/development.md), [deployment](docs/deployment.md), [privacy](docs/privacy.md), and [implementation status](docs/IMPLEMENTATION_STATUS.md).
+See [development](docs/development.md), [deployment](docs/deployment.md), [privacy](docs/privacy.md), and [implementation status](docs/IMPLEMENTATION_STATUS.md). See [backup and isolated restore](docs/backup-recovery.md) for the implemented encrypted backup, recovery and cleanup commands; source delivery does not prove runtime restoration.
 
 Packaged source collection and the native GitHub App OAuth ownership model are documented in [connectors](docs/connectors.md); GitHub OAuth credentials remain API-owned and do not pass through n8n.
 
@@ -70,5 +70,7 @@ The UTF-8 manifest is bounded to 1 MiB and has this exact top-level shape: `{"ve
 `profile_hash` is the lowercase hexadecimal SHA-256 of the canonical transport policy JSON. Serialize as UTF-8 JSON with recursively sorted keys (`sort_keys=true`), compact separators `,` and `:`, and `ensure_ascii=false`. The following is the complete sorted-key JSON shape for a native profile; replace example identity/path/argument/environment/artifact values with exact deployment values. Keep all keys shown, preserve JSON types, sort the `environment` and `artifact_sha256` object keys, and use the fixed `limits` keys and values shown: `{"argv":["/opt/bbd-mcp/bin/server"],"artifact_sha256":{"/opt/bbd-mcp/bin/server":"<64 lowercase hex>"},"cwd":"/opt/bbd-mcp","enabled":true,"entry_script":null,"environment":{},"executable":"/opt/bbd-mcp/bin/server","immutable_root":"/opt/bbd-mcp","limits":{"discovery_frame":1048576,"discovery_frames":64,"discovery_total":1048576,"ordinary_frame":262144,"ordinary_frames":16,"ordinary_total":524288,"outbound_frame":131072},"platform":"posix","policy":"bbd-os-mcp-stdio-v1","profile_id":"profile-id","runtime_kind":"native"}`. Compute `profile_hash = lowercase_hex(SHA256(UTF8(canonical_json(policy_object))))`. For Python or Node, set the exact `runtime_kind` and canonical `entry_script` accepted by the transport; the profile hash covers those values too. `operation_kind` is deliberately excluded. The transport recomputes this policy hash and verifies each artifact's bytes, ownership and path ancestry before launch; the catalog does not implement a second hash policy. Replacing the manifest requires an API restart and fresh connection check, discovery, and capability grants for the new identity.
 
 The API selects Uvicorn's asyncio loop explicitly, and API/worker Compose services use an init process. This source configuration does not prove host ACLs, read-only root filesystem policy, process cancellation behavior, provider compatibility, egress isolation, or target-capacity acceptance; those remain deployment validation gates.
+
+
 
 
