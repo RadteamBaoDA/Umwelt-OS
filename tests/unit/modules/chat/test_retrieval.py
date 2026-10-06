@@ -165,6 +165,7 @@ class TestContextBudgetAndReranking:
         ]
         reordered, status, warnings = await _apply_configured_reranking(
             session=MagicMock(),
+            session_factory=MagicMock(),
             redis=MagicMock(),
             settings=MagicMock(),
             query="finances",
@@ -179,6 +180,7 @@ class TestContextBudgetAndReranking:
         """Reranking empty evidence returns skipped immediately."""
         reordered, status, warnings = await _apply_configured_reranking(
             session=MagicMock(),
+            session_factory=MagicMock(),
             redis=MagicMock(),
             settings=MagicMock(),
             query="test",

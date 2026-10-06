@@ -20,6 +20,7 @@ from modules.connectors.catalog import (
     list_catalog,
 )
 from modules.connectors.models import ConnectorProvisioning
+from modules.sources.public import SourceFence
 from modules.connectors.public import (
     DEFAULT_OVERLAP,
     DEFAULT_TIMEZONE,
@@ -435,9 +436,16 @@ class TestQueryContracts:
             generation=1,
             configuration={"feed_url": "https://example.com/feed.xml"},
         )
+        source_fence = SourceFence(
+            id=source_id,
+            status="active",
+            generation=1,
+            local_only=False,
+        )
         session = AsyncMock()
 
-        with patch("modules.sources.public.get_connector_source", return_value=source):
+        with patch("modules.sources.public.lock_source", return_value=source_fence), \
+             patch("modules.sources.public.get_connector_source", return_value=source):
             scope = await get_current_provider_scope(session, source_id, expected_source_generation=1)
 
         assert scope is not None

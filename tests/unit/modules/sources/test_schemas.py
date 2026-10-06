@@ -326,11 +326,16 @@ class TestSourceFenceAndProjections:
             source_id=src_id,
             status="queued",
             error_code=None,
+            documents_status="queued",
+            pending_child_count=0,
+            failed_child_count=0,
+            pending_owner_codes=[],
             created_at=now,
             updated_at=now,
         )
         assert op.status == "queued"
         assert op.error_code is None
+        assert op.documents_status == "queued"
 
         # Invalid operation status
         with pytest.raises(ValidationError):
@@ -339,6 +344,10 @@ class TestSourceFenceAndProjections:
                 source_id=src_id,
                 status="in_progress",  # type: ignore[arg-type]
                 error_code=None,
+                documents_status="queued",
+                pending_child_count=0,
+                failed_child_count=0,
+                pending_owner_codes=[],
                 created_at=now,
                 updated_at=now,
             )

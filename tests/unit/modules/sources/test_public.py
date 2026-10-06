@@ -67,7 +67,7 @@ class TestLockSourceFunctions:
     async def test_get_source_fence_found(self) -> None:
         src = _make_source(generation=3, status="paused", local_only=False)
         session = AsyncMock()
-        session.get.return_value = src
+        session.scalar.return_value = src
 
         fence = await public.get_source_fence(session, src.id)
         assert fence is not None
@@ -77,7 +77,7 @@ class TestLockSourceFunctions:
     @pytest.mark.asyncio
     async def test_get_source_fence_not_found(self) -> None:
         session = AsyncMock()
-        session.get.return_value = None
+        session.scalar.return_value = None
 
         fence = await public.get_source_fence(session, uuid4())
         assert fence is None
@@ -119,7 +119,7 @@ class TestSourceConnectorAndConfiguration:
             configuration={"url": "https://example.com", "schedule_interval_minutes": 30}
         )
         session = AsyncMock()
-        session.get.return_value = src
+        session.scalar.return_value = src
 
         cs = await public.get_connector_source(session, src.id)
         assert cs is not None
@@ -134,7 +134,7 @@ class TestSourceConnectorAndConfiguration:
     @pytest.mark.asyncio
     async def test_get_connector_source_missing(self) -> None:
         session = AsyncMock()
-        session.get.return_value = None
+        session.scalar.return_value = None
 
         assert await public.get_connector_source(session, uuid4()) is None
 

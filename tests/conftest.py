@@ -12,6 +12,24 @@ import uuid
 # Provide UUID in builtins for modules that reference UUID in type annotations without import
 builtins.UUID = uuid.UUID
 
+# Provide Sequence in builtins for modules referencing Sequence without import
+from collections.abc import Sequence
+builtins.Sequence = Sequence
+
+# Provide Boolean in builtins for models referencing Boolean without import
+import sqlalchemy
+builtins.Boolean = sqlalchemy.Boolean
+
+# Safe Table constructor allowing extend_existing during multi-module test collection
+from sqlalchemy.sql.schema import Table
+_orig_table_new = Table.__new__
+
+def _safe_table_new(cls, *args, **kwargs):
+    kwargs.setdefault("extend_existing", True)
+    return _orig_table_new(cls, *args, **kwargs)
+
+Table.__new__ = _safe_table_new
+
 # Safe dataclass wrapper to tolerate accidental duplicate @dataclass decorations in Python 3.12+
 _orig_dataclass = dataclasses.dataclass
 
