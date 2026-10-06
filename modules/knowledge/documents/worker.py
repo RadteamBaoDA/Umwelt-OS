@@ -29,6 +29,8 @@ async def process_document_cleanup(ctx: dict[str, object], event_id: str) -> Non
     commit atomically. Incomplete work reuses its child event with a bounded retry; copied status
     remains running until every owner stage is integrated. Failure handlers compare the locked
     receipt's raw/Chat cursor progress with this attempt's starting snapshot before changing it.
+    Recovery without that snapshot leaves event delivery untouched; the dispatcher reclaims stale
+    queued work after its bounded interval instead of overwriting a newer delivery schedule.
     """
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     settings = cast(Settings, ctx["settings"])
@@ -234,10 +236,15 @@ async def process_document_cleanup(ctx: dict[str, object], event_id: str) -> Non
                 await ingestion.set_event_delivery(
                     session, identifier, "pending", next_attempt_at=datetime.now(UTC) + _RETRY_DELAY,
                 )
-            elif progress_unchanged or recovery_operation is None or attempt_progress is None:
+            elif (
+                progress_unchanged
+                and recovery_operation is not None
+                and recovery_operation.raw_status not in {"not_present", "retained_shared", "succeeded"}
+            ):
                 await ingestion.set_event_delivery(
                     session, identifier, "pending", next_attempt_at=datetime.now(UTC) + _RETRY_DELAY,
                 )
+            # Unknown snapshots, missing receipts and terminal stages do not own a delivery rewrite.
             await session.commit()
     except Exception as exc:
         logger.warning("Document copied-evidence cleanup deferred (%s)", type(exc).__name__)
@@ -288,8 +295,13 @@ async def process_document_cleanup(ctx: dict[str, object], event_id: str) -> Non
                 await ingestion.set_event_delivery(
                     session, identifier, "pending", next_attempt_at=datetime.now(UTC) + _RETRY_DELAY,
                 )
-            elif progress_unchanged or recovery_operation is None or attempt_progress is None:
+            elif (
+                progress_unchanged
+                and recovery_operation is not None
+                and recovery_operation.raw_status not in {"not_present", "retained_shared", "succeeded"}
+            ):
                 await ingestion.set_event_delivery(
                     session, identifier, "pending", next_attempt_at=datetime.now(UTC) + _RETRY_DELAY,
                 )
+            # Unknown snapshots, missing receipts and terminal stages do not own a delivery rewrite.
             await session.commit()
