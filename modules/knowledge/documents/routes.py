@@ -226,8 +226,13 @@ async def delete_document(
         record_status=operation.record_status,
         graph_status=operation.graph_status,
         raw_status=operation.raw_status,
+        evidence_scope_status=operation.evidence_scope_status,
+        copied_status=operation.copied_status,
+        chat_status=operation.chat_status,
+        chat_error_code=operation.chat_error_code,
         immediate_access_revoked=True,
         error_code=operation.error_code,
+        copied_error_code=operation.copied_error_code,
     )
 
 
@@ -245,8 +250,13 @@ async def get_deletion_operation(
         record_status=operation.record_status,
         graph_status=operation.graph_status,
         raw_status=operation.raw_status,
+        evidence_scope_status=operation.evidence_scope_status,
+        copied_status=operation.copied_status,
+        chat_status=operation.chat_status,
+        chat_error_code=operation.chat_error_code,
         immediate_access_revoked=True,
         error_code=operation.error_code,
+        copied_error_code=operation.copied_error_code,
     )
 
 

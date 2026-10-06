@@ -6,7 +6,7 @@ from typing import Any
 from uuid import UUID
 
 from redis.asyncio import Redis
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
 from core.model_gateway.client import ModelGateway, ModelGatewayError
@@ -69,6 +69,7 @@ def _extract_rerank_indices(rerank_payload: Any) -> list[int] | None:
 
 async def _apply_configured_reranking(
     session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
     redis: Redis,
     settings: Settings,
     query: str,
@@ -81,6 +82,7 @@ async def _apply_configured_reranking(
 
     Args:
         session: Active database session.
+        session_factory: Factory for isolated evidence-lock transactions at rerank egress.
         redis: Redis connection for execution config caching.
         settings: Application settings.
         query: User search query.
@@ -138,12 +140,46 @@ async def _apply_configured_reranking(
         )
 
         documents = [item.content for item in evidence_items]
+
+        send_session: AsyncSession | None = None
+
+        async def before_rerank_send() -> None:
+            """Lock and revalidate every exact chunk before sending copied text to a remote reranker."""
+            nonlocal send_session
+            send_session = session_factory()
+            refs = list(dict.fromkeys((item.document_version_id, item.chunk_id) for item in evidence_items))
+            try:
+                current = await documents_public.lock_chat_evidence_chunks(
+                    send_session, refs, require_active_source=True,
+                )
+                current_by_ref = {(item.document_version_id, item.chunk_id): item for item in current}
+                if any(
+                    (row := current_by_ref.get((item.document_version_id, item.chunk_id))) is None
+                    or row.source_generation != item.source_generation
+                    or row.local_only
+                    for item in evidence_items
+                ):
+                    raise ModelGatewayError("Retrieved evidence changed before remote reranking")
+            except BaseException:
+                await send_session.close()
+                send_session = None
+                raise
+
+        async def after_rerank_send() -> None:
+            """Release exact evidence locks immediately after each actual request opening."""
+            nonlocal send_session
+            if send_session is not None:
+                await send_session.close()
+                send_session = None
+
         raw_result = await gateway.rerank(
             alias="reranker",
             mapping=rerank_mapping,
             policy=policy,
             query=query,
             documents=documents,
+            before_send=before_rerank_send,
+            after_send=after_rerank_send,
         )
 
         indices = _extract_rerank_indices(raw_result)
@@ -169,6 +205,7 @@ async def _apply_configured_reranking(
 
 async def build_context(
     session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
     redis: Redis,
     settings: Settings,
     request: AnswerContextRequest,
@@ -182,6 +219,7 @@ async def build_context(
 
     Args:
         session: Active database session.
+        session_factory: Factory for isolated evidence-lock transactions at rerank egress.
         redis: Redis connection for caching and rate limiting.
         settings: Application settings.
         request: Validated AnswerContextRequest DTO.
@@ -403,7 +441,7 @@ async def build_context(
         reranked_items, rerank_status, rerank_warnings = budgeted_items, "skipped", []
     else:
         reranked_items, rerank_status, rerank_warnings = await _apply_configured_reranking(
-            session, redis, settings, request.query, budgeted_items
+            session, session_factory, redis, settings, request.query, budgeted_items
         )
     warnings.extend(rerank_warnings)
 
@@ -444,17 +482,21 @@ async def revalidate_context_fence(
     *,
     destination: str = "remote",
     require_current_versions: bool = False,
+    lock_evidence: bool = False,
 ) -> tuple[bool, list[str]]:
-    """Revalidate that retrieved evidence remains permitted and active prior to outbound egress.
+    """Revalidate retrieved evidence at egress and publication, optionally serializing deletion.
 
     Checks that all referenced sources exist, are active, match their recorded ingestion
     generation, and do not violate local_only egress restrictions when destination is 'remote'.
-    Also confirms that the backing document revisions have not been deleted.
+    Also confirms exact backing chunks remain present. When requested, ordered key-share locks
+    keep deletion from committing between this check and the caller's short write transaction.
 
     Args:
         session: Active database session.
         context: AnswerContext containing evidence items and fence snapshot.
         destination: Target destination ('remote' or 'local').
+        lock_evidence: Hold Source/Document/version/chunk key-share locks through the caller's
+            publication commit so deletion cannot commit between the current check and publication.
 
     Returns:
         Tuple of (is_valid: bool, list of rejection reason strings).
@@ -497,21 +539,34 @@ async def revalidate_context_fence(
     refs = [(item.document_version_id, item.chunk_id) for item in context.evidence]
     if refs:
         try:
-            existing_chunks = await documents_public.read_chat_evidence_chunks(
-                session, refs, require_active_source=True,
-                require_current_version=require_current_versions,
-                selection_fences=tuple(context.selection_fences) if context.selection_fences else None,
-            )
+            if lock_evidence:
+                existing_chunks = await documents_public.lock_chat_evidence_chunks(
+                    session, refs, require_active_source=True,
+                    require_current_version=require_current_versions,
+                    selection_fences=tuple(context.selection_fences) if context.selection_fences else None,
+                )
+            else:
+                existing_chunks = await documents_public.read_chat_evidence_chunks(
+                    session, refs, require_active_source=True,
+                    require_current_version=require_current_versions,
+                    selection_fences=tuple(context.selection_fences) if context.selection_fences else None,
+                )
         except ValueError:
             existing_chunks = []
             reasons.append("One or more exact selected evidence references are unavailable")
-        existing_keys = {(c.document_version_id, c.chunk_id) for c in existing_chunks}
+        current_by_ref = {(c.document_version_id, c.chunk_id): c for c in existing_chunks}
         for item in context.evidence:
             key = (item.document_version_id, item.chunk_id)
-            if key not in existing_keys:
+            current = current_by_ref.get(key)
+            if current is None:
                 reasons.append(
                     f"Evidence chunk (version={item.document_version_id}, chunk={item.chunk_id}) was deleted or deactivated"
                 )
+                continue
+            if current.source_generation != item.source_generation or current.source_status != "active":
+                reasons.append(f"Evidence source {item.source_id} changed before publication")
+            if destination == "remote" and current.local_only:
+                reasons.append(f"Evidence source {item.source_id} became local-only before remote publication")
 
     return len(reasons) == 0, reasons
 

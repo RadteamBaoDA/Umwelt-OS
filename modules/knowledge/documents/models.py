@@ -166,6 +166,10 @@ class DocumentCleanupOperation(Base):
         CheckConstraint("record_status = 'deleted'", name="ck_document_cleanup_record_status"),
         CheckConstraint("graph_status = 'tombstoned'", name="ck_document_cleanup_graph_status"),
         CheckConstraint("raw_status IN ('queued', 'not_present', 'retained_shared', 'succeeded', 'failed')", name="ck_document_cleanup_raw_status"),
+        CheckConstraint("evidence_scope_status IN ('capturing', 'captured', 'unavailable')", name="ck_document_cleanup_evidence_scope_status"),
+        CheckConstraint("copied_status IN ('queued', 'running', 'failed')", name="ck_document_cleanup_copied_status"),
+        CheckConstraint("chat_status IN ('queued', 'running', 'succeeded', 'failed')", name="ck_document_cleanup_chat_status"),
+        CheckConstraint("copied_cursor IS NULL OR octet_length(copied_cursor::text) <= 4096", name="ck_document_cleanup_copied_cursor_bound"),
         Index("ix_document_cleanup_status_created", "status", "created_at"),
     )
 
@@ -177,7 +181,38 @@ class DocumentCleanupOperation(Base):
     record_status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="deleted")
     graph_status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="tombstoned")
     raw_status: Mapped[str] = mapped_column(String(24), nullable=False, server_default="queued")
+    evidence_scope_status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="unavailable")
+    # This aggregate stays running until every copied-evidence owner stage is integrated.
+    copied_status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="queued")
+    copied_cursor: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    copied_error_code: Mapped[str | None] = mapped_column(String(64))
+    # Chat is the only copied-evidence owner implemented by this task.
+    chat_status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="queued")
+    chat_error_code: Mapped[str | None] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="queued")
     error_code: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class DocumentCleanupEvidenceReference(Base):
+    """Retain immutable version/chunk IDs needed to clean copies after hard deletion."""
+
+    __tablename__ = "document_cleanup_evidence_references"
+    __table_args__ = (
+        CheckConstraint(
+            "(reference_kind = 'version' AND chunk_id IS NULL) OR "
+            "(reference_kind = 'chunk' AND chunk_id IS NOT NULL)",
+            name="ck_document_cleanup_evidence_reference_shape",
+        ),
+        Index("ix_document_cleanup_evidence_operation_id", "operation_id", "id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    operation_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("document_cleanup_operations.id", ondelete="CASCADE"), nullable=False
+    )
+    # No FK to document_versions or document_chunks: these identities outlive their rows.
+    document_version_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    chunk_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    reference_kind: Mapped[str] = mapped_column(String(16), nullable=False)
