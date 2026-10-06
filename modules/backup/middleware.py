@@ -10,9 +10,11 @@ class BackupActivityMiddleware:
     """Keep an admitted owner request active through the final streamed response byte."""
 
     def __init__(self, app: ASGIApp) -> None:
+        """Store the wrapped application whose complete response lifetime is tracked."""
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Pass through non-HTTP scopes and settle HTTP activity after ASGI completion."""
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
@@ -23,6 +25,7 @@ class BackupActivityMiddleware:
         send_failed = False
 
         async def finalize(*, uncertain: bool, interrupted: bool = False) -> None:
+            """Finish this request's durable receipt once after its response lifetime."""
             nonlocal finalized
             if finalized:
                 return
@@ -38,6 +41,7 @@ class BackupActivityMiddleware:
                 await session.commit()
 
         async def send_and_finalize(message: Message) -> None:
+            """Forward one ASGI message while recording status and transport failure."""
             nonlocal response_status, send_failed
             try:
                 await send(message)

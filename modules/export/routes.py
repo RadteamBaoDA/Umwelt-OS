@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 import io
 import json
+import re
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -15,10 +16,17 @@ from core.auth.dependencies import require_owner
 from core.auth.models import AuthSession
 from core.database import get_session
 from modules.chat import public as chat_public
+from modules.dashboard import public as dashboard_public
+from modules.goals import public as goals_public
 from modules.knowledge.documents import public as documents_public
+from modules.knowledge.entities import public as entities_public
+from modules.knowledge.observations import public as observations_public
+from modules.knowledge.relationships import public as relationships_public
 from modules.memory import public as memory_public
+from modules.news import public as news_public
 from modules.sources import public as sources_public
 from modules.tasks import public as tasks_public
+from modules.timeline import public as timeline_public
 
 router = APIRouter(prefix="/api/v1/exports", tags=["exports"])
 Session = Annotated[AsyncSession, Depends(get_session)]
@@ -28,8 +36,15 @@ MAX_EXPORT_BYTES = 32 * 1024 * 1024
 DATASETS = (
     ("documents", "documents", documents_public),
     ("document_versions", "versions", documents_public),
+    ("entities", "entities", entities_public),
+    ("relationships", "relationships", relationships_public),
+    ("observations", "observations", observations_public),
+    ("events", "events", timeline_public),
     ("sources", "sources", sources_public),
     ("tasks", "tasks", tasks_public),
+    ("goals", "goals", goals_public),
+    ("news_topics", "topics", news_public),
+    ("dashboards", "dashboards", dashboard_public),
     ("conversations", "conversations", chat_public),
     ("messages", "messages", chat_public),
     ("memories", "memories", memory_public),
@@ -56,27 +71,37 @@ def _encode_json(payload: dict[str, Any]) -> bytes:
 
 
 def _render_markdown(payload: dict[str, Any]) -> bytes:
-    """Render owner records as escaped JSON code blocks so arbitrary text stays intact."""
-    lines = ["# BBD-OS data export", "", f"Created: {payload['created_at']}", ""]
+    """Render records as JSON blocks with fences longer than any embedded backtick run."""
+    lines = ["# Umwelt-OS data export", "", f"Created: {payload['created_at']}", ""]
+    coverage = json.dumps(payload["dataset_metadata"], ensure_ascii=False, indent=2)
+    lines.extend(("## Dataset coverage", "", "````json", coverage, "````", "", "## Limitations", ""))
+    for limitation in payload["limitations"]:
+        lines.extend((f"- {limitation}", ""))
     for dataset, records in payload["data"].items():
         lines.extend((f"## {dataset.replace('_', ' ').title()}", ""))
         if not records:
             lines.extend(("No records.", ""))
             continue
         for record in records:
-            # Four-backtick fences remain valid even when a record contains triple backticks.
-            lines.extend(("````json", json.dumps(record, ensure_ascii=False, indent=2), "````", ""))
+            encoded = json.dumps(record, ensure_ascii=False, indent=2)
+            longest = max((len(match.group(0)) for match in re.finditer(r"`+", encoded)), default=0)
+            fence = "`" * max(4, longest + 1)
+            lines.extend((f"{fence}json", encoded, fence, ""))
     return "\n".join(lines).encode("utf-8")
 
 
 def _render_csv(payload: dict[str, Any]) -> bytes:
-    """Flatten the allowlisted dataset DTOs into dataset/type plus stable JSON-valued columns."""
+    """Write data, coverage metadata, and limitations as typed rows with JSON values."""
     output = io.StringIO(newline="")
     writer = csv.writer(output)
-    writer.writerow(("dataset", "record_json"))
+    writer.writerow(("record_type", "dataset", "record_json"))
+    for dataset, metadata in payload["dataset_metadata"].items():
+        writer.writerow(("dataset_metadata", dataset, json.dumps(metadata, ensure_ascii=False, separators=(",", ":"))))
+    for limitation in payload["limitations"]:
+        writer.writerow(("limitation", "", json.dumps(limitation, ensure_ascii=False)))
     for dataset, records in payload["data"].items():
         for record in records:
-            writer.writerow((dataset, json.dumps(record, ensure_ascii=False, separators=(",", ":"))))
+            writer.writerow(("data", dataset, json.dumps(record, ensure_ascii=False, separators=(",", ":"))))
     return output.getvalue().encode("utf-8")
 
 
@@ -101,6 +126,7 @@ async def _collect_dataset(
                 "snapshot_count": page.snapshot_count,
                 "available": page.available,
                 "omission_reason": page.omission_reason,
+                "omitted_count": getattr(page, "omitted_count", 0),
             }
             if hasattr(page, "privacy_persisted"):
                 metadata.update({
@@ -110,6 +136,11 @@ async def _collect_dataset(
                 })
         elif page.snapshot_at != snapshot or page.snapshot_count != metadata["snapshot_count"]:
             raise HTTPException(status_code=409, detail="Export snapshot changed while reading owner pages")
+        else:
+            metadata["available"] = metadata["available"] and page.available
+            metadata["omitted_count"] += getattr(page, "omitted_count", 0)
+            if page.omission_reason is not None:
+                metadata["omission_reason"] = page.omission_reason
         if page.payload_bytes > page.max_payload_bytes:
             raise HTTPException(status_code=503, detail="Owner export exceeded its declared page bound")
         for item in page.items:
@@ -150,6 +181,7 @@ async def _validate_final_fences(
                 "record_kind": {
                     "document_versions": "versions",
                     "memory_candidates": "candidates",
+                    "news_topics": "topics",
                 }.get(dataset, dataset),
                 "snapshot_at": snapshot, "expected_snapshot_count": dataset_meta["snapshot_count"],
                 "fences": batch,
@@ -193,6 +225,8 @@ async def _build_export_response(
         "limitations": [
             "Raw files, graph state, workflow secrets, runtime credentials, and deployment identity are not included in portable exports.",
             "Connector source configuration is omitted because provider-specific secret-free fields are not yet allowlisted.",
+            "Deleted News topics and dashboard configurations without a retained cutoff-compatible gadget definition are omitted.",
+            "Generated daily brief history and its schedule are not part of the portable Dashboard export.",
             "Conversation and message history is omitted when the owner privacy setting disables retention.",
             "This export is a portable owner-data projection, not a restorable instance backup.",
         ],

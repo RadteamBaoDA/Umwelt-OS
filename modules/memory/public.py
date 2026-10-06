@@ -95,11 +95,14 @@ def _memory_export_provenance(value: object) -> MemoryExportProvenance | None:
     return MemoryExportProvenance.model_validate({key: item for key, item in value.items() if key in allowed})
 
 
-def _memory_export_read(item: Memory) -> MemoryExportRead:
+def _memory_export_read(
+    item: Memory, provenance: MemoryExportProvenance | None = None,
+) -> MemoryExportRead:
     """Project one retained memory record without its arbitrary JSON provenance keys."""
     return MemoryExportRead(
         id=item.id, content=item.content, type=item.memory_type,
-        provenance=_memory_export_provenance(item.provenance), confidence=item.confidence,
+        provenance=provenance if provenance is not None else _memory_export_provenance(item.provenance),
+        confidence=item.confidence,
         reason=item.reason, status=item.status, is_manual=item.is_manual,
         superseded_by_id=item.superseded_by_id, candidate_id=item.candidate_id,
         created_at=item.created_at, updated_at=item.updated_at,
@@ -107,11 +110,14 @@ def _memory_export_read(item: Memory) -> MemoryExportRead:
     )
 
 
-def _candidate_export_read(item: MemoryCandidate) -> MemoryCandidateExportRead:
+def _candidate_export_read(
+    item: MemoryCandidate, provenance: MemoryExportProvenance | None = None,
+) -> MemoryCandidateExportRead:
     """Project one retained review candidate without arbitrary JSON provenance keys."""
     return MemoryCandidateExportRead(
         id=item.id, content=item.content, type=item.memory_type,
-        provenance=_memory_export_provenance(item.provenance), confidence=item.confidence,
+        provenance=provenance if provenance is not None else _memory_export_provenance(item.provenance),
+        confidence=item.confidence,
         novelty_score=item.novelty_score, usefulness_score=item.usefulness_score,
         reason=item.reason, status=item.status, rejection_reason=item.rejection_reason,
         created_at=item.created_at, updated_at=item.updated_at, evaluated_at=item.evaluated_at,
@@ -120,62 +126,131 @@ def _candidate_export_read(item: MemoryCandidate) -> MemoryCandidateExportRead:
 
 async def _memory_export_source_fence(
     session: AsyncSession, row: Memory | MemoryCandidate,
-) -> dict[str, object]:
-    """Require exact retained owner evidence for copied content and capture source generation.
+) -> tuple[dict[str, object], MemoryExportProvenance | None]:
+    """Project only independently verified provenance and fence its live owner evidence.
 
-    Manual owner content without a document/source link remains independently exportable. A
-    model-derived copy with unsupported, partial, removed, or purging provenance fails closed.
+    Explicitly manual Memory remains exportable after optional evidence is removed. Every
+    model-derived or candidate copy needs exact retained Chat message or document evidence.
     """
     from modules.knowledge.documents import public as documents_public
     from modules.sources import public as sources_public
     from modules.sources.schemas import SourceExportFence
+    from modules.chat import public as chat_public
 
     raw = row.provenance if isinstance(row.provenance, dict) else {}
-    allowed = {"source", "conversation_id", "message_id", "source_id", "document_id",
+    allowed = {"conversation_id", "message_id", "source_id", "document_id",
                "document_version_id", "chunk_id", "origin"}
-    provenance = _memory_export_provenance(raw)
-    is_manual = row.is_manual if isinstance(row, Memory) else raw.get("origin") == "manual"
-    doc_keys = ("document_id", "document_version_id", "chunk_id")
-    has_any_doc = any(raw.get(key) is not None for key in doc_keys)
-    if has_any_doc and not all(raw.get(key) is not None for key in doc_keys):
-        raise HTTPException(status_code=409, detail="Memory export cannot verify incomplete document provenance")
-    linked_doc = has_any_doc
-    source_value = raw.get("source_id")
-    if source_value is not None and provenance is None:
-        raise HTTPException(status_code=409, detail="Memory export cannot verify source provenance")
-    source_id = provenance.source_id if provenance else None
-    document_id = provenance.document_id if provenance else None
-    version_id = provenance.document_version_id if provenance else None
-    chunk_id = provenance.chunk_id if provenance else None
-    if linked_doc:
-        if document_id is None or version_id is None or chunk_id is None:
-            raise HTTPException(status_code=409, detail="Memory export cannot verify document provenance")
+    manual_memory = isinstance(row, Memory) and row.is_manual is True
+    if raw.keys() - allowed and not manual_memory:
+        raise HTTPException(status_code=409, detail="Memory export cannot verify copied-content provenance")
+
+    def optional_uuid(key: str) -> UUID | None:
+        """Parse one optional provenance identifier without trusting persisted JSON types."""
+        value = raw.get(key)
+        if value is None:
+            return None
         try:
-            refs = await documents_public.read_evidence_refs(session, [(version_id, chunk_id)])
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail="Memory evidence was removed or is being purged") from exc
-        if (len(refs) != 1 or refs[0].document_id != document_id
-                or source_id is not None and refs[0].source_id != source_id):
-            raise HTTPException(status_code=409, detail="Memory evidence was removed or is being purged")
-        source_id = refs[0].source_id
-    if not linked_doc and not is_manual:
+            return value if isinstance(value, UUID) else UUID(str(value))
+        except (ValueError, TypeError, AttributeError):
+            return None
+
+    conversation_id, message_id = optional_uuid("conversation_id"), optional_uuid("message_id")
+    document_id, version_id, chunk_id = (
+        optional_uuid("document_id"), optional_uuid("document_version_id"), optional_uuid("chunk_id"),
+    )
+    raw_doc_fields = any(raw.get(key) is not None for key in ("document_id", "document_version_id", "chunk_id"))
+    complete_doc = all(value is not None for value in (document_id, version_id, chunk_id))
+    explicit_source_id = optional_uuid("source_id")
+    if not manual_memory:
+        if ((raw.get("conversation_id") is not None and conversation_id is None)
+                or (raw.get("message_id") is not None and message_id is None)
+                or (raw.get("source_id") is not None and explicit_source_id is None)
+                or (raw.get("origin") is not None
+                    and (not isinstance(raw.get("origin"), str)
+                         or raw.get("origin") not in {"agent", "model"}))):
+            raise HTTPException(status_code=409, detail="Memory export cannot verify copied-content provenance")
+    safe_provenance: dict[str, object] = {}
+    source_fence_data: dict[str, object] = {}
+    chat_evidence: dict[str, object] = {}
+    doc_evidence: object | None = None
+
+    if conversation_id is not None or message_id is not None:
+        if conversation_id is None or message_id is None:
+            if not manual_memory:
+                raise HTTPException(status_code=409, detail="Memory export cannot verify partial conversation provenance")
+        else:
+            origin = await chat_public.read_memory_export_origin(
+                session, owner_id=1, conversation_id=conversation_id, message_id=message_id,
+            )
+            if origin is None:
+                if not manual_memory:
+                    raise HTTPException(status_code=409, detail="Memory transcript evidence was removed or is not retained")
+            else:
+                safe_provenance.update(conversation_id=conversation_id, message_id=message_id)
+                chat_evidence = {
+                    "conversation_id": origin.conversation_id,
+                    "message_id": origin.message_id,
+                    "chat_evidence_digest": hashlib.sha256(origin.model_dump_json().encode("utf-8")).hexdigest(),
+                    "chat_privacy_persisted": origin.privacy_persisted,
+                    "chat_privacy_updated_at": origin.privacy_updated_at,
+                }
+
+    if raw_doc_fields:
+        if not complete_doc:
+            if not manual_memory:
+                raise HTTPException(status_code=409, detail="Memory export cannot verify incomplete document provenance")
+        else:
+            try:
+                refs = await documents_public.read_evidence_refs(session, [(version_id, chunk_id)])
+            except ValueError:
+                refs = []
+            if (len(refs) == 1 and refs[0].document_id == document_id
+                    and (explicit_source_id is None or refs[0].source_id == explicit_source_id)):
+                doc_evidence = refs[0]
+                safe_provenance.update(
+                    document_id=document_id, document_version_id=version_id, chunk_id=chunk_id,
+                )
+            elif not manual_memory:
+                raise HTTPException(status_code=409, detail="Memory document evidence was removed or is being purged")
+
+    source_id = explicit_source_id
+    if doc_evidence is not None:
+        source_id = doc_evidence.source_id
+    if source_id is not None:
+        source = await sources_public.get_source_fence(session, source_id)
+        eligible = bool(source and await sources_public.filter_export_eligible_sources(
+            session, [SourceExportFence(source_id=source_id, generation=source.generation)],
+        ))
+        if not eligible:
+            if not manual_memory:
+                raise HTTPException(status_code=409, detail="Memory source evidence was removed or is being purged")
+            safe_provenance.pop("source_id", None)
+            if doc_evidence is not None:
+                for key in ("document_id", "document_version_id", "chunk_id"):
+                    safe_provenance.pop(key, None)
+                doc_evidence = None
+        else:
+            safe_provenance["source_id"] = source_id
+            source_fence_data = {"source_id": source.id, "source_generation": source.generation}
+
+    if doc_evidence is not None and source_fence_data:
+        safe_provenance.update(
+            document_id=document_id, document_version_id=version_id, chunk_id=chunk_id,
+        )
+        source_fence_data.update(
+            document_id=document_id, document_version_id=version_id, chunk_id=chunk_id,
+        )
+    elif doc_evidence is not None:
+        source_fence_data.update(document_id=document_id, document_version_id=version_id, chunk_id=chunk_id)
+
+    if not doc_evidence and not chat_evidence and not manual_memory:
         raise HTTPException(status_code=409, detail="Memory export cannot verify copied-content provenance")
-    if raw.keys() - allowed and not is_manual:
-        raise HTTPException(status_code=409, detail="Memory export cannot verify copied-content provenance")
-    if source_id is None:
-        return {}
-    source = await sources_public.get_source_fence(session, source_id)
-    if source is None or not await sources_public.filter_export_eligible_sources(
-        session, [SourceExportFence(source_id=source_id, generation=source.generation)],
-    ):
-        raise HTTPException(status_code=409, detail="Memory source evidence was removed or is being purged")
-    return {key: value for key, value in {
-        "source_id": source.id,
-        "source_generation": source.generation,
-        "document_id": document_id,
-        "document_version_id": version_id,
-        "chunk_id": chunk_id,
-    }.items() if value is not None}
+    if manual_memory:
+        safe_provenance["origin"] = "manual"
+    elif isinstance(raw.get("origin"), str) and raw.get("origin") in {"agent", "model"}:
+        safe_provenance["origin"] = raw["origin"]
+    projected = MemoryExportProvenance.model_validate(safe_provenance) if safe_provenance else None
+    return {**source_fence_data, **chat_evidence}, projected
 
 
 def _memory_export_scope(record_kind: str, snapshot_at: datetime) -> tuple[object, ...]:
@@ -215,14 +290,26 @@ async def export_page(
         .execution_options(populate_existing=True)
     )).all())
     has_more, rows = len(rows) > limit, rows[:limit]
-    items = [_memory_export_read(row) if record_kind == "memories" else _candidate_export_read(row) for row in rows]
-    item_bytes = [item.model_dump_json().encode("utf-8") for item in items]
-    payload_bytes = 2 + sum(map(len, item_bytes)) + max(0, len(items) - 1)
-    if payload_bytes > MEMORY_EXPORT_PAGE_MAX_BYTES:
-        raise ValueError("Memory export page exceeds its byte bound")
-    fences = []
-    for row, raw in zip(rows, item_bytes, strict=True):
-        provenance_fence = await _memory_export_source_fence(session, row)
+    items, fences, omitted_count = [], [], 0
+    payload_bytes = 2
+    for row in rows:
+        try:
+            provenance_fence, provenance = await _memory_export_source_fence(session, row)
+        except HTTPException as exc:
+            if exc.status_code != 409:
+                raise
+            omitted_count += 1
+            continue
+        item = (_memory_export_read(row, provenance) if record_kind == "memories"
+                else _candidate_export_read(row, provenance))
+        raw = item.model_dump_json().encode("utf-8")
+        proposed_bytes = payload_bytes + len(raw) + (1 if items else 0)
+        if proposed_bytes > MEMORY_EXPORT_PAGE_MAX_BYTES:
+            if not items:
+                raise ValueError("Memory export record exceeds its page byte bound")
+            raise HTTPException(status_code=413, detail="Memory export page exceeds its byte bound")
+        payload_bytes = proposed_bytes
+        items.append(item)
         fences.append(MemoryExportFence(
             record_kind="memory" if record_kind == "memories" else "candidate", id=row.id,
             created_at=row.created_at, updated_at=row.updated_at,
@@ -231,8 +318,10 @@ async def export_page(
     return MemoryExportPage(
         owner_id=owner_id, record_kind=record_kind, snapshot_at=snapshot_at,
         snapshot_count=await _memory_export_count(session, record_kind, snapshot_at),
-        items=items, fences=fences, payload_bytes=payload_bytes,
+        omitted_count=omitted_count, items=items, fences=fences, payload_bytes=payload_bytes,
         max_payload_bytes=MEMORY_EXPORT_PAGE_MAX_BYTES,
+        available=omitted_count == 0,
+        omission_reason="unsupported_provenance" if omitted_count else None,
         next_cursor=_encode_memory_export_cursor(owner_id, record_kind, snapshot_at, rows[-1].created_at, rows[-1].id)
         if has_more and rows else None,
     )
@@ -257,13 +346,14 @@ async def validate_export_fences(
         ).execution_options(populate_existing=True))
         if row is None or row.created_at != fence.created_at or row.updated_at != fence.updated_at:
             return MemoryExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
-        item = _memory_export_read(row) if record_kind == "memories" else _candidate_export_read(row)
+        try:
+            source_fence, provenance = await _memory_export_source_fence(session, row)
+        except HTTPException:
+            return MemoryExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
+        item = (_memory_export_read(row, provenance) if record_kind == "memories"
+                else _candidate_export_read(row, provenance))
         digest = hashlib.sha256(item.model_dump_json().encode("utf-8")).hexdigest()
         if digest != fence.content_digest:
-            return MemoryExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
-        try:
-            source_fence = await _memory_export_source_fence(session, row)
-        except HTTPException:
             return MemoryExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
         expected_source_fence = fence.model_dump(exclude={"record_kind", "id", "created_at", "updated_at", "content_digest"}, exclude_none=True)
         if source_fence != expected_source_fence:

@@ -251,6 +251,11 @@ class MemoryExportFence(BaseModel):
     document_id: UUID | None = None
     document_version_id: UUID | None = None
     chunk_id: UUID | None = None
+    conversation_id: UUID | None = None
+    message_id: UUID | None = None
+    chat_evidence_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    chat_privacy_persisted: bool | None = None
+    chat_privacy_updated_at: datetime | None = None
 
 
 class MemoryExportPage(BaseModel):
@@ -262,6 +267,7 @@ class MemoryExportPage(BaseModel):
     record_kind: Literal["memories", "candidates"]
     snapshot_at: datetime
     snapshot_count: int = Field(ge=0)
+    omitted_count: int = Field(default=0, ge=0, le=100)
     items: list[MemoryExportRead | MemoryCandidateExportRead] = Field(max_length=100)
     fences: list[MemoryExportFence] = Field(max_length=100)
     payload_bytes: int = Field(ge=0, le=16_777_216)
