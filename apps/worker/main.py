@@ -32,6 +32,7 @@ from modules.knowledge.entities.worker import (
     process_entity_extraction_work,
     recover_entity_extraction_work,
 )
+from modules.knowledge.documents.worker import process_document_cleanup
 from modules.timeline.worker import process_timeline_extraction_work, recover_timeline_extraction_work
 from modules.knowledge.temporal.worker import process_graph_operation, recover_graph_work
 from modules.news.worker import process_news_document_ready, recover_news_work
@@ -128,6 +129,7 @@ class WorkerSettings:
         purge_expired_sessions, instrument_job(process_ingestion_event, success_return_outcome="returned"),
         instrument_job(process_normalize_event, success_return_outcome="returned"),
         instrument_job(process_uploaded_file, success_return_outcome="returned"), process_source_purge,
+        process_document_cleanup,
         reconcile_connectors, instrument_job(process_document_ready, success_return_outcome="returned"),
         instrument_job(process_entity_extraction_work),
         instrument_job(process_timeline_extraction_work), instrument_job(process_graph_operation),

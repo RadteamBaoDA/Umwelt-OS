@@ -53,6 +53,18 @@ class WorldDataMeasurement(BaseModel):
         return self
 
 
+class DocumentDeletionRead(BaseModel):
+    """Expose durable document-deletion progress without revealing storage paths."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    operation_id: UUID
+    status: Literal["queued", "running", "succeeded", "failed"]
+    record_status: Literal["deleted"]
+    graph_status: Literal["tombstoned"]
+    raw_status: Literal["queued", "not_present", "retained_shared", "succeeded", "failed"]
+    immediate_access_revoked: Literal[True] = True
+    error_code: str | None = Field(default=None, max_length=64)
+
+
 class ProviderTelegramMedia(BaseModel):
     """Describe safe media presence without requesting or storing binary data."""
     model_config = ConfigDict(extra="forbid", frozen=True)

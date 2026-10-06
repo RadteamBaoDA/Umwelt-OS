@@ -1,12 +1,12 @@
 <!-- current-implementation-snapshot:start -->
 ## Current implementation snapshot — 2026-10-06
 
-Verified `develop`: **655331b**. Goal active; production code/build/review stage.
+Verified `develop`: **44cf45a**. Goal active; production code/build/review stage.
 
 | State | Tasks |
 | --- | --- |
-| Integrated | P01–P11 and accepted reconciliation milestones; owner exports through Timeline/Observations (72d72c6); Chat/Memory deletion (94c7c1b); bounded expiry (32a6ccc); onboarding and demo/named workspace seed/reset (655331b) |
-| Implementing | Backup R2 readiness/recovery; durable individual-Document raw cleanup; visible Umwelt-OS branding and EN/VI resize labels |
+| Integrated | P01–P11 and accepted reconciliation milestones; owner exports through Timeline/Observations (72d72c6); Chat/Memory deletion (94c7c1b); bounded expiry (32a6ccc); onboarding and demo/named workspace seed/reset (655331b); visible branding and EN/VI labels (44cf45a) |
+| Implementing | Backup R2 readiness/recovery; durable individual-Document raw cleanup composition; square-unit Dashboard and viewport reconciliation |
 | Pending production | Complete portable GadgetDefinition/DailyBrief/schedule exports; copied Chat/Memory/Agent evidence cleanup and fences; mobile/a11y source reconciliation; final operations/OSS/docs and whole-branch review |
 | Deferred | Tests/behavioral acceptance until all production scope closes; live providers, verified restore, target 2-core/8GiB capacity and release |
 
@@ -294,3 +294,13 @@ Documents264c1e2 independent Sol taskreviewPASS finite rawreceipt/retry only; Lu
 
 ### Visible Umwelt-OS and bilingual labels integrated — 2026-10-06
 Accepted frozen brandingf8ebc24/source1fe2eba exactly on655331b: independent Sol source PASS and author-reported prescribed finalbuildexit0 Next/fourimages/process restoration, earlier missingdeps/env failures retained. Raw build transcript not supplied; receipt in root .superpowers/sdd/r16-branding-integrated explicitly author-reported. Root integrates only seven reviewed productionpaths and batched checkpoints, excluding tracked scratchreport. Header/login/home/title/catalog branding and Chat user/assistantfallback plus Dashboardresizearia labels EN/VI delivered; modelidentity/persistent bbd-os compatibility preserved. Actualsquaregeometry remains pendingP12T3; wholeR16/runtime not complete. BackupR2 building/Documentcomposition active. Root README/architecture/security/release/OSS drafts remain unreviewedunstaged; unrelatedownerfilespreserved. No tests/runtime/SQL/push/deploy.
+
+
+### Active wave after branding integration — 2026-10-06
+Verifieddevelop44cf45a. Luna p12_square_grid startsindependentP12T3geometry/viewportinreusedacceptedonboardingworktree/newbranchat44cf45a. Documentsaccepted264c1e2 composed7187b6b thenaskedmerge44cf45abeforefinalbuild; frozenbuildon264c1e2 onlycurrently, compositiongateopen. Backupe79539e currentbuildslot. Portableexports/copiedevidence/sourcepurge/UIstatus/finaldocs/wholebranchreview remainpending. No tests/runtime/SQL/push/deploy; checkpointchangeslocaluntilnextacceptedmilestone.
+
+### Backup R2 build and Document composition gate — 2026-10-06
+Backupe79539e exactprescribedbuildexit0 Next/fourimages; real log/JSON receiptretained. Original process_environment_restored=false preserved; authorqualification says finallyran but exactrestorationunverified dueunset/empty comparator, laterprocessabsence notproof. SolR2 retained/freshreviewdispatchcurrentlythreadlimit, notaccepted/integrated. Documentscurrentcompositionc71bd6c includesaccepteddevelop44cf45a, same10cleanupproductionfiles, cleanfreeze; prescribedbuildslotgrantednow. P12squaregrid Luna implementactive in reusedonboardingworktree44cf45abase. Goalactive/fullscopeopen; no tests/runtime/SQL/provider/reset/seed/push/deploy orstatusonlycommit.
+
+### Documents durable raw cleanup integrated — 2026-10-06
+Accepted task264c1e2 and current-base compositionc71bd6c: exact prescribed build exit0 Next/fourimages, restoration=True and independent task/composition Sol reviews PASS. Root applies identical ten productionfiles to44cf45a with checkpoint batch. Documents now owns durable deletion/outbox/status and safe retry/shared URI publication fences; DBdeleted/graph tombstoned/raw stages separate, no remote graph erasure claim. New p12_document_cleanup follows p12_onboarding_state; no migration execution. Evidence copied .superpowers/sdd/p12-document-cleanup-integrated. Copied Chat/Memory/Agent evidence, whole-Source unlink consistency and UI receipt visibility remain open. BackupR2 e79539e accepted scoped source next composes this migration/worker head before exact build/review. WholeP12 incomplete; no tests/runtime/SQL/push/deploy. Unrelated root drafts preserved.
