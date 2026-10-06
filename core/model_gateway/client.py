@@ -110,6 +110,7 @@ class ModelGateway:
         payload: dict[str, Any],
         probe: bool = False,
         before_send: Callable[[], Awaitable[None]] | None = None,
+        after_send: Callable[[], Awaitable[None]] | None = None,
     ) -> Any:
         """Check policy and cached capability before sending a bounded, retried gateway request; map transport and provider errors."""
         if not may_send(policy, alias, mapping, self.destination_id, bool(self.api_key), capability):
@@ -148,14 +149,18 @@ class ModelGateway:
                             await self.before_send()
                         if before_send is not None and before_send is not self.before_send:
                             await before_send()
-                        if path == "chat/completions":
-                            response = await client.chat.completions.create(**body)
-                        elif path == "embeddings":
-                            response = await client.embeddings.create(**body)
-                        elif path == "rerank":
-                            response = await client.post("/rerank", cast_to=dict, body=body)
-                        else:
-                            raise ModelGatewayError("Unsupported model gateway operation")
+                        try:
+                            if path == "chat/completions":
+                                response = await client.chat.completions.create(**body)
+                            elif path == "embeddings":
+                                response = await client.embeddings.create(**body)
+                            elif path == "rerank":
+                                response = await client.post("/rerank", cast_to=dict, body=body)
+                            else:
+                                raise ModelGatewayError("Unsupported model gateway operation")
+                        finally:
+                            if after_send is not None:
+                                await after_send()
                     except (APITimeoutError, APIConnectionError) as exc:
                         if attempt == 0:
                             continue
@@ -388,9 +393,10 @@ class ModelGateway:
         self, alias: str, mapping: ModelMapping | None, policy: RequestPolicy,
         query: str, documents: list[str], probe: bool = False, *,
         before_send: Callable[[], Awaitable[None]] | None = None,
+        after_send: Callable[[], Awaitable[None]] | None = None,
     ) -> Any:
-        """Request bounded reranking through gateway policy and fresh per-attempt authorization."""
+        """Request bounded reranking with fresh authorization and optional attempt cleanup."""
         return await self._request(
             alias, mapping, policy, "reranking", "rerank",
-            {"query": query, "documents": documents}, probe, before_send,
+            {"query": query, "documents": documents}, probe, before_send, after_send,
         )

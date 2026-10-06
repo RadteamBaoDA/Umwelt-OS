@@ -3,8 +3,10 @@
 import base64 as _base64
 import binascii as _binascii
 import hashlib as _hashlib
+from dataclasses import dataclass as _dataclass
 from datetime import UTC as _UTC, datetime as _datetime
 import json as _json
+from typing import Any as _Any
 from urllib.parse import urlsplit as _urlsplit, urlunsplit as _urlunsplit
 
 from sqlalchemy import and_ as _and, func as _func, or_ as _or, select as _select, tuple_ as _tuple
@@ -30,6 +32,7 @@ from modules.chat.models import (
     ResponseRun,
     StreamEvent,
 )
+from modules.knowledge.documents.public import DocumentCleanupEvidenceScope
 from modules.chat.retrieval import (
     build_context,
     format_grounded_context,
@@ -72,12 +75,32 @@ from modules.chat.stream import (
     parse_event_id,
 )
 from modules.chat.worker import (
+    _privacy_cancel_locked,
     is_history_storage_enabled,
     process_chat_response,
     purge_expired_chat_runs,
     run_response_generation,
 )
 from modules.chat.seed import ensure_demo_conversation
+
+
+@_dataclass(frozen=True)
+class CopiedEvidenceCleanupProgress:
+    """Describe one bounded Chat cleanup page without changing stream identities."""
+
+    next_cursor: str | None
+    complete: bool
+    rows_examined: int
+    rows_changed: int
+
+
+_REMOVE_EVIDENCE = object()
+_EVIDENCE_FIELDS = {
+    "sourcetype", "source_type", "sourceid", "source_id", "documentid", "document_id",
+    "documentversionid", "document_version_id", "chunkid", "chunk_id", "title", "url",
+    "canonical_url", "observedat", "observed_at", "quote", "content", "excerpt",
+    "content_hash", "chunk_index", "version_number", "score",
+}
 
 __all__ = [
     "AgentActivityLink", "AgentActivityRead",
@@ -97,6 +120,9 @@ __all__ = [
     "ChatExportMessageRead",
     "ChatExportPage",
     "ChatMemoryExportOrigin",
+    "CopiedEvidenceCleanupProgress",
+    "filter_current_citations",
+    "purge_document_copied_evidence_page",
     "Citation",
     "CitationValidationResult",
     "Conversation",
@@ -1161,4 +1187,323 @@ async def validate_export_fences(
     return ChatExportFenceValidation(
         valid=True, reason="valid", observed_snapshot_count=observed_count,
         privacy_persisted=current_privacy_persisted, privacy_updated_at=current_privacy_updated_at,
+    )
+
+
+def _cleanup_uuid(value: object) -> UUID | None:
+    """Parse one exact UUID field from a stored Chat evidence object without fuzzy matching."""
+    if isinstance(value, UUID):
+        return value
+    if isinstance(value, str):
+        try:
+            return UUID(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _cleanup_scope_parts(
+    scope: DocumentCleanupEvidenceScope,
+) -> tuple[set[UUID], set[tuple[UUID, UUID]], set[UUID]]:
+    """Separate exact version-only references from exact version/chunk identities."""
+    version_ids = {item.document_version_id for item in scope.references if item.reference_kind == "version"}
+    chunk_refs = {
+        (item.document_version_id, item.chunk_id)
+        for item in scope.references if item.reference_kind == "chunk" and item.chunk_id is not None
+    }
+    return version_ids, chunk_refs, {scope.document_id}
+
+
+def _matches_cleanup_scope(value: object, scope: DocumentCleanupEvidenceScope) -> bool:
+    """Match exact structured IDs without requiring chunk and version records in one page.
+
+    Chunk identities and version-only identities have independent random cursors, so an exact
+    version/chunk pair must match its chunk record even when the separate version record is on
+    another bounded reference page. A version-only object still requires its own version record.
+    """
+    if not isinstance(value, dict):
+        return False
+    version_ids, chunk_refs, document_ids = _cleanup_scope_parts(scope)
+    document_id = _cleanup_uuid(value.get("documentId") or value.get("document_id"))
+    version_id = _cleanup_uuid(value.get("documentVersionId") or value.get("document_version_id"))
+    chunk_id = _cleanup_uuid(value.get("chunkId") or value.get("chunk_id"))
+    if version_id is not None:
+        if chunk_id is not None:
+            return (version_id, chunk_id) in chunk_refs
+        return version_id in version_ids
+    return document_id in document_ids
+
+
+def _scrub_cleanup_payload(value: _Any, scope: DocumentCleanupEvidenceScope) -> tuple[_Any, bool]:
+    """Remove exact copied evidence objects while retaining unrelated and owner-authored fields."""
+    if isinstance(value, list):
+        cleaned: list[_Any] = []
+        changed = False
+        for item in value:
+            if _matches_cleanup_scope(item, scope):
+                changed = True
+                continue
+            candidate, item_changed = _scrub_cleanup_payload(item, scope)
+            changed = changed or item_changed
+            if candidate is not _REMOVE_EVIDENCE:
+                cleaned.append(candidate)
+        return (cleaned if changed else value), changed
+    if isinstance(value, dict):
+        matched = _matches_cleanup_scope(value, scope)
+        cleaned: dict[str, _Any] = {}
+        changed = False
+        for key, item in value.items():
+            if matched and str(key).replace("-", "_").lower() in _EVIDENCE_FIELDS:
+                changed = True
+                continue
+            candidate, item_changed = _scrub_cleanup_payload(item, scope)
+            changed = changed or item_changed
+            if candidate is not _REMOVE_EVIDENCE:
+                cleaned[key] = candidate
+        if matched and not cleaned:
+            return _REMOVE_EVIDENCE, True
+        return (cleaned if changed else value), changed
+    return value, False
+
+
+def _filter_citation_values(
+    citations: object, scope: DocumentCleanupEvidenceScope,
+) -> tuple[list[dict[str, object]], bool]:
+    """Drop exact citations for a deleted document and preserve unrelated citation dictionaries."""
+    if not isinstance(citations, list):
+        return [], citations not in (None, [])
+    kept: list[dict[str, object]] = []
+    changed = False
+    for item in citations:
+        if _matches_cleanup_scope(item, scope):
+            changed = True
+        elif isinstance(item, dict):
+            kept.append(item)
+        else:
+            changed = True
+    return (kept if changed else citations), changed  # type: ignore[return-value]
+
+
+def _cleanup_scope_fingerprint(scope: DocumentCleanupEvidenceScope) -> str:
+    """Bind a continuation token to one operation and one bounded captured reference page."""
+    material = {
+        "operation_id": str(scope.operation_id),
+        "document_id": str(scope.document_id),
+        "references": [
+            [item.reference_kind, str(item.document_version_id), str(item.chunk_id) if item.chunk_id else None]
+            for item in scope.references
+        ],
+    }
+    return _hashlib.sha256(_json.dumps(material, separators=(",", ":"), sort_keys=True).encode()).hexdigest()
+
+
+def _encode_cleanup_cursor(
+    scope: DocumentCleanupEvidenceScope, kind: str, after: UUID | None,
+) -> str:
+    """Encode a deterministic Chat-table keyset cursor bound to this evidence page."""
+    payload = {"v": 1, "operation": str(scope.operation_id), "fingerprint": _cleanup_scope_fingerprint(scope),
+               "kind": kind, "after": str(after) if after else None}
+    raw = _json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return _base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _decode_cleanup_cursor(
+    cursor: str, scope: DocumentCleanupEvidenceScope,
+) -> tuple[str, UUID | None]:
+    """Reject malformed, non-canonical, cross-operation, and cross-page cleanup cursors."""
+    try:
+        if not cursor or len(cursor) > 1024 or "=" in cursor:
+            raise ValueError("Invalid Chat copied-evidence cursor")
+        raw = _base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
+        payload = _json.loads(raw)
+        if (not isinstance(payload, dict)
+                or set(payload) != {"v", "operation", "fingerprint", "kind", "after"}
+                or payload["v"] != 1 or payload["operation"] != str(scope.operation_id)
+                or payload["fingerprint"] != _cleanup_scope_fingerprint(scope)
+                or payload["kind"] not in {"messages", "runs", "events"}):
+            raise ValueError("Chat copied-evidence cursor does not match this operation page")
+        after = UUID(payload["after"]) if payload["after"] is not None else None
+        if _encode_cleanup_cursor(scope, payload["kind"], after) != cursor:
+            raise ValueError("Chat copied-evidence cursor is not canonical")
+        return payload["kind"], after
+    except (ValueError, TypeError, KeyError, UnicodeDecodeError, _binascii.Error, _json.JSONDecodeError) as exc:
+        raise ValueError("Invalid Chat copied-evidence cursor") from exc
+
+
+async def filter_current_citations(
+    session: AsyncSession,
+    citations: object,
+) -> list[dict[str, object]]:
+    """Return only citations whose exact document, version, and chunk still exist.
+
+    The Documents owner supplies detached current evidence; absent or mismatched references
+    are omitted before Chat history or SSE replay can expose their copied title, URL, or quote.
+    Evidence row locks remain held until the caller's short response transaction completes.
+    """
+    if not isinstance(citations, list) or not citations:
+        return []
+    refs: list[tuple[UUID, UUID]] = []
+    parsed: list[tuple[dict[str, object], UUID, UUID, UUID, UUID]] = []
+    for raw in citations:
+        if not isinstance(raw, dict):
+            continue
+        source_id = _cleanup_uuid(raw.get("sourceId") or raw.get("source_id"))
+        document_id = _cleanup_uuid(raw.get("documentId") or raw.get("document_id"))
+        version_id = _cleanup_uuid(raw.get("documentVersionId") or raw.get("document_version_id"))
+        chunk_id = _cleanup_uuid(raw.get("chunkId") or raw.get("chunk_id"))
+        if None in (source_id, document_id, version_id, chunk_id):
+            continue
+        refs.append((version_id, chunk_id))  # type: ignore[arg-type]
+        parsed.append((raw, source_id, document_id, version_id, chunk_id))  # type: ignore[arg-type]
+    unique_refs = sorted(set(refs), key=lambda item: (str(item[0]), str(item[1])))
+    if not unique_refs:
+        return []
+    from modules.knowledge.documents import public as documents_public
+
+    current = {}
+    for start in range(0, len(unique_refs), 100):
+        evidence = await documents_public.lock_chat_evidence_chunks(
+            session, unique_refs[start:start + 100], require_active_source=False,
+        )
+        current.update({(item.document_version_id, item.chunk_id): item for item in evidence})
+    return [
+        raw for raw, source_id, document_id, version_id, chunk_id in parsed
+        if (item := current.get((version_id, chunk_id))) is not None
+        and item.source_id == source_id and item.document_id == document_id
+    ]
+
+
+async def purge_document_copied_evidence_page(
+    session: AsyncSession,
+    scope: DocumentCleanupEvidenceScope,
+    *,
+    cursor: str | None = None,
+    limit: int = 100,
+) -> CopiedEvidenceCleanupProgress:
+    """Clean one bounded Chat table page using detached identities captured before hard deletion.
+
+    Lock order is Memory privacy, Conversation parent, ResponseRun, then StreamEvent. This
+    function mutates only Chat-owned rows; it preserves message text, unrelated citations,
+    append-only mutation receipts, and every existing stream/event/run identity. The Documents
+    caller persists the returned cursor and page mutations in the same transaction. Version-only
+    and chunk identity records can fall on different scope pages; each exact chunk pair matches
+    independently of the separate version-only record.
+    """
+    if not 1 <= limit <= 100:
+        raise ValueError("Chat copied-evidence page size must be between 1 and 100")
+    if len(scope.references) > 100:
+        raise ValueError("Chat copied-evidence identity page exceeds 100 references")
+    if cursor is None:
+        kind, after = "messages", None
+    else:
+        kind, after = _decode_cleanup_cursor(cursor, scope)
+    from modules.memory.public import lock_export_privacy
+
+    await lock_export_privacy(session)
+    kinds = ("messages", "runs", "events")
+    index = kinds.index(kind)
+    examined = 0
+    changed = 0
+    while index < len(kinds) and examined < limit:
+        kind = kinds[index]
+        remaining = limit - examined
+        if kind == "messages":
+            found = list((await session.execute(
+                _select(Message.id, Message.conversation_id)
+                .where(*([Message.id > after] if after else []))
+                .order_by(Message.id).limit(remaining + 1)
+            )).all())
+        elif kind == "runs":
+            found = list((await session.execute(
+                _select(ResponseRun.id, ResponseRun.conversation_id)
+                .where(*([ResponseRun.id > after] if after else []))
+                .order_by(ResponseRun.id).limit(remaining + 1)
+            )).all())
+        else:
+            found = list((await session.execute(
+                _select(StreamEvent.id, StreamEvent.response_id, ResponseRun.conversation_id)
+                .join(ResponseRun, ResponseRun.id == StreamEvent.response_id)
+                .where(*([StreamEvent.id > after] if after else []))
+                .order_by(StreamEvent.id).limit(remaining + 1)
+            )).all())
+        has_more = len(found) > remaining
+        rows = found[:remaining]
+        examined += len(rows)
+        for candidate in rows:
+            if kind == "messages":
+                row_id, conversation_id = candidate
+                parent = await session.scalar(_select(Conversation).where(
+                    Conversation.id == conversation_id,
+                ).with_for_update().execution_options(populate_existing=True))
+                if parent is None:
+                    continue
+                message = await session.scalar(_select(Message).where(
+                    Message.id == row_id, Message.conversation_id == conversation_id,
+                ).with_for_update().execution_options(populate_existing=True))
+                if message is None:
+                    continue
+                citations, citations_changed = _filter_citation_values(message.citations, scope)
+                metadata, metadata_changed = _scrub_cleanup_payload(message.metadata_json or {}, scope)
+                if citations_changed or metadata_changed:
+                    message.citations = citations
+                    message.metadata_json = metadata if isinstance(metadata, dict) else {}
+                    changed += 1
+            elif kind == "runs":
+                row_id, conversation_id = candidate
+                parent = await session.scalar(_select(Conversation).where(
+                    Conversation.id == conversation_id,
+                ).with_for_update().execution_options(populate_existing=True))
+                if parent is None:
+                    continue
+                run = await session.scalar(_select(ResponseRun).where(
+                    ResponseRun.id == row_id, ResponseRun.conversation_id == conversation_id,
+                ).with_for_update().execution_options(populate_existing=True))
+                if run is None:
+                    continue
+                citations, citations_changed = _filter_citation_values(run.citations, scope)
+                context, context_changed = _scrub_cleanup_payload(run.retrieval_context or {}, scope)
+                if citations_changed or context_changed:
+                    run.citations = citations
+                    run.retrieval_context = context if isinstance(context, dict) else {}
+                    changed += 1
+                    if run.status in {"pending", "streaming"}:
+                        await _privacy_cancel_locked(session, run)
+            else:
+                row_id, response_id, conversation_id = candidate
+                parent = await session.scalar(_select(Conversation).where(
+                    Conversation.id == conversation_id,
+                ).with_for_update().execution_options(populate_existing=True))
+                if parent is None:
+                    continue
+                run = await session.scalar(_select(ResponseRun).where(
+                    ResponseRun.id == response_id, ResponseRun.conversation_id == conversation_id,
+                ).with_for_update().execution_options(populate_existing=True))
+                if run is None:
+                    continue
+                event = await session.scalar(_select(StreamEvent).where(
+                    StreamEvent.id == row_id, StreamEvent.response_id == response_id,
+                ).with_for_update().execution_options(populate_existing=True))
+                if event is None:
+                    continue
+                payload, payload_changed = _scrub_cleanup_payload(event.data or {}, scope)
+                if payload_changed:
+                    event.data = payload if isinstance(payload, dict) else {}
+                    changed += 1
+                    if run.status in {"pending", "streaming"}:
+                        await _privacy_cancel_locked(session, run, event.seq)
+        if has_more:
+            last_id = rows[-1][0]
+            return CopiedEvidenceCleanupProgress(
+                next_cursor=_encode_cleanup_cursor(scope, kind, last_id),
+                complete=False, rows_examined=examined, rows_changed=changed,
+            )
+        after = None
+        index += 1
+        if examined >= limit and index < len(kinds):
+            return CopiedEvidenceCleanupProgress(
+                next_cursor=_encode_cleanup_cursor(scope, kinds[index], None),
+                complete=False, rows_examined=examined, rows_changed=changed,
+            )
+    return CopiedEvidenceCleanupProgress(
+        next_cursor=None, complete=True, rows_examined=examined, rows_changed=changed,
     )

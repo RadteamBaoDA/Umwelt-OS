@@ -328,7 +328,7 @@ async def get_conversation(
     _owner: OwnerRead,
     response: Response,
 ) -> ConversationDetailRead:
-    """Retrieve ordered messages and the durable handle for a pending/streaming response.
+    """Retrieve ordered messages with current citations and the durable response handle.
 
     An active response ID lets any owner-authorized Chat surface reattach to its replayable SSE
     stream after navigation or remount, without creating another message or generation run.
@@ -414,7 +414,7 @@ async def get_conversation(
             content=m.content,
             client_request_id=m.client_request_id,
             model_identity=m.model_identity,
-            citations=m.citations or [],
+            citations=await chat_public.filter_current_citations(session, m.citations or []),
             response_id=m.response_id or response_ids_by_user_message.get(m.id),
             revision_of_message_id=m.revision_of_message_id,
             created_at=m.created_at,
@@ -832,11 +832,11 @@ async def get_response_events(
             start_seq = 1
 
     async def sse_event_stream() -> Any:
-        """Yield one locked event at a time after auth, expiry, and active-run consent checks.
+        """Yield one locked event at a time after auth, expiry, consent, and current-citation checks.
 
         The short per-event transaction stays open through the ASGI send of that single payload,
-        serializing opt-out/redaction against publication without holding a lock over model streaming.
-        Completed runs remain readable as previously retained transcript history.
+        serializing deletion/redaction against publication without holding a lock over model streaming.
+        Citations are filtered through Documents' exact current-evidence projection before replay.
         """
         current_seq = start_seq - 1
         last_heartbeat = asyncio.get_running_loop().time()
@@ -858,10 +858,9 @@ async def get_response_events(
                     run_hint = await session.scalar(select(ResponseRun).where(ResponseRun.id == response_id))
                     if run_hint is None:
                         return
-                    # Terminal runs contain previously retained history; only active replay needs
-                    # the owner privacy lock, and terminal state cannot transition back to active.
-                    if run_hint.status in ("pending", "streaming"):
-                        await lock_export_privacy(session)
+                    # Current-evidence output follows Memory privacy before Chat parent/run locks
+                    # for both active and terminal transcripts.
+                    await lock_export_privacy(session)
                     parent = await session.scalar(select(Conversation).where(
                         Conversation.id == run_hint.conversation_id,
                     ).with_for_update().execution_options(populate_existing=True))
@@ -899,9 +898,17 @@ async def get_response_events(
                     if event is not None:
                         # Do not materialize a batch: cancellation must never replay a stale object
                         # loaded before its payload was redacted by another transaction.
+                        event_data = event.data
+                        if isinstance(event_data, dict) and isinstance(event_data.get("citations"), list):
+                            event_data = {
+                                **event_data,
+                                "citations": await chat_public.filter_current_citations(
+                                    session, event_data["citations"],
+                                ),
+                            }
                         yield format_sse_event(
                             event=event.event_type,
-                            data=event.data,
+                            data=event_data,
                             event_id=event.event_id,
                         )
                         current_seq = event.seq

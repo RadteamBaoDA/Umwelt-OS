@@ -12,7 +12,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import HTTPException
 from pydantic import BaseModel
-from sqlalchemy import and_, delete, desc, func, select, text, tuple_, update
+from sqlalchemy import and_, delete, desc, func, insert, literal, select, text, tuple_, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,7 +23,8 @@ from core.realtime import ReplayDraft, commit_with_replay, make_knowledge_change
 from core.tools.schemas import ToolDestination, ToolOutputFence
 from core.auth.models import Owner
 from modules.knowledge.documents.models import (
-    Document, DocumentChunk, DocumentCleanupOperation, DocumentInteraction, DocumentVersion, NormalizedDocumentIdentity,
+    Document, DocumentChunk, DocumentCleanupEvidenceReference, DocumentCleanupOperation, DocumentInteraction,
+    DocumentVersion, NormalizedDocumentIdentity,
     NormalizedVersionProvenance,
 )
 from modules.knowledge.documents.schemas import (
@@ -60,6 +61,26 @@ async def observability_quality_summary(session: AsyncSession) -> dict[str, int]
 EXTRACTION_CHUNK_LIMIT = 100
 EXTRACTION_INPUT_BYTES = 64_000
 EXPORT_PAGE_MAX_BYTES = 16_777_216
+
+
+@dataclass(frozen=True)
+class DocumentCleanupEvidenceIdentity:
+    """Carry one captured immutable version or chunk identity after hard deletion."""
+
+    document_version_id: UUID
+    chunk_id: UUID | None
+    reference_kind: str
+
+
+@dataclass(frozen=True)
+class DocumentCleanupEvidenceScope:
+    """Return a bounded detached page of one deleted document's evidence identities."""
+
+    operation_id: UUID
+    source_id: UUID
+    document_id: UUID
+    references: tuple[DocumentCleanupEvidenceIdentity, ...]
+    next_cursor: UUID | None
 
 
 def _encode_document_export_cursor(
@@ -1611,6 +1632,70 @@ async def get_document_cleanup_operation(
     return await session.get(DocumentCleanupOperation, operation_id)
 
 
+async def capture_document_cleanup_evidence(session: AsyncSession, operation: DocumentCleanupOperation) -> None:
+    """Snapshot exact version-only and chunk identities into the operation before its FK cascade.
+
+    Both inserts are owner-local SQL ``INSERT … SELECT`` statements, so document history size
+    does not create an unbounded Python snapshot. The child identities intentionally have no
+    foreign keys back to evidence rows and remain readable until the cleanup receipt is removed.
+    """
+    identity_columns = ["id", "operation_id", "document_version_id", "chunk_id", "reference_kind"]
+    await session.execute(insert(DocumentCleanupEvidenceReference).from_select(
+        identity_columns,
+        select(
+            func.gen_random_uuid(), literal(operation.id), DocumentVersion.id,
+            literal(None), literal("version"),
+        ).where(DocumentVersion.document_id == operation.document_id),
+    ))
+    await session.execute(insert(DocumentCleanupEvidenceReference).from_select(
+        identity_columns,
+        select(
+            func.gen_random_uuid(), literal(operation.id), DocumentChunk.document_version_id,
+            DocumentChunk.id, literal("chunk"),
+        ).join(DocumentVersion, DocumentVersion.id == DocumentChunk.document_version_id)
+        .where(DocumentVersion.document_id == operation.document_id),
+    ))
+
+
+async def list_document_cleanup_evidence_scope(
+    session: AsyncSession,
+    operation_id: UUID,
+    *,
+    after: UUID | None = None,
+    limit: int = 100,
+) -> DocumentCleanupEvidenceScope | None:
+    """Return one deterministic bounded identity page for the durable Chat cleanup cursor."""
+    if not 1 <= limit <= 100:
+        raise ValueError("Document cleanup evidence page size must be between 1 and 100")
+    operation = await session.get(DocumentCleanupOperation, operation_id)
+    if operation is None:
+        return None
+    statement = select(DocumentCleanupEvidenceReference).where(
+        DocumentCleanupEvidenceReference.operation_id == operation_id,
+    )
+    if after is not None:
+        statement = statement.where(DocumentCleanupEvidenceReference.id > after)
+    rows = list((await session.scalars(
+        statement.order_by(DocumentCleanupEvidenceReference.id).limit(limit + 1)
+    )).all())
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    return DocumentCleanupEvidenceScope(
+        operation_id=operation.id,
+        source_id=operation.source_id,
+        document_id=operation.document_id,
+        references=tuple(
+            DocumentCleanupEvidenceIdentity(
+                document_version_id=row.document_version_id,
+                chunk_id=row.chunk_id,
+                reference_kind=row.reference_kind,
+            )
+            for row in rows
+        ),
+        next_cursor=rows[-1].id if has_more and rows else None,
+    )
+
+
 async def create_document(session: AsyncSession, payload: DocumentCreate) -> Document:
     """Create a source-locked document and initial version, then publish its change."""
     await sources.lock_source_for_document(session, payload.source_id)
@@ -2226,13 +2311,14 @@ async def update_document(
 
 
 async def delete_document(session: AsyncSession, document_id: UUID) -> DocumentCleanupOperation | None:
-    """Commit access revocation and graph cleanup before durable asynchronous raw-file cleanup.
+    """Commit access revocation, detached evidence IDs, and durable asynchronous cleanup stages.
 
     Lock order is Source then Document then raw-URI identity then normalized identity and
-    graph support. The operation snapshots the URI before canonical rows are removed; its
-    event and deletion/tombstone replay commit atomically. The caller owns authorization,
-    while missing documents return None. A successful return means canonical access is
-    revoked, not that file cleanup or remote graph reconciliation has completed.
+    graph support. The operation snapshots raw storage and exact immutable version/chunk IDs
+    before canonical rows are removed; its event and deletion/tombstone replay commit atomically.
+    A cleanup event is always emitted, including documents with no raw URI. The caller owns
+    authorization; a successful return means canonical access is revoked, not that any cleanup
+    owner stage has completed.
     """
     identity = await session.execute(select(Document.source_id).where(Document.id == document_id))
     source_id = identity.scalar_one_or_none()
@@ -2254,21 +2340,25 @@ async def delete_document(session: AsyncSession, document_id: UUID) -> DocumentC
         document_id=document.id,
         raw_uri=document.raw_uri,
         raw_status="queued" if document.raw_uri else "not_present",
-        status="queued" if document.raw_uri else "succeeded",
+        evidence_scope_status="capturing",
+        copied_status="queued",
+        chat_status="queued",
+        status="queued",
     )
     session.add(operation)
     await session.flush()
-    if document.raw_uri:
-        from modules.ingestion import public as ingestion
+    await capture_document_cleanup_evidence(session, operation)
+    operation.evidence_scope_status = "captured"
+    from modules.ingestion import public as ingestion
 
-        await ingestion.publish_event(session, DomainEvent(
-            id=uuid4(),
-            type="document.cleanup.requested",
-            version=1,
-            occurred_at=datetime.now(UTC),
-            producer="modules.knowledge.documents",
-            payload={"operation_id": str(operation.id)},
-        ))
+    await ingestion.publish_event(session, DomainEvent(
+        id=uuid4(),
+        type="document.cleanup.requested",
+        version=1,
+        occurred_at=datetime.now(UTC),
+        producer="modules.knowledge.documents",
+        payload={"operation_id": str(operation.id)},
+    ))
     from modules.knowledge.observations import public as observations
     await observations.purge_document_in_uow(session, document.id)
     if document.external_id is not None:
@@ -2985,4 +3075,71 @@ async def read_chat_evidence_chunks(
 
     # Return matching items in the caller's requested order, omitting any deleted/missing refs.
     return [by_ref[ref] for ref in refs if ref in by_ref]
+
+
+async def lock_chat_evidence_chunks(
+    session: AsyncSession,
+    refs: list[tuple[UUID, UUID]],
+    *,
+    require_active_source: bool = True,
+    require_current_version: bool = False,
+    selection_fences: tuple[GadgetDocumentSelectionFence, ...] | None = None,
+) -> list[ChatEvidenceChunk]:
+    """Hold key-share locks on exact evidence through Chat's short publication transaction.
+
+    Lock order matches Documents deletion and append: Source, Document, immutable version,
+    then chunk. A hard delete cannot commit between this current-evidence check and the caller's
+    publication commit; callers must release these locks promptly by committing or rolling back.
+    """
+    if len(refs) > 100 or len(set(refs)) != len(refs):
+        raise ValueError("Evidence references must be unique and contain at most 100 items")
+    if not refs:
+        return []
+    if selection_fences is not None and not await validate_gadget_document_selection_fences(
+        session, selection_fences,
+    ):
+        raise ValueError("Selected document version or source privacy scope is stale")
+    ref_filter = tuple_(DocumentVersion.id, DocumentChunk.id).in_(refs)
+    source_ids = list((await session.scalars(
+        select(Source.id).join(Document, Document.source_id == Source.id)
+        .join(DocumentVersion, DocumentVersion.document_id == Document.id)
+        .join(DocumentChunk, DocumentChunk.document_version_id == DocumentVersion.id)
+        .where(ref_filter).distinct().order_by(Source.id)
+    )).all())
+    if source_ids:
+        await session.scalars(
+            select(Source.id).where(Source.id.in_(source_ids)).order_by(Source.id)
+            .with_for_update(read=True, key_share=True, of=Source)
+        )
+    document_ids = list((await session.scalars(
+        select(Document.id).join(DocumentVersion, DocumentVersion.document_id == Document.id)
+        .join(DocumentChunk, DocumentChunk.document_version_id == DocumentVersion.id)
+        .where(ref_filter).distinct().order_by(Document.id)
+    )).all())
+    if document_ids:
+        await session.scalars(
+            select(Document.id).where(Document.id.in_(document_ids)).order_by(Document.id)
+            .with_for_update(read=True, key_share=True, of=Document)
+        )
+    version_ids = list((await session.scalars(
+        select(DocumentVersion.id).join(DocumentChunk, DocumentChunk.document_version_id == DocumentVersion.id)
+        .where(ref_filter).distinct().order_by(DocumentVersion.id)
+    )).all())
+    if version_ids:
+        await session.scalars(
+            select(DocumentVersion.id).where(DocumentVersion.id.in_(version_ids)).order_by(DocumentVersion.id)
+            .with_for_update(read=True, key_share=True, of=DocumentVersion)
+        )
+    chunk_ids = [chunk_id for _, chunk_id in refs]
+    await session.scalars(
+        select(DocumentChunk.id).where(DocumentChunk.id.in_(chunk_ids)).order_by(DocumentChunk.id)
+        .with_for_update(read=True, key_share=True, of=DocumentChunk)
+    )
+    evidence = await read_chat_evidence_chunks(
+        session, refs, require_active_source=require_active_source,
+        require_current_version=require_current_version,
+    )
+    if selection_fences is not None and len(evidence) != len(refs):
+        raise ValueError("One or more exact selected evidence chunks are unavailable")
+    return evidence
 

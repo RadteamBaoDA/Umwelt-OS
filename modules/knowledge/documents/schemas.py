@@ -61,8 +61,13 @@ class DocumentDeletionRead(BaseModel):
     record_status: Literal["deleted"]
     graph_status: Literal["tombstoned"]
     raw_status: Literal["queued", "not_present", "retained_shared", "succeeded", "failed"]
+    evidence_scope_status: Literal["capturing", "captured", "unavailable"]
+    copied_status: Literal["queued", "running", "failed"]
+    chat_status: Literal["queued", "running", "succeeded", "failed"]
+    chat_error_code: str | None = Field(default=None, max_length=64)
     immediate_access_revoked: Literal[True] = True
     error_code: str | None = Field(default=None, max_length=64)
+    copied_error_code: str | None = Field(default=None, max_length=64)
 
 
 class ProviderTelegramMedia(BaseModel):

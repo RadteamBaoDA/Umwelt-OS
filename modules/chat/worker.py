@@ -348,11 +348,12 @@ async def run_response_generation(
     settings: Settings,
     redis: Redis,
 ) -> None:
-    """Execute model response generation via ModelGateway, persisting bounded stream events and final text.
+    """Generate a grounded response while current evidence is locked at every external boundary.
 
     Manages the lifecycle of a single ResponseRun: transitions status from pending to streaming,
-    retrieves grounded context, streams tokens through ModelGateway, validates citations,
-    persists the completed assistant message and terminal event, and handles cancellation.
+    retrieves grounded context, fences rerank/chat egress and every citation/delta/final publication,
+    validates citations, persists the completed assistant message and terminal event, and handles
+    deletion-driven cancellation under the Memory/Chat parent/run lock order.
 
     Args:
         response_id: Unique UUID of the ResponseRun to process.
@@ -487,7 +488,9 @@ async def run_response_generation(
             await session.commit()
 
             # Grounded retrieval
-            answer_context = await build_context(session, redis, settings, answer_request)
+            answer_context = await build_context(
+                session, session_factory, redis, settings, answer_request,
+            )
 
             # Recheck cancellation before model egress
             if await is_run_cancelled(response_id, redis):
@@ -504,13 +507,13 @@ async def run_response_generation(
                 fences_ok, fence_reasons = await revalidate_context_fence(
                     session, answer_context, destination="remote",
                     require_current_versions=answer_request.selected_only,
+                    lock_evidence=True,
                 )
                 if not fences_ok:
                     logger.warning("Context fence revalidation raised warnings: %s", fence_reasons)
-                    if answer_request.selected_only:
-                        # A gadget Ask is bound to its validated selection and privacy fence;
-                        # stale or locally restricted evidence must not reach model egress.
-                        raise RuntimeError("Selected evidence failed its current privacy fence")
+                    await _privacy_cancel_locked(session, live_run, seq)
+                    await session.commit()
+                    return
                 seq = await _next_event_seq(session, response_id, seq)
                 citations_payload = [
                     {
@@ -570,7 +573,7 @@ async def run_response_generation(
                         await current_session.close()
 
             async def before_send_attempt() -> None:
-                """Fence consent, live Chat rows, and optional selected evidence for every attempt."""
+                """Fence consent, live Chat rows, and every exact evidence reference before each attempt."""
                 nonlocal send_attempt_session
                 await release_send_attempt_session()
                 send_attempt_session = session_factory()
@@ -585,13 +588,16 @@ async def run_response_generation(
                             await _cancel_response_locked(send_attempt_session, live_run, seq)
                             await send_attempt_session.commit()
                             raise ResponseNoLongerActive("Response was stopped before request opening")
-                        if answer_request.selected_only:
+                        if answer_context.evidence:
                             fences_ok, _fence_reasons = await revalidate_context_fence(
                                 send_attempt_session, answer_context, destination="remote",
-                                require_current_versions=True,
+                                require_current_versions=answer_request.selected_only,
+                                lock_evidence=True,
                             )
                             if not fences_ok:
-                                raise RuntimeError("Selected evidence failed its current privacy fence")
+                                await _privacy_cancel_locked(send_attempt_session, live_run, seq)
+                                await send_attempt_session.commit()
+                                raise ResponseNoLongerActive("Evidence was deleted before remote request opening")
                 except BaseException:
                     await release_send_attempt_session()
                     raise
@@ -638,7 +644,7 @@ async def run_response_generation(
                 after_send=after_send_attempt,
             )
 
-        # 4. Stream tokens through ModelGateway; recheck exact selection before each client callback.
+        # 4. Stream tokens through ModelGateway; recheck all current evidence before each publication.
         async for raw_line in stream_iter:
             if await is_run_cancelled(response_id, redis):
                 await _mark_cancelled(response_id, session_factory, seq, privacy_fence)
@@ -664,13 +670,16 @@ async def run_response_generation(
                                     await _cancel_response_locked(session, live_run, seq)
                                     await session.commit()
                                     return
-                                if answer_request.selected_only:
+                                if answer_context.evidence:
                                     fences_ok, _fence_reasons = await revalidate_context_fence(
                                         session, answer_context, destination="remote",
-                                        require_current_versions=True,
+                                        require_current_versions=answer_request.selected_only,
+                                        lock_evidence=True,
                                     )
                                     if not fences_ok:
-                                        raise RuntimeError("Selected evidence changed during response streaming")
+                                        await _privacy_cancel_locked(session, live_run, seq)
+                                        await session.commit()
+                                        return
                                 accumulated_text += content_delta
                                 seq = await _next_event_seq(session, response_id, seq)
                                 session.add(
@@ -702,12 +711,16 @@ async def run_response_generation(
                 await session.commit()
                 return
             conversation = await session.scalar(select(Conversation).where(Conversation.id == conversation_id))
-            if answer_request.selected_only:
+            if answer_context.evidence:
                 fences_ok, _fence_reasons = await revalidate_context_fence(
-                    session, answer_context, destination="remote", require_current_versions=True,
+                    session, answer_context, destination="remote",
+                    require_current_versions=answer_request.selected_only,
+                    lock_evidence=True,
                 )
                 if not fences_ok:
-                    raise RuntimeError("Selected evidence changed before final answer persistence")
+                    await _privacy_cancel_locked(session, live_run, seq)
+                    await session.commit()
+                    return
             model_ident = mapping.model if mapping else alias
             assistant_msg = Message(
                 conversation_id=conversation_id,

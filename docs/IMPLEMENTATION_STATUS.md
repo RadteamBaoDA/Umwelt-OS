@@ -1,17 +1,17 @@
 <!-- current-implementation-snapshot:start -->
 ## Current implementation snapshot — 2026-10-06
 
-Verified `develop`: **a2a2cc2**. Goal active; production code/build/review stage.
+Verified `develop`: **bce670b**. Goal active; production code/build/review stage.
 
 | State | Tasks |
 | --- | --- |
-| Integrated | P01–P11 and accepted reconciliation milestones; owner exports through Timeline/Observations (72d72c6); Chat/Memory deletion (94c7c1b); bounded expiry (32a6ccc); onboarding/demo/named workspace source (655331b); branding/EN–VI labels (44cf45a); individual Document raw cleanup (3d2c51e); backup/admission/recovery/portable export aggregator with isolated restore identity repair (5212def); square Dashboard/saved-column/gesture/bounded mobile projection milestone (a2a2cc2) |
-| Implementing | Chat copied-evidence cleanup/publication/replay completion and current-base composition; all GadgetDefinition/DailyBrief/schedule portable exports; Luna mobile content-floor/group/draft implementation after completed Sol source ruling |
-| Next Dashboard task | Source-backed mobile content-floor fit, hidden-group full-draft preservation and per-breakpoint dirty drafts; square-grid projection P2 closed after exact composed build and Sol re-review |
-| Pending production | Memory/Agent/materialization copied-evidence stages; whole-Source raw URI consistency; deletion receipt UI; narrow-mobile content-floor fit, group-filter/dirty-breakpoint consistency and remaining a11y; final operations/OSS/docs and whole-branch review |
-| Deferred | Tests/behavioral acceptance until all production scope closes; live providers, verified restore, target 2-core/8GiB capacity and release |
+| Integrated | P01–P11 and accepted reconciliation milestones; prior owner exports/deletion/expiry/onboarding/branding/raw cleanup; backup/admission/recovery (5212def); square Dashboard (a2a2cc2); complete saved GadgetDefinition/eligible retained DailyBrief/schedule portable exports (bce670b) |
+| Active | Chat exact-pair repair6f81161 PASS source review, composing/building on latest develop; Luna mobile content/group/draft/Expand implementation; Sol Agent copied-evidence inference |
+| Ready briefs | Whole-Source child cleanup and Memory owner cleanup inference completed; controller manual/legacy/lock rulings recorded; dependent implementation follows accepted shared child contracts |
+| Pending production | Memory/Agent/Dashboard/Notifications/Automations copied-evidence stages; whole-Source raw consistency; deletion receipt UI; mobile/a11y reconciliation; final operations/OSS/docs and whole-branch review |
+| Deferred | Tests/behavioral acceptance until all production scope closes; live providers, verified restore, target2core/8GiB capacity and release |
 
-P12/R16 remain incomplete. Backup source build and review do not certify actual restore. Restoration assertions false/unverified remain preserved in receipts. No tests/runtime/SQL/reset/seed/provider operations or push/deploy/main merge. Checkpoints update locally and batch with accepted source milestones.
+P12/R16 remain incomplete. All false environment restoration assertions remain false/unverified. No tests/runtime/SQL/reset/seed/provider operations or push/deploy/main merge. Checkpoints batch with accepted source milestones.
 <!-- current-implementation-snapshot:end -->
 ## Retained Timeline/Observations export integration — 2026-10-06
 
@@ -886,3 +886,9 @@ Author confirmed explicit D:/Project/Umwelt-OS-p12-backup launch fixed cwd failu
 
 ## Accepted complete portable Dashboard export milestone integration — 2026-10-06
 Accepted original924d698/current-base composition5987c23 repaired6ac3820ed87099b14ae04345b6d41cda2a3a3995. Independent Sol scoped re-review APPROVE after two DTO contract blockers and malformed-latest-brief fact projection fix. Exact prescribed build session24513 exit0/four images; root read actual native log, matching receipt and clean frozen author HEAD. All three exact environment restoration resultsfalse remain unverified. Root no-fast-forward merge index verified equal to entire accepted6ac3820 tree before adding these four checkpoints. Six production paths delivered unplaced saved GadgetDefinitions, eligible retained DailyBrief revisions and schedule with omission metadata/cutoff/final fences. GitNexus detect_changes tool not available in enabled tools; direct staged six-path/source/caller scope verified. Integrating one accepted source milestone with checkpoint changes; unrelated docs/guidance/index-count/legacy UX deletions preserved unstaged. No tests/runtime/migration/env/provider operations, push/deploy/main merge. WholeP12 remains incomplete: Chat integration, mobile, copied owner stages, Source cleanup, deletion UI and final release/validation pending.
+
+## Chat latest-develop composition built and review dispatched — 2026-10-06
+Chat6f81161 composed accepted developbce670b into08f93a54c5629ca7e76d0f6d7155bbc57120909a. Root verified clean source and exact eleven-path delta against develop; prescribed actor session75283 terminalexit0/fourimages, native tee log and matching JSON preserved under root review evidence. All three restoration checksfalse remain unverified. Fresh independent Sol composition review dispatched; acceptance/integration waits verdict. Agent owner inference brief complete. Controller inspected reused document-cleanup/owner-contract worktrees: both clean but old author commits are not ancestors of current develop, so do not blindly fast-forward or erase old branches/evidence. New scoped branch from accepted develop can reuse checkout after integration, preserving ignored reports. No tests/runtime/status-only commit.
+
+## Accepted Chat copied-evidence milestone integration — 2026-10-06
+Original7ee156f review P1 exact-page pairing repaired6f81161, scoped Sol PASS; composed accepted developbce670b into08f93a54c5629ca7e76d0f6d7155bbc57120909a. Exact prescribed session75283 exit0/fourimages and independent Sol composition PASS. Root verified merge index equals entire accepted08f93a54 source tree before staging checkpoints. Integrating eleven production paths plus four checkpoints in one no-fast-forward source milestone; unrelated root drafts/guidance/legacy UX deletions preserved unstaged. Delivered immutable pre-cascade version/chunk child scopes, no-raw cleanup, bounded Chat physical structured-copy stages and current read/replay/egress/publication fences; explicit raw/Chat/aggregate status. Migration headp12_chat_evidence_cleanup follows backup_control. All false environment restoration flags remain unverified. Other copy owners/Source orchestration/deletion UI/mobile/final release incomplete; no full erasure/runtime acceptance claim. GitNexus detect_changes unavailable; staged/source/caller scope traced. No tests/runtime/provider/env/SQL/migration/reset/seed operations, push/deploy/main merge.

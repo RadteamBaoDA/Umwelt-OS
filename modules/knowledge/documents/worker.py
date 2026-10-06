@@ -1,4 +1,7 @@
+"""Documents-owned bounded cleanup consumer for raw files and Chat evidence copies."""
+
 from datetime import UTC, datetime, timedelta
+import logging
 from typing import cast
 from uuid import UUID
 
@@ -11,111 +14,200 @@ from modules.ingestion import public as ingestion
 from modules.knowledge.documents import public as documents
 from modules.knowledge.documents.models import DocumentCleanupOperation
 
+logger = logging.getLogger(__name__)
+_RETRY_DELAY = timedelta(seconds=30)
+_CONTINUATION_DELAY = timedelta(seconds=1)
+
 
 async def process_document_cleanup(ctx: dict[str, object], event_id: str) -> None:
-    """Retry a durable document's raw-file cleanup after its DB and graph tombstones commit.
+    """Advance one bounded raw and Chat copy-cleanup page after canonical deletion commits.
 
-    The event payload contains only an operation ID. Documents locks the raw URI while
-    checking shared references, rejecting future publication of a deleted URI, and
-    unlinking. Unsafe paths and filesystem failures preserve tombstones, expose a bounded
-    error code, and return the durable event to pending with a delay; retrying unlink is
-    idempotent.
+    The event payload contains only an operation ID. Documents locks and unlinks the exact raw
+    URI when present, then passes one bounded detached evidence-reference scope to Chat for
+    Chat-only mutation. A deterministic cursor and both stage outcomes commit with their
+    receipts; incomplete pages return the existing outbox event to pending. Aggregate copied
+    evidence stays running after Chat completes because Memory, Agents, dashboard briefs, and
+    other copy owners remain unintegrated. Errors preserve deletion tombstones and expose
+    bounded retry status.
     """
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     settings = cast(Settings, ctx["settings"])
     identifier = UUID(event_id)
-    async with factory() as session:
-        event = await ingestion.get_event_delivery(session, identifier)
-        if event is None or event.status == "delivered":
-            return
-        try:
-            operation_id = UUID(str(event.payload["operation_id"]))
-        except (KeyError, TypeError, ValueError):
-            await ingestion.set_event_delivery(session, identifier, "failed")
-            await session.commit()
-            return
-        operation = await session.scalar(
-            select(DocumentCleanupOperation)
-            .where(DocumentCleanupOperation.id == operation_id)
-            .with_for_update()
-        )
-        if operation is None:
-            await ingestion.set_event_delivery(session, identifier, "failed")
-            await session.commit()
-            return
-        if operation.raw_status in {"not_present", "retained_shared", "succeeded"}:
-            operation.status = "succeeded"
-            operation.error_code = None
-            await ingestion.set_event_delivery(session, identifier, "delivered")
-            await session.commit()
-            return
-        raw_uri = operation.raw_uri
-        operation.status = "running"
-        await session.commit()
 
     try:
         async with factory() as session:
-            if raw_uri is not None:
-                await documents.lock_raw_uri_identity(session, raw_uri)
-            operation = await session.scalar(
-                select(DocumentCleanupOperation)
-                .where(DocumentCleanupOperation.id == operation_id)
-                .with_for_update()
-            )
+            event = await ingestion.get_event_delivery(session, identifier)
+            if event is None or event.status == "delivered":
+                return
+            try:
+                operation_id = UUID(str(event.payload["operation_id"]))
+            except (KeyError, TypeError, ValueError):
+                await ingestion.set_event_delivery(session, identifier, "failed")
+                await session.commit()
+                return
+
+            operation_hint = await session.scalar(select(DocumentCleanupOperation).where(
+                DocumentCleanupOperation.id == operation_id,
+            ))
+            if operation_hint is None:
+                await ingestion.set_event_delivery(session, identifier, "failed")
+                await session.commit()
+                return
+            if operation_hint.raw_uri and operation_hint.raw_status not in {
+                "not_present", "retained_shared", "succeeded",
+            }:
+                # Raw URI publication/deletion keeps the existing URI-before-receipt lock order.
+                await documents.lock_raw_uri_identity(session, operation_hint.raw_uri)
+            operation = await session.scalar(select(DocumentCleanupOperation).where(
+                DocumentCleanupOperation.id == operation_id,
+            ).with_for_update().execution_options(populate_existing=True))
             if operation is None:
                 await ingestion.set_event_delivery(session, identifier, "failed")
                 await session.commit()
                 return
-            if operation.raw_status in {"not_present", "retained_shared", "succeeded"}:
-                # A duplicate delivery that waited for the URI lock must not regress a
-                # cleanup another worker already completed.
-                operation.status = "succeeded"
-                operation.error_code = None
+
+            operation.status = "running"
+            operation.error_code = None
+            operation.copied_status = "running"
+            next_attempt_at: datetime | None = None
+            terminal_scope_failure = False
+
+            if operation.raw_status not in {"not_present", "retained_shared", "succeeded"}:
+                try:
+                    if operation.raw_uri is None:
+                        operation.raw_status = "not_present"
+                    elif await documents.raw_uri_is_referenced(session, operation.raw_uri):
+                        operation.raw_status = "retained_shared"
+                    else:
+                        # Resolve persisted URIs under data_dir immediately before the idempotent unlink.
+                        storage_path(settings.data_dir, operation.raw_uri).unlink(missing_ok=True)
+                        operation.raw_status = "succeeded"
+                except (OSError, ValueError):
+                    operation.raw_status = "failed"
+                    operation.error_code = "file_cleanup_failed"
+                    next_attempt_at = datetime.now(UTC) + _RETRY_DELAY
+
+            if operation.evidence_scope_status != "captured":
+                operation.chat_status = "failed"
+                operation.chat_error_code = "evidence_identity_unavailable"
+                operation.copied_status = "failed"
+                operation.copied_error_code = "evidence_identity_unavailable"
+                operation.error_code = "evidence_identity_unavailable"
+                terminal_scope_failure = True
+            elif operation.chat_status != "succeeded":
+                operation.chat_status = "running"
+                operation.chat_error_code = None
+                cursor_state = operation.copied_cursor or {}
+                if not isinstance(cursor_state, dict):
+                    cursor_state = {}
+                reference_after = UUID(str(cursor_state["reference_after"])) if cursor_state.get("reference_after") else None
+                chat_cursor = cursor_state.get("chat_cursor")
+                if chat_cursor is not None and not isinstance(chat_cursor, str):
+                    raise ValueError("Stored Chat cleanup cursor is malformed")
+                scope = await documents.list_document_cleanup_evidence_scope(
+                    session, operation.id, after=reference_after, limit=100,
+                )
+                if scope is None:
+                    raise ValueError("Document cleanup evidence scope is unavailable")
+                from modules.chat import public as chat
+
+                progress = await chat.purge_document_copied_evidence_page(
+                    session, scope, cursor=chat_cursor, limit=100,
+                )
+                if progress.complete:
+                    if scope.next_cursor is None:
+                        operation.chat_status = "succeeded"
+                        operation.chat_error_code = None
+                        operation.copied_cursor = None
+                    else:
+                        operation.copied_cursor = {
+                            "reference_after": str(scope.next_cursor),
+                            "chat_cursor": None,
+                        }
+                        next_attempt_at = datetime.now(UTC) + _CONTINUATION_DELAY
+                else:
+                    if progress.next_cursor is None:
+                        raise ValueError("Chat cleanup page is incomplete without a continuation cursor")
+                    operation.copied_cursor = {
+                        "reference_after": str(reference_after) if reference_after else None,
+                        "chat_cursor": progress.next_cursor,
+                    }
+                    next_attempt_at = datetime.now(UTC) + _CONTINUATION_DELAY
+
+            if operation.raw_status == "failed":
+                operation.error_code = operation.error_code or "file_cleanup_failed"
+                next_attempt_at = next_attempt_at or datetime.now(UTC) + _RETRY_DELAY
+            if operation.chat_status == "failed" and not terminal_scope_failure:
+                operation.copied_status = "failed"
+                operation.copied_error_code = operation.chat_error_code or "chat_cleanup_failed"
+                operation.error_code = operation.copied_error_code
+                next_attempt_at = next_attempt_at or datetime.now(UTC) + _RETRY_DELAY
+
+            if operation.raw_status == "failed" or operation.chat_status == "failed":
+                operation.status = "failed"
+            else:
+                # This task cleans Chat only; keep aggregate deletion visibly pending for other owners.
+                operation.status = "running"
+                operation.copied_status = "running"
+
+            if next_attempt_at is not None:
+                await ingestion.set_event_delivery(
+                    session, identifier, "pending", next_attempt_at=next_attempt_at,
+                )
+            else:
+                # The event is complete for Documents and Chat even while other copy owners remain pending.
                 await ingestion.set_event_delivery(session, identifier, "delivered")
+            await session.commit()
+    except ValueError:
+        # A malformed local continuation restarts idempotently from the first exact identity page.
+        async with factory() as session:
+            event = await ingestion.get_event_delivery(session, identifier)
+            if event is None or event.status == "delivered":
+                return
+            try:
+                operation_id = UUID(str(event.payload["operation_id"]))
+            except (KeyError, TypeError, ValueError):
+                await ingestion.set_event_delivery(session, identifier, "failed")
                 await session.commit()
                 return
-            if raw_uri is not None:
-                shared = await documents.raw_uri_is_referenced(session, raw_uri)
-                if shared:
-                    raw_status = "retained_shared"
-                else:
-                    # Resolve under data_dir at the last responsible boundary; persisted URIs
-                    # are still untrusted input when read back from durable state.
-                    storage_path(settings.data_dir, raw_uri).unlink(missing_ok=True)
-                    raw_status = "succeeded"
-            else:
-                raw_status = "not_present"
-            operation.raw_status = raw_status
-            operation.status = "succeeded"
-            operation.error_code = None
-            await ingestion.set_event_delivery(session, identifier, "delivered")
-            # Keep the identity lock until cleanup status and delivery commit atomically.
-            await session.commit()
-    except (OSError, ValueError):
-        async with factory() as session:
-            if raw_uri is not None:
-                await documents.lock_raw_uri_identity(session, raw_uri)
-            operation = await session.scalar(
-                select(DocumentCleanupOperation)
-                .where(DocumentCleanupOperation.id == operation_id)
-                .with_for_update()
+            operation = await session.scalar(select(DocumentCleanupOperation).where(
+                DocumentCleanupOperation.id == operation_id,
+            ).with_for_update().execution_options(populate_existing=True))
+            if operation is not None:
+                operation.copied_cursor = None
+                operation.chat_status = "failed"
+                operation.chat_error_code = "chat_cursor_reset"
+                operation.copied_status = "failed"
+                operation.copied_error_code = "chat_cursor_reset"
+                operation.status = "failed"
+                operation.error_code = "chat_cursor_reset"
+            await ingestion.set_event_delivery(
+                session, identifier, "pending", next_attempt_at=datetime.now(UTC) + _RETRY_DELAY,
             )
-            if operation is not None and operation.raw_status in {"not_present", "retained_shared", "succeeded"}:
-                # A concurrent delivery may have completed between the failed unlink
-                # transaction and this receipt update; preserve that terminal state.
-                operation.status = "succeeded"
-                operation.error_code = None
-                await ingestion.set_event_delivery(session, identifier, "delivered")
-            else:
-                if operation is not None:
-                    operation.raw_status = "failed"
-                    operation.status = "failed"
-                    operation.error_code = "file_cleanup_failed"
-                await ingestion.set_event_delivery(
-                    session,
-                    identifier,
-                    "pending",
-                    next_attempt_at=datetime.now(UTC) + timedelta(seconds=30),
-                )
             await session.commit()
-        raise
+    except Exception as exc:
+        logger.warning("Document copied-evidence cleanup deferred (%s)", type(exc).__name__)
+        async with factory() as session:
+            event = await ingestion.get_event_delivery(session, identifier)
+            if event is None or event.status == "delivered":
+                return
+            try:
+                operation_id = UUID(str(event.payload["operation_id"]))
+            except (KeyError, TypeError, ValueError):
+                await ingestion.set_event_delivery(session, identifier, "failed")
+                await session.commit()
+                return
+            operation = await session.scalar(select(DocumentCleanupOperation).where(
+                DocumentCleanupOperation.id == operation_id,
+            ).with_for_update().execution_options(populate_existing=True))
+            if operation is not None:
+                operation.chat_status = "failed"
+                operation.chat_error_code = "chat_cleanup_failed"
+                operation.copied_status = "failed"
+                operation.copied_error_code = "chat_cleanup_failed"
+                operation.status = "failed"
+                operation.error_code = "chat_cleanup_failed"
+            await ingestion.set_event_delivery(
+                session, identifier, "pending", next_attempt_at=datetime.now(UTC) + _RETRY_DELAY,
+            )
+            await session.commit()
