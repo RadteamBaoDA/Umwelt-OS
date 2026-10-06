@@ -14,10 +14,211 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modules.knowledge.observations.models import Observation
 from modules.knowledge.observations.schemas import (
     GeospatialObservationPage, GeospatialObservationRead, ObservationQuery, WorldMeasurement,
+    ObservationExportRead, ObservationExportFence, ObservationExportPage,
+    ObservationExportFenceValidation,
 )
+from core.auth.models import Owner
 from modules.connectors import public as connectors
 from modules.knowledge.documents import public as documents
 from modules.sources import public as sources
+from modules.sources.schemas import SourceExportFence
+
+
+OBSERVATION_EXPORT_PAGE_MAX_BYTES = 16_777_216
+
+
+def _observation_export_cursor(owner_id: int, snapshot_at: datetime, accepted_at: datetime, row_id: UUID) -> str:
+    """Encode the fixed owner, cutoff and accepted-time/ID keyset position."""
+    value = {"v": 1, "owner": owner_id, "kind": "observations", "snapshot": snapshot_at.astimezone(UTC).isoformat(),
+             "at": accepted_at.astimezone(UTC).isoformat(), "id": str(row_id)}
+    return base64.urlsafe_b64encode(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).decode().rstrip("=")
+
+
+def _decode_observation_export_cursor(cursor: str, owner_id: int) -> tuple[datetime, datetime, UUID]:
+    """Validate a canonical cutoff-bound cursor and reject cross-owner reuse."""
+    try:
+        if not cursor or len(cursor) > 1024 or "=" in cursor:
+            raise ValueError
+        value = json.loads(base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True))
+        if not isinstance(value, dict) or set(value) != {"v", "owner", "kind", "snapshot", "at", "id"}:
+            raise ValueError
+        if value["v"] != 1 or value["owner"] != owner_id or value["kind"] != "observations":
+            raise ValueError
+        snapshot, position = datetime.fromisoformat(value["snapshot"]), datetime.fromisoformat(value["at"])
+        if any(item.tzinfo is None or item.utcoffset() is None for item in (snapshot, position)):
+            raise ValueError
+        snapshot, position = snapshot.astimezone(UTC), position.astimezone(UTC)
+        row_id = UUID(value["id"])
+        if snapshot > datetime.now(UTC) or _observation_export_cursor(owner_id, snapshot, position, row_id) != cursor:
+            raise ValueError
+        return snapshot, position, row_id
+    except (ValueError, TypeError, KeyError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Invalid observation export cursor") from exc
+
+
+def _observation_export_digest(item: ObservationExportRead) -> str:
+    """Hash the exact allowlisted portable record rather than internal ORM state."""
+    return hashlib.sha256(json.dumps(item.model_dump(mode="json"), sort_keys=True,
+                                     separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+
+
+async def _observation_export_count(session: AsyncSession, snapshot_at: datetime) -> int:
+    """Count only rows whose current source scope and exact document version remain valid."""
+    # ponytail: exact public evidence filtering scans O(N) per page; replace with a Documents-owned
+    # SQL eligibility count only when capacity evidence shows this bounded-memory path is too slow.
+    base = select(Observation).where(
+        Observation.is_current.is_(True), Observation.accepted_at <= snapshot_at,
+        Observation.source_id.in_(sources.export_eligible_source_ids()),
+    )
+    count, position = 0, None
+    while True:
+        statement = base
+        if position is not None:
+            statement = statement.where(tuple_(Observation.accepted_at, Observation.id) > position)
+        rows = list((await session.scalars(statement.order_by(Observation.accepted_at, Observation.id)
+                                           .limit(256).execution_options(populate_existing=True))).all())
+        if not rows:
+            return count
+        scope_by_source = {}
+        candidates = []
+        for row in rows:
+            scope = scope_by_source.get(row.source_id)
+            if row.source_id not in scope_by_source:
+                source = await sources.get_connector_source(session, row.source_id)
+                scope = (await connectors.export_provider_scope(session, row.source_id, source.generation)
+                         if source is not None else None)
+                scope_by_source[row.source_id] = scope
+            if scope is not None and scope.provider_id == row.provider:
+                candidates.append((documents.ObservationExportEvidenceCandidate(
+                    observation_id=row.id, source_id=row.source_id, accepted_source_generation=row.source_generation,
+                    provider=row.provider, provider_scope_discriminator=row.provider_scope_discriminator,
+                    external_id=row.external_id, document_id=row.document_id, document_version_id=row.document_version_id,
+                ), scope))
+        for candidate, scope in candidates:
+            count += int(await documents.export_observation_evidence(session, candidate, scope) is not None)
+        position = (rows[-1].accepted_at, rows[-1].id)
+
+
+async def export_page(session: AsyncSession, *, owner_id: int, record_kind: str, limit: int = 50,
+                      cursor: str | None = None) -> ObservationExportPage:
+    """Export bounded current measurements; require current source scope and exact retained document evidence."""
+    if record_kind != "observations" or not 1 <= limit <= 100:
+        raise ValueError("Observation export kind or limit is invalid")
+    if owner_id != 1 or await session.scalar(select(Owner.id).where(Owner.id == owner_id)) is None:
+        raise PermissionError("Observation export requires the current owner")
+    if cursor is None:
+        snapshot, position = datetime.now(UTC), None
+    else:
+        snapshot, position_at, position_id = _decode_observation_export_cursor(cursor, owner_id)
+        position = (position_at, position_id)
+    count = await _observation_export_count(session, snapshot)
+    statement = select(Observation).where(
+        Observation.is_current.is_(True), Observation.accepted_at <= snapshot,
+        Observation.source_id.in_(sources.export_eligible_source_ids()),
+    )
+    if position is not None:
+        statement = statement.where(tuple_(Observation.accepted_at, Observation.id) > position)
+    rows = list((await session.scalars(statement.order_by(Observation.accepted_at, Observation.id)
+                                       .limit(limit + 1).execution_options(populate_existing=True))).all())
+    more = len(rows) > limit
+    items: list[ObservationExportRead] = []
+    fences: list[ObservationExportFence] = []
+    last_examined: tuple[datetime, UUID] | None = None
+    for row in rows[:limit]:
+        source = await sources.get_connector_source(session, row.source_id)
+        if source is None:
+            last_examined = (row.accepted_at, row.id)
+            continue
+        scope = await connectors.export_provider_scope(session, row.source_id, source.generation)
+        if scope is None or scope.provider_id != row.provider:
+            last_examined = (row.accepted_at, row.id)
+            continue
+        evidence = await documents.export_observation_evidence(session, documents.ObservationExportEvidenceCandidate(
+            observation_id=row.id, source_id=row.source_id, accepted_source_generation=row.source_generation,
+            provider=row.provider, provider_scope_discriminator=row.provider_scope_discriminator,
+            external_id=row.external_id, document_id=row.document_id, document_version_id=row.document_version_id,
+        ), scope)
+        if evidence is None:
+            last_examined = (row.accepted_at, row.id)
+            continue
+        item = ObservationExportRead(
+            id=row.id, source_id=row.source_id, source_generation=row.source_generation,
+            provider=row.provider, external_id=row.external_id, revision=row.revision, metric=row.metric,
+            symbol=row.symbol, region=row.region, latitude=row.latitude, longitude=row.longitude,
+            observed_at=row.observed_at, published_at=row.published_at, collected_at=row.collected_at,
+            accepted_at=row.accepted_at, value=row.value, unit=row.unit, currency=row.currency,
+            timezone=row.timezone, quality=row.quality, missing_reason=row.missing_reason,
+            document_id=row.document_id, document_version_id=row.document_version_id,
+        )
+        proposed = items + [item]
+        size = len(json.dumps([value.model_dump(mode="json") for value in proposed], ensure_ascii=False,
+                              separators=(",", ":")).encode())
+        if size > OBSERVATION_EXPORT_PAGE_MAX_BYTES:
+            if not items:
+                raise ValueError("An observation export record exceeds the page byte budget")
+            more = True
+            break
+        items.append(item)
+        last_examined = (row.accepted_at, row.id)
+        fences.append(ObservationExportFence(
+            id=row.id, source_id=row.source_id, accepted_source_generation=row.source_generation,
+            current_source_generation=evidence.current_source_generation,
+            provider_scope_digest=hashlib.sha256(scope.discriminator.encode()).hexdigest(),
+            record_digest=_observation_export_digest(item),
+        ))
+    next_cursor = (_observation_export_cursor(owner_id, snapshot, *last_examined)
+                   if more and last_examined is not None else None)
+    payload = len(json.dumps([item.model_dump(mode="json") for item in items], ensure_ascii=False,
+                             separators=(",", ":")).encode())
+    return ObservationExportPage(owner_id=owner_id, snapshot_at=snapshot, snapshot_count=count,
+                                 items=items, fences=fences, payload_bytes=payload, next_cursor=next_cursor)
+
+
+async def validate_export_fences(session: AsyncSession, *, owner_id: int, record_kind: str,
+                                 snapshot_at: datetime, expected_snapshot_count: int,
+                                 fences: list[ObservationExportFence]) -> ObservationExportFenceValidation:
+    """Recheck snapshot count, current provider scope, generation and exact exported fields."""
+    if record_kind != "observations" or len(fences) > 100 or expected_snapshot_count < 0:
+        raise ValueError("Observation export validation input is invalid")
+    if owner_id != 1 or await session.scalar(select(Owner.id).where(Owner.id == owner_id)) is None:
+        return ObservationExportFenceValidation(valid=False, reason="owner_unavailable", observed_snapshot_count=0)
+    observed = await _observation_export_count(session, snapshot_at)
+    if observed != expected_snapshot_count:
+        return ObservationExportFenceValidation(valid=False, reason="snapshot_count_changed", observed_snapshot_count=observed)
+    for fence in fences:
+        row = await session.scalar(select(Observation).where(Observation.id == fence.id).execution_options(populate_existing=True))
+        if (row is None or row.source_id != fence.source_id
+                or row.source_generation != fence.accepted_source_generation):
+            return ObservationExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
+        source = await sources.get_connector_source(session, row.source_id)
+        scope = (await connectors.export_provider_scope(session, row.source_id, source.generation)
+                 if source is not None else None)
+        if (source is None or source.generation != fence.current_source_generation or scope is None
+                or scope.provider_id != row.provider
+                or hashlib.sha256(scope.discriminator.encode()).hexdigest() != fence.provider_scope_digest):
+            return ObservationExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
+        item = ObservationExportRead(
+            id=row.id, source_id=row.source_id, source_generation=row.source_generation, provider=row.provider,
+            external_id=row.external_id, revision=row.revision, metric=row.metric, symbol=row.symbol, region=row.region,
+            latitude=row.latitude, longitude=row.longitude, observed_at=row.observed_at, published_at=row.published_at,
+            collected_at=row.collected_at, accepted_at=row.accepted_at, value=row.value, unit=row.unit,
+            currency=row.currency, timezone=row.timezone, quality=row.quality, missing_reason=row.missing_reason,
+            document_id=row.document_id, document_version_id=row.document_version_id,
+        )
+        evidence = await documents.export_observation_evidence(session, documents.ObservationExportEvidenceCandidate(
+            observation_id=row.id, source_id=row.source_id, accepted_source_generation=row.source_generation,
+            provider=row.provider, provider_scope_discriminator=row.provider_scope_discriminator,
+            external_id=row.external_id, document_id=row.document_id, document_version_id=row.document_version_id,
+        ), scope)
+        eligible = await sources.filter_export_eligible_sources(session, [SourceExportFence(
+            source_id=fence.source_id, generation=fence.current_source_generation,
+        )])
+        if (not row.is_current or row.accepted_at > snapshot_at or row.source_id not in eligible
+                or evidence is None or evidence.current_source_generation != fence.current_source_generation):
+            return ObservationExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
+        if _observation_export_digest(item) != fence.record_digest:
+            return ObservationExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
+    return ObservationExportFenceValidation(valid=True, reason="valid", observed_snapshot_count=observed)
 
 
 @dataclass(frozen=True)

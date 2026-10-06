@@ -1,3 +1,22 @@
+## Retained Timeline/Observations export integration — 2026-10-06
+
+Accepted `99c85802955b5e50d843ca44fc37d73b1f8e2ffc` based exactly on develop `94c7c1b`: prescribed build exit0/four images, clean source and independent Sol scoped re-review PASS. Both P1 findings closed: manual/derived schema matches storage; only expected unsupported-derived eligibility is omitted, overflow/DTO failures explicit. Integrating eight owner source/schema files with this checkpoint batch. Exact immutable accepted evidence and current Source-generation publication fences are distinct; retained paused/connector-only archived data remains exportable, pending data purge excluded. Fresh Source connector and Documents evidence reads preserve signatures/DTOs; Source read helper has 65 traced callers and no new row lock. Count streaming is O(N x pages); measured target capacity remains deferred.
+
+Chat/Memory deletion integrated94c7c1b. Backup/portable caller now can compose these accepted owners; full portable coverage still needs saved brief history/schedule and final owner-data audit. Demo seed/reset, worker expiry/full deletion/recovery and final release/OSS/branding/R16 remain open. No full P12 claim. No tests/runtime/SQL/migrations/push/deploy; build process-only password restoration receipt True.
+## Timeline/Observations export build and review gate — 2026-10-06
+
+Frozen `b0009d910a0b42aca5db2e8515fb7b8c844ac414` composed through develop `94c7c1b`: root prescribed build session90141 exit0/four images, clean tree. Process-only placeholder receipt verifies prior/restored password absent and restoration True. Earlier author Docker failure due missing password retained; no .env workaround.
+
+Independent Sol review reports REQUEST CHANGES: manual-event origin schema mismatches persisted manual value, causing swallowed validation and missing records; child-overflow ValueErrors are swallowed rather than explicitly rejected. Repair/rebuild/re-review pending; NOT integrated. Shared read freshness and retained accepted-vs-current generation seams are part of reviewed source, not runtime acceptance. Backup owner exports and demo/reset continue. No tests/runtime/SQL/migrations/push/deploy. Local status update only.
+## Parallel remaining production checkpoint — 2026-10-06
+
+Develop now `94c7c1b`: accepted conversation-deletion milestone integrated. Three Luna tasks remain active in reused isolated worktrees: backup/export composed `3f4c24e` with current develop (unbuilt/unreviewed); Timeline/Observations export repairing exact eligibility/count/cursor/support semantics; P12 demo/reset author on new branch in accepted onboarding checkout. Sol review capacity reserved as authors freeze.
+
+Ruling: retained paused/connector-only archived observations are owner historical data, not an active collection query. Recorded accepted generation/provenance must be proven by Documents owner; publication fence captures current retained Source generation separately. Provider configuration scope must come from Connector owner, never reconstructed from observation fields. Data-purge eligibility excludes. This requires narrow public export seams; operational APIs remain strict.
+
+Ruling: fictional project is a knowledge Entity, article is a Document. Minimal owner flush-only seed helpers may be added; coordinator owns transaction/receipt. Stable existing namespaces remain; disabled conversation retention is respected. Reset/seed commands are implemented only and never executed in production stage.
+
+No tests/runtime/migrations/push/deploy. Local checkpoint, next commit with accepted milestone.
 ## Chat/Memory conversation deletion integration — 2026-10-06
 
 Accepted standalone `4f6624a` composed with develop `de132d8` into `77aaad115e08cede45ffde047f6f3c846ed97698`. Exact prescribed composition build exit 0/four images and independent Sol source/composition review PASS; root verified three task-file blob equality and clean author tree. Integrating Chat-owned deletion/bounded bulk contract and Memory privacy-before-purge locking with this checkpoint batch. Existing route/service commits and Agent uncertainty tombstones preserved. Composition receipt records `Process password restored: False`; retained verbatim, restoration success is not asserted. No .env operations or runtime execution.

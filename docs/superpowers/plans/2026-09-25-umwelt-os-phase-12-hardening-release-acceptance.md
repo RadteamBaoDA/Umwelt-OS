@@ -12,7 +12,7 @@
 
 **Entry gate:** Functional acceptance from Phases 1–11; actual target hardware and permitted live integrations for final release gate.
 
-**Implementation status:** Not started. This file is an implementation plan, not evidence of working code.
+**Implementation status:** In progress. P12-T4 report preparation is code/build/review delivered at develop34eeecd; target measurements remain pending. P12-T3 onboarding API/UI milestone is integrated at de132d8, with seed/reset/mobile remainder open. P12-T1 backup/full export and P12-T2 deletion/recovery remain incomplete. Read EXECUTION.md for exact current evidence.
 
 Code stage: implement production code and run affected production builds only. Do not create or modify test files, or run tests, lint, standalone typecheck, audits, or non-build acceptance checks. Begin deferred behavioral acceptance only after all Phase 1-12 production code is complete.
 
@@ -109,7 +109,7 @@ Concrete contract/configuration shape (illustrative IDs/timestamps are test data
 **Interfaces — consumes/produces:** Report exact hardware/OS/architecture,all versions,enabled profiles,gateway location,model IDs,dataset/concurrency,peak memory,CPU,queue delay and latency distribution. No hardware capacity statement from the development host alone.
 
 
-- [ ] **P12-T4.3 — Implement the minimal production behavior.** Define the performance report and production configuration fields needed to record target-host measurements; change deployment limits only from measured results during the deferred acceptance stage.
+- [x] **P12-T4.3 — Implement the minimal production behavior.** Define the performance report and production configuration fields needed to record target-host measurements; change deployment limits only from measured results during the deferred acceptance stage.
 
 Concrete contract/configuration shape (illustrative IDs/timestamps are test data, not production defaults):
 
@@ -117,9 +117,11 @@ Concrete contract/configuration shape (illustrative IDs/timestamps are test data
 {"target_host_verified":false,"latency":{"provider_ms":null,"application_ms":null},"oom_events":null}
 ```
 
-- [ ] **P12-T4.4 - Build the affected deliverable.** Run `./scripts/dev.ps1 build` (or `make build`); fix production build failures before proceeding.
+- [x] **P12-T4.4 - Build the affected deliverable.** Run `./scripts/dev.ps1 build` (or `make build`); fix production build failures before proceeding.
 
-- [ ] **P12-T4.5 - Record build evidence and continue.** Record changed files, exact build command/result, review findings and unresolved gates in `EXECUTION.md`; then continue.
+- [x] **P12-T4.5 - Record build evidence and continue.** Record changed files, exact build command/result, review findings and unresolved gates in `EXECUTION.md`; then continue.
+
+P12-T4 evidence: report source8d8ced8; prescribed buildexit0/four images; independent document review PASS; source equality verified and integrated34eeecd. This closes report preparation only, not target-host capacity acceptance.
 
 ## Task P12-T5: Clean-install, upgrade and complete-product release gate
 

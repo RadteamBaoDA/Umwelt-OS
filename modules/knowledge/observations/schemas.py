@@ -1,6 +1,7 @@
 """Strict owner-facing observation and query DTOs."""
 
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
@@ -129,3 +130,74 @@ class ObservationPage(BaseModel):
     items: list[ObservationRead]
     next_cursor: str | None
     truncated: bool = False
+
+
+class ObservationExportRead(BaseModel):
+    """Expose allowlisted measurement facts and stable evidence identifiers."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    record_kind: Literal["observation"] = "observation"
+    id: UUID
+    source_id: UUID
+    source_generation: int = Field(ge=1)
+    provider: str = Field(min_length=1, max_length=64)
+    external_id: str = Field(min_length=1, max_length=512)
+    revision: int = Field(ge=1)
+    metric: str = Field(min_length=1, max_length=80)
+    symbol: str | None = None
+    region: str | None = None
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    observed_at: datetime
+    published_at: datetime | None = None
+    collected_at: datetime
+    accepted_at: datetime
+    value: float | None = None
+    unit: str = Field(min_length=1, max_length=64)
+    currency: str | None = None
+    timezone: str | None = None
+    quality: str = Field(min_length=1, max_length=32)
+    missing_reason: str | None = Field(default=None, max_length=64)
+    document_id: UUID
+    document_version_id: UUID
+
+    @field_validator("value")
+    @classmethod
+    def finite_export_value(cls, value: float | None) -> float | None:
+        """Reject corrupt non-finite persisted provider values from portable JSON."""
+        import math
+        if value is not None and not math.isfinite(value):
+            raise ValueError("Observation export values must be finite")
+        return value
+
+
+class ObservationExportFence(BaseModel):
+    """Bind an observation revision to its live source scope and exact record digest."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    id: UUID
+    source_id: UUID
+    accepted_source_generation: int = Field(ge=1)
+    current_source_generation: int = Field(ge=1)
+    provider_scope_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    record_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class ObservationExportPage(BaseModel):
+    """Return a bounded typed page and the fixed snapshot count for final validation."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    owner_id: int = Field(ge=1)
+    record_kind: Literal["observations"] = "observations"
+    snapshot_at: datetime
+    snapshot_count: int = Field(ge=0)
+    items: list[ObservationExportRead] = Field(max_length=100)
+    fences: list[ObservationExportFence] = Field(max_length=100)
+    payload_bytes: int = Field(ge=0, le=16_777_216)
+    max_payload_bytes: int = Field(default=16_777_216, ge=1, le=16_777_216)
+    next_cursor: str | None = None
+
+
+class ObservationExportFenceValidation(BaseModel):
+    """Report whether owner scope, count, source scope and records remain unchanged."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    valid: bool
+    reason: Literal["valid", "owner_unavailable", "snapshot_count_changed", "record_changed"]
+    observed_snapshot_count: int = Field(ge=0)

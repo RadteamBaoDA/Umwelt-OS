@@ -281,6 +281,49 @@ async def get_current_provider_scope(
     )
 
 
+async def export_provider_scope(
+    session: AsyncSession, source_id: UUID, expected_source_generation: int,
+) -> ProviderScopeSnapshot | None:
+    """Project retained non-secret provider scope for backup exports across inactive states.
+
+    This does not authorize collection or reuse historical observation fields: it validates the
+    current retained source generation/configuration and rejects pending data purge. A lifecycle
+    pause/archive alone does not erase portable owner evidence; changed or unsupported scope fails closed.
+    Credential bytes and provider configuration are never returned.
+    """
+    from modules.connectors.catalog import get_catalog_entry
+    from modules.sources import public as sources
+    from modules.sources.schemas import SourceExportFence
+
+    if not await sources.filter_export_eligible_sources(session, [SourceExportFence(
+        source_id=source_id, generation=expected_source_generation,
+    )]):
+        return None
+    source = await sources.get_connector_source(session, source_id)
+    if source is None or source.generation != expected_source_generation:
+        return None
+    provider_id = source.provider or {"rss": "rss", "web": "web", "api": "rest"}.get(source.type)
+    entry = get_catalog_entry(provider_id) if provider_id else None
+    if entry is None or entry.availability not in {"available", "implemented", "requires_credentials"}:
+        return None
+    try:
+        from modules.connectors.registry import configuration as provider_configuration
+
+        configuration = provider_configuration(source).model_dump(mode="json", exclude_none=True)
+    except Exception:
+        return None
+    if any(name not in configuration for name in entry.scope_fields):
+        return None
+    values = {name: configuration[name] for name in entry.scope_fields if name in configuration}
+    if len(values) != len(entry.scope_fields):
+        return None
+    encoded = json.dumps([provider_id, values], sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return ProviderScopeSnapshot(
+        source_id=source.id, source_generation=source.generation,
+        provider_id=provider_id, discriminator=hashlib.sha256(encoded.encode()).hexdigest(),
+    )
+
+
 @dataclass(frozen=True)
 class AgentBrowserScope:
     """Bind browser reads to current source and connector revisions and one exact HTTPS path."""
