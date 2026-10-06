@@ -171,6 +171,9 @@ class DocumentCleanupOperation(Base):
         CheckConstraint("copied_status IN ('queued', 'running', 'failed')", name="ck_document_cleanup_copied_status"),
         CheckConstraint("chat_status IN ('queued', 'running', 'succeeded', 'failed')", name="ck_document_cleanup_chat_status"),
         CheckConstraint("copied_cursor IS NULL OR octet_length(copied_cursor::text) <= 4096", name="ck_document_cleanup_copied_cursor_bound"),
+        CheckConstraint("memory_status IN ('queued', 'running', 'succeeded', 'failed')", name="ck_document_cleanup_memory_status"),
+        CheckConstraint("memory_cursor IS NULL OR octet_length(memory_cursor::text) <= 4096", name="ck_document_cleanup_memory_cursor_bound"),
+        CheckConstraint("memory_unresolved_count >= 0", name="ck_document_cleanup_memory_unresolved_nonnegative"),
         Index("ix_document_cleanup_status_created", "status", "created_at"),
         Index("ix_document_cleanup_source_purge_id", "source_purge_operation_id", "id"),
         Index(
@@ -195,9 +198,14 @@ class DocumentCleanupOperation(Base):
     copied_status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="queued")
     copied_cursor: Mapped[dict[str, object] | None] = mapped_column(JSONB)
     copied_error_code: Mapped[str | None] = mapped_column(String(64))
-    # Chat is the only copied-evidence owner implemented by this task.
+    # Each copied owner keeps an independent bounded continuation state.
     chat_status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="queued")
     chat_error_code: Mapped[str | None] = mapped_column(String(64))
+    memory_status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="queued")
+    memory_error_code: Mapped[str | None] = mapped_column(String(64))
+    memory_cursor: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    memory_unresolved_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    memory_cache_pending: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="queued")
     error_code: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
