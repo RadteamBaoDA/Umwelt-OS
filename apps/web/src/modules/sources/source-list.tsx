@@ -60,17 +60,22 @@ function scheduleLabel(minutes: number, t: ReturnType<typeof useTranslations<'so
   return t('scheduleUnknown');
 }
 
-/** Polls and renders progress for the supplied asynchronous source purge operation. */
+/** Polls and renders Source purge state plus the explicitly pending owner cleanup stages. */
 function PurgeProgress({ operationId }: { operationId: string }) {
   const t = useTranslations('sources');
   const operation = useQuery({
     queryKey: ['operation', operationId],
     queryFn: () => getOperation(operationId),
-    refetchInterval: (query) => ['succeeded', 'failed'].includes(query.state.data?.status ?? '') ? false : 1500,
+    refetchInterval: (query) => {
+      const current = query.state.data;
+      const permanentFailure = current?.documents_status === 'failed'
+        || current?.documents_status === 'unavailable';
+      return current?.status === 'succeeded' || permanentFailure ? false : 1500;
+    },
   });
   if (operation.isPending) return <p className="muted">{t('loading')}</p>;
   if (operation.isError) return <p className="error" role="alert">{t('actionFailed')}</p>;
-  return <p role="status">{operation.data.status}{operation.data.error_code ? ` · ${operation.data.error_code}` : ''}</p>;
+  return <p role="status">{operation.data.status}{operation.data.error_code ? ` · ${operation.data.error_code}` : ''}{operation.data.pending_owner_codes.length ? ` · pending: ${operation.data.pending_owner_codes.join(', ')}` : ''}</p>;
 }
 
 /** Renders a source’s schedule, status, and actions, including archive or purge confirmation. */

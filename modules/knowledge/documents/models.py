@@ -11,6 +11,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -159,7 +160,7 @@ class DocumentChunk(Base):
 
 
 class DocumentCleanupOperation(Base):
-    """Retain individual-document deletion stages and the raw URI needed for retry."""
+    """Retain individual or source-scoped document cleanup stages and detached identities."""
     __tablename__ = "document_cleanup_operations"
     __table_args__ = (
         CheckConstraint("status IN ('queued', 'running', 'succeeded', 'failed')", name="ck_document_cleanup_status"),
@@ -171,10 +172,18 @@ class DocumentCleanupOperation(Base):
         CheckConstraint("chat_status IN ('queued', 'running', 'succeeded', 'failed')", name="ck_document_cleanup_chat_status"),
         CheckConstraint("copied_cursor IS NULL OR octet_length(copied_cursor::text) <= 4096", name="ck_document_cleanup_copied_cursor_bound"),
         Index("ix_document_cleanup_status_created", "status", "created_at"),
+        Index("ix_document_cleanup_source_purge_id", "source_purge_operation_id", "id"),
+        Index(
+            "uq_document_cleanup_source_purge_document",
+            "source_purge_operation_id", "document_id", unique=True,
+            postgresql_where=text("source_purge_operation_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    # Documents keeps this owner-local linkage; no cross-owner foreign key is introduced.
+    source_purge_operation_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     # No FK: this receipt must outlive the hard-deleted document rows.
     document_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     raw_uri: Mapped[str | None] = mapped_column(Text)

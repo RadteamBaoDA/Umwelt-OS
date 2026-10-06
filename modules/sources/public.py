@@ -31,6 +31,7 @@ from modules.sources.schemas import (
     SourceMetadataExportFence,
     SourceMetadataExportPage,
     SourceMetadataExportValidation,
+    OperationRead,
     SourceRead,
 )
 
@@ -717,7 +718,12 @@ async def archive_source(
 async def start_source_purge(
     session: AsyncSession, source_id: UUID
 ) -> SourcePurgeOperation | None:
-    """Create or reuse purge work after fencing and disposing source-owned GitHub hints."""
+    """Queue source purge after generation, connector, and browser admission fences commit.
+
+    New operations carry no raw URI snapshot: Documents creates durable per-document cleanup
+    receipts under its publication identity locks before the canonical cascade. The legacy
+    JSON column remains readable only for explicit compatibility repair.
+    """
     source = await _lock_source_row(session, source_id)
     if source is None:
         return None
@@ -734,13 +740,13 @@ async def start_source_purge(
         source.generation += 1
         source.status = "archived"
         source.retired_at = datetime.now(UTC)
-    operation = SourcePurgeOperation(source_id=source_id, generation=source.generation, raw_uris=[])
+    operation = SourcePurgeOperation(
+        source_id=source_id, generation=source.generation, raw_uris=[],
+        pending_owner_codes=["documents"],
+    )
     session.add(operation)
     await session.flush()
     from modules.ingestion import public as ingestion
-    from modules.knowledge.documents import public as documents
-
-    operation.raw_uris = sorted(await documents.raw_uris(session, source_id))
     await _fence_connector_source(session, source)
     if source.provider == "github":
         await _reconcile_github_hint_lifecycle(session, source, active=False)
@@ -754,6 +760,34 @@ async def start_source_purge(
     await commit_with_replay(session, drafts)
     await session.refresh(operation)
     return operation
+
+
+async def read_source_purge_operation(
+    session: AsyncSession,
+    operation_id: UUID,
+) -> OperationRead | None:
+    """Return the allowlisted public progress projection for one Source purge receipt.
+
+    The exact Source-owned ID lookup exposes aggregate stage/count fields only; it never returns
+    legacy URI JSON, child receipt IDs, event payloads, or owner-private cleanup data.
+    """
+    operation = await session.scalar(select(SourcePurgeOperation).where(
+        SourcePurgeOperation.id == operation_id,
+    ))
+    if operation is None:
+        return None
+    return OperationRead(
+        operation_id=operation.id,
+        source_id=operation.source_id,
+        status=operation.status,
+        error_code=operation.error_code,
+        documents_status=operation.documents_status,
+        pending_child_count=operation.pending_child_count,
+        failed_child_count=operation.failed_child_count,
+        pending_owner_codes=list(operation.pending_owner_codes),
+        created_at=operation.created_at,
+        updated_at=operation.updated_at,
+    )
 
 
 async def _fence_connector_source(session: AsyncSession, source: Source) -> None:

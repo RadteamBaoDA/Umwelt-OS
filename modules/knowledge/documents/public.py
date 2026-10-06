@@ -7,12 +7,12 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
-from uuid import UUID
+from uuid import UUID, uuid5
 from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import HTTPException
 from pydantic import BaseModel
-from sqlalchemy import and_, delete, desc, func, insert, literal, select, text, tuple_, update
+from sqlalchemy import and_, case, delete, desc, func, insert, literal, or_, select, text, tuple_, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -81,6 +81,18 @@ class DocumentCleanupEvidenceScope:
     document_id: UUID
     references: tuple[DocumentCleanupEvidenceIdentity, ...]
     next_cursor: UUID | None
+
+
+@dataclass(frozen=True)
+class SourceCleanupProgress:
+    """Expose bounded Documents-owned aggregate counts without receipt identities."""
+
+    child_count: int
+    capture_complete: bool
+    pending_count: int
+    failed_count: int
+    all_required_complete: bool
+    pending_owner_codes: tuple[str, ...]
 
 
 def _encode_document_export_cursor(
@@ -1696,6 +1708,96 @@ async def list_document_cleanup_evidence_scope(
     )
 
 
+async def source_cleanup_progress(
+    session: AsyncSession,
+    source_purge_operation_id: UUID,
+    *,
+    capture_recorded: bool,
+) -> SourceCleanupProgress:
+    """Aggregate child stages in Documents and return counts, never a child-ID snapshot.
+
+    The Source owner supplies its durable capture receipt because only that owner can
+    distinguish a successfully empty Source from a legacy operation whose rows vanished.
+    This query is read-only and does not lock child receipts while Source is held.
+    """
+    failed = or_(
+        DocumentCleanupOperation.evidence_scope_status == "unavailable",
+        DocumentCleanupOperation.raw_status == "failed",
+        DocumentCleanupOperation.chat_status == "failed",
+        DocumentCleanupOperation.copied_status == "failed",
+    )
+    raw_pending = DocumentCleanupOperation.raw_status.not_in(
+        ("not_present", "retained_shared", "succeeded", "failed")
+    )
+    chat_pending = DocumentCleanupOperation.chat_status.not_in(("succeeded", "failed"))
+    copy_pending = DocumentCleanupOperation.copied_status != "succeeded"
+    pending = and_(~failed, or_(raw_pending, chat_pending, copy_pending))
+    row = (await session.execute(select(
+        func.count(DocumentCleanupOperation.id),
+        func.sum(case((pending, 1), else_=0)),
+        func.sum(case((failed, 1), else_=0)),
+        func.sum(case((and_(~failed, raw_pending), 1), else_=0)),
+        func.sum(case((and_(~failed, chat_pending), 1), else_=0)),
+    ).where(
+        DocumentCleanupOperation.source_purge_operation_id == source_purge_operation_id,
+    ))).one()
+    child_count, pending_count, failed_count, raw_waiting, chat_waiting = (
+        int(value or 0) for value in row
+    )
+    owners: list[str] = []
+    if not capture_recorded:
+        owners.append("documents")
+    if raw_waiting:
+        owners.append("raw")
+    if chat_waiting:
+        owners.append("chat")
+    if child_count:
+        # These owner contracts are deliberately pending until their own cleanup stages exist.
+        owners.extend(("memory", "agents", "dashboard", "notifications", "automations"))
+    all_required_complete = capture_recorded and child_count == 0
+    return SourceCleanupProgress(
+        child_count=child_count,
+        capture_complete=capture_recorded,
+        pending_count=pending_count,
+        failed_count=failed_count,
+        all_required_complete=all_required_complete,
+        pending_owner_codes=tuple(owners),
+    )
+
+
+async def publish_source_cleanup_wakeup(
+    session: AsyncSession,
+    operation: DocumentCleanupOperation,
+    *,
+    progress_key: str,
+) -> None:
+    """Publish an idempotent Source aggregate event for one durable child-stage transition.
+
+    The child receipt transaction owns this outbox change. The payload identifies only the
+    Source purge operation, so this path never locks or reads a Source row under a URI lock.
+    The caller supplies a bounded ASCII status/revision token with no content data while holding
+    the child receipt lock; deriving a distinct UUID deduplicates repeated transitions without
+    allowing an older observer to consume a newer wakeup.
+    """
+    if operation.source_purge_operation_id is None:
+        return
+    if not re.fullmatch(r"[a-z0-9:_;=-]{1,128}", progress_key):
+        raise ValueError("Source cleanup progress key must be a bounded lowercase status token")
+    event_id = uuid5(operation.id, f"source-purge-progress:{progress_key}")
+    from modules.ingestion import public as ingestion
+
+    prior = await ingestion.get_event_delivery(session, event_id)
+    if prior is None:
+        await ingestion.publish_event(session, DomainEvent(
+            id=event_id,
+            type="source.purge.progressed",
+            version=1,
+            occurred_at=datetime.now(UTC),
+            producer="modules.knowledge.documents",
+            payload={"operation_id": str(operation.source_purge_operation_id)},
+        ))
+
+
 async def create_document(session: AsyncSession, payload: DocumentCreate) -> Document:
     """Create a source-locked document and initial version, then publish its change."""
     await sources.lock_source_for_document(session, payload.source_id)
@@ -2399,13 +2501,116 @@ async def delete_document(session: AsyncSession, document_id: UUID) -> DocumentC
     return operation
 
 
-async def delete_source_documents(session: AsyncSession, source_id: UUID) -> list[ReplayDraft]:
-    """Delete source-owned data and return timeline invalidations without committing."""
+async def _capture_source_document_cleanup(
+    session: AsyncSession, source_id: UUID, source_purge_operation_id: UUID,
+) -> None:
+    """Create one durable cleanup receipt and exact evidence children for every source document.
+
+    The caller owns the Source lock, transaction, and already-locked Documents set. This helper
+    locks raw identities in exact URI order,
+    then uses owner-local INSERT SELECT statements so versions, chunks, and URIs are never
+    assembled into an unbounded Python snapshot. Child events commit with the canonical cascade.
+    """
+    # Materialize and order identities in PostgreSQL; the lock calls do not emit URI values to Python.
+    await session.execute(text(
+        "WITH identities AS MATERIALIZED ("
+        " SELECT DISTINCT raw_uri FROM documents"
+        " WHERE source_id = :source_id AND raw_uri IS NOT NULL AND raw_uri <> ''"
+        " ORDER BY raw_uri"
+        "), locks AS MATERIALIZED ("
+        " SELECT pg_advisory_xact_lock(hashtextextended('documents.raw:' || raw_uri, 0)) AS acquired"
+        " FROM identities ORDER BY raw_uri"
+        ") SELECT count(*) FROM locks"
+    ), {"source_id": source_id})
+
+    await session.execute(insert(DocumentCleanupOperation).from_select(
+        [
+            "id", "source_id", "document_id", "source_purge_operation_id", "raw_uri",
+            "record_status", "graph_status", "raw_status", "evidence_scope_status",
+            "copied_status", "chat_status", "status",
+        ],
+        select(
+            func.gen_random_uuid(), Document.source_id, Document.id,
+            literal(source_purge_operation_id), Document.raw_uri,
+            literal("deleted"), literal("tombstoned"),
+            case(((Document.raw_uri.is_not(None) & (Document.raw_uri != "")), "queued"), else_="not_present"),
+            literal("capturing"), literal("queued"), literal("queued"), literal("queued"),
+        ).where(Document.source_id == source_id),
+    ))
+
+    columns = ["id", "operation_id", "document_version_id", "chunk_id", "reference_kind"]
+    await session.execute(insert(DocumentCleanupEvidenceReference).from_select(
+        columns,
+        select(
+            func.gen_random_uuid(), DocumentCleanupOperation.id, DocumentVersion.id,
+            literal(None), literal("version"),
+        ).join(DocumentCleanupOperation, and_(
+            DocumentCleanupOperation.source_purge_operation_id == source_purge_operation_id,
+            DocumentCleanupOperation.document_id == DocumentVersion.document_id,
+        )),
+    ))
+    await session.execute(insert(DocumentCleanupEvidenceReference).from_select(
+        columns,
+        select(
+            func.gen_random_uuid(), DocumentCleanupOperation.id, DocumentChunk.document_version_id,
+            DocumentChunk.id, literal("chunk"),
+        ).join(DocumentVersion, DocumentVersion.id == DocumentChunk.document_version_id)
+        .join(DocumentCleanupOperation, and_(
+            DocumentCleanupOperation.source_purge_operation_id == source_purge_operation_id,
+            DocumentCleanupOperation.document_id == DocumentVersion.document_id,
+        )),
+    ))
+    await session.execute(update(DocumentCleanupOperation).where(
+        DocumentCleanupOperation.source_purge_operation_id == source_purge_operation_id,
+    ).values(evidence_scope_status="captured"))
+
+    # At most 10,000 receipts exist by the gate above; keyset them to bound event batches.
+    after: UUID | None = None
+    while True:
+        statement = select(DocumentCleanupOperation.id).where(
+            DocumentCleanupOperation.source_purge_operation_id == source_purge_operation_id,
+        )
+        if after is not None:
+            statement = statement.where(DocumentCleanupOperation.id > after)
+        receipt_ids = list((await session.scalars(
+            statement.order_by(DocumentCleanupOperation.id).limit(500)
+        )).all())
+        if not receipt_ids:
+            break
+        now = datetime.now(UTC)
+        from modules.ingestion import public as ingestion
+
+        for receipt_id in receipt_ids:
+            await ingestion.publish_event(session, DomainEvent(
+                id=uuid5(receipt_id, "document-cleanup-requested"),
+                type="document.cleanup.requested",
+                version=1,
+                occurred_at=now,
+                producer="modules.knowledge.documents",
+                payload={"operation_id": str(receipt_id)},
+            ))
+        after = receipt_ids[-1]
+
+
+async def delete_source_documents(
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    source_purge_operation_id: UUID,
+) -> list[ReplayDraft]:
+    """Capture exact cleanup children before deleting source-owned canonical data.
+
+    The caller holds the Source row and commits this unit of work. The Documents owner locks
+    at most 10,001 rows to enforce its existing 10,000-document atomic ceiling, serializes raw
+    URI tombstones with publication, and emits bounded child events in the same transaction;
+    no filesystem work or cross-owner row mutation occurs here.
+    """
     document_ids = list((await session.scalars(
         select(Document.id).where(Document.source_id == source_id).order_by(Document.id).limit(10_001).with_for_update()
     )).all())
     if len(document_ids) > 10_000:
         raise ValueError("Source graph cleanup exceeds its atomic document limit")
+    await _capture_source_document_cleanup(session, source_id, source_purge_operation_id)
     from modules.knowledge.observations import public as observations
     await observations.purge_source_in_uow(session, source_id)
     timeline_drafts = await _remove_graph_support(session, source_id=source_id)
