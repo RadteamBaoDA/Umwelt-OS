@@ -6,6 +6,7 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 from uuid import UUID
 from urllib.parse import urlsplit, urlunsplit
 
@@ -35,11 +36,16 @@ from modules.knowledge.documents.schemas import (
     DocumentExportProvenance, DocumentExportRead, DocumentVersionExportRead,
     ProviderDocumentSnapshotList,
     ProviderDocumentSnapshotRead, ProviderRecordMetadata, PROVIDER_IDS,
+    ObservationExportEvidenceCandidate, ObservationExportEvidenceRead,
+    TimelineExportEvidenceCandidate, TimelineExportEvidenceRead,
     TelegramDocumentOrder,
 )
 from modules.sources import public as sources
 from modules.sources.models import Source
 from modules.sources.schemas import SourceExportFence
+
+if TYPE_CHECKING:
+    from modules.connectors.public import ProviderScopeSnapshot
 
 
 async def observability_quality_summary(session: AsyncSession) -> dict[str, int]:
@@ -503,6 +509,104 @@ async def current_observation_evidence_versions(
         ):
             accepted[candidate.observation_id] = version_number
     return accepted
+
+
+async def export_observation_evidence(
+    session: AsyncSession, candidate: ObservationExportEvidenceCandidate,
+    current_scope: "ProviderScopeSnapshot",
+) -> ObservationExportEvidenceRead | None:
+    """Prove retained observation provenance without requiring its accepted source generation to be current.
+
+    Documents validates the exact current document revision, source identity, provider record identity,
+    accepted generation and non-secret scope digest. The separate current source generation is returned
+    for final backup fencing; paused or archived lifecycle changes do not rewrite historical acceptance.
+    Pending data purge and changed scope fail closed.
+    """
+    from modules.connectors.public import ProviderScopeSnapshot
+
+    if (not isinstance(current_scope, ProviderScopeSnapshot)
+            or current_scope.source_id != candidate.source_id
+            or current_scope.provider_id != candidate.provider
+            or current_scope.discriminator != candidate.provider_scope_discriminator):
+        return None
+    rows = (await session.execute(select(
+        Source.id.label("source_id"), Source.status.label("source_status"),
+        Source.generation.label("current_source_generation"), Document.id.label("document_id"),
+        Document.source_id.label("document_source_id"), Document.current_version.label("current_version"),
+        DocumentVersion.id.label("document_version_id"),
+        DocumentVersion.version_number.label("document_version_number"),
+        NormalizedVersionProvenance.source_generation.label("accepted_source_generation"),
+        NormalizedVersionProvenance.provider_id.label("provider_id"),
+        NormalizedVersionProvenance.provenance_json.label("provenance"),
+    ).join(Document, Document.source_id == Source.id)
+      .join(DocumentVersion, DocumentVersion.document_id == Document.id)
+      .join(NormalizedVersionProvenance, NormalizedVersionProvenance.document_version_id == DocumentVersion.id)
+      .where(
+          Source.id == candidate.source_id, Source.generation == current_scope.source_generation,
+          Source.status.in_(("active", "paused", "archived")), Source.id.in_(sources.export_eligible_source_ids()),
+          Document.id == candidate.document_id, DocumentVersion.id == candidate.document_version_id,
+          Document.current_version == DocumentVersion.version_number,
+          NormalizedVersionProvenance.source_generation == candidate.accepted_source_generation,
+          NormalizedVersionProvenance.provider_id == candidate.external_id,
+          NormalizedVersionProvenance.provenance_json["provider_scope_discriminator"].astext
+          == current_scope.discriminator,
+      ).limit(2))).all()
+    matches = [row for row in rows if isinstance(row.provenance, dict)
+               and row.provenance.get("provider_scope_discriminator") == current_scope.discriminator]
+    if len(matches) != 1:
+        return None
+    row = matches[0]
+    return ObservationExportEvidenceRead(
+        observation_id=candidate.observation_id, source_id=row.source_id,
+        current_source_generation=row.current_source_generation,
+        accepted_source_generation=row.accepted_source_generation,
+        document_id=row.document_id, document_version_id=row.document_version_id,
+        document_version_number=row.document_version_number, provider=current_scope.provider_id,
+        provider_scope_discriminator=current_scope.discriminator,
+    )
+
+
+async def export_timeline_evidence(
+    session: AsyncSession, candidate: TimelineExportEvidenceCandidate,
+) -> TimelineExportEvidenceRead | None:
+    """Prove a retained exact chunk and accepted generation, while separately fencing its current source.
+
+    Timeline facts may retain support from an earlier source generation after a source is paused or
+    archived. The source owner's purge eligibility and fresh scalar projection keep the evidence usable
+    only while its exact source/document/version/chunk and accepted provenance remain retained.
+    """
+    count = func.count(NormalizedVersionProvenance.id)
+    minimum_generation = func.min(NormalizedVersionProvenance.source_generation)
+    maximum_generation = func.max(NormalizedVersionProvenance.source_generation)
+    row = (await session.execute(select(
+        Source.id.label("source_id"), Source.status.label("source_status"),
+        Source.generation.label("current_source_generation"), Document.id.label("document_id"),
+        DocumentVersion.id.label("document_version_id"), DocumentChunk.id.label("chunk_id"),
+        count.label("provenance_count"), minimum_generation.label("minimum_accepted_generation"),
+        maximum_generation.label("maximum_accepted_generation"),
+    ).join(Document, Document.source_id == Source.id)
+      .join(DocumentVersion, DocumentVersion.document_id == Document.id)
+      .join(DocumentChunk, DocumentChunk.document_version_id == DocumentVersion.id)
+      .join(NormalizedVersionProvenance, NormalizedVersionProvenance.document_version_id == DocumentVersion.id)
+      .where(
+          Source.id == candidate.source_id,
+          Source.status.in_(("active", "paused", "archived")),
+          Source.id.in_(sources.export_eligible_source_ids()),
+          Document.id == candidate.document_id,
+          DocumentVersion.id == candidate.document_version_id,
+          DocumentChunk.id == candidate.chunk_id,
+      ).group_by(Source.id, Source.status, Source.generation, Document.id, DocumentVersion.id, DocumentChunk.id)
+      .limit(1))).one_or_none()
+    if (row is None or row.source_id != candidate.source_id or row.provenance_count < 1
+            or row.minimum_accepted_generation != candidate.accepted_source_generation
+            or row.maximum_accepted_generation != candidate.accepted_source_generation):
+        return None
+    return TimelineExportEvidenceRead(
+        evidence_id=candidate.evidence_id, source_id=row.source_id,
+        accepted_source_generation=candidate.accepted_source_generation,
+        current_source_generation=row.current_source_generation,
+        document_id=row.document_id, document_version_id=row.document_version_id, chunk_id=row.chunk_id,
+    )
 
 
 def _provider_snapshot(
@@ -2598,7 +2702,11 @@ async def lock_document_ids(session: AsyncSession, document_ids: list[UUID]) -> 
 async def _read_evidence_ref_rows(
     session: AsyncSession, refs: list[tuple[UUID, UUID]]
 ) -> list[EvidenceReferenceRead]:
-    """Build ordered evidence DTOs with version provenance and exact reference validation."""
+    """Build fresh ordered evidence DTOs with version provenance and exact reference validation.
+
+    populate_existing prevents a caller's stale identity-map objects from authorizing a deleted,
+    replaced, or edited source citation during backup finalization or other evidence-bound reads.
+    """
     rows = (await session.execute(
         select(Document, DocumentVersion, DocumentChunk, Source.id)
         .join(DocumentVersion, DocumentVersion.document_id == Document.id)
@@ -2612,7 +2720,7 @@ async def _read_evidence_ref_rows(
             NormalizedVersionProvenance.document_version_id.in_(
                 {version.id for _, version, _, _ in rows}
             )
-        )
+        ).execution_options(populate_existing=True)
     )).all() if rows else []
     provenance_by_version = {item.document_version_id: item for item in provenance_rows}
     by_ref = {

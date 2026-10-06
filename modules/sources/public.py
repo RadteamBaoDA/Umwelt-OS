@@ -342,8 +342,13 @@ def _connector_source(source: Source) -> ConnectorSource:
 
 
 async def get_connector_source(session: AsyncSession, source_id: UUID) -> ConnectorSource | None:
-    """Read and project a source for connector consumers."""
-    source = await session.get(Source, source_id)
+    """Read fresh retained source configuration and project it for connector consumers.
+
+    populate_existing keeps generation, status and provider scope checks current even when the
+    caller's identity map already holds this source; this remains a read with no row lock.
+    """
+    source = await session.scalar(select(Source).where(Source.id == source_id)
+                                  .execution_options(populate_existing=True))
     return _connector_source(source) if source is not None else None
 
 

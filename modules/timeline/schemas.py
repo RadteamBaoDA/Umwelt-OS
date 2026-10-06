@@ -26,6 +26,87 @@ def _clean(value: str | None) -> str | None:
     return " ".join(value.split()) if value is not None else None
 
 
+class TimelineExportParticipant(BaseModel):
+    """Serialize a stable participant identity and role without arbitrary metadata."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    entity_id: UUID
+    role: str = Field(min_length=1, max_length=64)
+    origin: Literal["manual", "derived"]
+
+
+class TimelineExportEvidence(BaseModel):
+    """Bind one exported event support to an exact retained source generation and chunk."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    source_id: UUID
+    source_generation: int = Field(ge=1)
+    document_id: UUID
+    document_version_id: UUID
+    chunk_id: UUID
+
+
+class TimelineExportRead(BaseModel):
+    """Expose portable canonical event facts and only eligible stable references."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    record_kind: Literal["event"] = "event"
+    id: UUID
+    type: str = Field(min_length=1, max_length=64)
+    subtype: str | None = None
+    title: str = Field(min_length=1, max_length=300)
+    summary: str | None = Field(default=None, max_length=20_000)
+    importance_score: float | None = Field(default=None, ge=0, le=1)
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    origin: Literal["manual", "derived"]
+    date_precision: Literal["timed", "date", "unknown"]
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    occurred_date: date | None = None
+    end_date: date | None = None
+    occurrence_timezone: str | None = None
+    observed_at: datetime
+    valid_from: datetime | None = None
+    valid_to: datetime | None = None
+    revision: int = Field(ge=1)
+    created_at: datetime
+    updated_at: datetime
+    participants: list[TimelineExportParticipant] = Field(max_length=100)
+    evidence: list[TimelineExportEvidence] = Field(max_length=100)
+
+
+class TimelineExportFence(BaseModel):
+    """Bind the current event revision, children and source generations for finalization."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    id: UUID
+    created_at: datetime
+    updated_at: datetime
+    revision: int = Field(ge=1)
+    record_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    evidence_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    participant_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_fences: list[tuple[UUID, int]] = Field(max_length=100)
+
+
+class TimelineExportPage(BaseModel):
+    """Return an immutable bounded event page and its snapshot fences."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    owner_id: int = Field(ge=1)
+    record_kind: Literal["events"]
+    snapshot_at: datetime
+    snapshot_count: int = Field(ge=0)
+    items: list[TimelineExportRead] = Field(max_length=100)
+    fences: list[TimelineExportFence] = Field(max_length=100)
+    payload_bytes: int = Field(ge=0, le=16_777_216)
+    max_payload_bytes: int = Field(default=16_777_216, ge=1, le=16_777_216)
+    next_cursor: str | None = None
+
+
+class TimelineExportFenceValidation(BaseModel):
+    """Report whether the event snapshot and captured parent/child fences remain current."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    valid: bool
+    reason: Literal["valid", "owner_unavailable", "snapshot_count_changed", "record_changed"]
+    observed_snapshot_count: int = Field(ge=0)
+
+
 class ParticipantInput(BaseModel):
     """Validate one canonical participant and its role metadata."""
     model_config = ConfigDict(extra="forbid")

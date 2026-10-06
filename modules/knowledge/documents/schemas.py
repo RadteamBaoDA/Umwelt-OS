@@ -332,6 +332,56 @@ class ProviderDocumentSnapshotRead(BaseModel):
     metadata_is_version_snapshot: bool
 
 
+class ObservationExportEvidenceCandidate(BaseModel):
+    """Identify a retained observation's accepted document and provider provenance."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    observation_id: UUID
+    source_id: UUID
+    accepted_source_generation: int = Field(ge=1)
+    provider: str = Field(min_length=1, max_length=64)
+    provider_scope_discriminator: str = Field(pattern=r"^[0-9a-f]{64}$")
+    external_id: str = Field(min_length=1, max_length=512)
+    document_id: UUID
+    document_version_id: UUID
+
+
+class ObservationExportEvidenceRead(BaseModel):
+    """Confirm exact retained document evidence and captured current source generation."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    observation_id: UUID
+    source_id: UUID
+    current_source_generation: int = Field(ge=1)
+    accepted_source_generation: int = Field(ge=1)
+    document_id: UUID
+    document_version_id: UUID
+    document_version_number: int = Field(ge=1)
+    provider: str = Field(min_length=1, max_length=64)
+    provider_scope_discriminator: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class TimelineExportEvidenceCandidate(BaseModel):
+    """Identify one exact event evidence reference and its accepted source generation."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    evidence_id: UUID
+    source_id: UUID
+    accepted_source_generation: int = Field(ge=1)
+    document_id: UUID
+    document_version_id: UUID
+    chunk_id: UUID
+
+
+class TimelineExportEvidenceRead(BaseModel):
+    """Confirm retained exact event evidence and separate accepted/current source generations."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    evidence_id: UUID
+    source_id: UUID
+    accepted_source_generation: int = Field(ge=1)
+    current_source_generation: int = Field(ge=1)
+    document_id: UUID
+    document_version_id: UUID
+    chunk_id: UUID
+
+
 class ProviderDocumentSnapshotList(BaseModel):
     """Return a bounded current-version owner snapshot page."""
     model_config = ConfigDict(extra="forbid")
