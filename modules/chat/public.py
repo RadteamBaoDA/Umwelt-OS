@@ -82,6 +82,7 @@ __all__ = [
     "list_agent_run_ids_for_owner",
     "has_live_agent_run_link", "live_agent_conversation_id", "list_agent_run_ids_for_delete",
     "filter_live_agent_run_ids", "authorize_agent_run_access",
+    "delete_conversation", "purge_unpinned_conversations",
     "AnswerContext",
     "AnswerContextRequest",
     "CancelResponse",
@@ -129,6 +130,58 @@ __all__ = [
     "validate_citations",
     "validate_export_fences",
 ]
+
+
+async def delete_conversation(
+    session: AsyncSession, conversation_id: UUID, owner_id: int, *, skip_pinned: bool = False,
+) -> bool:
+    """Delete one conversation inside the caller's transaction.
+
+    Lock order is Memory privacy fence, Chat conversation parent, then Agent run/action rows.
+    Owner and any requested pin filter are checked after the parent lock is acquired. This function
+    never commits; the route or owning service commits after its unit of work.
+    """
+    from modules.memory.public import lock_export_privacy
+
+    await lock_export_privacy(session)
+    conversation = await session.scalar(
+        _select(Conversation)
+        .where(Conversation.id == conversation_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if conversation is None:
+        return False
+    owner = await session.scalar(_select(_Owner.id).where(_Owner.id == owner_id))
+    if owner is None or (skip_pinned and conversation.pinned):
+        return False
+
+    from modules.agents.public import purge_conversation_actions
+
+    await purge_conversation_actions(session, conversation_id, owner_id)
+    await session.delete(conversation)
+    return True
+
+
+async def purge_unpinned_conversations(session: AsyncSession, owner_id: int) -> int:
+    """Delete unpinned Chat history in bounded UUID keyset pages, without committing."""
+    deleted = 0
+    cursor: UUID | None = None
+    while True:
+        stmt = _select(Conversation.id).where(Conversation.pinned.is_(False))
+        if cursor is not None:
+            stmt = stmt.where(Conversation.id > cursor)
+        conversation_ids = list((await session.scalars(
+            stmt.order_by(Conversation.id).limit(100)
+        )).all())
+        if not conversation_ids:
+            return deleted
+        for conversation_id in conversation_ids:
+            if await delete_conversation(
+                session, conversation_id, owner_id, skip_pinned=True,
+            ):
+                deleted += 1
+        cursor = conversation_ids[-1]
 
 
 async def resolve_gadget_context(session: AsyncSession, context: dict | None) -> dict:
