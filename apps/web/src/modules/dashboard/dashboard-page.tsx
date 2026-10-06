@@ -99,6 +99,65 @@ function findFreeCoordinates(
 }
 
 /**
+ * Projects only contract-invalid mobile rectangles into a deterministic, non-overlapping stack.
+ * Valid user-authored widths and positions remain unchanged; callers keep repairs local until an
+ * explicit Save submits the layout.
+ *
+ * @param placements Saved or draft mobile rectangles.
+ * @param instances Dashboard instances used to retain renderer minimum heights.
+ * @param columns Stored mobile column count.
+ * @returns Full-width integer placements without overlap.
+ */
+function projectMobilePlacements(
+  placements: DashboardPlacement[],
+  instances: GadgetInstance[],
+  columns: number,
+): DashboardPlacement[] {
+  const minimumHeights = new Map(instances.map((instance) => [
+    instance.id,
+    RENDERER_MIN_SIZES[instance.definition.renderer]?.minH ?? 3,
+  ]));
+  const minimumWidths = new Map(instances.map((instance) => [
+    instance.id,
+    RENDERER_MIN_SIZES[instance.definition.renderer]?.minW ?? 4,
+  ]));
+  const hasOverlap = placements.some((placement, index) =>
+    placements.slice(index + 1).some((other) => doPlacementsOverlap(placement, other)),
+  );
+  const withinContract = Number.isInteger(columns) && columns >= 1 && columns <= 20
+    && placements.every((placement) => {
+      const minimumHeight = minimumHeights.get(placement.instance_id) ?? 3;
+      const minimumWidth = minimumWidths.get(placement.instance_id) ?? 4;
+      return Number.isInteger(placement.x)
+        && Number.isInteger(placement.y)
+        && Number.isInteger(placement.w)
+        && Number.isInteger(placement.h)
+        && placement.x >= 0
+        && placement.y >= 0
+        && placement.x + placement.w <= columns
+        && placement.y + placement.h <= 100_000
+        && placement.w >= minimumWidth
+        && placement.w <= 20
+        && placement.h >= minimumHeight
+        && placement.h <= 100_000;
+    });
+  if (withinContract && !hasOverlap) {
+    return placements;
+  }
+
+  const ordered = [...placements].sort((a, b) =>
+    a.y - b.y || a.x - b.x || (a.instance_id < b.instance_id ? -1 : a.instance_id > b.instance_id ? 1 : 0),
+  );
+  let nextY = 0;
+  return ordered.map((placement) => {
+    const h = Math.max(placement.h, minimumHeights.get(placement.instance_id) ?? 3);
+    const y = Math.max(placement.y, nextY);
+    nextY = y + h;
+    return { ...placement, x: 0, y, w: columns, h };
+  });
+}
+
+/**
  * Main dashboard container view for BBD-OS.
  * Supports viewing and editing modes, dashboard switching, group tab filtering,
  * preset picker triggering, reading stability queuing, and dirty navigation guarding.
@@ -177,9 +236,14 @@ export function DashboardPage() {
 
   const activeDashboard = activeDashboardQuery.data ?? null;
   const currentBreakpoint = isMobile ? 'mobile' : 'desktop';
+  const layoutColumns = activeDashboard?.layouts[currentBreakpoint].columns ?? 20;
   const savedPlacements = useMemo(() => {
     if (!activeDashboard) return [];
-    return activeDashboard.layouts[currentBreakpoint]?.items ?? [];
+    const layout = activeDashboard.layouts[currentBreakpoint];
+    const placements = layout?.items ?? [];
+    return currentBreakpoint === 'mobile'
+      ? projectMobilePlacements(placements, activeDashboard.instances, layout?.columns ?? 20)
+      : placements;
   }, [activeDashboard, currentBreakpoint]);
 
   // Sync draft placements from saved placements when not dirty
@@ -247,7 +311,7 @@ export function DashboardPage() {
         {
           expected_revision: activeDashboard.revision,
           breakpoint: currentBreakpoint,
-          columns: isMobile ? 1 : 20,
+          columns: layoutColumns,
           items: draftPlacements,
         },
         session.csrfToken,
@@ -411,7 +475,7 @@ export function DashboardPage() {
     },
   });
 
-  // Add Gadget Instance
+  /** Adds the new instance to the active breakpoint draft using its effective minimum width. */
   const handleAddGadgetInstance = useCallback(
     async (params: { definitionId: string; groupId: string; title?: string }) => {
       if (!activeDashboard) return;
@@ -437,13 +501,15 @@ export function DashboardPage() {
         if (newInstance) {
           const rendererKey = newInstance.definition.renderer;
           const minSize = RENDERER_MIN_SIZES[rendererKey] ?? { minW: 4, minH: 3 };
-          const coords = findFreeCoordinates(draftPlacements, minSize.minW, minSize.minH, 20);
+          const columns = layoutColumns;
+          const width = isMobile ? columns : Math.min(minSize.minW, columns);
+          const coords = findFreeCoordinates(draftPlacements, width, minSize.minH, columns);
 
           const newPlacement: DashboardPlacement = {
             instance_id: newInstance.id,
             x: coords.x,
             y: coords.y,
-            w: minSize.minW,
+            w: width,
             h: minSize.minH,
           };
 
@@ -453,7 +519,7 @@ export function DashboardPage() {
         setSaveError(err instanceof Error ? err.message : t('saveFailed'));
       }
     },
-    [activeDashboard, draftPlacements, pushHistory, queryClient, session.csrfToken, t],
+    [activeDashboard, draftPlacements, isMobile, layoutColumns, pushHistory, queryClient, session.csrfToken, t],
   );
 
   // Remove Gadget Instance
@@ -717,7 +783,8 @@ export function DashboardPage() {
         <DashboardGrid
           instances={visibleInstances}
           placements={visiblePlacements}
-          columns={isMobile ? 1 : 20}
+          columns={layoutColumns}
+          breakpoint={currentBreakpoint}
           isEditMode={isEditMode}
           onLayoutChange={pushHistory}
           onRemoveInstance={handleRemoveInstance}
