@@ -226,6 +226,7 @@ async def _build_export_response(
             "Raw files, graph state, workflow secrets, runtime credentials, and deployment identity are not included in portable exports.",
             "Connector source configuration is omitted because provider-specific secret-free fields are not yet allowlisted.",
             "Deleted News topics and dashboard configurations without a retained cutoff-compatible gadget definition are omitted.",
+            "Saved gadget definitions that are not placed in an exported dashboard are omitted from this portable projection.",
             "Generated daily brief history and its schedule are not part of the portable Dashboard export.",
             "Conversation and message history is omitted when the owner privacy setting disables retention.",
             "This export is a portable owner-data projection, not a restorable instance backup.",

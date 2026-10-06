@@ -387,8 +387,8 @@ class DashboardExportPage(StrictConfiguration):
     record_kind: Literal["dashboards"]
     snapshot_at: datetime
     snapshot_count: int = Field(ge=0)
-    items: list[DashboardDetail] = Field(max_length=50)
-    fences: list[DashboardExportFence] = Field(max_length=50)
+    items: list[DashboardDetail] = Field(max_length=100)
+    fences: list[DashboardExportFence] = Field(max_length=100)
     payload_bytes: int = Field(ge=0, le=16_777_216)
     max_payload_bytes: int = Field(default=16_777_216, ge=1, le=16_777_216)
     next_cursor: str | None = None

@@ -523,7 +523,7 @@ async def validate_export_fences(
     expected_snapshot_count: int, fences: list[DashboardExportFence],
 ) -> DashboardExportValidation:
     """Re-read full configuration DTO digests and parent/child fences before publication."""
-    if owner_id != 1 or record_kind != "dashboards" or len(fences) > 50:
+    if owner_id != 1 or record_kind != "dashboards" or len(fences) > 100:
         raise ValueError("Dashboard export validation input is invalid")
     observed = int(await session.scalar(
         select(func.count()).select_from(Dashboard).where(*_dashboard_export_scope(owner_id, snapshot_at))

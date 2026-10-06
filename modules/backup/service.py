@@ -8,6 +8,7 @@ import tarfile
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO
+from uuid import UUID
 
 from pydantic import ValidationError
 
@@ -24,6 +25,11 @@ class BackupArchiveError(ValueError):
 
 
 def _digest_file(path: Path) -> tuple[int, str]:
+    """Return byte count and SHA-256 for a regular file, reading it in bounded chunks.
+
+    The caller supplies a local file path. Open/read errors propagate to the caller so an
+    incomplete digest can never be mistaken for a successful checksum.
+    """
     digest = hashlib.sha256()
     size = 0
     with path.open("rb") as source:
@@ -34,6 +40,11 @@ def _digest_file(path: Path) -> tuple[int, str]:
 
 
 def _safe_relative(value: str) -> PurePosixPath:
+    """Normalize a POSIX archive member name and reject absolute, empty, or traversing paths.
+
+    A trailing directory slash is removed. Backslashes and empty, dot, or parent path
+    segments raise ``BackupArchiveError``; only a nonempty archive-relative path is returned.
+    """
     normalized = value.rstrip("/")
     path = PurePosixPath(normalized)
     parts = normalized.split("/")
@@ -49,6 +60,7 @@ def build_manifest(
     components: dict[str, tuple[str, str]],
     required_key_references: dict[str, str],
     consistency_method: str,
+    operation_id: UUID | None = None,
 ) -> BackupManifest:
     """Hash staged component files and return a credential-free versioned manifest."""
     snapshot_root = snapshot_root.resolve(strict=True)
@@ -96,6 +108,7 @@ def build_manifest(
         created_at=datetime.now(UTC),
         consistency="quiesced",
         consistency_method=consistency_method,
+        operation_id=operation_id,
         components=tuple(component_records),
         required_key_references=key_references,
     )

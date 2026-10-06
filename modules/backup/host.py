@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from typing import BinaryIO, Any
 from urllib.parse import quote
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 from dotenv import dotenv_values
@@ -23,7 +23,7 @@ from sqlalchemy.engine import make_url
 
 from core.config import Settings
 from modules.backup.manifest import BackupManifest
-from modules.backup.service import build_manifest, extract_snapshot_tar, write_snapshot_tar
+from modules.backup.service import _digest_file, build_manifest, extract_snapshot_tar, write_snapshot_tar
 
 
 class BackupHostError(RuntimeError):
@@ -697,11 +697,61 @@ def cleanup_isolated_restore(
 
 def _record_ready_services(compose: Compose, operation_id: str, expected: str,
                            required: set[str]) -> None:
-    """Persist a small readiness receipt after Compose confirms every required service."""
+    """Probe applicable service readiness before persisting the recovered component receipt."""
     _verify_services_running(compose, required)
+    if "api" in required:
+        _wait_for_api_ready(compose)
+    if "worker" in required:
+        _wait_for_worker_ready(compose)
+    if "graph" in required:
+        _verify_graph_volume(compose)
     _record_receipt(compose, operation_id, expected, "core_services", {
         "status": "complete", "components": {name: "complete" for name in sorted(required)},
     })
+
+
+def _verify_n8n_readiness(
+    gate: N8nScheduleGate, workflow_states: list[dict[str, object]],
+) -> None:
+    """Require a live authenticated workflow inventory matching the saved paused state."""
+    current = gate._workflows()
+    expected_ids = {str(item["workflow_id"]) for item in workflow_states}
+    if ({str(item["id"]) for item in current} != expected_ids
+            or any(item["active"] for item in current)):
+        raise BackupHostError("n8n workflow inventory did not recover under its paused schedule")
+
+
+def _verify_archive_receipt(
+    archive_path: Path | None, archive_receipt: object, operation_id: str,
+    age: str, identity: Path, recipient: str,
+) -> bool:
+    """Prove an optional recovery archive matches its durable bytes, manifest, and operation receipt."""
+    if not isinstance(archive_receipt, dict) or archive_path is None:
+        return False
+    if (archive_receipt.get("status") != "complete"
+            or archive_receipt.get("archive_name") != archive_path.name
+            or archive_receipt.get("operation_id") != operation_id):
+        return False
+    try:
+        archive_path = archive_path.expanduser()
+        if archive_path.is_symlink() or not archive_path.is_file():
+            return False
+        size, digest = _digest_file(archive_path)
+        if size != archive_receipt.get("bytes") or digest != archive_receipt.get("sha256"):
+            return False
+        with tempfile.TemporaryDirectory(prefix="bbd-os-recovery-verify-") as temporary:
+            stage = Path(temporary) / "snapshot"
+            manifest = _decrypt_snapshot(age, identity, archive_path, stage)
+            manifest_digest = hashlib.sha256(
+                manifest.model_dump_json(indent=2).encode("utf-8")
+            ).hexdigest()
+            if (manifest.operation_id != UUID(operation_id)
+                    or manifest_digest != archive_receipt.get("manifest_sha256")):
+                return False
+            _verify_manifest_keys(manifest, stage, recipient)
+        return True
+    except (BackupHostError, OSError, ValueError, TypeError):
+        return False
 
 
 def _normalize_archived_control(compose: Compose) -> None:
@@ -1354,7 +1404,7 @@ def create_backup(output: Path, *, root: Path | None = None, drain_timeout: int 
                 })
                 required_keys = {"AGE_RECIPIENT": recipient, "N8N_ENCRYPTION_KEY": live_key}
             else:
-            required_keys = {"AGE_RECIPIENT": recipient}
+                required_keys = {"AGE_RECIPIENT": recipient}
             archived_configuration = dotenv_values(stage / "configuration" / "runtime.env", interpolate=False)
             archive_postgres_password = archived_configuration.get("POSTGRES_PASSWORD")
             archive_database_url = archived_configuration.get("DATABASE_URL")
@@ -1388,6 +1438,7 @@ def create_backup(output: Path, *, root: Path | None = None, drain_timeout: int 
                 stage, components=component_specs,
                 required_key_references=required_keys,
                 consistency_method="transactional-admission-barrier+service-stop+postgres-logical-dump+falkordb-save",
+                operation_id=UUID(operation_id),
             )
             statuses = {item.name: item.status for item in manifest.components}
             if statuses.get("postgres") != "complete" or statuses.get("raw_files") != "complete":
@@ -1403,20 +1454,27 @@ def create_backup(output: Path, *, root: Path | None = None, drain_timeout: int 
                 _record_stage_failure(compose, operation_id, phase, "archive", "archive_encryption_failed")
                 raise
             archive_bytes = output.stat().st_size
+            archive_size, archive_digest = _digest_file(output)
+            if archive_size != archive_bytes:
+                raise BackupHostError("Backup archive changed before its durable receipt was recorded")
             _record_receipt(compose, operation_id, phase, "archive", {
                 "status": "complete", "bytes": archive_bytes, "schema_version": schema_version,
-                "archive_name": output.name,
+                "archive_name": output.name, "sha256": archive_digest,
+                "manifest_sha256": hashlib.sha256(manifest.model_dump_json(indent=2).encode("utf-8")).hexdigest(),
+                "operation_id": operation_id,
             })
         _publish_phase(compose, operation_id, phase, "resuming")
         phase = "resuming"
         _start_services(compose, stopped)
+        ready_services = required | ({"graph"} if graph_enabled else set()) | ({"n8n"} if n8n_configured else set())
         if schedule_gate is not None:
-            ready_services = required | ({"graph"} if graph_enabled else set()) | {"n8n"}
-            _record_ready_services(
-                compose, operation_id, phase, ready_services,
-            )
-            compose.coordinator("release", "--operation-id", operation_id)
-            admission_released = True
+            # The exact workflow inventory request is also the post-restart n8n readiness probe.
+            expected_workflows = _load_workflow_states(_load_operation(compose, operation_id))
+            _verify_n8n_readiness(schedule_gate, expected_workflows)
+        _record_ready_services(compose, operation_id, phase, ready_services)
+        compose.coordinator("release", "--operation-id", operation_id)
+        admission_released = True
+        if schedule_gate is not None:
             operation = _load_operation(compose, operation_id)
             activation_failures = schedule_gate.resume(_load_workflow_states(operation), operation)
             if activation_failures:
@@ -1457,10 +1515,11 @@ def create_backup(output: Path, *, root: Path | None = None, drain_timeout: int 
                     if phase != "resuming":
                         _publish_phase(compose, operation_id, phase, "resuming")
                         phase = "resuming"
-                    ready_services = required | ({"graph"} if graph_enabled else set()) | {"n8n"}
-                    _record_ready_services(
-                        compose, operation_id, phase, ready_services,
-                    )
+                    ready_services = required | ({"graph"} if graph_enabled else set()) | ({"n8n"} if n8n_configured else set())
+                    if schedule_gate is not None:
+                        expected_workflows = _load_workflow_states(operation)
+                        _verify_n8n_readiness(schedule_gate, expected_workflows)
+                    _record_ready_services(compose, operation_id, phase, ready_services)
                     compose.coordinator("release", "--operation-id", operation_id)
                     admission_released = True
                     if snapshot_exists:
@@ -1477,6 +1536,8 @@ def create_backup(output: Path, *, root: Path | None = None, drain_timeout: int 
                     if phase != "resuming":
                         _publish_phase(compose, operation_id, phase, "resuming")
                         phase = "resuming"
+                    ready_services = required | ({"graph"} if graph_enabled else set()) | ({"n8n"} if n8n_configured else set())
+                    _record_ready_services(compose, operation_id, phase, ready_services)
                     compose.coordinator(
                         "resume", "--operation-id", operation_id, "--outcome", "incomplete",
                     )
@@ -1526,11 +1587,21 @@ def recover_operation(
 
     archive_receipt = receipts.get("archive")
     archive_name = archive_receipt.get("archive_name") if isinstance(archive_receipt, dict) else None
-    backup_complete = bool(
-        isinstance(archive_receipt, dict) and archive_receipt.get("status") == "complete"
-        and archive_path is not None and archive_path.expanduser().name == archive_name
-        and archive_path.expanduser().is_file() and not archive_path.expanduser().is_symlink()
-    )
+    backup_complete = False
+    if archive_path is not None and isinstance(archive_receipt, dict):
+        candidate = archive_path.expanduser()
+        if not candidate.is_absolute():
+            candidate = root / candidate
+        if not candidate.is_symlink() and candidate.is_file():
+            try:
+                age, recipient, identity = _age_tools(settings, root)
+                backup_complete = _verify_archive_receipt(
+                    candidate.resolve(strict=True), archive_receipt, operation_id,
+                    age, identity, recipient,
+                )
+            except (BackupHostError, OSError):
+                # Service recovery remains available when the optional backup cannot be proven.
+                backup_complete = False
     graph_enabled = settings.graph_enabled
     n8n_configured = bool(settings.n8n_api_key.get_secret_value())
     required = {"postgres", "api", "worker"}
@@ -1550,6 +1621,7 @@ def recover_operation(
             gate = _build_schedule_gate(compose, settings, operation_id, timeout_seconds=60)
             try:
                 gate.pause_saved_and_drain(workflow_states, "failed_recovery_required")
+                _verify_n8n_readiness(gate, workflow_states)
             finally:
                 gate.close()
         if "core_services" not in receipts:
@@ -1569,8 +1641,13 @@ def recover_operation(
     _wait_for_worker_ready(compose)
     if graph_enabled and control.get("phase") == "idle":
         _verify_graph_volume(compose)
-    if workflow_states is not None and control.get("phase") == "idle":
+    if workflow_states is not None:
         _verify_live_n8n_key(compose, settings)
+        readiness_gate = _build_schedule_gate(compose, settings, operation_id, timeout_seconds=60)
+        try:
+            _verify_n8n_readiness(readiness_gate, workflow_states)
+        finally:
+            readiness_gate.close()
     if control.get("phase") == "resuming":
         compose.coordinator("release", "--operation-id", operation_id)
     operation = _load_operation(compose, operation_id)

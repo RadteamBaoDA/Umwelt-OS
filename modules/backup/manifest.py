@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -46,5 +47,6 @@ class BackupManifest(BaseModel):
     created_at: datetime
     consistency: Literal["quiesced"]
     consistency_method: str = Field(min_length=1, max_length=160)
+    operation_id: UUID | None = None
     components: tuple[BackupComponent, ...]
     required_key_references: tuple[ProtectedKeyReference, ...]

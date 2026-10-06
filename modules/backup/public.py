@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
@@ -298,6 +299,7 @@ def _safe_stage_receipt(receipt: dict[str, object]) -> dict[str, object]:
     allowed = {
         "status", "files", "bytes", "schema_version", "detail_code", "components",
         "workflow_states", "workflow_id", "original_active", "effect_status", "archive_name",
+        "sha256", "manifest_sha256", "operation_id",
     }
     if not receipt or set(receipt) - allowed:
         raise HTTPException(status_code=422, detail="Backup stage receipt contains unsupported fields")
@@ -316,6 +318,15 @@ def _safe_stage_receipt(receipt: dict[str, object]) -> dict[str, object]:
             if (not isinstance(value, str) or not value or len(value) > 255
                     or "/" in value or "\\" in value or any(ord(char) < 32 for char in value)):
                 raise HTTPException(status_code=422, detail="Backup archive name is invalid")
+        elif key in {"sha256", "manifest_sha256"}:
+            if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+                raise HTTPException(status_code=422, detail="Backup archive digest is invalid")
+        elif key == "operation_id":
+            try:
+                if not isinstance(value, str) or str(UUID(value)) != value:
+                    raise ValueError
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail="Backup archive operation identity is invalid") from exc
         elif key == "workflow_states":
             if not isinstance(value, list) or len(value) > 10_000:
                 raise HTTPException(status_code=422, detail="Backup workflow state inventory is invalid")

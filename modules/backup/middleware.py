@@ -10,11 +10,20 @@ class BackupActivityMiddleware:
     """Keep an admitted owner request active through the final streamed response byte."""
 
     def __init__(self, app: ASGIApp) -> None:
-        """Store the wrapped application whose complete response lifetime is tracked."""
+        """Wrap one ASGI application; tracked owner receipts settle only after its full call ends.
+
+        ``app`` is the downstream ASGI callable. Non-HTTP scopes pass through unchanged, and
+        HTTP work without a registered activity receipt is also forwarded without DB writes.
+        """
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        """Pass through non-HTTP scopes and settle HTTP activity after ASGI completion."""
+        """Forward an ASGI request and settle its registered activity after response completion.
+
+        ``scope``, ``receive``, and ``send`` are the standard ASGI request inputs. Streaming
+        sends and response background work remain inside the wrapped call; transport failure
+        marks only this request interrupted, never uncertainty about a separate external effect.
+        """
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
