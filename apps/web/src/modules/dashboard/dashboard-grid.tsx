@@ -110,6 +110,10 @@ export interface DashboardGridProps {
   columns?: number;
   /** Layout identity used to cancel gestures when the parent switches breakpoints. */
   breakpoint: 'desktop' | 'mobile';
+  /** Physical viewport request, including a breakpoint currently awaiting dirty-session choice. */
+  requestedBreakpoint?: 'desktop' | 'mobile';
+  /** Parent operation state that disables edit commits before the React update is painted. */
+  interactionPending?: boolean;
   /** Whether edit mode is currently enabled (shows grid lines, handles, drag). */
   isEditMode: boolean;
   /** Callback fired when user moves, resizes, or nudges gadgets in edit mode. */
@@ -164,6 +168,8 @@ export function DashboardGrid({
   onGridMetricsChange,
   columns = 20,
   breakpoint,
+  requestedBreakpoint = breakpoint,
+  interactionPending = false,
   isEditMode,
   onLayoutChange,
   onRemoveInstance,
@@ -177,8 +183,8 @@ export function DashboardGrid({
   const [gridWidth, setGridWidth] = useState(0);
   const columnCount = Math.max(1, Math.min(20, Math.floor(columns)));
   const visibleGroupKey = [...visibleInstanceIds].sort().join('\u0000');
-  const layoutContextRef = useRef({ breakpoint, columnCount, visibleGroupKey });
-  layoutContextRef.current = { breakpoint, columnCount, visibleGroupKey };
+  const layoutContextRef = useRef({ breakpoint, requestedBreakpoint, columnCount, visibleGroupKey, interactionEnabled: isEditMode && !interactionPending });
+  layoutContextRef.current = { breakpoint, requestedBreakpoint, columnCount, visibleGroupKey, interactionEnabled: isEditMode && !interactionPending };
 
   /** Tracks the visible container so unit tracks follow its actual width. */
   useEffect(() => {
@@ -198,12 +204,16 @@ export function DashboardGrid({
   const [interactionNotice, setInteractionNotice] = useState<string | null>(null);
   const [frameHeaderHeight, setFrameHeaderHeight] = useState(0);
 
-  /** Drops pointer drafts when the dashboard switches between independent breakpoint layouts. */
+  /** Cancels transient gestures on owner changes, pending viewport choice, or disabled editing. */
   useEffect(() => {
+    if (!isEditMode || interactionPending || requestedBreakpoint !== breakpoint) {
+      setGesture(null);
+      return;
+    }
     setGesture((current) => current?.columnCount === columnCount
       && current.breakpoint === breakpoint
       && current.visibleGroupKey === visibleGroupKey ? current : null);
-  }, [breakpoint, columnCount, visibleGroupKey]);
+  }, [breakpoint, columnCount, interactionPending, isEditMode, requestedBreakpoint, visibleGroupKey]);
 
   // Map instances by id for quick lookup
   const instancesById = useMemo(() => {
@@ -326,7 +336,8 @@ export function DashboardGrid({
     /** Window pointer move handler updating gesture draft. */
     const onPointerMove = (e: PointerEvent) => {
       const grid = gridRef.current;
-      if (!grid
+      if (!grid || !layoutContextRef.current.interactionEnabled
+        || layoutContextRef.current.requestedBreakpoint !== gesture.breakpoint
         || gesture.columnCount !== layoutContextRef.current.columnCount
         || gesture.breakpoint !== layoutContextRef.current.breakpoint
         || gesture.visibleGroupKey !== layoutContextRef.current.visibleGroupKey
@@ -382,7 +393,9 @@ export function DashboardGrid({
     const onPointerUp = () => {
       const width = gridRef.current?.getBoundingClientRect().width ?? 0;
       const metrics = getGridUnitMetrics(width, columnCount);
-      if (gesture.columnCount !== layoutContextRef.current.columnCount
+      if (!layoutContextRef.current.interactionEnabled
+        || layoutContextRef.current.requestedBreakpoint !== gesture.breakpoint
+        || gesture.columnCount !== layoutContextRef.current.columnCount
         || gesture.breakpoint !== layoutContextRef.current.breakpoint
         || gesture.visibleGroupKey !== layoutContextRef.current.visibleGroupKey
         || !metrics) {
@@ -402,7 +415,9 @@ export function DashboardGrid({
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();
-        if (gesture.columnCount !== layoutContextRef.current.columnCount
+        if (!layoutContextRef.current.interactionEnabled
+          || layoutContextRef.current.requestedBreakpoint !== gesture.breakpoint
+          || gesture.columnCount !== layoutContextRef.current.columnCount
           || gesture.breakpoint !== layoutContextRef.current.breakpoint
           || gesture.visibleGroupKey !== layoutContextRef.current.visibleGroupKey) {
           setGesture(null);

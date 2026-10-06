@@ -13,7 +13,7 @@ import {
   X,
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   AlertDialog,
   AlertDialogContent,
@@ -82,9 +82,11 @@ export interface LayoutEditorProps {
     groupId: string;
     title?: string;
     renderer: string;
-  }) => void;
-  /** Preflights bounded placement before creating a quick definition on the server. */
-  onCanAddGadgetInstance: (renderer: string) => boolean;
+  }, reservationId: string) => Promise<void>;
+  /** Reserves the owner layout before any asynchronous definition creation begins. */
+  onBeginAddGadgetInstance: (renderer: string) => string | null;
+  /** Releases a reservation when quick definition creation fails before instance creation. */
+  onCancelPendingAdd: (reservationId: string) => void;
   /** Available groups on the active dashboard. */
   groups: DashboardGroup[];
   /** Currently selected group identifier. */
@@ -124,7 +126,8 @@ export function LayoutEditor({
   canUseReadableMobileSizes = false,
   onOpenPresetPicker,
   onAddGadgetInstance,
-  onCanAddGadgetInstance,
+  onBeginAddGadgetInstance,
+  onCancelPendingAdd,
   groups,
   activeGroupId,
   dirtyModalOpen,
@@ -136,6 +139,8 @@ export function LayoutEditor({
   const t = useTranslations('dashboard');
   const session = useWorkspaceSession();
   const [addDialogOpen, setAddDialogOpen] = useState<boolean>(false);
+  const [isAdding, setIsAdding] = useState<boolean>(false);
+  const isAddingRef = useRef(false);
 
   // States for Add Gadget modal
   const [selectedDefinitionId, setSelectedDefinitionId] = useState<string>('');
@@ -181,33 +186,44 @@ export function LayoutEditor({
 
   /** Handles confirmation of adding a gadget to the dashboard. */
   const handleConfirmAdd = useCallback(async () => {
+    if (isAddingRef.current) return;
     let definitionId = selectedDefinitionId;
     const finalGroupId = targetGroupId || groups[0]?.id || '';
     const selectedDefinition = definitions.find((definition) => definition.id === definitionId);
     const renderer = selectedDefinition?.renderer ?? selectedRenderer;
-    if (!onCanAddGadgetInstance(renderer)) {
+    const reservationId = onBeginAddGadgetInstance(renderer);
+    if (!reservationId) {
       setAddDialogOpen(false);
       return;
     }
 
-    // If no existing definition selected, create a quick definition first
-    if (!definitionId) {
-      const created = await createDefMutation.mutateAsync();
-      definitionId = created.id;
+    isAddingRef.current = true;
+    setIsAdding(true);
+    try {
+      // If no existing definition selected, create a quick definition first.
+      if (!definitionId) {
+        const created = await createDefMutation.mutateAsync();
+        definitionId = created.id;
+      }
+
+      await onAddGadgetInstance({
+        definitionId,
+        groupId: finalGroupId,
+        title: instanceTitle.trim() || undefined,
+        renderer,
+      }, reservationId);
+
+      setAddDialogOpen(false);
+      setSelectedDefinitionId('');
+      setInstanceTitle('');
+      setNewDefName('');
+    } catch {
+      onCancelPendingAdd(reservationId);
+    } finally {
+      isAddingRef.current = false;
+      setIsAdding(false);
     }
-
-    onAddGadgetInstance({
-      definitionId,
-      groupId: finalGroupId,
-      title: instanceTitle.trim() || undefined,
-      renderer,
-    });
-
-    setAddDialogOpen(false);
-    setSelectedDefinitionId('');
-    setInstanceTitle('');
-    setNewDefName('');
-  }, [createDefMutation, definitions, groups, instanceTitle, onAddGadgetInstance, onCanAddGadgetInstance, selectedDefinitionId, selectedRenderer, targetGroupId]);
+  }, [createDefMutation, definitions, groups, instanceTitle, onAddGadgetInstance, onBeginAddGadgetInstance, onCancelPendingAdd, selectedDefinitionId, selectedRenderer, targetGroupId]);
 
   return (
     <>
@@ -383,7 +399,7 @@ export function LayoutEditor({
       </AlertDialog>
 
       {/* Add Gadget Dialog */}
-      <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
+      <Dialog open={addDialogOpen} onOpenChange={(open) => { if (!isAddingRef.current) setAddDialogOpen(open); }}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>{t('addGadgetTitle')}</DialogTitle>
@@ -519,12 +535,14 @@ export function LayoutEditor({
             <Button
               type="button"
               className="secondary text-xs"
-              onClick={() => setAddDialogOpen(false)}
+              disabled={isAdding}
+              onClick={() => { if (!isAddingRef.current) setAddDialogOpen(false); }}
             >
               {t('cancel')}
             </Button>
             <Button
               type="button"
+              disabled={isAdding}
               className="text-xs font-bold"
               onClick={handleConfirmAdd}
             >

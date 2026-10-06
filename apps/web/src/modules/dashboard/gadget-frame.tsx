@@ -127,6 +127,7 @@ export function GadgetFrame({
   useEffect(() => {
     const node = headerRef.current;
     if (!node || !onHeaderMeasured) return;
+    /** Reports the current stable header border-box height to the dashboard grid. */
     const report = () => onHeaderMeasured(node.getBoundingClientRect().height);
     report();
     const observer = new ResizeObserver(report);
@@ -134,19 +135,29 @@ export function GadgetFrame({
     return () => observer.disconnect();
   }, [onHeaderMeasured]);
 
-  /** Reparents the single portal host while preserving its renderer state and reading scroll position. */
-  useLayoutEffect(() => {
-    if (!rendererHost) return;
-    const destination = isExpanded ? expandedHostRef.current : inlineHostRef.current;
-    if (!destination || rendererHost.parentElement === destination) return;
-    if (isExpanded && inlineScrollRef.current) {
+  /** Moves the one renderer host and restores inline reading position after returning from Expand. */
+  const moveRendererHost = useCallback((destination: HTMLDivElement | null, expanded: boolean) => {
+    if (!rendererHost || !destination || rendererHost.parentElement === destination) return;
+    if (expanded && inlineScrollRef.current) {
       inlineScrollPosition.current = inlineScrollRef.current.scrollTop;
     }
     destination.appendChild(rendererHost);
-    if (!isExpanded && inlineScrollRef.current) {
+    if (!expanded && inlineScrollRef.current) {
       inlineScrollRef.current.scrollTop = inlineScrollPosition.current;
     }
-  }, [isExpanded, rendererHost]);
+  }, [rendererHost]);
+
+  /** Moves the host as soon as Radix attaches its lazily mounted expanded destination. */
+  const attachExpandedHost = useCallback((node: HTMLDivElement | null) => {
+    expandedHostRef.current = node;
+    if (node && isExpanded) moveRendererHost(node, true);
+  }, [isExpanded, moveRendererHost]);
+
+  /** Reparents the single portal host when the inline or expanded destination is ready. */
+  useLayoutEffect(() => {
+    const destination = isExpanded ? expandedHostRef.current : inlineHostRef.current;
+    moveRendererHost(destination, isExpanded);
+  }, [isExpanded, moveRendererHost]);
 
   const definition = instance.definition;
   const displayTitle = instance.title || definition.name || definition.renderer;
@@ -332,7 +343,7 @@ export function GadgetFrame({
               <X className="h-4 w-4" />
             </Button>
           </DialogHeader>
-          <div ref={expandedHostRef} className="min-h-0 flex-1 overflow-auto overscroll-contain p-4" />
+          <div ref={attachExpandedHost} className="min-h-0 flex-1 overflow-auto overscroll-contain p-4" />
         </DialogContent>
       </Dialog>
       {rendererHost && createPortal(renderGadgetContent(), rendererHost)}

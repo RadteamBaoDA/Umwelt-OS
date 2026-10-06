@@ -62,10 +62,10 @@ const GADGET_REGISTRY: Record<string, React.ComponentType<GadgetRendererProps>> 
 export const GADGET_READING_BODY_FLOORS: Record<string, number> = {
   // The common floor matches the legacy `.skeleton { min-height: 180px }` surface in app/globals.css.
   daily_brief: 180, tasks: 180, goals: 180,
-  // TimelineGadget: 152px fixed loading stack + root p-3, header, and inter-section gap.
-  timeline: 216,
-  // EntityGadget/PersonalContext: two h-14 skeletons plus space-y-2.5 and p-1, root padding/header.
-  entity: 204, personal_context: 204,
+  // TimelineGadget: 180px readable content baseline plus root p-3, two gaps, and fixed header.
+  timeline: 264,
+  // Entity/PersonalContext: 180px content baseline plus root padding, search header, and spacing.
+  entity: 272, personal_context: 272,
   // FeedGadget: three h-16 skeletons plus loading gaps/padding, root p-3 and fixed action-bar chrome.
   news_feed: 280, telegram_feed: 280, feed: 280,
   // Fixed renderer roots reserve the common baseline plus bounded controls and outer padding.
@@ -74,12 +74,18 @@ export const GADGET_READING_BODY_FLOORS: Record<string, number> = {
   // MetricsChart: h-[140px] plot + p-3, two space-y-3 gaps, fixed chart header and range controls.
   finance_chart: 276, metrics_chart: 276,
   github_project: 204,
-  // MapGadget: min-h-48 plot + p-3, fixed map header/evidence heading, spacing and attribution.
-  weather: 204, map: 324, intelligence_panel: 180,
+  // MapGadget uses a root-font-scaled 12rem plot and bounded header, status, evidence, and attribution chrome.
+  weather: 204, map: 368, intelligence_panel: 180,
 };
 
 /** Resolves an explicit bounded reading floor; unknown renderers use the common body baseline. */
 export function getGadgetReadingBodyFloor(rendererId: string): number {
+  if (rendererId === 'map') {
+    const rootFontSize = typeof document === 'undefined'
+      ? 16
+      : Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+    return 12 * rootFontSize + 176;
+  }
   return GADGET_READING_BODY_FLOORS[rendererId] ?? 180;
 }
 
