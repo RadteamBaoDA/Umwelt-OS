@@ -443,6 +443,7 @@ class GadgetDefinitionExportPage(StrictConfiguration):
     payload_bytes: int = Field(ge=0, le=16_777_216)
     max_payload_bytes: int = Field(default=16_777_216, ge=1, le=16_777_216)
     next_cursor: str | None = None
+    available: bool = True
     omission_reason: Literal["definition_changed_after_snapshot"] | None = None
 
 

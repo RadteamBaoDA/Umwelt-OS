@@ -171,7 +171,7 @@ class BriefScheduleExportFence(BaseModel):
 
 
 class BriefScheduleExportPage(BaseModel):
-    """Return the single owner brief schedule projection and its publication fence."""
+    """Return the single owner schedule projection and the shared bounded-cursor page contract."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -183,6 +183,9 @@ class BriefScheduleExportPage(BaseModel):
     fences: list[BriefScheduleExportFence] = Field(max_length=1)
     payload_bytes: int = Field(ge=0, le=16_777_216)
     max_payload_bytes: int = Field(default=16_777_216, ge=1, le=16_777_216)
+    next_cursor: str | None = Field(default=None, max_length=512)
+    available: bool = True
+    omission_reason: Literal["schedule_changed_after_snapshot"] | None = None
 
 
 class BriefScheduleExportValidation(BaseModel):

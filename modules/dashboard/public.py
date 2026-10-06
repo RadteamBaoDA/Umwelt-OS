@@ -580,7 +580,7 @@ async def _definition_export_page(
     return GadgetDefinitionExportPage(
         owner_id=owner_id, record_kind="gadget_definitions", snapshot_at=snapshot_at,
         snapshot_count=snapshot_count, omitted_count=len(rows) - len(eligible_rows),
-        items=items, fences=fences, payload_bytes=payload_bytes,
+        items=items, fences=fences, payload_bytes=payload_bytes, available=True,
         next_cursor=_encode_owner_export_cursor("gadget_definitions", snapshot_at, rows[-1].created_at, rows[-1].id)
         if has_more and rows else None,
         omission_reason="definition_changed_after_snapshot" if len(rows) != len(eligible_rows) else None,
@@ -637,17 +637,20 @@ async def _brief_export_eligibility(
 ) -> bool:
     """Require each immutable citation's actual fact kind/id/title/source set to remain current.
 
-    Rebuild the current owner fact projection for the cited local day. The normal fact policy drops
-    deleted, paused, or local-only sources; matching identity, title and current numbered reference
-    prevents stale citation labels from being copied into the portable record.
+    Rebuild current widgets only, excluding saved brief/history presentation. The normal fact policy
+    drops deleted, paused, or local-only sources; matching identity, title and current numbered
+    reference prevents stale citation labels from being copied into the portable record.
     """
+    citations = _brief_export_citations(row)
+    if citations is None:
+        return False
     key = (row.brief_date, row.timezone)
     fact_by_identity = cache.get(key)
     if fact_by_identity is None:
-        daily_context = await context.build_daily_context(
+        widgets = await context.build_daily_widgets(
             session, row.owner_id, row.brief_date, row.timezone,
         )
-        facts = await briefs._facts(session, daily_context)
+        facts = await briefs._facts(session, widgets)
         fact_by_identity = {
             (str(item["kind"]), str(item["id"])): (
                 str(item["title"]), tuple(str(source_id) for source_id in item["source_ids"]),
@@ -656,22 +659,36 @@ async def _brief_export_eligibility(
             for reference, item in enumerate(facts, start=1)
         }
         cache[key] = fact_by_identity
-    if not row.citations:
-        return False
-    for citation in row.citations:
-        if not isinstance(citation, dict):
-            return False
-        kind, identifier = citation.get("kind"), citation.get("id")
-        title, source_ids, reference = citation.get("title"), citation.get("source_ids"), citation.get("ref")
-        if (not isinstance(kind, str) or not isinstance(identifier, (str, UUID))
-                or not isinstance(title, str) or not isinstance(source_ids, list)
-                or type(reference) is not int or not 1 <= reference <= 40
-                or any(not isinstance(value, (str, UUID)) for value in source_ids)):
-            return False
-        current = fact_by_identity.get((kind, str(identifier)))
-        if current != (title, tuple(str(source_id) for source_id in source_ids), reference):
+    for citation in citations:
+        current = fact_by_identity.get((citation["kind"], citation["id"]))
+        if current != (citation["title"], tuple(citation["source_ids"]), citation["ref"]):
             return False
     return True
+
+
+def _brief_export_citations(row: DailyBrief) -> list[dict[str, Any]] | None:
+    """Allowlist the saved citation identity fields, rejecting malformed/duplicate references early."""
+    if not isinstance(row.citations, list) or not row.citations or len(row.citations) > 40:
+        return None
+    expected_keys = {"ref", "kind", "id", "title", "source_ids"}
+    citations: list[dict[str, Any]] = []
+    seen_references: set[int] = set()
+    for citation in row.citations:
+        if not isinstance(citation, dict) or set(citation) != expected_keys:
+            return None
+        reference, kind, identifier = citation["ref"], citation["kind"], citation["id"]
+        title, source_ids = citation["title"], citation["source_ids"]
+        if (type(reference) is not int or not 1 <= reference <= 40 or reference in seen_references
+                or not isinstance(kind, str) or not isinstance(identifier, str)
+                or not isinstance(title, str) or not isinstance(source_ids, list)
+                or any(not isinstance(value, str) for value in source_ids)):
+            return None
+        seen_references.add(reference)
+        citations.append({
+            "ref": reference, "kind": kind, "id": identifier,
+            "title": title, "source_ids": list(source_ids),
+        })
+    return citations
 
 
 def _brief_export_row_digest(row: DailyBrief) -> str:
@@ -723,9 +740,13 @@ async def _brief_export_page(
         if not eligible:
             omitted_count += 1
             continue
+        citations = _brief_export_citations(row)
+        if citations is None:
+            raise HTTPException(status_code=409, detail="Daily brief changed during export; retry the download")
         items.append(DailyBriefExport(
             id=row.id, brief_date=row.brief_date, timezone=row.timezone, revision=row.revision,
-            status="current", content=row.content, citations=row.citations, model_alias=row.model_alias,
+            status="current", content=row.content, citations=citations,
+            model_alias=row.model_alias,
             generated_at=row.generated_at,
         ))
     encoded = [item.model_dump_json().encode("utf-8") for item in items]
@@ -796,10 +817,11 @@ async def _brief_schedule_export_page(
     if row is not None and row.updated_at > snapshot_at:
         raise HTTPException(status_code=409, detail="Brief schedule changed during export; retry the download")
     item = _brief_schedule_export_value(row)
-    payload_bytes = len(item.model_dump_json().encode("utf-8"))
+    payload_bytes = 2 + len(item.model_dump_json().encode("utf-8"))
     return BriefScheduleExportPage(
         owner_id=owner_id, record_kind="brief_schedule", snapshot_at=snapshot_at,
-        snapshot_count=1, items=[item], fences=[_brief_schedule_export_fence(row)], payload_bytes=payload_bytes,
+        snapshot_count=1, items=[item], fences=[_brief_schedule_export_fence(row)],
+        payload_bytes=payload_bytes, next_cursor=None, available=True, omission_reason=None,
     )
 
 
