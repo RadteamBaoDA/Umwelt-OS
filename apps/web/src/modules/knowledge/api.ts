@@ -10,6 +10,21 @@ export type Document = {
 export type DocumentVersion = { id: string; document_id: string; version_number: number; content: string; content_hash: string; observed_at: string; created_at: string };
 export type CitationTarget = { document_id: string; document_version_id: string; version_number: number; chunk_id: string; title: string; excerpt: string; observed_at: string };
 export type DocumentPage = { items: Document[]; next_cursor: string | null };
+/** Durable owner receipt returned by the accepted document deletion and its status read. */
+export type DocumentDeletionReceipt = {
+  operation_id: string;
+  status: 'queued' | 'running' | 'succeeded' | 'failed';
+  record_status: 'deleted';
+  graph_status: 'tombstoned';
+  raw_status: 'queued' | 'not_present' | 'retained_shared' | 'succeeded' | 'failed';
+  evidence_scope_status: 'capturing' | 'captured' | 'unavailable';
+  copied_status: 'queued' | 'running' | 'failed';
+  chat_status: 'queued' | 'running' | 'succeeded' | 'failed';
+  chat_error_code: string | null;
+  immediate_access_revoked: true;
+  error_code: string | null;
+  copied_error_code: string | null;
+};
 export type GadgetDocumentProjection = {
   document_id: string; document_version_id: string; version_number: number; source_id: string;
   title: string; canonical_url: string | null; published_at: string | null; observed_at: string;
@@ -34,6 +49,8 @@ export type EntityEvidencePage = { items: EntityEvidence[]; next_cursor: string 
 export type EntityCorrectionPreview = { operation: 'merge' | 'split'; entity_ids: string[]; membership_ids: string[]; relationship_ids: string[]; evidence_ref_count: number; conflicts: { code: string; message: string; entity_ids: string[]; membership_ids: string[]; relationship_ids: string[] }[] };
 export type EntityCorrectionResult = { operation: 'merge' | 'split' | 'suppress'; entity_id: string; canonical_entity_id: string; replacement_entity_ids: string[]; revision: number; conflicts: Record<string, unknown>[] };
 export const documentKeys = { all: ['documents'] as const, detail: (id: string) => ['documents', id] as const, versions: (id: string) => ['documents', id, 'versions'] as const };
+/** Keeps deletion receipts in a cache namespace independent of removed documents. */
+export const documentDeletionKeys = { detail: (id: string) => ['document-deletion-operations', id] as const };
 export const entityKeys = { all: ['entities'] as const, list: (type?: string, q?: string) => ['entities', 'list', type ?? '', q ?? ''] as const, detail: (id: string) => ['entities', id] as const, evidence: (id: string) => ['entities', id, 'evidence'] as const, history: (id: string) => ['entities', id, 'history'] as const, /** Scopes entity-timeline pages to canonical identity and normalized display filters. */ timeline: (id: string, filters: Record<string, string>) => ['entities', id, 'timeline', filters] as const, neighbors: (id: string) => ['relationships', 'neighbors', id] as const, graphNeighbors: (id: string) => ['relationships', 'graph-neighbors', id] as const };
 
 export type EntityHistoryPage = { items: { id: string; recorded_at: string; operation: string; affected_ids: string[]; revisions: Record<string, number> }[]; next_cursor: string | null; historical_values_available: false; memberships: EntityEvidence[]; membership_next_cursor: string | null };
@@ -78,8 +95,15 @@ export function createDocument(payload: { source_id: string; title: string; cont
 export function updateDocument(id: string, payload: { title: string; metadata: Record<string, unknown> }, csrfToken: string) { return apiRequest<Document>(`/api/v1/documents/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify(payload) }); }
 /** Replaces a document’s content using optimistic concurrency with the expected version and supplied CSRF token. */
 export function updateContent(id: string, content: string, expectedVersion: number, csrfToken: string) { return apiRequest<Document>(`/api/v1/documents/${id}/content`, { method: 'PUT', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify({ content, expected_version: expectedVersion }) }); }
-/** Deletes the document using the supplied CSRF token. */
-export function deleteDocument(id: string, csrfToken: string) { return apiRequest<void>(`/api/v1/documents/${id}`, { method: 'DELETE', headers: csrfHeaders(csrfToken) }); }
+/** Deletes a document and returns the durable cleanup receipt before its detail record disappears. */
+export function deleteDocument(id: string, csrfToken: string) { return apiRequest<DocumentDeletionReceipt>(`/api/v1/documents/${id}`, { method: 'DELETE', headers: csrfHeaders(csrfToken) }); }
+
+/** Reads one owner-authorized cleanup receipt with cancellation and a bounded request lifetime. */
+export function getDocumentDeletionOperation(operationId: string, signal?: AbortSignal) {
+  const timeout = AbortSignal.timeout(10_000);
+  const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
+  return apiRequest<DocumentDeletionReceipt>(`/api/v1/documents/deletion-operations/${encodeURIComponent(operationId)}`, { signal: requestSignal });
+}
 
 /** Lists entities with optional cursor, type, and text filters. */
 export function listEntities(cursor?: string, type?: string, q?: string) { const p = new URLSearchParams({ limit: '50' }); if (cursor) p.set('cursor', cursor); if (type) p.set('type', type); if (q) p.set('q', q); return apiRequest<EntityPage>(`/api/v1/entities?${p}`); }
