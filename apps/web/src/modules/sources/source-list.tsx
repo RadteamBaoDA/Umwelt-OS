@@ -60,22 +60,54 @@ function scheduleLabel(minutes: number, t: ReturnType<typeof useTranslations<'so
   return t('scheduleUnknown');
 }
 
-/** Polls and renders Source purge state plus the explicitly pending owner cleanup stages. */
+/** Shows allowlisted owner cleanup progress, polling for at most 30 seconds with abortable GETs and manual refresh afterward. */
 function PurgeProgress({ operationId }: { operationId: string }) {
   const t = useTranslations('sources');
+  const pollingStartedAt = useRef(Date.now());
   const operation = useQuery({
     queryKey: ['operation', operationId],
-    queryFn: () => getOperation(operationId),
+    queryFn: ({ signal }) => {
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => controller.abort(), 10_000);
+      const cancelQuery = () => controller.abort(signal.reason);
+      if (signal.aborted) cancelQuery();
+      else signal.addEventListener('abort', cancelQuery, { once: true });
+      return getOperation(operationId, controller.signal).finally(() => {
+        window.clearTimeout(timeoutId);
+        signal.removeEventListener('abort', cancelQuery);
+      });
+    },
     refetchInterval: (query) => {
       const current = query.state.data;
-      const permanentFailure = current?.documents_status === 'failed'
-        || current?.documents_status === 'unavailable';
-      return current?.status === 'succeeded' || permanentFailure ? false : 1500;
+      const terminal = current?.status === 'succeeded' || current?.status === 'failed'
+        || current?.documents_status === 'failed' || current?.documents_status === 'unavailable';
+      return terminal || Date.now() - pollingStartedAt.current >= 30_000 ? false : 1500;
     },
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    retry: false,
   });
-  if (operation.isPending) return <p className="muted">{t('loading')}</p>;
-  if (operation.isError) return <p className="error" role="alert">{t('actionFailed')}</p>;
-  return <p role="status">{operation.data.status}{operation.data.error_code ? ` · ${operation.data.error_code}` : ''}{operation.data.pending_owner_codes.length ? ` · pending: ${operation.data.pending_owner_codes.join(', ')}` : ''}</p>;
+  const refreshButton = <Button type="button" className="secondary" disabled={operation.isFetching} onClick={() => void operation.refetch()}>
+    {operation.isFetching ? t('cleanupRefreshingProgress') : t('cleanupRefreshProgress')}
+  </Button>;
+  if (!operation.data) return <div><p className={operation.isError ? 'error' : 'muted'} role={operation.isError ? 'alert' : 'status'}>{operation.isError ? t('actionFailed') : t('loading')}</p>{refreshButton}</div>;
+
+  const ownerLabels = new Map<string, string>([
+    ['documents', t('cleanupOwnerDocuments')],
+    ['raw', t('cleanupOwnerRaw')],
+    ['chat', t('cleanupOwnerChat')],
+    ['memory', t('cleanupOwnerMemory')],
+    ['agents', t('cleanupOwnerAgents')],
+    ['dashboard', t('cleanupOwnerDashboard')],
+    ['notifications', t('cleanupOwnerNotifications')],
+    ['automations', t('cleanupOwnerAutomations')],
+  ]);
+  const pendingOwners = [...new Set(operation.data.pending_owner_codes.map((code) => ownerLabels.get(code) ?? t('cleanupOwnerOther')))].slice(0, 9);
+  return <div>
+    <p role="status">{operation.data.status}{operation.data.error_code ? ` · ${operation.data.error_code}` : ''}</p>
+    {pendingOwners.length > 0 && <p className="muted">{t('cleanupPendingOwnerStages', { owners: pendingOwners.join(', ') })}</p>}
+    {refreshButton}
+  </div>;
 }
 
 /** Renders a source’s schedule, status, and actions, including archive or purge confirmation. */

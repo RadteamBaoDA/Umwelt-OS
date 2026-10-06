@@ -351,5 +351,7 @@ export function retryRun(id: string, stageKey: string, csrfToken: string) {
   return apiRequest<{ run_id: string }>(`/api/v1/ingestion/runs/${id}/retry`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify({ stage_key: stageKey }) });
 }
 
-/** Fetches the allowlisted Source purge progress projection for its operation ID. */
-export function getOperation(id: string) { return apiRequest<PurgeOperation>(`/api/v1/system/operations/${id}`); }
+/** Fetches the allowlisted Source purge progress projection and forwards its abort signal to the GET. */
+export function getOperation(id: string, signal?: AbortSignal) {
+  return apiRequest<PurgeOperation>(`/api/v1/system/operations/${id}`, { signal });
+}
