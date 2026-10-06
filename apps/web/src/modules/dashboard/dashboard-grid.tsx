@@ -29,6 +29,9 @@ export const RENDERER_MIN_SIZES: Record<string, { minW: number; minH: number }> 
 /** Default fallback minimum size if renderer is unlisted. */
 const DEFAULT_MIN_SIZE = { minW: 4, minH: 3 };
 
+/** Shared spacing between square dashboard units in the grid and its guides. */
+const GRID_GAP_PX = 12;
+
 /** Tests whether two integer placements overlap on a half-open rectangle basis. */
 export function doPlacementsOverlap(a: DashboardPlacement, b: DashboardPlacement): boolean {
   return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
@@ -89,8 +92,10 @@ export interface DashboardGridProps {
   instances: GadgetInstance[];
   /** Integer placements mapping each gadget instance to its grid coordinates. */
   placements: DashboardPlacement[];
-  /** Total number of grid columns (default 20 for desktop). */
+  /** Requested column count, clamped to the supported range of one through 20. */
   columns?: number;
+  /** Layout identity used to cancel gestures when the parent switches breakpoints. */
+  breakpoint: 'desktop' | 'mobile';
   /** Whether edit mode is currently enabled (shows grid lines, handles, drag). */
   isEditMode: boolean;
   /** Callback fired when user moves, resizes, or nudges gadgets in edit mode. */
@@ -110,8 +115,14 @@ interface ActiveGesture {
   type: 'move' | 'resize';
   direction?: 'e' | 's' | 'se';
   instanceId: string;
+  /** Originating layout prevents a gesture draft from crossing desktop/mobile state. */
+  breakpoint: 'desktop' | 'mobile';
+  /** Column count at pointer-down; a breakpoint-width change cancels the gesture. */
+  columnCount: number;
   startX: number;
   startY: number;
+  /** Frozen grid stride keeps a pointer gesture stable across viewport resizes. */
+  cellStride: number;
   initialPlacement: DashboardPlacement;
   currentPlacement: DashboardPlacement;
   backupPlacements: DashboardPlacement[];
@@ -121,7 +132,7 @@ interface ActiveGesture {
 
 /**
  * Grid renderer for Umwelt-OS dashboards.
- * Operates strictly on R10 integer rectangles without moving or jumping during streaming.
+ * Operates on square integer units with at most 20 columns without moving during streaming.
  * In edit mode, supports title drag-to-move, edge/corner resizing, collision displacement,
  * per-gesture cancel via Escape, and keyboard alternatives.
  *
@@ -132,6 +143,7 @@ export function DashboardGrid({
   instances,
   placements,
   columns = 20,
+  breakpoint,
   isEditMode,
   onLayoutChange,
   onRemoveInstance,
@@ -141,9 +153,32 @@ export function DashboardGrid({
 }: DashboardGridProps) {
   const t = useTranslations('dashboard');
   const gridRef = useRef<HTMLDivElement>(null);
+  // A hidden grid remains unmeasured until ResizeObserver reports a positive width.
+  const [gridWidth, setGridWidth] = useState(0);
+  const columnCount = Math.max(1, Math.min(20, Math.floor(columns)));
+  const layoutContextRef = useRef({ breakpoint, columnCount });
+  layoutContextRef.current = { breakpoint, columnCount };
+
+  /** Tracks the visible container so unit tracks follow its actual width. */
+  useEffect(() => {
+    const node = gridRef.current;
+    if (!node) return;
+
+    const observer = new ResizeObserver(([entry]) => {
+      if (!entry) return;
+      setGridWidth((current) => current === entry.contentRect.width ? current : entry.contentRect.width);
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
 
   const [selectedInstanceId, setSelectedInstanceId] = useState<string | null>(null);
   const [gesture, setGesture] = useState<ActiveGesture | null>(null);
+
+  /** Drops pointer drafts when the dashboard switches between independent breakpoint layouts. */
+  useEffect(() => {
+    setGesture((current) => current?.columnCount === columnCount && current.breakpoint === breakpoint ? current : null);
+  }, [breakpoint, columnCount]);
 
   // Map instances by id for quick lookup
   const instancesById = useMemo(() => {
@@ -152,18 +187,19 @@ export function DashboardGrid({
 
   // Merge placements with active gesture if any
   const effectivePlacements = useMemo(() => {
-    if (!gesture) return placements;
+    if (!gesture || gesture.columnCount !== columnCount || gesture.breakpoint !== breakpoint) return placements;
     return placements.map((p) =>
       p.instance_id === gesture.instanceId ? gesture.currentPlacement : p,
     );
-  }, [gesture, placements]);
+  }, [breakpoint, columnCount, gesture, placements]);
 
-  /** Helper to get minimum bounds for a given instance */
+  /** Resolves renderer-specific integer width and height bounds. */
   const getMinSize = useCallback(
     (instanceId: string) => {
       const inst = instancesById.get(instanceId);
       const renderer = inst?.definition?.renderer ?? '';
-      return RENDERER_MIN_SIZES[renderer] ?? DEFAULT_MIN_SIZE;
+      const minimum = RENDERER_MIN_SIZES[renderer] ?? DEFAULT_MIN_SIZE;
+      return minimum;
     },
     [instancesById],
   );
@@ -174,14 +210,20 @@ export function DashboardGrid({
       if (!isEditMode || event.button !== 0) return;
       const initial = placements.find((p) => p.instance_id === instanceId);
       if (!initial) return;
+      const width = gridRef.current?.getBoundingClientRect().width ?? 0;
+      const cellSize = (width - GRID_GAP_PX * (columnCount - 1)) / columnCount;
+      if (cellSize <= 0) return;
 
       const minSize = getMinSize(instanceId);
       setSelectedInstanceId(instanceId);
       setGesture({
         type: 'move',
         instanceId,
+        breakpoint,
+        columnCount,
         startX: event.clientX,
         startY: event.clientY,
+        cellStride: cellSize + GRID_GAP_PX,
         initialPlacement: { ...initial },
         currentPlacement: { ...initial },
         backupPlacements: placements.map((p) => ({ ...p })),
@@ -192,7 +234,7 @@ export function DashboardGrid({
       event.preventDefault();
       event.stopPropagation();
     },
-    [getMinSize, isEditMode, placements],
+    [breakpoint, columnCount, getMinSize, isEditMode, placements],
   );
 
   /** Initiates resize gesture on handle pointer down. */
@@ -201,6 +243,9 @@ export function DashboardGrid({
       if (!isEditMode || event.button !== 0) return;
       const initial = placements.find((p) => p.instance_id === instanceId);
       if (!initial) return;
+      const width = gridRef.current?.getBoundingClientRect().width ?? 0;
+      const cellSize = (width - GRID_GAP_PX * (columnCount - 1)) / columnCount;
+      if (cellSize <= 0) return;
 
       const minSize = getMinSize(instanceId);
       setSelectedInstanceId(instanceId);
@@ -208,8 +253,11 @@ export function DashboardGrid({
         type: 'resize',
         direction,
         instanceId,
+        breakpoint,
+        columnCount,
         startX: event.clientX,
         startY: event.clientY,
+        cellStride: cellSize + GRID_GAP_PX,
         initialPlacement: { ...initial },
         currentPlacement: { ...initial },
         backupPlacements: placements.map((p) => ({ ...p })),
@@ -220,7 +268,7 @@ export function DashboardGrid({
       event.preventDefault();
       event.stopPropagation();
     },
-    [getMinSize, isEditMode, placements],
+    [breakpoint, columnCount, getMinSize, isEditMode, placements],
   );
 
   // Global window listeners for pointermove, pointerup, and per-gesture Escape cancel
@@ -229,16 +277,19 @@ export function DashboardGrid({
 
     /** Window pointer move handler updating gesture draft. */
     const onPointerMove = (e: PointerEvent) => {
-      if (!gridRef.current) return;
-      const rect = gridRef.current.getBoundingClientRect();
-      const colWidth = rect.width / columns;
-      const rowHeight = 44 + 12; // row height 44px + 12px gap
-
-      const dx = Math.round((e.clientX - gesture.startX) / colWidth);
-      const dy = Math.round((e.clientY - gesture.startY) / rowHeight);
+      const grid = gridRef.current;
+      if (!grid
+        || gesture.columnCount !== layoutContextRef.current.columnCount
+        || gesture.breakpoint !== layoutContextRef.current.breakpoint
+        || gesture.cellStride <= 0) return;
+      const width = grid.getBoundingClientRect().width;
+      const cellSize = (width - GRID_GAP_PX * (columnCount - 1)) / columnCount;
+      if (cellSize <= 0) return;
+      const dx = Math.round((e.clientX - gesture.startX) / gesture.cellStride);
+      const dy = Math.round((e.clientY - gesture.startY) / gesture.cellStride);
 
       if (gesture.type === 'move') {
-        const nextX = Math.max(0, Math.min(columns - gesture.initialPlacement.w, gesture.initialPlacement.x + dx));
+        const nextX = Math.max(0, Math.min(columnCount - gesture.initialPlacement.w, gesture.initialPlacement.x + dx));
         const nextY = Math.max(0, gesture.initialPlacement.y + dy);
 
         setGesture((prev) =>
@@ -258,7 +309,7 @@ export function DashboardGrid({
         let nextH = gesture.initialPlacement.h;
 
         if (gesture.direction === 'e' || gesture.direction === 'se') {
-          nextW = Math.max(gesture.minW, Math.min(columns - gesture.initialPlacement.x, gesture.initialPlacement.w + dx));
+          nextW = Math.max(gesture.minW, Math.min(columnCount - gesture.initialPlacement.x, gesture.initialPlacement.w + dx));
         }
         if (gesture.direction === 's' || gesture.direction === 'se') {
           nextH = Math.max(gesture.minH, gesture.initialPlacement.h + dy);
@@ -281,6 +332,14 @@ export function DashboardGrid({
 
     /** Window pointer up handler committing gesture with collision displacement. */
     const onPointerUp = () => {
+      const width = gridRef.current?.getBoundingClientRect().width ?? 0;
+      const cellSize = (width - GRID_GAP_PX * (columnCount - 1)) / columnCount;
+      if (gesture.columnCount !== layoutContextRef.current.columnCount
+        || gesture.breakpoint !== layoutContextRef.current.breakpoint
+        || cellSize <= 0) {
+        setGesture(null);
+        return;
+      }
       const updated = placements.map((p) =>
         p.instance_id === gesture.instanceId ? gesture.currentPlacement : p,
       );
@@ -293,6 +352,11 @@ export function DashboardGrid({
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();
+        if (gesture.columnCount !== layoutContextRef.current.columnCount
+          || gesture.breakpoint !== layoutContextRef.current.breakpoint) {
+          setGesture(null);
+          return;
+        }
         // Restore pre-gesture placements immediately
         onLayoutChange?.(gesture.backupPlacements);
         setGesture(null);
@@ -308,7 +372,7 @@ export function DashboardGrid({
       window.removeEventListener('pointerup', onPointerUp);
       window.removeEventListener('keydown', onKeyDown);
     };
-  }, [columns, gesture, onLayoutChange, placements]);
+  }, [breakpoint, columnCount, gesture, onLayoutChange, placements]);
 
   /** Keyboard alternative navigation in edit mode (Arrow keys move, Shift+Arrow resizes). */
   const handleKeyDown = useCallback(
@@ -323,7 +387,7 @@ export function DashboardGrid({
 
       if (e.shiftKey) {
         // Shift + Arrows -> Resize
-        if (e.key === 'ArrowRight' && next.x + next.w < columns) {
+        if (e.key === 'ArrowRight' && next.x + next.w < columnCount) {
           next.w += 1;
           changed = true;
         } else if (e.key === 'ArrowLeft' && next.w > minSize.minW) {
@@ -338,7 +402,7 @@ export function DashboardGrid({
         }
       } else {
         // Arrows -> Move
-        if (e.key === 'ArrowRight' && next.x + next.w < columns) {
+        if (e.key === 'ArrowRight' && next.x + next.w < columnCount) {
           next.x += 1;
           changed = true;
         } else if (e.key === 'ArrowLeft' && next.x > 0) {
@@ -362,7 +426,7 @@ export function DashboardGrid({
         setSelectedInstanceId(null);
       }
     },
-    [columns, getMinSize, isEditMode, onLayoutChange, placements],
+    [breakpoint, columnCount, getMinSize, isEditMode, onLayoutChange, placements],
   );
 
   // Calculate highest row to render adequate grid background in edit mode
@@ -374,16 +438,20 @@ export function DashboardGrid({
     return max + (isEditMode ? 4 : 0);
   }, [effectivePlacements, isEditMode]);
 
+  // Matching column width and row height makes every persisted unit square; gaps define the shared stride.
+  const cellSize = Math.max(0, (gridWidth - GRID_GAP_PX * (columnCount - 1)) / columnCount);
+  const gridMinHeight = maxRow * cellSize + Math.max(0, maxRow - 1) * GRID_GAP_PX;
+
   return (
     <div
       ref={gridRef}
       className={`relative w-full ${isEditMode ? 'select-none' : ''}`}
       style={{
         display: 'grid',
-        gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
-        gridAutoRows: '44px',
-        gap: '12px',
-        minHeight: `${maxRow * 56}px`,
+        gridTemplateColumns: `repeat(${columnCount}, ${cellSize}px)`,
+        gridAutoRows: `${cellSize}px`,
+        gap: `${GRID_GAP_PX}px`,
+        minHeight: `${gridMinHeight}px`,
       }}
     >
       {/* Background grid guides in edit mode */}
@@ -392,12 +460,12 @@ export function DashboardGrid({
           aria-hidden="true"
           className="absolute inset-0 pointer-events-none rounded-xl border border-dashed border-border/40 grid"
           style={{
-            gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
-            gridAutoRows: '44px',
-            gap: '12px',
+            gridTemplateColumns: `repeat(${columnCount}, ${cellSize}px)`,
+            gridAutoRows: `${cellSize}px`,
+            gap: `${GRID_GAP_PX}px`,
           }}
         >
-          {Array.from({ length: columns * maxRow }).map((_, i) => (
+          {Array.from({ length: columnCount * maxRow }).map((_, i) => (
             <div
               key={i}
               className="border border-border/20 rounded-md bg-primary/[0.015]"
