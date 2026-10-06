@@ -1247,6 +1247,36 @@ class MemoryService:
             auto_accept_memory=rec.auto_accept_memory,
         )
 
+    async def _read_privacy_config_under_fence(self) -> MemoryPrivacyConfig:
+        """Read fresh consent while holding the privacy lock through the caller's decision.
+
+        The default-row initializer admits writes before acquiring this owner lock and may
+        commit internally. If the fresh locked read finds no row, release its read transaction,
+        initialize through that existing admission path, then reacquire the privacy fence and
+        reread with populate_existing before the caller acts on consent.
+        """
+        await lock_export_privacy(self.session)
+        rec = await self.session.scalar(
+            select(MemoryPrivacyRecord).where(MemoryPrivacyRecord.owner_id == 1)
+            .with_for_update().execution_options(populate_existing=True)
+        )
+        if rec is None:
+            # Do not acquire the backup admission barrier after the privacy owner lock.
+            await self.session.rollback()
+            await self.get_privacy_config()
+            await lock_export_privacy(self.session)
+            rec = await self.session.scalar(
+                select(MemoryPrivacyRecord).where(MemoryPrivacyRecord.owner_id == 1)
+                .with_for_update().execution_options(populate_existing=True)
+            )
+        if rec is None:
+            raise HTTPException(status_code=503, detail="Memory privacy settings are unavailable")
+        return MemoryPrivacyConfig(
+            store_conversation_history=rec.store_conversation_history,
+            store_agent_memory=rec.store_agent_memory,
+            auto_accept_memory=rec.auto_accept_memory,
+        )
+
     async def update_privacy_config(self, payload: MemoryPrivacyUpdate) -> MemoryPrivacyConfig:
         """Update owner memory privacy controls.
 
@@ -1297,7 +1327,7 @@ class MemoryService:
         Returns:
             Dictionary containing novelty_score, usefulness_score, confidence, and recommendation.
         """
-        await lock_export_privacy(self.session)
+        privacy = await self._read_privacy_config_under_fence()
         source_rows = list((await self.session.scalars(
             select(Memory).where(Memory.status == "active")
             .order_by(desc(Memory.confidence), desc(Memory.created_at)).limit(100)
@@ -1306,7 +1336,6 @@ class MemoryService:
         for row in source_rows:
             if await _verified_memory_read(self.session, row) is not None:
                 active_contents.append(row.content)
-        privacy = await self.get_privacy_config()
         evaluation = evaluate_candidate(
             content,
             memory_type,
@@ -1345,7 +1374,7 @@ class MemoryService:
         Returns:
             List of created MemoryCandidateRead objects.
         """
-        privacy = await self.get_privacy_config()
+        privacy = await self._read_privacy_config_under_fence()
         if not privacy.store_agent_memory:
             return []
 
@@ -1353,7 +1382,6 @@ class MemoryService:
         if not proposals:
             return []
 
-        await lock_export_privacy(self.session)
         prov = dict(provenance or {})
         if conversation_id:
             prov["conversation_id"] = str(conversation_id)
@@ -1634,12 +1662,11 @@ class MemoryService:
         Returns:
             List of active MemoryRead objects.
         """
-        privacy = await self.get_privacy_config()
+        privacy = await self._read_privacy_config_under_fence()
         # If agent memory is explicitly disabled, do not inject memories into prompt
         if not privacy.store_agent_memory:
             return []
 
-        await lock_export_privacy(self.session)
         stmt = (
             select(Memory)
             .where(Memory.status == "active")
