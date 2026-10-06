@@ -88,7 +88,7 @@ const catalogParts = {
       chooseSample: 'Use fictional sample data', choosePersonalImport: 'Import personal data', sampleSelected: 'Fictional sample data selected', importSelected: 'Personal import selected',
     },
     setup: {
-      brand: 'BBD-OS · Local setup', title: 'Create your owner account', description: 'This account is stored on this server. Choose a password with at least 12 characters.',
+      brand: 'Umwelt-OS · Local setup', title: 'Create your owner account', description: 'This account is stored on this server. Choose a password with at least 12 characters.',
       setupToken: 'Setup token', enterSetupToken: 'Enter the setup token.', password: 'Password', passwordHelp: 'Use at least 12 characters.', confirmPassword: 'Confirm password', passwordMismatch: 'Passwords do not match.',
       failure: 'Setup could not be completed.', creating: 'Creating account…', createOwner: 'Create owner',
     },
@@ -102,7 +102,7 @@ const catalogParts = {
       precision: 'Occurrence precision', allPrecision: 'All precision', timed: 'Timed', dateOnly: 'Date only', unknownTime: 'Unknown time', type: 'Event type', typeHelp: 'Matches event types regardless of letter case.', typeTooLong: 'Event type must be 64 characters or fewer.',
       rangeHelp: 'The end date is excluded. Dates filter occurrence time, not a historical graph snapshot; unknown-time events cannot be date-filtered.', timezoneLabel: 'Calendar and display time zone: {timezone}', applyFilters: 'Apply filters', invalidRange: 'Choose both dates and make the end date later than the start date.',
       loading: 'Loading timeline', loadFailed: 'Could not load the timeline.', retry: 'Retry', loadedCount: '{count} matching events loaded', graphStatusUnavailable: 'Graph status unavailable.', graphStatusLoading: 'Loading graph status…', graphStatusNoEvidence: 'No evidence versions to check for graph status.', graphStatusSummary: 'Graph status returned for {count} evidence versions.', graphStatusBound: 'Graph status is checked for the first 100 evidence versions; {count} more are not included.', graphStatusRowsBound: '{count} additional status rows are omitted from this list.', graphStatusDetails: 'Graph synchronization status', graphEnabled: 'enabled', graphDisabled: 'disabled', metadataVersionSnapshot: 'Title and URL are from this document version.', metadataCurrentFallback: 'Title and URL use current document metadata; historical metadata is unavailable.',
-      noEvents: 'No events match these filters.', loadMore: 'Load more events', nextPageFailed: 'Could not load the next timeline page.', occurred: 'Occurred', observed: 'Observed by source', recorded: 'Recorded by BBD-OS', validity: 'Valid from – valid to', openStart: 'No start boundary', openEnd: 'No end boundary',
+      noEvents: 'No events match these filters.', loadMore: 'Load more events', nextPageFailed: 'Could not load the next timeline page.', occurred: 'Occurred', observed: 'Observed by source', recorded: 'Recorded by Umwelt-OS', validity: 'Valid from – valid to', openStart: 'No start boundary', openEnd: 'No end boundary',
       lateArrival: 'Observed after the recorded occurrence time.', derived: 'Derived', manual: 'Manual', participants: 'Participants', evidence: 'Evidence', evidenceObserved: 'Evidence observed', sourceId: 'Source',
     },
     entities: {
@@ -113,7 +113,7 @@ const catalogParts = {
     },
     preferences: {
       title: 'User settings',
-      description: 'Choose how BBD-OS looks and formats dates and numbers.',
+      description: 'Choose how Umwelt-OS looks and formats dates and numbers.',
       appearance: 'Appearance',
       theme: 'Theme',
       light: 'Light',
@@ -196,7 +196,7 @@ const catalogParts = {
       close: 'Close',
     },
     sources: {
-      title: 'Data sources', description: 'Configure supported sources and collection schedules inside BBD-OS.',
+      title: 'Data sources', description: 'Configure supported sources and collection schedules inside Umwelt-OS.',
       addConnector: 'Connect a source', addManual: 'New manual source', loading: 'Loading sources…', loadFailed: 'Could not load sources.',
       empty: 'No sources yet. Connect an RSS feed, web page or REST API, or create a manual source.', retry: 'Retry', loadMore: 'Load more',
       provider: 'Provider', chooseProvider: 'Choose a provider', providerRss: 'RSS / Atom', providerWeb: 'Web page', providerRest: 'REST API', providerMcp: 'MCP server',
@@ -267,6 +267,8 @@ const catalogParts = {
       cancelled: 'Generation stopped',
       thinking: 'Reasoning & retrieving evidence…',
       streaming: 'Generating response…',
+      userSpeaker: 'You',
+      assistantFallback: 'Umwelt-OS Assistant',
       sufficientEvidence: 'Grounded in retrieved sources',
       insufficientEvidence: 'Insufficient grounded evidence',
       citations: 'Citations & Evidence',
@@ -480,7 +482,7 @@ const catalogParts = {
       chooseSample: 'Dùng dữ liệu mẫu hư cấu', choosePersonalImport: 'Nhập dữ liệu cá nhân', sampleSelected: 'Đã chọn dữ liệu mẫu hư cấu', importSelected: 'Đã chọn nhập dữ liệu cá nhân',
     },
     setup: {
-      brand: 'BBD-OS · Thiết lập cục bộ', title: 'Tạo tài khoản chủ sở hữu', description: 'Tài khoản này được lưu trên máy chủ. Chọn mật khẩu có ít nhất 12 ký tự.',
+      brand: 'Umwelt-OS · Thiết lập cục bộ', title: 'Tạo tài khoản chủ sở hữu', description: 'Tài khoản này được lưu trên máy chủ. Chọn mật khẩu có ít nhất 12 ký tự.',
       setupToken: 'Mã thiết lập', enterSetupToken: 'Nhập mã thiết lập.', password: 'Mật khẩu', passwordHelp: 'Dùng ít nhất 12 ký tự.', confirmPassword: 'Xác nhận mật khẩu', passwordMismatch: 'Mật khẩu không khớp.',
       failure: 'Không thể hoàn tất thiết lập.', creating: 'Đang tạo tài khoản…', createOwner: 'Tạo tài khoản chủ sở hữu',
     },
@@ -494,7 +496,7 @@ const catalogParts = {
       precision: 'Độ chính xác thời điểm', allPrecision: 'Tất cả độ chính xác', timed: 'Có giờ', dateOnly: 'Chỉ ngày', unknownTime: 'Chưa rõ thời điểm', type: 'Loại sự kiện', typeHelp: 'Khớp loại sự kiện không phân biệt chữ hoa chữ thường.', typeTooLong: 'Loại sự kiện không được dài quá 64 ký tự.',
       rangeHelp: 'Ngày kết thúc không được tính. Bộ lọc dùng ngày xảy ra, không chọn ảnh chụp lịch sử của đồ thị; sự kiện chưa rõ thời điểm không thể lọc theo ngày.', timezoneLabel: 'Múi giờ lịch và hiển thị: {timezone}', applyFilters: 'Áp dụng bộ lọc', invalidRange: 'Hãy chọn cả hai ngày và đặt ngày kết thúc sau ngày bắt đầu.',
       loading: 'Đang tải dòng thời gian', loadFailed: 'Không thể tải dòng thời gian.', retry: 'Thử lại', loadedCount: 'Đã tải {count} sự kiện phù hợp', graphStatusUnavailable: 'Trạng thái đồ thị chưa khả dụng.', graphStatusLoading: 'Đang tải trạng thái đồ thị…', graphStatusNoEvidence: 'Không có phiên bản bằng chứng để kiểm tra trạng thái đồ thị.', graphStatusSummary: 'Đã nhận trạng thái đồ thị cho {count} phiên bản bằng chứng.', graphStatusBound: 'Chỉ kiểm tra trạng thái đồ thị cho 100 phiên bản bằng chứng đầu tiên; còn {count} phiên bản chưa được tính.', graphStatusRowsBound: 'Còn {count} dòng trạng thái khác không hiển thị trong danh sách này.', graphStatusDetails: 'Trạng thái đồng bộ đồ thị', graphEnabled: 'đã bật', graphDisabled: 'đã tắt', metadataVersionSnapshot: 'Tiêu đề và URL thuộc phiên bản tài liệu này.', metadataCurrentFallback: 'Tiêu đề và URL dùng siêu dữ liệu tài liệu hiện tại; siêu dữ liệu lịch sử chưa khả dụng.',
-      noEvents: 'Không có sự kiện phù hợp với bộ lọc.', loadMore: 'Tải thêm sự kiện', nextPageFailed: 'Không thể tải trang dòng thời gian tiếp theo.', occurred: 'Xảy ra lúc', observed: 'Nguồn đã quan sát', recorded: 'BBD-OS đã ghi nhận', validity: 'Hiệu lực từ – đến', openStart: 'Không có mốc bắt đầu', openEnd: 'Không có mốc kết thúc',
+      noEvents: 'Không có sự kiện phù hợp với bộ lọc.', loadMore: 'Tải thêm sự kiện', nextPageFailed: 'Không thể tải trang dòng thời gian tiếp theo.', occurred: 'Xảy ra lúc', observed: 'Nguồn đã quan sát', recorded: 'Umwelt-OS đã ghi nhận', validity: 'Hiệu lực từ – đến', openStart: 'Không có mốc bắt đầu', openEnd: 'Không có mốc kết thúc',
       lateArrival: 'Được quan sát sau thời điểm xảy ra đã ghi nhận.', derived: 'Suy ra', manual: 'Thủ công', participants: 'Người tham gia', evidence: 'Bằng chứng', evidenceObserved: 'Bằng chứng được quan sát lúc', sourceId: 'Nguồn',
     },
     entities: {
@@ -505,7 +507,7 @@ const catalogParts = {
     },
     preferences: {
       title: 'Cài đặt người dùng',
-      description: 'Chọn giao diện BBD-OS và cách định dạng ngày giờ, số liệu.',
+      description: 'Chọn giao diện Umwelt-OS và cách định dạng ngày giờ, số liệu.',
       appearance: 'Giao diện',
       theme: 'Chủ đề',
       light: 'Sáng',
@@ -588,7 +590,7 @@ const catalogParts = {
       close: 'Đóng',
     },
     sources: {
-      title: 'Nguồn dữ liệu', description: 'Cấu hình nguồn được hỗ trợ và lịch thu thập ngay trong BBD-OS.',
+      title: 'Nguồn dữ liệu', description: 'Cấu hình nguồn được hỗ trợ và lịch thu thập ngay trong Umwelt-OS.',
       addConnector: 'Kết nối nguồn', addManual: 'Tạo nguồn thủ công', loading: 'Đang tải nguồn…', loadFailed: 'Không thể tải nguồn dữ liệu.',
       empty: 'Chưa có nguồn. Kết nối RSS, trang web hoặc REST API, hoặc tạo nguồn thủ công.', retry: 'Thử lại', loadMore: 'Tải thêm',
       provider: 'Nhà cung cấp', chooseProvider: 'Chọn nhà cung cấp', providerRss: 'RSS / Atom', providerWeb: 'Trang web', providerRest: 'REST API', providerMcp: 'Máy chủ MCP',
@@ -659,6 +661,8 @@ const catalogParts = {
       cancelled: 'Đã dừng tạo phản hồi',
       thinking: 'Đang suy luận và tìm kiếm bằng chứng…',
       streaming: 'Đang tạo câu trả lời…',
+      userSpeaker: 'Bạn',
+      assistantFallback: 'Trợ lý Umwelt-OS',
       sufficientEvidence: 'Dựa trên các nguồn thu thập được',
       insufficientEvidence: 'Không đủ bằng chứng xác thực',
       citations: 'Trích dẫn & Bằng chứng',
@@ -821,6 +825,9 @@ const catalogParts = {
   dashboardEn: {
     dashboard: {
       title: 'Dashboard',
+      resizeWidth: 'Resize width',
+      resizeHeight: 'Resize height',
+      resizeCorner: 'Resize corner',
       viewMode: 'View',
       editMode: 'Edit',
       toggleEdit: 'Edit layout',
@@ -962,6 +969,9 @@ const catalogParts = {
   dashboardVi: {
     dashboard: {
       title: 'Bảng điều khiển',
+      resizeWidth: 'Đổi chiều rộng',
+      resizeHeight: 'Đổi chiều cao',
+      resizeCorner: 'Đổi kích cỡ bằng góc',
       viewMode: 'Xem',
       editMode: 'Chỉnh sửa',
       toggleEdit: 'Chỉnh sửa bố cục',

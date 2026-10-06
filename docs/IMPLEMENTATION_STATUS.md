@@ -1,3 +1,17 @@
+<!-- current-implementation-snapshot:start -->
+## Current implementation snapshot — 2026-10-06
+
+Verified `develop`: **655331b**. Goal active; production code/build/review stage.
+
+| State | Tasks |
+| --- | --- |
+| Integrated | P01–P11 and accepted reconciliation milestones; owner exports through Timeline/Observations (72d72c6); Chat/Memory deletion (94c7c1b); bounded expiry (32a6ccc); onboarding and demo/named workspace seed/reset (655331b) |
+| Implementing | Backup R2 readiness/recovery; durable individual-Document raw cleanup; visible Umwelt-OS branding and EN/VI resize labels |
+| Pending production | Complete portable GadgetDefinition/DailyBrief/schedule exports; copied Chat/Memory/Agent evidence cleanup and fences; mobile/a11y source reconciliation; final operations/OSS/docs and whole-branch review |
+| Deferred | Tests/behavioral acceptance until all production scope closes; live providers, verified restore, target 2-core/8GiB capacity and release |
+
+P12/R16 remain incomplete. No tests/runtime/SQL/reset/seed/provider operations or push/deploy in this production wave. Historical entries below retain their original evidence; later accepted milestones supersede interim pending states. Checkpoints update locally and batch with accepted task commits.
+<!-- current-implementation-snapshot:end -->
 ## Retained Timeline/Observations export integration — 2026-10-06
 
 Accepted `99c85802955b5e50d843ca44fc37d73b1f8e2ffc` based exactly on develop `94c7c1b`: prescribed build exit0/four images, clean source and independent Sol scoped re-review PASS. Both P1 findings closed: manual/derived schema matches storage; only expected unsupported-derived eligibility is omitted, overflow/DTO failures explicit. Integrating eight owner source/schema files with this checkpoint batch. Exact immutable accepted evidence and current Source-generation publication fences are distinct; retained paused/connector-only archived data remains exportable, pending data purge excluded. Fresh Source connector and Documents evidence reads preserve signatures/DTOs; Source read helper has 65 traced callers and no new row lock. Count streaming is O(N x pages); measured target capacity remains deferred.
@@ -757,3 +771,16 @@ Workspace R2 exact787e98d Sol scoped PASS: per-project OS serialization closes m
 
 ### P12 seed/named workspace milestone integrated — 2026-10-06
 Accepted composed28e696c at baseline32a6ccc: prescribed build exit0 Next/fourimages, password/DB/Redis restored, actual log hash verified; original review, R1/R2 and composition reviews PASS after ownership/isolation/concurrent-registration repairs. Source integrates17 accepted paths with stable fictional P12 seed receipts/owner public writers and isolated named dev workspace commands. Exact seed/privacy and Chat expiry seams preserved; migrations unchanged. Evidence copied .superpowers/sdd/p12-demo-reset-integrated. No seed/reset/workspace operation or runtime acceptance performed. Whole P12-T3 remains open for mobile/a11y source reconciliation and deferred acceptance. Root README intro/gateway and architecture/security/release drafts remain unreviewed/uncommitted; owner unrelated files preserved. Backup R2/document raw cleanup remain active; no tests/runtime/SQL/providers/push/deploy.
+
+### Active production wave after workspace integration — 2026-10-06
+Verified develop655331b, source equality for accepted workspace/seed paths28e696c; unrelated root drafts preserved unstaged. Three Luna implementers active: backup_finish R2 readiness, p12_document_cleanup durable per-document raw cleanup, r16_branding_implement visible Umwelt-OS/catalog/resize labels in new isolated branch based655331b. Backup owns next serialized build upon freeze. Root final README/architecture/security/release drafts remain pending independent final review. Saved portable export coverage and copied-evidence deletion remain next scope; no whole-phase completion/tests/runtime/push/deploy.
+
+
+### Document raw cleanup build / branding build wave — 2026-10-06
+Frozen Documents264c1e2 on isolated baseline32a6ccc: migration parent corrected to accepted p12_onboarding_state; duplicate cleanup status regression guarded. Prescribed rerun build exit0 Next/fourimages and process password/DB/Redis restoration=True; initial log lacks final exit and remains preserved. Locked dependency install reported six high advisories; no new audit command authorized, preserve output for deferred security stage. Independent Sol task review dispatched; no integration/fullP12-T2 claim. Copied evidence/source-level cleanup consistency/UI pending/failure visibility remain open. Branding source1fe2eba/reportf8ebc24 frozen on655331b (seven production files), prescribed build slot granted; tracked scratch report will be excluded from root source integration and evidence copied. Backup R2 mutable readiness source remains active; no tests/runtime/SQL/provider/seed/reset/push/deploy or status-only commit.
+
+### Finite source gates advancing — 2026-10-06
+Documents264c1e2 independent Sol taskreviewPASS finite rawreceipt/retry only; Luna composing655331b before finalbuild/review. Brandingf8ebc24 prescribed finalbuildPASS after locked dependency install and corrected process placeholders; independent Sol reviewactive sevenproductionfiles, reportexcludedintegration. BackupR2 e79539e frozen threeproductionfiles startupgeneration/corehealth/hostreadiness+workflowrecovery, prescribedbuildslotgranted afterbrandrelease. Confirmed P12T3 sourcegap: fractionalcolumnwidth/fixed44pxrows violates spec165.3 squareunits; finite geometry+viewport taskbriefprepared .superpowers/sdd/p12-ui-remainder/source-notes.md, implementdispatch pendingcapacity. WholeP12/R16 remainsopen; no tests/runtime/SQL/provider/seed/reset/push/deploy.
+
+### Visible Umwelt-OS and bilingual labels integrated — 2026-10-06
+Accepted frozen brandingf8ebc24/source1fe2eba exactly on655331b: independent Sol source PASS and author-reported prescribed finalbuildexit0 Next/fourimages/process restoration, earlier missingdeps/env failures retained. Raw build transcript not supplied; receipt in root .superpowers/sdd/r16-branding-integrated explicitly author-reported. Root integrates only seven reviewed productionpaths and batched checkpoints, excluding tracked scratchreport. Header/login/home/title/catalog branding and Chat user/assistantfallback plus Dashboardresizearia labels EN/VI delivered; modelidentity/persistent bbd-os compatibility preserved. Actualsquaregeometry remains pendingP12T3; wholeR16/runtime not complete. BackupR2 building/Documentcomposition active. Root README/architecture/security/release/OSS drafts remain unreviewedunstaged; unrelatedownerfilespreserved. No tests/runtime/SQL/push/deploy.

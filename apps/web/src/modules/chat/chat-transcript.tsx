@@ -144,7 +144,7 @@ export function ChatTranscript({
             >
               <div className="flex items-center justify-between gap-4 text-[11px] text-muted-foreground mb-0.5">
                 <span className="font-semibold">
-                  {isUser ? 'You' : msg.model_identity || 'BBD-OS Assistant'}
+                  {isUser ? t('userSpeaker') : msg.model_identity || t('assistantFallback')}
                 </span>
                 {formattedDate && <span>{formattedDate}</span>}
               </div>
@@ -219,7 +219,7 @@ export function ChatTranscript({
 
           <div className="flex flex-col gap-1 p-3.5 rounded-2xl shadow-xs bg-surface border border-border text-foreground rounded-tl-xs">
             <div className="flex items-center gap-2 text-[11px] text-muted-foreground mb-0.5">
-              <span className="font-semibold">BBD-OS Assistant</span>
+              <span className="font-semibold">{t('assistantFallback')}</span>
               <span className="inline-flex items-center gap-1 text-[10px] text-accent">
                 <span className="size-1.5 rounded-full bg-accent animate-pulse" />
                 {t('streaming')}
