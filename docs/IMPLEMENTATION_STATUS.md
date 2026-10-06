@@ -1,17 +1,17 @@
 <!-- current-implementation-snapshot:start -->
 ## Current implementation snapshot — 2026-10-06
 
-Verified `develop`: **3d2c51e**. Goal active; production code/build/review stage.
+Verified `develop`: **5212def**. Goal active; production code/build/review stage.
 
 | State | Tasks |
 | --- | --- |
-| Integrated | P01–P11 and accepted reconciliation milestones; owner exports through Timeline/Observations (72d72c6); Chat/Memory deletion (94c7c1b); bounded expiry (32a6ccc); onboarding and demo/named workspace seed/reset (655331b); branding and EN/VI labels (44cf45a); individual Document raw cleanup (3d2c51e) |
-| Implementing | Backup isolated environment P1 repair in reused worktree; Chat copied-evidence identity capture, cleanup consumer and publication/replay fences |
-| Built, review pending | Square Dashboard geometry and saved-column/breakpoint contract at c0d16c7; prescribed build exit 0/four images with restoration assertions false/unverified; independent review/composition pending |
-| Pending production | Complete portable GadgetDefinition/DailyBrief/schedule exports after backup contracts integrate; Memory/Agent/materialization copied-evidence stages; whole-Source raw URI consistency; deletion receipt UI; narrow-mobile content-floor fit and remaining accessibility reconciliation; final operations/OSS/docs and whole-branch review |
+| Integrated | P01–P11 and accepted reconciliation milestones; owner exports through Timeline/Observations (72d72c6); Chat/Memory deletion (94c7c1b); bounded expiry (32a6ccc); onboarding/demo/named workspace source (655331b); branding/EN–VI labels (44cf45a); individual Document raw cleanup (3d2c51e); backup/admission/recovery/portable export aggregator with isolated restore identity repair (5212def) |
+| Implementing | Chat copied-evidence cleanup/publication/replay selected-fence completion and current-base composition; Square Dashboard P2 malformed projection repair; all GadgetDefinition/DailyBrief/schedule portable exports in reused backup worktree |
+| Reviewed but repair required | Square c0d16c7 build exit 0/four images; Sol found one P2 projection defect. No Dashboard integration until repaired exact source passes build/re-review |
+| Pending production | Memory/Agent/materialization copied-evidence stages; whole-Source raw URI consistency; deletion receipt UI; narrow-mobile content-floor fit, group-filter/dirty-breakpoint consistency and remaining a11y; final operations/OSS/docs and whole-branch review |
 | Deferred | Tests/behavioral acceptance until all production scope closes; live providers, verified restore, target 2-core/8GiB capacity and release |
 
-P12/R16 remain incomplete. Builds are serialized; source freeze or observed process termination does not prove build success. No tests/runtime/SQL/reset/seed/provider operations or push/deploy in this production wave. Historical entries retain their original evidence. Checkpoints update locally and batch with accepted source milestones.
+P12/R16 remain incomplete. Backup source build and review do not certify actual restore. Restoration assertions false/unverified remain preserved in receipts. No tests/runtime/SQL/reset/seed/provider operations or push/deploy/main merge. Checkpoints update locally and batch with accepted source milestones.
 <!-- current-implementation-snapshot:end -->
 ## Retained Timeline/Observations export integration — 2026-10-06
 
@@ -825,3 +825,11 @@ Exact repaired f3442bf506f5260101d7883b76c1423732b9d343 prescribed build session
 Accepted scoped backup e79539e composed with develop 3d2c51e at c81f11b; original composition P1 environment escape repaired at f3442bf506f5260101d7883b76c1423732b9d343. Exact prescribed repaired composition build session 30516 exit 0/four images and independent Sol scoped re-review PASS. Root verified merge index equals the entire accepted f3442bf source tree before staging checkpoints. Integrating 61 reviewed production/config/operations-document paths via no-fast-forward merge, with these four checkpoint files in one milestone commit. Root README intro/gateway drafts were saved, replayed successfully and remain unstaged; unrelated AGENTS/CLAUDE/OSS/architecture/deployment/release/security/old-UX edits remain preserved. Evidence copied to .superpowers/sdd/p12-backup-integrated.
 
 Delivered finite production scope: durable backup/admission/recovery controls, encrypted consistency/archive receipt source, isolated restore/cleanup identity fence, native Settings backup/export UI and bounded owner export aggregator. Sole source migration head p12_backup_control follows p12_document_cleanup. All preserved build receipts reporting false process restoration remain false/unverified. No runtime archive/restore/cleanup/migration/seed/reset command executed. Portable unplaced GadgetDefinitions/all DailyBrief revisions/schedule, copied-evidence domains, Source raw consistency, deletion receipt UI, mobile/a11y and final release remain pending; this does not complete whole P12 or prove restore/capacity acceptance. No push/deploy/main merge.
+
+## Repaired Dashboard composed build — 2026-10-06
+P2 repair d2c3e1e composed with accepted develop5212def into95d81e5f408ab4ec87b43280d9c2850e6b19955c. Root read durable build-r1.log: exact prescribed build exitCode0, four images; priorPresent false and environmentRestored false for all three process variables remain unverified. Author preserved session21542 in its own tool scope. Independent Sol P2+composition re-review still required before integration. Historical root PID observation was not a reliable independent live-process proof because it could match its querying shell; durable author exit receipts are the build evidence. No build duplicate or runtime acceptance claim.
+
+## Accepted square Dashboard milestone integration — 2026-10-06
+Original c0d16c7 projection P2 repaired at d2c3e1e, composed with accepted develop5212def into95d81e5f408ab4ec87b43280d9c2850e6b19955c. Exact prescribed composed build session21542 exit0/four images and independent scoped Sol repair/composition review PASS. Root verified complete merge index equality to accepted95d81e5 before staging checkpoints. Integrating three reviewed UI paths via no-fast-forward merge with four checkpoint files in one milestone commit. All unrelated root drafts/guidance/index-count/legacy UX deletions preserved unstaged; evidence copied to .superpowers/sdd/p12-square-grid-integrated.
+
+Delivered square tracks/guides/shared stride, stored breakpoint column contract, stale gesture cancellation, preserved valid mobile width/position, bounded malformed projection or explicit EN/VI edit/Save refusal. All prior/new restoration flagsfalse remain unverified. Narrow-mobile map/chart content floors, hidden-group whole-draft preservation, dirty breakpoint drafts and remaining mobile/a11y source behavior are still pending; wholeP12T3/R16 are not closed. Chat copied-evidence stage and full portable export coverage continue in isolated worktrees. No tests/runtime/browser/SQL/migration/env/provider operations, push/deploy or main merge.
