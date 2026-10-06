@@ -404,6 +404,57 @@ class DashboardExportValidation(StrictConfiguration):
     observed_snapshot_count: int = Field(ge=0)
 
 
+class GadgetDefinitionExport(StrictConfiguration):
+    """Expose one saved renderer definition without placement dependencies or runtime state."""
+
+    id: UUID
+    name: Name
+    revision: Revision
+    renderer: str
+    source_ids: list[UUID] = Field(max_length=MAX_SOURCES_PER_DEFINITION)
+    scope: GadgetScope
+    filters: GadgetFilters
+    highlight_rules: list[HighlightRule] = Field(max_length=MAX_RULES_PER_DEFINITION)
+    created_at: datetime
+    updated_at: datetime
+
+
+class GadgetDefinitionExportFence(StrictConfiguration):
+    """Bind a saved definition and its immutable saved-configuration projection for publication."""
+
+    id: UUID
+    created_at: datetime
+    updated_at: datetime
+    revision: Revision
+    content_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    eligible: bool
+
+
+class GadgetDefinitionExportPage(StrictConfiguration):
+    """Return one bounded all-definition owner page, including definitions used by no dashboard."""
+
+    owner_id: int = Field(ge=1)
+    record_kind: Literal["gadget_definitions"]
+    snapshot_at: datetime
+    snapshot_count: int = Field(ge=0)
+    omitted_count: int = Field(default=0, ge=0)
+    items: list[GadgetDefinitionExport] = Field(max_length=100)
+    fences: list[GadgetDefinitionExportFence] = Field(max_length=100)
+    payload_bytes: int = Field(ge=0, le=16_777_216)
+    max_payload_bytes: int = Field(default=16_777_216, ge=1, le=16_777_216)
+    next_cursor: str | None = None
+    available: bool = True
+    omission_reason: Literal["definition_changed_after_snapshot"] | None = None
+
+
+class GadgetDefinitionExportValidation(StrictConfiguration):
+    """Report whether the cutoff inventory and exact saved definition projections still match."""
+
+    valid: bool
+    reason: Literal["valid", "snapshot_count_changed", "record_changed"]
+    observed_snapshot_count: int = Field(ge=0)
+
+
 class RendererRead(StrictConfiguration):
     """Describe renderer configuration, adapter presence and geometry without runtime guarantees.
 

@@ -108,17 +108,33 @@ async def _events_widget(session: AsyncSession, day: date, timezone: str) -> Dai
     )
 
 
+async def build_daily_widgets(
+    session: AsyncSession, owner_id: int, day: date, timezone: str, *, relation: DayRelation | None = None,
+) -> list[DailyWidget]:
+    """Project current owner records for one day without reading saved brief history or notifications.
+
+    Widget queries retain their existing per-owner bounds and evidence/privacy filters. The result
+    contains current task/goal/news/timeline projections, never a historical state snapshot.
+    """
+    selected_relation = relation or relation_to_today(day, timezone)
+    return [
+        await _tasks_widget(session, owner_id, day, timezone),
+        await _goals_widget(session, owner_id),
+        await _stories_widget(session, owner_id, day, timezone, selected_relation),
+        await _events_widget(session, day, timezone),
+    ]
+
+
 async def build_daily_context(
     session: AsyncSession, owner_id: int, day: date, timezone: str
 ) -> DailyContext:
-    """Compose the saved latest brief and current-record widgets for one local day."""
+    """Compose the saved latest brief and current-record widgets for one local day.
+
+    Retained brief history is presentation data; callers needing only fact support should use
+    ``build_daily_widgets`` so malformed saved citations cannot prevent independent current reads.
+    """
     relation = relation_to_today(day, timezone)
-    widgets = [
-        await _tasks_widget(session, owner_id, day, timezone),
-        await _goals_widget(session, owner_id),
-        await _stories_widget(session, owner_id, day, timezone, relation),
-        await _events_widget(session, day, timezone),
-    ]
+    widgets = await build_daily_widgets(session, owner_id, day, timezone, relation=relation)
     now = datetime.now(UTC)
     return DailyContext(
         selected_date=day, timezone=timezone, relation=relation, generated_at=now,

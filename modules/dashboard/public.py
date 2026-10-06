@@ -22,11 +22,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import HTTPException
 
 from core.realtime import commit_with_replay, make_dashboard_change
-from modules.dashboard import gadgets, layouts
+from modules.dashboard import briefs, context, gadgets, layouts
 from modules.dashboard.models import (
     Dashboard,
     DashboardGroup,
     DashboardLayout,
+    DailyBrief,
+    BriefSchedule as BriefScheduleRow,
     GadgetDefinition,
     GadgetInstance,
     GadgetPlacement,
@@ -36,6 +38,10 @@ from modules.dashboard.schemas import (
     DashboardExportFence,
     DashboardExportPage,
     DashboardExportValidation,
+    GadgetDefinitionExport,
+    GadgetDefinitionExportFence,
+    GadgetDefinitionExportPage,
+    GadgetDefinitionExportValidation,
     DashboardPatch,
     GadgetDefinitionCreate,
     GadgetDefinitionPatch,
@@ -66,6 +72,17 @@ from modules.dashboard.schemas import (
 )
 from modules.sources.schemas import GadgetSourceSelectionPage
 from modules.sources import public as sources
+from modules.dashboard.daily_schemas import (
+    BriefSchedule,
+    BriefExportFence,
+    BriefExportPage,
+    BriefExportValidation,
+    BriefScheduleExport,
+    BriefScheduleExportFence,
+    BriefScheduleExportPage,
+    BriefScheduleExportValidation,
+    DailyBriefExport,
+)
 
 MAX_REVISION = 9_007_199_254_740_991
 DASHBOARD_QUOTA_LOCK_NAMESPACE = 4_603_202
@@ -460,6 +477,149 @@ def _dashboard_export_scope(owner_id: int, snapshot_at: datetime) -> tuple[objec
     return Dashboard.owner_id == owner_id, Dashboard.created_at <= snapshot_at, Dashboard.updated_at <= snapshot_at
 
 
+def _encode_owner_export_cursor(
+    record_kind: str, snapshot_at: datetime, position_at: datetime, identifier: UUID,
+) -> str:
+    """Bind a portable owner keyset position to its dataset and fixed cutoff."""
+    raw = json.dumps(
+        [1, record_kind, snapshot_at.isoformat(), position_at.isoformat(), str(identifier)],
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _decode_owner_export_cursor(cursor: str, record_kind: str) -> tuple[datetime, datetime, UUID]:
+    """Reject oversized, noncanonical, cross-dataset, or future portable owner cursors."""
+    try:
+        if len(cursor) > 512 or "=" in cursor:
+            raise ValueError
+        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
+        if base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=") != cursor:
+            raise ValueError
+        value = json.loads(raw)
+        if not isinstance(value, list) or len(value) != 5 or value[:2] != [1, record_kind]:
+            raise ValueError
+        snapshot_at, position_at = datetime.fromisoformat(value[2]), datetime.fromisoformat(value[3])
+        identifier = UUID(value[4])
+        if (any(item.tzinfo is None or item.utcoffset() is None for item in (snapshot_at, position_at))
+                or snapshot_at.isoformat() != value[2] or position_at.isoformat() != value[3]
+                or position_at > snapshot_at or snapshot_at > datetime.now(UTC)
+                or str(identifier) != value[4]
+                or _encode_owner_export_cursor(record_kind, snapshot_at, position_at, identifier) != cursor):
+            raise ValueError
+        return snapshot_at, position_at, identifier
+    except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError, binascii.Error) as exc:
+        raise HTTPException(status_code=422, detail="Owner export cursor is invalid") from exc
+
+
+def _definition_export_scope(owner_id: int, snapshot_at: datetime) -> tuple[object, ...]:
+    """Select the complete set of saved owner definitions created by the cutoff."""
+    return (
+        GadgetDefinition.owner_id == owner_id,
+        GadgetDefinition.created_at <= snapshot_at,
+    )
+
+
+def _definition_export_read(row: GadgetDefinition) -> GadgetDefinitionExport:
+    """Project persisted selectors only, excluding placements, live warnings and renderer output."""
+    return GadgetDefinitionExport(
+        id=row.id, name=row.name, revision=row.revision, renderer=row.renderer,
+        source_ids=[UUID(str(item)) for item in row.source_ids],
+        scope=GadgetScope.model_validate(row.scope), filters=GadgetFilters.model_validate(row.filters),
+        highlight_rules=[HighlightRule.model_validate(item) for item in row.highlight_rules],
+        created_at=row.created_at, updated_at=row.updated_at,
+    )
+
+
+def _definition_export_row_digest(row: GadgetDefinition) -> str:
+    """Hash the exact persisted selector fields and both revision timestamps for final fencing."""
+    value = {
+        "id": str(row.id), "name": row.name, "revision": row.revision, "renderer": row.renderer,
+        "source_ids": row.source_ids, "scope": row.scope, "filters": row.filters,
+        "highlight_rules": row.highlight_rules, "created_at": row.created_at.isoformat(),
+        "updated_at": row.updated_at.isoformat(),
+    }
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True,
+                                     separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+async def _definition_export_page(
+    session: AsyncSession, *, owner_id: int, limit: int, cursor: str | None,
+) -> GadgetDefinitionExportPage:
+    """Page all definitions, including unplaced; omit changed-after-cutoff configs and fence them."""
+    if owner_id != 1 or not 1 <= limit <= 100:
+        raise ValueError("Gadget definition export owner or page limit is invalid")
+    if cursor is None:
+        snapshot_at, position = datetime.now(UTC), None
+    else:
+        snapshot_at, position_at, position_id = _decode_owner_export_cursor(cursor, "gadget_definitions")
+        position = (position_at, position_id)
+    scope = _definition_export_scope(owner_id, snapshot_at)
+    snapshot_count = int(await session.scalar(
+        select(func.count()).select_from(GadgetDefinition).where(*scope)
+    ) or 0)
+    statement = select(GadgetDefinition).where(*scope)
+    if position is not None:
+        from sqlalchemy import tuple_
+        statement = statement.where(tuple_(GadgetDefinition.created_at, GadgetDefinition.id) > position)
+    rows = list((await session.scalars(
+        statement.order_by(GadgetDefinition.created_at, GadgetDefinition.id).limit(limit + 1)
+        .execution_options(populate_existing=True)
+    )).all())
+    has_more, rows = len(rows) > limit, rows[:limit]
+    eligible_rows = [row for row in rows if row.updated_at <= snapshot_at]
+    items = [_definition_export_read(row) for row in eligible_rows]
+    encoded = [item.model_dump_json().encode("utf-8") for item in items]
+    payload_bytes = 2 + sum(map(len, encoded)) + max(0, len(items) - 1)
+    if payload_bytes > 16_777_216:
+        raise HTTPException(status_code=413, detail="Gadget definition export page exceeds its byte bound")
+    fences = [GadgetDefinitionExportFence(
+        id=row.id, created_at=row.created_at, updated_at=row.updated_at, revision=row.revision,
+        content_digest=_definition_export_row_digest(row), eligible=row.updated_at <= snapshot_at,
+    ) for row in rows]
+    return GadgetDefinitionExportPage(
+        owner_id=owner_id, record_kind="gadget_definitions", snapshot_at=snapshot_at,
+        snapshot_count=snapshot_count, omitted_count=len(rows) - len(eligible_rows),
+        items=items, fences=fences, payload_bytes=payload_bytes, available=True,
+        next_cursor=_encode_owner_export_cursor("gadget_definitions", snapshot_at, rows[-1].created_at, rows[-1].id)
+        if has_more and rows else None,
+        omission_reason="definition_changed_after_snapshot" if len(rows) != len(eligible_rows) else None,
+    )
+
+
+async def _definition_export_validation(
+    session: AsyncSession, *, owner_id: int, snapshot_at: datetime,
+    expected_snapshot_count: int, fences: list[GadgetDefinitionExportFence],
+) -> GadgetDefinitionExportValidation:
+    """Recheck the definition cutoff inventory and exact saved-selector digest before publication."""
+    if owner_id != 1 or len(fences) > 100:
+        raise ValueError("Gadget definition export validation input is invalid")
+    scope = _definition_export_scope(owner_id, snapshot_at)
+    observed = int(await session.scalar(
+        select(func.count()).select_from(GadgetDefinition).where(*scope)
+    ) or 0)
+    if observed != expected_snapshot_count:
+        return GadgetDefinitionExportValidation(
+            valid=False, reason="snapshot_count_changed", observed_snapshot_count=observed,
+        )
+    for fence in fences:
+        row = await session.scalar(select(GadgetDefinition).where(
+            GadgetDefinition.id == fence.id, *scope,
+        ).execution_options(populate_existing=True))
+        if row is None:
+            return GadgetDefinitionExportValidation(
+                valid=False, reason="record_changed", observed_snapshot_count=observed,
+            )
+        eligible = row.updated_at <= snapshot_at
+        if (row.created_at != fence.created_at or row.updated_at != fence.updated_at
+                or row.revision != fence.revision or eligible != fence.eligible
+                or _definition_export_row_digest(row) != fence.content_digest):
+            return GadgetDefinitionExportValidation(
+                valid=False, reason="record_changed", observed_snapshot_count=observed,
+            )
+    return GadgetDefinitionExportValidation(valid=True, reason="valid", observed_snapshot_count=observed)
+
+
 def _newer_export_definition_exists(owner_id: int, snapshot_at: datetime):
     """Find child definitions updated after the cutoff but used by a retained dashboard."""
     return select(GadgetInstance.id).join(
@@ -471,10 +631,240 @@ def _newer_export_definition_exists(owner_id: int, snapshot_at: datetime):
     ).correlate(Dashboard).exists()
 
 
+async def _brief_export_eligibility(
+    session: AsyncSession, row: DailyBrief,
+    cache: dict[tuple[object, str], dict[tuple[str, str], tuple[str, tuple[str, ...], int]]],
+) -> bool:
+    """Require each immutable citation's actual fact kind/id/title/source set to remain current.
+
+    Rebuild current widgets only, excluding saved brief/history presentation. The normal fact policy
+    drops deleted, paused, or local-only sources; matching identity, title and current numbered
+    reference prevents stale citation labels from being copied into the portable record.
+    """
+    citations = _brief_export_citations(row)
+    if citations is None:
+        return False
+    key = (row.brief_date, row.timezone)
+    fact_by_identity = cache.get(key)
+    if fact_by_identity is None:
+        widgets = await context.build_daily_widgets(
+            session, row.owner_id, row.brief_date, row.timezone,
+        )
+        facts = await briefs._facts(session, widgets)
+        fact_by_identity = {
+            (str(item["kind"]), str(item["id"])): (
+                str(item["title"]), tuple(str(source_id) for source_id in item["source_ids"]),
+                reference,
+            )
+            for reference, item in enumerate(facts, start=1)
+        }
+        cache[key] = fact_by_identity
+    for citation in citations:
+        current = fact_by_identity.get((citation["kind"], citation["id"]))
+        if current != (citation["title"], tuple(citation["source_ids"]), citation["ref"]):
+            return False
+    return True
+
+
+def _brief_export_citations(row: DailyBrief) -> list[dict[str, Any]] | None:
+    """Allowlist the saved citation identity fields, rejecting malformed/duplicate references early."""
+    if not isinstance(row.citations, list) or not row.citations or len(row.citations) > 40:
+        return None
+    expected_keys = {"ref", "kind", "id", "title", "source_ids"}
+    citations: list[dict[str, Any]] = []
+    seen_references: set[int] = set()
+    for citation in row.citations:
+        if not isinstance(citation, dict) or set(citation) != expected_keys:
+            return None
+        reference, kind, identifier = citation["ref"], citation["kind"], citation["id"]
+        title, source_ids = citation["title"], citation["source_ids"]
+        if (type(reference) is not int or not 1 <= reference <= 40 or reference in seen_references
+                or not isinstance(kind, str) or not isinstance(identifier, str)
+                or not isinstance(title, str) or not isinstance(source_ids, list)
+                or any(not isinstance(value, str) for value in source_ids)):
+            return None
+        seen_references.add(reference)
+        citations.append({
+            "ref": reference, "kind": kind, "id": identifier,
+            "title": title, "source_ids": list(source_ids),
+        })
+    return citations
+
+
+def _brief_export_row_digest(row: DailyBrief) -> str:
+    """Hash only persisted brief fields intentionally eligible for portable projection."""
+    value = {
+        "id": str(row.id), "brief_date": row.brief_date.isoformat(), "timezone": row.timezone,
+        "revision": row.revision, "status": row.status, "content": row.content,
+        "citations": row.citations, "model_alias": row.model_alias,
+        "generated_at": row.generated_at.isoformat(),
+    }
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True,
+                                     separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+async def _brief_export_page(
+    session: AsyncSession, *, owner_id: int, limit: int, cursor: str | None,
+) -> BriefExportPage:
+    """Page every saved revision at one cutoff and omit text whose exact live citation set fails."""
+    if owner_id != 1 or not 1 <= limit <= 100:
+        raise ValueError("Daily brief export owner or page limit is invalid")
+    if cursor is None:
+        snapshot_at, position = datetime.now(UTC), None
+    else:
+        snapshot_at, position_at, position_id = _decode_owner_export_cursor(cursor, "daily_briefs")
+        position = (position_at, position_id)
+    scope = (DailyBrief.owner_id == owner_id, DailyBrief.generated_at <= snapshot_at)
+    snapshot_count = int(await session.scalar(
+        select(func.count()).select_from(DailyBrief).where(*scope)
+    ) or 0)
+    statement = select(DailyBrief).where(*scope)
+    if position is not None:
+        from sqlalchemy import tuple_
+        statement = statement.where(tuple_(DailyBrief.generated_at, DailyBrief.id) > position)
+    rows = list((await session.scalars(
+        statement.order_by(DailyBrief.generated_at, DailyBrief.id).limit(limit + 1)
+        .execution_options(populate_existing=True)
+    )).all())
+    has_more, rows = len(rows) > limit, rows[:limit]
+    fact_cache: dict[tuple[object, str], dict[tuple[str, str], tuple[str, tuple[str, ...], int]]] = {}
+    items: list[DailyBriefExport] = []
+    fences: list[BriefExportFence] = []
+    omitted_count = 0
+    for row in rows:
+        eligible = await _brief_export_eligibility(session, row, fact_cache)
+        fences.append(BriefExportFence(
+            id=row.id, generated_at=row.generated_at, revision=row.revision,
+            content_digest=_brief_export_row_digest(row), eligible=eligible,
+        ))
+        if not eligible:
+            omitted_count += 1
+            continue
+        citations = _brief_export_citations(row)
+        if citations is None:
+            raise HTTPException(status_code=409, detail="Daily brief changed during export; retry the download")
+        items.append(DailyBriefExport(
+            id=row.id, brief_date=row.brief_date, timezone=row.timezone, revision=row.revision,
+            status="current", content=row.content, citations=citations,
+            model_alias=row.model_alias,
+            generated_at=row.generated_at,
+        ))
+    encoded = [item.model_dump_json().encode("utf-8") for item in items]
+    payload_bytes = 2 + sum(map(len, encoded)) + max(0, len(items) - 1)
+    if payload_bytes > 16_777_216:
+        raise HTTPException(status_code=413, detail="Daily brief export page exceeds its byte bound")
+    return BriefExportPage(
+        owner_id=owner_id, record_kind="daily_briefs", snapshot_at=snapshot_at,
+        snapshot_count=snapshot_count, omitted_count=omitted_count, items=items, fences=fences,
+        payload_bytes=payload_bytes,
+        next_cursor=_encode_owner_export_cursor("daily_briefs", snapshot_at, rows[-1].generated_at, rows[-1].id)
+        if has_more and rows else None,
+        omission_reason="unsupported_or_deleted_citation" if omitted_count else None,
+    )
+
+
+async def _brief_export_validation(
+    session: AsyncSession, *, owner_id: int, snapshot_at: datetime,
+    expected_snapshot_count: int, fences: list[BriefExportFence],
+) -> BriefExportValidation:
+    """Recheck all scanned revisions, including omitted rows, so deletion or support changes abort."""
+    if owner_id != 1 or len(fences) > 100:
+        raise ValueError("Daily brief export validation input is invalid")
+    scope = DailyBrief.owner_id == owner_id, DailyBrief.generated_at <= snapshot_at
+    observed = int(await session.scalar(select(func.count()).select_from(DailyBrief).where(*scope)) or 0)
+    if observed != expected_snapshot_count:
+        return BriefExportValidation(valid=False, reason="snapshot_count_changed", observed_snapshot_count=observed)
+    fact_cache: dict[tuple[object, str], dict[tuple[str, str], tuple[str, tuple[str, ...], int]]] = {}
+    for fence in fences:
+        row = await session.scalar(select(DailyBrief).where(
+            DailyBrief.id == fence.id, *scope,
+        ).execution_options(populate_existing=True))
+        if row is None:
+            return BriefExportValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
+        eligible = await _brief_export_eligibility(session, row, fact_cache)
+        if (row.generated_at != fence.generated_at or row.revision != fence.revision
+                or eligible != fence.eligible or _brief_export_row_digest(row) != fence.content_digest):
+            return BriefExportValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
+    return BriefExportValidation(valid=True, reason="valid", observed_snapshot_count=observed)
+
+
+def _brief_schedule_export_value(row: BriefScheduleRow | None) -> BriefScheduleExport:
+    """Project the saved/default editable time without its private scheduler ownership fields."""
+    schedule = BriefSchedule.model_validate(row) if row is not None else BriefSchedule()
+    return BriefScheduleExport.model_validate(schedule.model_dump())
+
+
+def _brief_schedule_export_fence(row: BriefScheduleRow | None) -> BriefScheduleExportFence:
+    """Digest the safe schedule projection together with its persisted-row identity and timestamp."""
+    value = _brief_schedule_export_value(row)
+    updated_at = row.updated_at if row is not None else None
+    data = {"persisted": row is not None, "updated_at": updated_at.isoformat() if updated_at else None,
+            "schedule": value.model_dump(mode="json")}
+    return BriefScheduleExportFence(
+        persisted=row is not None, updated_at=updated_at,
+        content_digest=hashlib.sha256(json.dumps(data, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+    )
+
+
+async def _brief_schedule_export_page(
+    session: AsyncSession, *, owner_id: int,
+) -> BriefScheduleExportPage:
+    """Return the default or persisted owner schedule and reject updates racing the cutoff."""
+    if owner_id != 1:
+        raise ValueError("Brief schedule export owner is invalid")
+    snapshot_at = datetime.now(UTC)
+    row = await session.get(BriefScheduleRow, owner_id)
+    if row is not None and row.updated_at > snapshot_at:
+        raise HTTPException(status_code=409, detail="Brief schedule changed during export; retry the download")
+    item = _brief_schedule_export_value(row)
+    payload_bytes = 2 + len(item.model_dump_json().encode("utf-8"))
+    return BriefScheduleExportPage(
+        owner_id=owner_id, record_kind="brief_schedule", snapshot_at=snapshot_at,
+        snapshot_count=1, items=[item], fences=[_brief_schedule_export_fence(row)],
+        payload_bytes=payload_bytes, next_cursor=None, available=True, omission_reason=None,
+    )
+
+
+async def _brief_schedule_export_validation(
+    session: AsyncSession, *, owner_id: int, snapshot_at: datetime,
+    expected_snapshot_count: int, fences: list[BriefScheduleExportFence],
+) -> BriefScheduleExportValidation:
+    """Compare persisted/default schedule state immediately before the aggregate download is returned."""
+    if owner_id != 1 or expected_snapshot_count != 1 or len(fences) != 1:
+        raise ValueError("Brief schedule export validation input is invalid")
+    row = await session.get(BriefScheduleRow, owner_id, populate_existing=True)
+    observed = 1
+    current = _brief_schedule_export_fence(row)
+    expected = fences[0]
+    valid = (
+        (row is None or row.updated_at <= snapshot_at)
+        and current.persisted == expected.persisted
+        and current.updated_at == expected.updated_at
+        and current.content_digest == expected.content_digest
+    )
+    return BriefScheduleExportValidation(
+        valid=valid, reason="valid" if valid else "record_changed", observed_snapshot_count=observed,
+    )
+
+
 async def export_page(
     session: AsyncSession, *, owner_id: int, record_kind: str, limit: int = 50, cursor: str | None = None,
-) -> DashboardExportPage:
-    """Return bounded saved dashboard structure, excluding runtime payloads and source content."""
+) -> DashboardExportPage | GadgetDefinitionExportPage | BriefExportPage | BriefScheduleExportPage:
+    """Return one cutoff-bound dashboard, definition, retained-brief or schedule page.
+
+    Each dataset is owner-scoped and size-bounded. Dashboard placements exclude newer unretained
+    definition revisions; definitions include unplaced saved selectors; brief prose is emitted only
+    when every actual fact kind/ID/title/source citation remains currently eligible; schedule output
+    excludes automation ownership identifiers. The aggregate caller must revalidate returned fences.
+    """
+    if record_kind == "gadget_definitions":
+        return await _definition_export_page(session, owner_id=owner_id, limit=limit, cursor=cursor)
+    if record_kind == "daily_briefs":
+        return await _brief_export_page(session, owner_id=owner_id, limit=limit, cursor=cursor)
+    if record_kind == "brief_schedule":
+        if cursor is not None:
+            raise ValueError("Brief schedule export does not accept a cursor")
+        return await _brief_schedule_export_page(session, owner_id=owner_id)
     if owner_id != 1 or record_kind != "dashboards" or not 1 <= limit <= 100:
         raise ValueError("Dashboard export owner, kind or page limit is invalid")
     if cursor is None:
@@ -521,8 +911,31 @@ async def export_page(
 async def validate_export_fences(
     session: AsyncSession, *, owner_id: int, record_kind: str, snapshot_at: datetime,
     expected_snapshot_count: int, fences: list[DashboardExportFence],
-) -> DashboardExportValidation:
-    """Re-read full configuration DTO digests and parent/child fences before publication."""
+) -> (DashboardExportValidation | GadgetDefinitionExportValidation | BriefExportValidation
+      | BriefScheduleExportValidation):
+    """Recheck the cutoff inventory and exact public projection/evidence fences for one dataset.
+
+    The export aggregator calls this only after rendering, immediately before constructing the
+    response. Bounds cap each fence batch; invalid owner, dataset or changed evidence fails closed.
+    """
+    if record_kind == "gadget_definitions":
+        return await _definition_export_validation(
+            session, owner_id=owner_id, snapshot_at=snapshot_at,
+            expected_snapshot_count=expected_snapshot_count,
+            fences=fences,  # type: ignore[arg-type]
+        )
+    if record_kind == "daily_briefs":
+        return await _brief_export_validation(
+            session, owner_id=owner_id, snapshot_at=snapshot_at,
+            expected_snapshot_count=expected_snapshot_count,
+            fences=fences,  # type: ignore[arg-type]
+        )
+    if record_kind == "brief_schedule":
+        return await _brief_schedule_export_validation(
+            session, owner_id=owner_id, snapshot_at=snapshot_at,
+            expected_snapshot_count=expected_snapshot_count,
+            fences=fences,  # type: ignore[arg-type]
+        )
     if owner_id != 1 or record_kind != "dashboards" or len(fences) > 100:
         raise ValueError("Dashboard export validation input is invalid")
     observed = int(await session.scalar(
