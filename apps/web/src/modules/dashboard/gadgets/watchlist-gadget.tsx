@@ -46,6 +46,7 @@ export interface WatchlistGadgetProps {
  * Standard Watchlist and Rules table gadget template.
  * Renders tracked symbols, keywords, condition matches, and explainable highlight rules
  * with visible text-based severity badges (Info, Warning, Critical) and notification states.
+ * The bounded root scrolls its controls and watchlist instead of clipping them in compact cards.
  *
  * @param props Gadget instance configuration and watchlist items.
  * @returns Accessible watchlist table gadget component.
@@ -93,7 +94,7 @@ export function WatchlistGadget({
   });
 
   return (
-    <div className="flex flex-col h-full bg-card text-card-foreground p-3 space-y-3 overflow-hidden">
+    <div className="flex flex-col h-full bg-card text-card-foreground p-3 space-y-3 overflow-y-auto overflow-x-hidden">
       {/* Header bar */}
       <div className="flex items-center justify-between border-b border-border pb-2 text-xs">
         <div className="flex items-center gap-1.5 font-medium text-muted-foreground">

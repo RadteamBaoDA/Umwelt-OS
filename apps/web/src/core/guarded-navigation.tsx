@@ -3,15 +3,20 @@
 import { createContext, useCallback, useContext, useEffect, useRef, type ReactNode } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 
-type NavigationMode = 'push' | 'replace';
+export type NavigationMode = 'push' | 'replace';
+export interface GuardedNavigationIntent {
+  href: string;
+  mode: NavigationMode;
+}
 export type LeaveGuard = {
   hasUnsavedChanges: () => boolean;
-  confirmDiscard: () => boolean;
+  confirmDiscard: (intent?: GuardedNavigationIntent) => boolean;
   acceptLeave: () => void;
 };
 type GuardedNavigation = {
   registerLeaveGuard: (guard: LeaveGuard) => () => void;
   navigate: (href: string, mode?: NavigationMode) => boolean;
+  continueNavigation: (intent: GuardedNavigationIntent) => void;
   ensureSourcesDocument: () => boolean;
   ensureEntityDocument: () => boolean;
 };
@@ -70,15 +75,16 @@ export function GuardedNavigationProvider({ children }: { children: ReactNode })
     return false;
   }, [pathname]);
 
-  /** Navigates while consulting the active unsaved-change guard and preserving full-page transitions for source routes. */
-  const navigate = useCallback((href: string, mode: NavigationMode = 'push') => {
+  /** Performs the accepted route transition, preserving full-page source-route behavior. */
+  const performNavigation = useCallback((href: string, mode: NavigationMode, acceptGuard: boolean) => {
     const destination = new URL(href, window.location.href);
     const leavesPage = destination.origin !== window.location.origin || destination.pathname !== pathname;
     const guard = guardRef.current;
-    if (leavesPage && guard?.hasUnsavedChanges()) {
-      if (!guard.confirmDiscard()) return false;
+    if (acceptGuard && leavesPage && guard?.hasUnsavedChanges()) {
+      if (!guard.confirmDiscard({ href: destination.href, mode })) return false;
       guard.acceptLeave();
     }
+    if (!acceptGuard) guard?.acceptLeave();
     if (destination.origin !== window.location.origin) {
       guard?.acceptLeave();
       if (mode === 'replace') window.location.replace(destination.href);
@@ -105,6 +111,15 @@ export function GuardedNavigationProvider({ children }: { children: ReactNode })
     else router.push(appHref);
     return true;
   }, [pathname, router]);
+
+  /** Navigates through the normal leave confirmation flow. */
+  const navigate = useCallback((href: string, mode: NavigationMode = 'push') =>
+    performNavigation(href, mode, true), [performNavigation]);
+
+  /** Continues an exact intent after an owner has resolved its custom asynchronous leave prompt. */
+  const continueNavigation = useCallback((intent: GuardedNavigationIntent) => {
+    performNavigation(intent.href, intent.mode, false);
+  }, [performNavigation]);
 
   useEffect(() => {
     /** Intercepts eligible links, including external destinations, when guarded source routes or unsaved drafts require controlled navigation. */
@@ -146,7 +161,7 @@ export function GuardedNavigationProvider({ children }: { children: ReactNode })
     };
   }, [navigate]);
 
-  return <GuardedNavigationContext.Provider value={{ registerLeaveGuard, navigate, ensureSourcesDocument, ensureEntityDocument }}>
+  return <GuardedNavigationContext.Provider value={{ registerLeaveGuard, navigate, continueNavigation, ensureSourcesDocument, ensureEntityDocument }}>
     {children}
   </GuardedNavigationContext.Provider>;
 }

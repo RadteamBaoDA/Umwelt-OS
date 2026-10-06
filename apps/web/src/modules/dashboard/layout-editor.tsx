@@ -13,7 +13,7 @@ import {
   X,
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   AlertDialog,
   AlertDialogContent,
@@ -70,6 +70,10 @@ export interface LayoutEditorProps {
   onUndo: () => void;
   /** Callback fired to re-apply undone layout snapshot. */
   onRedo: () => void;
+  /** Optional explicit adoption of the current local readable mobile projection. */
+  onUseReadableMobileSizes?: () => void;
+  /** True only after a complete measured readable projection is available. */
+  canUseReadableMobileSizes?: boolean;
   /** Callback fired when user opens the preset picker dialog. */
   onOpenPresetPicker: () => void;
   /** Callback fired when adding a selected definition or new gadget instance. */
@@ -77,13 +81,20 @@ export interface LayoutEditorProps {
     definitionId: string;
     groupId: string;
     title?: string;
-  }) => void;
+    renderer: string;
+  }, reservationId: string) => Promise<void>;
+  /** Reserves the owner layout before any asynchronous definition creation begins. */
+  onBeginAddGadgetInstance: (renderer: string) => string | null;
+  /** Releases a reservation when quick definition creation fails before instance creation. */
+  onCancelPendingAdd: (reservationId: string) => void;
   /** Available groups on the active dashboard. */
   groups: DashboardGroup[];
   /** Currently selected group identifier. */
   activeGroupId?: string;
   /** Controls open state of the Save / Discard / Stay modal. */
   dirtyModalOpen: boolean;
+  /** Origin-specific text when a pending layout switch is caused by a viewport breakpoint. */
+  dirtyDescription?: string;
   /** Callback handling dirty modal resolution (save, discard, or stay). */
   onDirtyModalResolution: (action: 'save' | 'discard' | 'stay') => void;
   /** Optional error message displayed if the last save attempt failed. */
@@ -94,12 +105,13 @@ export interface LayoutEditorProps {
 
 /**
  * Toolbar and dirty navigation guard for dashboard layout editing.
- * Provides explicit Save, Cancel, Undo, Redo, Add Gadget, and Preset Picker controls.
+ * Provides explicit Save/Cancel/Undo/Redo controls, optional readable-size adoption, and Add
+ * preflight before quick definitions are created.
  * Shows a Save / Discard / Stay modal before discarding unsaved layout changes,
  * and retains draft state upon failed save attempts.
  *
  * @param props Toolbar state flags and action callbacks.
- * @returns Accessible toolbar banner and modals.
+ * @returns Accessible toolbar and owner decision dialogs.
  */
 export function LayoutEditor({
   isDirty,
@@ -110,11 +122,16 @@ export function LayoutEditor({
   onCancel,
   onUndo,
   onRedo,
+  onUseReadableMobileSizes,
+  canUseReadableMobileSizes = false,
   onOpenPresetPicker,
   onAddGadgetInstance,
+  onBeginAddGadgetInstance,
+  onCancelPendingAdd,
   groups,
   activeGroupId,
   dirtyModalOpen,
+  dirtyDescription,
   onDirtyModalResolution,
   saveError,
   onDismissSaveError,
@@ -122,6 +139,8 @@ export function LayoutEditor({
   const t = useTranslations('dashboard');
   const session = useWorkspaceSession();
   const [addDialogOpen, setAddDialogOpen] = useState<boolean>(false);
+  const [isAdding, setIsAdding] = useState<boolean>(false);
+  const isAddingRef = useRef(false);
 
   // States for Add Gadget modal
   const [selectedDefinitionId, setSelectedDefinitionId] = useState<string>('');
@@ -167,26 +186,44 @@ export function LayoutEditor({
 
   /** Handles confirmation of adding a gadget to the dashboard. */
   const handleConfirmAdd = useCallback(async () => {
+    if (isAddingRef.current) return;
     let definitionId = selectedDefinitionId;
     const finalGroupId = targetGroupId || groups[0]?.id || '';
-
-    // If no existing definition selected, create a quick definition first
-    if (!definitionId) {
-      const created = await createDefMutation.mutateAsync();
-      definitionId = created.id;
+    const selectedDefinition = definitions.find((definition) => definition.id === definitionId);
+    const renderer = selectedDefinition?.renderer ?? selectedRenderer;
+    const reservationId = onBeginAddGadgetInstance(renderer);
+    if (!reservationId) {
+      setAddDialogOpen(false);
+      return;
     }
 
-    onAddGadgetInstance({
-      definitionId,
-      groupId: finalGroupId,
-      title: instanceTitle.trim() || undefined,
-    });
+    isAddingRef.current = true;
+    setIsAdding(true);
+    try {
+      // If no existing definition selected, create a quick definition first.
+      if (!definitionId) {
+        const created = await createDefMutation.mutateAsync();
+        definitionId = created.id;
+      }
 
-    setAddDialogOpen(false);
-    setSelectedDefinitionId('');
-    setInstanceTitle('');
-    setNewDefName('');
-  }, [createDefMutation, groups, instanceTitle, onAddGadgetInstance, selectedDefinitionId, targetGroupId]);
+      await onAddGadgetInstance({
+        definitionId,
+        groupId: finalGroupId,
+        title: instanceTitle.trim() || undefined,
+        renderer,
+      }, reservationId);
+
+      setAddDialogOpen(false);
+      setSelectedDefinitionId('');
+      setInstanceTitle('');
+      setNewDefName('');
+    } catch {
+      onCancelPendingAdd(reservationId);
+    } finally {
+      isAddingRef.current = false;
+      setIsAdding(false);
+    }
+  }, [createDefMutation, definitions, groups, instanceTitle, onAddGadgetInstance, onBeginAddGadgetInstance, onCancelPendingAdd, selectedDefinitionId, selectedRenderer, targetGroupId]);
 
   return (
     <>
@@ -236,9 +273,21 @@ export function LayoutEditor({
 
           <div className="w-px h-5 bg-border mx-1" />
 
+          {onUseReadableMobileSizes && (
+            <Button
+              type="button"
+              className="secondary min-h-11 text-xs px-3"
+              disabled={!canUseReadableMobileSizes || isSaving}
+              onClick={onUseReadableMobileSizes}
+            >
+              {t('useReadableMobileSizes')}
+            </Button>
+          )}
+
           {/* Add Gadget */}
           <Button
             type="button"
+            disabled={isSaving}
             className="secondary text-xs h-8 px-2.5 gap-1.5"
             onClick={() => setAddDialogOpen(true)}
           >
@@ -249,6 +298,7 @@ export function LayoutEditor({
           {/* Presets */}
           <Button
             type="button"
+            disabled={isSaving}
             className="secondary text-xs h-8 px-2.5 gap-1.5"
             onClick={onOpenPresetPicker}
           >
@@ -315,13 +365,14 @@ export function LayoutEditor({
               <span>{t('dirtyWarningTitle')}</span>
             </AlertDialogTitle>
             <AlertDialogDescription className="text-muted-foreground text-sm">
-              {t('dirtyWarningDesc')}
+              {dirtyDescription ?? t('dirtyWarningDesc')}
             </AlertDialogDescription>
           </AlertDialogHeader>
 
           <AlertDialogFooter className="flex-col sm:flex-row gap-2 mt-4">
             <Button
               type="button"
+              disabled={isSaving}
               className="secondary w-full sm:w-auto text-xs"
               onClick={() => onDirtyModalResolution('stay')}
             >
@@ -329,6 +380,7 @@ export function LayoutEditor({
             </Button>
             <Button
               type="button"
+              disabled={isSaving}
               className="secondary text-destructive hover:bg-destructive/10 w-full sm:w-auto text-xs"
               onClick={() => onDirtyModalResolution('discard')}
             >
@@ -336,6 +388,7 @@ export function LayoutEditor({
             </Button>
             <Button
               type="button"
+              disabled={isSaving}
               className="w-full sm:w-auto text-xs font-bold"
               onClick={() => onDirtyModalResolution('save')}
             >
@@ -346,7 +399,7 @@ export function LayoutEditor({
       </AlertDialog>
 
       {/* Add Gadget Dialog */}
-      <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
+      <Dialog open={addDialogOpen} onOpenChange={(open) => { if (!isAddingRef.current) setAddDialogOpen(open); }}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>{t('addGadgetTitle')}</DialogTitle>
@@ -482,12 +535,14 @@ export function LayoutEditor({
             <Button
               type="button"
               className="secondary text-xs"
-              onClick={() => setAddDialogOpen(false)}
+              disabled={isAdding}
+              onClick={() => { if (!isAddingRef.current) setAddDialogOpen(false); }}
             >
               {t('cancel')}
             </Button>
             <Button
               type="button"
+              disabled={isAdding}
               className="text-xs font-bold"
               onClick={handleConfirmAdd}
             >

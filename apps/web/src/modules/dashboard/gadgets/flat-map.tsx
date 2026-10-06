@@ -36,7 +36,7 @@ function readDeckColor(token: string, fallback: string, alpha: number): [number,
 /** Convert the bundled Natural Earth topology once; flat rendering does not fetch tiles or a basemap. */
 const landGeometry = feature(worldTopology as unknown as Topology, 'land');
 
-/** Render a local equirectangular view and the same point IDs shown by the globe and evidence list. */
+/** Render a local equirectangular plot whose 192px floor does not shrink beneath map controls. */
 export function FlatMap({ features, selectedFeatureId, onSelectFeature, width, height, visible, interactive }: FlatMapProps) {
   const t = useTranslations('dashboard');
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -116,7 +116,7 @@ export function FlatMap({ features, selectedFeatureId, onSelectFeature, width, h
     setUnavailable(false);
   };
 
-  return <div className="relative h-full min-h-48 w-full">
+  return <div className="relative h-full min-h-48 shrink-0 w-full">
     <DeckGL<typeof views>
       views={views}
       viewState={{ 'world-flat': { target: [0, 0, 0], zoom } }}

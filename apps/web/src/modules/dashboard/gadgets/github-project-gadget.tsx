@@ -19,7 +19,8 @@ function safeGithubUrl(value: unknown): string | null {
 /**
  * Project gadget for one configured GitHub source: collected record counts plus recent mapped
  * issue, pull request, commit and release events from the Timeline, each linked to its provider
- * record. Data comes only from the owner APIs; nothing is sampled or fabricated.
+ * record. Data comes only from the owner APIs; nothing is sampled or fabricated. The bounded root
+ * scrolls controls and events rather than clipping them in compact cards.
  */
 export function GithubProjectGadget({ instance }: { instance: GadgetInstance }) {
   const t = useTranslations('github');
@@ -54,7 +55,7 @@ export function GithubProjectGadget({ instance }: { instance: GadgetInstance }) 
   const counts = summary.data?.resource_counts;
   const items = events.data ?? [];
   return (
-    <section className="flex h-full min-h-0 flex-col gap-3 overflow-hidden bg-card p-3 text-card-foreground">
+    <section className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto overflow-x-hidden bg-card p-3 text-card-foreground">
       <header className="flex items-center justify-between gap-2 border-b border-border pb-2">
         <h2 className="text-sm font-semibold">{instance.title || t('gadgetTitle')}</h2>
         <div className="flex items-center gap-1.5">

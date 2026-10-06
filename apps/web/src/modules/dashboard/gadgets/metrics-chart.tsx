@@ -49,6 +49,7 @@ export interface MetricsChartProps {
  * Renders high-precision time-series data using Recharts via shadcn conventions,
  * supporting Area, Line, and Bar modes, time range filtering (24h/7d/30d/90d/1y/all),
  * unit/currency formatting, change calculations, and provider latency indicators.
+ * Its control bars and 140px chart minimum remain nonshrinking inside a bounded scroll root.
  *
  * @param props Gadget instance configuration and time series options.
  * @returns Accessible metrics chart gadget component.
@@ -117,9 +118,9 @@ export function MetricsChart({
   }
 
   return (
-    <div className="flex flex-col h-full bg-card text-card-foreground p-3 space-y-3 overflow-hidden">
+    <div className="flex flex-col h-full bg-card text-card-foreground p-3 space-y-3 overflow-y-auto overflow-x-hidden">
       {/* Top Header: Symbol, Value, Change & Controls */}
-      <div className="flex items-start justify-between border-b border-border pb-2.5">
+      <div className="flex shrink-0 items-start justify-between border-b border-border pb-2.5">
         <div className="space-y-1">
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-mono">
             <span className="font-bold text-foreground">{targetSymbol}</span>
@@ -200,7 +201,7 @@ export function MetricsChart({
       </div>
 
       {/* Time Range Filter Bar */}
-      <div className="flex items-center justify-between text-xs">
+      <div className="flex shrink-0 items-center justify-between text-xs">
         <div className="flex items-center gap-1">
           {(['24h', '7d', '30d', '90d', '1y', 'all'] as ChartTimeRange[]).map((range) => (
             <button
@@ -224,7 +225,7 @@ export function MetricsChart({
       </div>
 
       {/* Main Responsive Recharts View */}
-      <div className="flex-1 w-full min-h-[140px] relative">
+      <div className="flex-1 w-full min-h-[140px] shrink-0 relative">
         {chartKind === 'area' && (
           <BaseAreaChart
             data={data}
