@@ -25,6 +25,7 @@ from modules.timeline.schemas import (
     TimelineExportEvidence, TimelineExportFence, TimelineExportFenceValidation,
     TimelineExportPage, TimelineExportParticipant, TimelineExportRead,
 )
+from modules.timeline.seed import ensure_demo_events
 
 MAX_PAGE = 100
 TIMELINE_EXPORT_PAGE_MAX_BYTES = 16_777_216
@@ -1652,3 +1653,4 @@ async def list_changed_events_after(
             payload["importance"] = float(r.importance_score)
         result.append((r.updated_at, r.id, f"{r.id}:{r.revision}", payload))
     return result
+

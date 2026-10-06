@@ -31,6 +31,7 @@ from modules.knowledge.relationships.schemas import (
 )
 from modules.sources import public as sources
 from modules.sources.schemas import SourceExportFence
+from modules.knowledge.relationships.seed import ensure_demo_relationships
 
 MAX_CLEANUP_SUPPORTS = 10_000
 
@@ -1377,3 +1378,4 @@ async def validate_export_fences(
         if [ref.id for ref in refs] != fence.evidence_ids or digest != fence.evidence_digest:
             return RelationshipExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
     return RelationshipExportFenceValidation(valid=True, reason="valid", observed_snapshot_count=observed)
+

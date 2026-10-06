@@ -12,6 +12,7 @@ from core.database import Base
 
 P08_DEMO_NAMESPACE = "bbd-os.demo.phase-8"
 P10_DEMO_NAMESPACE = "bbd-os.demo.phase-10"
+P12_DEMO_NAMESPACE = "bbd-os.demo.phase-12"
 
 
 class DemoSeedBusy(RuntimeError):
@@ -43,6 +44,16 @@ def demo_seed_id(kind: str, identity: str) -> UUID:
     if kind not in {"goal", "milestone", "task", "topic", "automation"} or not 1 <= len(identity) <= 128:
         raise ValueError("Invalid P08 demo seed identity")
     return uuid5(NAMESPACE_URL, f"{P08_DEMO_NAMESPACE}/{kind}/{identity}")
+
+
+def p12_demo_seed_id(kind: str, identity: str) -> UUID:
+    """Return a stable Phase 12 fixture ID without changing any earlier seed identity."""
+    if (
+        kind not in {"entity", "relationship", "event", "article", "conversation"}
+        or not 1 <= len(identity) <= 128
+    ):
+        raise ValueError("Invalid P12 demo seed identity")
+    return uuid5(NAMESPACE_URL, f"{P12_DEMO_NAMESPACE}/{kind}/{identity}")
 
 
 async def claim_demo_seed(session: AsyncSession, owner_id: int, namespace: str) -> bool:

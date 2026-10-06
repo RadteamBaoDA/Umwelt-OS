@@ -182,7 +182,7 @@ function ChatTriggerButton() {
   return <SessionContext.Provider value={session.data}>
       <div className="shell">
         <header className="topbar">
-          <Link href="/app" className="brand-name">BBD-OS</Link>
+          <Link href="/app" className="brand-name">Umwelt-OS</Link>
           <div className="top-actions">
             {visibleMainNavigation.some((item) => item.id === 'chat') && <ChatTriggerButton />}
             <CommandPalette />

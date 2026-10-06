@@ -32,6 +32,9 @@ services:
       dockerfile: infrastructure/docker/api.Dockerfile
     command: ["alembic", "upgrade", "head"]
     env_file: .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Run setup to create .env}
+      REDIS_URL: ${REDIS_URL:?Run setup to create .env}
     depends_on:
       postgres:
         condition: service_healthy
@@ -43,6 +46,8 @@ services:
       dockerfile: infrastructure/docker/api.Dockerfile
     env_file: .env
     environment:
+      DATABASE_URL: ${DATABASE_URL:?Run setup to create .env}
+      REDIS_URL: ${REDIS_URL:?Run setup to create .env}
       # env_file can retain owner opt-in values; base deployment must force remote export off.
       BBD_LANGFUSE_ENABLED: "false"
     init: true
@@ -69,6 +74,8 @@ services:
     command: ["arq", "apps.worker.main.WorkerSettings"]
     env_file: .env
     environment:
+      DATABASE_URL: ${DATABASE_URL:?Run setup to create .env}
+      REDIS_URL: ${REDIS_URL:?Run setup to create .env}
       # Keep API and worker disabled unless the explicit observability overlay is included.
       BBD_LANGFUSE_ENABLED: "false"
     init: true

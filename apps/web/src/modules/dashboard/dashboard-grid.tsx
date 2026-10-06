@@ -120,7 +120,7 @@ interface ActiveGesture {
 }
 
 /**
- * Grid renderer for BBD-OS dashboards.
+ * Grid renderer for Umwelt-OS dashboards.
  * Operates strictly on R10 integer rectangles without moving or jumping during streaming.
  * In edit mode, supports title drag-to-move, edge/corner resizing, collision displacement,
  * per-gesture cancel via Escape, and keyboard alternatives.
@@ -452,7 +452,7 @@ export function DashboardGrid({
                 {/* East / Right edge handle */}
                 <div
                   role="separator"
-                  aria-label="Resize width"
+                  aria-label={t('resizeWidth')}
                   onPointerDown={(e) => handleResizeStart(placement.instance_id, 'e', e)}
                   className="absolute right-0 top-3 bottom-3 w-2.5 cursor-ew-resize hover:bg-primary/40 active:bg-primary rounded-r-md transition-colors z-20"
                 />
@@ -460,7 +460,7 @@ export function DashboardGrid({
                 {/* South / Bottom edge handle */}
                 <div
                   role="separator"
-                  aria-label="Resize height"
+                  aria-label={t('resizeHeight')}
                   onPointerDown={(e) => handleResizeStart(placement.instance_id, 's', e)}
                   className="absolute bottom-0 left-3 right-3 h-2.5 cursor-ns-resize hover:bg-primary/40 active:bg-primary rounded-b-md transition-colors z-20"
                 />
@@ -468,7 +468,7 @@ export function DashboardGrid({
                 {/* South-East / Corner handle */}
                 <div
                   role="separator"
-                  aria-label="Resize corner"
+                  aria-label={t('resizeCorner')}
                   onPointerDown={(e) => handleResizeStart(placement.instance_id, 'se', e)}
                   className="absolute right-0 bottom-0 w-4 h-4 cursor-nwse-resize flex items-end justify-end p-0.5 z-20 group"
                 >

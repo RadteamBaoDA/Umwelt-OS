@@ -6,7 +6,7 @@ import { QueryProvider } from '@/core/query-provider';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'BBD-OS',
+  title: 'Umwelt-OS',
   description: 'Private personal intelligence workspace',
 };
 

@@ -156,3 +156,28 @@ class DocumentChunk(Base):
     metadata_json: Mapped[dict[str, object]] = mapped_column(
         "metadata", JSONB, nullable=False, server_default="{}"
     )
+
+
+class DocumentCleanupOperation(Base):
+    """Retain individual-document deletion stages and the raw URI needed for retry."""
+    __tablename__ = "document_cleanup_operations"
+    __table_args__ = (
+        CheckConstraint("status IN ('queued', 'running', 'succeeded', 'failed')", name="ck_document_cleanup_status"),
+        CheckConstraint("record_status = 'deleted'", name="ck_document_cleanup_record_status"),
+        CheckConstraint("graph_status = 'tombstoned'", name="ck_document_cleanup_graph_status"),
+        CheckConstraint("raw_status IN ('queued', 'not_present', 'retained_shared', 'succeeded', 'failed')", name="ck_document_cleanup_raw_status"),
+        Index("ix_document_cleanup_status_created", "status", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    # No FK: this receipt must outlive the hard-deleted document rows.
+    document_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    raw_uri: Mapped[str | None] = mapped_column(Text)
+    record_status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="deleted")
+    graph_status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="tombstoned")
+    raw_status: Mapped[str] = mapped_column(String(24), nullable=False, server_default="queued")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="queued")
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())

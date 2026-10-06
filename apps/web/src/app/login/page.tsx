@@ -47,7 +47,7 @@ export default function LoginPage() {
     onSuccess: () => router.replace('/app'),
   });
 
-  return <main className="page"><section className="auth-panel"><span className="brand">BBD-OS</span><h1>{t('welcome')}</h1><p className="muted">{t('privateWorkspace')}</p><form className="form" onSubmit={form.handleSubmit((values) => login.mutate(values))}>
+  return <main className="page"><section className="auth-panel"><span className="brand">Umwelt-OS</span><h1>{t('welcome')}</h1><p className="muted">{t('privateWorkspace')}</p><form className="form" onSubmit={form.handleSubmit((values) => login.mutate(values))}>
     <div className="field"><Label htmlFor="password">{t('password')}</Label><Input id="password" type="password" autoComplete="current-password" autoFocus {...form.register('password')} />{form.formState.errors.password && <span className="error">{t('enterPassword')}</span>}</div>
     {login.error && <p className="error" role="alert">{t(apiFailureKey(login.error) ?? 'signInFailed')}</p>}
     <Button type="submit" disabled={login.isPending}>{login.isPending ? t('signingIn') : t('signIn')}</Button>

@@ -12,17 +12,18 @@ from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import HTTPException
 from pydantic import BaseModel
-from sqlalchemy import and_, delete, desc, func, select, tuple_, update
+from sqlalchemy import and_, delete, desc, func, select, text, tuple_, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.pagination import decode_cursor, encode_cursor
+from core.events import DomainEvent
 from core.chunking import chunk_text
 from core.realtime import ReplayDraft, commit_with_replay, make_knowledge_change
 from core.tools.schemas import ToolDestination, ToolOutputFence
 from core.auth.models import Owner
 from modules.knowledge.documents.models import (
-    Document, DocumentChunk, DocumentInteraction, DocumentVersion, NormalizedDocumentIdentity,
+    Document, DocumentChunk, DocumentCleanupOperation, DocumentInteraction, DocumentVersion, NormalizedDocumentIdentity,
     NormalizedVersionProvenance,
 )
 from modules.knowledge.documents.schemas import (
@@ -1477,6 +1478,45 @@ def content_hash(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
+async def ensure_demo_article(session: AsyncSession) -> tuple[int, int, int]:
+    """Normalize one fictional article through Documents and preserve provenance and chunks.
+
+    Returns (created, existing, skipped). The stable source/provider identity and accepted content
+    hash make retries idempotent; a tombstoned normalized identity stays deleted. The caller owns
+    the transaction and receipt, while Documents owns source fencing, normalization, and chunking.
+    """
+    from core.demo_seed import P12_DEMO_NAMESPACE, p12_demo_seed_id
+
+    article_id = p12_demo_seed_id("article", "lantern-inscription-care")
+    source_id = p12_demo_seed_id("article", "source")
+    content = (
+        "Fictional field note: Mira records that the north orchard lantern inscriptions should be "
+        "photographed in soft morning light before the catalogue is assembled."
+    )
+    await sources.ensure_demo_source(session, source_id, P12_DEMO_NAMESPACE)
+    source = await sources.lock_source(session, source_id)
+    if source is None:
+        raise RuntimeError("P12 demo article source is unavailable")
+    title = "Field note: caring for orchard lantern inscriptions"
+    result = await upsert_normalized_document(session, NormalizedDocumentInput(
+        source_id=source_id,
+        expected_source_generation=source.generation,
+        observation_id=article_id,
+        provider_id=f"{P12_DEMO_NAMESPACE}/lantern-inscription-care",
+        accepted_record_hash=content_hash(content),
+        normalization_version=1,
+        observed_at=datetime(2026, 9, 20, 9, 0, tzinfo=UTC),
+        title=title,
+        canonical_url="https://example.invalid/demo/orchard-lantern-care",
+        content_type="article",
+        content=content,
+        provenance={"title": title, "content_type": "article"},
+    ))
+    if result.disposition == "tombstoned":
+        return 0, 0, 1
+    return (1, 0, 0) if result.created_version else (0, 1, 0)
+
+
 async def list_evidence_ref_keys(
     session: AsyncSession, *, document_id: UUID | None = None, source_id: UUID | None = None,
     limit: int = 10_000,
@@ -1548,6 +1588,27 @@ async def raw_uris(session: AsyncSession, source_id: UUID | None = None) -> set[
     if source_id is not None:
         statement = statement.where(Document.source_id == source_id)
     return {uri for uri in (await session.scalars(statement)).all() if uri}
+
+
+async def raw_uri_is_referenced(session: AsyncSession, raw_uri: str) -> bool:
+    """Return whether a surviving document still owns the exact raw-storage URI."""
+    return bool(await session.scalar(select(Document.id).where(Document.raw_uri == raw_uri).limit(1)))
+
+
+async def lock_raw_uri_identity(session: AsyncSession, raw_uri: str) -> None:
+    """Serialize raw-URI publication with its final ownership check and unlink transaction."""
+    identity = f"documents.raw:{raw_uri}"
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:identity, 0))"),
+        {"identity": identity},
+    )
+
+
+async def get_document_cleanup_operation(
+    session: AsyncSession, operation_id: UUID,
+) -> DocumentCleanupOperation | None:
+    """Read a Documents-owned cleanup receipt without exposing its captured raw URI."""
+    return await session.get(DocumentCleanupOperation, operation_id)
 
 
 async def create_document(session: AsyncSession, payload: DocumentCreate) -> Document:
@@ -1999,7 +2060,15 @@ async def add_uploaded_document(
     external_id: str,
     document_id: UUID,
 ) -> UUID:
-    """Create the queued empty version record for a previously stored raw upload."""
+    """Publish one uploaded raw URI after the deletion fence and create its empty version.
+
+    The caller has already staged the file and owns rollback cleanup. The raw-URI
+    transaction lock serializes this publication with deletion; a URI already captured
+    by a durable cleanup receipt raises ValueError so it cannot be referenced again.
+    """
+    await lock_raw_uri_identity(session, raw_uri)
+    if await session.scalar(select(DocumentCleanupOperation.id).where(DocumentCleanupOperation.raw_uri == raw_uri)):
+        raise ValueError("This raw file identity was already deleted")
     document = Document(
         id=document_id,
         source_id=source_id,
@@ -2156,20 +2225,50 @@ async def update_document(
     return document
 
 
-async def delete_document(session: AsyncSession, document_id: UUID) -> bool:
-    """Lock and delete a document, tombstoning normalized identity and removing supported graph data."""
+async def delete_document(session: AsyncSession, document_id: UUID) -> DocumentCleanupOperation | None:
+    """Commit access revocation and graph cleanup before durable asynchronous raw-file cleanup.
+
+    Lock order is Source then Document then raw-URI identity then normalized identity and
+    graph support. The operation snapshots the URI before canonical rows are removed; its
+    event and deletion/tombstone replay commit atomically. The caller owns authorization,
+    while missing documents return None. A successful return means canonical access is
+    revoked, not that file cleanup or remote graph reconciliation has completed.
+    """
     identity = await session.execute(select(Document.source_id).where(Document.id == document_id))
     source_id = identity.scalar_one_or_none()
     if source_id is None:
-        return False
+        return None
     source = await sources.lock_source(session, source_id)
     if source is None:
-        return False
+        return None
     document = await session.scalar(
         select(Document).where(Document.id == document_id, Document.source_id == source_id).with_for_update()
     )
     if document is None:
-        return False
+        return None
+    if document.raw_uri:
+        # Upload publication takes the same identity lock before accepting a new reference.
+        await lock_raw_uri_identity(session, document.raw_uri)
+    operation = DocumentCleanupOperation(
+        source_id=source_id,
+        document_id=document.id,
+        raw_uri=document.raw_uri,
+        raw_status="queued" if document.raw_uri else "not_present",
+        status="queued" if document.raw_uri else "succeeded",
+    )
+    session.add(operation)
+    await session.flush()
+    if document.raw_uri:
+        from modules.ingestion import public as ingestion
+
+        await ingestion.publish_event(session, DomainEvent(
+            id=uuid4(),
+            type="document.cleanup.requested",
+            version=1,
+            occurred_at=datetime.now(UTC),
+            producer="modules.knowledge.documents",
+            payload={"operation_id": str(operation.id)},
+        ))
     from modules.knowledge.observations import public as observations
     await observations.purge_document_in_uow(session, document.id)
     if document.external_id is not None:
@@ -2203,8 +2302,11 @@ async def delete_document(session: AsyncSession, document_id: UUID) -> bool:
     drafts: list[ReplayDraft] = [*timeline_drafts]
     if deleted:
         drafts.append(make_knowledge_change(source_id, document_id, deleted=True))
+    if not deleted:
+        raise RuntimeError("Locked document disappeared during its cleanup transaction")
     await commit_with_replay(session, drafts)
-    return deleted
+    await session.refresh(operation)
+    return operation
 
 
 async def delete_source_documents(session: AsyncSession, source_id: UUID) -> list[ReplayDraft]:

@@ -7,7 +7,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "p12_backup_control"
-down_revision: str | Sequence[str] | None = "p12_onboarding_state"
+down_revision: str | Sequence[str] | None = "p12_document_cleanup"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

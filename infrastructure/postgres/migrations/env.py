@@ -13,7 +13,7 @@ from core.demo_seed import DemoSeedReceipt
 from core.remote_heavy_models import RemoteHeavyGuard
 from core.database import Base
 from modules.knowledge.documents.models import (
-    Document, DocumentChunk, DocumentVersion, NormalizedDocumentIdentity, NormalizedVersionProvenance,
+    Document, DocumentChunk, DocumentCleanupOperation, DocumentVersion, NormalizedDocumentIdentity, NormalizedVersionProvenance,
 )
 from modules.ingestion.models import (
     CollectorCredential,
