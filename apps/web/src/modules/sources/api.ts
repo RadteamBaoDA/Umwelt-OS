@@ -124,7 +124,18 @@ export type ConnectorCatalogEntry = {
   unavailable_operations: string[];
 };
 export type SourceIngestion = { current_run: IngestionRun | null; items: IngestionRun[]; next_cursor: string | null };
-export type PurgeOperation = { operation_id: string; source_id: string; status: string; error_code: string | null; created_at: string; updated_at: string };
+export type PurgeOperation = {
+  operation_id: string;
+  source_id: string;
+  status: 'queued' | 'running' | 'succeeded' | 'failed';
+  error_code: string | null;
+  documents_status: 'queued' | 'deleted' | 'failed' | 'unavailable';
+  pending_child_count: number | null;
+  failed_child_count: number | null;
+  pending_owner_codes: string[];
+  created_at: string;
+  updated_at: string;
+};
 export const sourceKeys = { all: ['sources'] as const, list: ['sources', 'list'] as const, detail: (id: string) => ['sources', id] as const };
 export const connectorKeys = {
   catalog: ['connector-catalog'] as const,
@@ -340,5 +351,7 @@ export function retryRun(id: string, stageKey: string, csrfToken: string) {
   return apiRequest<{ run_id: string }>(`/api/v1/ingestion/runs/${id}/retry`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify({ stage_key: stageKey }) });
 }
 
-/** Fetches a system operation by ID. */
-export function getOperation(id: string) { return apiRequest<PurgeOperation>(`/api/v1/system/operations/${id}`); }
+/** Fetches the allowlisted Source purge progress projection and forwards its abort signal to the GET. */
+export function getOperation(id: string, signal?: AbortSignal) {
+  return apiRequest<PurgeOperation>(`/api/v1/system/operations/${id}`, { signal });
+}
