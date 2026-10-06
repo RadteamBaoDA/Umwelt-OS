@@ -97,6 +97,7 @@ function safeFeedUrl(value: string | null, telegram: boolean): string | null {
  * Standard Feed Stream gadget template.
  * Displays real-time or polled items from news feeds, RSS channels, Telegram messages,
  * and knowledge documents, with visible unread badges and reading stability protection.
+ * Its fixed loading surface and root scroll fallback fit the frame's bounded reading floor.
  *
  * @param props Gadget instance configuration and feed handlers.
  * @returns Accessible feed stream gadget component.
@@ -189,7 +190,7 @@ export function FeedGadget({
   React.useEffect(() => onUnreadCountChange?.(unreadCount), [onUnreadCountChange, unreadCount]);
 
   return (
-    <div className="flex flex-col h-full bg-card text-card-foreground p-3 space-y-3 overflow-hidden">
+    <div className="flex flex-col h-full bg-card text-card-foreground p-3 space-y-3 overflow-y-auto overflow-x-hidden">
       {/* Top action bar */}
       <div className="flex items-center justify-between border-b border-border pb-2 text-xs">
         <div className="flex items-center gap-2">

@@ -31,6 +31,7 @@ export interface TimelineGadgetProps {
  * Standard Timeline gadget template.
  * Renders a chronological slice of recorded and derived events from the Phase 5 Temporal API,
  * including date precision, linked participants, and evidence excerpts.
+ * Its fixed loading stack contributes to the reading floor; the root remains scrollable when compact.
  *
  * @param props Gadget instance configuration and optional initial items.
  * @returns Accessible timeline slice gadget component.
@@ -71,7 +72,7 @@ export function TimelineGadget({ instance, initialEvents }: TimelineGadgetProps)
   const events = timelineQuery.data ?? initialEvents ?? [];
 
   return (
-    <div className="flex flex-col h-full bg-card text-card-foreground p-3 space-y-3 overflow-hidden">
+    <div className="flex flex-col h-full bg-card text-card-foreground p-3 space-y-3 overflow-y-auto overflow-x-hidden">
       {/* Header bar with total events and link to full timeline page */}
       <div className="flex items-center justify-between border-b border-border pb-2 text-xs">
         <span className="text-muted-foreground font-mono">

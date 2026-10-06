@@ -55,6 +55,7 @@ export function getEntityIcon(type: string): React.ReactElement {
  * Standard Entity Spotlight gadget template.
  * Highlights tracked persons, companies, and projects extracted by the Phase 4 Entity Knowledge API,
  * including aliases, provenance metadata, and direct navigation into knowledge graphs.
+ * The renderer root is a bounded scroll fallback so compact cards never clip its controls.
  *
  * @param props Gadget instance configuration and optional entity items.
  * @returns Accessible entity spotlight gadget component.
@@ -88,7 +89,7 @@ export function EntityGadget({ instance, initialEntities }: EntityGadgetProps) {
   const entities = entitiesQuery.data ?? initialEntities ?? [];
 
   return (
-    <div className="flex flex-col h-full bg-card text-card-foreground p-3 space-y-3 overflow-hidden">
+    <div className="flex flex-col h-full bg-card text-card-foreground p-3 space-y-3 overflow-y-auto overflow-x-hidden">
       {/* Header with search filter and quick link to all entities */}
       <div className="flex items-center gap-2 border-b border-border pb-2">
         <div className="relative flex-1">

@@ -23,7 +23,7 @@ type SelectedRecordIdentity = {
   versionNumber: number;
 };
 
-/** Render current source records and open Ask AI with exact selected versions. */
+/** Render current source records in a bounded scroll root and Ask AI with exact selected versions. */
 export function TablePanel({ instance }: TablePanelProps) {
   const t = useTranslations('dashboard');
   const { openDrawer } = useChatController();
@@ -44,7 +44,7 @@ export function TablePanel({ instance }: TablePanelProps) {
   );
 
   return (
-    <section className="flex h-full flex-col gap-3 overflow-hidden bg-card p-3 text-card-foreground">
+    <section className="flex h-full flex-col gap-3 overflow-y-auto overflow-x-hidden bg-card p-3 text-card-foreground">
       <header className="flex items-center justify-between border-b border-border pb-2">
         <h2 className="text-xs font-semibold">{t('tablePanelTitle')}</h2>
         <Button

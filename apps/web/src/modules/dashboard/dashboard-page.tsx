@@ -43,7 +43,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
-import { useGuardedNavigation } from '@/core/guarded-navigation';
+import { useGuardedNavigation, type GuardedNavigationIntent } from '@/core/guarded-navigation';
 import {
   createDashboard,
   createDashboardGroup,
@@ -64,6 +64,7 @@ import {
   doPlacementsOverlap,
   RENDERER_MIN_SIZES,
 } from './dashboard-grid';
+import { getGadgetReadingBodyFloor } from './widget-registry';
 import { LayoutEditor } from './layout-editor';
 import { PresetPicker } from './preset-picker';
 import { GadgetSettings } from './gadget-settings';
@@ -76,16 +77,18 @@ import { NotificationBell } from '@/modules/notifications/notification-bell';
  * @param w Width of the new gadget.
  * @param h Height of the new gadget.
  * @param columns Total columns count.
- * @returns Valid (x, y) coordinates.
+ * @returns Valid free coordinates, or null when bounded space is exhausted or invalid.
  */
 function findFreeCoordinates(
   existing: DashboardPlacement[],
   w: number,
   h: number,
   columns = 20,
-): { x: number; y: number } {
+): { x: number; y: number } | null {
+  if (!Number.isInteger(columns) || columns < 1 || columns > 20
+    || !Number.isInteger(w) || !Number.isInteger(h) || w < 1 || w > columns || h < 1) return null;
   let y = 0;
-  while (y < 500) {
+  while (y + h <= MAX_LAYOUT_ROWS) {
     for (let x = 0; x <= columns - w; x++) {
       const candidate: DashboardPlacement = { instance_id: '', x, y, w, h };
       const collides = existing.some((p) => doPlacementsOverlap(candidate, p));
@@ -95,23 +98,84 @@ function findFreeCoordinates(
     }
     y++;
   }
-  return { x: 0, y: 0 };
+  return null;
 }
 
 const MAX_LAYOUT_ROWS = 100_000;
 
 type MobileProjection = { placements: DashboardPlacement[]; unavailable: boolean };
 
+/** Immutable identity and baseline owned by one dirty dashboard layout session. */
+interface LayoutEditOrigin {
+  dashboardId: string;
+  breakpoint: 'desktop' | 'mobile';
+  columns: number;
+  baseRevision: number;
+  savedSnapshot: DashboardPlacement[];
+}
+
+/** Compares complete geometry snapshots independently of array order. */
+function sameLayout(a: DashboardPlacement[], b: DashboardPlacement[]): boolean {
+  if (a.length !== b.length) return false;
+  const left = new Map(a.map((placement) => [placement.instance_id, placement]));
+  return left.size === b.length && b.every((placement) => {
+    const saved = left.get(placement.instance_id);
+    return saved !== undefined && saved.x === placement.x && saved.y === placement.y
+      && saved.w === placement.w && saved.h === placement.h;
+  });
+}
+
+/** Validates a complete owner snapshot before it enters history or reaches the Save mutation. */
+function isValidLayoutSnapshot(
+  placements: DashboardPlacement[],
+  instances: GadgetInstance[],
+  columns: number,
+): boolean {
+  if (!Number.isInteger(columns) || columns < 1 || columns > 20
+    || placements.length !== instances.length) return false;
+  const instancesById = new Map(instances.map((instance) => [instance.id, instance]));
+  if (instancesById.size !== instances.length) return false;
+  const placementIds = new Set(placements.map((placement) => placement.instance_id));
+  if (placementIds.size !== placements.length || instances.some((instance) => !placementIds.has(instance.id))) return false;
+  for (let index = 0; index < placements.length; index++) {
+    const placement = placements[index];
+    const instance = instancesById.get(placement.instance_id);
+    if (!instance) return false;
+    const minimum = RENDERER_MIN_SIZES[instance.definition.renderer] ?? { minW: 4, minH: 3 };
+    if (![placement.x, placement.y, placement.w, placement.h].every(Number.isInteger)
+      || placement.x < 0 || placement.y < 0 || placement.w < minimum.minW
+      || placement.h < minimum.minH || placement.x + placement.w > columns
+      || placement.y + placement.h > MAX_LAYOUT_ROWS) return false;
+    if (placements.slice(index + 1).some((other) => doPlacementsOverlap(placement, other))) return false;
+  }
+  return true;
+}
+
+/** Exact values captured when a layout save begins; later viewport state cannot rebind the request. */
+interface LayoutSaveRequest extends LayoutEditOrigin {
+  items: DashboardPlacement[];
+}
+
+/** Identity reserved across quick definition creation and dashboard instance creation. */
+interface AddReservation {
+  dashboardId: string;
+  breakpoint: 'desktop' | 'mobile';
+  columns: number;
+  baseRevision: number;
+  renderer: string;
+  width: number;
+  height: number;
+}
+
 /**
- * Projects repairable invalid mobile rectangles into a deterministic bounded stack. Valid
- * user-authored widths and positions remain unchanged; callers keep repairs local until an explicit
- * Save submits the layout. Returns an unavailable result when renderer minimums cannot fit the
- * stored grid or row ceiling, or the source placements do not cover the dashboard instances.
+ * Repairs malformed mobile rectangles locally while preserving independently valid x/w and y
+ * priority; overlapping repaired rectangles move only downward. Valid owner layouts pass through
+ * unchanged, and no recovery is persisted until an explicit Save.
  *
  * @param placements Saved or draft mobile rectangles.
  * @param instances Dashboard instances and their renderer minimum sizes.
  * @param columns Stored mobile column count.
- * @returns Valid full-width stack, unchanged valid placements, or an unavailable result.
+ * @returns Valid recovered placements, unchanged valid placements, or an unavailable result.
  */
 function projectMobilePlacements(
   placements: DashboardPlacement[],
@@ -122,6 +186,7 @@ function projectMobilePlacements(
     instance.id,
     RENDERER_MIN_SIZES[instance.definition.renderer] ?? { minW: 4, minH: 3 },
   ]));
+  /** Marks mobile projection as unavailable when ownership or bounded geometry is invalid. */
   const unavailable = (): MobileProjection => ({ placements: [], unavailable: true });
   if (!Number.isInteger(columns) || columns < 1 || columns > 20
     || [...minimumSizes.values()].some(({ minW }) => minW > columns)) {
@@ -134,77 +199,68 @@ function projectMobilePlacements(
     return unavailable();
   }
 
-  const ordered = [...placements].sort((a, b) =>
-    a.y - b.y || a.x - b.x || (a.instance_id < b.instance_id ? -1 : a.instance_id > b.instance_id ? 1 : 0),
-  );
-  const minimumRows = ordered.reduce(
-    (total, placement) => total + (minimumSizes.get(placement.instance_id)?.minH ?? 3),
-    0,
+  const minimumRows = placements.reduce(
+    (total, placement) => total + (minimumSizes.get(placement.instance_id)?.minH ?? 3), 0,
   );
   if (minimumRows > MAX_LAYOUT_ROWS) return unavailable();
-
-  const hasOverlap = placements.some((placement, index) =>
-    placements.slice(index + 1).some((other) => doPlacementsOverlap(placement, other)),
+  /** Checks a single rectangle against its renderer minimum and the bounded mobile canvas. */
+  const validGeometry = (placement: DashboardPlacement) => {
+    const minimum = minimumSizes.get(placement.instance_id);
+    return minimum !== undefined
+      && Number.isInteger(placement.x) && Number.isInteger(placement.y)
+      && Number.isInteger(placement.w) && Number.isInteger(placement.h)
+      && placement.x >= 0 && placement.y >= 0 && placement.w >= minimum.minW
+      && placement.h >= minimum.minH && placement.x + placement.w <= columns
+      && placement.y + placement.h <= MAX_LAYOUT_ROWS;
+  };
+  const noOverlap = placements.every((placement, index) =>
+    placements.slice(index + 1).every((other) => !doPlacementsOverlap(placement, other)),
   );
-  const withinContract = Number.isInteger(columns) && columns >= 1 && columns <= 20
-    && placements.every((placement) => {
-      const minimumSize = minimumSizes.get(placement.instance_id);
-      if (!minimumSize) return false;
-      return Number.isInteger(placement.x)
-        && Number.isInteger(placement.y)
-        && Number.isInteger(placement.w)
-        && Number.isInteger(placement.h)
-        && placement.x >= 0
-        && placement.y >= 0
-        && placement.x + placement.w <= columns
-        && placement.y + placement.h <= MAX_LAYOUT_ROWS
-        && placement.w >= minimumSize.minW
-        && placement.w <= 20
-        && placement.h >= minimumSize.minH
-        && placement.h <= MAX_LAYOUT_ROWS;
-    });
-  if (withinContract && !hasOverlap) {
-    return { placements, unavailable: false };
-  }
+  if (placements.every(validGeometry) && noOverlap) return { placements, unavailable: false };
 
-  let nextY = 0;
-  const projected = ordered.map((placement, index) => {
-    const minimumHeight = minimumSizes.get(placement.instance_id)?.minH ?? 3;
-    const remainingMinimumRows = ordered.slice(index + 1).reduce(
-      (total, next) => total + (minimumSizes.get(next.instance_id)?.minH ?? 3),
-      0,
-    );
-    const availableHeight = MAX_LAYOUT_ROWS - nextY - remainingMinimumRows;
-    const h = Math.max(minimumHeight, Math.min(placement.h, availableHeight));
-    const projectedPlacement = { ...placement, x: 0, y: nextY, w: columns, h };
-    nextY += h;
-    return projectedPlacement;
+  // Stable total ordering prevents NaN subtraction from making repair order engine-dependent.
+  const ordered = [...placements].sort((a, b) => {
+    /** Orders finite coordinates before malformed values for deterministic local recovery. */
+    const compareCoordinate = (left: number, right: number) => {
+      const leftFinite = Number.isFinite(left);
+      const rightFinite = Number.isFinite(right);
+      return leftFinite && rightFinite ? left - right : leftFinite ? -1 : rightFinite ? 1 : 0;
+    };
+    return compareCoordinate(a.y, b.y) || compareCoordinate(a.x, b.x)
+      || a.instance_id.localeCompare(b.instance_id);
   });
-  const validProjection = projected.every((placement) => {
-    const minimumSize = minimumSizes.get(placement.instance_id);
-    return minimumSize !== undefined
-      && Number.isInteger(placement.x)
-      && Number.isInteger(placement.y)
-      && Number.isInteger(placement.w)
-      && Number.isInteger(placement.h)
-      && placement.x >= 0
-      && placement.y >= 0
-      && placement.x + placement.w <= columns
-      && placement.y + placement.h <= MAX_LAYOUT_ROWS
-      && placement.w >= minimumSize.minW
-      && placement.h >= minimumSize.minH;
-  }) && !projected.some((placement, index) =>
-    projected.slice(index + 1).some((other) => doPlacementsOverlap(placement, other)),
-  );
-  return validProjection
-    ? { placements: projected, unavailable: false }
-    : unavailable();
+  const repaired: DashboardPlacement[] = [];
+  for (const source of ordered) {
+    const minimum = minimumSizes.get(source.instance_id);
+    if (!minimum) return unavailable();
+    const xValid = Number.isInteger(source.x) && source.x >= 0;
+    const wValid = Number.isInteger(source.w) && source.w >= minimum.minW
+      && source.w <= 20 && xValid && source.x + source.w <= columns;
+    const candidate: DashboardPlacement = {
+      ...source,
+      x: wValid ? source.x : 0,
+      w: wValid ? source.w : minimum.minW,
+      h: Number.isInteger(source.h) && source.h >= minimum.minH && source.h <= MAX_LAYOUT_ROWS
+        ? source.h : minimum.minH,
+      y: Number.isInteger(source.y) && source.y >= 0 && source.y <= MAX_LAYOUT_ROWS
+        ? source.y : 0,
+    };
+    while (repaired.some((other) => doPlacementsOverlap(candidate, other))) {
+      const colliding = repaired.filter((other) => doPlacementsOverlap(candidate, other));
+      const nextY = Math.max(...colliding.map((other) => other.y + other.h));
+      if (nextY <= candidate.y || nextY + candidate.h > MAX_LAYOUT_ROWS) return unavailable();
+      candidate.y = nextY;
+    }
+    if (candidate.x + candidate.w > columns || candidate.y + candidate.h > MAX_LAYOUT_ROWS) return unavailable();
+    repaired.push(candidate);
+  }
+  return { placements: placements.map((placement) => repaired.find((item) => item.instance_id === placement.instance_id)!), unavailable: false };
 }
 
 /**
  * Main dashboard container view for BBD-OS.
- * Supports viewing and editing modes, dashboard switching, group tab filtering,
- * preset picker triggering, reading stability queuing, and dirty navigation guarding.
+ * Supports owner-scoped desktop/mobile drafts, local mobile reading projection/adoption, complete
+ * group-independent geometry history, dashboard switching, and dirty navigation guarding.
  *
  * @returns Authenticated dashboard view component.
  */
@@ -237,12 +293,23 @@ export function DashboardPage() {
   const [dirtyModalOpen, setDirtyModalOpen] = useState<boolean>(false);
   const pendingDashboardSwitchRef = useRef<string | null>(null);
   const pendingExitEditRef = useRef<boolean>(false);
+  const pendingRouteNavigationRef = useRef<GuardedNavigationIntent | null>(null);
+  const addReservationsRef = useRef(new Map<string, AddReservation>());
+  const addReservationSequenceRef = useRef(0);
+  const saveOperationPendingRef = useRef(false);
+  const membershipOperationCountRef = useRef(0);
+  const pendingBreakpointRef = useRef<'desktop' | 'mobile' | null>(null);
+  const dismissedBreakpointRef = useRef<'desktop' | 'mobile' | null>(null);
+  const [editOrigin, setEditOrigin] = useState<LayoutEditOrigin | null>(null);
 
   // Layout placements draft and history stack
   const [draftPlacements, setDraftPlacements] = useState<DashboardPlacement[]>([]);
+  const [readablePlacements, setReadablePlacements] = useState<DashboardPlacement[] | null>(null);
+  const [gridMetrics, setGridMetrics] = useState<{ cellSize: number; stride: number; frameHeaderHeight: number } | null>(null);
   const [history, setHistory] = useState<DashboardPlacement[][]>([]);
   const [historyIndex, setHistoryIndex] = useState<number>(-1);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [membershipMutationsPending, setMembershipMutationsPending] = useState(0);
 
   // Reading stability queues (queued item count per gadget instance)
   const [readingQueues, setReadingQueues] = useState<Record<string, number>>({});
@@ -279,8 +346,25 @@ export function DashboardPage() {
   });
 
   const activeDashboard = activeDashboardQuery.data ?? null;
-  const currentBreakpoint = isMobile ? 'mobile' : 'desktop';
-  const layoutColumns = activeDashboard?.layouts[currentBreakpoint].columns ?? 20;
+  const requestedBreakpoint = isMobile ? 'mobile' : 'desktop';
+  const currentBreakpoint = isDirty && editOrigin?.dashboardId === selectedDashboardId
+    ? editOrigin.breakpoint : requestedBreakpoint;
+  const layoutColumns = (editOrigin?.dashboardId === selectedDashboardId
+    ? editOrigin.columns : activeDashboard?.layouts[currentBreakpoint].columns) ?? 20;
+  const layoutIdentityRef = useRef({
+    dashboardId: selectedDashboardId,
+    breakpoint: currentBreakpoint,
+    columns: layoutColumns,
+    baseRevision: activeDashboard?.revision ?? null,
+  });
+  layoutIdentityRef.current = {
+    dashboardId: selectedDashboardId,
+    breakpoint: currentBreakpoint,
+    columns: layoutColumns,
+    baseRevision: activeDashboard?.revision ?? null,
+  };
+  const liveLayoutRef = useRef({ activeDashboard, draftPlacements });
+  liveLayoutRef.current = { activeDashboard, draftPlacements };
   const mobileProjection = useMemo(
     () => activeDashboard
       ? projectMobilePlacements(
@@ -299,83 +383,156 @@ export function DashboardPage() {
     return currentBreakpoint === 'mobile' ? mobileProjection.placements : activeDashboard.layouts.desktop.items;
   }, [activeDashboard, currentBreakpoint, mobileProjection.placements]);
 
-  // Sync draft placements from saved placements when not dirty
+  /** Freezes the dirty source layout across media changes and requests an explicit decision. */
   useEffect(() => {
-    if (!isDirty) {
-      setDraftPlacements(savedPlacements);
-      setHistory([savedPlacements]);
-      setHistoryIndex(0);
+    if (!isDirty || !editOrigin || editOrigin.dashboardId !== selectedDashboardId) return;
+    if (requestedBreakpoint === editOrigin.breakpoint) {
+      pendingBreakpointRef.current = null;
+      dismissedBreakpointRef.current = null;
+      return;
     }
-  }, [isDirty, savedPlacements]);
+    pendingBreakpointRef.current = requestedBreakpoint;
+    if (dismissedBreakpointRef.current !== requestedBreakpoint && !dirtyModalOpen) {
+      setDirtyModalOpen(true);
+    }
+  }, [dirtyModalOpen, editOrigin, isDirty, requestedBreakpoint, selectedDashboardId]);
+
+  // Reset clean history only when its owner or saved baseline actually changes.
+  useEffect(() => {
+    if (isDirty) return;
+    const originMatches = editOrigin?.dashboardId === selectedDashboardId
+      && editOrigin.breakpoint === requestedBreakpoint
+      && editOrigin.columns === layoutColumns
+      && sameLayout(editOrigin.savedSnapshot, savedPlacements);
+    if (originMatches) return;
+    setDraftPlacements(savedPlacements);
+    setHistory([savedPlacements.map((placement) => ({ ...placement }))]);
+    setHistoryIndex(0);
+    if (editOrigin) setEditOrigin(null);
+  }, [editOrigin, isDirty, layoutColumns, requestedBreakpoint, savedPlacements, selectedDashboardId]);
 
   // Register GuardedNavigation leave guard for dirty layout edits
   useEffect(() => {
     return guardedNavigation.registerLeaveGuard({
       hasUnsavedChanges: () => isDirty,
-      confirmDiscard: () => {
+      confirmDiscard: (intent) => {
+        if (intent) pendingRouteNavigationRef.current = intent;
         setDirtyModalOpen(true);
         return false;
       },
       acceptLeave: () => {
         setIsDirty(false);
         setIsEditMode(false);
+        setEditOrigin(null);
       },
     });
   }, [guardedNavigation, isDirty]);
 
-  /** Pushes a new placements snapshot to the undo/redo history stack. */
+  /** Pushes one complete, validated placements snapshot to the originating undo/redo history. */
   const pushHistory = useCallback((nextPlacements: DashboardPlacement[]) => {
+    if (saveOperationPendingRef.current || membershipOperationCountRef.current > 0) return;
+    const origin = editOrigin ?? (activeDashboard ? {
+      dashboardId: activeDashboard.id,
+      breakpoint: currentBreakpoint,
+      columns: layoutColumns,
+      baseRevision: activeDashboard.revision,
+      savedSnapshot: savedPlacements.map((placement) => ({ ...placement })),
+    } : null);
+    if (!activeDashboard || !origin || origin.dashboardId !== activeDashboard.id
+      || !isValidLayoutSnapshot(nextPlacements, activeDashboard.instances, origin.columns)) {
+      setSaveError(t('layoutActionUnavailable'));
+      return;
+    }
+    const dirty = origin ? !sameLayout(nextPlacements, origin.savedSnapshot) : true;
     setHistory((prev) => {
       const truncated = prev.slice(0, historyIndex + 1);
       return [...truncated, nextPlacements];
     });
     setHistoryIndex((prev) => prev + 1);
     setDraftPlacements(nextPlacements);
-    setIsDirty(true);
-  }, [historyIndex]);
+    setIsDirty(dirty);
+    setEditOrigin(origin);
+  }, [activeDashboard, currentBreakpoint, editOrigin, historyIndex, layoutColumns, savedPlacements, t]);
 
   /** Handles Undo action from layout editor toolbar. */
   const handleUndo = useCallback(() => {
+    if (saveOperationPendingRef.current || membershipOperationCountRef.current > 0) return;
     if (historyIndex > 0) {
       const nextIndex = historyIndex - 1;
       setHistoryIndex(nextIndex);
       setDraftPlacements(history[nextIndex]);
-      setIsDirty(true);
+      const origin = editOrigin;
+      const dirty = origin ? !sameLayout(history[nextIndex], origin.savedSnapshot) : true;
+      setIsDirty(dirty);
     }
-  }, [history, historyIndex]);
+  }, [editOrigin, history, historyIndex]);
 
   /** Handles Redo action from layout editor toolbar. */
   const handleRedo = useCallback(() => {
+    if (saveOperationPendingRef.current || membershipOperationCountRef.current > 0) return;
     if (historyIndex < history.length - 1) {
       const nextIndex = historyIndex + 1;
       setHistoryIndex(nextIndex);
       setDraftPlacements(history[nextIndex]);
-      setIsDirty(true);
+      const origin = editOrigin;
+      const dirty = origin ? !sameLayout(history[nextIndex], origin.savedSnapshot) : true;
+      setIsDirty(dirty);
     }
-  }, [history, historyIndex]);
+  }, [editOrigin, history, historyIndex]);
 
-  // Layout save mutation
+  /** Captures the owner layout session and exact geometry before starting an asynchronous save. */
+  const captureLayoutSaveRequest = useCallback((): LayoutSaveRequest | null => {
+    if (!activeDashboard || mobileProjectionUnavailable) {
+      setSaveError(t('layoutActionUnavailable'));
+      return null;
+    }
+    const origin = editOrigin ?? {
+      dashboardId: activeDashboard.id,
+      breakpoint: currentBreakpoint,
+      columns: layoutColumns,
+      baseRevision: activeDashboard.revision,
+      savedSnapshot: savedPlacements.map((placement) => ({ ...placement })),
+    };
+    if (origin.dashboardId !== activeDashboard.id
+      || !isValidLayoutSnapshot(draftPlacements, activeDashboard.instances, origin.columns)) {
+      setSaveError(t('layoutActionUnavailable'));
+      return null;
+    }
+    return {
+      ...origin,
+      savedSnapshot: origin.savedSnapshot.map((placement) => ({ ...placement })),
+      items: draftPlacements.map((placement) => ({ ...placement })),
+    };
+  }, [activeDashboard, currentBreakpoint, draftPlacements, editOrigin, layoutColumns, mobileProjectionUnavailable, savedPlacements, t]);
+
+  // Layout save uses only captured origin identity and geometry, even if media changes in flight.
   const saveLayoutMutation = useMutation({
-    mutationFn: async () => {
-      if (!activeDashboard) throw new Error('No active dashboard');
-      if (mobileProjectionUnavailable) throw new Error(t('mobileLayoutUnavailable'));
+    mutationFn: async (request: LayoutSaveRequest) => {
       setSaveError(null);
       return replaceDashboardLayout(
-        activeDashboard.id,
+        request.dashboardId,
         {
-          expected_revision: activeDashboard.revision,
-          breakpoint: currentBreakpoint,
-          columns: layoutColumns,
-          items: draftPlacements,
+          expected_revision: request.baseRevision,
+          breakpoint: request.breakpoint,
+          columns: request.columns,
+          items: request.items,
         },
         session.csrfToken,
       );
     },
-    onSuccess: (updated) => {
+    onSuccess: (updated, request) => {
+      if (updated.id !== request.dashboardId) {
+        setSaveError(t('saveFailed'));
+        return;
+      }
       queryClient.setQueryData(dashboardKeys.detail(updated.id), updated);
       void queryClient.invalidateQueries({ queryKey: dashboardKeys.all });
       setIsDirty(false);
-      setHistory([draftPlacements]);
+      setEditOrigin(null);
+      pendingBreakpointRef.current = null;
+      dismissedBreakpointRef.current = null;
+      setHistory([request.items]);
+      setDraftPlacements(request.items);
       setHistoryIndex(0);
     },
     onError: (error) => {
@@ -383,25 +540,88 @@ export function DashboardPage() {
       setSaveError(error instanceof Error ? error.message : t('saveFailed'));
     },
   });
+  const layoutOperationPending = saveLayoutMutation.isPending || membershipMutationsPending > 0;
 
-  /** Triggered by Save button on toolbar. */
+  /** Checks bounded space before a quick definition or instance can be created. */
+  const canAddGadgetInstance = useCallback((renderer: string): boolean => {
+    if (!activeDashboard || layoutOperationPending || membershipOperationCountRef.current > 0) return false;
+    const minimum = RENDERER_MIN_SIZES[renderer] ?? { minW: 4, minH: 3 };
+    const width = currentBreakpoint === 'mobile' ? layoutColumns : Math.min(minimum.minW, layoutColumns);
+    const height = currentBreakpoint === 'mobile' && gridMetrics
+      ? Math.max(minimum.minH, Math.ceil((getGadgetReadingBodyFloor(renderer) + gridMetrics.frameHeaderHeight + 2 + 12) / gridMetrics.stride))
+      : minimum.minH;
+    if (findFreeCoordinates(draftPlacements, width, height, layoutColumns)) return true;
+    setSaveError(t('noFreeDashboardSpace'));
+    return false;
+  }, [activeDashboard, currentBreakpoint, draftPlacements, gridMetrics, layoutColumns, layoutOperationPending, t]);
+
+  /** Reconciles an already-committed membership response without rebinding its local draft owner. */
+  const reconcileMembershipDashboard = useCallback((requestedDashboardId: string, updated: Dashboard) => {
+    if (updated.id === requestedDashboardId) {
+      const cached = queryClient.getQueryData<Dashboard>(dashboardKeys.detail(updated.id));
+      if (!cached || cached.revision <= updated.revision) {
+        queryClient.setQueryData(dashboardKeys.detail(updated.id), updated);
+      }
+    }
+    void queryClient.invalidateQueries({ queryKey: dashboardKeys.detail(requestedDashboardId) });
+    void queryClient.invalidateQueries({ queryKey: dashboardKeys.all });
+  }, [queryClient]);
+
+  /** Reserves owner identity and a unique operation before quick-definition network work begins. */
+  const beginAddGadgetInstance = useCallback((renderer: string): string | null => {
+    if (!activeDashboard || !canAddGadgetInstance(renderer) || membershipOperationCountRef.current > 0) return null;
+    const minimum = RENDERER_MIN_SIZES[renderer] ?? { minW: 4, minH: 3 };
+    const width = currentBreakpoint === 'mobile' ? layoutColumns : Math.min(minimum.minW, layoutColumns);
+    const height = currentBreakpoint === 'mobile' && gridMetrics
+      ? Math.max(minimum.minH, Math.ceil((getGadgetReadingBodyFloor(renderer) + gridMetrics.frameHeaderHeight + 2 + 12) / gridMetrics.stride))
+      : minimum.minH;
+    const reservationId = `dashboard-add-${++addReservationSequenceRef.current}`;
+    addReservationsRef.current.set(reservationId, {
+      dashboardId: activeDashboard.id,
+      breakpoint: currentBreakpoint,
+      columns: layoutColumns,
+      baseRevision: activeDashboard.revision,
+      renderer,
+      width,
+      height,
+    });
+    membershipOperationCountRef.current += 1;
+    setMembershipMutationsPending((pending) => pending + 1);
+    return reservationId;
+  }, [activeDashboard, canAddGadgetInstance, currentBreakpoint, gridMetrics, layoutColumns]);
+
+  /** Releases one Add reservation idempotently after either stage of creation finishes. */
+  const releaseAddReservation = useCallback((reservationId: string) => {
+    if (!addReservationsRef.current.delete(reservationId)) return;
+    membershipOperationCountRef.current = Math.max(0, membershipOperationCountRef.current - 1);
+    setMembershipMutationsPending((pending) => Math.max(0, pending - 1));
+  }, []);
+
+  /** Triggered by Save button; the mutation never rereads viewport-derived identity. */
   const handleSave = useCallback(() => {
-    void saveLayoutMutation.mutateAsync();
-  }, [saveLayoutMutation]);
+    if (saveOperationPendingRef.current || membershipOperationCountRef.current > 0) return;
+    const request = captureLayoutSaveRequest();
+    if (!request) return;
+    saveOperationPendingRef.current = true;
+    void saveLayoutMutation.mutateAsync(request).finally(() => { saveOperationPendingRef.current = false; });
+  }, [captureLayoutSaveRequest, saveLayoutMutation]);
 
   /** Request to exit edit mode or switch dashboard. */
   const requestExitEdit = useCallback(() => {
+    if (layoutOperationPending || membershipOperationCountRef.current > 0) return;
     if (isDirty) {
       pendingExitEditRef.current = true;
       setDirtyModalOpen(true);
     } else {
       setIsEditMode(false);
+      setEditOrigin(null);
     }
-  }, [isDirty]);
+  }, [isDirty, layoutOperationPending]);
 
   /** Request switching to another dashboard (with dirty protection). */
   const requestSwitchDashboard = useCallback(
     (newId: string) => {
+      if (layoutOperationPending || membershipOperationCountRef.current > 0) return;
       if (newId === selectedDashboardId) return;
       if (isDirty) {
         pendingDashboardSwitchRef.current = newId;
@@ -411,7 +631,7 @@ export function DashboardPage() {
         setActiveGroupId('all');
       }
     },
-    [isDirty, selectedDashboardId],
+    [isDirty, layoutOperationPending, selectedDashboardId],
   );
 
   /** Resolves the dirty modal selection: save, discard, or stay. */
@@ -422,12 +642,28 @@ export function DashboardPage() {
       if (action === 'stay') {
         pendingDashboardSwitchRef.current = null;
         pendingExitEditRef.current = false;
+        pendingRouteNavigationRef.current = null;
+        dismissedBreakpointRef.current = pendingBreakpointRef.current;
+        pendingBreakpointRef.current = null;
         return;
       }
 
       if (action === 'discard') {
+        const routeIntent = pendingRouteNavigationRef.current;
+        pendingRouteNavigationRef.current = null;
         setIsDirty(false);
+        setEditOrigin(null);
         setDraftPlacements(savedPlacements);
+        setHistory([savedPlacements]);
+        setHistoryIndex(0);
+        pendingBreakpointRef.current = null;
+        dismissedBreakpointRef.current = null;
+        if (routeIntent) {
+          pendingDashboardSwitchRef.current = null;
+          pendingExitEditRef.current = false;
+          guardedNavigation.continueNavigation(routeIntent);
+          return;
+        }
         if (pendingDashboardSwitchRef.current) {
           setSelectedDashboardId(pendingDashboardSwitchRef.current);
           pendingDashboardSwitchRef.current = null;
@@ -441,8 +677,23 @@ export function DashboardPage() {
       }
 
       if (action === 'save') {
+        if (saveOperationPendingRef.current || membershipOperationCountRef.current > 0) return;
+        const request = captureLayoutSaveRequest();
+        if (!request) {
+          if (pendingRouteNavigationRef.current) setDirtyModalOpen(true);
+          return;
+        }
+        saveOperationPendingRef.current = true;
         try {
-          await saveLayoutMutation.mutateAsync();
+          await saveLayoutMutation.mutateAsync(request);
+          const routeIntent = pendingRouteNavigationRef.current;
+          pendingRouteNavigationRef.current = null;
+          if (routeIntent) {
+            pendingDashboardSwitchRef.current = null;
+            pendingExitEditRef.current = false;
+            guardedNavigation.continueNavigation(routeIntent);
+            return;
+          }
           if (pendingDashboardSwitchRef.current) {
             setSelectedDashboardId(pendingDashboardSwitchRef.current);
             pendingDashboardSwitchRef.current = null;
@@ -454,12 +705,17 @@ export function DashboardPage() {
           }
         } catch {
           // If save fails, retain draft and remain on page
-          pendingDashboardSwitchRef.current = null;
-          pendingExitEditRef.current = false;
+          if (pendingRouteNavigationRef.current) setDirtyModalOpen(true);
+          else {
+            pendingDashboardSwitchRef.current = null;
+            pendingExitEditRef.current = false;
+          }
+        } finally {
+          saveOperationPendingRef.current = false;
         }
       }
     },
-    [saveLayoutMutation, savedPlacements],
+    [captureLayoutSaveRequest, guardedNavigation, saveLayoutMutation, savedPlacements],
   );
 
   // Dashboard creation mutation
@@ -479,6 +735,7 @@ export function DashboardPage() {
   const renameMutation = useMutation({
     mutationFn: async (name: string) => {
       if (!activeDashboard) return;
+      if (layoutOperationPending) return;
       return renameDashboard(
         activeDashboard.id,
         name,
@@ -529,57 +786,107 @@ export function DashboardPage() {
     },
   });
 
-  /** Adds the new instance to the active breakpoint draft using its effective minimum width. */
+  /** Captures owner identity before membership creation; late results cannot rebind another layout. */
   const handleAddGadgetInstance = useCallback(
-    async (params: { definitionId: string; groupId: string; title?: string }) => {
-      if (!activeDashboard) return;
+    async (params: { definitionId: string; groupId: string; title?: string; renderer: string }, reservationId: string) => {
+      const reservation = addReservationsRef.current.get(reservationId);
+      if (!reservation || reservation.renderer !== params.renderer) {
+        releaseAddReservation(reservationId);
+        return;
+      }
       try {
+        const live = liveLayoutRef.current;
+        const preflightIdentity = layoutIdentityRef.current;
+        if (!live.activeDashboard
+          || live.activeDashboard.id !== reservation.dashboardId
+          || preflightIdentity.dashboardId !== reservation.dashboardId
+          || preflightIdentity.breakpoint !== reservation.breakpoint
+          || preflightIdentity.columns !== reservation.columns
+          || preflightIdentity.baseRevision !== reservation.baseRevision
+          || live.activeDashboard.revision !== reservation.baseRevision) return;
+        // Recheck live occupancy after asynchronous definition creation, immediately before POST.
+        const coords = findFreeCoordinates(live.draftPlacements, reservation.width, reservation.height, reservation.columns);
+        if (!coords) {
+          setSaveError(t('noFreeDashboardSpace'));
+          return;
+        }
         const updatedDashboard = await createGadgetInstance(
-          activeDashboard.id,
+          reservation.dashboardId,
           {
-            expected_revision: activeDashboard.revision,
+            expected_revision: reservation.baseRevision,
             group_id: params.groupId,
             definition_id: params.definitionId,
             title: params.title,
           },
           session.csrfToken,
         );
+        reconcileMembershipDashboard(reservation.dashboardId, updatedDashboard);
 
-        queryClient.setQueryData(dashboardKeys.detail(updatedDashboard.id), updatedDashboard);
-
+        const responseIdentity = layoutIdentityRef.current;
+        if (updatedDashboard.id !== reservation.dashboardId
+          || responseIdentity.dashboardId !== reservation.dashboardId
+          || responseIdentity.breakpoint !== reservation.breakpoint
+          || responseIdentity.columns !== reservation.columns
+          || (responseIdentity.baseRevision !== reservation.baseRevision
+            && responseIdentity.baseRevision !== updatedDashboard.revision)) return;
         // Find newly added instance
         const newInstance = updatedDashboard.instances.find(
-          (inst) => !activeDashboard.instances.some((old) => old.id === inst.id),
+          (inst) => !live.activeDashboard!.instances.some((old) => old.id === inst.id),
         );
 
         if (newInstance) {
-          const rendererKey = newInstance.definition.renderer;
-          const minSize = RENDERER_MIN_SIZES[rendererKey] ?? { minW: 4, minH: 3 };
-          const columns = layoutColumns;
-          const width = isMobile ? columns : Math.min(minSize.minW, columns);
-          const coords = findFreeCoordinates(draftPlacements, width, minSize.minH, columns);
-
           const newPlacement: DashboardPlacement = {
             instance_id: newInstance.id,
             x: coords.x,
             y: coords.y,
-            w: width,
-            h: minSize.minH,
+            w: reservation.width,
+            h: reservation.height,
           };
 
-          pushHistory([...draftPlacements, newPlacement]);
+          const nextPlacements = [...live.draftPlacements, newPlacement];
+          const serverSnapshot = reservation.breakpoint === 'mobile'
+            ? projectMobilePlacements(updatedDashboard.layouts.mobile.items, updatedDashboard.instances, updatedDashboard.layouts.mobile.columns)
+            : { placements: updatedDashboard.layouts.desktop.items, unavailable: false };
+          if (serverSnapshot.unavailable) {
+            setSaveError(t('mobileLayoutUnavailable'));
+            return;
+          }
+          const origin: LayoutEditOrigin = {
+            dashboardId: updatedDashboard.id,
+            breakpoint: reservation.breakpoint,
+            columns: reservation.columns,
+            baseRevision: updatedDashboard.revision,
+            savedSnapshot: serverSnapshot.placements.map((placement) => ({ ...placement })),
+          };
+          const dirty = !sameLayout(nextPlacements, origin.savedSnapshot);
+          setDraftPlacements(nextPlacements);
+          setHistory([nextPlacements]);
+          setHistoryIndex(0);
+          setIsDirty(dirty);
+          setEditOrigin(dirty ? origin : null);
         }
       } catch (err) {
         setSaveError(err instanceof Error ? err.message : t('saveFailed'));
+      } finally {
+        releaseAddReservation(reservationId);
       }
     },
-    [activeDashboard, draftPlacements, isMobile, layoutColumns, pushHistory, queryClient, session.csrfToken, t],
+    [layoutIdentityRef, reconcileMembershipDashboard, releaseAddReservation, session.csrfToken, t],
   );
 
-  // Remove Gadget Instance
+  /** Captures owner identity before removal; accepted server membership resets layout history. */
   const handleRemoveInstance = useCallback(
     async (instanceId: string) => {
       if (!activeDashboard) return;
+      if (layoutOperationPending || membershipOperationCountRef.current > 0) return;
+      const requestedIdentity = {
+        dashboardId: activeDashboard.id,
+        breakpoint: currentBreakpoint,
+        columns: layoutColumns,
+        baseRevision: activeDashboard.revision,
+      };
+      membershipOperationCountRef.current += 1;
+      setMembershipMutationsPending((pending) => pending + 1);
       try {
         const updatedDashboard = await deleteGadgetInstance(
           activeDashboard.id,
@@ -587,14 +894,43 @@ export function DashboardPage() {
           activeDashboard.revision,
           session.csrfToken,
         );
-        queryClient.setQueryData(dashboardKeys.detail(updatedDashboard.id), updatedDashboard);
+        reconcileMembershipDashboard(requestedIdentity.dashboardId, updatedDashboard);
+        const currentIdentity = layoutIdentityRef.current;
+        if (updatedDashboard.id !== requestedIdentity.dashboardId
+          || currentIdentity.dashboardId !== requestedIdentity.dashboardId
+          || currentIdentity.breakpoint !== requestedIdentity.breakpoint
+          || currentIdentity.columns !== requestedIdentity.columns
+          || (currentIdentity.baseRevision !== requestedIdentity.baseRevision
+            && currentIdentity.baseRevision !== updatedDashboard.revision)) return;
         const filtered = draftPlacements.filter((p) => p.instance_id !== instanceId);
-        pushHistory(filtered);
+        const serverSnapshot = requestedIdentity.breakpoint === 'mobile'
+          ? projectMobilePlacements(updatedDashboard.layouts.mobile.items, updatedDashboard.instances, updatedDashboard.layouts.mobile.columns)
+          : { placements: updatedDashboard.layouts.desktop.items, unavailable: false };
+        if (serverSnapshot.unavailable) {
+          setSaveError(t('mobileLayoutUnavailable'));
+          return;
+        }
+        const origin: LayoutEditOrigin = {
+          dashboardId: updatedDashboard.id,
+          breakpoint: requestedIdentity.breakpoint,
+          columns: requestedIdentity.columns,
+          baseRevision: updatedDashboard.revision,
+          savedSnapshot: serverSnapshot.placements.filter((placement) => placement.instance_id !== instanceId).map((placement) => ({ ...placement })),
+        };
+        const dirty = !sameLayout(filtered, origin.savedSnapshot);
+        setDraftPlacements(filtered);
+        setHistory([filtered]);
+        setHistoryIndex(0);
+        setIsDirty(dirty);
+        setEditOrigin(dirty ? origin : null);
       } catch (err) {
         setSaveError(err instanceof Error ? err.message : t('saveFailed'));
+      } finally {
+        membershipOperationCountRef.current = Math.max(0, membershipOperationCountRef.current - 1);
+        setMembershipMutationsPending((pending) => Math.max(0, pending - 1));
       }
     },
-    [activeDashboard, draftPlacements, pushHistory, queryClient, session.csrfToken, t],
+    [activeDashboard, currentBreakpoint, draftPlacements, layoutColumns, layoutIdentityRef, layoutOperationPending, queryClient, reconcileMembershipDashboard, session.csrfToken, t],
   );
 
   /** Filter instances by active group tab. */
@@ -603,12 +939,6 @@ export function DashboardPage() {
     if (activeGroupId === 'all') return activeDashboard.instances;
     return activeDashboard.instances.filter((inst) => inst.group_id === activeGroupId);
   }, [activeDashboard, activeGroupId]);
-
-  /** Filter placements for visible instances. */
-  const visiblePlacements: DashboardPlacement[] = useMemo(() => {
-    const visibleIds = new Set(visibleInstances.map((inst) => inst.id));
-    return draftPlacements.filter((p) => visibleIds.has(p.instance_id));
-  }, [draftPlacements, visibleInstances]);
 
   /** Revealing / clearing reading updates for an instance. */
   const handleApplyReadingQueue = useCallback((instanceId: string) => {
@@ -630,6 +960,7 @@ export function DashboardPage() {
             <DropdownMenuTrigger asChild>
               <button
                 type="button"
+                disabled={layoutOperationPending}
                 className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-border bg-card text-foreground font-bold text-base hover:bg-primary/10 transition-colors"
               >
                 <Layout className="w-4 h-4 text-primary" />
@@ -641,6 +972,7 @@ export function DashboardPage() {
               {dashboards.map((dash) => (
                 <DropdownMenuItem
                   key={dash.id}
+                  disabled={layoutOperationPending}
                   onClick={() => requestSwitchDashboard(dash.id)}
                   className={`text-xs flex items-center justify-between ${
                     dash.id === selectedDashboardId ? 'font-bold text-primary' : ''
@@ -656,6 +988,7 @@ export function DashboardPage() {
               <DropdownMenuSeparator />
 
               <DropdownMenuItem
+                disabled={layoutOperationPending}
                 onClick={() => setCreateDashboardOpen(true)}
                 className="text-xs gap-2 font-medium"
               >
@@ -666,6 +999,7 @@ export function DashboardPage() {
               {activeDashboard && (
                 <>
                   <DropdownMenuItem
+                    disabled={layoutOperationPending}
                     onClick={() => {
                       setRenameValue(activeDashboard.name);
                       setRenameDialogOpen(true);
@@ -677,6 +1011,7 @@ export function DashboardPage() {
                   </DropdownMenuItem>
 
                   <DropdownMenuItem
+                    disabled={layoutOperationPending}
                     onClick={() => setDeleteDialogOpen(true)}
                     className="text-xs gap-2 text-destructive focus:text-destructive"
                   >
@@ -708,6 +1043,7 @@ export function DashboardPage() {
           {editMode && activeDashboard && (
             <button
               type="button"
+              disabled={layoutOperationPending}
               onClick={() => setAddGroupOpen(true)}
               aria-label={t('addGroup')}
               title={t('addGroup')}
@@ -724,6 +1060,7 @@ export function DashboardPage() {
           {/* Preset Picker Trigger */}
           <Button
             type="button"
+            disabled={layoutOperationPending}
             className="secondary text-xs h-8 px-2.5 gap-1.5"
             onClick={() => setPresetPickerOpen(true)}
           >
@@ -734,7 +1071,7 @@ export function DashboardPage() {
           {/* View / Edit Mode Toggle Button */}
           <Button
             type="button"
-            disabled={!canEditLayout && !isEditMode}
+            disabled={layoutOperationPending || (!canEditLayout && !isEditMode)}
             onClick={() => {
               if (isEditMode) {
                 requestExitEdit();
@@ -761,9 +1098,24 @@ export function DashboardPage() {
         </div>
       </div>
 
+      {editOrigin && editOrigin.dashboardId === selectedDashboardId && requestedBreakpoint !== editOrigin.breakpoint && (
+        <p role="status" className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm text-muted-foreground">
+          {t('mobileEditOrigin', {
+            breakpoint: t(editOrigin.breakpoint === 'mobile' ? 'mobileLayout' : 'desktopLayout'),
+            requested: t(requestedBreakpoint === 'mobile' ? 'mobileLayout' : 'desktopLayout'),
+          })}
+        </p>
+      )}
+
       {mobileProjectionUnavailable && (
         <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
           {t('mobileLayoutUnavailable')}
+        </p>
+      )}
+
+      {activeDashboard && currentBreakpoint === 'mobile' && !editMode && !mobileProjectionUnavailable && readablePlacements && (
+        <p role="status" className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm text-muted-foreground">
+          {t('mobileReadingProjection')}
         </p>
       )}
 
@@ -771,18 +1123,28 @@ export function DashboardPage() {
       {editMode && (
         <LayoutEditor
           isDirty={isDirty}
-          isSaving={saveLayoutMutation.isPending}
+          isSaving={layoutOperationPending}
           canUndo={historyIndex > 0}
           canRedo={historyIndex < history.length - 1}
           onSave={handleSave}
           onCancel={requestExitEdit}
           onUndo={handleUndo}
           onRedo={handleRedo}
+          onUseReadableMobileSizes={() => {
+            if (currentBreakpoint === 'mobile' && readablePlacements) pushHistory(readablePlacements);
+          }}
+          canUseReadableMobileSizes={currentBreakpoint === 'mobile' && readablePlacements !== null}
           onOpenPresetPicker={() => setPresetPickerOpen(true)}
           onAddGadgetInstance={handleAddGadgetInstance}
+          onBeginAddGadgetInstance={beginAddGadgetInstance}
+          onCancelPendingAdd={releaseAddReservation}
           groups={activeDashboard?.groups ?? []}
           activeGroupId={activeGroupId === 'all' ? undefined : activeGroupId}
           dirtyModalOpen={dirtyModalOpen}
+          dirtyDescription={editOrigin && requestedBreakpoint !== editOrigin.breakpoint
+            ? t('mobileBreakpointDirtyWarning', {
+                breakpoint: t(editOrigin.breakpoint === 'mobile' ? 'mobileLayout' : 'desktopLayout'),
+              }) : undefined}
           onDirtyModalResolution={handleDirtyModalResolution}
           saveError={saveError}
           onDismissSaveError={() => setSaveError(null)}
@@ -843,11 +1205,17 @@ export function DashboardPage() {
         </div>
       ) : (
         <DashboardGrid
-          instances={visibleInstances}
-          placements={mobileProjectionUnavailable ? [] : visiblePlacements}
+          instances={activeDashboard.instances}
+          placements={mobileProjectionUnavailable ? [] : draftPlacements}
+          visibleInstanceIds={visibleInstances.map((instance) => instance.id)}
+          isMobileView={currentBreakpoint === 'mobile'}
+          onReadableProjectionChange={setReadablePlacements}
+          onGridMetricsChange={setGridMetrics}
           columns={layoutColumns}
           breakpoint={currentBreakpoint}
-          isEditMode={editMode}
+          requestedBreakpoint={requestedBreakpoint}
+          interactionPending={layoutOperationPending}
+          isEditMode={editMode && !layoutOperationPending}
           onLayoutChange={pushHistory}
           onRemoveInstance={handleRemoveInstance}
           onConfigureInstance={(inst) => {
@@ -1018,7 +1386,7 @@ export function DashboardPage() {
             </Button>
             <Button
               type="button"
-              disabled={!newGroupName.trim() || addGroupMutation.isPending}
+              disabled={!newGroupName.trim() || addGroupMutation.isPending || layoutOperationPending}
               className="text-xs font-bold"
               onClick={() => addGroupMutation.mutate(newGroupName.trim())}
             >
