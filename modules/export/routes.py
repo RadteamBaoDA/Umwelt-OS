@@ -45,6 +45,9 @@ DATASETS = (
     ("goals", "goals", goals_public),
     ("news_topics", "topics", news_public),
     ("dashboards", "dashboards", dashboard_public),
+    ("gadget_definitions", "gadget_definitions", dashboard_public),
+    ("daily_briefs", "daily_briefs", dashboard_public),
+    ("brief_schedule", "brief_schedule", dashboard_public),
     ("conversations", "conversations", chat_public),
     ("messages", "messages", chat_public),
     ("memories", "memories", memory_public),
@@ -109,7 +112,7 @@ async def _collect_dataset(
     session: AsyncSession, owner_id: int, dataset: str, record_kind: str, public: Any,
     byte_budget: list[int],
 ) -> tuple[list[dict[str, Any]], dict[str, Any], tuple[Any, Any, list[BaseModel]]]:
-    """Drain a public owner cursor while retaining bounded DTOs and private final fence receipts."""
+    """Drain one public cursor under page, 100,000-row and 32 MiB bounds, retaining final fences."""
     cursor = None
     records: list[dict[str, Any]] = []
     fences: list[BaseModel] = []
@@ -150,7 +153,7 @@ async def _collect_dataset(
                 raise HTTPException(status_code=413, detail="Export exceeds the 32 MiB download bound")
             records.append(record)
         fences.extend(page.fences)
-        if len(records) > 100_000:
+        if len(records) > 100_000 or len(fences) > 100_000:
             raise HTTPException(status_code=413, detail="Export contains too many records for one bounded download")
         cursor = page.next_cursor
         if cursor is None:
@@ -200,7 +203,7 @@ async def _build_export_response(
     owner: OwnerRead,
     response: Response,
 ) -> Response:
-    """Build one credential-free bounded download and publish only after all owner fences pass."""
+    """Build a credential-free download with bounded dataset rows/bytes and final owner fences."""
     collected: dict[str, list[dict[str, Any]]] = {}
     dataset_metadata: dict[str, dict[str, Any]] = {}
     pending: dict[str, tuple[Any, Any, list[BaseModel]]] = {}
@@ -226,8 +229,7 @@ async def _build_export_response(
             "Raw files, graph state, workflow secrets, runtime credentials, and deployment identity are not included in portable exports.",
             "Connector source configuration is omitted because provider-specific secret-free fields are not yet allowlisted.",
             "Deleted News topics and dashboard configurations without a retained cutoff-compatible gadget definition are omitted.",
-            "Saved gadget definitions that are not placed in an exported dashboard are omitted from this portable projection.",
-            "Generated daily brief history and its schedule are not part of the portable Dashboard export.",
+            "Saved daily brief revisions are omitted when any exact fact kind, fact ID, title, or currently eligible source citation no longer matches retained Dashboard evidence.",
             "Conversation and message history is omitted when the owner privacy setting disables retention.",
             "This export is a portable owner-data projection, not a restorable instance backup.",
         ],
