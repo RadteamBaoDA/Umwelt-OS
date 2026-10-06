@@ -1,3 +1,8 @@
+## P12 Entities/Relationships export integration — 2026-10-06
+
+Accepted7b791f2 repair composed with develop34eeecd; inherited duplicate Memory reader removed by preserving exact accepted develop blob. Frozen0f4e093fa9592acb142ae57a3a45efb13661e66a has exactly four owner file delta. Prescribed composition build session95371 exit0/four images and independent composition review PASS. Integrating this coherent knowledge export milestone with checkpoint batch. Timeline/Observations still required; full export caller/backup and deletion/recovery remain open. No whole-P12 or runtime acceptance claim.
+
+Onboarding R170d8ab7 frozen and current-base composition pending final build/scoped review. Backup branch still based pre3215939; missing Chat/Documents symbols there is expected until preserved source snapshot merges currentdevelop, not permission to duplicate accepted owner contracts.
 ## P12-T4 performance record delivery — 2026-10-06
 
 Frozen8d8ced8 performance report: prescribed buildexit0/four images and independent document source review PASS. Root verified exact performance-report blob equality and no production-code delta versus current developbd79c06. Integrating the report with this completed task checkpoint batch. P12-T4 production preparation delivered; actual target-host measurement/capacity acceptance remains pending/null, no deployment limits changed.
@@ -374,3 +379,6 @@ Performance report freeze8d8ced8 prescribed build session92447 terminal exit0 wi
 ### Parallel pipeline/source-host resolution — 2026-10-06
 
 Onboarding author confirms explicit PowerShell7/login:false/workdir launch now succeeds; existing source preserved and demo/reset/drawer tracing continues. Knowledge export author asked to freeze first coherent Entities + approved Temporal unresolved-effect public projection milestone for build/review, preserving any incomplete Relationships schema draft separately. Remaining Relationships/Timeline/Observations scope remains required, not dropped. This frees the fourth total concurrency slot for independent review between source milestones. Backup owner-journal reconciliation explicitly remains required production scope alongside all canonical domain exports; no silent deferral to test stage.
+### Knowledge export R1 freeze/build — 2026-10-06
+
+Frozen7b791f29cd70fca3c33c3cffd2373cb08b2a47ce (parenteb56a03), clean author tree. Three-file repair claims all original findings addressed: fresh child rows, non-owner/legacy field support validation, independent alias-support memberships and generation/content fences. Root prescribed repair build live session43750; independent scoped Sol re-review dispatched. No acceptance/merge until both exact gates pass. Memory export provenance/fresh reads/cursor tightening continues separately in backup branch; full per-domain/deletion/onboarding scopes remain open. Develop unchanged34eeecd.

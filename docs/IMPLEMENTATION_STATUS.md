@@ -1,3 +1,8 @@
+## P12 Entities/Relationships export integration — 2026-10-06
+
+Accepted7b791f2 repair composed with develop34eeecd; inherited duplicate Memory reader removed by preserving exact accepted develop blob. Frozen0f4e093fa9592acb142ae57a3a45efb13661e66a has exactly four owner file delta. Prescribed composition build session95371 exit0/four images and independent composition review PASS. Integrating this coherent knowledge export milestone with checkpoint batch. Timeline/Observations still required; full export caller/backup and deletion/recovery remain open. No whole-P12 or runtime acceptance claim.
+
+Onboarding R170d8ab7 frozen and current-base composition pending final build/scoped review. Backup branch still based pre3215939; missing Chat/Documents symbols there is expected until preserved source snapshot merges currentdevelop, not permission to duplicate accepted owner contracts.
 ## P12-T4 performance record delivery — 2026-10-06
 
 Frozen8d8ced8 performance report: prescribed buildexit0/four images and independent document source review PASS. Root verified exact performance-report blob equality and no production-code delta versus current developbd79c06. Integrating the report with this completed task checkpoint batch. P12-T4 production preparation delivered; actual target-host measurement/capacity acceptance remains pending/null, no deployment limits changed.
