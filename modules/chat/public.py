@@ -1215,7 +1215,12 @@ def _cleanup_scope_parts(
 
 
 def _matches_cleanup_scope(value: object, scope: DocumentCleanupEvidenceScope) -> bool:
-    """Match only structured source/document/version/chunk IDs captured for this deletion."""
+    """Match exact structured IDs without requiring chunk and version records in one page.
+
+    Chunk identities and version-only identities have independent random cursors, so an exact
+    version/chunk pair must match its chunk record even when the separate version record is on
+    another bounded reference page. A version-only object still requires its own version record.
+    """
     if not isinstance(value, dict):
         return False
     version_ids, chunk_refs, document_ids = _cleanup_scope_parts(scope)
@@ -1223,8 +1228,6 @@ def _matches_cleanup_scope(value: object, scope: DocumentCleanupEvidenceScope) -
     version_id = _cleanup_uuid(value.get("documentVersionId") or value.get("document_version_id"))
     chunk_id = _cleanup_uuid(value.get("chunkId") or value.get("chunk_id"))
     if version_id is not None:
-        if version_id not in version_ids:
-            return False
         if chunk_id is not None:
             return (version_id, chunk_id) in chunk_refs
         return version_id in version_ids
@@ -1382,7 +1385,9 @@ async def purge_document_copied_evidence_page(
     Lock order is Memory privacy, Conversation parent, ResponseRun, then StreamEvent. This
     function mutates only Chat-owned rows; it preserves message text, unrelated citations,
     append-only mutation receipts, and every existing stream/event/run identity. The Documents
-    caller persists the returned cursor and page mutations in the same transaction.
+    caller persists the returned cursor and page mutations in the same transaction. Version-only
+    and chunk identity records can fall on different scope pages; each exact chunk pair matches
+    independently of the separate version-only record.
     """
     if not 1 <= limit <= 100:
         raise ValueError("Chat copied-evidence page size must be between 1 and 100")
