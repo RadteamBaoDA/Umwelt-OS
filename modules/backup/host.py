@@ -70,18 +70,23 @@ def _build_schedule_gate(
 
 
 class Compose:
-    """Run fixed project Compose files while suppressing credential-bearing diagnostics."""
+    """Run fixed Compose projects with bounded output and optional isolated interpolation values."""
 
     def __init__(
         self, root: Path, settings: Settings, project_name: str | None = None,
         *, include_connectors: bool = True, env_file: Path | None = None,
         extra_compose_file: Path | None = None,
+        command_environment: dict[str, str] | None = None,
     ) -> None:
-        """Bind Compose operations to the fixed deployment project and file inventory."""
+        """Bind Compose operations to fixed files and copy any per-project interpolation environment."""
         self.root = root.resolve()
         self.settings = settings
         self.project_name = project_name
         self.env_file = env_file
+        # Compose interpolation reads the subprocess environment before applying service overrides.
+        self.command_environment = (
+            command_environment.copy() if command_environment is not None else None
+        )
         self.files = [
             "docker-compose.yml",
             "infrastructure/graph/compose.yml",
@@ -115,6 +120,7 @@ class Compose:
                 stdin=stdin,
                 input=input_data,
                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False,
+                env=self.command_environment,
             )
         except OSError as exc:
             raise BackupHostError("Docker Compose is unavailable") from exc
@@ -130,6 +136,7 @@ class Compose:
             result = subprocess.run(
                 self.command(*args), cwd=self.root, stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+                env=self.command_environment,
             )
         except OSError as exc:
             raise BackupHostError("Docker Compose is unavailable") from exc
@@ -143,6 +150,7 @@ class Compose:
                 result = subprocess.run(
                     self.command(*args), cwd=self.root, stdin=subprocess.DEVNULL,
                     stdout=output, stderr=subprocess.DEVNULL, check=False,
+                    env=self.command_environment,
                 )
         except OSError as exc:
             destination.unlink(missing_ok=True)
@@ -188,6 +196,7 @@ class Compose:
                     "run", "--rm", "--no-deps", "-T", "backup-volume-restore", "restore", name,
                 ), cwd=self.root, stdin=source,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+                env=self.command_environment,
             )
         except OSError as exc:
             raise BackupHostError("Docker Compose restore helper failed") from exc
@@ -201,6 +210,7 @@ class Compose:
                 result = subprocess.run(
                     self.command(*args), cwd=self.root, stdin=input_file,
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+                    env=self.command_environment,
                 )
         except OSError as exc:
             raise BackupHostError("Docker Compose restore command failed") from exc
@@ -617,6 +627,34 @@ def _wait_for_worker_ready(
     raise BackupHostError("Isolated worker did not publish its readiness heartbeat")
 
 
+def _restore_compose_environment(archived_env: Path) -> dict[str, str]:
+    """Build Compose interpolation values from the protected archive's fixed local DB identity."""
+    configuration = dotenv_values(archived_env, interpolate=False)
+    database_value = configuration.get("DATABASE_URL")
+    postgres_password = configuration.get("POSTGRES_PASSWORD")
+    try:
+        database_url = make_url(database_value) if isinstance(database_value, str) else None
+        database_port = database_url.port if database_url is not None else None
+    except (ValueError, TypeError) as exc:
+        raise BackupHostError("Archived database configuration is invalid") from exc
+    if (database_url is None or database_url.drivername != "postgresql+asyncpg"
+            or database_url.host != "postgres" or database_port not in {None, 5432}
+            or database_url.username != "bbd" or database_url.database != "bbd"
+            or database_url.query or not isinstance(postgres_password, str)
+            or not postgres_password or database_url.password != postgres_password
+            or "\x00" in postgres_password):
+        raise BackupHostError("Archived database credentials do not match the fixed restore identity")
+
+    encoded_password = quote(postgres_password, safe="")
+    command_environment = os.environ.copy()
+    command_environment.update({
+        "DATABASE_URL": f"postgresql+asyncpg://bbd:{encoded_password}@postgres:5432/bbd",
+        "POSTGRES_PASSWORD": postgres_password,
+        "REDIS_URL": "redis://redis:6379/0",
+    })
+    return command_environment
+
+
 def _write_restore_override(path: Path, archived_env: Path) -> None:
     """Write archived settings and an internal-only network for isolated validation."""
     env_path = json.dumps(str(archived_env.resolve()).replace("\\", "/"))
@@ -732,7 +770,10 @@ def _discard_retained_restore_directory(root: Path, project_name: str) -> None:
 def cleanup_isolated_restore(
     project_name: str, *, root: Path | None = None,
 ) -> dict[str, str]:
-    """Stop and remove one retained isolated restore project and its protected settings."""
+    """Stop and remove one retained isolated restore project safely.
+
+    Rebuild DB/Redis interpolation from the protected archived runtime settings.
+    """
     root = (root or Path.cwd()).resolve(strict=True)
     if not re.fullmatch(r"bbd-restore-[0-9a-f]{16}", project_name):
         raise BackupHostError("Isolated restore project identity is invalid")
@@ -753,9 +794,20 @@ def cleanup_isolated_restore(
             or override.resolve(strict=True).parent != resolved_staging
             or marker.resolve(strict=True).parent != resolved_staging):
         raise BackupHostError("Retained isolated restore configuration escaped its owner directory")
+    command_environment = _restore_compose_environment(env_file)
+    # Rebuild older retained overrides from the validated runtime file before Compose interpolation.
+    _write_restore_override(override, env_file)
+    _secure_retained_path(override, directory=False)
     compose = Compose(
-        root, Settings(_env_file=env_file), project_name=project_name, include_connectors=False,
+        root,
+        Settings(
+            _env_file=env_file,
+            database_url=command_environment["DATABASE_URL"],
+            redis_url=command_environment["REDIS_URL"],
+        ),
+        project_name=project_name, include_connectors=False,
         env_file=env_file, extra_compose_file=override,
+        command_environment=command_environment,
     )
     compose.quiet("down", "--volumes", "--remove-orphans")
     _discard_retained_restore_directory(root, project_name)
@@ -1154,7 +1206,10 @@ def _verify_graph_volume(compose: Compose) -> None:
 def restore_backup(
     archive_path: Path, *, root: Path | None = None, keep_isolated: bool = False,
 ) -> dict[str, object]:
-    """Restore and migrate a backup only inside a uniquely named Compose project."""
+    """Restore and migrate within a uniquely named Compose project.
+
+    The project's DB/Redis interpolation comes from the verified archive.
+    """
     root = (root or Path.cwd()).resolve()
     settings = Settings(_env_file=root / ".env")
     age, recipient, identity = _age_tools(settings, root)
@@ -1173,21 +1228,7 @@ def restore_backup(
         manifest = _decrypt_snapshot(age, identity, archive_path, stage)
         component_statuses = _verify_manifest_keys(manifest, stage, recipient)
         archived_env = stage / "configuration" / "runtime.env"
-        archived_configuration = dotenv_values(archived_env, interpolate=False)
-        archived_database_value = archived_configuration.get("DATABASE_URL")
-        archived_postgres_password = archived_configuration.get("POSTGRES_PASSWORD")
-        try:
-            database_url = (
-                make_url(archived_database_value)
-                if isinstance(archived_database_value, str) else None
-            )
-        except (ValueError, TypeError) as exc:
-            raise BackupHostError("Archived database configuration is invalid") from exc
-        if (database_url is None or database_url.host != "postgres"
-                or database_url.username != "bbd" or database_url.database != "bbd"
-                or not archived_postgres_password
-                or database_url.password != archived_postgres_password):
-            raise BackupHostError("Archived database credentials do not match the fixed restore identity")
+        command_environment = _restore_compose_environment(archived_env)
         if keep_isolated:
             retained_staging = _retained_restore_directory(root, project_name)
             retained_env = retained_staging / "runtime.env"
@@ -1207,8 +1248,15 @@ def restore_backup(
             compose_override = Path(temporary) / "restore-compose.override.yml"
             _write_restore_override(compose_override, compose_env)
         compose = Compose(
-            root, settings, project_name=project_name, include_connectors=False,
+            root,
+            Settings(
+                _env_file=compose_env,
+                database_url=command_environment["DATABASE_URL"],
+                redis_url=command_environment["REDIS_URL"],
+            ),
+            project_name=project_name, include_connectors=False,
             env_file=compose_env, extra_compose_file=compose_override,
+            command_environment=command_environment,
         )
         postgres_component = next(
             (component for component in manifest.components if component.name == "postgres"), None,
