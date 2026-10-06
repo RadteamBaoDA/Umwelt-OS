@@ -1,3 +1,25 @@
+## P12-T4 performance record delivery — 2026-10-06
+
+Frozen8d8ced8 performance report: prescribed buildexit0/four images and independent document source review PASS. Root verified exact performance-report blob equality and no production-code delta versus current developbd79c06. Integrating the report with this completed task checkpoint batch. P12-T4 production preparation delivered; actual target-host measurement/capacity acceptance remains pending/null, no deployment limits changed.
+
+Knowledge exporteb56a03 prescribed build PASS but independent review REQUEST CHANGES (fresh child reads, nullable-origin support masking, independently retained aliases); Luna finite repair active. Onboardingb5377de source review REQUEST CHANGES (semantic compatibility, indexing status/failure visibility, pending/error states); Luna finite repair active, no build yet. Full remaining backup/export/P12 deletion/onboarding seed-reset-mobile/R16 scope stays open. No tests/runtime/SQL/migration execution or push/deploy.
+## Current P12 production pipeline — 2026-10-06
+
+| Scope | Current state | Required remaining gates |
+| --- | --- | --- |
+| Integrated owner-export / chat privacy | develop bd79c06 | Deferred runtime acceptance |
+| P12-T4 performance record | Frozen8d8ced8, prescribed build PASS | Independent source review + scoped integration; real target measurement deferred |
+| Full backup/export | Source implementation active; full domain contracts/admission/owner uncertainty gates incomplete | Full source freeze, current-base composition, prescribed build + independent review |
+| Knowledge export | Entities + Relationships source in progress | First coherent owner milestone freeze/build/review, then Timeline/Observations; Temporal count owner projection coordinated |
+| Onboarding API/UI | Source in progress, tool host restored | First coherent source freeze/composition/build/review |
+| P12-T3 seed/reset/mobile remainder | Required pending | Fresh Luna slice after first UI milestone; no seed/reset execution during code stage |
+| P12-T2 deletion/recovery | Current handoff bd79c06 and unreviewed security draft | Owner code hooks/receipts/stages after export source freeze, build/review |
+| P12-T5 / R16 final release | Documentation drafts only | Final code/OSS/commands reconciliation + build/review; acceptance still deferred |
+
+Pending task decomposition preserves the entire approved plan. Generic reserved/queued work must not be confused with actual unresolved remote attempt; backup gating uses owner dispatch receipts and lifecycle drain, never fabricates terminal outcome. No task declared fully complete from source-only slices.
+## Current develop integration — 2026-10-06
+
+Verified develop HEADbd79c069276c696e40df54062d50b0d1e7201350: owner export3215939 and Chat privacybd79c06 integrated after exact build/review. Current parallel Luna tasks: full backup/export/admission, onboarding/demo/mobile, and missing knowledge domain export owner contracts (Entities/Relationships/Timeline/Observations). P12-T2 deletion/recovery waits shared-owner source freeze; capacity/release/R16 remain open. All deferred tests/runtime/restore/target capacity acceptance unproven. Status updated locally; next docs commit batched with accepted task/phase.
 ## P12 chat privacy integration — 2026-10-06
 
 Accepted privacy6c22b73 composed with develop3215939 into0827281; duplicate reader repaired7929be573ab6bd8e31ab3a48c0abb90520550ba0. Exact prescribed build exit0, four images, clean author tree and independent narrow composition re-review PASS. Integrating four production files with this checkpoint batch. Consent is Memory-owned, serialized before parent/run locks; remote attempts/events/Stop and final writes recheck current consent. Runtime races/provider/SSE timing remain deferred, not proven by build.

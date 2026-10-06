@@ -1,3 +1,11 @@
+## P12-T4 performance record delivery — 2026-10-06
+
+Frozen8d8ced8 performance report: prescribed buildexit0/four images and independent document source review PASS. Root verified exact performance-report blob equality and no production-code delta versus current developbd79c06. Integrating the report with this completed task checkpoint batch. P12-T4 production preparation delivered; actual target-host measurement/capacity acceptance remains pending/null, no deployment limits changed.
+
+Knowledge exporteb56a03 prescribed build PASS but independent review REQUEST CHANGES (fresh child reads, nullable-origin support masking, independently retained aliases); Luna finite repair active. Onboardingb5377de source review REQUEST CHANGES (semantic compatibility, indexing status/failure visibility, pending/error states); Luna finite repair active, no build yet. Full remaining backup/export/P12 deletion/onboarding seed-reset-mobile/R16 scope stays open. No tests/runtime/SQL/migration execution or push/deploy.
+## Current develop integration — 2026-10-06
+
+Verified develop HEADbd79c069276c696e40df54062d50b0d1e7201350: owner export3215939 and Chat privacybd79c06 integrated after exact build/review. Current parallel Luna tasks: full backup/export/admission, onboarding/demo/mobile, and missing knowledge domain export owner contracts (Entities/Relationships/Timeline/Observations). P12-T2 deletion/recovery waits shared-owner source freeze; capacity/release/R16 remain open. All deferred tests/runtime/restore/target capacity acceptance unproven. Status updated locally; next docs commit batched with accepted task/phase.
 ## P12 chat privacy integration — 2026-10-06
 
 Accepted privacy6c22b73 composed with develop3215939 into0827281; duplicate reader repaired7929be573ab6bd8e31ab3a48c0abb90520550ba0. Exact prescribed build exit0, four images, clean author tree and independent narrow composition re-review PASS. Integrating four production files with this checkpoint batch. Consent is Memory-owned, serialized before parent/run locks; remote attempts/events/Stop and final writes recheck current consent. Runtime races/provider/SSE timing remain deferred, not proven by build.
