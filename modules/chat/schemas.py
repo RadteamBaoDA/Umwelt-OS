@@ -4,7 +4,7 @@ from datetime import date, datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from modules.knowledge.documents.schemas import GadgetDocumentSelectionFence
 
 MAX_RETRIEVAL_LIMIT = 50
@@ -227,6 +227,148 @@ class MessageRead(BaseModel):
     response_id: UUID | None = None
     revision_of_message_id: UUID | None = None
     created_at: datetime
+
+
+class ChatExportCitation(BaseModel):
+    """Carry one citation only while its exact owner-visible evidence still exists."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_type: Literal["document"] = "document"
+    source_id: UUID
+    document_id: UUID
+    document_version_id: UUID
+    chunk_id: UUID
+    title: str = Field(min_length=1, max_length=500)
+    url: str | None = Field(default=None, max_length=2048)
+    observed_at: datetime | None = None
+    quote: str = Field(min_length=1, max_length=MAX_QUOTE_LENGTH)
+    current_source_generation: int = Field(ge=0)
+
+
+class ChatExportConversationRead(BaseModel):
+    """Expose only owner-visible conversation fields needed for a portable transcript."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    record_kind: Literal["conversation"] = "conversation"
+    id: UUID
+    title: str = Field(max_length=255)
+    context_kind: str | None = Field(default=None, max_length=32)
+    context_resource_id: UUID | None = None
+    pinned: bool
+    archived: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class ChatExportMessageRead(BaseModel):
+    """Expose one retained transcript revision without internal request or run payloads."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    record_kind: Literal["message"] = "message"
+    id: UUID
+    conversation_id: UUID
+    role: Literal["user", "assistant", "system"]
+    content: str
+    response_id: UUID | None = None
+    revision_of_message_id: UUID | None = None
+    citations: list[ChatExportCitation] = Field(default_factory=list, max_length=100)
+    omitted_citation_count: int = Field(default=0, ge=0)
+    created_at: datetime
+    updated_at: datetime
+
+    @field_validator("content")
+    @classmethod
+    def bounded_export_content(cls, value: str) -> str:
+        """Keep one transcript payload within the portable export record bound."""
+        if len(value.encode("utf-8")) > 1_048_576:
+            raise ValueError("Chat message exceeds the export content bound")
+        return value
+
+
+class ChatExportCitationFence(BaseModel):
+    """Bind an exported citation to its retained exact evidence and live source generation."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_id: UUID
+    document_id: UUID
+    document_version_id: UUID
+    chunk_id: UUID
+    current_source_generation: int = Field(ge=0)
+
+
+class ChatExportFence(BaseModel):
+    """Bind one conversation or message record to its current owner-visible revisions."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    conversation_id: UUID
+    conversation_created_at: datetime
+    conversation_updated_at: datetime
+    message_id: UUID | None = None
+    message_created_at: datetime | None = None
+    message_updated_at: datetime | None = None
+    citations: list[ChatExportCitationFence] = Field(default_factory=list, max_length=100)
+
+
+class ChatExportPage(BaseModel):
+    """Return a bounded typed owner export page and its consistency fences."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    owner_id: int = Field(ge=1)
+    record_kind: Literal["conversations", "messages"]
+    snapshot_at: datetime
+    snapshot_count: int = Field(ge=0)
+    items: list[ChatExportConversationRead | ChatExportMessageRead] = Field(max_length=100)
+    fences: list[ChatExportFence] = Field(max_length=100)
+    payload_bytes: int = Field(ge=0, le=16_777_216)
+    max_payload_bytes: int = Field(default=16_777_216, ge=1, le=16_777_216)
+    next_cursor: str | None = None
+    available: bool
+    omission_reason: Literal["conversation_history_disabled"] | None = None
+    privacy_persisted: bool
+    privacy_updated_at: datetime | None = None
+    history_enabled: bool
+
+    @model_validator(mode="after")
+    def validate_privacy_fence(self) -> "ChatExportPage":
+        """Require a persisted privacy row to have an aware timestamp fence."""
+        if self.privacy_persisted != (self.privacy_updated_at is not None):
+            raise ValueError("Chat export privacy persistence marker is inconsistent")
+        if (self.privacy_updated_at is not None
+                and (self.privacy_updated_at.tzinfo is None or self.privacy_updated_at.utcoffset() is None)):
+            raise ValueError("Chat export privacy timestamp must be timezone-aware")
+        return self
+
+
+class ChatExportFenceValidation(BaseModel):
+    """Report whether captured chat export fences remain current at finalization."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    valid: bool
+    reason: Literal[
+        "valid", "owner_unavailable", "conversation_history_disabled",
+        "privacy_changed", "snapshot_count_changed", "record_changed",
+        "citation_unavailable", "source_generation_changed",
+    ]
+    observed_snapshot_count: int = Field(ge=0)
+    privacy_persisted: bool
+    privacy_updated_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def validate_privacy_fence(self) -> "ChatExportFenceValidation":
+        """Require a persisted privacy row to have an aware timestamp fence."""
+        if self.privacy_persisted != (self.privacy_updated_at is not None):
+            raise ValueError("Chat export privacy persistence marker is inconsistent")
+        if (self.privacy_updated_at is not None
+                and (self.privacy_updated_at.tzinfo is None or self.privacy_updated_at.utcoffset() is None)):
+            raise ValueError("Chat export privacy timestamp must be timezone-aware")
+        return self
 
 
 class ConversationDetailRead(ConversationRead):

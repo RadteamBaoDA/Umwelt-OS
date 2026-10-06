@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 MemoryType = Literal["fact", "preference", "instruction", "decision", "procedural"]
 MemoryStatus = Literal["active", "invalidated", "superseded", "forgotten"]
@@ -167,6 +167,16 @@ class MemoryPrivacyConfig(BaseModel):
     store_conversation_history: bool = True
     store_agent_memory: bool = False
     auto_accept_memory: bool = False
+
+
+class MemoryExportPrivacy(BaseModel):
+    """Immutable, minimal history-retention setting and missing-row fence for exports."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    store_conversation_history: StrictBool
+    persisted: StrictBool
+    updated_at: datetime | None
 
 
 class MemoryPrivacyUpdate(BaseModel):

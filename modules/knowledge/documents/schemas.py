@@ -521,6 +521,122 @@ class VersionList(BaseModel):
     next_cursor: str | None
 
 
+class DocumentExportProvenance(BaseModel):
+    """Expose version-scoped collection provenance without raw provider payloads or digests."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    provider_id: str = Field(min_length=1, max_length=512)
+    provider_version: str | None = Field(default=None, max_length=255)
+    normalization_version: int = Field(ge=1)
+    accepted_source_generation: int = Field(ge=1)
+    observed_at: datetime
+    received_at: datetime | None = None
+    collected_at: datetime | None = None
+    selection_observed_at: datetime
+    title: str = Field(max_length=500)
+    canonical_url: str | None = Field(default=None, max_length=2048)
+    published_at: datetime | None = None
+    content_type: str | None = Field(default=None, max_length=64)
+
+
+class DocumentExportRead(BaseModel):
+    """Expose the safe owner-visible identity and current-revision marker of a document."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    record_kind: Literal["document"] = "document"
+    id: UUID
+    source_id: UUID
+    source_status: Literal["active", "paused", "archived"]
+    current_source_generation: int = Field(ge=1)
+    current_version: int = Field(ge=1)
+    current_version_accepted_generation: int | None = Field(default=None, ge=1)
+    title: str = Field(max_length=500)
+    content_type: str | None = Field(default=None, max_length=64)
+    mime_type: str | None = Field(default=None, max_length=255)
+    canonical_url: str | None = Field(default=None, max_length=2048)
+    created_at: datetime
+    updated_at: datetime
+
+
+class DocumentVersionExportRead(BaseModel):
+    """Expose one retained immutable revision with safe provenance and live source fences."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    record_kind: Literal["version"] = "version"
+    id: UUID
+    document_id: UUID
+    source_id: UUID
+    source_status: Literal["active", "paused", "archived"]
+    current_source_generation: int = Field(ge=1)
+    version_number: int = Field(ge=1)
+    is_current_version: bool
+    content: str
+    observed_at: datetime
+    created_at: datetime
+    provenance: DocumentExportProvenance | None = None
+
+    @field_validator("content")
+    @classmethod
+    def bounded_export_content(cls, value: str) -> str:
+        """Keep any one version payload within the document owner's established byte bound."""
+        if len(value.encode("utf-8")) > MAX_CONTENT_BYTES:
+            raise ValueError("Document version exceeds the export content bound")
+        return value
+
+
+class DocumentExportFence(BaseModel):
+    """Bind a document or immutable revision to live identity and source-generation state."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    document_id: UUID
+    document_created_at: datetime
+    document_updated_at: datetime
+    source_id: UUID
+    source_status: Literal["active", "paused", "archived"]
+    current_source_generation: int = Field(ge=1)
+    document_current_version: int | None = Field(default=None, ge=1)
+    version_id: UUID | None = None
+    version_number: int | None = Field(default=None, ge=1)
+    version_created_at: datetime | None = None
+    # This digest is a validation-only fence and is excluded from exported record DTOs.
+    version_content_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+
+class DocumentExportPage(BaseModel):
+    """Return one bounded owner-authorized document or version export page."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    owner_id: int = Field(ge=1)
+    record_kind: Literal["documents", "versions"]
+    snapshot_at: datetime
+    snapshot_count: int = Field(ge=0)
+    items: list[DocumentExportRead | DocumentVersionExportRead] = Field(max_length=100)
+    fences: list[DocumentExportFence] = Field(max_length=100)
+    payload_bytes: int = Field(ge=0, le=16_777_216)
+    max_payload_bytes: int = Field(default=16_777_216, ge=1, le=16_777_216)
+    next_cursor: str | None = None
+    available: bool = True
+    omission_reason: None = None
+
+
+class DocumentExportFenceValidation(BaseModel):
+    """Report whether captured document/source fences remain valid at finalization."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    valid: bool
+    reason: Literal[
+        "valid", "owner_unavailable", "snapshot_count_changed", "record_changed",
+        "source_generation_changed", "evidence_unavailable",
+    ]
+    observed_snapshot_count: int = Field(ge=0)
+
+
 class EvidenceReferenceRead(BaseModel):
     """Expose exact versioned chunk provenance and excerpt for evidence review."""
     document_id: UUID

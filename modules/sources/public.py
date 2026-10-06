@@ -1,9 +1,10 @@
 from copy import deepcopy
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import Integer, case, cast, desc, func, select, tuple_
+from sqlalchemy import Integer, Select, case, cast, desc, func, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,10 +17,47 @@ from modules.sources.schemas import (
     ConnectorSource,
     GadgetSourceSelection,
     GadgetSourceSelectionPage,
+    SourceExportFence,
     SourceCreate,
     SourceFence,
     SourcePatch,
 )
+
+
+def export_eligible_source_ids() -> Select[tuple[UUID]]:
+    """Return a SQL source-ID projection excluding committed, unfinished data purges.
+
+    The predicate is deliberately source-owned so export consumers can filter and count
+    eligible rows before paging without importing SourcePurgeOperation or materializing
+    the source table. Archived connector-only sources remain eligible because they have
+    no data-purge operation.
+    """
+    pending_data_purges = select(SourcePurgeOperation.source_id).where(
+        SourcePurgeOperation.status.in_(("queued", "running", "failed"))
+    )
+    return select(Source.id).where(~Source.id.in_(pending_data_purges))
+
+
+async def filter_export_eligible_sources(
+    session: AsyncSession, fences: Sequence[SourceExportFence],
+) -> tuple[UUID, ...]:
+    """Keep a bounded set of captured source generations with no unfinished data purge."""
+    if len(fences) > 100:
+        raise ValueError("Source export fence set exceeds its page limit")
+    source_ids = [fence.source_id for fence in fences]
+    if len(set(source_ids)) != len(source_ids):
+        raise ValueError("Source export fences must have unique source IDs")
+    if not source_ids:
+        return ()
+    generations = {fence.source_id: fence.generation for fence in fences}
+    rows = (await session.execute(
+        select(Source.id, Source.generation)
+        .where(Source.id.in_(source_ids), Source.id.in_(export_eligible_source_ids()))
+    )).all()
+    return tuple(
+        source_id for source_id, generation in rows
+        if generations.get(source_id) == generation
+    )
 
 
 async def observability_quality_summary(session: AsyncSession, *, now: datetime | None = None) -> dict[str, int]:

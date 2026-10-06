@@ -1,3 +1,36 @@
+## P12 owner-export contracts integration — 2026-10-06
+
+Accepted export2a98e2e composed with develop56bc8ba into06e7073. Exact composition build PASS exit0 (four images), independent composition source review PASS. Integrating eight owner contract files plus this checkpoint batch; all full-export caller/UI/restore/runtime work remains incomplete. Build receipt records process_password_restored=False; preserve that qualifier, do not claim successful restoration. No .env operations or runtime execution were performed.
+
+Chat privacy6c22b73 code/build/scoped review PASS; composition pending. Backup and onboarding continue in isolated worktrees. Stop revoked; plan ACTIVE. Older top-level snapshots below are historical.
+## Resume authorized — 2026-10-06
+
+Owner revoked stop and authorized remaining plan implementation, isolated parallel worktrees, phase integration into develop and continuous local reporting. Models: available gpt-6-luna implement/build; gpt-6.1-sol review/inference.
+
+- Develop baseline 56bc8ba; preserve unrelated dirty contributor/docs/UX changes.
+- Chat privacy6c22b73: prescribed author build PASS and independent four-finding re-review PASS; develop composition/build/review/integration pending.
+- Owner export accepted2a98e2e composed with develop into06e7073. Map dependency conflicts resolved with develop's exact package/lock files. Initial composition build failed missing installed map packages; locked npm ci then rerun prescribed build pending. Independent composition review dispatched.
+- Parallel agents: backup/export remaining production; onboarding/demo/mobile/a11y in isolated checkout; Sol composition reviewer.
+- Build slot serialized; no tests/lint/standalone typecheck/runtime/SQL/migrations in production stage. No push/deploy. Current live evidence supersedes stop snapshots below.
+## Final user-requested stop checkpoint — 2026-10-06
+
+- Develop remains `56bc8ba`: P01–P11, Collector/MCP, R07, R12, R14, R15 integrated.
+- Chat privacy repair committed `6c22b73d84fa6725afe3e79467214f35e641cc7c`; author reports clean tracked tree, prescribed build session 94198 exit 0. Root verified commit and four Built image log lines. Scoped source fingerprint `b17546c64215581305a1ca40169013e11d369957ac7030be748363308770d30c`. Independent re-review, composition and merge PENDING.
+- Owner-export repair `2a98e2e`: build/scoped review PASS, composition and merge PENDING; receipt restoration qualifier preserved.
+- Full backup dirty implementation preserved at defed36; unbuilt/unreviewed. Other P12/R16 production and deferred acceptance remain incomplete.
+- Current implementer instructed to stop after completed repair/build/commit. No new task dispatch; checkpoint saved locally without status-only commit. No main merge, push or deployment.
+- Resume from pending review/composition; do not claim full plan completion. This snapshot supersedes earlier running-agent milestones below.
+## Verified stop-request checkpoint — 2026-10-06
+
+| Status | Scope |
+| --- | --- |
+| Integrated into develop | P01–P11, Collector/MCP, R07, R12, R14, R15; HEAD 56bc8ba |
+| Build/review passed, not integrated | Owner-export repair 2a98e2e |
+| Running repair, not accepted | Chat privacy: base 378468a; dirty Memory public, Chat routes and worker; no live build at latest agent checkpoint |
+| Incomplete implementation preserved | P12 full backup author stopped; dirty source preserved at defed36, unbuilt/unreviewed/unintegrated |
+| Pending | Remaining P12 deletion/recovery, onboarding, capacity/release/OSS, R16, then deferred tests/runtime acceptance |
+
+Finish current assigned agent work, save evidence, then stop per user request. No new task dispatch, main merge, push or deploy. Older entries below are historical when inconsistent with this snapshot. Status files updated without a standalone docs commit.
 # Umwelt-OS implementation status
 
 Updated: 2026-10-06 — ACTIVE. develop `1a48454` includes P01–P11, Collector/MCP, R12, R14 and R07. R15 composition `8467803` build and final independent review PASS; integrated in this task commit. Two P12 agents implement backup/restore and owner export contracts; remaining P12/R16 scope incomplete. Runtime/provider/capacity acceptance deferred.

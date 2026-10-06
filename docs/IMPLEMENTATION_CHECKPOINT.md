@@ -1,4 +1,40 @@
+## P12 owner-export contracts integration — 2026-10-06
+
+Accepted export2a98e2e composed with develop56bc8ba into06e7073. Exact composition build PASS exit0 (four images), independent composition source review PASS. Integrating eight owner contract files plus this checkpoint batch; all full-export caller/UI/restore/runtime work remains incomplete. Build receipt records process_password_restored=False; preserve that qualifier, do not claim successful restoration. No .env operations or runtime execution were performed.
+
+Chat privacy6c22b73 code/build/scoped review PASS; composition pending. Backup and onboarding continue in isolated worktrees. Stop revoked; plan ACTIVE. Older top-level snapshots below are historical.
+## Resume authorized — 2026-10-06
+
+Owner revoked stop and authorized remaining plan implementation, isolated parallel worktrees, phase integration into develop and continuous local reporting. Models: available gpt-6-luna implement/build; gpt-6.1-sol review/inference.
+
+- Develop baseline 56bc8ba; preserve unrelated dirty contributor/docs/UX changes.
+- Chat privacy6c22b73: prescribed author build PASS and independent four-finding re-review PASS; develop composition/build/review/integration pending.
+- Owner export accepted2a98e2e composed with develop into06e7073. Map dependency conflicts resolved with develop's exact package/lock files. Initial composition build failed missing installed map packages; locked npm ci then rerun prescribed build pending. Independent composition review dispatched.
+- Parallel agents: backup/export remaining production; onboarding/demo/mobile/a11y in isolated checkout; Sol composition reviewer.
+- Build slot serialized; no tests/lint/standalone typecheck/runtime/SQL/migrations in production stage. No push/deploy. Current live evidence supersedes stop snapshots below.
+## Final user-requested stop checkpoint — 2026-10-06
+
+- Develop remains `56bc8ba`: P01–P11, Collector/MCP, R07, R12, R14, R15 integrated.
+- Chat privacy repair committed `6c22b73d84fa6725afe3e79467214f35e641cc7c`; author reports clean tracked tree, prescribed build session 94198 exit 0. Root verified commit and four Built image log lines. Scoped source fingerprint `b17546c64215581305a1ca40169013e11d369957ac7030be748363308770d30c`. Independent re-review, composition and merge PENDING.
+- Owner-export repair `2a98e2e`: build/scoped review PASS, composition and merge PENDING; receipt restoration qualifier preserved.
+- Full backup dirty implementation preserved at defed36; unbuilt/unreviewed. Other P12/R16 production and deferred acceptance remain incomplete.
+- Current implementer instructed to stop after completed repair/build/commit. No new task dispatch; checkpoint saved locally without status-only commit. No main merge, push or deployment.
+- Resume from pending review/composition; do not claim full plan completion. This snapshot supersedes earlier running-agent milestones below.
 # Umwelt-OS — Implementation checkpoint
+
+## Current verified snapshot — 2026-10-06
+
+This snapshot supersedes older current-state headings below; those remain historical.
+
+- Integration branch: `develop`, verified HEAD `56bc8ba3cb094c31bcfab6b0c9530274a674f895`.
+- Integrated: P01–P11, Collector/MCP, R07, R12, R14, R15. R15 commit `56bc8ba`.
+- Owner-export repair: frozen `2a98e2e1bf10ba74d107f74c6ea7f9f912693afb`, build exit 0, independent scoped review PASS; composition and integration pending. Build receipt retains `process_password_restored=False`; no claim of successful restoration.
+- P12 backup author stopped with source preserved; P12 chat-privacy repair author remains running. Backup dirty implementation is preserved; privacy repair is not accepted or integrated yet.
+- Pending production: full P12 backup/export, deletion/recovery, onboarding, capacity/release/OSS and R16. Deferred tests/runtime acceptance remain pending.
+- User stop instruction: finish currently assigned agent work and save reports, then stop; no new task dispatch. No push/deploy/main integration performed in this snapshot.
+- Registered worktrees remain. R07/R15 removed registrations previously left physical directory remnants; complete physical cleanup is not proven.
+- Checkpoint updated locally only; no standalone status commit.
+
 
 Ngày: 2026-10-05. **ACTIVE**. P11 integrated c58a56e. R12 composition active; R14 source7086167 accepted/composition pending; R07 Luna actual source port active. Older pause/fix entries below are history.
 
@@ -262,3 +298,33 @@ P12 owner-export frozen867cca74c0050c14e664107ac0e5aae4395256d6, clean tracked w
 ## R15 completed integration — 2026-10-06
 
 R15 frozen84678032 has exact full build PASS and independent composition-review PASS. Squash-integrated32 source/OSS files into develop with this task checkpoint: dual map engines, shared layers, source-filtered intelligence/correlation and bounded qualified support. Chat/citation contracts preserved; sole migration head r07_chat_mutation_receipts unchanged. Runtime/provider/mobile/capacity acceptance deferred. P12 export867cca7 build PASS pending review; backup/restore/privacy and remaining P12/R16 incomplete. No tests run.
+
+R15 cleanup: saved composition reports and accepted scoped repair review under root .superpowers/sdd/r15-integrated. git worktree remove --force unregistered the completed checkout, but reported Directory not empty; remaining directory D:/Project/Umwelt-OS-r15-maps still exists. Branch/frozen commits retained; do not report filesystem fully removed. No destructive fallback attempted. Active P12 worktrees preserved.
+
+P12 owner-export independent review in progress has reported definite source blockers: Chat export payload_bytes used before assignment and undefined _tuple_ pagination helper. Reviewer is also tracing immediate with_data source-purge intent versus connector-only archived retention. Build PASS remains packaging evidence; it does not accept these runtime paths. Full verdict pending; export integration withheld. Chat privacy implementation now has three-file production diff and separate build grant.
+
+P12 export repair round1: independent report867cca7 REQUEST CHANGES has3 P1 (byte accumulator, tuple alias, committed source purge intent). Retained/fresh repair-agent dispatch rejected thread capacity. Active gpt-6-luna backup author assigned finite repair in the clean owner-contracts checkout before returning to full backup scope; original backup dirty tree is preserved. Source-owned public deletion-intent eligibility required; builds serialized behind Chat privacy. No repair completion/merge claim.
+
+P12 export repair ruling: Sources may expose a narrowly documented read-only eligible-source-id SQL projection for database-side export count/page filtering, keeping purge persistence models private to its owner. Bounded captured source validation remains public; caller writes and whole-source materialization are prohibited. Explicit with_data purge intent denies export before worker cleanup; connector-only archive remains eligible for retained portability.
+
+P12 Chat privacy frozen378468a has prescribed build exit0 but independent review REQUEST CHANGES4P1: SSE current-consent replay, every actual remote opening/retry, consent/parent transaction serialization, and Stop+optout redaction/status-sequence race. Retained Luna implementer dispatched repair round1; Memory owner public synchronization expansion authorized with backup-author coordination. Export repair keeps next build slot; no develop integration of either incomplete task. Preserve completed retained history and receipt-only idempotent acknowledgements.
+
+P12 export R1 source now has4-file diff (Chat public, Documents public, Sources public/schema): byte accumulator initialized, tuple alias corrected, owner eligibility SQL projection and bounded source generation validation wired into count/page/final and exact citation paths. Source spot-check only; build/scoped review pending. Build grant issued after privacy terminal exit0. Privacy R1 code repair runs separately; no merge.
+
+P12 export R1 build launched by Luna author in owner-contracts checkout, live exec cell366; preserved repair-build.log and repair-build-receipt.txt. Wait same handle to terminal; no parallel build or restart. After frozen repair, independent scoped re-review3P1 remains required. Privacy R1 synchronization proposal accepted; implementation underway, build waits export slot. Goal remains all original/P12/R01–R16 plus deferred acceptance, not just these repairs.
+
+P12 export R1 prescribed build cell366 terminal exit1: frontend production build completed; Docker Compose interpolation lacked process POSTGRES_PASSWORD. No .env created/changed. Original fingerprint receipt invalid (multiple per-byte hashes) and restoration flag false; neither used as completion evidence. Corrected same-command rerun authorized with explicit process-only environment set/restore in finally, single Get-FileHash over captured source.diff, preserved failure log and separate rerun receipt. This is retry of a terminal failed build, not duplication of a live run. No tests/runtime actions.
+
+P12-T4 source preparation: created docs/performance-report.md with explicit nullable hardware/platform/version/profile/model/workload/resource/queue/latency/OOM/disk/provenance fields. No measurements or deployment-limit changes performed. Task build/review and actual target-host acceptance remain pending; draft uncommitted until completed large task.
+
+P12 export R1 corrected rerun terminal exit0, source diff unchanged SHA7d0fa8896b4cf7ce05a48e35ffe9a53cbee0892114b158bb5d541e819ddf7040 and four images verified in receipt/log. Receipt process_password_restored=False is retained without rewriting as success; build used only process placeholder, process ended and author reports fresh process variable absent, no .env/persistent writes. Source reviewer preliminary3P1 closures PASS, final freeze SHA awaited. Privacy R1 owner advisory lock/worker changes now authored; full repair/build/re-review incomplete.
+
+### Chat privacy repair source observation — 2026-10-06
+
+Live source inspection: three modified production files (Memory public, Chat routes/worker), observed diff 297 insertions / 145 deletions. Source contains Memory advisory/row locks and before/after-send callbacks; this is progress evidence only, not proof all review findings are closed. Build/review/commit remain pending. Build slot is free; implementer instructed to finish only current repair/build/report and stop.
+### Chat privacy implementer milestone — 2026-10-06
+
+Implementer reports code now covers all four original review paths: per-event active SSE consent checks/redaction, all ModelGateway attempts, serialized Memory → parent → run write fences, and privacy-aware Stop/cancellation with run-locked sequence allocation. Source edge-case inspection and ignored repair report are in progress; no live build at this milestone. This author report is not independent acceptance; prescribed build, frozen commit, scoped re-review and integration remain pending.
+### Chat privacy failure-path repair — 2026-10-06
+
+Author identified then repaired cancellation/failure writes attempted in a potentially aborted transaction: rollback and retry privacy cancellation in a fresh transaction. Starting HEAD remains 378468a; dirty repair has no prescribed build receipt yet. A pre-fix diff fingerprint is stale and must not be used as build evidence. Author directed to freeze current source, run prescribed build, generate exact receipt/commit and stop; independent acceptance and merge remain pending.

@@ -1,12 +1,20 @@
 """Public module contracts and API boundary for the chat capability."""
 
-from sqlalchemy import select as _select
+import base64 as _base64
+import binascii as _binascii
+from datetime import UTC as _UTC, datetime as _datetime
+import json as _json
+from urllib.parse import urlsplit as _urlsplit, urlunsplit as _urlunsplit
+
+from sqlalchemy import and_ as _and, func as _func, or_ as _or, select as _select, tuple_ as _tuple
 from core.telemetry import RunMeta as _RunMeta
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import BaseModel
+from core.auth.models import Owner as _Owner
 
 from modules.chat.citations import (
     INSUFFICIENT_EVIDENCE_MESSAGE,
@@ -45,6 +53,13 @@ from modules.chat.schemas import (
     SelectedDocumentVersion,
     SendMessageRequest,
     SendMessageResponse,
+    ChatExportCitation,
+    ChatExportCitationFence,
+    ChatExportConversationRead,
+    ChatExportFence,
+    ChatExportFenceValidation,
+    ChatExportMessageRead,
+    ChatExportPage,
     TemporalContextItem,
     ValidatedAnswer,
 )
@@ -70,6 +85,13 @@ __all__ = [
     "AnswerContext",
     "AnswerContextRequest",
     "CancelResponse",
+    "ChatExportCitation",
+    "ChatExportCitationFence",
+    "ChatExportConversationRead",
+    "ChatExportFence",
+    "ChatExportFenceValidation",
+    "ChatExportMessageRead",
+    "ChatExportPage",
     "Citation",
     "CitationValidationResult",
     "Conversation",
@@ -93,6 +115,7 @@ __all__ = [
     "ValidatedAnswer",
     "build_context",
     "ensure_grounded_answer",
+    "export_page",
     "format_grounded_context",
     "format_sse_event",
     "is_history_storage_enabled",
@@ -104,6 +127,7 @@ __all__ = [
     "run_response_generation",
     "validate_answer_citations",
     "validate_citations",
+    "validate_export_fences",
 ]
 
 
@@ -501,3 +525,526 @@ async def get_run_meta_by_id(session: AsyncSession, run_id: UUID) -> _RunMeta | 
     return _RunMeta(kind="chat", id=str(row.id), status=row.status, error_code=row.error_code,
                     created_at=row.created_at, updated_at=row.updated_at, finished_at=row.completed_at,
                     model_identity=row.model_name, token_usage=row.token_usage or None)
+
+
+CHAT_EXPORT_PAGE_MAX_BYTES = 16_777_216
+CHAT_EXPORT_MAX_CITATIONS_PER_PAGE = 100
+
+
+def _encode_chat_export_cursor(
+    owner_id: int, record_kind: str, snapshot_at: _datetime, position_at: _datetime, position_id: UUID,
+) -> str:
+    """Encode a canonical owner/kind/cutoff-bound chat keyset cursor."""
+    payload = {
+        "v": 1, "owner": owner_id, "kind": record_kind,
+        "snapshot": snapshot_at.astimezone(_UTC).isoformat(),
+        "at": position_at.astimezone(_UTC).isoformat(), "id": str(position_id),
+    }
+    raw = _json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return _base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _decode_chat_export_cursor(
+    cursor: str, owner_id: int, record_kind: str,
+) -> tuple[_datetime, _datetime, UUID]:
+    """Decode a strict canonical cursor and reject owner or record-kind substitution."""
+    try:
+        if not cursor or len(cursor) > 1024 or "=" in cursor:
+            raise ValueError("Invalid chat export cursor")
+        raw = _base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
+        payload = _json.loads(raw)
+        if not isinstance(payload, dict) or set(payload) != {"v", "owner", "kind", "snapshot", "at", "id"}:
+            raise ValueError("Invalid chat export cursor")
+        if payload["v"] != 1 or payload["owner"] != owner_id or payload["kind"] != record_kind:
+            raise ValueError("Chat export cursor belongs to another owner or record kind")
+        snapshot_at = _datetime.fromisoformat(payload["snapshot"])
+        position_at = _datetime.fromisoformat(payload["at"])
+        if any(value.tzinfo is None or value.utcoffset() is None for value in (snapshot_at, position_at)):
+            raise ValueError("Chat export cursor timestamps must be timezone-aware")
+        snapshot_at, position_at = snapshot_at.astimezone(_UTC), position_at.astimezone(_UTC)
+        if snapshot_at > _datetime.now(_UTC):
+            raise ValueError("Chat export cursor cutoff cannot be in the future")
+        position_id = UUID(payload["id"])
+        if _encode_chat_export_cursor(owner_id, record_kind, snapshot_at, position_at, position_id) != cursor:
+            raise ValueError("Chat export cursor is not canonical")
+        return snapshot_at, position_at, position_id
+    except (ValueError, TypeError, KeyError, UnicodeDecodeError, _binascii.Error, _json.JSONDecodeError) as exc:
+        raise ValueError("Invalid chat export cursor") from exc
+
+
+def _chat_export_payload_bytes(items: Sequence[BaseModel]) -> int:
+    """Measure serialized item-array bytes for the aggregate export-page budget."""
+    return len(_json.dumps(
+        [item.model_dump(mode="json") for item in items],
+        ensure_ascii=False, separators=(",", ":"),
+    ).encode("utf-8"))
+
+
+def _chat_export_item_bytes(item: BaseModel) -> int:
+    """Measure one serialized chat record so page admission avoids repeated full-array encoding."""
+    return len(_json.dumps(item.model_dump(mode="json"), ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+
+
+def _safe_chat_export_url(value: str | None) -> str | None:
+    """Remove credentials, query values, fragments, and non-web URLs from citations."""
+    if not value:
+        return None
+    try:
+        parsed = _urlsplit(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+            return None
+        host = parsed.hostname
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        if parsed.port is not None:
+            host = f"{host}:{parsed.port}"
+        return _urlunsplit((parsed.scheme, host, parsed.path, "", ""))
+    except ValueError:
+        return None
+
+
+async def _require_chat_export_owner(session: AsyncSession, owner_id: int) -> None:
+    """Require the live singleton owner before reading owner-scoped chat history."""
+    if owner_id != 1 or await session.scalar(_select(_Owner.id).where(_Owner.id == owner_id)) is None:
+        raise PermissionError("Chat export requires the current owner")
+
+
+def _chat_export_privacy_marker(persisted: bool, updated_at: _datetime | None) -> tuple[bool, _datetime | None]:
+    """Validate the compact Memory-owned history-privacy persistence and timestamp fence."""
+    if type(persisted) is not bool or persisted != (updated_at is not None):
+        raise ValueError("Chat export privacy marker is inconsistent")
+    if (updated_at is not None
+            and (not isinstance(updated_at, _datetime) or updated_at.tzinfo is None or updated_at.utcoffset() is None)):
+        raise ValueError("Chat export privacy timestamp must be timezone-aware")
+    return persisted, updated_at
+
+
+async def _chat_export_privacy(session: AsyncSession) -> tuple[bool, bool, _datetime | None]:
+    """Read Memory's current history-storage grant and its minimal persisted-row fence."""
+    from modules.memory import public as memory_public
+
+    privacy = await memory_public.read_export_privacy(session)
+    persisted, updated_at = _chat_export_privacy_marker(privacy.persisted, privacy.updated_at)
+    return privacy.store_conversation_history, persisted, updated_at
+
+
+def _chat_export_scope(snapshot_at: _datetime, now: _datetime) -> tuple[object, ...]:
+    """Filter to retained, non-automation conversation history unchanged at the cutoff."""
+    return (
+        Conversation.created_at <= snapshot_at,
+        Conversation.updated_at <= snapshot_at,
+        Conversation.ephemeral.is_(False),
+        _or(Conversation.expires_at.is_(None), Conversation.expires_at > now),
+        _or(Conversation.context_kind.is_(None), Conversation.context_kind != "automation"),
+    )
+
+
+async def _chat_export_count(session: AsyncSession, record_kind: str, snapshot_at: _datetime) -> int:
+    """Count current owner-visible rows at a fixed export cutoff."""
+    now = _datetime.now(_UTC)
+    scope = _chat_export_scope(snapshot_at, now)
+    if record_kind == "conversations":
+        statement = _select(_func.count()).select_from(Conversation).where(*scope)
+    else:
+        statement = (
+            _select(_func.count()).select_from(Message)
+            .join(Conversation, Conversation.id == Message.conversation_id)
+            .where(*scope, Message.created_at <= snapshot_at, Message.updated_at <= snapshot_at)
+        )
+    return int(await session.scalar(statement) or 0)
+
+
+async def _chat_export_evidence_fences(
+    session: AsyncSession, refs: Sequence[tuple[UUID, UUID]],
+) -> dict[tuple[UUID, UUID], tuple[object, int]]:
+    """Resolve exact retained chunks and live source generations for at most one bounded batch."""
+    from modules.knowledge.documents import public as documents_public
+
+    unique_refs = list(dict.fromkeys(refs))
+    if len(unique_refs) > CHAT_EXPORT_MAX_CITATIONS_PER_PAGE:
+        raise ValueError("Chat export page exceeds its exact citation-reference budget")
+    if not unique_refs:
+        return {}
+    try:
+        evidence_rows = await documents_public.read_evidence_refs(session, unique_refs)
+    except ValueError:
+        # A deletion can race a page; retry individually to omit only copied citation fields
+        # whose exact document/version/chunk fence is no longer owner-visible.
+        evidence_rows = []
+        for ref in unique_refs:
+            try:
+                evidence_rows.extend(await documents_public.read_evidence_refs(session, [ref]))
+            except ValueError:
+                continue
+    versions = list(dict.fromkeys(item.document_version_id for item in evidence_rows))
+    source_fences = await documents_public.review_version_fences(session, versions)
+    from modules.sources import public as sources_public
+    from modules.sources.schemas import SourceExportFence
+
+    source_generations: dict[UUID, int] = {}
+    conflicting_sources: set[UUID] = set()
+    for source_fence in source_fences.values():
+        previous = source_generations.setdefault(source_fence.source_id, source_fence.current_source_generation)
+        if previous != source_fence.current_source_generation:
+            conflicting_sources.add(source_fence.source_id)
+    source_export_fences = [
+        SourceExportFence(source_id=source_id, generation=generation)
+        for source_id, generation in source_generations.items()
+        if source_id not in conflicting_sources
+    ]
+    eligible_sources = set(await sources_public.filter_export_eligible_sources(session, source_export_fences))
+    resolved: dict[tuple[UUID, UUID], tuple[object, int]] = {}
+    for item in evidence_rows:
+        fence = source_fences.get(item.document_version_id)
+        if (fence is not None and fence.document_id == item.document_id and fence.source_id == item.source_id
+                and fence.source_id in eligible_sources and fence.source_id not in conflicting_sources):
+            resolved[(item.document_version_id, item.chunk_id)] = (item, fence.current_source_generation)
+    return resolved
+
+
+async def export_page(
+    session: AsyncSession,
+    *,
+    owner_id: int,
+    record_kind: str,
+    limit: int = 50,
+    cursor: str | None = None,
+) -> ChatExportPage:
+    """Return a bounded owner-authorized page of conversations or retained message revisions.
+
+    The calling export route authenticates the owner and this query rechecks the singleton owner.
+    Current privacy settings, ephemeral expiry, deletion, and conversation visibility are applied
+    on every page. The cutoff-bound cursor and repeated counts expose page drift; final row/evidence
+    fences must still be revalidated immediately before artifact publication. Message JSON internals
+    and copied citation labels are never serialized; citation labels are rebuilt from live evidence.
+    """
+    if record_kind not in {"conversations", "messages"} or not 1 <= limit <= 100:
+        raise ValueError("Chat export kind or page limit is invalid")
+    await _require_chat_export_owner(session, owner_id)
+    if cursor is None:
+        snapshot_at = _datetime.now(_UTC)
+        position = None
+    else:
+        snapshot_at, position_at, position_id = _decode_chat_export_cursor(cursor, owner_id, record_kind)
+        position = (position_at, position_id)
+    history_enabled, privacy_persisted, privacy_updated_at = await _chat_export_privacy(session)
+    if not history_enabled:
+        return ChatExportPage(
+            owner_id=owner_id, record_kind=record_kind, snapshot_at=snapshot_at,
+            snapshot_count=0, items=[], fences=[], payload_bytes=2, max_payload_bytes=CHAT_EXPORT_PAGE_MAX_BYTES,
+            next_cursor=None, available=False, omission_reason="conversation_history_disabled",
+            privacy_persisted=privacy_persisted, privacy_updated_at=privacy_updated_at, history_enabled=False,
+        )
+    snapshot_count = await _chat_export_count(session, record_kind, snapshot_at)
+    now = _datetime.now(_UTC)
+    scope = _chat_export_scope(snapshot_at, now)
+    items: list[ChatExportConversationRead | ChatExportMessageRead] = []
+    fences: list[ChatExportFence] = []
+    has_more = False
+    payload_bytes = 2
+
+    if record_kind == "conversations":
+        statement = _select(
+            Conversation.id.label("conversation_id"), Conversation.title.label("title"),
+            Conversation.context_kind.label("context_kind"),
+            Conversation.context_resource_id.label("context_resource_id"),
+            Conversation.pinned.label("pinned"), Conversation.archived.label("archived"),
+            Conversation.created_at.label("created_at"), Conversation.updated_at.label("updated_at"),
+        ).where(*scope)
+        if position is not None:
+            statement = statement.where(_tuple(Conversation.created_at, Conversation.id) > position)
+        result = await session.stream(
+            statement.order_by(Conversation.created_at, Conversation.id)
+            .limit(limit + 1).execution_options(yield_per=10)
+        )
+        try:
+            async for row in result.mappings():
+                if len(items) == limit:
+                    has_more = True
+                    break
+                item = ChatExportConversationRead(
+                    id=row["conversation_id"], title=row["title"], context_kind=row["context_kind"],
+                    context_resource_id=row["context_resource_id"], pinned=row["pinned"],
+                    archived=row["archived"], created_at=row["created_at"], updated_at=row["updated_at"],
+                )
+                item_bytes = _chat_export_item_bytes(item)
+                proposed_bytes = payload_bytes + item_bytes + (1 if items else 0)
+                if proposed_bytes > CHAT_EXPORT_PAGE_MAX_BYTES:
+                    if not items:
+                        raise ValueError("A conversation export record exceeds the page byte budget")
+                    has_more = True
+                    break
+                items.append(item)
+                payload_bytes = proposed_bytes
+                fences.append(ChatExportFence(
+                    conversation_id=row["conversation_id"], conversation_created_at=row["created_at"],
+                    conversation_updated_at=row["updated_at"],
+                ))
+        finally:
+            await result.close()
+        next_cursor = (
+            _encode_chat_export_cursor(owner_id, record_kind, snapshot_at, items[-1].created_at, items[-1].id)
+            if has_more and items else None
+        )
+    else:
+        statement = (
+            _select(
+                Message.id.label("message_id"), Message.conversation_id.label("conversation_id"),
+                Message.role.label("role"), Message.content.label("content"),
+                Message.citations.label("citations"), Message.response_id.label("response_id"),
+                Message.revision_of_message_id.label("revision_of_message_id"),
+                Message.created_at.label("message_created_at"), Message.updated_at.label("message_updated_at"),
+                Conversation.created_at.label("conversation_created_at"),
+                Conversation.updated_at.label("conversation_updated_at"),
+            )
+            .join(Conversation, Conversation.id == Message.conversation_id)
+            .where(*scope, Message.created_at <= snapshot_at, Message.updated_at <= snapshot_at)
+        )
+        if position is not None:
+            statement = statement.where(_tuple(Message.created_at, Message.id) > position)
+        result = await session.stream(
+            statement.order_by(Message.created_at, Message.id)
+            .limit(limit + 1).execution_options(yield_per=10)
+        )
+        candidates: list[tuple[object, list[Citation], int]] = []
+        page_ref_set: set[tuple[UUID, UUID]] = set()
+        page_citation_count = 0
+        predicted_candidate_bytes = 0
+        try:
+            async for raw_row in result.mappings():
+                if len(candidates) == limit:
+                    has_more = True
+                    break
+                row = dict(raw_row)
+                content = row["content"]
+                if len(content.encode("utf-8")) > 1_048_576:
+                    raise ValueError("A retained chat message exceeds the export content bound")
+                raw_citations = row["citations"] if isinstance(row["citations"], list) else []
+                if len(raw_citations) > 100:
+                    raise ValueError("A retained message exceeds the citation export bound")
+                parsed: list[Citation] = []
+                omitted = 0 if isinstance(row["citations"], list) else 1
+                for raw in raw_citations:
+                    try:
+                        parsed.append(Citation.model_validate(raw))
+                    except ValueError:
+                        omitted += 1
+                refs_for_message = {(item.documentVersionId, item.chunkId) for item in parsed}
+                predicted_record_bytes = (
+                    len(_json.dumps(content, ensure_ascii=False).encode("utf-8"))
+                    + len(parsed) * 32_768 + 1024
+                )
+                if (len(page_ref_set | refs_for_message) > CHAT_EXPORT_MAX_CITATIONS_PER_PAGE
+                        or page_citation_count + len(parsed) > CHAT_EXPORT_MAX_CITATIONS_PER_PAGE
+                        or predicted_candidate_bytes + predicted_record_bytes > CHAT_EXPORT_PAGE_MAX_BYTES):
+                    has_more = True
+                    break
+                candidates.append((row, parsed, omitted))
+                page_ref_set.update(refs_for_message)
+                page_citation_count += len(parsed)
+                predicted_candidate_bytes += predicted_record_bytes
+        finally:
+            await result.close()
+
+        evidence = await _chat_export_evidence_fences(session, list(page_ref_set))
+        for row, parsed, initially_omitted in candidates:
+            citations: list[ChatExportCitation] = []
+            citation_fences: list[ChatExportCitationFence] = []
+            omitted = initially_omitted
+            for citation in parsed:
+                resolved = evidence.get((citation.documentVersionId, citation.chunkId))
+                if resolved is None:
+                    omitted += 1
+                    continue
+                reference, current_generation = resolved
+                if (reference.document_id != citation.documentId or reference.source_id != citation.sourceId):
+                    omitted += 1
+                    continue
+                citations.append(ChatExportCitation(
+                    source_id=reference.source_id, document_id=reference.document_id,
+                    document_version_id=reference.document_version_id, chunk_id=reference.chunk_id,
+                    title=reference.title, url=_safe_chat_export_url(reference.canonical_url),
+                    observed_at=reference.observed_at, quote=citation.quote,
+                    current_source_generation=current_generation,
+                ))
+                citation_fences.append(ChatExportCitationFence(
+                    source_id=reference.source_id, document_id=reference.document_id,
+                    document_version_id=reference.document_version_id, chunk_id=reference.chunk_id,
+                    current_source_generation=current_generation,
+                ))
+            item = ChatExportMessageRead(
+                id=row["message_id"], conversation_id=row["conversation_id"], role=row["role"],
+                content=row["content"], response_id=row["response_id"],
+                revision_of_message_id=row["revision_of_message_id"],
+                citations=citations, omitted_citation_count=omitted,
+                created_at=row["message_created_at"], updated_at=row["message_updated_at"],
+            )
+            item_bytes = _chat_export_item_bytes(item)
+            proposed_bytes = payload_bytes + item_bytes + (1 if items else 0)
+            if proposed_bytes > CHAT_EXPORT_PAGE_MAX_BYTES:
+                if not items:
+                    raise ValueError("A chat message export record exceeds the page byte budget")
+                has_more = True
+                break
+            items.append(item)
+            payload_bytes = proposed_bytes
+            fences.append(ChatExportFence(
+                conversation_id=row["conversation_id"],
+                conversation_created_at=row["conversation_created_at"],
+                conversation_updated_at=row["conversation_updated_at"], message_id=row["message_id"],
+                message_created_at=row["message_created_at"], message_updated_at=row["message_updated_at"],
+                citations=citation_fences,
+            ))
+        if len(candidates) > len(items):
+            has_more = True
+        next_cursor = (
+            _encode_chat_export_cursor(owner_id, record_kind, snapshot_at, items[-1].created_at, items[-1].id)
+            if has_more and items else None
+        )
+
+    if len(items) != len(fences):
+        raise RuntimeError("Chat export page lost a record fence")
+    if sum(len(fence.citations) for fence in fences) > CHAT_EXPORT_MAX_CITATIONS_PER_PAGE:
+        raise RuntimeError("Chat export page exceeded its citation fence budget")
+    return ChatExportPage(
+        owner_id=owner_id, record_kind=record_kind, snapshot_at=snapshot_at,
+        snapshot_count=snapshot_count, items=items, fences=fences,
+        payload_bytes=_chat_export_payload_bytes(items), max_payload_bytes=CHAT_EXPORT_PAGE_MAX_BYTES,
+        next_cursor=next_cursor, available=True, omission_reason=None,
+        privacy_persisted=privacy_persisted, privacy_updated_at=privacy_updated_at, history_enabled=True,
+    )
+
+
+async def validate_export_fences(
+    session: AsyncSession,
+    *,
+    owner_id: int,
+    record_kind: str,
+    snapshot_at: _datetime,
+    expected_snapshot_count: int,
+    privacy_persisted: bool,
+    privacy_updated_at: _datetime | None,
+    fences: Sequence[ChatExportFence],
+) -> ChatExportFenceValidation:
+    """Revalidate bounded chat rows, privacy, deletion, and exact citation evidence before publication."""
+    if record_kind not in {"conversations", "messages"} or not 0 <= expected_snapshot_count <= 2**63 - 1:
+        raise ValueError("Chat export revalidation input is invalid")
+    privacy_persisted, privacy_updated_at = _chat_export_privacy_marker(privacy_persisted, privacy_updated_at)
+    if len(fences) > 100 or sum(len(fence.citations) for fence in fences) > CHAT_EXPORT_MAX_CITATIONS_PER_PAGE:
+        raise ValueError("Chat export revalidation exceeds its bounded page contract")
+    if owner_id != 1 or await session.scalar(_select(_Owner.id).where(_Owner.id == owner_id)) is None:
+        return ChatExportFenceValidation(
+            valid=False, reason="owner_unavailable", observed_snapshot_count=0,
+            privacy_persisted=privacy_persisted, privacy_updated_at=privacy_updated_at,
+        )
+    history_enabled, current_privacy_persisted, current_privacy_updated_at = await _chat_export_privacy(session)
+    if not history_enabled:
+        return ChatExportFenceValidation(
+            valid=False, reason="conversation_history_disabled", observed_snapshot_count=0,
+            privacy_persisted=current_privacy_persisted, privacy_updated_at=current_privacy_updated_at,
+        )
+    if (current_privacy_persisted, current_privacy_updated_at) != (privacy_persisted, privacy_updated_at):
+        return ChatExportFenceValidation(
+            valid=False, reason="privacy_changed", observed_snapshot_count=0,
+            privacy_persisted=current_privacy_persisted, privacy_updated_at=current_privacy_updated_at,
+        )
+    observed_count = await _chat_export_count(session, record_kind, snapshot_at)
+    if observed_count != expected_snapshot_count:
+        return ChatExportFenceValidation(
+            valid=False, reason="snapshot_count_changed", observed_snapshot_count=observed_count,
+            privacy_persisted=current_privacy_persisted, privacy_updated_at=current_privacy_updated_at,
+        )
+    citation_fences: list[ChatExportCitationFence] = []
+    for fence in fences:
+        now = _datetime.now(_UTC)
+        conversation = (await session.execute(
+            _select(Conversation.created_at, Conversation.updated_at, Conversation.ephemeral,
+                    Conversation.expires_at, Conversation.context_kind)
+            .where(Conversation.id == fence.conversation_id)
+        )).one_or_none()
+        if conversation is None or (
+            conversation.created_at != fence.conversation_created_at
+            or conversation.updated_at != fence.conversation_updated_at
+            or conversation.ephemeral
+            or conversation.expires_at is not None and conversation.expires_at <= now
+            or conversation.context_kind == "automation"
+        ):
+            return ChatExportFenceValidation(
+                valid=False, reason="record_changed", observed_snapshot_count=observed_count,
+                privacy_persisted=current_privacy_persisted, privacy_updated_at=current_privacy_updated_at,
+            )
+        if record_kind == "conversations":
+            if fence.message_id is not None:
+                raise ValueError("Conversation export fence cannot contain a message identity")
+        else:
+            if fence.message_id is None or fence.message_created_at is None or fence.message_updated_at is None:
+                raise ValueError("Message export fence is missing its transcript revision identity")
+            message = (await session.execute(
+                _select(Message.created_at, Message.updated_at)
+                .where(Message.id == fence.message_id, Message.conversation_id == fence.conversation_id)
+            )).one_or_none()
+            if message is None or (
+                message.created_at != fence.message_created_at or message.updated_at != fence.message_updated_at
+            ):
+                return ChatExportFenceValidation(
+                    valid=False, reason="record_changed", observed_snapshot_count=observed_count,
+                    privacy_persisted=current_privacy_persisted, privacy_updated_at=current_privacy_updated_at,
+                )
+            citation_fences.extend(fence.citations)
+    if record_kind == "messages" and citation_fences:
+        from modules.knowledge.documents import public as documents_public
+
+        refs = list(dict.fromkeys((item.document_version_id, item.chunk_id) for item in citation_fences))
+        if len(refs) > CHAT_EXPORT_MAX_CITATIONS_PER_PAGE:
+            raise ValueError("Chat citation fences exceed the revalidation reference budget")
+        evidence: dict[tuple[UUID, UUID], object] = {}
+        for start in range(0, len(refs), CHAT_EXPORT_MAX_CITATIONS_PER_PAGE):
+            batch = refs[start:start + CHAT_EXPORT_MAX_CITATIONS_PER_PAGE]
+            try:
+                evidence.update({(row.document_version_id, row.chunk_id): row
+                                 for row in await documents_public.read_evidence_refs(session, batch)})
+            except ValueError:
+                return ChatExportFenceValidation(
+                    valid=False, reason="citation_unavailable", observed_snapshot_count=observed_count,
+                    privacy_persisted=current_privacy_persisted, privacy_updated_at=current_privacy_updated_at,
+                )
+        version_ids = list(dict.fromkeys(version_id for version_id, _chunk_id in refs))
+        current_sources = await documents_public.review_version_fences(session, version_ids)
+        from modules.sources import public as sources_public
+        from modules.sources.schemas import SourceExportFence
+
+        current_generations: dict[UUID, int] = {}
+        conflicting_sources: set[UUID] = set()
+        cited_source_ids = {citation.source_id for citation in citation_fences}
+        for current in current_sources.values():
+            if current.source_id not in cited_source_ids:
+                continue
+            previous = current_generations.setdefault(current.source_id, current.current_source_generation)
+            if previous != current.current_source_generation:
+                conflicting_sources.add(current.source_id)
+        eligible_source_fences = [
+            SourceExportFence(source_id=source_id, generation=generation)
+            for source_id, generation in current_generations.items()
+            if source_id not in conflicting_sources
+        ]
+        eligible_sources = set(await sources_public.filter_export_eligible_sources(session, eligible_source_fences))
+        for citation in citation_fences:
+            ref = evidence.get((citation.document_version_id, citation.chunk_id))
+            current = current_sources.get(citation.document_version_id)
+            if (ref is None or current is None or ref.document_id != citation.document_id
+                    or ref.source_id != citation.source_id or current.document_id != citation.document_id
+                    or current.source_id != citation.source_id or citation.source_id not in eligible_sources
+                    or citation.source_id in conflicting_sources):
+                return ChatExportFenceValidation(
+                    valid=False, reason="citation_unavailable", observed_snapshot_count=observed_count,
+                    privacy_persisted=current_privacy_persisted, privacy_updated_at=current_privacy_updated_at,
+                )
+            if current.current_source_generation != citation.current_source_generation:
+                return ChatExportFenceValidation(
+                    valid=False, reason="source_generation_changed", observed_snapshot_count=observed_count,
+                    privacy_persisted=current_privacy_persisted, privacy_updated_at=current_privacy_updated_at,
+                )
+    return ChatExportFenceValidation(
+        valid=True, reason="valid", observed_snapshot_count=observed_count,
+        privacy_persisted=current_privacy_persisted, privacy_updated_at=current_privacy_updated_at,
+    )
