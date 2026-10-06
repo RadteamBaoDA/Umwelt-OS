@@ -5,7 +5,7 @@ from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,6 +36,20 @@ from modules.tools.mcp_schemas import (
     McpRisk,
     McpTransport,
 )
+
+
+async def unresolved_backup_effects(session: AsyncSession) -> dict[str, int]:
+    """Project browser owner-journal jobs explicitly marked as uncertain after dispatch.
+
+    Queued jobs are unsent durable work; running jobs remain covered by activity drain. Only
+    the browser owner’s ``uncertain`` terminal state means the external read outcome is unknown.
+    """
+    from modules.tools.models import BrowserReadJob
+
+    count = int(await session.scalar(select(func.count()).select_from(BrowserReadJob).where(
+        BrowserReadJob.status == "uncertain",
+    )) or 0)
+    return {"browser_job_uncertain": count} if count else {}
 from modules.tools.mcp_server import McpServerBundle, create_inbound_mcp_bundle
 
 

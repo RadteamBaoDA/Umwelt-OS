@@ -9,22 +9,135 @@ from __future__ import annotations
 
 import hashlib
 import json
+import base64
+import binascii
+from datetime import UTC, datetime
 from copy import deepcopy
 from typing import Any, Sequence
 from uuid import UUID, uuid5
 
-from sqlalchemy import select
+from fastapi import HTTPException
+from sqlalchemy import func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.pagination import decode_cursor, encode_cursor
 from modules.goals.models import Goal
 from modules.goals.schemas import (
-    GoalCreate, GoalFilter, GoalPage, GoalRead, GoalUpdate, MilestoneSchema,
+    GoalCreate, GoalExportFence, GoalExportPage, GoalExportValidation,
+    GoalFilter, GoalPage, GoalRead, GoalUpdate, MilestoneSchema,
     PlanAcceptanceResult, PlanProposal, TaskProposal,
 )
 from modules.goals.seed import ensure_demo_goals
 
 MAX_REVISION = 9_007_199_254_740_991
+GOAL_EXPORT_PAGE_BYTES = 16_777_216
+
+
+def _encode_goal_export_cursor(snapshot_at: datetime, created_at: datetime, identifier: UUID) -> str:
+    """Bind a canonical goal keyset position to one immutable export cutoff."""
+    raw = json.dumps(
+        [1, "goals", snapshot_at.isoformat(), created_at.isoformat(), str(identifier)],
+        separators=(",", ":"),
+    ).encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def _decode_goal_export_cursor(cursor: str) -> tuple[datetime, datetime, UUID]:
+    """Reject noncanonical, oversized, cross-dataset, or future goal export cursors."""
+    try:
+        if len(cursor) > 512 or "=" in cursor:
+            raise ValueError
+        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
+        if base64.urlsafe_b64encode(raw).decode().rstrip("=") != cursor:
+            raise ValueError
+        values = json.loads(raw)
+        if not isinstance(values, list) or len(values) != 5 or values[:2] != [1, "goals"]:
+            raise ValueError
+        snapshot_at, created_at = datetime.fromisoformat(values[2]), datetime.fromisoformat(values[3])
+        identifier = UUID(values[4])
+        if (any(value.tzinfo is None or value.utcoffset() is None for value in (snapshot_at, created_at))
+                or snapshot_at.isoformat() != values[2] or created_at.isoformat() != values[3]
+                or created_at > snapshot_at or snapshot_at > datetime.now(UTC)
+                or str(identifier) != values[4]
+                or _encode_goal_export_cursor(snapshot_at, created_at, identifier) != cursor):
+            raise ValueError
+        return snapshot_at, created_at, identifier
+    except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError, binascii.Error) as exc:
+        raise HTTPException(status_code=422, detail="Goal export cursor is invalid") from exc
+
+
+def _goal_export_scope(owner_id: int, snapshot_at: datetime) -> tuple[object, ...]:
+    """Select one owner's stored goal revisions present at the export cutoff."""
+    return Goal.owner_id == owner_id, Goal.created_at <= snapshot_at, Goal.updated_at <= snapshot_at
+
+
+async def _goal_export_read(session: AsyncSession, row: Goal) -> GoalRead:
+    """Reuse Goal's task/entity public projections while excluding internal replay manifests."""
+    task_ids = _milestone_task_ids(row.milestones or [])
+    task_states = await _task_rows_for_goal(session, row.owner_id, task_ids, row.id)
+    result = await _reconcile_goal(row, task_states)
+    return await _current_entity_projection(session, result)
+
+
+async def export_page(
+    session: AsyncSession, *, owner_id: int, record_kind: str, limit: int = 50, cursor: str | None = None,
+) -> GoalExportPage:
+    """Return a bounded owner page of stored goal fields with final-validation digests."""
+    if owner_id != 1 or record_kind != "goals" or not 1 <= limit <= 100:
+        raise ValueError("Goal export owner, kind or page limit is invalid")
+    if cursor is None:
+        snapshot_at, position = datetime.now(UTC), None
+    else:
+        snapshot_at, position_at, position_id = _decode_goal_export_cursor(cursor)
+        position = (position_at, position_id)
+    scope = _goal_export_scope(owner_id, snapshot_at)
+    snapshot_count = int(await session.scalar(select(func.count()).select_from(Goal).where(*scope)) or 0)
+    statement = select(Goal).where(*scope).execution_options(populate_existing=True)
+    if position is not None:
+        statement = statement.where(tuple_(Goal.created_at, Goal.id) > position)
+    rows = list((await session.execute(statement.order_by(Goal.created_at, Goal.id).limit(limit + 1))).all())
+    has_more, rows = len(rows) > limit, rows[:limit]
+    items = [await _goal_export_read(session, row) for row in rows]
+    encoded = [item.model_dump_json().encode("utf-8") for item in items]
+    payload_bytes = 2 + sum(map(len, encoded)) + max(0, len(items) - 1)
+    if payload_bytes > GOAL_EXPORT_PAGE_BYTES:
+        raise HTTPException(status_code=413, detail="Goal export page exceeds its byte bound")
+    fences = [GoalExportFence(
+        id=row.id, created_at=row.created_at, updated_at=row.updated_at, revision=row.revision,
+        content_digest=hashlib.sha256(raw).hexdigest(),
+    ) for row, raw in zip(rows, encoded, strict=True)]
+    return GoalExportPage(
+        owner_id=owner_id, record_kind="goals", snapshot_at=snapshot_at,
+        snapshot_count=snapshot_count, items=items, fences=fences, payload_bytes=payload_bytes,
+        next_cursor=_encode_goal_export_cursor(snapshot_at, rows[-1].created_at, rows[-1].id)
+        if has_more and rows else None,
+    )
+
+
+async def validate_export_fences(
+    session: AsyncSession, *, owner_id: int, record_kind: str, snapshot_at: datetime,
+    expected_snapshot_count: int, fences: list[GoalExportFence],
+) -> GoalExportValidation:
+    """Recheck each goal digest and the fixed-cutoff owner inventory before publication."""
+    if owner_id != 1 or record_kind != "goals" or len(fences) > 100:
+        raise ValueError("Goal export validation input is invalid")
+    observed = int(await session.scalar(
+        select(func.count()).select_from(Goal).where(*_goal_export_scope(owner_id, snapshot_at))
+    ) or 0)
+    if observed != expected_snapshot_count:
+        return GoalExportValidation(valid=False, reason="snapshot_count_changed", observed_snapshot_count=observed)
+    for fence in fences:
+        row = await session.scalar(select(Goal).where(
+            Goal.id == fence.id, *_goal_export_scope(owner_id, snapshot_at),
+        ).execution_options(populate_existing=True))
+        if row is None:
+            return GoalExportValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
+        item = await _goal_export_read(session, row)
+        if (item.created_at != fence.created_at or item.updated_at != fence.updated_at
+                or item.revision != fence.revision
+                or hashlib.sha256(item.model_dump_json().encode("utf-8")).hexdigest() != fence.content_digest):
+            return GoalExportValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
+    return GoalExportValidation(valid=True, reason="valid", observed_snapshot_count=observed)
 
 
 class GoalConflict(Exception):

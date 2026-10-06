@@ -4,7 +4,7 @@ Umwelt-OS is a self-hosted Personal Intelligence OS. Phase 0 provides the privat
 
 ## Start locally
 
-Requirements: Docker Compose v2, Python 3.12, uv, Node.js 24, and npm. On Windows, run commands from PowerShell:
+Requirements: Docker Compose v2.24 or newer, Python 3.12, uv, Node.js 24, and npm. On Windows, run commands from PowerShell:
 
 ```powershell
 ./scripts/dev.ps1 setup

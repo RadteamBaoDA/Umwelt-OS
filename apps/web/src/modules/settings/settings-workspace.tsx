@@ -7,6 +7,7 @@ import { SourceList } from '@/modules/sources/source-list';
 import { McpSettings } from '@/modules/sources/mcp-editor';
 import { OperationsPage } from '@/modules/observability/operations-page';
 import { LifecycleSettings } from '@/modules/settings/lifecycle-settings';
+import { BackupExportSettings } from '@/modules/settings/backup-export';
 
 /** Renders source, MCP connection/grant management, and owner interests in the authenticated workspace. */
 export function SettingsWorkspace() {
@@ -29,5 +30,6 @@ export function SettingsWorkspace() {
     <div className="mt-8 border-t border-border pt-8">
       <TopicSettings csrfToken={csrfToken} />
     </div>
+    <BackupExportSettings />
   </section>;
 }

@@ -9,20 +9,133 @@ document-seed coordinator.
 
 from __future__ import annotations
 
+import base64
+import binascii
 from datetime import UTC, datetime, time, timedelta
+import hashlib
+import json
 from typing import Sequence
 from uuid import UUID, uuid4, uuid5
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import DateTime, cast, func, or_, select
+from fastapi import HTTPException
+from sqlalchemy import DateTime, cast, func, or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.auth.models import Owner
 from core.pagination import decode_cursor, encode_cursor
 from modules.tasks.models import Task
-from modules.tasks.schemas import TaskCreate, TaskFilter, TaskPage, TaskRead, TaskUpdate
+from modules.tasks.schemas import (
+    TaskCreate, TaskExportFence, TaskExportPage, TaskExportValidation,
+    TaskFilter, TaskPage, TaskRead, TaskUpdate,
+)
 from modules.tasks.seed import ensure_demo_tasks
 
 MAX_REVISION = 9_007_199_254_740_991
+
+
+def _encode_task_export_cursor(snapshot_at: datetime, created_at: datetime, identifier: UUID) -> str:
+    """Bind a task keyset position to the immutable owner export cutoff."""
+    payload = json.dumps([1, "tasks", snapshot_at.isoformat(), created_at.isoformat(), str(identifier)],
+                         separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(payload).decode().rstrip("=")
+
+
+def _decode_task_export_cursor(cursor: str) -> tuple[datetime, datetime, UUID]:
+    """Reject oversized, noncanonical, cross-dataset, or future task export cursors."""
+    try:
+        if len(cursor) > 512 or "=" in cursor:
+            raise ValueError
+        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
+        if base64.urlsafe_b64encode(raw).decode().rstrip("=") != cursor:
+            raise ValueError
+        values = json.loads(raw)
+        if not isinstance(values, list) or len(values) != 5 or values[:2] != [1, "tasks"]:
+            raise ValueError
+        snapshot_at, created_at = datetime.fromisoformat(values[2]), datetime.fromisoformat(values[3])
+        identifier = UUID(values[4])
+        if (any(value.tzinfo is None or value.utcoffset() is None for value in (snapshot_at, created_at))
+                or snapshot_at.isoformat() != values[2] or created_at.isoformat() != values[3]
+                or created_at > snapshot_at or snapshot_at > datetime.now(UTC)
+                or str(identifier) != values[4]
+                or _encode_task_export_cursor(snapshot_at, created_at, identifier) != cursor):
+            raise ValueError
+        return snapshot_at, created_at, identifier
+    except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError, binascii.Error) as exc:
+        raise HTTPException(status_code=422, detail="Task export cursor is invalid") from exc
+
+
+def _task_export_scope(snapshot_at: datetime) -> tuple[object, ...]:
+    """Select live owner tasks unchanged through the fixed snapshot cutoff."""
+    return (Task.owner_id == 1, Task.deleted_at.is_(None),
+            Task.created_at <= snapshot_at, Task.updated_at <= snapshot_at)
+
+
+async def export_page(
+    session: AsyncSession, *, owner_id: int, record_kind: str, limit: int = 50, cursor: str | None = None,
+) -> TaskExportPage:
+    """Return a bounded owner task page using the same detached DTO as the task API."""
+    if owner_id != 1 or record_kind != "tasks" or not 1 <= limit <= 100:
+        raise ValueError("Task export owner, kind or page limit is invalid")
+    if await session.scalar(select(Owner.id).where(Owner.id == owner_id)) is None:
+        raise HTTPException(status_code=404, detail="Owner not found")
+    if cursor is None:
+        snapshot_at, position = datetime.now(UTC), None
+    else:
+        snapshot_at, position_at, position_id = _decode_task_export_cursor(cursor)
+        position = (position_at, position_id)
+    count = int(await session.scalar(select(func.count()).select_from(Task).where(
+        *_task_export_scope(snapshot_at),
+    )) or 0)
+    statement = select(Task).where(*_task_export_scope(snapshot_at))
+    if position is not None:
+        statement = statement.where(tuple_(Task.created_at, Task.id) > position)
+    rows = list((await session.scalars(
+        statement.order_by(Task.created_at, Task.id).limit(limit + 1)
+        .execution_options(populate_existing=True)
+    )).all())
+    more, rows = len(rows) > limit, rows[:limit]
+    items = [_to_task_read(row) for row in rows]
+    encoded = [item.model_dump_json().encode("utf-8") for item in items]
+    payload_bytes = 2 + sum(map(len, encoded)) + max(0, len(items) - 1)
+    if payload_bytes > 16_777_216:
+        raise HTTPException(status_code=413, detail="Task export page exceeds its byte bound")
+    fences = [TaskExportFence(
+        id=row.id, created_at=row.created_at, updated_at=row.updated_at,
+        content_digest=hashlib.sha256(raw).hexdigest(),
+    ) for row, raw in zip(rows, encoded, strict=True)]
+    return TaskExportPage(
+        owner_id=owner_id, record_kind="tasks", snapshot_at=snapshot_at, snapshot_count=count,
+        items=items, fences=fences, payload_bytes=payload_bytes,
+        next_cursor=_encode_task_export_cursor(snapshot_at, rows[-1].created_at, rows[-1].id)
+        if more and rows else None,
+    )
+
+
+async def validate_export_fences(
+    session: AsyncSession, *, owner_id: int, record_kind: str, snapshot_at: datetime,
+    expected_snapshot_count: int, fences: list[TaskExportFence],
+) -> TaskExportValidation:
+    """Recheck task ownership, deletion, exact DTO content and snapshot count before publication."""
+    if owner_id != 1 or record_kind != "tasks" or len(fences) > 100:
+        raise ValueError("Task export validation input is invalid")
+    if await session.scalar(select(Owner.id).where(Owner.id == owner_id)) is None:
+        return TaskExportValidation(valid=False, reason="owner_unavailable", observed_snapshot_count=0)
+    count = int(await session.scalar(select(func.count()).select_from(Task).where(
+        *_task_export_scope(snapshot_at),
+    )) or 0)
+    if count != expected_snapshot_count:
+        return TaskExportValidation(valid=False, reason="snapshot_count_changed", observed_snapshot_count=count)
+    for fence in fences:
+        row = await session.scalar(select(Task).where(
+            Task.id == fence.id, *_task_export_scope(snapshot_at),
+        ).execution_options(populate_existing=True))
+        if row is None or row.created_at != fence.created_at or row.updated_at != fence.updated_at:
+            return TaskExportValidation(valid=False, reason="record_changed", observed_snapshot_count=count)
+        item = _to_task_read(row)
+        if hashlib.sha256(item.model_dump_json().encode("utf-8")).hexdigest() != fence.content_digest:
+            return TaskExportValidation(valid=False, reason="record_changed", observed_snapshot_count=count)
+    return TaskExportValidation(valid=True, reason="valid", observed_snapshot_count=count)
 
 
 class TaskConflict(Exception):

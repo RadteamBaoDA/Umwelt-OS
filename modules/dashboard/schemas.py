@@ -370,6 +370,40 @@ class DashboardDetail(StrictConfiguration):
     layouts: DashboardLayoutsRead
 
 
+class DashboardExportFence(StrictConfiguration):
+    """Bind one dashboard projection to its parent revision and rendered config digest."""
+
+    id: UUID
+    created_at: datetime
+    updated_at: datetime
+    revision: Revision
+    content_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class DashboardExportPage(StrictConfiguration):
+    """Return a bounded owner dashboard page and exact projection fences."""
+
+    owner_id: int = Field(ge=1)
+    record_kind: Literal["dashboards"]
+    snapshot_at: datetime
+    snapshot_count: int = Field(ge=0)
+    items: list[DashboardDetail] = Field(max_length=100)
+    fences: list[DashboardExportFence] = Field(max_length=100)
+    payload_bytes: int = Field(ge=0, le=16_777_216)
+    max_payload_bytes: int = Field(default=16_777_216, ge=1, le=16_777_216)
+    next_cursor: str | None = None
+    available: bool = True
+    omission_reason: Literal["definition_changed_after_snapshot"] | None = None
+
+
+class DashboardExportValidation(StrictConfiguration):
+    """Report whether dashboard projections and the fixed-cutoff inventory remain unchanged."""
+
+    valid: bool
+    reason: Literal["valid", "owner_unavailable", "snapshot_count_changed", "record_changed"]
+    observed_snapshot_count: int = Field(ge=0)
+
+
 class RendererRead(StrictConfiguration):
     """Describe renderer configuration, adapter presence and geometry without runtime guarantees.
 

@@ -30,8 +30,12 @@ class Settings(BaseSettings):
     browser_service_url: AnyHttpUrl = AnyHttpUrl("http://browser:8001")
     browser_shared_token: SecretStr = SecretStr("")
     n8n_service_url: AnyHttpUrl = Field(default=AnyHttpUrl("http://n8n:5678"), validation_alias="N8N_SERVICE_URL")
+    n8n_port: int = Field(default=5678, ge=1, le=65535, validation_alias="N8N_PORT")
     n8n_api_key: SecretStr = Field(default=SecretStr(""), validation_alias="N8N_API_KEY")
     n8n_webhook_token: SecretStr = Field(default=SecretStr(""), validation_alias="N8N_WEBHOOK_TOKEN")
+    n8n_encryption_key: SecretStr = Field(default=SecretStr(""), validation_alias="N8N_ENCRYPTION_KEY", repr=False)
+    backup_age_recipient: str = Field(default="", validation_alias="BACKUP_AGE_RECIPIENT")
+    backup_age_identity_path: Path | None = Field(default=None, validation_alias="BACKUP_AGE_IDENTITY_PATH", repr=False)
     connector_credential_encryption_key: SecretStr = Field(
         default=SecretStr(""), validation_alias="CONNECTOR_CREDENTIAL_ENCRYPTION_KEY", repr=False
     )

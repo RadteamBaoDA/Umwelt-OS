@@ -55,6 +55,9 @@ from modules.tasks.tools import register_task_tools
 from modules.tools.public import McpAdmission, McpRuntime, create_inbound_mcp_bundle
 from modules.agents.routes import router as agents_router
 from modules.automations.routes import router as automations_router, webhook_router as automation_webhook_router
+from modules.backup.routes import router as backup_router
+from modules.backup.middleware import BackupActivityMiddleware
+from modules.export.routes import router as export_router
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -117,7 +120,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     install_log_redaction()
     install_error_handling(app)
+    app.add_middleware(BackupActivityMiddleware)
     app.include_router(auth_router)
+    app.include_router(backup_router)
+    app.include_router(export_router)
     app.include_router(system_router)
     app.include_router(sources_router)
     app.include_router(documents_router)

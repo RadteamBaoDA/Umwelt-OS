@@ -617,17 +617,33 @@ async def auth_session(
 ) -> AuthState:
     """Return the current authenticated state and CSRF token for the active owner session."""
     row = await _current_session(request, session, request.cookies.get(SESSION_COOKIE))
-    _owner, row = await _lock_owner_session(
-        request, session, row, None, check_csrf=False
-    )
     settings: Settings = request.app.state.settings
     existing_cookie = request.cookies.get(CSRF_COOKIE)
     existing_token = existing_cookie.split(".", 1)[0] if existing_cookie and "." in existing_cookie else None
-    if (
+    csrf_is_current = bool(
         existing_token
         and _valid_csrf(existing_cookie, existing_token, settings)
         and hmac.compare_digest(row.csrf_hash, _hash(existing_token))
-    ):
+    )
+    if not csrf_is_current:
+        from modules.settings.public import register_activity
+        from modules.backup.public import BackupAdmissionDenied
+
+        try:
+            receipt = await register_activity(session, "auth_csrf_rotation", "auth/session")
+        except BackupAdmissionDenied as exc:
+            raise HTTPException(
+                status_code=503, detail="Authentication writes are paused for a consistent backup",
+                headers={"Retry-After": "30"},
+            ) from exc
+        request.state.backup_activity = receipt
+        # Persist admission before locking the owner/session rows for rotation.
+        await session.commit()
+    _owner, row = await _lock_owner_session(
+        request, session, row, None, check_csrf=False
+    )
+    if csrf_is_current:
+        assert existing_token is not None
         csrf_token = existing_token
     else:
         csrf_token, csrf_cookie = _new_csrf(settings)

@@ -16,7 +16,7 @@ from core.auth.dependencies import require_owner, require_owner_write
 from core.auth.models import AuthSession, Owner
 from core.database import get_session
 from modules.automations import public
-from modules.settings.public import module_dependency, module_is_enabled
+from modules.settings.public import module_dependency, module_is_enabled, register_request_activity
 from modules.automations.execution import enqueue_trigger
 from modules.automations.models import AutomationTrigger, AutomationWebhookCredential
 from modules.automations.schemas import (
@@ -187,7 +187,7 @@ async def receive_inbound_webhook(
         AutomationWebhookCredential.alias == alias,
         AutomationWebhookCredential.revoked_at.is_(None),
         AutomationWebhookCredential.expires_at > datetime.now(UTC),
-    ).with_for_update())
+    ))
     if credential is None or not verify_inbound_token(token, credential.token_hash):
         raise HTTPException(status_code=401, detail="Webhook credentials are invalid or expired")
     # External trigger ingress uses its own bearer. Check persisted availability only after it
@@ -207,6 +207,18 @@ async def receive_inbound_webhook(
         payload = InboundEvent.model_validate(json.loads(body))
     except (json.JSONDecodeError, UnicodeDecodeError, ValidationError) as exc:
         raise HTTPException(status_code=422, detail="Webhook event payload is invalid") from exc
+    # Commit the global admission before taking the credential row lock used for the durable inbox write.
+    await register_request_activity(request, session, "automation_webhook_ingress", alias)
+    credential = await session.scalar(select(AutomationWebhookCredential).where(
+        AutomationWebhookCredential.owner_id == 1,
+        AutomationWebhookCredential.alias == alias,
+        AutomationWebhookCredential.revoked_at.is_(None),
+        AutomationWebhookCredential.expires_at > datetime.now(UTC),
+    ).with_for_update().execution_options(populate_existing=True))
+    if credential is None or not verify_inbound_token(token, credential.token_hash):
+        raise HTTPException(status_code=401, detail="Webhook credentials are invalid or expired")
+    if not await module_is_enabled(session, "automations"):
+        raise HTTPException(status_code=404, detail="Automation webhooks are unavailable")
     accepted = await enqueue_trigger(
         session, 1, "webhook", f"{alias}:{event_key}",
         {"event": payload.event}, hook=alias,

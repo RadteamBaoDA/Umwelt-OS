@@ -231,3 +231,43 @@ class GoalPage(BaseModel):
     items: list[GoalRead]
     next_cursor: str | None = None
     total: int | None = None
+
+
+class GoalExportFence(BaseModel):
+    """Bind one goal projection to its stored revision and exact portable content."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: UUID
+    created_at: datetime
+    updated_at: datetime
+    revision: int = Field(ge=1, le=9_007_199_254_740_991)
+    content_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class GoalExportPage(BaseModel):
+    """Return a bounded owner goal page with fixed-cutoff revision fences."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    owner_id: int = Field(ge=1)
+    record_kind: Literal["goals"]
+    snapshot_at: datetime
+    snapshot_count: int = Field(ge=0)
+    items: list[GoalRead] = Field(max_length=100)
+    fences: list[GoalExportFence] = Field(max_length=100)
+    payload_bytes: int = Field(ge=0, le=16_777_216)
+    max_payload_bytes: int = Field(default=16_777_216, ge=1, le=16_777_216)
+    next_cursor: str | None = None
+    available: bool = True
+    omission_reason: None = None
+
+
+class GoalExportValidation(BaseModel):
+    """Report whether captured goals and the cutoff-bound inventory remain unchanged."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    valid: bool
+    reason: Literal["valid", "owner_unavailable", "snapshot_count_changed", "record_changed"]
+    observed_snapshot_count: int = Field(ge=0)

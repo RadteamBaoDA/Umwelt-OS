@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import json
 from datetime import UTC, datetime
-from typing import Annotated, NoReturn
+from typing import Annotated, Literal, NoReturn
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from sqlalchemy import Boolean, BigInteger, CheckConstraint, DateTime, Float, ForeignKey, Index, String, func, select
+from sqlalchemy import Boolean, BigInteger, CheckConstraint, DateTime, Float, ForeignKey, Index, String, func, select, tuple_
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
@@ -200,6 +201,46 @@ class TopicPage(BaseModel):
     total: int
 
 
+class TopicExportFence(BaseModel):
+    """Bind a live topic export record to its stored revision and canonical DTO digest."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: UUID
+    created_at: datetime
+    updated_at: datetime
+    revision: int = Field(ge=1, le=MAX_REVISION)
+    content_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class TopicExportPage(BaseModel):
+    """Return one bounded page of live owner topics and fixed-cutoff inventory data."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    owner_id: int = Field(ge=1)
+    record_kind: Literal["topics"]
+    snapshot_at: datetime
+    snapshot_count: int = Field(ge=0)
+    items: list[TopicRead] = Field(max_length=100)
+    fences: list[TopicExportFence] = Field(max_length=100)
+    payload_bytes: int = Field(ge=0, le=16_777_216)
+    max_payload_bytes: int = Field(default=16_777_216, ge=1, le=16_777_216)
+    next_cursor: str | None = None
+    available: bool = True
+    omission_reason: None = None
+
+
+class TopicExportValidation(BaseModel):
+    """Report whether exported topics and the owner inventory remain unchanged."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    valid: bool
+    reason: Literal["valid", "owner_unavailable", "snapshot_count_changed", "record_changed"]
+    observed_snapshot_count: int = Field(ge=0)
+
+
 class TopicFilter(BaseModel):
     """Bound topic collection reads to 100 rows and an optional active filter."""
     model_config = ConfigDict(extra="forbid")
@@ -322,6 +363,108 @@ async def list_topics(session: AsyncSession, owner_id: int, filters: TopicFilter
     items = [await _topic_read(session, row) for row in rows]
     next_cursor = _encode_topic_cursor(rows[-1].created_at, rows[-1].id, owner_id, filters.is_active) if more and rows else None
     return TopicPage(items=items, next_cursor=next_cursor, total=total)
+
+
+def _encode_topic_export_cursor(snapshot_at: datetime, created_at: datetime, topic_id: UUID) -> str:
+    """Bind a canonical topic keyset position to one fixed export cutoff."""
+    raw = json.dumps([1, "topics", snapshot_at.isoformat(), created_at.isoformat(), str(topic_id)],
+                     separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def _decode_topic_export_cursor(cursor: str) -> tuple[datetime, datetime, UUID]:
+    """Reject oversized, noncanonical, cross-dataset, or future topic export cursors."""
+    try:
+        if len(cursor) > 512 or "=" in cursor:
+            raise ValueError
+        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
+        if base64.urlsafe_b64encode(raw).decode().rstrip("=") != cursor:
+            raise ValueError
+        value = json.loads(raw)
+        if not isinstance(value, list) or len(value) != 5 or value[:2] != [1, "topics"]:
+            raise ValueError
+        snapshot_at, created_at = datetime.fromisoformat(value[2]), datetime.fromisoformat(value[3])
+        topic_id = UUID(value[4])
+        if (any(item.tzinfo is None or item.utcoffset() is None for item in (snapshot_at, created_at))
+                or snapshot_at.isoformat() != value[2] or created_at.isoformat() != value[3]
+                or created_at > snapshot_at or snapshot_at > datetime.now(UTC)
+                or str(topic_id) != value[4]
+                or _encode_topic_export_cursor(snapshot_at, created_at, topic_id) != cursor):
+            raise ValueError
+        return snapshot_at, created_at, topic_id
+    except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError, binascii.Error) as exc:
+        raise HTTPException(status_code=422, detail="Topic export cursor is invalid") from exc
+
+
+def _topic_export_scope(owner_id: int, snapshot_at: datetime) -> tuple[object, ...]:
+    """Select only live owner topics that existed unchanged at the export cutoff."""
+    return (
+        Topic.owner_id == owner_id, Topic.deleted_at.is_(None),
+        Topic.created_at <= snapshot_at, Topic.updated_at <= snapshot_at,
+    )
+
+
+async def export_page(
+    session: AsyncSession, *, owner_id: int, record_kind: str, limit: int = 50, cursor: str | None = None,
+) -> TopicExportPage:
+    """Return a bounded canonical owner topic page without tombstones or provider content."""
+    if owner_id != 1 or record_kind != "topics" or not 1 <= limit <= 100:
+        raise ValueError("Topic export owner, kind or page limit is invalid")
+    if cursor is None:
+        snapshot_at, position = datetime.now(UTC), None
+    else:
+        snapshot_at, position_at, position_id = _decode_topic_export_cursor(cursor)
+        position = (position_at, position_id)
+    scope = _topic_export_scope(owner_id, snapshot_at)
+    snapshot_count = int(await session.scalar(select(func.count()).select_from(Topic).where(*scope)) or 0)
+    statement = select(Topic).where(*scope)
+    if position is not None:
+        statement = statement.where(tuple_(Topic.created_at, Topic.id) > position)
+    rows = list((await session.scalars(
+        statement.order_by(Topic.created_at, Topic.id).limit(limit + 1).execution_options(populate_existing=True)
+    )).all())
+    has_more, rows = len(rows) > limit, rows[:limit]
+    items = [await _topic_read(session, row) for row in rows]
+    encoded = [item.model_dump_json().encode("utf-8") for item in items]
+    payload_bytes = 2 + sum(map(len, encoded)) + max(0, len(items) - 1)
+    if payload_bytes > 16_777_216:
+        raise HTTPException(status_code=413, detail="Topic export page exceeds its byte bound")
+    fences = [TopicExportFence(
+        id=row.id, created_at=row.created_at, updated_at=row.updated_at, revision=row.revision,
+        content_digest=hashlib.sha256(raw).hexdigest(),
+    ) for row, raw in zip(rows, encoded, strict=True)]
+    return TopicExportPage(
+        owner_id=owner_id, record_kind="topics", snapshot_at=snapshot_at,
+        snapshot_count=snapshot_count, items=items, fences=fences, payload_bytes=payload_bytes,
+        next_cursor=_encode_topic_export_cursor(snapshot_at, rows[-1].created_at, rows[-1].id)
+        if has_more and rows else None,
+    )
+
+
+async def validate_export_fences(
+    session: AsyncSession, *, owner_id: int, record_kind: str, snapshot_at: datetime,
+    expected_snapshot_count: int, fences: list[TopicExportFence],
+) -> TopicExportValidation:
+    """Re-read topic projections and inventory before publishing the portable download."""
+    if owner_id != 1 or record_kind != "topics" or len(fences) > 100:
+        raise ValueError("Topic export validation input is invalid")
+    observed = int(await session.scalar(
+        select(func.count()).select_from(Topic).where(*_topic_export_scope(owner_id, snapshot_at))
+    ) or 0)
+    if observed != expected_snapshot_count:
+        return TopicExportValidation(valid=False, reason="snapshot_count_changed", observed_snapshot_count=observed)
+    for fence in fences:
+        row = await session.scalar(select(Topic).where(
+            Topic.id == fence.id, *_topic_export_scope(owner_id, snapshot_at),
+        ).execution_options(populate_existing=True))
+        if row is None:
+            return TopicExportValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
+        item = await _topic_read(session, row)
+        if (item.created_at != fence.created_at or item.updated_at != fence.updated_at
+                or item.revision != fence.revision
+                or hashlib.sha256(item.model_dump_json().encode("utf-8")).hexdigest() != fence.content_digest):
+            return TopicExportValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
+    return TopicExportValidation(valid=True, reason="valid", observed_snapshot_count=observed)
 
 
 async def update_topic(session: AsyncSession, owner_id: int, topic_id: UUID, payload: TopicUpdate) -> TopicRead:

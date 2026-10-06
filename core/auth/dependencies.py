@@ -82,7 +82,47 @@ async def require_owner_write(
     origin: Annotated[str | None, Header()] = None,
     csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
 ) -> AuthSession:
-    """Require owner authentication, allowed Origin, and matching signed CSRF cookie/header for writes."""
+    """Authenticate and record a durable backup-admitted owner request before domain locks.
+
+    The activity row is committed before endpoint work so the backup coordinator can
+    drain a request across any internal commits without holding an advisory lock over
+    network waits. Its ASGI response finalizer publishes the terminal receipt.
+    """
+    auth_session = await _authorize_owner_write(request, session, origin, csrf_token)
+    if getattr(request.state, "backup_activity", None) is None:
+        from modules.settings.public import register_activity
+        from modules.backup.public import BackupAdmissionDenied
+
+        try:
+            receipt = await register_activity(session, "api_owner_write", request.url.path)
+        except BackupAdmissionDenied as exc:
+            raise HTTPException(
+                status_code=503, detail="Writes are paused for a consistent backup",
+                headers={"Retry-After": "30"},
+            ) from exc
+        request.state.backup_activity = receipt
+        # Persist admission before the handler can acquire an owner/source row lock.
+        await session.commit()
+    return auth_session
+
+
+async def require_backup_owner_write(
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    origin: Annotated[str | None, Header()] = None,
+    csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
+) -> AuthSession:
+    """Authorize backup control writes without applying the ordinary maintenance gate."""
+    return await _authorize_owner_write(request, session, origin, csrf_token)
+
+
+async def _authorize_owner_write(
+    request: Request,
+    session: AsyncSession,
+    origin: str | None,
+    csrf_token: str | None,
+) -> AuthSession:
+    """Validate owner session, same-origin policy, and its session-bound signed CSRF proof."""
     settings: Settings = request.app.state.settings
     if not _origin_allowed(origin, settings):
         raise HTTPException(status_code=403, detail="Origin is not allowed")

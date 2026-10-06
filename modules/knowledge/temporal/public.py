@@ -21,6 +21,20 @@ from modules.knowledge.temporal.models import (
 from modules.knowledge.temporal.schemas import ChangePage, ChangeRead, GraphStatus, ReconcileRequest, ReconcileStatus
 
 
+async def unresolved_backup_effects(session: AsyncSession) -> dict[str, int]:
+    """Count graph dispatch receipts without proven completion or client cessation.
+
+    A queued GraphOperation has not crossed the transport boundary and does not block backup.
+    GraphDispatch is inserted before the synchronous transport call; only rows lacking both
+    terminal timestamps can still represent an external graph effect whose outcome is unknown.
+    """
+    count = int(await session.scalar(select(func.count()).select_from(GraphDispatch).where(
+        GraphDispatch.completed_at.is_(None),
+        GraphDispatch.cessation_verified_at.is_(None),
+    )) or 0)
+    return {"external_dispatch_outcome_unproven": count} if count else {}
+
+
 def digest(value: object) -> str:
     """Hash deterministically serialized detached IDs/revisions; never use this as authorization."""
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()

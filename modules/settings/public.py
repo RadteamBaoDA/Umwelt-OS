@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from redis.asyncio import Redis
+from starlette.requests import Request
 
 from core.config import Settings
 from core.model_gateway.schemas import AIExecutionConfig, AISettingsRead, AISettingsUpdate, ModelMapping, PrivacySettings
@@ -19,6 +20,7 @@ from modules.settings.models import OwnerPreferencesRecord
 from modules.settings.schemas import (
     ModuleLifecycleRead, OwnerPreferencesRead, OwnerPreferencesUpdate, RetentionSettingsRead,
 )
+from modules.backup.schemas import ActivityReceipt, AdmissionReceipt
 
 OWNER_ID = 1
 ALIASES = ("reasoning-large", "reasoning-small", "fast", "embedding", "reranker", "vision", "local-private")
@@ -338,6 +340,42 @@ async def module_is_enabled(session: AsyncSession, module_id: str) -> bool:
     from modules.settings.lifecycle import module_is_enabled as _module_is_enabled
 
     return await _module_is_enabled(session, module_id)
+
+
+async def admit_write(
+    session: AsyncSession, kind: str, work_id: str | None = None, epoch: int | None = None,
+) -> AdmissionReceipt:
+    """Forward a durable write admission to Backup without exposing its persistence models."""
+    from modules.backup.public import admit_write as _admit_write
+
+    return await _admit_write(session, kind, work_id, epoch)
+
+
+async def register_activity(
+    session: AsyncSession, kind: str, work_id: str | None = None,
+) -> ActivityReceipt:
+    """Forward an admitted API/job activity registration to Backup's detached receipt contract."""
+    from modules.backup.public import register_activity as _register_activity
+
+    return await _register_activity(session, kind, work_id)
+
+
+async def register_request_activity(
+    request: Request, session: AsyncSession, kind: str, work_id: str | None = None,
+) -> ActivityReceipt:
+    """Persist one non-owner-session callback admission before it locks owner rows or commits effects."""
+    from modules.backup.public import register_request_activity as _register_request_activity
+
+    return await _register_request_activity(request, session, kind, work_id)
+
+
+async def finish_activity(
+    session: AsyncSession, receipt: ActivityReceipt, *, uncertain: bool = False, interrupted: bool = False,
+) -> bool:
+    """Forward a terminal activity receipt while retaining Backup model ownership."""
+    from modules.backup.public import finish_activity as _finish_activity
+
+    return await _finish_activity(session, receipt, uncertain=uncertain, interrupted=interrupted)
 
 
 def module_dependency(module_id: str):

@@ -99,11 +99,13 @@ async def receive_github_webhook(request: Request, session: Session) -> JSONResp
     except (ValueError, TypeError, RecursionError) as exc:
         raise HTTPException(status_code=400, detail="GitHub webhook payload is invalid") from exc
     from modules.connectors import public as connectors
-    from modules.settings.public import module_is_enabled
+    from modules.settings.public import module_is_enabled, register_request_activity
 
     if not await module_is_enabled(session, "connectors"):
         raise HTTPException(status_code=404, detail="Webhook unavailable")
 
+    # Admission commits before the unique delivery/outbox transaction begins.
+    await register_request_activity(request, session, "github_webhook_ingress", delivery_id)
     receipt = await connectors.persist_verified_github_delivery(session, delivery)
     code = 202 if receipt.disposition == "received" else 200
     return JSONResponse(status_code=code, content=receipt.model_dump(mode="json"))
@@ -513,6 +515,11 @@ async def complete_github_authorization(request: Request, session: Session, owne
     state = request.query_params.get("state", "")
     if not isinstance(browser, dict) or not state or browser.get("state_hash") != oauth.digest(state) or not isinstance(browser.get("browser_nonce"), str):
         raise HTTPException(status_code=400, detail="GitHub authorization state is invalid")
+    # This callback writes state and performs remote token exchange, so it must be durably admitted
+    # before locking the one-time attempt; no advisory lock survives the subsequent network calls.
+    from modules.settings.public import register_request_activity
+
+    await register_request_activity(request, session, "github_oauth_callback")
     attempt = await session.scalar(select(GithubOAuthAttempt).where(GithubOAuthAttempt.state_hash == oauth.digest(state)).with_for_update())
     now = datetime.now(UTC)
     if attempt is None or attempt.consumed_at is not None or attempt.expires_at <= now or attempt.session_hash != owner.token_hash or attempt.browser_hash != oauth.digest(browser["browser_nonce"]):

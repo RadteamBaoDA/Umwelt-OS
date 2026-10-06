@@ -12,5 +12,6 @@ playwright-report/
 test-results/
 **/playwright/.auth/
 data/
+.backup-restores/
 .superpowers/sdd/
 .gitnexus

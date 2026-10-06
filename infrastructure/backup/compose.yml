@@ -1,0 +1,26 @@
+services:
+  backup-volume:
+    image: bbd-os-backup-volume:0.1.0
+    build:
+      context: .
+      dockerfile: infrastructure/docker/api.Dockerfile
+    entrypoint: ["python", "-m", "modules.backup.volume_io"]
+    network_mode: none
+    restart: "no"
+    volumes:
+      - app-data:/vol/raw_files:ro
+      - n8n-data:/vol/n8n:ro
+      - graph-data:/vol/graph:ro
+
+  backup-volume-restore:
+    image: bbd-os-backup-volume:0.1.0
+    build:
+      context: .
+      dockerfile: infrastructure/docker/api.Dockerfile
+    entrypoint: ["python", "-m", "modules.backup.volume_io"]
+    network_mode: none
+    restart: "no"
+    volumes:
+      - app-data:/vol/raw_files
+      - n8n-data:/vol/n8n
+      - graph-data:/vol/graph
