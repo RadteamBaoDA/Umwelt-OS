@@ -1,3 +1,8 @@
+## P12-T3 onboarding API/UI milestone integration — 2026-10-06
+
+Original4dc8373 and readiness repair70d8ab7 composed with currentdevelop781c0eb intoe7eb87e62d51b850c0d4373e4e678650ef024dfa. Exact prescribed build session65210 exit0/four images and scoped source/composition re-review PASS. Integrating fourteen production paths with checkpoint batch: resumable revision-fenced owner progress, explicit completion/data choice, localized setup/onboarding, truthful semantic compatibility/index progress/error states, user-menu entry and linked p12_onboarding_state migration. No migration/runtime execution. Seed/reset and remaining mobile/drawer reconciliation still required; this does not complete wholeP12T3.
+
+Entities/Relationships export integrated781c0eb. Remaining Timeline/Observations export and finite Chat/Memory conversation deletion UoW assigned isolated Luna worktrees. Full backup/per-domain caller and P12T2/R16 remain active. No tests/push/deploy.
 ## P12 Entities/Relationships export integration — 2026-10-06
 
 Accepted7b791f2 repair composed with develop34eeecd; inherited duplicate Memory reader removed by preserving exact accepted develop blob. Frozen0f4e093fa9592acb142ae57a3a45efb13661e66a has exactly four owner file delta. Prescribed composition build session95371 exit0/four images and independent composition review PASS. Integrating this coherent knowledge export milestone with checkpoint batch. Timeline/Observations still required; full export caller/backup and deletion/recovery remain open. No whole-P12 or runtime acceptance claim.

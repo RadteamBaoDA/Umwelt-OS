@@ -58,7 +58,7 @@ from modules.knowledge.temporal.models import (
     GraphReceipt, GraphChange, GraphReconcileRun, GraphDispatch, GraphReconcileMember, GraphRebuildDependency,
 )
 from modules.timeline.models import Event, EventParticipant, EventEvidence, ParticipantEvidence, EventAudit, EventSuppression, TimelineExtractionWork, TimelineExtractionResult
-from modules.settings.models import AISettingsRecord, OwnerPreferencesRecord
+from modules.settings.models import AISettingsRecord, OnboardingStateRecord, OwnerPreferencesRecord
 from modules.dashboard.models import (
     Dashboard,
     DashboardGroup,
@@ -156,6 +156,7 @@ _temporal_models = (
     GraphAllocation, GraphPartition, GraphMapping, GraphSupport, GraphOperation,
     GraphReceipt, GraphChange, GraphReconcileRun, GraphDispatch, GraphReconcileMember, GraphRebuildDependency,
 )
+_settings_models = (AISettingsRecord, OnboardingStateRecord, OwnerPreferencesRecord)
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

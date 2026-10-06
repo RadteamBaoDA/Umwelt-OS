@@ -63,6 +63,26 @@ class OwnerPreferencesRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
 
+class OnboardingStateRecord(Base):
+    """Persist only the owner's resumable onboarding step and explicit completion."""
+    __tablename__ = "onboarding_state"
+    __table_args__ = (
+        CheckConstraint("owner_id = 1", name="ck_onboarding_state_single_owner"),
+        CheckConstraint("configuration_revision > 0", name="ck_onboarding_state_revision_positive"),
+        CheckConstraint("current_step IN ('ai_privacy', 'capability', 'sources', 'sample_or_import', 'indexing', 'complete')", name="ck_onboarding_state_step"),
+        CheckConstraint("data_choice IS NULL OR data_choice IN ('sample', 'personal_import')", name="ck_onboarding_state_data_choice"),
+        CheckConstraint("(current_step = 'complete') = (completed_at IS NOT NULL)", name="ck_onboarding_state_completion"),
+    )
+
+    owner_id: Mapped[int] = mapped_column(ForeignKey("owner.id", ondelete="CASCADE"), primary_key=True)
+    configuration_revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    current_step: Mapped[str] = mapped_column(String(32), nullable=False, server_default="ai_privacy")
+    data_choice: Mapped[str | None] = mapped_column(String(24))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
 class RetentionSettingsRecord(Base):
     """Persist revisioned trace retention while raw-source and document history remain retained."""
 
