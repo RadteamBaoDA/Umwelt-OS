@@ -1,3 +1,17 @@
+## P12 chat privacy integration — 2026-10-06
+
+Accepted privacy6c22b73 composed with develop3215939 into0827281; duplicate reader repaired7929be573ab6bd8e31ab3a48c0abb90520550ba0. Exact prescribed build exit0, four images, clean author tree and independent narrow composition re-review PASS. Integrating four production files with this checkpoint batch. Consent is Memory-owned, serialized before parent/run locks; remote attempts/events/Stop and final writes recheck current consent. Runtime races/provider/SSE timing remain deferred, not proven by build.
+
+Owner-export contracts integrated3215939. Full backup/per-domain export, deletion/recovery, onboarding/demo/mobile and capacity/release/R16 remain incomplete. Continue independent Luna work in separate worktrees; tests stay deferred. No push/deploy.
+## Chat privacy composition repair milestone — 2026-10-06
+
+Frozen narrow dedup7929be573ab6bd8e31ab3a48c0abb90520550ba0: prescribed composition build session5753 exit0, four images, tracked tree clean. Root verified commit/one helper/log; receipt preserved in author worktree. Independent narrow re-review dispatched; merge remains pending. Develop stays3215939. Onboarding progress API/state/migration and backup/export canonical domain contracts are in progress, not accepted. Continue remaining P12/R16 production; tests/runtime deferred.
+## Live integration milestone — 2026-10-06
+
+- Owner-export contracts integrated into develop at3215939695f3cf4c3bf91a31be39665a43179928; exact source composition06e7073 build and independent composition review PASS. Full export UI/caller and backup remain incomplete.
+- Chat privacy original6c22b73 build/scoped re-review PASS. Composition0827281 review REQUEST CHANGES P2: identical read_export_privacy duplicated by auto-merge. Luna narrow dedup/build repair assigned, build slot granted; no merge until repaired exact source passes build/re-review.
+- Parallel Luna backup/export Settings/routes/admission implementation and isolated onboarding/demo/mobile/a11y implementation continue; additive API/locales/migration seams coordinated.
+- Active remaining original P12 and R16; deferred tests/runtime still gated. No push/deploy or test-stage commands. Current evidence supersedes earlier stop snapshots.
 ## P12 owner-export contracts integration — 2026-10-06
 
 Accepted export2a98e2e composed with develop56bc8ba into06e7073. Exact composition build PASS exit0 (four images), independent composition source review PASS. Integrating eight owner contract files plus this checkpoint batch; all full-export caller/UI/restore/runtime work remains incomplete. Build receipt records process_password_restored=False; preserve that qualifier, do not claim successful restoration. No .env operations or runtime execution were performed.

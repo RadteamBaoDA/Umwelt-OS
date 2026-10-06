@@ -231,10 +231,14 @@ export function ChatSession({
         if (statusVal === 'cancelled') {
           if (isCurrentView()) {
             setIsStreaming(false);
+            setIsPending(false);
+            setStreamingText('');
+            setStreamingCitations([]);
             setActiveResponseId(null);
             setError(t('cancelled'));
           }
           void queryClient.invalidateQueries({ queryKey: chatKeys.conversation(responseConversationId) });
+          void queryClient.invalidateQueries({ queryKey: chatKeys.conversations() });
         } else if (statusVal === 'auth_expired' && isCurrentView()) {
           setIsStreaming(false);
           setActiveResponseId(null);
