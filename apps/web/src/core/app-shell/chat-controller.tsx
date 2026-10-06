@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useCallback, useContext, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import type { ChatContext } from '@/modules/chat/api';
 
 /** Immutable request identity retained until the server acknowledges a message revision. */
@@ -192,7 +192,7 @@ export function ChatControllerProvider({ children }: { children: ReactNode }) {
   // Day -> conversation bindings for this browser session; a conversation keeps the day it was created with.
   const dayConversations = useRef(new Map<string, string>());
   const contextRef = useRef<ChatContext | null>(null);
-  contextRef.current = context;
+  useLayoutEffect(() => { contextRef.current = context; });
 
   const bindDayConversation = useCallback((day: { date: string; timezone: string }, conversationId: string) => {
     dayConversations.current.set(dayKey(day.date, day.timezone), conversationId);

@@ -1,7 +1,7 @@
 'use client';
 
 import { useTranslations } from 'next-intl';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { DashboardPlacement, GadgetInstance } from './api';
 import { GadgetFrame } from './gadget-frame';
 import { projectReadableMobilePlacements, resolveGadgetRenderer } from './widget-registry';
@@ -184,7 +184,9 @@ export function DashboardGrid({
   const columnCount = Math.max(1, Math.min(20, Math.floor(columns)));
   const visibleGroupKey = [...visibleInstanceIds].sort().join('\u0000');
   const layoutContextRef = useRef({ breakpoint, requestedBreakpoint, columnCount, visibleGroupKey, interactionEnabled: isEditMode && !interactionPending });
-  layoutContextRef.current = { breakpoint, requestedBreakpoint, columnCount, visibleGroupKey, interactionEnabled: isEditMode && !interactionPending };
+  useLayoutEffect(() => {
+    layoutContextRef.current = { breakpoint, requestedBreakpoint, columnCount, visibleGroupKey, interactionEnabled: isEditMode && !interactionPending };
+  });
 
   /** Tracks the visible container so unit tracks follow its actual width. */
   useEffect(() => {
@@ -205,6 +207,7 @@ export function DashboardGrid({
   const [frameHeaderHeight, setFrameHeaderHeight] = useState(0);
 
   /** Cancels transient gestures on owner changes, pending viewport choice, or disabled editing. */
+  /* eslint-disable react-hooks/set-state-in-effect -- gesture is transient pointer state that must reset when its owner changes */
   useEffect(() => {
     if (!isEditMode || interactionPending || requestedBreakpoint !== breakpoint) {
       setGesture(null);
@@ -214,6 +217,9 @@ export function DashboardGrid({
       && current.breakpoint === breakpoint
       && current.visibleGroupKey === visibleGroupKey ? current : null);
   }, [breakpoint, columnCount, interactionPending, isEditMode, requestedBreakpoint, visibleGroupKey]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  const [announcement, setAnnouncement] = useState<string>('');
 
   // Map instances by id for quick lookup
   const instancesById = useMemo(() => {
@@ -490,8 +496,10 @@ export function DashboardGrid({
         e.preventDefault();
         const updated = placements.map((p) => (p.instance_id === instanceId ? next : p));
         const resolved = resolveCollisions(updated, instanceId, columnCount, getMinSize);
-        if (resolved) onLayoutChange?.(resolved);
-        else setInteractionNotice(t('layoutActionUnavailable'));
+        if (resolved) {
+          onLayoutChange?.(resolved);
+          setAnnouncement(t('positionLabel', { x: next.x + 1, y: next.y + 1, w: next.w, h: next.h }));
+        } else setInteractionNotice(t('layoutActionUnavailable'));
       } else if (e.key === 'Escape') {
         setSelectedInstanceId(null);
       }
@@ -534,6 +542,13 @@ export function DashboardGrid({
 
   const projectionPending = isMobileView && !isEditMode && !projectionMeasurementReady;
   const projectionUnavailable = isMobileView && !isEditMode && projectionMeasurementReady && !readableProjection;
+  const overlapCount = gesture
+    ? placements.filter((p) => p.instance_id !== gesture.instanceId && doPlacementsOverlap(gesture.currentPlacement, p)).length
+    : 0;
+  const gestureNotice = gesture ? (overlapCount > 0 ? t('overlapNotice', { count: overlapCount }) : t('dropFits')) : '';
+  const liveText = gesture
+    ? `${t('positionLabel', { x: gesture.currentPlacement.x + 1, y: gesture.currentPlacement.y + 1, w: gesture.currentPlacement.w, h: gesture.currentPlacement.h })}. ${gestureNotice}`
+    : announcement;
   const gridMinHeight = maxRow * cellSize + Math.max(0, maxRow - 1) * GRID_GAP_PX;
 
   return (
@@ -548,6 +563,7 @@ export function DashboardGrid({
         minHeight: `${gridMinHeight}px`,
       }}
     >
+      {isEditMode && <p role="status" aria-live="polite" className="sr-only">{liveText}</p>}
       {interactionNotice && (
         <p role="status" className="absolute inset-x-0 top-0 z-20 rounded-md bg-card/95 px-3 py-2 text-sm text-destructive">
           {interactionNotice}
@@ -604,7 +620,7 @@ export function DashboardGrid({
               zIndex: isGestureTarget ? 30 : 10,
               visibility: projectionPending ? 'hidden' : undefined,
             }}
-            className="relative flex flex-col min-h-0 min-w-0"
+            className={`relative flex flex-col min-h-0 min-w-0 rounded-xl ${isGestureTarget ? (overlapCount > 0 ? 'outline outline-2 outline-destructive' : 'outline outline-2 outline-primary') : ''}`}
           >
             <GadgetFrame
               instance={instance}
@@ -659,13 +675,14 @@ export function DashboardGrid({
 
             {/* Live tooltip showing integer coordinates during gesture */}
             {isGestureTarget && (
-              <div className="absolute -top-7 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded bg-foreground text-background text-[11px] font-mono shadow-md z-40 whitespace-nowrap pointer-events-none">
-                {t('positionLabel', {
+              <div className={`absolute -top-7 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded text-[11px] shadow-md z-40 max-w-xs pointer-events-none ${overlapCount > 0 ? 'bg-destructive text-destructive-foreground' : 'bg-foreground text-background'}`}>
+                <span className="font-mono">{t('positionLabel', {
                   x: placement.x + 1,
                   y: placement.y + 1,
                   w: placement.w,
                   h: placement.h,
-                })}
+                })}</span>
+                <span className="ml-2">{gestureNotice}</span>
               </div>
             )}
           </div>

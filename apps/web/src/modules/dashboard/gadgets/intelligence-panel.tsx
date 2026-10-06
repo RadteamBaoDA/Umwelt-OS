@@ -17,9 +17,11 @@ export function IntelligencePanel({ instance }: { instance: GadgetInstance }) {
   const regions = scope?.regions ?? [];
   const countries = scope?.cii_country_codes ?? [];
   const days = Math.max(1, Math.min(scope?.lookback_days ?? 30, 30));
-  const [visibleGroups, setVisibleGroups] = useState(20);
+  const [pageState, setPageState] = useState({ key: '', count: 20 });
   const scopeKey = `${instance.id}:${sourceIds.join(',')}:${regions.join(',')}:${days}`;
-  useEffect(() => { setVisibleGroups(20); }, [scopeKey]);
+  // The page size resets whenever the scope changes.
+  const visibleGroups = pageState.key === scopeKey ? pageState.count : 20;
+  const setVisibleGroups = (update: (count: number) => number) => setPageState({ key: scopeKey, count: update(visibleGroups) });
   const to = new Date();
   const from = new Date(to.getTime() - days * 86_400_000);
   const correlation = useQuery({

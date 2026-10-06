@@ -6,6 +6,9 @@ import { WorkspaceShell } from '@/core/app-shell/workspace-shell';
 import { ChatSession } from '@/modules/chat/chat-session';
 import { ChatHistory } from '@/modules/chat/chat-history';
 import { useChatController } from '@/core/app-shell/chat-controller';
+import { ChatSideRail } from '@/modules/chat/chat-side-rail';
+import { chatKeys, getConversation, type Citation } from '@/modules/chat/api';
+import { useQuery } from '@tanstack/react-query';
 
 /**
  * Inner Chat page content consuming ChatController from within the WorkspaceShell tree.
@@ -30,8 +33,24 @@ function ChatPageContent() {
     setMobileView('chat');
   }, [chatCtrl]);
 
+  // Same query key as ChatSession, so this reads the cached transcript without another request.
+  const { data: detail } = useQuery({
+    queryKey: chatKeys.conversation(chatCtrl.activeConversationId ?? ''),
+    queryFn: () => getConversation(chatCtrl.activeConversationId!),
+    enabled: Boolean(chatCtrl.activeConversationId),
+  });
+  const citations = React.useMemo(() => {
+    const seen = new Set<string>();
+    const unique: Citation[] = [];
+    for (const message of detail?.messages ?? []) for (const citation of message.citations ?? []) {
+      const key = `${citation.documentVersionId}:${citation.chunkId}`;
+      if (!seen.has(key)) { seen.add(key); unique.push(citation); }
+    }
+    return unique;
+  }, [detail?.messages]);
+
   return (
-    <div className="flex h-[calc(100vh-140px)] min-h-[500px] w-full rounded-2xl border border-border bg-surface shadow-xs overflow-hidden">
+    <div className="flex h-[calc(100dvh-140px)] min-h-[500px] w-full rounded-2xl border border-border bg-surface shadow-xs overflow-hidden max-md:h-[calc(100dvh-180px)]">
       {/* Sidebar history on desktop; toggleable on mobile */}
       <div
         className={`${
@@ -57,7 +76,7 @@ function ChatPageContent() {
           <button
             type="button"
             onClick={() => setMobileView('history')}
-            className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-border bg-surface text-foreground"
+            className="min-h-11 rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-semibold text-foreground"
           >
             ← {t('history')}
           </button>
@@ -74,6 +93,8 @@ function ChatPageContent() {
           />
         </div>
       </div>
+
+      <ChatSideRail citations={citations} context={chatCtrl.context} />
     </div>
   );
 }

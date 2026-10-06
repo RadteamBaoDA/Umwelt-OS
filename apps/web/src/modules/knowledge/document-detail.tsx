@@ -33,8 +33,10 @@ export function DocumentDetail({ id, citedVersion, citationVersionId, citationCh
     enabled: !visibleDeletionOperationId && Boolean(citationVersionId && citationChunkId),
   });
   const [selectedVersion, setSelectedVersion] = useState<number | null>(citedVersion);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs state to an external or prop change; reset-on-change is intentional here
   useEffect(() => { setSelectedVersion(citedVersion); }, [citedVersion]);
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs state to an external or prop change; reset-on-change is intentional here
     if (citationTarget.data) setSelectedVersion(citationTarget.data.version_number);
   }, [citationTarget.data]);
   useEffect(() => {
@@ -48,9 +50,11 @@ export function DocumentDetail({ id, citedVersion, citationVersionId, citationCh
   const [metadataError, setMetadataError] = useState('');
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs state to an external or prop change; reset-on-change is intentional here
     if (!visibleDeletionOperationId && document.data && title === null) { setTitle(document.data.title); setMetadata(JSON.stringify(document.data.metadata, null, 2)); }
   }, [document.data, title, visibleDeletionOperationId]);
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs state to an external or prop change; reset-on-change is intentional here
     if (!visibleDeletionOperationId && current.data && expectedVersion === null) { setContent(current.data.content); setExpectedVersion(current.data.version_number); }
   }, [current.data, expectedVersion, visibleDeletionOperationId]);
 

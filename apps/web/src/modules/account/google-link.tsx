@@ -1,7 +1,7 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -18,8 +18,7 @@ export function GoogleLink() {
   const { csrfToken } = useWorkspaceSession();
   const queryClient = useQueryClient();
   const [password, setPassword] = useState('');
-  const [providerError, setProviderError] = useState(false);
-  useEffect(() => setProviderError(new URLSearchParams(window.location.search).get('google') === 'error'), []);
+  const providerError = useSyncExternalStore(() => () => undefined, () => new URLSearchParams(window.location.search).get('google') === 'error', () => false);
   const status = useQuery({ queryKey: ['auth-google-status'], queryFn: () => apiRequest<GoogleStatus>('/api/v1/auth/google/status') });
   const link = useMutation({
     mutationFn: async () => {

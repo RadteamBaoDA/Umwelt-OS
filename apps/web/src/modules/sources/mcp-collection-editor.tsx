@@ -22,6 +22,7 @@ export function McpCollectionEditor({ sourceId, sourceStatus, onChanged, onDraft
   const [grants, setGrants] = useState<McpGrant[]>([]);
   const [generation, setGeneration] = useState(0);
   const [connectionId, setConnectionId] = useState('');
+  const visibleGrants = connectionId ? grants : [];
   const [grantIds, setGrantIds] = useState<string[]>([]);
   const [argumentsByGrant, setArgumentsByGrant] = useState<Record<string, string>>({});
   const [interval, setInterval] = useState<15 | 30 | 60 | 360 | 1440>(60);
@@ -51,7 +52,7 @@ export function McpCollectionEditor({ sourceId, sourceStatus, onChanged, onDraft
 
   useEffect(() => {
     let current = true;
-    if (!connectionId) { setGrants([]); return () => { current = false; }; }
+    if (!connectionId) return;
     void listMcpGrants(connectionId).then((result) => {
       const connection = connections.find((item) => item.id === connectionId);
       if (current) setGrants(result.items.filter((grant) => grant.purpose === 'collection' && grant.revoked_at === null
@@ -111,7 +112,7 @@ export function McpCollectionEditor({ sourceId, sourceStatus, onChanged, onDraft
     {loading ? <p className="muted">{t('loading')}</p> : connections.length === 0 ? <p className="error">{t('mcpNoConnection')}</p> : <>
       <div className="field"><Label htmlFor="mcp-collection-connection">{t('mcpConnection')}</Label><Select disabled={busy} value={connectionId} onValueChange={(value) => { setConnectionId(value); setGrants([]); setGrantIds([]); onDraftChange(true); }}><SelectTrigger id="mcp-collection-connection"><SelectValue /></SelectTrigger><SelectContent>{connections.map((item) => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}</SelectContent></Select></div>
       <fieldset className="space-y-2" disabled={busy}><legend>{t('mcpCollectionGrants')}</legend>
-        {grants.length === 0 ? <p className="muted">{t('mcpNoGrants')}</p> : grants.map((grant) => <div key={grant.id} className="space-y-2"><label className="field-inline"><Checkbox disabled={!grantIds.includes(grant.id) && grantIds.length >= 10} checked={grantIds.includes(grant.id)} onCheckedChange={(checked) => { setGrantIds((current) => checked ? [...new Set([...current, grant.id])] : current.filter((id) => id !== grant.id)); onDraftChange(true); }} /><span>{grant.capability_id} · {grant.risk}</span></label>{grantIds.includes(grant.id) && <div className="field"><Label htmlFor={`mcp-args-${grant.id}`}>{t('mcpArguments')}</Label><Input id={`mcp-args-${grant.id}`} value={argumentsByGrant[grant.id] ?? '{}'} onChange={(event) => { setArgumentsByGrant((current) => ({ ...current, [grant.id]: event.target.value })); onDraftChange(true); }} /></div>}</div>)}
+        {visibleGrants.length === 0 ? <p className="muted">{t('mcpNoGrants')}</p> : visibleGrants.map((grant) => <div key={grant.id} className="space-y-2"><label className="field-inline"><Checkbox disabled={!grantIds.includes(grant.id) && grantIds.length >= 10} checked={grantIds.includes(grant.id)} onCheckedChange={(checked) => { setGrantIds((current) => checked ? [...new Set([...current, grant.id])] : current.filter((id) => id !== grant.id)); onDraftChange(true); }} /><span>{grant.capability_id} · {grant.risk}</span></label>{grantIds.includes(grant.id) && <div className="field"><Label htmlFor={`mcp-args-${grant.id}`}>{t('mcpArguments')}</Label><Input id={`mcp-args-${grant.id}`} value={argumentsByGrant[grant.id] ?? '{}'} onChange={(event) => { setArgumentsByGrant((current) => ({ ...current, [grant.id]: event.target.value })); onDraftChange(true); }} /></div>}</div>)}
       </fieldset>
       <div className="field"><Label htmlFor="mcp-collection-schedule">{t('schedule')}</Label><Select disabled={busy} value={String(interval)} onValueChange={(value) => { setInterval(Number(value) as typeof interval); onDraftChange(true); }}><SelectTrigger id="mcp-collection-schedule"><SelectValue /></SelectTrigger><SelectContent>{intervals.map((minutes) => <SelectItem key={minutes} value={String(minutes)}>{t('everyMinutes', { minutes })}</SelectItem>)}</SelectContent></Select></div>
       <div className="field"><Label htmlFor="mcp-collection-timezone">{t('timezone')}</Label><Input disabled={busy} id="mcp-collection-timezone" value={timezone} onChange={(event) => { setTimezone(event.target.value); onDraftChange(true); }} maxLength={64} /></div>

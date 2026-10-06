@@ -21,10 +21,11 @@ type DocumentDeletionStageStatus =
 /** Shows the operation-only deletion receipt after its Document and content queries are gone. */
 export function DocumentDeletionReceiptPanel({ operationId }: { operationId: string }) {
   const t = useTranslations('shell');
-  const pollUntil = useRef(Date.now() + 30_000);
+  const pollUntil = useRef(0);
   const [automaticRefreshPaused, setAutomaticRefreshPaused] = useState(false);
   useEffect(() => {
     pollUntil.current = Date.now() + 30_000;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs state to an external or prop change; reset-on-change is intentional here
     setAutomaticRefreshPaused(false);
     const timer = window.setTimeout(() => setAutomaticRefreshPaused(true), 30_000);
     return () => window.clearTimeout(timer);

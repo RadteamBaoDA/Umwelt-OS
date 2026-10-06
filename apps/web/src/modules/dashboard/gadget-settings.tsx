@@ -102,6 +102,7 @@ export function GadgetSettings({
   const [newRuleNotify, setNewRuleNotify] = useState<boolean>(true);
 
   // Sync state when instance opens
+  /* eslint-disable react-hooks/set-state-in-effect -- form state is reset from the opened instance */
   useEffect(() => {
     if (instance) {
       setTitle(instance.title || '');
@@ -124,6 +125,7 @@ export function GadgetSettings({
       setSaveError(null);
     }
   }, [instance, open]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // Mutation saving both instance title and reusable definition configuration
   const saveMutation = useMutation({
@@ -439,8 +441,8 @@ export function GadgetSettings({
                           rule.severity === 'critical'
                             ? 'bg-destructive/15 text-destructive'
                             : rule.severity === 'warning'
-                            ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
-                            : 'bg-blue-500/15 text-blue-700 dark:text-blue-300'
+                            ? 'bg-background text-foreground border border-border'
+                            : 'bg-background text-muted-foreground border border-border'
                         }`}
                       >
                         {rule.severity}

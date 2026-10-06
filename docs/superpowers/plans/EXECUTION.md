@@ -1,5 +1,5 @@
 <!-- current-implementation-snapshot:start -->
-## Current implementation snapshot — 2026-10-06 18:50 — P12 PRODUCTION CODE COMPLETE (acceptance deferred)
+## Current implementation snapshot — 2026-10-06 21:55 — P12 CODE + P13 UI COMPLETE (test stage in progress)
 
 Controller Claude Opus 5.5; implementers Sonnet 5.5; reviewers Opus 5.5. SDD ledger: `.superpowers/sdd/2026-09-25-umwelt-os-phase-12-hardening-release-acceptance/progress.md`. Alembic head `p12_evidence_version_index`.
 
@@ -7,9 +7,11 @@ Controller Claude Opus 5.5; implementers Sonnet 5.5; reviewers Opus 5.5. SDD led
 | --- | --- |
 | Integrated before this run | P01–P11, R01–R16 production, P12 backup/recovery `5212def`, square Dashboard `a2a2cc2`, portable exports `bce670b`, Chat cleanup `f6da2e2`, receipt UI `4416843`, Source canonical cleanup `fe601bc`, mobile Dashboard `98365a1`, Memory cleanup `84c25df`, expiry `32a6ccc`, demo/seed/reset `655331b`, branding `44cf45a` |
 | Integrated this run | Agent Documents stage `2c06b07`; Notifications/Automations + saved-brief Documents stages `b4c52b1`; Source historical + Source-local Memory coverage gate `00ddd32`; final-review fixes (cache-eviction re-settle, arq keep_result=0 for outbox consumers, reconciler re-arm bound, evidence version index) + P12-T5/R16 release/OSS docs (this commit) |
+| P13 UI (Claude Design `28946`) | 24 artboards implemented on `codex/umwelt-p13-ui` (W0 shell/brand/settings nav, W1–W5 surfaces, split i18n `core/messages/*`, MCP + permissions settings routes, `safeHttpUrl` for untrusted hrefs); every wave Opus-reviewed; final UI review → one fix wave → security residual fixed `4b5841c`; squash-merged to develop (this commit); typecheck/lint (0 errors)/build + prescribed build exit 0. Backend-missing follow-ups (34) in `.superpowers/sdd/ui-design-28946/gap-analysis.md` |
 | Review/build evidence | Every task Opus-reviewed to ACCEPT (fix rounds recorded in ledger); final whole-change review FIX FIRST → one fix wave → ACCEPT; prescribed build exit 0 / four images on every accepted head (process-only placeholder env) |
 | GitNexus risk | detect_changes CRITICAL on b4c52b1 (28 files/58 flows) and 00ddd32 (14 files/61 flows): expected cross-module scope; behavior unverified until test stage |
-| Deferred acceptance | Test stage (author/run behavioral, integration, UI, recovery, security tests); live providers; restore into separate instance; 2-core/8GiB capacity; physical erasure; release acceptance `{"functional_acceptance":"pending","live_integrations":"pending","target_capacity":"pending","restore_verified":false}` |
+| Test stage (in progress) | `codex/umwelt-p13-tests`: B1a runtime NameError/import/route fixes + 24 tests, B1b ruff clean; B1c mypy and B2a full harness running; B2b acceptance integration tests pending |
+| Deferred acceptance | Test stage remainder (author/run behavioral, integration, UI, recovery, security tests); live providers; restore into separate instance; 2-core/8GiB capacity; physical erasure; release acceptance `{"functional_acceptance":"pending","live_integrations":"pending","target_capacity":"pending","restore_verified":false}` |
 | Deferred minors | Listed in SDD ledger (`minor (deferred)` lines) and final-review triage; none block merge per final review |
 <!-- current-implementation-snapshot:end -->
 ## Retained Timeline/Observations export integration — 2026-10-06

@@ -70,12 +70,15 @@ export function useChatScroll({
     pinFrameRef.current = requestAnimationFrame(tick);
   }, []);
 
+  // Resetting follow state when the conversation changes must happen before paint.
+  /* eslint-disable react-hooks/set-state-in-effect */
   React.useLayoutEffect(() => {
     loadedRef.current = false;
     followRef.current = true;
     lastScrollTopRef.current = 0;
     setIsAtBottom(true);
   }, [conversationId]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   React.useLayoutEffect(() => {
     if (messageCount === 0) {

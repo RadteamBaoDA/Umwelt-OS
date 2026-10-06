@@ -1,6 +1,7 @@
 'use client';
 
 import * as React from 'react';
+import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { AlertCircleIcon, BotIcon, CheckIcon, CopyIcon, Loader2Icon, PencilIcon, RefreshCwIcon, UserIcon } from 'lucide-react';
 import type { ChatMessage, Citation } from '@/modules/chat/api';
@@ -11,6 +12,27 @@ import { useChatScroll } from './use-chat-scroll';
 import { useCopyMessage } from './use-copy-message';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { formatDateTime } from '@/core/i18n';
+
+/** Compact numbered source links for the quick-chat drawer, where the full citation panel is not shown. */
+function CitationChips({ citations }: { citations: Citation[] }) {
+  const t = useTranslations('chat');
+  return (
+    <ol aria-label={t('sourceLinks')} className="mt-1 flex flex-wrap gap-1.5 border-t border-border pt-2 text-[11px]">
+      {citations.map((citation, index) => (
+        <li key={`${citation.chunkId}-${index}`}>
+          <Link
+            href={`/knowledge/documents/${citation.documentId}?${new URLSearchParams({ versionId: citation.documentVersionId, chunkId: citation.chunkId })}#cited-chunk`}
+            title={`${citation.title} (${t('viewCitation')})`}
+            className="inline-flex min-h-8 max-w-[14rem] items-center gap-1 rounded-md border border-border px-2 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <sup className="font-semibold text-foreground">{index + 1}</sup>
+            <span className="truncate">{citation.title}</span>
+          </Link>
+        </li>
+      ))}
+    </ol>
+  );
+}
 
 export interface ChatTranscriptProps {
   /** Currently selected conversation, used to reset the reading position between threads. */
@@ -88,7 +110,7 @@ export function ChatTranscript({
     >
       {messages.length === 0 && !streamingText && !isPending && (
         <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-muted-foreground my-auto">
-          <div className="size-12 rounded-full bg-accent/10 text-accent flex items-center justify-center mb-3">
+          <div className="size-12 rounded-full bg-primary/10 text-primary flex items-center justify-center mb-3">
             <BotIcon className="size-6" />
           </div>
           <h3 className="text-base font-semibold text-foreground mb-1">
@@ -128,7 +150,7 @@ export function ChatTranscript({
             <div
               className={`size-8 rounded-full flex items-center justify-center shrink-0 text-xs font-semibold ${
                 isUser
-                  ? 'bg-accent text-white dark:text-zinc-900'
+                  ? 'bg-primary text-primary-foreground'
                   : 'bg-surface border border-border text-foreground'
               }`}
             >
@@ -138,7 +160,7 @@ export function ChatTranscript({
             <div
               className={`flex flex-col gap-1 p-3.5 rounded-2xl shadow-xs text-sm ${
                 isUser
-                  ? 'bg-accent/10 border border-accent/20 text-foreground rounded-tr-xs'
+                  ? 'bg-primary/10 border border-primary/20 text-foreground rounded-tr-xs'
                   : 'bg-surface border border-border text-foreground rounded-tl-xs'
               }`}
             >
@@ -161,7 +183,7 @@ export function ChatTranscript({
                 {mode === 'full' && <button
                   type="button"
                   onClick={() => void copyMessage(msg.id, msg.content)}
-                  className="inline-flex min-h-8 items-center gap-1 rounded-md px-2 text-[11px] text-muted-foreground hover:bg-accent/10 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="inline-flex min-h-8 items-center gap-1 rounded-md px-2 text-[11px] text-muted-foreground hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   aria-label={t('copyMessage')}
                 >
                   {copiedMessageId === msg.id ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
@@ -197,6 +219,9 @@ export function ChatTranscript({
               {mode === 'full' && !isUser && msg.citations && msg.citations.length > 0 && (
                 <CitationPanel citations={msg.citations} variant="inline" />
               )}
+              {mode === 'drawer' && !isUser && msg.citations && msg.citations.length > 0 && (
+                <CitationChips citations={msg.citations} />
+              )}
             </div>
           </div>
         );
@@ -205,7 +230,7 @@ export function ChatTranscript({
       {/* Pending status indicator */}
       {isPending && !streamingText && (
         <div className="flex gap-3 max-w-[85%] mr-auto items-center text-xs text-muted-foreground p-3 rounded-xl bg-surface/50 border border-border">
-          <Loader2Icon className="size-4 animate-spin text-accent" />
+          <Loader2Icon className="size-4 animate-spin text-primary" />
           <span>{t('thinking')}</span>
         </div>
       )}
@@ -214,14 +239,14 @@ export function ChatTranscript({
       {(streamingText || isStreaming) && (
         <div className="flex gap-3 max-w-[90%] sm:max-w-[85%] mr-auto flex-row">
           <div className="size-8 rounded-full flex items-center justify-center shrink-0 bg-surface border border-border text-foreground text-xs font-semibold">
-            <BotIcon className="size-4 text-accent" />
+            <BotIcon className="size-4 text-primary" />
           </div>
 
           <div className="flex flex-col gap-1 p-3.5 rounded-2xl shadow-xs bg-surface border border-border text-foreground rounded-tl-xs">
             <div className="flex items-center gap-2 text-[11px] text-muted-foreground mb-0.5">
               <span className="font-semibold">{t('assistantFallback')}</span>
-              <span className="inline-flex items-center gap-1 text-[10px] text-accent">
-                <span className="size-1.5 rounded-full bg-accent animate-pulse" />
+              <span className="inline-flex items-center gap-1 text-[10px] text-primary">
+                <span className="size-1.5 rounded-full bg-primary animate-pulse" />
                 {t('streaming')}
               </span>
             </div>
@@ -231,13 +256,16 @@ export function ChatTranscript({
             {mode === 'full' && streamingCitations && streamingCitations.length > 0 && (
               <CitationPanel citations={streamingCitations} variant="inline" />
             )}
+            {mode === 'drawer' && streamingCitations && streamingCitations.length > 0 && (
+              <CitationChips citations={streamingCitations} />
+            )}
           </div>
         </div>
       )}
 
       {/* Error banner */}
       {error && (
-        <div className="flex items-center justify-between gap-2 p-3 rounded-lg border border-destructive/30 bg-destructive/10 text-destructive text-xs">
+        <div role="alert" className="flex items-center justify-between gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
           <div className="flex items-center gap-2">
             <AlertCircleIcon className="size-4 shrink-0" />
             <span>{error}</span>
@@ -246,7 +274,7 @@ export function ChatTranscript({
             <button
               type="button"
               onClick={onRetry}
-              className="px-2 py-1 rounded bg-destructive text-white hover:opacity-90 font-medium text-[11px]"
+              className="min-h-8 rounded bg-destructive px-2 py-1 text-[11px] font-medium text-destructive-foreground hover:opacity-90"
             >
               {t('retry')}
             </button>

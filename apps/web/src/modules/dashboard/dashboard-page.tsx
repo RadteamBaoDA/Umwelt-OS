@@ -13,8 +13,9 @@ import {
   Sparkles,
   Trash2,
 } from 'lucide-react';
+import Link from 'next/link';
 import { useTranslations } from 'next-intl';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, useLayoutEffect } from 'react';
 import {
   AlertDialog,
   AlertDialogContent,
@@ -42,6 +43,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { useChatController } from '@/core/app-shell/chat-controller';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { useGuardedNavigation, type GuardedNavigationIntent } from '@/core/guarded-navigation';
 import {
@@ -68,6 +70,9 @@ import { getGadgetReadingBodyFloor } from './widget-registry';
 import { LayoutEditor } from './layout-editor';
 import { PresetPicker } from './preset-picker';
 import { GadgetSettings } from './gadget-settings';
+import { useDisplayPreferences } from '@/core/query-provider';
+import { formatDateTime } from '@/core/i18n';
+import { listSources, sourceKeys } from '@/modules/sources/api';
 import { NotificationBell } from '@/modules/notifications/notification-bell';
 
 /**
@@ -102,6 +107,18 @@ function findFreeCoordinates(
 }
 
 const MAX_LAYOUT_ROWS = 100_000;
+
+const MOBILE_QUERY = '(max-width: 768px)';
+/** Subscribes to the phone-width media query. */
+function subscribeMobileMedia(onChange: () => void): () => void {
+  const media = window.matchMedia(MOBILE_QUERY);
+  media.addEventListener('change', onChange);
+  return () => media.removeEventListener('change', onChange);
+}
+/** Reads the current phone-width match. */
+function getMobileMedia(): boolean { return window.matchMedia(MOBILE_QUERY).matches; }
+/** Server render assumes desktop. */
+function getServerMobileMedia(): boolean { return false; }
 
 type MobileProjection = { placements: DashboardPlacement[]; unavailable: boolean };
 
@@ -269,12 +286,13 @@ export function DashboardPage() {
   const session = useWorkspaceSession();
   const queryClient = useQueryClient();
   const guardedNavigation = useGuardedNavigation();
+  const { openDrawer } = useChatController();
+  const display = useDisplayPreferences();
 
   // Active dashboard selection
-  const [selectedDashboardId, setSelectedDashboardId] = useState<string | null>(null);
+  const [chosenDashboardId, setSelectedDashboardId] = useState<string | null>(null);
   const [isEditMode, setIsEditMode] = useState<boolean>(false);
   const [activeGroupId, setActiveGroupId] = useState<string>('all');
-  const [isMobile, setIsMobile] = useState<boolean>(false);
 
   // Dialogs state
   const [presetPickerOpen, setPresetPickerOpen] = useState<boolean>(false);
@@ -315,13 +333,7 @@ export function DashboardPage() {
   const [readingQueues, setReadingQueues] = useState<Record<string, number>>({});
 
   // Responsive breakpoint tracking
-  useEffect(() => {
-    const media = window.matchMedia('(max-width: 768px)');
-    setIsMobile(media.matches);
-    const listener = (e: MediaQueryListEvent) => setIsMobile(e.matches);
-    media.addEventListener('change', listener);
-    return () => media.removeEventListener('change', listener);
-  }, []);
+  const isMobile = useSyncExternalStore(subscribeMobileMedia, getMobileMedia, getServerMobileMedia);
 
   // Fetch dashboards list
   const dashboardsQuery = useQuery({
@@ -331,12 +343,8 @@ export function DashboardPage() {
 
   const dashboards = dashboardsQuery.data ?? [];
 
-  // Automatically select first dashboard if none selected
-  useEffect(() => {
-    if (!selectedDashboardId && dashboards.length > 0) {
-      setSelectedDashboardId(dashboards[0].id);
-    }
-  }, [dashboards, selectedDashboardId]);
+  // Fall back to the first dashboard until the owner picks one
+  const selectedDashboardId = chosenDashboardId ?? dashboards[0]?.id ?? null;
 
   // Fetch active dashboard details
   const activeDashboardQuery = useQuery({
@@ -346,6 +354,17 @@ export function DashboardPage() {
   });
 
   const activeDashboard = activeDashboardQuery.data ?? null;
+
+  // Stale sources: sources this dashboard reads whose latest error is newer than the latest success.
+  const sourcesQuery = useQuery({
+    queryKey: [...sourceKeys.list, 'dashboard-stale'],
+    queryFn: () => listSources(),
+    enabled: Boolean(activeDashboard),
+  });
+  const dashboardSourceIds = new Set(activeDashboard?.instances.flatMap((i) => i.definition.source_ids) ?? []);
+  const staleSources = (sourcesQuery.data?.items ?? []).filter((s) =>
+    dashboardSourceIds.has(s.id) && s.status === 'active' && s.last_error_at
+    && (!s.last_success_at || Date.parse(s.last_error_at) > Date.parse(s.last_success_at)));
   const requestedBreakpoint = isMobile ? 'mobile' : 'desktop';
   const currentBreakpoint = isDirty && editOrigin?.dashboardId === selectedDashboardId
     ? editOrigin.breakpoint : requestedBreakpoint;
@@ -357,14 +376,16 @@ export function DashboardPage() {
     columns: layoutColumns,
     baseRevision: activeDashboard?.revision ?? null,
   });
-  layoutIdentityRef.current = {
-    dashboardId: selectedDashboardId,
-    breakpoint: currentBreakpoint,
-    columns: layoutColumns,
-    baseRevision: activeDashboard?.revision ?? null,
-  };
+  useLayoutEffect(() => {
+    layoutIdentityRef.current = {
+      dashboardId: selectedDashboardId,
+      breakpoint: currentBreakpoint,
+      columns: layoutColumns,
+      baseRevision: activeDashboard?.revision ?? null,
+    };
+  });
   const liveLayoutRef = useRef({ activeDashboard, draftPlacements });
-  liveLayoutRef.current = { activeDashboard, draftPlacements };
+  useLayoutEffect(() => { liveLayoutRef.current = { activeDashboard, draftPlacements }; });
   const mobileProjection = useMemo(
     () => activeDashboard
       ? projectMobilePlacements(
@@ -405,10 +426,13 @@ export function DashboardPage() {
       && editOrigin.columns === layoutColumns
       && sameLayout(editOrigin.savedSnapshot, savedPlacements);
     if (originMatches) return;
+    // Re-baselines the draft when its owner or saved layout changes; derived state cannot hold undo history.
+    /* eslint-disable react-hooks/set-state-in-effect */
     setDraftPlacements(savedPlacements);
     setHistory([savedPlacements.map((placement) => ({ ...placement }))]);
     setHistoryIndex(0);
     if (editOrigin) setEditOrigin(null);
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, [editOrigin, isDirty, layoutColumns, requestedBreakpoint, savedPlacements, selectedDashboardId]);
 
   // Register GuardedNavigation leave guard for dirty layout edits
@@ -951,6 +975,31 @@ export function DashboardPage() {
 
   return (
     <section className="flex flex-col w-full min-h-[calc(100vh-140px)] gap-4">
+      {/* Page header: dashboard name, saved layout revision and primary actions */}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="truncate text-2xl font-bold text-foreground">{activeDashboard?.name ?? t('title')}</h1>
+          <p className="text-sm text-muted-foreground">
+            {t('pageSubtitle')}
+            {activeDashboard ? <> {'·'} {t('layoutRevision', { revision: activeDashboard.revision })}</> : null}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" variant="outline" className="min-h-11" onClick={() => openDrawer({ context: { kind: 'general' } })}>
+            <Sparkles className="w-4 h-4" aria-hidden="true" />
+            <span>{t('askAi')}</span>
+          </Button>
+          <Button
+            type="button"
+            className="min-h-11 font-semibold"
+            disabled={layoutOperationPending || (!canEditLayout && !isEditMode)}
+            onClick={() => { if (isEditMode) requestExitEdit(); else setIsEditMode(true); }}
+          >
+            {isEditMode ? <Eye className="w-4 h-4" aria-hidden="true" /> : <Edit3 className="w-4 h-4" aria-hidden="true" />}
+            <span>{isEditMode ? t('finishEditing') : t('toggleEdit')}</span>
+          </Button>
+        </div>
+      </div>
       {/* Dashboard Top Header Bar */}
       <div className="flex flex-wrap items-center justify-between gap-4 pb-2 border-b border-border">
         {/* Left: Switcher, Active Title, Group Tabs */}
@@ -961,10 +1010,10 @@ export function DashboardPage() {
               <button
                 type="button"
                 disabled={layoutOperationPending}
-                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-border bg-card text-foreground font-bold text-base hover:bg-primary/10 transition-colors"
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-border bg-card text-foreground font-semibold text-sm min-h-11 hover:bg-primary/10 transition-colors"
               >
                 <Layout className="w-4 h-4 text-primary" />
-                <span>{activeDashboard?.name ?? t('title')}</span>
+                <span className="text-sm">{t('switchDashboard')}</span>
                 <ChevronDown className="w-4 h-4 text-muted-foreground ml-1" />
               </button>
             </DropdownMenuTrigger>
@@ -1067,34 +1116,6 @@ export function DashboardPage() {
             <Sparkles className="w-3.5 h-3.5 text-primary" />
             <span>{t('presets')}</span>
           </Button>
-
-          {/* View / Edit Mode Toggle Button */}
-          <Button
-            type="button"
-            disabled={layoutOperationPending || (!canEditLayout && !isEditMode)}
-            onClick={() => {
-              if (isEditMode) {
-                requestExitEdit();
-              } else {
-                setIsEditMode(true);
-              }
-            }}
-            className={`text-xs h-8 px-3 gap-1.5 font-semibold ${
-              isEditMode ? 'bg-primary text-primary-foreground' : 'secondary'
-            }`}
-          >
-            {isEditMode ? (
-              <>
-                <Eye className="w-3.5 h-3.5" />
-                <span>{t('finishEditing')}</span>
-              </>
-            ) : (
-              <>
-                <Edit3 className="w-3.5 h-3.5" />
-                <span>{t('toggleEdit')}</span>
-              </>
-            )}
-          </Button>
         </div>
       </div>
 
@@ -1122,6 +1143,9 @@ export function DashboardPage() {
       {/* Layout Editor Toolbar (visible in Edit Mode) */}
       {editMode && (
         <LayoutEditor
+          dashboardName={activeDashboard?.name ?? ''}
+          editCount={isDirty ? Math.max(1, historyIndex) : 0}
+          baseRevision={editOrigin?.baseRevision ?? activeDashboard?.revision}
           isDirty={isDirty}
           isSaving={layoutOperationPending}
           canUndo={historyIndex > 0}
@@ -1178,28 +1202,25 @@ export function DashboardPage() {
         </div>
       ) : visibleInstances.length === 0 ? (
         <div className="flex-1 flex flex-col items-center justify-center p-12 text-center border border-dashed border-border rounded-2xl bg-card">
-          <Layout className="w-10 h-10 text-muted-foreground/50 mb-2" />
-          <h2 className="text-base font-bold text-foreground mb-1">{t('emptyDashboard')}</h2>
-          <p className="text-xs text-muted-foreground max-w-sm mb-4">{t('emptyDashboardDesc')}</p>
-          <div className="flex gap-2">
+          <Layout className="w-10 h-10 text-muted-foreground mb-2" aria-hidden="true" />
+          <h2 className="text-lg font-bold text-foreground mb-1">{t('emptyTitle')}</h2>
+          <p className="text-sm text-muted-foreground max-w-md mb-4">{t('emptyDesc')}</p>
+          <div className="flex flex-wrap justify-center gap-2">
             <Button
               type="button"
-              className="text-xs"
+              variant="outline"
+              className="min-h-11"
               disabled={!canEditLayout}
               onClick={() => {
                 setIsEditMode(true);
               }}
             >
-              <Plus className="w-3.5 h-3.5 mr-1" />
-              {t('addGadget')}
+              <Plus className="w-4 h-4" aria-hidden="true" />
+              {t('startEmpty')}
             </Button>
-            <Button
-              type="button"
-              className="secondary text-xs"
-              onClick={() => setPresetPickerOpen(true)}
-            >
-              <Sparkles className="w-3.5 h-3.5 mr-1" />
-              {t('presets')}
+            <Button type="button" className="min-h-11" onClick={() => setPresetPickerOpen(true)}>
+              <Sparkles className="w-4 h-4" aria-hidden="true" />
+              {t('choosePreset')}
             </Button>
           </div>
         </div>
@@ -1225,6 +1246,37 @@ export function DashboardPage() {
           readingQueues={readingQueues}
           onApplyReadingQueue={handleApplyReadingQueue}
         />
+      )}
+
+      {activeDashboard && staleSources.length > 0 && (
+        <section aria-label={t('staleSourcesTitle')} className="space-y-2 rounded-md border border-border bg-card p-3 text-sm">
+          <h2 className="text-sm font-semibold">{t('staleSourcesTitle')}</h2>
+          <ul className="space-y-2">
+            {staleSources.map((s) => (
+              <li key={s.id} className="space-y-0.5">
+                <p>{t('staleSourceLine', { name: s.name, code: s.last_error_code ?? s.collection_error_code ?? s.processing_error_code ?? '—' })}</p>
+                <p className="text-xs text-muted-foreground">
+                  {t('staleSourceTimes', {
+                    success: s.last_success_at ? formatDateTime(s.last_success_at, display.locale, display.timezone) : t('staleSourceNever'),
+                    error: formatDateTime(s.last_error_at!, display.locale, display.timezone),
+                  })}
+                </p>
+              </li>
+            ))}
+          </ul>
+          <Link href="/settings/sources" className="inline-flex min-h-11 items-center text-xs font-semibold text-primary underline underline-offset-4">
+            {t('openSourceStatus')}
+          </Link>
+        </section>
+      )}
+
+      {activeDashboard && (
+        <p className="flex flex-wrap items-center gap-x-3 text-xs text-muted-foreground">
+          <span>{t('timesShownIn', { timezone: display.timezone })}</span>
+          <Link href="/settings/sources" className="inline-flex min-h-11 items-center text-primary underline underline-offset-4">
+            {t('openSourceStatus')}
+          </Link>
+        </p>
       )}
 
       {/* Preset Picker Modal */}

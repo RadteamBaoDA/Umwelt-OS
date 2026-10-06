@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertCircle, CheckCircle2, ChevronRight, Eye, LayoutTemplate, Sparkles, X } from 'lucide-react';
+import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { useCallback, useState } from 'react';
 import { Button } from '@/components/ui/button';
@@ -56,7 +57,6 @@ export function PresetPicker({
   onOpenChange,
   currentDashboardId,
   currentDashboardRevision,
-  currentDashboardName,
   onPresetApplied,
 }: PresetPickerProps) {
   const t = useTranslations('dashboard');
@@ -268,9 +268,35 @@ export function PresetPicker({
                       </div>
                     </div>
 
+                    {/* Per-gadget readiness: warnings come from the preview; nothing is connected on the owner's behalf */}
+                    <div className="space-y-1.5">
+                      <p className="text-xs font-semibold text-foreground">
+                        {t('slotsReadiness', {
+                          ready: previewMutation.data.slots.filter((slot) => slot.warnings.length === 0).length,
+                          setup: previewMutation.data.slots.filter((slot) => slot.warnings.length > 0).length,
+                        })}
+                      </p>
+                      <ul className="divide-y divide-border rounded-md border border-border">
+                        {previewMutation.data.slots.map((slot) => (
+                          <li key={slot.slot_id} className="flex items-center justify-between gap-2 px-2.5 py-1.5 text-xs">
+                            <span className="min-w-0 truncate font-mono">{slot.renderer}</span>
+                            {slot.warnings.length === 0 ? (
+                              <span className="shrink-0 text-muted-foreground">{t('slotReady')}</span>
+                            ) : (
+                              <span className="flex shrink-0 items-center gap-2">
+                                <span className="font-semibold text-destructive">{t('slotNeedsSetup')}</span>
+                                <Link href="/settings/sources" className="inline-flex min-h-11 items-center text-primary underline underline-offset-4">{t('slotConfigure')}</Link>
+                              </span>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                      <p className="text-[11px] text-muted-foreground">{t('presetsNoConnect')}</p>
+                    </div>
+
                     {/* Missing access / capability warnings banner */}
                     {allWarnings.length > 0 && (
-                      <div className="p-3 rounded-md bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-300 text-xs space-y-1.5">
+                      <div className="p-3 rounded-md bg-muted/30 border border-border text-foreground text-xs space-y-1.5">
                         <div className="font-semibold flex items-center gap-1.5">
                           <AlertCircle className="w-4 h-4 shrink-0" />
                           <span>{t('missingAccessWarnings')} ({allWarnings.length})</span>

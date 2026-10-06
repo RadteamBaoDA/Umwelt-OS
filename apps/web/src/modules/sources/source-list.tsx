@@ -2,30 +2,29 @@
 
 import { useInfiniteQuery, useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { AppLocaleId, normalizeFormattingLocale } from '@/core/i18n';
 import { useGuardedNavigation } from '@/core/guarded-navigation';
 import {
-  archiveSource,
   connectorKeys,
   ConnectorConfiguration,
-  deactivateConnector,
   getConnectorActivation,
   getGitHubWebhookStatus,
   getMonotonicConnectorConfiguration,
   getOperation,
   listSources,
-  purgeSource,
   Source,
   sourceKeys,
   triggerCollection,
-  updateSourceStatus,
 } from './api';
 import { ConnectorEditor } from './connector-editor';
+import { DisconnectDialog } from './disconnect-dialog';
+import { useSourceActions } from './use-source-actions';
 import { SourceForm } from './source-form';
+import { matchesFilter, SourceFilter, SourceRowState, sourceRowState, SourcesTable } from './source-table';
 import { SyncHistory } from './sync-history';
 
 /** Formats an optional ISO timestamp with the supplied application locale and time zone, returning the supplied fallback when absent. */
@@ -33,11 +32,6 @@ function formatDate(value: string | null, locale: AppLocaleId, timezone: string,
   return value ? new Intl.DateTimeFormat(normalizeFormattingLocale(locale), {
     dateStyle: 'medium', timeStyle: 'short', timeZone: timezone,
   }).format(new Date(value)) : fallback;
-}
-
-/** Maps a source or run status to the matching translation message key. */
-function statusKey(status: string): 'statusActive' | 'statusPaused' | 'statusArchived' {
-  return status === 'paused' ? 'statusPaused' : status === 'archived' ? 'statusArchived' : 'statusActive';
 }
 
 /** Resolves registered provider IDs to translated names while preserving generic source labels. */
@@ -61,18 +55,21 @@ function scheduleLabel(minutes: number, t: ReturnType<typeof useTranslations<'so
 }
 
 /** Shows allowlisted owner cleanup progress, polling for at most 30 seconds with abortable GETs and manual refresh afterward. */
-function PurgeProgress({ operationId }: { operationId: string }) {
+function PurgeProgress({ operationId, onSucceeded }: { operationId: string; onSucceeded: () => void }) {
   const t = useTranslations('sources');
-  const pollingStartedAt = useRef(Date.now());
+  const pollingStartedAt = useRef<number | null>(null);
   const operation = useQuery({
     queryKey: ['operation', operationId],
     queryFn: ({ signal }) => {
+      pollingStartedAt.current ??= Date.now();
       const controller = new AbortController();
       const timeoutId = window.setTimeout(() => controller.abort(), 10_000);
       const cancelQuery = () => controller.abort(signal.reason);
       if (signal.aborted) cancelQuery();
       else signal.addEventListener('abort', cancelQuery, { once: true });
-      return getOperation(operationId, controller.signal).finally(() => {
+      return getOperation(operationId, controller.signal).then((result) => {
+        return result;
+      }).finally(() => {
         window.clearTimeout(timeoutId);
         signal.removeEventListener('abort', cancelQuery);
       });
@@ -81,12 +78,14 @@ function PurgeProgress({ operationId }: { operationId: string }) {
       const current = query.state.data;
       const terminal = current?.status === 'succeeded' || current?.status === 'failed'
         || current?.documents_status === 'failed' || current?.documents_status === 'unavailable';
-      return terminal || Date.now() - pollingStartedAt.current >= 30_000 ? false : 1500;
+      return terminal || Date.now() - (pollingStartedAt.current ?? Date.now()) >= 30_000 ? false : 1500;
     },
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
     retry: false,
   });
+  const succeeded = operation.data?.status === 'succeeded';
+  useEffect(() => { if (succeeded) onSucceeded(); }, [succeeded, onSucceeded]);
   const refreshButton = <Button type="button" className="secondary" disabled={operation.isFetching} onClick={() => void operation.refetch()}>
     {operation.isFetching ? t('cleanupRefreshingProgress') : t('cleanupRefreshProgress')}
   </Button>;
@@ -104,7 +103,7 @@ function PurgeProgress({ operationId }: { operationId: string }) {
   ]);
   const pendingOwners = [...new Set(operation.data.pending_owner_codes.map((code) => ownerLabels.get(code) ?? t('cleanupOwnerOther')))].slice(0, 9);
   return <div>
-    <p role="status">{operation.data.status}{operation.data.error_code ? ` · ${operation.data.error_code}` : ''}</p>
+    <p role="status">{succeeded ? t('cleanupComplete') : operation.data.status}{operation.data.error_code ? ` · ${operation.data.error_code}` : ''}</p>
     {operation.data.memory_status === 'failed' && (operation.data.memory_error_code === 'legacy_provenance_unresolved' || operation.data.memory_error_code === 'evidence_identity_unavailable')
       && <p className="error" role="alert">{t('cleanupMemoryUnavailable')}</p>}
     {pendingOwners.length > 0 && <p className="muted">{t('cleanupPendingOwnerStages', { owners: pendingOwners.join(', ') })}</p>}
@@ -117,12 +116,24 @@ function SourceEntry({
   source,
   schedule,
   timezone,
+  operationId,
+  onPurgeStarted,
+  onPurgeFinished,
+  purged,
+  editingId,
   onEdit,
   onChanged,
 }: {
   source: Source;
   schedule: string;
   timezone: string | null;
+  operationId: string;
+  onPurgeStarted: (operationId: string) => void;
+  onPurgeFinished: () => void;
+  /** Cleanup finished; the row must not offer Disconnect & delete again. */
+  purged: boolean;
+  /** Source open in the editor; its Pause/Disconnect live in the editor header only. */
+  editingId: string | null;
   onEdit: (source: Source) => void;
   onChanged: () => void;
 }) {
@@ -131,7 +142,6 @@ function SourceEntry({
   const { csrfToken } = useWorkspaceSession();
   const queryClient = useQueryClient();
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [operationId, setOperationId] = useState('');
   const [collectResult, setCollectResult] = useState<{ status: string; hasRun: boolean } | null>(null);
   const connector = ['rss', 'web', 'api'].includes(source.type);
   const activation = useQuery({
@@ -147,79 +157,49 @@ function SourceEntry({
       void queryClient.invalidateQueries({ queryKey: sourceKeys.detail(source.id) });
     },
   });
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(false);
+  const { busy, error, toggleStatus, disconnect } = useSourceActions({ source, activation: activation.data, onResumed: onEdit, onChanged, onPurgeStarted });
 
-  /** Changes the source between active and paused states and refreshes the displayed source data. */
-  async function toggleStatus() {
-    setBusy(true);
-    setError(false);
-    try {
-      if (source.status === 'paused') {
-        const resumed = await updateSourceStatus(source.id, 'active', csrfToken);
-        await queryClient.invalidateQueries({ queryKey: sourceKeys.all });
-        onEdit(resumed);
-      } else if (connector && activation.data && activation.data.desired_revision > 0) {
-        await deactivateConnector(source.id, csrfToken);
-        await queryClient.invalidateQueries({ queryKey: connectorKeys.activation(source.id) });
-        await queryClient.invalidateQueries({ queryKey: sourceKeys.all });
-        onChanged();
-      } else {
-        await updateSourceStatus(source.id, 'paused', csrfToken);
-        await queryClient.invalidateQueries({ queryKey: sourceKeys.all });
-        onChanged();
-      }
-    } catch {
-      setError(true);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  /** Archives the source and optionally starts its data purge, preserving the user-selected deletion behavior. */
-  async function disconnect(deleteData: boolean) {
-    if (!window.confirm(t(deleteData ? 'confirmDelete' : 'confirmKeep'))) return;
-    setBusy(true);
-    setError(false);
-    try {
-      if (deleteData) {
-        const operation = await purgeSource(source.id, csrfToken);
-        setOperationId(operation.operation_id);
-      } else {
-        await archiveSource(source.id, csrfToken);
-      }
-      await queryClient.invalidateQueries({ queryKey: sourceKeys.all });
-      await queryClient.invalidateQueries({ queryKey: connectorKeys.activation(source.id) });
-      onChanged();
-    } catch {
-      setError(true);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return <li className="record-row source-record">
-    <div className="record-content">
-      <div className="source-record-heading"><div><strong>{source.name}</strong><p className="muted">{providerLabel(source.provider, t) ?? source.type} · {t(statusKey(source.status))}</p></div>
-        {connector && <p className="source-activation-label">{t('activationState')}: {activation.isPending ? t('stateUnknown') : activation.isError ? t('stateUnknown') : t(({ queued: 'stateQueued', provisioning: 'stateProvisioning', active: 'active', saved_not_active: 'stateSavedNotActive', reconciliation_required: 'stateReconciliationRequired', disabled: 'stateDisabled' } as Record<string, string>)[activation.data.state] ?? 'stateUnknown')}{activation.data?.error_code ? ` · ${activation.data.error_code}` : ''}</p>}
-      </div>
-      {connector && <p className="muted">{t('schedule')}: {schedule}{timezone ? ` · ${timezone}` : ''}</p>}
-      <div className="source-timestamps"><p>{t('collectedAt')}: {formatDate(source.collected_at, display.locale, display.timezone, t('never'))}</p><p>{t('indexedAt')}: {formatDate(source.indexed_at, display.locale, display.timezone, t('never'))}</p></div>
-      <p className="muted">{t('collectionError')}: {source.collection_error_code ?? t('noError')} · {t('processingError')}: {source.processing_error_code ?? t('noError')}</p>
-      <div className="form-actions source-actions">
-        {connector && source.status !== 'archived' && <Button className="secondary" onClick={() => onEdit(source)}>{t('configure')}</Button>}
-        {connector && source.status === 'active' && activation.data?.state === 'active' && <Button className="secondary" disabled={collect.isPending || busy} onClick={() => collect.mutate()}>{collect.isPending ? t('collecting') : t('collectNow')}</Button>}
-        {source.status !== 'archived' && <Button className="secondary" disabled={busy} onClick={toggleStatus}>{busy ? t(source.status === 'paused' ? 'resuming' : 'pausing') : t(source.status === 'paused' ? 'resume' : 'pause')}</Button>}
-        {source.status !== 'archived' && <Button className="secondary" disabled={busy} onClick={() => disconnect(false)}>{t('disconnectKeep')}</Button>}
-        <Button className="secondary" disabled={busy} onClick={() => disconnect(true)}>{t('disconnectDelete')}</Button>
-        {connector && <Button className="secondary" aria-expanded={historyOpen} onClick={() => setHistoryOpen((open) => !open)}>{t(historyOpen ? 'hideHistory' : 'showHistory')}</Button>}
-      </div>
+  const editedHere = editingId === source.id;
+  const rowState = sourceRowState(source, activation.data);
+  const chipKey: Record<SourceRowState, 'statusActive' | 'statusPaused' | 'statusArchived' | 'stateSavedNotActive' | 'stateError'> = {
+    active: 'statusActive', paused: 'statusPaused', archived: 'statusArchived', savedNotActive: 'stateSavedNotActive', error: 'stateError',
+  };
+  const hasDetail = Boolean(collectResult || operationId || (historyOpen && connector) || error || collect.error || activation.isError);
+  const cell = 'px-3 py-3 align-top text-sm max-[720px]:block max-[720px]:px-0 max-[720px]:py-1';
+  const mobileLabel = (key: 'colSchedule' | 'colCollected' | 'colIndexed') => <span className="muted mr-1 min-[721px]:hidden">{t(key)}:</span>;
+  return <>
+    <tr className="border-b border-border max-[720px]:mb-3 max-[720px]:block max-[720px]:rounded-lg max-[720px]:border max-[720px]:p-3">
+      <th scope="row" className={`${cell} font-normal`}>
+        <strong>{source.name}</strong>
+        <p className="muted">{providerLabel(source.provider, t) ?? source.type}</p>
+        {(source.collection_error_code || source.processing_error_code) && <p className="error">{t('collectionError')}: {source.collection_error_code ?? t('noError')} · {t('processingError')}: {source.processing_error_code ?? t('noError')}</p>}
+      </th>
+      <td className={cell}>
+        <span className="badge">{t(chipKey[rowState])}</span>
+        {connector && activation.data?.error_code && <p className="muted">{activation.data.error_code}</p>}
+        {connector && activation.data && <p className="muted">{t('activationState')}: {t(({ queued: 'stateQueued', provisioning: 'stateProvisioning', active: 'active', saved_not_active: 'stateSavedNotActive', reconciliation_required: 'stateReconciliationRequired', disabled: 'stateDisabled' } as Record<string, string>)[activation.data.state] ?? 'stateUnknown')}</p>}
+      </td>
+      <td className={cell}>{mobileLabel('colSchedule')}{connector ? `${schedule}${timezone ? ` · ${timezone}` : ''}` : '—'}</td>
+      <td className={cell}>{mobileLabel('colCollected')}{formatDate(source.collected_at, display.locale, display.timezone, t('never'))}</td>
+      <td className={cell}>{mobileLabel('colIndexed')}{formatDate(source.indexed_at, display.locale, display.timezone, t('never'))}</td>
+      <td className={cell}>
+        <div className="flex flex-wrap gap-2" role="group" aria-label={t('sourceActions', { name: source.name })}>
+          {connector && source.status !== 'archived' && <Button className="secondary" onClick={() => onEdit(source)}>{t('configure')}</Button>}
+          {connector && source.status === 'active' && activation.data?.state === 'active' && <Button className="secondary" disabled={collect.isPending || busy} onClick={() => collect.mutate()}>{collect.isPending ? t('collecting') : t('collectNow')}</Button>}
+          {!editedHere && source.status !== 'archived' && <Button className="secondary" disabled={busy} onClick={toggleStatus}>{busy ? t(source.status === 'paused' ? 'resuming' : 'pausing') : t(source.status === 'paused' ? 'resume' : 'pause')}</Button>}
+          {!editedHere && !purged && <DisconnectDialog name={source.name} archived={source.status === 'archived'} disabled={busy} onConfirm={(deleteData) => void disconnect(deleteData)}
+            trigger={<Button className="secondary" disabled={busy}>{busy ? t('disconnecting') : t(source.status === 'archived' ? 'disconnectDelete' : 'disconnectAction')}</Button>} />}
+          {connector && <Button className="secondary" aria-expanded={historyOpen} onClick={() => setHistoryOpen((open) => !open)}>{t(historyOpen ? 'hideHistory' : 'showHistory')}</Button>}
+        </div>
+      </td>
+    </tr>
+    {hasDetail && <tr className="max-[720px]:block"><td colSpan={6} className="px-3 pb-4 max-[720px]:block max-[720px]:px-0">
       {collectResult && <p className="muted" role="status">{t('collectResult', { status: collectResult.status })}{!collectResult.hasRun ? ` ${t('noRunId')}` : ''}</p>}
-      {operationId && <PurgeProgress operationId={operationId} />}
+      {operationId && <PurgeProgress operationId={operationId} onSucceeded={onPurgeFinished} />}
       {historyOpen && connector && <SyncHistory source={source} />}
       {(error || collect.error || activation.isError) && <p className="error" role="alert">{t('actionFailed')}{activation.isError && ` · ${t('stateUnknown')}`}</p>}
-    </div>
-  </li>;
+    </td></tr>}
+  </>;
 }
 
 /** Loads sources and connector configuration, and coordinates selection changes with the active unsaved-draft guard. */
@@ -248,7 +228,7 @@ export function SourceList() {
     queryFn: ({ pageParam }) => listSources(pageParam),
     getNextPageParam: (last) => last.next_cursor ?? undefined,
   });
-  const items = sources.data?.pages.flatMap((page) => page.items) ?? [];
+  const items = useMemo(() => sources.data?.pages.flatMap((page) => page.items) ?? [], [sources.data]);
   const githubWebhook = useQuery({
     queryKey: ['github-webhook-status'],
     queryFn: ({ signal }) => getGitHubWebhookStatus(signal),
@@ -261,9 +241,33 @@ export function SourceList() {
       queryClient.getQueryData<ConnectorConfiguration>(connectorKeys.configuration(source.id)),
     ]),
   })) });
+  const [filter, setFilter] = useState<SourceFilter>('all');
+  // Purge operations stay lifted here so rows with in-flight cleanup remain mounted under any filter.
+  const [operations, setOperations] = useState<Record<string, string>>({});
+  const [purged, setPurged] = useState<Record<string, boolean>>({});
+  const activations = useQueries({ queries: connectors.map((source) => ({
+    queryKey: connectorKeys.activation(source.id),
+    queryFn: () => getConnectorActivation(source.id),
+  })) });
+  const activationBySourceId = new Map(connectors.map((source, index) => [source.id, activations[index]?.data]));
+  const states = new Map(items.map((source) => [source.id, sourceRowState(source, activationBySourceId.get(source.id))]));
+  const counts: Record<SourceFilter, number> = { all: items.length, active: 0, paused: 0, attention: 0 };
+  for (const state of states.values()) { counts.active += matchesFilter(state, 'active') ? 1 : 0; counts.paused += matchesFilter(state, 'paused') ? 1 : 0; counts.attention += matchesFilter(state, 'attention') ? 1 : 0; }
+  const visible = items.filter((source) => Boolean(operations[source.id]) || matchesFilter(states.get(source.id) ?? 'active', filter));
   const configurationBySourceId = new Map(connectors.map((source, index) => [source.id, configurations[index]]));
   /** Invalidates the source list query after a source mutation. */
   const refresh = () => queryClient.invalidateQueries({ queryKey: sourceKeys.all });
+  // Prune finished-purge entries only after the row has left the list.
+  useEffect(() => {
+    if (!sources.isSuccess || sources.isFetching) return;
+    const listed = new Set(items.map((source) => source.id));
+    const gone = Object.keys(purged).filter((id) => !listed.has(id));
+    if (gone.length === 0) return;
+    const drop = (current: Record<string, unknown>) => Object.fromEntries(Object.entries(current).filter(([id]) => !gone.includes(id)));
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- prunes finished-purge entries once their rows have left the refetched list; no-op when none are gone
+    setOperations((current) => drop(current) as Record<string, string>);
+    setPurged((current) => drop(current) as Record<string, boolean>);
+  }, [items, purged, sources.isSuccess, sources.isFetching]);
 
   return <div className="sources-list">
     <section className="sub-panel" aria-labelledby="github-webhook-heading">
@@ -282,14 +286,18 @@ export function SourceList() {
       <Button className="secondary" onClick={() => transition(undefined, !adding)}>{t('addManual')}</Button>
     </div>
     {adding && <section className="sub-panel"><h2>{t('manualTitle')}</h2><SourceForm onSaved={() => { setAdding(false); void refresh(); }} /></section>}
-    {editing !== undefined && <ConnectorEditor key={`${editing?.id ?? 'new'}:${editSession}`} source={editing} registerTransitionGuard={(guard) => { transitionGuard.current = guard; }} onChanged={() => { void refresh(); }} onClose={() => transition(undefined)} />}
+    {editing !== undefined && <nav aria-label={t('backToSources')}><Button type="button" variant="ghost" onClick={() => transition(undefined)}>← {t('backToSources')}</Button></nav>}
+    {editing !== undefined && <ConnectorEditor key={`${editing?.id ?? 'new'}:${editSession}`} source={editing} registerTransitionGuard={(guard) => { transitionGuard.current = guard; }} onChanged={() => { void refresh(); }} onPurgeStarted={(id) => editing && setOperations((current) => ({ ...current, [editing.id]: id }))} onClose={() => transition(undefined)} />}
     {sources.isPending && <div className="skeleton" aria-label={t('loading')} />}
     {sources.isError && <p className="error" role="alert">{t('loadFailed')} <Button className="secondary" onClick={() => sources.refetch()}>{t('retry')}</Button></p>}
     {sources.isSuccess && items.length === 0 && <p className="empty-state">{t('empty')}</p>}
-    {items.length > 0 && <ul className="record-list">{items.map((source) => {
-      const configuration = configurationBySourceId.get(source.id);
-      return <SourceEntry key={source.id} source={source} schedule={configuration?.data ? scheduleLabel(configuration.data.configuration.schedule_interval_minutes, t) : t('scheduleUnknown')} timezone={configuration?.data?.configuration.timezone ?? null} onEdit={(value) => transition(value)} onChanged={() => { void refresh(); }} />;
-    })}</ul>}
+    {items.length > 0 && <SourcesTable filter={filter} counts={counts} onFilterChange={setFilter}>
+      {visible.map((source) => {
+        const configuration = configurationBySourceId.get(source.id);
+        return <SourceEntry key={source.id} source={source} schedule={configuration?.data ? scheduleLabel(configuration.data.configuration.schedule_interval_minutes, t) : t('scheduleUnknown')} timezone={configuration?.data?.configuration.timezone ?? null} operationId={operations[source.id] ?? ''} editingId={editing?.id ?? null} onPurgeStarted={(id) => setOperations((current) => ({ ...current, [source.id]: id }))} purged={Boolean(purged[source.id])} onPurgeFinished={() => { if (purged[source.id]) return; setPurged((current) => ({ ...current, [source.id]: true })); void refresh(); }} onEdit={(value) => transition(value)} onChanged={() => { void refresh(); }} />;
+      })}
+    </SourcesTable>}
+    {items.length > 0 && visible.length === 0 && <p className="empty-state">{t('emptyFiltered')}</p>}
     {sources.hasNextPage && <Button className="secondary" disabled={sources.isFetchingNextPage} onClick={() => sources.fetchNextPage()}>{t('loadMore')}</Button>}
   </div>;
 }

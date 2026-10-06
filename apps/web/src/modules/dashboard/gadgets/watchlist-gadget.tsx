@@ -197,8 +197,8 @@ export function WatchlistGadget({
                             item.severity === 'critical'
                               ? 'bg-destructive/15 text-destructive border border-destructive/30'
                               : item.severity === 'warning'
-                              ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30'
-                              : 'bg-blue-500/15 text-blue-700 dark:text-blue-300 border border-blue-500/30'
+                              ? 'bg-background text-foreground border border-border'
+                              : 'bg-background text-muted-foreground border border-border'
                           }`}
                         >
                           {item.severity === 'critical' ? (
@@ -217,7 +217,7 @@ export function WatchlistGadget({
                             item.status === 'alert'
                               ? 'text-destructive font-bold'
                               : item.status === 'matched'
-                              ? 'text-amber-600 dark:text-amber-400 font-bold'
+                              ? 'text-foreground font-bold'
                               : 'text-muted-foreground'
                           }`}
                         >

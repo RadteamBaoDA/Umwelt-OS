@@ -1,6 +1,7 @@
 'use client';
 
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { MonitorIcon, MoonIcon, SunIcon } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
@@ -55,11 +56,11 @@ export function PreferencesDialog({ open, preferences, csrfToken, loading = fals
   const [reloadPending, setReloadPending] = useState(false);
   const [reloadError, setReloadError] = useState(false);
   const baseline = useRef<PreferenceValues>({ theme: 'system', locale, timezone });
+  const [baselineValues, setBaselineValues] = useState<PreferenceValues>({ theme: 'system', locale, timezone });
   const mounted = useRef(true);
   const openRef = useRef(open);
-  openRef.current = open;
   const generationRef = useRef(authGeneration);
-  generationRef.current = authGeneration;
+  useLayoutEffect(() => { openRef.current = open; generationRef.current = authGeneration; });
   const editSessionRef = useRef(0);
   const reloadRequestRef = useRef(0);
   const reloadControllerRef = useRef<AbortController | null>(null);
@@ -109,6 +110,7 @@ export function PreferencesDialog({ open, preferences, csrfToken, loading = fals
       setReloadError(false);
       if (!open) setPreview(null, authGeneration);
       else {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- draft resets when the dialog or auth generation changes; keeps the existing stale-result fences
         setDraft(null);
         save.reset();
       }
@@ -128,12 +130,14 @@ export function PreferencesDialog({ open, preferences, csrfToken, loading = fals
   useEffect(() => {
     if (!open) {
       setPreview(null, authGeneration);
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- draft resets when the dialog or auth generation changes; keeps the existing stale-result fences
       setDraft(null);
       return;
     }
     if (draft || !preferences) return;
     const values = { theme: preferences.theme || 'system', locale: preferences.persisted ? preferences.locale : locale, timezone: preferences.timezone };
     baseline.current = values;
+    setBaselineValues(values);
     save.reset();
     setDraft({ ...preferences, ...values });
     setPreview(values, authGeneration);
@@ -146,10 +150,7 @@ export function PreferencesDialog({ open, preferences, csrfToken, loading = fals
 
   /** Restores committed preferences and clears the temporary preview when the dialog is dismissed. */
   const restore = () => {
-    // Closing without Save restores the committed pair after any live theme or locale preview.
-    const confirmed = preferences
-      ? { theme: preferences.theme, locale: preferences.locale, timezone: preferences.timezone }
-      : baseline.current;
+    // Closing without Save clears the live theme or locale preview, restoring the committed values.
     setPreview(null, authGeneration);
     setDraft(null);
   };
@@ -175,7 +176,7 @@ export function PreferencesDialog({ open, preferences, csrfToken, loading = fals
   };
 
   const dirty = Boolean(draft && (!draft.persisted ||
-    draft.theme !== baseline.current.theme || draft.locale !== baseline.current.locale || draft.timezone !== baseline.current.timezone
+    draft.theme !== baselineValues.theme || draft.locale !== baselineValues.locale || draft.timezone !== baselineValues.timezone
   ));
   const hasConflict = save.error instanceof ApiError && save.error.status === 409;
   /** Aborts the previous request and starts a reload attempt bound to this edit session and auth generation. */
@@ -217,6 +218,7 @@ export function PreferencesDialog({ open, preferences, csrfToken, loading = fals
     const values = { theme: latest.theme, locale: latest.persisted ? latest.locale : locale, timezone: latest.timezone };
     client.setQueryData(['owner-preferences'], latest);
     baseline.current = values;
+    setBaselineValues(values);
     save.reset();
     setDraft({ ...latest, ...values });
     setPreview(values, authGeneration);
@@ -259,7 +261,7 @@ export function PreferencesDialog({ open, preferences, csrfToken, loading = fals
             }} className="theme-options">
               {(['light', 'dark', 'system'] as const).map((value) => <Label className="theme-option" key={value} htmlFor={`theme-${value}`}>
                 <RadioGroupItem id={`theme-${value}`} value={value} />
-                <span>{t(value)}</span>
+                {value === 'light' ? <SunIcon aria-hidden="true" className="size-4" /> : value === 'dark' ? <MoonIcon aria-hidden="true" className="size-4" /> : <MonitorIcon aria-hidden="true" className="size-4" />}<span>{t(value)}</span>
               </Label>)}
             </RadioGroup>
           </div>
@@ -269,12 +271,13 @@ export function PreferencesDialog({ open, preferences, csrfToken, loading = fals
               const next = value as AppLocaleId;
               setDraft({ ...draft, locale: next });
             }}>
-              <SelectTrigger id="preference-locale"><SelectValue /></SelectTrigger>
+              <SelectTrigger id="preference-locale" aria-describedby="preference-locale-help"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="en-us">{t('englishUs')}</SelectItem>
                 <SelectItem value="vi-vi">{t('vietnamese')}</SelectItem>
               </SelectContent>
             </Select>
+            <p id="preference-locale-help" className="muted text-xs">{t('languageHelp')}</p>
           </div>
           <div className="field">
             <Label htmlFor="preference-timezone">{t('timezone')}</Label>
@@ -282,7 +285,7 @@ export function PreferencesDialog({ open, preferences, csrfToken, loading = fals
               const next = event.target.value;
               setDraft({ ...draft, timezone: next });
             }} />
-            <p id="preference-timezone-help" className="muted">{t('timezoneHelp')}</p>
+            <p id="preference-timezone-help" className="muted text-xs">{t('timezoneHelp')} {t('scheduleTimezoneNote')}</p>
           </div>
         </fieldset>
         <p className="muted" role="status">{save.isPending ? t('saving') : dirty ? t('unsaved') : t('saved')}</p>

@@ -52,6 +52,7 @@ export function GoalDetail({ goal, csrfToken, onClose, onEditLinkedTask }: {
   });
   const milestoneConflict = milestoneMutation.error instanceof ApiError && milestoneMutation.error.status === 409;
   /** Tracks fresh revisions only outside an active owner conflict or frozen delete confirmation. */
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs state to an external or prop change; reset-on-change is intentional here
   useEffect(() => { if (ownerVerified && current && !conflict && !milestoneConflict && !confirmDelete) setExpectedRevision(current.revision); }, [ownerVerified, current, conflict, milestoneConflict, confirmDelete]);
   const writesPending = remove.isPending || milestoneMutation.isPending || formPending;
   const writeReviewRequired = conflict || milestoneConflict;

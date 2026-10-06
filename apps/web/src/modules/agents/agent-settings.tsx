@@ -61,6 +61,7 @@ export function AgentSettingsWorkspace() {
     refetchInterval: (query) => query.state.data && ['queued', 'running', 'waiting_approval'].includes(query.state.data.status) ? 3000 : false,
   });
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs state to an external or prop change; reset-on-change is intentional here
     setDraft(selected ? { ...selected, allowed_tools: [...selected.allowed_tools], source_ids: [...selected.source_ids] } : null);
     setSelectedRunId(null);
   }, [selected]);
@@ -181,7 +182,7 @@ export function AgentSettingsWorkspace() {
           {!runs.isError && !runs.data?.items.length && <p className="text-sm text-muted-foreground">{t('agentNoRuns')}</p>}
           <div className="space-y-2">
             {runs.data?.items.map((run) => (
-              <Button key={run.id} type="button" className={`secondary h-auto w-full justify-start rounded-md p-2 text-left text-sm font-normal ${selectedRunId === run.id ? 'border-primary bg-accent/20' : 'border-border hover:bg-accent/10'}`} aria-pressed={selectedRunId === run.id} onClick={() => setSelectedRunId(run.id)}>
+              <Button key={run.id} type="button" className={`secondary h-auto w-full justify-start rounded-md p-2 text-left text-sm font-normal ${selectedRunId === run.id ? 'border-primary bg-secondary' : 'border-border hover:bg-secondary'}`} aria-pressed={selectedRunId === run.id} onClick={() => setSelectedRunId(run.id)}>
                 <span className="font-medium text-foreground">{t(runStatusKeys[run.status] ?? 'agentRunFailed')}</span>
                 <span className="ml-2 text-xs text-muted-foreground">{format.dateTime(new Date(run.created_at), { dateStyle: 'short', timeStyle: 'short' })}</span>
               </Button>

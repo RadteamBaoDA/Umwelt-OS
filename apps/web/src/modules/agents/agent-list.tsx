@@ -27,7 +27,7 @@ export function AgentList({ profiles, selectedId, onSelect }: AgentListProps) {
           type="button"
           aria-pressed={selectedId === profile.id}
           onClick={() => onSelect(profile.id)}
-          className={`secondary h-auto w-full justify-start rounded-lg p-3 text-left font-normal transition-colors ${selectedId === profile.id ? 'border-primary bg-accent/20' : 'border-border bg-background hover:bg-accent/10'}`}
+          className={`secondary h-auto w-full justify-start rounded-lg p-3 text-left font-normal transition-colors ${selectedId === profile.id ? 'border-primary bg-secondary' : 'border-border bg-background hover:bg-secondary'}`}
         >
           <span className="block font-medium text-foreground">{t(titleKeys[profile.id] ?? 'agentProfileKnowledge')}</span>
           <span className="mt-1 block text-xs text-muted-foreground">

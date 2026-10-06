@@ -53,7 +53,7 @@ function createMarkdownRenderer(): MarkdownItInstance {
     `<pre class="my-2 max-w-full overflow-x-auto rounded-md border border-border bg-muted p-3 text-xs"><code>${escapeHtml(tokens[index].content)}</code></pre>`;
   markdown.renderer.rules.bullet_list_open = () => '<ul class="my-2 list-disc space-y-1 pl-6">';
   markdown.renderer.rules.ordered_list_open = () => '<ol class="my-2 list-decimal space-y-1 pl-6">';
-  markdown.renderer.rules.blockquote_open = () => '<blockquote class="my-2 border-l-2 border-accent pl-3 text-muted-foreground">';
+  markdown.renderer.rules.blockquote_open = () => '<blockquote class="my-2 border-l-2 border-primary pl-3 text-muted-foreground">';
   return markdown;
 }
 
@@ -67,6 +67,7 @@ export function ChatMarkdown({ content }: { content: string }) {
     // DOMPurify needs the live browser window; keeping creation here avoids touching it during SSR.
     const purifier = DOMPurify(window);
     const rendered = markdownRenderer.render(content);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- sanitizer needs the live window, so state is set after mount
     setSafeHtml(purifier.sanitize(rendered, {
       ALLOWED_TAGS: MARKDOWN_TAGS,
       ALLOWED_ATTR: ['class', 'href', 'rel', 'target'],
@@ -78,7 +79,7 @@ export function ChatMarkdown({ content }: { content: string }) {
 
   return (
     <div
-      className="chat-markdown min-w-0 break-words text-sm leading-relaxed text-foreground [&_p]:my-1.5 [&_h1]:my-2 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:my-2 [&_h2]:text-base [&_h2]:font-semibold [&_h3]:my-2 [&_h3]:font-semibold [&_a]:text-accent [&_a]:underline [&_table]:my-2 [&_table]:border-collapse [&_td]:border [&_td]:border-border [&_td]:p-1 [&_th]:border [&_th]:border-border [&_th]:p-1 [&_th]:font-semibold"
+      className="chat-markdown min-w-0 break-words text-sm leading-relaxed text-foreground [&_p]:my-1.5 [&_h1]:my-2 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:my-2 [&_h2]:text-base [&_h2]:font-semibold [&_h3]:my-2 [&_h3]:font-semibold [&_a]:text-primary [&_a]:underline [&_table]:my-2 [&_table]:border-collapse [&_td]:border [&_td]:border-border [&_td]:p-1 [&_th]:border [&_th]:border-border [&_th]:p-1 [&_th]:font-semibold"
       dangerouslySetInnerHTML={{ __html: safeHtml }}
     />
   );

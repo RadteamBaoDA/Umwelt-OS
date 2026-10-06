@@ -23,6 +23,12 @@ export interface ChatComposerProps {
   disabled?: boolean;
   /** Custom placeholder string override. */
   placeholder?: string;
+  /** Model identity reported by the latest assistant answer, if any. */
+  modelLabel?: string | null;
+  /** Number of distinct sources cited by the latest assistant answer. */
+  sourcesCount?: number;
+  /** Full page shows the truthful web search and attachment availability note. */
+  showCapabilityNote?: boolean;
 }
 
 /**
@@ -40,6 +46,9 @@ export function ChatComposer({
   isStreaming,
   disabled = false,
   placeholder,
+  modelLabel = null,
+  sourcesCount = 0,
+  showCapabilityNote = false,
 }: ChatComposerProps) {
   const t = useTranslations('chat');
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
@@ -89,7 +98,7 @@ export function ChatComposer({
   const canSend = value.trim().length > 0 && !isStreaming && !disabled;
 
   return (
-    <div className="relative flex flex-col gap-2 p-3 bg-background border-t border-border">
+    <div className="relative flex flex-col gap-2 border-t border-border bg-background p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
       <div className="relative flex items-end gap-2 rounded-xl border border-border bg-surface p-2 shadow-sm focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-1">
         <textarea
           ref={textareaRef}
@@ -108,7 +117,7 @@ export function ChatComposer({
             <Button
               type="button"
               onClick={onStop}
-              className="flex items-center gap-1.5 px-3 py-1.5 h-9 rounded-lg bg-destructive text-white hover:opacity-90 font-medium text-xs shadow-sm transition-opacity"
+              className="flex items-center gap-1.5 px-3 py-1.5 h-9 rounded-lg bg-destructive text-destructive-foreground hover:opacity-90 font-medium text-xs shadow-sm transition-opacity"
               aria-label={t('stopGenerating')}
             >
               <SquareIcon className="size-3.5 fill-current" />
@@ -119,7 +128,7 @@ export function ChatComposer({
               type="button"
               onClick={handleSend}
               disabled={!canSend}
-              className="flex items-center gap-1.5 px-3 py-1.5 h-9 rounded-lg bg-accent text-white dark:text-zinc-900 disabled:opacity-40 disabled:cursor-not-allowed font-medium text-xs shadow-sm transition-opacity"
+              className="flex items-center gap-1.5 px-3 py-1.5 h-9 rounded-lg bg-primary text-primary-foreground disabled:opacity-40 disabled:cursor-not-allowed font-medium text-xs shadow-sm transition-opacity"
               aria-label={t('send')}
             >
               <SendIcon className="size-3.5" />
@@ -128,10 +137,11 @@ export function ChatComposer({
           )}
         </div>
       </div>
-      <div className="flex items-center justify-between px-1 text-[11px] text-muted-foreground">
-        <span>{t('sufficientEvidence')}</span>
-        <span className="hidden sm:inline">Enter ↵ to send • Shift+Enter for newline</span>
+      <div className="flex flex-wrap items-center justify-between gap-x-3 px-1 text-[11px] text-muted-foreground">
+        <span>{modelLabel ? t('modelLine', { model: modelLabel }) : t('modelNotReported')}{sourcesCount > 0 ? ` · ${t('sourcesCount', { count: sourcesCount })}` : ''}</span>
+        <span className="hidden sm:inline">Enter ↵ · Shift+Enter</span>
       </div>
+      {showCapabilityNote && <p className="px-1 text-[11px] text-muted-foreground">{t('composerNote')}</p>}
     </div>
   );
 }

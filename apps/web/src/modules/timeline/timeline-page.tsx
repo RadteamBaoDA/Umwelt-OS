@@ -42,6 +42,7 @@ export function TimelinePage() {
   const appliedTypeTooLong = [...eventType].length > 64;
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs state to an external or prop change; reset-on-change is intentional here
     setDraftDateFrom(dateFrom); setDraftDateTo(dateTo); setDraftSourceId(sourceId);
     setDraftEntityId(entityId); setDraftPrecision(precision); setDraftEventType(eventType);
   }, [dateFrom, dateTo, sourceId, entityId, precision, eventType]);

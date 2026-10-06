@@ -2,7 +2,7 @@
 
 import GlobeRenderer, { type GlobeInstance } from 'globe.gl';
 import { MeshBasicMaterial } from 'three';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import type { MapFeature } from '../map-layers';
 
@@ -42,9 +42,11 @@ export function GlobeMap({ features, selectedFeatureId, onSelectFeature, width, 
   const [unavailable, setUnavailable] = useState(false);
   const [contextLost, setContextLost] = useState(false);
   const isSized = width > 0 && height > 0;
-  selectedFeatureRef.current = selectedFeatureId;
-  visibleRef.current = visible;
-  interactiveRef.current = interactive;
+  useLayoutEffect(() => {
+    selectedFeatureRef.current = selectedFeatureId;
+    visibleRef.current = visible;
+    interactiveRef.current = interactive;
+  });
 
   useEffect(() => {
     const host = hostRef.current;
@@ -87,6 +89,8 @@ export function GlobeMap({ features, selectedFeatureId, onSelectFeature, width, 
       };
       canvas.addEventListener('webglcontextlost', handleContextLost);
       canvas.addEventListener('webglcontextrestored', handleContextRestored);
+      // Renderer creation is an external-system sync; clearing the failure flag belongs here.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setUnavailable(false);
       return () => {
         canvas.removeEventListener('webglcontextlost', handleContextLost);

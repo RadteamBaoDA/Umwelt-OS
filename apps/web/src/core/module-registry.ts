@@ -8,7 +8,10 @@ export type ShellMessageKey =
   | 'documents'
   | 'entities'
   | 'search'
-  | 'systemStatus';
+  | 'systemStatus'
+  | 'sourcesTab'
+  | 'mcpTab'
+  | 'permissionsTab';
 
 export type NavigationDestination = {
   id: string;
@@ -42,6 +45,14 @@ export const settingsGroups: NavigationDestination[] = [
   { id: 'dashboard-gadgets', href: '/settings/dashboard', messageKey: 'dashboardGadgets' },
 ];
 
+/** Sub-tabs of the Data sources group (rendered by the shell above the page); exact tabs match only their own path. */
+export const sourcesSubNavigation: (NavigationDestination & { exact?: boolean })[] = [
+  { id: 'sources-list', href: '/settings/sources', messageKey: 'sourcesTab', exact: true },
+  { id: 'sources-mcp', href: '/settings/sources/mcp', messageKey: 'mcpTab' },
+  { id: 'sources-permissions', href: '/settings/sources/permissions', messageKey: 'permissionsTab' },
+];
+
+/** Routes kept reachable from the command palette only (not shown in the Settings rail). */
 export const detailDestinations: NavigationDestination[] = [
   { id: 'documents', href: '/knowledge/documents', messageKey: 'documents' },
   { id: 'entities', href: '/knowledge/entities', messageKey: 'entities' },

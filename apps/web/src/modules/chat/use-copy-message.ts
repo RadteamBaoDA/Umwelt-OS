@@ -36,6 +36,8 @@ export function useCopyMessage(conversationId: string | null | undefined) {
     }
   }, []);
 
+  // Clear copy feedback when the conversation changes so it cannot leak across threads.
+  /* eslint-disable react-hooks/set-state-in-effect */
   React.useEffect(() => {
     setCopiedMessageId(null);
     setFailedMessageId(null);
@@ -45,6 +47,7 @@ export function useCopyMessage(conversationId: string | null | undefined) {
       timerRef.current = null;
     };
   }, [conversationId]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   return { copyMessage, copiedMessageId, failedMessageId };
 }

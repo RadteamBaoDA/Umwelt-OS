@@ -1,16 +1,9 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-import { StoryDetail } from '@/modules/news/story-detail';
+import { DetailDialog, type DetailTarget } from '@/modules/detail/detail-dialog';
 import { StoryList } from '@/modules/news/story-list';
 import type { GadgetInstance } from '../api';
 
@@ -35,14 +28,14 @@ export interface NewsFeedProps {
  */
 export function NewsFeed({ instance }: NewsFeedProps) {
   const t = useTranslations('news');
-  const [selected, setSelected] = useState<{ storyId: string; sourceIds: string[] } | null>(null);
+  const [selectedTarget, setSelected] = useState<DetailTarget | null>(null);
   const returnFocusRef = useRef<HTMLButtonElement>(null);
   const listFallbackRef = useRef<HTMLDivElement>(null);
   // Snapshot the configured scope once per definition change; the detail dialog cannot widen it.
   const sourceIds = useMemo(() => [...instance.definition.source_ids], [instance.definition.source_ids]);
-  useEffect(() => {
-    if (sourceIds.length === 0) setSelected(null);
-  }, [sourceIds.length]);
+  // An unconfigured gadget never shows a stale selection.
+  const selected = sourceIds.length > 0 ? selectedTarget : null;
+  const closeDetail = useCallback(() => setSelected(null), []);
   const { filters, scope, highlight_rules: highlightRules } = instance.definition;
   const keywordQuery = (filters.keywords ?? []).map((word) => word.trim()).filter(Boolean).join(' ');
   const queryIsTooLong = keywordQuery.length > 200;
@@ -81,38 +74,22 @@ export function NewsFeed({ instance }: NewsFeedProps) {
           showTrends={showTrends}
           onSelectStory={(storyId, trigger) => {
             returnFocusRef.current = trigger;
-            setSelected({ storyId, sourceIds: [...sourceIds] });
+            setSelected({ kind: 'story', id: storyId, sourceGadget: instance.id, sourceIds: [...sourceIds] });
           }}
         />
       )}
-      <Dialog open={sourceIds.length > 0 && selected !== null} onOpenChange={(open) => { if (!open) setSelected(null); }}>
-        <DialogContent
-          closeLabel={t('close')}
-          className="grid-rows-[auto_minmax(0,1fr)] gap-0 h-[calc(100dvh-1rem)] max-h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] max-w-4xl overflow-hidden p-0 sm:h-[85dvh] sm:max-h-[85dvh] sm:w-[calc(100vw-2rem)] sm:max-w-4xl"
-          onCloseAutoFocus={(event) => {
-            // The controlled dialog has no DialogTrigger, so return focus to its actual opener.
-            event.preventDefault();
-            const trigger = returnFocusRef.current;
-            if (trigger?.isConnected) trigger.focus();
-            else listFallbackRef.current?.focus();
-            returnFocusRef.current = null;
-          }}
-        >
-          <DialogHeader className="border-b border-border px-4 py-3 text-left">
-            <DialogTitle>{t('detailTitle')}</DialogTitle>
-            <DialogDescription>{t('detailDialogDescription')}</DialogDescription>
-          </DialogHeader>
-          <div className="min-h-0 flex-1 overflow-hidden p-3 sm:p-4">
-            {sourceIds.length > 0 && selected ? (
-              <StoryDetail
-                storyId={selected.storyId}
-                sourceIds={selected.sourceIds}
-                onBack={() => setSelected(null)}
-              />
-            ) : null}
-          </div>
-        </DialogContent>
-      </Dialog>
+      <DetailDialog
+        target={selected}
+        onClose={closeDetail}
+        onCloseAutoFocus={(event) => {
+          // The controlled dialog has no DialogTrigger, so return focus to its actual opener.
+          event.preventDefault();
+          const trigger = returnFocusRef.current;
+          if (trigger?.isConnected) trigger.focus();
+          else listFallbackRef.current?.focus();
+          returnFocusRef.current = null;
+        }}
+      />
     </div>
   );
 }

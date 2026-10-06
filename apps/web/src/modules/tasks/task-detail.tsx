@@ -47,6 +47,7 @@ export function TaskDetail({ task, csrfToken, onClose, onTaskChanged }: {
     onError: () => { setConfirmDelete(false); setDeleteIntent(null); },
   });
   const conflict = remove.error instanceof ApiError && remove.error.status === 409;
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs state to an external or prop change; reset-on-change is intentional here
   useEffect(() => { if (ownerVerified && current && !conflict && !confirmDelete) setExpectedRevision(current.revision); }, [ownerVerified, current, conflict, confirmDelete]);
   /** Fetches the current owner projection for review without advancing a pending deletion revision. */
   const refreshCurrentTask = async () => {

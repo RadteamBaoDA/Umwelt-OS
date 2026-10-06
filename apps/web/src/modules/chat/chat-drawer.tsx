@@ -55,7 +55,7 @@ export function ChatDrawer() {
           <Link
             href="/chat"
             onClick={() => chatCtrl.closeDrawer()}
-            className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent/10 transition-colors"
+            className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
             title={t('openInFullPage')}
             aria-label={t('openInFullPage')}
           >

@@ -1,6 +1,8 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { ArrowLeftIcon } from 'lucide-react';
+import Link from 'next/link';
 import { useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
@@ -23,6 +25,8 @@ import {
 } from '@/components/ui/select';
 import { ApiError } from '@/core/api';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
+import { formatDateTime } from '@/core/i18n';
+import { useDisplayPreferences } from '@/core/query-provider';
 import {
   acceptMemoryCandidate,
   createMemory,
@@ -31,6 +35,7 @@ import {
   listMemoryCandidates,
   memoryKeys,
   rejectMemoryCandidate,
+  updateMemory,
   type MemoryCandidate,
   type MemoryItem,
 } from './api';
@@ -153,18 +158,57 @@ export function CreateMemoryDialog({
   );
 }
 
+/** Edits one memory's text through the PATCH route; only the content changes. */
+function EditMemoryDialog({ item, onOpenChange, csrfToken }: { item: MemoryItem | null; onOpenChange: (open: boolean) => void; csrfToken: string }) {
+  const t = useTranslations('memory');
+  const queryClient = useQueryClient();
+  const [draft, setDraft] = useState<{ id: string; text: string } | null>(null);
+  const text = draft && item && draft.id === item.id ? draft.text : (item?.content ?? '');
+  const save = useMutation({
+    mutationFn: () => updateMemory(item!.id, { content: text.trim() }, csrfToken),
+    onSuccess: () => {
+      setDraft(null);
+      onOpenChange(false);
+      void queryClient.invalidateQueries({ queryKey: memoryKeys.all });
+    },
+  });
+  return (
+    <Dialog open={item !== null} onOpenChange={(open) => { if (!save.isPending) { if (!open) { setDraft(null); save.reset(); } onOpenChange(open); } }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>{t('editMemory')}</DialogTitle>
+          <DialogDescription>{t('memoryNote')}</DialogDescription>
+        </DialogHeader>
+        <form className="space-y-4 pt-2" onSubmit={(event) => { event.preventDefault(); if (text.trim() && item) save.mutate(); }}>
+          <div className="space-y-1.5">
+            <Label htmlFor="memory-edit-content">{t('content')}</Label>
+            <Input id="memory-edit-content" value={text} required maxLength={2000} onChange={(event) => setDraft({ id: item?.id ?? '', text: event.target.value })} />
+          </div>
+          {save.error && <p className="text-destructive text-sm" role="alert">{save.error instanceof ApiError ? save.error.message : t('saveFailed')}</p>}
+          <DialogFooter className="pt-2">
+            <Button type="button" className="secondary" onClick={() => onOpenChange(false)} disabled={save.isPending}>{t('cancel')}</Button>
+            <Button type="submit" disabled={save.isPending || !text.trim() || text.trim() === item?.content}>{save.isPending ? t('loading') : t('save')}</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 /**
  * Renders the selective memory workspace panel with active memories, candidates,
- * manual creation, and immediate forget action.
+ * manual creation, edit and a confirmed forget action.
  */
 export function MemoryList() {
   const t = useTranslations('memory');
   const { csrfToken } = useWorkspaceSession();
   const queryClient = useQueryClient();
+  const display = useDisplayPreferences();
   const [filterType, setFilterType] = useState<MemoryFilterType>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
-  const [forgetId, setForgetId] = useState<string | null>(null);
+  const [editItem, setEditItem] = useState<MemoryItem | null>(null);
+  const [forgetItem, setForgetItem] = useState<MemoryItem | null>(null);
 
   const queryType = filterType === 'all' ? undefined : filterType;
   const memoriesQuery = useQuery({
@@ -180,66 +224,73 @@ export function MemoryList() {
   const forgetMutation = useMutation({
     mutationFn: (id: string) => forgetMemory(id, undefined, csrfToken),
     onSuccess: () => {
-      setForgetId(null);
-      queryClient.invalidateQueries({ queryKey: memoryKeys.all });
+      setForgetItem(null);
+      void queryClient.invalidateQueries({ queryKey: memoryKeys.all });
     },
   });
 
   const acceptCandidateMutation = useMutation({
     mutationFn: (id: string) => acceptMemoryCandidate(id, csrfToken),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: memoryKeys.all });
+      void queryClient.invalidateQueries({ queryKey: memoryKeys.all });
     },
   });
 
   const rejectCandidateMutation = useMutation({
     mutationFn: (id: string) => rejectMemoryCandidate(id, undefined, csrfToken),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: memoryKeys.all });
+      void queryClient.invalidateQueries({ queryKey: memoryKeys.all });
     },
   });
 
   const items = memoriesQuery.data?.items ?? [];
   const candidates = candidatesQuery.data?.items ?? [];
+  // Only the active tab shows a count: the server returns no per-kind aggregates, so the count is for the
+  // list currently loaded ("N+" when more pages exist) rather than invented for the other kinds.
+  const page = memoriesQuery.data;
+  const countSuffix = page ? ` ${page.total_count ?? items.length}${page.total_count == null && page.next_cursor ? '+' : ''}` : '';
 
   return (
-    <section className="content-panel space-y-6">
-      <div className="section-heading flex items-start justify-between gap-4">
-        <div>
-          <span className="brand">{t('activeMemories')}</span>
-          <h1 className="text-2xl font-bold tracking-tight">{t('title')}</h1>
-          <p className="muted text-sm text-muted-foreground">{t('subtitle')}</p>
+    <section className="content-panel space-y-6" aria-labelledby="memory-title">
+      <div className="section-heading flex flex-wrap items-start justify-between gap-4">
+        <div className="grid gap-1">
+          <Link href="/chat" className="inline-flex min-h-11 w-fit items-center gap-1 text-sm font-semibold text-primary underline-offset-4 hover:underline"><ArrowLeftIcon aria-hidden="true" className="size-4" />{t('backToChat')}</Link>
+          <h1 id="memory-title" className="text-2xl font-bold tracking-tight">{t('title')}</h1>
+          <p className="muted text-sm text-muted-foreground">{t('subtitle')} {t('memoryNote')}</p>
         </div>
         <div className="form-actions">
+          <Button asChild variant="outline"><Link href="/settings/memory">{t('memorySettings')}</Link></Button>
           <Button onClick={() => setCreateDialogOpen(true)}>{t('newMemory')}</Button>
         </div>
       </div>
 
       {/* Filter and search toolbar */}
       <div className="flex flex-wrap items-center gap-3">
-        <div className="flex rounded-md border border-input p-0.5 bg-background">
+        <div role="group" aria-label={t('filterByType')} className="flex rounded-md border border-input bg-background p-0.5">
           {(['all', 'fact', 'preference', 'instruction'] as const).map((typeKey) => (
             <button
               key={typeKey}
               type="button"
+              aria-pressed={filterType === typeKey}
               onClick={() => setFilterType(typeKey)}
-              className={`px-3 py-1.5 text-xs font-medium rounded-sm transition-colors ${
+              className={`min-h-11 rounded-sm px-3 text-sm font-semibold transition-colors ${
                 filterType === typeKey
                   ? 'bg-primary text-primary-foreground shadow-sm'
                   : 'text-muted-foreground hover:text-foreground'
               }`}
             >
-              {typeKey === 'all' ? t('filterAll') : t(typeKey)}
+              {typeKey === 'all' ? t('filterAll') : t(typeKey)}{filterType === typeKey ? countSuffix : ''}
             </button>
           ))}
         </div>
 
-        <div className="flex-1 min-w-[200px]">
+        <div className="min-w-[200px] flex-1">
           <Input
-            placeholder={t('contentPlaceholder')}
+            type="search"
+            aria-label={t('searchMemories')}
+            placeholder={t('searchMemories')}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="h-8 text-xs"
           />
         </div>
       </div>
@@ -247,11 +298,11 @@ export function MemoryList() {
       {/* Active memories list */}
       <div className="space-y-3">
         {memoriesQuery.isPending && (
-          <div className="skeleton h-32 rounded-lg" aria-label={t('loading')} />
+          <div className="skeleton h-32 rounded-lg" role="status" aria-label={t('loading')} />
         )}
 
         {memoriesQuery.isError && (
-          <div className="p-4 rounded-md border border-destructive/20 bg-destructive/10 text-destructive text-sm flex items-center justify-between">
+          <div className="flex items-center justify-between rounded-md border border-destructive/20 bg-destructive/10 p-4 text-sm text-destructive" role="alert">
             <span>{t('errorLoading')}</span>
             <Button
               className="secondary"
@@ -263,9 +314,9 @@ export function MemoryList() {
         )}
 
         {memoriesQuery.isSuccess && items.length === 0 && (
-          <div className="empty-state p-8 text-center rounded-lg border border-dashed border-border">
-            <h3 className="font-semibold text-base mb-1">{t('emptyTitle')}</h3>
-            <p className="text-sm text-muted-foreground max-w-md mx-auto mb-4">
+          <div className="empty-state rounded-lg border border-dashed border-border p-8 text-center">
+            <h3 className="mb-1 text-base font-semibold">{t('emptyTitle')}</h3>
+            <p className="mx-auto mb-4 max-w-md text-sm text-muted-foreground">
               {t('emptyDescription')}
             </p>
             <Button onClick={() => setCreateDialogOpen(true)}>
@@ -275,19 +326,16 @@ export function MemoryList() {
         )}
 
         {items.length > 0 && (
-          <ul className="record-list divide-y divide-border border rounded-lg overflow-hidden bg-card">
+          <ul className="record-list divide-y divide-border overflow-hidden rounded-lg border bg-background">
             {items.map((item: MemoryItem) => (
               <li
                 key={item.id}
-                className="p-4 flex items-start justify-between gap-4 hover:bg-muted/40 transition-colors"
+                className="flex flex-wrap items-start justify-between gap-4 p-4 transition-colors hover:bg-secondary"
               >
-                <div className="space-y-1.5 min-w-0 flex-1">
+                <div className="min-w-0 flex-1 space-y-1.5">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-secondary text-secondary-foreground">
+                    <span className="inline-flex items-center rounded bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground">
                       {t(item.type as 'fact' | 'preference' | 'instruction')}
-                    </span>
-                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-muted text-muted-foreground">
-                      {item.is_manual ? t('manual') : t('model')}
                     </span>
                     {item.confidence < 1.0 && (
                       <span className="text-xs text-muted-foreground">
@@ -295,23 +343,21 @@ export function MemoryList() {
                       </span>
                     )}
                   </div>
-                  <p className="font-medium text-sm text-foreground break-words">{item.content}</p>
+                  <p className="break-words text-sm font-medium text-foreground">{item.content}</p>
                   {item.reason && (
-                    <p className="text-xs text-muted-foreground italic">{item.reason}</p>
+                    <p className="text-xs italic text-muted-foreground">{item.reason}</p>
                   )}
                   <p className="text-xs text-muted-foreground">
-                    {new Date(item.created_at).toLocaleString()}
+                    {item.is_manual ? t('addedByYou') : t('model')} · {formatDateTime(item.created_at, display.locale, display.timezone)}
                   </p>
                 </div>
 
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex shrink-0 items-center gap-2">
+                  <Button variant="ghost" onClick={() => setEditItem(item)}>{t('edit')}</Button>
                   <Button
-                    className="secondary text-destructive hover:bg-destructive/10 hover:text-destructive border-destructive/30"
-                    disabled={forgetMutation.isPending && forgetId === item.id}
-                    onClick={() => {
-                      setForgetId(item.id);
-                      forgetMutation.mutate(item.id);
-                    }}
+                    variant="ghost"
+                    className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    onClick={() => setForgetItem(item)}
                   >
                     {t('forget')}
                   </Button>
@@ -324,7 +370,7 @@ export function MemoryList() {
 
       {/* Memory candidates review section */}
       {candidates.length > 0 && (
-        <div className="space-y-3 pt-4 border-t border-border">
+        <div className="space-y-3 border-t border-border pt-4">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold">{t('candidatesTitle')}</h2>
             <span className="text-xs text-muted-foreground">
@@ -332,28 +378,28 @@ export function MemoryList() {
             </span>
           </div>
 
-          <ul className="record-list divide-y divide-border border rounded-lg overflow-hidden bg-card">
+          <ul className="record-list divide-y divide-border overflow-hidden rounded-lg border bg-background">
             {candidates.map((cand: MemoryCandidate) => (
               <li
                 key={cand.id}
-                className="p-4 flex items-start justify-between gap-4 hover:bg-muted/40 transition-colors"
+                className="flex flex-wrap items-start justify-between gap-4 p-4 transition-colors hover:bg-secondary"
               >
-                <div className="space-y-1.5 min-w-0 flex-1">
+                <div className="min-w-0 flex-1 space-y-1.5">
                   <div className="flex items-center gap-2">
-                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-primary/10 text-primary">
+                    <span className="inline-flex items-center rounded bg-secondary px-2 py-0.5 text-xs font-medium text-primary">
                       {t(cand.type as 'fact' | 'preference' | 'instruction')}
                     </span>
                     <span className="text-xs text-muted-foreground">
                       {Math.round(cand.confidence * 100)}% {t('confidence')}
                     </span>
                   </div>
-                  <p className="font-medium text-sm text-foreground break-words">{cand.content}</p>
+                  <p className="break-words text-sm font-medium text-foreground">{cand.content}</p>
                   {cand.reason && (
                     <p className="text-xs text-muted-foreground">{cand.reason}</p>
                   )}
                 </div>
 
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex shrink-0 items-center gap-2">
                   <Button
                     disabled={acceptCandidateMutation.isPending}
                     onClick={() => acceptCandidateMutation.mutate(cand.id)}
@@ -380,6 +426,21 @@ export function MemoryList() {
         onOpenChange={setCreateDialogOpen}
         csrfToken={csrfToken}
       />
+      <EditMemoryDialog item={editItem} onOpenChange={(open) => { if (!open) setEditItem(null); }} csrfToken={csrfToken} />
+      <Dialog open={forgetItem !== null} onOpenChange={(open) => { if (!open && !forgetMutation.isPending) { setForgetItem(null); forgetMutation.reset(); } }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{t('forgetName')}</DialogTitle>
+            <DialogDescription>{t('forgetConfirm')}</DialogDescription>
+          </DialogHeader>
+          {forgetItem && <p className="break-words rounded-md border border-border p-3 text-sm">{forgetItem.content}</p>}
+          {forgetMutation.error && <p className="text-destructive text-sm" role="alert">{forgetMutation.error instanceof ApiError ? forgetMutation.error.message : t('forgetFailed')}</p>}
+          <DialogFooter>
+            <Button type="button" className="secondary" disabled={forgetMutation.isPending} onClick={() => setForgetItem(null)}>{t('cancel')}</Button>
+            <Button type="button" variant="destructive" disabled={forgetMutation.isPending} onClick={() => { if (forgetItem) forgetMutation.mutate(forgetItem.id); }}>{forgetMutation.isPending ? t('loading') : t('forget')}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }

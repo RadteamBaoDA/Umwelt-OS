@@ -7,13 +7,12 @@ import {
   LayoutTemplate,
   Plus,
   Redo2,
-  Save,
   Sliders,
   Undo2,
   X,
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   AlertDialog,
   AlertDialogContent,
@@ -48,12 +47,16 @@ import {
   listGadgetDefinitions,
   listGadgetRenderers,
   type DashboardGroup,
-  type GadgetDefinition,
-  type GadgetRenderer,
 } from './api';
 
 /** Props for the LayoutEditor toolbar and dirty confirmation workflow. */
 export interface LayoutEditorProps {
+  /** Name of the dashboard being edited. */
+  dashboardName: string;
+  /** Number of edits in the undo history since the saved baseline. */
+  editCount: number;
+  /** Saved layout revision this draft started from. */
+  baseRevision?: number | null;
   /** Whether layout draft has unsaved changes. */
   isDirty: boolean;
   /** Whether save layout mutation is currently in flight. */
@@ -114,6 +117,9 @@ export interface LayoutEditorProps {
  * @returns Accessible toolbar and owner decision dialogs.
  */
 export function LayoutEditor({
+  dashboardName,
+  editCount,
+  baseRevision,
   isDirty,
   isSaving,
   canUndo,
@@ -163,7 +169,7 @@ export function LayoutEditor({
     enabled: addDialogOpen,
   });
 
-  const definitions = definitionsQuery.data ?? [];
+  const definitions = useMemo(() => definitionsQuery.data ?? [], [definitionsQuery.data]);
   const renderers = renderersQuery.data ?? [];
 
   // Quick definition creation mutation
@@ -229,20 +235,22 @@ export function LayoutEditor({
     <>
       {/* Top Edit Toolbar */}
       <div className="flex flex-wrap items-center justify-between gap-3 p-3 rounded-xl border border-primary/40 bg-primary/5 backdrop-blur-xs mb-4 shadow-xs">
-        <div className="flex items-center gap-2">
-          <span className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-primary text-primary-foreground text-xs font-bold tracking-wide uppercase">
-            <Sliders className="w-3.5 h-3.5" />
-            <span>{t('editMode')}</span>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
+            <Sliders className="w-4 h-4 text-primary" aria-hidden="true" />
+            <span>{t('editingTitle', { name: dashboardName })}</span>
           </span>
-
           {isDirty ? (
-            <span className="flex items-center gap-1 text-xs font-semibold text-amber-600 dark:text-amber-400">
-              <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+            <span role="status" className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+              <span className="w-2 h-2 rounded-full bg-primary" aria-hidden="true" />
               <span>{t('unsavedChanges')}</span>
             </span>
-          ) : (
-            <span className="text-xs text-muted-foreground">{t('keyboardHelp')}</span>
-          )}
+          ) : null}
+          <span className="text-xs text-muted-foreground">{t('keyboardHelp')}</span>
+          <span className="text-xs text-muted-foreground">
+            {t('editCount', { count: editCount })}
+            {baseRevision != null ? <> {'·'} {t('draftOf', { revision: baseRevision })}</> : null}
+          </span>
         </div>
 
         {/* Toolbar Buttons */}
@@ -337,6 +345,12 @@ export function LayoutEditor({
         </div>
       </div>
 
+      <ul aria-label={t('gridLegend')} className="-mt-2 mb-4 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+        <li className="flex items-center gap-1.5"><span aria-hidden="true" className="h-3 w-3 rounded-sm border border-border" />{t('legendFree')}</li>
+        <li className="flex items-center gap-1.5"><span aria-hidden="true" className="h-3 w-3 rounded-sm border border-primary bg-primary/15" />{t('legendDrop')}</li>
+        <li className="flex items-center gap-1.5"><span aria-hidden="true" className="h-3 w-3 rounded-sm border border-destructive bg-destructive/15" />{t('legendOverlap')}</li>
+      </ul>
+
       {/* Save Error Alert Banner */}
       {saveError && (
         <div className="mb-4 p-3 rounded-lg bg-destructive/10 border border-destructive/30 text-destructive text-xs flex items-center justify-between">
@@ -361,7 +375,7 @@ export function LayoutEditor({
         <AlertDialogContent className="sm:max-w-md">
           <AlertDialogHeader>
             <AlertDialogTitle className="flex items-center gap-2 text-foreground">
-              <AlertCircle className="w-5 h-5 text-amber-500" />
+              <AlertCircle className="w-5 h-5 text-muted-foreground" />
               <span>{t('dirtyWarningTitle')}</span>
             </AlertDialogTitle>
             <AlertDialogDescription className="text-muted-foreground text-sm">

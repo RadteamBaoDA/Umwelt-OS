@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
@@ -47,6 +47,18 @@ function errorKey(error: unknown): 'requestFailed' | 'sessionExpired' | 'conflic
   if (error.status === 503 && error.code === 'mcp_runtime_refresh_failed') return 'runtimeRefreshFailed';
   if (error.status === 503) return 'transportUnavailable';
   return 'requestFailed';
+}
+/** Subscribes to a coarse wall clock so expiry checks stay pure during render. */
+function useClock(stepMs: number): number {
+  return useSyncExternalStore(
+    (notify) => { const id = window.setInterval(notify, stepMs); return () => window.clearInterval(id); },
+    () => Math.floor(Date.now() / stepMs) * stepMs,
+    () => 0,
+  );
+}
+/** Reads the browser time zone without a post-mount state update; server render falls back to the configured zone. */
+function useBrowserTimezone(fallback: string): string {
+  return useSyncExternalStore(() => () => {}, () => Intl.DateTimeFormat().resolvedOptions().timeZone || fallback, () => fallback);
 }
 /** Formats server instants with the user locale and explicit configured timezone. */
 function dateLabel(value: string, locale: string, timezone: string): string {
@@ -110,7 +122,8 @@ export function McpSettings() {
   const [conflict, setConflict] = useState(false);
   const [reconciliationRequired, setReconciliationRequired] = useState(false);
   const [error, setError] = useState<McpMessageKey | ''>('');
-  const [browserTimezone, setBrowserTimezone] = useState(display.timezone);
+  const browserTimezone = useBrowserTimezone(display.timezone);
+  const now = useClock(30_000);
   const generation = useRef(0);
   const sessionGeneration = useRef(0);
   const mounted = useRef(false);
@@ -150,13 +163,12 @@ export function McpSettings() {
    * When preserving an active draft, its ID/revision remain immutable and any missing or revised
    * owner invalidates descriptor review instead of retargeting the draft to another connection.
    */
-  const refresh = useCallback(async (preferredId?: string, preserveDraft = false): Promise<boolean> => {
+  const loadSnapshot = useCallback(async (preferredId?: string, preserveDraft = false): Promise<boolean> => {
     const requestGeneration = ++generation.current;
     const requestSession = sessionGeneration.current;
     activeRead.current?.abort();
     const controller = new AbortController();
     activeRead.current = controller;
-    setLoading(true);
     try {
       const [connectionResult, clientResult, toolResult] = await Promise.all([
         listMcpConnections(controller.signal), listMcpInboundClients(controller.signal), listMcpNativeTools(controller.signal),
@@ -233,14 +245,16 @@ export function McpSettings() {
       if (mounted.current && generation.current === requestGeneration && sessionGeneration.current === requestSession) setLoading(false);
     }
   }, [setDraftOwner]);
-
-  useEffect(() => {
-    setBrowserTimezone(Intl.DateTimeFormat().resolvedOptions().timeZone || display.timezone);
-  }, [display.timezone]);
+  /** Marks the snapshot as loading, then loads it; the mount effect calls loadSnapshot directly because loading starts true. */
+  const refresh = useCallback((preferredId?: string, preserveDraft = false) => {
+    setLoading(true);
+    return loadSnapshot(preferredId, preserveDraft);
+  }, [loadSnapshot]);
 
   useEffect(() => {
     mounted.current = true;
-    void refresh();
+    // Deferred so the initial read starts from an event-style callback rather than a synchronous effect body.
+    const initialLoad = window.setTimeout(() => { void loadSnapshot(); }, 0);
     /** Clears session-owned snapshots and volatile credentials so a following login cannot inherit prior state. */
     const clearSecret = () => {
       sessionGeneration.current += 1; cancelReads(); currentId.current = null;
@@ -251,8 +265,8 @@ export function McpSettings() {
       setDisplayedToken(null); setCopied(false); setTokenAcknowledged(false); setReconciliationRequired(false); setError('');
     };
     window.addEventListener('bbd:auth-ending', clearSecret);
-    return () => { mounted.current = false; sessionGeneration.current += 1; generation.current += 1; activeRead.current?.abort(); window.removeEventListener('bbd:auth-ending', clearSecret); };
-  }, [cancelReads, refresh, setDisplayedToken, setDraftOwner]);
+    return () => { window.clearTimeout(initialLoad); mounted.current = false; sessionGeneration.current += 1; generation.current += 1; activeRead.current?.abort(); window.removeEventListener('bbd:auth-ending', clearSecret); };
+  }, [cancelReads, loadSnapshot, setDisplayedToken, setDraftOwner]);
 
   useEffect(() => registerLeaveGuard({
     hasUnsavedChanges: () => dirty || grantDirty || tokenState.current.exists,
@@ -261,7 +275,7 @@ export function McpSettings() {
       return window.confirm(t('discardDraftConfirm'));
     },
     acceptLeave: () => { setDirty(false); setGrantDirty(false); setDraft((value) => value ? { ...value, credential: '' } : value); setDisplayedToken(null); },
-  }), [dirty, grantDirty, registerLeaveGuard, t]);
+  }), [dirty, grantDirty, registerLeaveGuard, setDisplayedToken, t]);
 
   useEffect(() => {
     hasDraftRef.current = dirty || grantDirty || editing;
@@ -489,7 +503,7 @@ export function McpSettings() {
     if (!succeeded) { setReconciliationRequired(true); setError('reconciliationFailed'); return; }
     if (conflict && !hasDraftRef.current) setConflict(false);
   };
-  const canEnable = Boolean(selected && !editing && discovery && discovery.connection_id === selected.id && discovery.connection_revision === selected.revision && discovery.deployment_profile_hash === selected.deployment_profile_hash && selected.health === 'connected' && (selected.transport !== 'stdio' || Boolean(selected.deployment_profile_id && selected.deployment_profile_hash)) && grants.some((grant) => !grant.revoked_at && (!grant.expires_at || new Date(grant.expires_at).getTime() > Date.now()) && grant.connection_id === selected.id && ['chat', 'collection'].includes(grant.purpose) && grant.risk === 'READ_ONLY' && grant.source_ids.length > 0 && (grant.purpose !== 'collection' || grant.source_ids.length === 1) && grant.reviewed_connection_revision === selected.revision && grant.reviewed_profile_hash === selected.deployment_profile_hash && discovery.capabilities.some((capability) => capability.id === grant.capability_id && capability.descriptor_hash === grant.descriptor_hash)));
+  const canEnable = Boolean(selected && !editing && discovery && discovery.connection_id === selected.id && discovery.connection_revision === selected.revision && discovery.deployment_profile_hash === selected.deployment_profile_hash && selected.health === 'connected' && (selected.transport !== 'stdio' || Boolean(selected.deployment_profile_id && selected.deployment_profile_hash)) && grants.some((grant) => !grant.revoked_at && (!grant.expires_at || new Date(grant.expires_at).getTime() > now) && grant.connection_id === selected.id && ['chat', 'collection'].includes(grant.purpose) && grant.risk === 'READ_ONLY' && grant.source_ids.length > 0 && (grant.purpose !== 'collection' || grant.source_ids.length === 1) && grant.reviewed_connection_revision === selected.revision && grant.reviewed_profile_hash === selected.deployment_profile_hash && discovery.capabilities.some((capability) => capability.id === grant.capability_id && capability.descriptor_hash === grant.descriptor_hash)));
   const inputsFrozen = busy || loading || reconciliationRequired || conflict;
 
   return <section className="mt-8 border-t border-border pt-8 space-y-6" aria-labelledby="mcp-settings-title">
@@ -513,15 +527,45 @@ export function McpSettings() {
       </div>}
       {grants.length > 0 && <div><h4>{t('savedGrants')}</h4><ul className="record-list">{grants.map((grant) => <li key={grant.id} className="record-row"><strong>{t(grantPurposeMessageKey(grant.purpose))} · {t(grantRiskMessageKey(grant.risk))} · {grant.revoked_at ? t('revoked') : t('grantLive')}</strong><p className="muted">{t('reviewIdentity')}: r{grant.reviewed_connection_revision} · {grant.descriptor_hash} · {grant.destinations.join(', ')}</p></li>)}</ul><p className="muted">{t('rediscoverToReview')}</p></div>}
       {discovery && <div className="space-y-3"><h4>{t('descriptorReview')}</h4><p className="muted">{t('discoveryIdentity', { revision: discovery.connection_revision, schema: discovery.schema_set_hash, profile: discovery.deployment_profile_hash ?? t('notApplicable') })}</p>
+        <p className="muted">{t('discoveryNotGrant')} {t('permLevelsNote')}</p>
         <p className="muted">{t('sourceScopeNote')} {t('scopeBoundsHelp')}</p>
-        {discovery.capabilities.map((item) => { const value = grantDrafts[item.id] ?? { selected: false, purpose: 'chat' as const, sources: [], destinations: '', expires: '' }; return <article key={item.id} className="rounded-md border border-border p-3 space-y-2"><div className="flex items-start gap-2"><Checkbox id={`grant-${item.id}`} checked={value.selected} disabled={inputsFrozen || !supported(item)} onCheckedChange={(checked) => updateGrant(item.id, { selected: Boolean(checked) })} /><Label htmlFor={`grant-${item.id}`}>{item.kind}: {item.remote_key}</Label><span className="muted">{supported(item) ? t('readOnlyGrant') : t('unsupportedKind')}</span></div><p className="muted">{t('descriptorHash')}: <code>{item.descriptor_hash}</code></p><pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-muted p-2 text-xs">{JSON.stringify(item.descriptor, null, 2)}</pre>{value.selected && supported(item) && <div className="grid gap-2 sm:grid-cols-2"><div><Label htmlFor={`purpose-${item.id}`}>{t('purposeSelection')}</Label><Select disabled={inputsFrozen} value={value.purpose} onValueChange={(purpose: 'chat' | 'collection') => updateGrant(item.id, { purpose })}><SelectTrigger id={`purpose-${item.id}`}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="chat">{t('purposeChat')}</SelectItem><SelectItem value="collection">{t('purposeCollection')}</SelectItem></SelectContent></Select></div><fieldset><legend>{t('sourceScopes')}</legend>{sources.map((source) => <label key={source.id} className="flex items-center gap-2"><Checkbox disabled={inputsFrozen} checked={value.sources.includes(source.id)} onCheckedChange={(checked) => updateGrant(item.id, { sources: checked ? [...value.sources, source.id] : value.sources.filter((id) => id !== source.id) })} />{source.name}</label>)}</fieldset><div>{value.purpose === 'collection' ? <p className="muted">{t('collectionDestination')}</p> : <><Label htmlFor={`dest-${item.id}`}>{t('destinations')}</Label><Input disabled={inputsFrozen} id={`dest-${item.id}`} value={value.destinations} placeholder={t('destinationPlaceholder')} onChange={(e) => updateGrant(item.id, { destinations: e.target.value })} /><p className="muted">{t('destinationPrivacy')}</p></>}<Label htmlFor={`expire-${item.id}`}>{t('optionalExpiry')}</Label><Input disabled={inputsFrozen} id={`expire-${item.id}`} type="datetime-local" value={value.expires} onChange={(e) => updateGrant(item.id, { expires: e.target.value })} /><p className="muted">{t('inputTimeZone', { timezone: browserTimezone })}</p></div>{value.purpose === 'collection' && <p className="muted sm:col-span-2">{t('collectionSourceLimit')}</p>}</div>}</article>; })}
+        <div className="max-[720px]:overflow-visible">
+          <table className="w-full border-collapse text-left max-[720px]:block">
+            <caption className="sr-only">{t('toolsCaption')}</caption>
+            <thead className="max-[720px]:sr-only"><tr className="border-b border-border">{(['toolColName', 'toolColRisk', 'toolColPermission'] as const).map((key) => <th key={key} scope="col" className="muted px-3 py-2 text-xs font-semibold">{t(key)}</th>)}</tr></thead>
+            <tbody className="max-[720px]:block">
+              {discovery.capabilities.map((item) => {
+                const value = grantDrafts[item.id] ?? { selected: false, purpose: 'chat' as const, sources: [], destinations: '', expires: '' };
+                const level = value.selected && supported(item) ? value.purpose : 'none';
+                const description = typeof item.descriptor.description === 'string' ? item.descriptor.description : null;
+                return <Fragment key={item.id}>
+                  <tr className="border-t border-border max-[720px]:mb-2 max-[720px]:block max-[720px]:rounded-lg max-[720px]:border max-[720px]:p-3">
+                    <th scope="row" className="px-3 py-3 text-left align-top font-normal max-[720px]:block max-[720px]:px-0"><Label htmlFor={`purpose-${item.id}`}>{item.kind}: {item.remote_key}</Label>{description && <p className="muted text-sm">{description}</p>}</th>
+                    <td className="px-3 py-3 align-top max-[720px]:block max-[720px]:px-0"><span className="badge">{supported(item) ? t('grantReadOnlyOnly') : t('unsupportedShort')}</span></td>
+                    <td className="px-3 py-3 align-top max-[720px]:block max-[720px]:px-0">
+                      <Select disabled={inputsFrozen || !supported(item)} value={level} onValueChange={(next: 'none' | 'chat' | 'collection') => updateGrant(item.id, next === 'none' ? { selected: false } : { selected: true, purpose: next })}>
+                        <SelectTrigger id={`purpose-${item.id}`} className="min-h-11"><SelectValue /></SelectTrigger>
+                        <SelectContent><SelectItem value="none">{t('permNone')}</SelectItem><SelectItem value="chat">{t('permChat')}</SelectItem><SelectItem value="collection">{t('permCollection')}</SelectItem></SelectContent>
+                      </Select>
+                    </td>
+                  </tr>
+                  <tr className="max-[720px]:block"><td colSpan={3} className="px-3 pb-3 max-[720px]:block max-[720px]:px-0">
+                    <p className="muted text-sm">{supported(item) ? t('readOnlyGrant') : t('unsupportedKind')}</p>
+                    <details><summary className="cursor-pointer text-sm">{t('descriptorShow')}</summary><p className="muted">{t('descriptorHash')}: <code>{item.descriptor_hash}</code></p><pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-muted p-2 text-xs">{JSON.stringify(item.descriptor, null, 2)}</pre></details>
+                    {value.selected && supported(item) && <div className="mt-2 grid gap-2 sm:grid-cols-2"><fieldset><legend>{t('sourceScopes')}</legend>{sources.map((source) => <label key={source.id} className="flex min-h-11 items-center gap-2"><Checkbox disabled={inputsFrozen} checked={value.sources.includes(source.id)} onCheckedChange={(checked) => updateGrant(item.id, { sources: checked ? [...value.sources, source.id] : value.sources.filter((id) => id !== source.id) })} />{source.name}</label>)}</fieldset><div>{value.purpose === 'collection' ? <p className="muted">{t('collectionDestination')}</p> : <><Label htmlFor={`dest-${item.id}`}>{t('destinations')}</Label><Input disabled={inputsFrozen} id={`dest-${item.id}`} value={value.destinations} placeholder={t('destinationPlaceholder')} onChange={(e) => updateGrant(item.id, { destinations: e.target.value })} /><p className="muted">{t('destinationPrivacy')}</p></>}<Label htmlFor={`expire-${item.id}`}>{t('optionalExpiry')}</Label><Input disabled={inputsFrozen} id={`expire-${item.id}`} type="datetime-local" value={value.expires} onChange={(e) => updateGrant(item.id, { expires: e.target.value })} /><p className="muted">{t('inputTimeZone', { timezone: browserTimezone })}</p></div>{value.purpose === 'collection' && <p className="muted sm:col-span-2">{t('collectionSourceLimit')}</p>}</div>}
+                  </td></tr>
+                </Fragment>;
+              })}
+            </tbody>
+          </table>
+        </div>
         <Button disabled={inputsFrozen || !selected || Boolean(tokenView)} onClick={saveGrants}>{t('saveGrantReview')}</Button>
       </div>}
       <p className="muted">{t('collectionUnavailable')} <Link className="underline" href="/settings/sources">{t('manageCollectionSources')}</Link></p>
       </div>}
     </section>
 
-    <section className="sub-panel space-y-4" aria-labelledby="mcp-inbound-title"><h3 id="mcp-inbound-title">{t('inboundClients')}</h3><p className="muted">{t('inboundDescription')}</p>
+    <details className="sub-panel" open={tokenView ? true : undefined}><summary className="cursor-pointer font-semibold">{t('inboundClients')}</summary><section className="space-y-4 mt-3" aria-labelledby="mcp-inbound-title"><h3 id="mcp-inbound-title" className="sr-only">{t('inboundClients')}</h3><p className="muted">{t('inboundDescription')}</p>
       <div className="grid gap-3 sm:grid-cols-2"><div><Label htmlFor="inbound-name">{t('name')}</Label><Input disabled={busy || loading || reconciliationRequired || conflict || Boolean(tokenView)} id="inbound-name" value={clientName} onChange={(e) => setClientName(e.target.value)} maxLength={120} /></div><div><Label htmlFor="inbound-audience">{t('audience')}</Label><Input id="inbound-audience" value="/api/v1/mcp/" readOnly /><p className="muted">{t('audienceServerNote')}</p></div><div><Label htmlFor="inbound-expiry">{t('clientExpiry')}</Label><Input disabled={busy || loading || reconciliationRequired || conflict || Boolean(tokenView)} id="inbound-expiry" type="datetime-local" value={clientExpiry} onChange={(e) => setClientExpiry(e.target.value)} /><p className="muted">{t('inputTimeZone', { timezone: browserTimezone })}</p></div><div><Label htmlFor="inbound-capabilities">{t('capabilityLabels')}</Label><Input disabled={busy || loading || reconciliationRequired || conflict || Boolean(tokenView)} id="inbound-capabilities" value={capabilities} onChange={(e) => setCapabilities(e.target.value)} placeholder={t('emptyAllowed')} /><p className="muted">{t('capabilityNoInference')}</p></div></div>
       <p className="muted">{t('inboundBounds')}</p>
       <fieldset disabled={busy || loading || reconciliationRequired || conflict || Boolean(tokenView)}><legend>{t('nativeToolBindings')}</legend><div className="grid gap-2 sm:grid-cols-2">{tools.map((tool) => <label key={`${tool.name}@${tool.version}`} className="flex items-start gap-2"><Checkbox checked={chosenTools.includes(`${tool.name}@${tool.version}`)} onCheckedChange={(checked) => setChosenTools((values) => checked ? [...values, `${tool.name}@${tool.version}`] : values.filter((entry) => entry !== `${tool.name}@${tool.version}`))} /><span>{tool.name} · {tool.version}<small className="block muted">{tool.schema_fingerprint} · {tool.permissions.join(', ') || t('noPermissions')}</small></span></label>)}</div></fieldset>
@@ -529,7 +573,7 @@ export function McpSettings() {
       <Button disabled={busy || loading || reconciliationRequired || conflict || Boolean(tokenView) || Boolean(confirm)} onClick={issue}>{t('issueClient')}</Button>
       {clients.length > 0 && <ul className="record-list">{clients.map((client) => <li key={client.id} className="record-row flex flex-wrap justify-between gap-3"><div><strong>{client.name}</strong><p className="muted">{client.token_prefix} · {client.audience} · {t(client.revoked_at ? 'revoked' : 'clientActive')} · {t('revision', { revision: client.revision })}</p><p className="muted">{t('clientScopeSummary', { tools: client.bindings.map((binding) => binding.name).join(', '), sources: client.source_ids.length })}</p></div><div className="flex gap-2"><Button className="secondary" disabled={busy || loading || reconciliationRequired || conflict || Boolean(tokenView) || Boolean(client.revoked_at)} onClick={() => setConfirm({ action: 'rotate', client })}>{t('rotate')}</Button><Button className="secondary" disabled={busy || loading || reconciliationRequired || conflict || Boolean(tokenView) || Boolean(client.revoked_at)} onClick={() => setConfirm({ action: 'revoke', client })}>{t('revoke')}</Button></div></li>)}</ul>}
       {tokenView && <aside className="rounded-md border border-border p-4" aria-live="polite"><h4>{t('oneTimeToken')}</h4><p className="muted">{t('tokenOnce', { name: tokenView.client.name, prefix: tokenView.client.token_prefix })}</p><Input readOnly type="text" autoComplete="off" spellCheck={false} value={tokenView.token} aria-label={t('oneTimeToken')} /><div className="flex gap-2"><Button className="secondary" disabled={busy} onClick={() => void copyToken()}>{t('copyToken')}</Button>{copied && <span role="status">{t('copied')}</span>}<Button className="secondary" disabled={busy} onClick={() => setConfirm({ action: 'dismiss', client: tokenView.client })}>{t('dismissToken')}</Button></div><label className="flex items-center gap-2"><Checkbox checked={tokenAcknowledged} onCheckedChange={(checked) => { const acknowledged = Boolean(checked); setTokenAcknowledged(acknowledged); tokenState.current = { exists: Boolean(tokenView), acknowledged }; }} />{t('copyAcknowledgement')}</label><p className="muted">{t('clipboardNotAcceptance')}</p></aside>}
-    </section>
+    </section></details>
 
     <AlertDialog open={Boolean(confirm)} onOpenChange={(open) => { if (!open) setConfirm(null); }}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{t(confirm?.action === 'rotate' ? 'confirmRotate' : confirm?.action === 'revoke' ? 'confirmRevoke' : confirm?.action === 'save-empty-grants' ? 'confirmEmptyGrant' : confirm?.action === 'discover' ? 'confirmDiscover' : 'confirmDismiss')}</AlertDialogTitle><AlertDialogDescription>{t(confirm?.action === 'rotate' ? 'rotateWarning' : confirm?.action === 'revoke' ? 'revokeWarning' : confirm?.action === 'save-empty-grants' ? 'emptyGrantWarning' : confirm?.action === 'discover' ? 'rediscoverConfirm' : 'dismissWarning')}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>{t('cancel')}</AlertDialogCancel><Button disabled={confirm?.action === 'dismiss' && !tokenAcknowledged} onClick={confirmClientAction}>{t('confirm')}</Button></AlertDialogFooter></AlertDialogContent></AlertDialog>
   </section>;

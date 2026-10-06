@@ -344,6 +344,7 @@ export function RechartsContainer({
   const [isMounted, setIsMounted] = useState<boolean>(false);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs state to an external or prop change; reset-on-change is intentional here
     setIsMounted(true);
   }, []);
 

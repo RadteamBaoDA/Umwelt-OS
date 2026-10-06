@@ -7,6 +7,7 @@ import { ExternalLinkIcon, FileTextIcon, XIcon } from 'lucide-react';
 import type { Citation } from '@/modules/chat/api';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { formatDateTime } from '@/core/i18n';
+import { safeHttpUrl } from '@/core/safe-url';
 
 export interface CitationPanelProps {
   /** List of citations to render. */
@@ -55,14 +56,14 @@ export function CitationPanel({
     >
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-          <FileTextIcon className="size-3.5 text-accent" />
+          <FileTextIcon className="size-3.5 text-primary" />
           <span>{t('citations')} ({itemsToRender.length})</span>
         </div>
         {onClose && (
           <button
             type="button"
             onClick={onClose}
-            className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent/10 transition-colors"
+            className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
             aria-label={t('closeDrawer')}
           >
             <XIcon className="size-3.5" />
@@ -93,19 +94,19 @@ export function CitationPanel({
                 <div className="flex items-center gap-1.5 shrink-0">
                   <Link
                     href={docHref}
-                    className="inline-flex items-center gap-1 text-[11px] text-accent hover:underline font-medium"
+                    className="inline-flex items-center gap-1 text-[11px] text-primary hover:underline font-medium"
                     title={t('openDocument')}
                   >
                     <span>{t('document')}</span>
                     <ExternalLinkIcon className="size-3" />
                   </Link>
-                  {citation.url && (
+                  {safeHttpUrl(citation.url) && (
                     <a
-                      href={citation.url}
+                      href={safeHttpUrl(citation.url)}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
-                      title={citation.url}
+                      title={safeHttpUrl(citation.url)}
                     >
                       <ExternalLinkIcon className="size-3" />
                     </a>
@@ -114,7 +115,7 @@ export function CitationPanel({
               </div>
 
               {citation.quote && (
-                <blockquote className="pl-2 border-l-2 border-accent/40 italic text-muted-foreground line-clamp-4 text-[11px] leading-relaxed">
+                <blockquote className="pl-2 border-l-2 border-primary/40 italic text-muted-foreground line-clamp-4 text-[11px] leading-relaxed">
                   &ldquo;{citation.quote}&rdquo;
                 </blockquote>
               )}

@@ -206,6 +206,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       ? 'authenticated'
       : sessionExpired ? 'expired' : 'unavailable';
     if (sessionState !== 'authenticated') {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs state to an external or prop change; reset-on-change is intentional here
       setBarrierGeneration(generation);
       setStatus(sessionState);
       return;

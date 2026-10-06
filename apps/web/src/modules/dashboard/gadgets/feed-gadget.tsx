@@ -1,6 +1,6 @@
 'use client';
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Bookmark,
   ExternalLink,
@@ -15,12 +15,15 @@ import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import React, { useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { formatDateTime } from '@/core/i18n';
+import { safeHttpUrl } from '@/core/safe-url';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { useChatController } from '@/core/app-shell/chat-controller';
 import { documentKeys, listGadgetDocumentProjections, setGadgetDocumentInteraction } from '@/modules/knowledge/api';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
-import type { GadgetInstance } from '../api';
+import { dashboardKeys, listGadgetSources, type GadgetInstance } from '../api';
 
 /** Feed item model supporting documents, news articles, and telegram messages. */
 export interface FeedStreamItem {
@@ -128,16 +131,26 @@ export function FeedGadget({
       : 'document';
 
   const [onlyUnread, setOnlyUnread] = useState<boolean>(false);
+  const [searchText, setSearchText] = useState('');
+  const [sourceFilter, setSourceFilter] = useState('all');
   const [selectedTelegram, setSelectedTelegram] = useState<Record<string, SelectedTelegramIdentity>>({});
 
   // Query documents as live feed items
-  const docsQuery = useQuery({
+  const docsQuery = useInfiniteQuery({
     queryKey: [...documentKeys.all, 'gadget', sourceIds, channelIds],
-    queryFn: async () => {
+    initialPageParam: undefined as string | undefined,
+    queryFn: async ({ pageParam }) => {
       if (sourceIds.length === 0) return { items: [], next_cursor: null };
-      return listGadgetDocumentProjections(sourceIds, channelIds);
+      return listGadgetDocumentProjections(sourceIds, channelIds, pageParam);
     },
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
     staleTime: 30_000,
+  });
+  // Source names for the filter; only fetched when more than one source can be filtered.
+  const sourcesQuery = useQuery({
+    queryKey: [...dashboardKeys.sources, 'feed-filter'],
+    queryFn: ({ signal }) => listGadgetSources(100, undefined, signal),
+    enabled: sourceIds.length > 1,
   });
   const interactionMutation = useMutation({
     mutationFn: (change: { id: string; versionNumber: number; read?: boolean; bookmarked?: boolean }) =>
@@ -153,7 +166,7 @@ export function FeedGadget({
       return initialItems;
     }
 
-    const docs = docsQuery.data?.items ?? [];
+    const docs = docsQuery.data?.pages.flatMap((page) => page.items) ?? [];
     return docs.flatMap((doc) => {
       const telegram = doc.provider_metadata?.provider === 'telegram' ? doc.provider_metadata.telegram : null;
       if (isTelegram && !telegram) return [];
@@ -186,7 +199,13 @@ export function FeedGadget({
   const staleTelegramSelections = selectedTelegramItems.filter((item) =>
     currentTelegramItems.get(item.documentId)?.documentVersionId !== item.documentVersionId,
   );
-  const displayedItems = onlyUnread ? feedItems.filter((i) => !i.read) : feedItems;
+  const needle = searchText.trim().toLowerCase();
+  const displayedItems = feedItems.filter((i) =>
+    (!onlyUnread || !i.read)
+    && (sourceFilter === 'all' || i.sourceId === sourceFilter)
+    && (!needle || `${i.title} ${i.excerpt ?? ''}`.toLowerCase().includes(needle)),
+  );
+  const filtering = onlyUnread || sourceFilter !== 'all' || needle !== '';
   React.useEffect(() => onUnreadCountChange?.(unreadCount), [onUnreadCountChange, unreadCount]);
 
   return (
@@ -210,20 +229,6 @@ export function FeedGadget({
             {t('unreadCount', { count: unreadCount })}
             </span>
           )}
-          {isTelegram && (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={selectedTelegramItems.length === 0}
-              onClick={() => openDrawer({ context: {
-                kind: 'selection',
-                items: selectedTelegramItems.map(({ sourceId, documentId, documentVersionId }) => ({
-                  sourceId, documentId, documentVersionId,
-                })),
-              } })}
-            >{t('askAboutSelected', { count: selectedTelegramItems.length })}</Button>
-          )}
         </div>
 
         <div className="flex items-center gap-1">
@@ -240,7 +245,70 @@ export function FeedGadget({
         </div>
       </div>
 
-      {isTelegram && staleTelegramSelections.length > 0 && (
+      {/* Search and source filters apply to the loaded items only */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Input
+          type="search"
+          value={searchText}
+          onChange={(event) => setSearchText(event.target.value)}
+          aria-label={t('feedSearch')}
+          placeholder={t('feedSearch')}
+          className="h-11 min-w-0 flex-1 basis-40 text-xs"
+        />
+        {sourceIds.length > 1 && (
+          <Select value={sourceFilter} onValueChange={setSourceFilter}>
+            <SelectTrigger aria-label={t('feedSourceLabel')} className="h-11 w-auto min-w-36 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all" className="text-xs">{t('feedSourceAll')}</SelectItem>
+              {sourceIds.map((id) => (
+                <SelectItem key={id} value={id} className="text-xs">
+                  {sourcesQuery.data?.items.find((source) => source.id === id)?.name ?? t('feedSourceUnknown')}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+      </div>
+      {filtering && <p className="text-[11px] text-muted-foreground">{t('feedFiltersNote')}</p>}
+
+      {selectedTelegramItems.length > 0 && (
+        <div role="group" aria-label={t('feedBulkBar')} className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-background p-2 text-xs">
+          <span className="font-semibold" role="status">{t('feedSelectedCount', { count: selectedTelegramItems.length })}</span>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="min-h-11"
+            onClick={() => openDrawer({ context: {
+              kind: 'selection',
+              items: selectedTelegramItems.map(({ sourceId, documentId, documentVersionId }) => ({
+                sourceId, documentId, documentVersionId,
+              })),
+            } })}
+          >{t('askAboutSelected', { count: selectedTelegramItems.length })}</Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="min-h-11"
+            disabled={interactionMutation.isPending}
+            onClick={() => selectedTelegramItems.forEach((item) => interactionMutation.mutate({ id: item.documentId, versionNumber: item.versionNumber, read: true }))}
+          >{t('feedMarkRead')}</Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="min-h-11"
+            disabled={interactionMutation.isPending}
+            onClick={() => selectedTelegramItems.forEach((item) => interactionMutation.mutate({ id: item.documentId, versionNumber: item.versionNumber, bookmarked: true }))}
+          >{t('feedSave')}</Button>
+          <Button type="button" size="sm" variant="ghost" className="min-h-11" onClick={() => setSelectedTelegram({})}>{t('feedClear')}</Button>
+        </div>
+      )}
+
+      {staleTelegramSelections.length > 0 && (
         <p role="status" className="text-xs text-muted-foreground">{t('selectionChanged', { count: staleTelegramSelections.length })}</p>
       )}
 
@@ -253,13 +321,19 @@ export function FeedGadget({
         </div>
       )}
 
+      {docsQuery.isError && !docsQuery.isFetchNextPageError && (
+        <p role="alert" className="text-xs text-destructive">{t('feedLoadError')}</p>
+      )}
+
       {/* Empty State */}
-      {!docsQuery.isLoading && displayedItems.length === 0 && (
+      {!docsQuery.isLoading && !docsQuery.isError && displayedItems.length === 0 && (
         <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-muted-foreground">
           <Newspaper className="w-8 h-8 mb-2 opacity-50" />
             <p className="text-xs font-semibold text-foreground mb-1">{t('feedEmptyTitle')}</p>
           <p className="text-[11px] max-w-xs text-muted-foreground">
-            {onlyUnread
+            {needle || sourceFilter !== 'all'
+              ? t('feedNoMatch')
+              : onlyUnread
               ? t('feedCaughtUp')
               : t('feedEmptyDetail')}
           </p>
@@ -313,7 +387,7 @@ export function FeedGadget({
                   </p>
                 )}
 
-                {isTelegram && item.documentVersionId && item.sourceId && (
+                {item.documentVersionId && item.sourceId && (
                   <label className="inline-flex items-center gap-1.5 text-[10px] text-muted-foreground">
                     <input
                       type="checkbox"
@@ -395,9 +469,9 @@ export function FeedGadget({
                       title={item.bookmarked ? t('removeBookmark') : t('bookmark')}
                     ><Bookmark className="h-3.5 w-3.5" fill={item.bookmarked ? 'currentColor' : 'none'} /></button>}
 
-                    {item.url && (
+                    {safeHttpUrl(item.url) && (
                       <a
-                        href={item.url}
+                        href={safeHttpUrl(item.url)}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="inline-flex items-center gap-0.5 hover:text-primary font-medium"
@@ -419,6 +493,23 @@ export function FeedGadget({
             );
           })}
         </div>
+      )}
+
+      {!initialItems?.length && docsQuery.isFetchNextPageError && (
+        <p role="alert" className="text-xs text-destructive">{t('feedLoadMoreError')}</p>
+      )}
+      {!initialItems?.length && docsQuery.hasNextPage && (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="min-h-11 self-center"
+          disabled={docsQuery.isFetchingNextPage}
+          onClick={() => docsQuery.fetchNextPage()}
+        >{docsQuery.isFetchingNextPage ? t('feedLoadingMore') : t('feedLoadMore')}</Button>
+      )}
+      {!initialItems?.length && !docsQuery.hasNextPage && !docsQuery.isError && feedItems.length > 0 && (
+        <p className="text-center text-[11px] text-muted-foreground">{t('feedEndOfList')}</p>
       )}
     </div>
   );

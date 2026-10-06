@@ -24,7 +24,8 @@ function ActionRow({ rule, run, action, csrfToken, onOpenChat }: {
   // approval for an older revision has already been dropped by the server fence.
   const spec = run.revision === rule.revision ? rule.actions[action.ordinal - 1] : undefined;
   const pending = action.status === 'awaiting_approval';
-  const expired = pending && action.approval_expires_at !== null && Date.parse(action.approval_expires_at) <= Date.now();
+  const [mountedAt] = useState(() => Date.now());
+  const expired = pending && action.approval_expires_at !== null && Date.parse(action.approval_expires_at) <= mountedAt;
   const agentRun = action.result_reference?.startsWith('agent_run:');
   return <li className="space-y-2 rounded-md border border-border p-3 text-sm">
     <div className="flex flex-wrap items-center justify-between gap-2">

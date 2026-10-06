@@ -3,7 +3,8 @@
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import Link from 'next/link';
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { Button } from '@/components/ui/button';
 import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { listGeospatialObservations } from '@/modules/observations/api';
@@ -12,6 +13,14 @@ import { buildMapLayers, projectMapFeatures } from '../map-layers';
 
 const FlatMap = lazy(() => import('./flat-map').then((module) => ({ default: module.FlatMap })));
 const GlobeMap = lazy(() => import('./globe-map').then((module) => ({ default: module.GlobeMap })));
+
+const PHONE_QUERY = '(max-width: 768px)';
+/** Subscribes to the phone-width media query. */
+function subscribePhone(onChange: () => void): () => void {
+  const media = window.matchMedia(PHONE_QUERY);
+  media.addEventListener('change', onChange);
+  return () => media.removeEventListener('change', onChange);
+}
 
 /** Shared owner-scoped map controller; fixed controls and a nonshrinking plot precede scrollable evidence. */
 export function MapGadget({ instance, isEditMode = false }: { instance: GadgetInstance; isEditMode?: boolean }) {
@@ -30,7 +39,9 @@ export function MapGadget({ instance, isEditMode = false }: { instance: GadgetIn
   const intersectingRef = useRef(false);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [visible, setVisible] = useState(false);
-  const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
+  const [pickedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
+  const isPhone = useSyncExternalStore(subscribePhone, () => window.matchMedia(PHONE_QUERY).matches, () => false);
+  const [mapRequested, setMapRequested] = useState(false);
 
   useEffect(() => {
     const node = plotRef.current;
@@ -70,15 +81,12 @@ export function MapGadget({ instance, isEditMode = false }: { instance: GadgetIn
   const layers = useMemo(() => buildMapLayers(sourceIds, layerIds, features, precise), [sourceIds, layerIds, features, precise]);
   const activeLayer = layers.find((layer) => layer.id === 'world_observations');
   const points = activeLayer?.enabled && activeLayer.availability === 'available' ? activeLayer.features : [];
+  const selectedFeatureId = pickedFeatureId && features.some((feature) => feature.feature_id === pickedFeatureId) ? pickedFeatureId : null;
   const selectFeature = useCallback((featureId: string) => setSelectedFeatureId(featureId), []);
   const selected = features.find((feature) => feature.feature_id === selectedFeatureId) ?? null;
-  const canRenderEngine = visible && size.width > 0 && size.height > 0;
-
-  useEffect(() => {
-    if (selectedFeatureId && !features.some((feature) => feature.feature_id === selectedFeatureId)) {
-      setSelectedFeatureId(null);
-    }
-  }, [features, selectedFeatureId]);
+  // On phones the WebGL map is opt-in; the evidence list below always carries the same events.
+  const mapOnDemand = isPhone && !mapRequested;
+  const canRenderEngine = visible && size.width > 0 && size.height > 0 && !mapOnDemand;
 
   return <section className="flex h-full min-h-0 flex-col gap-2 overflow-hidden bg-card p-3 text-card-foreground">
     <header className="flex shrink-0 items-center justify-between gap-2 border-b border-border pb-2">
@@ -90,9 +98,11 @@ export function MapGadget({ instance, isEditMode = false }: { instance: GadgetIn
     {precise && sourceIds.length > 0 && observations.isPending && <p role="status" className="line-clamp-2 shrink-0 break-words text-xs text-muted-foreground">{t('observationLoading')}</p>}
     {observations.isError && <p role="alert" className="line-clamp-2 shrink-0 break-words text-xs text-destructive">{t('observationLoadFailed')}</p>}
     <div ref={plotRef} role="group" className="relative min-h-48 shrink-0 flex-1 overflow-hidden rounded border border-border" aria-label={t('mapPlotLabel')}>
+      {mapOnDemand && <div className="flex h-full flex-col items-start justify-center gap-2 p-3"><p className="text-xs text-muted-foreground">{t('mapOnDemand')}</p><Button type="button" variant="outline" className="min-h-11" onClick={() => setMapRequested(true)}>{t('mapOpen')}</Button></div>}
       {canRenderEngine && engine === 'globe'
         ? <Suspense fallback={<p role="status" className="p-2 text-xs text-muted-foreground">{t('mapRendererLoading')}</p>}><GlobeMap features={points} selectedFeatureId={selectedFeatureId} onSelectFeature={selectFeature} width={size.width} height={size.height} visible={visible} interactive={!isEditMode} /></Suspense>
         : canRenderEngine && <Suspense fallback={<p role="status" className="p-2 text-xs text-muted-foreground">{t('mapRendererLoading')}</p>}><FlatMap features={points} selectedFeatureId={selectedFeatureId} onSelectFeature={selectFeature} width={size.width} height={size.height} visible={visible} interactive={!isEditMode} /></Suspense>}
+      {isPhone && mapRequested && <Button type="button" variant="outline" className="absolute right-2 top-2 z-10 min-h-11" onClick={() => setMapRequested(false)}>{t('mapHide')}</Button>}
       {selected && <p className="absolute bottom-2 left-2 max-w-[90%] rounded bg-card/90 px-2 py-1 text-xs">{selected.metric} · {selected.value ?? t('weatherMissingValue')} {selected.unit} · {selected.region ?? selected.provider}<span className="block">{t('mapSourceIdentity')}: {selected.source_id} · {t('mapQuality')}: {selected.quality}</span>{selected.document_version_number ? <Link className="underline" href={`/knowledge/documents/${selected.document_id}?version=${selected.document_version_number}#cited-revision`}>{t('mapOpenRevision', { version: selected.document_version_number })}</Link> : <span>{t('mapRevisionUnavailable')}</span>}</p>}
     </div>
     <div className="flex min-h-0 flex-1 flex-col">

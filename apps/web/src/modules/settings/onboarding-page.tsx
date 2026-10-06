@@ -1,5 +1,6 @@
 'use client';
 
+import { CheckIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
@@ -102,20 +103,36 @@ export function OnboardingPage() {
             ? <><h2>{t('indexingTitle')}</h2><p>{t('indexingText')}</p><p role="status">{indexUnresolved ? index.isError && networkUnavailable(index.error) ? t('offline') : t('unknown') : `${indexState(index.data?.status ?? 'unavailable')} · ${t('indexCount', { count: index.data?.indexed_items ?? 0 })} · ${t('indexFailures', { count: index.data?.failed_items ?? 0 })}`}</p><p role="status">{aiUnresolved || indexUnresolved ? t('unknown') : semanticUnavailable ? t('semanticUnavailable') : t('semanticCompatibilityUnknown')}</p>{!aiUnresolved && !indexUnresolved && !semanticUnavailable ? <p>{t('semanticCompatibilityHelp')}</p> : null}<p role="status">{t('lexicalIndependent')}</p><div className="form-actions"><Button asChild className="secondary"><Link href="/search">{t('openSearch')}</Link></Button><Button asChild className="secondary"><Link href="/sources">{t('openSources')}</Link></Button></div></>
             : <><h2>{t('completeTitle')}</h2><p>{t('completeText')}</p><p role="status">{t('finished')}</p><Button asChild><Link href="/app">{t('openDashboard')}</Link></Button></>;
 
+  const done = Boolean(progress.data.completed_at);
   return <section className="content-panel space-y-5" aria-labelledby="onboarding-title">
-    <header><h1 id="onboarding-title">{t('title')}</h1><p className="muted">{t('description')}</p><p role="status" aria-live="polite">{save.isPending ? t('saving') : progress.data.completed_at ? t('finished') : t('progress', { current: currentIndex + 1, total: steps.length })}</p></header>
-    <nav aria-label={t('currentStep')} className="flex flex-wrap gap-2">
-      {steps.map((step, position) => <Button key={step.id} type="button" aria-current={step.id === currentStep.id ? 'step' : undefined}
-        className={step.id === currentStep.id ? '' : 'secondary'} disabled={save.isPending || progress.data.completed_at !== null || position > currentIndex}
-        onClick={() => move(step.id)}>{position + 1}. {t(step.label)}</Button>)}
-    </nav>
-    <div className="sub-panel space-y-4" aria-live="polite">{stepContent}</div>
-    {save.error && <p className="error" role="alert">{t('saveFailed')}</p>}
-    {!progress.data.completed_at && <div className="form-actions">
-      <Button type="button" className="secondary" disabled={save.isPending || currentIndex <= 0} onClick={() => move(steps[currentIndex - 1].id)}>{t('previous')}</Button>
-      <Button type="button" disabled={save.isPending || (currentStep.id === 'sample_or_import' && progress.data.data_choice === null)} onClick={() => move(steps[Math.min(steps.length - 1, currentIndex + 1)].id)}>
-        {currentStep.id === 'indexing' ? t('finish') : t('next')}
-      </Button>
-    </div>}
+    <header><span className="brand">{t('eyebrow')}</span><h1 id="onboarding-title">{t('title')}</h1><p className="muted">{t('description')}</p><p role="status" aria-live="polite" className="text-sm font-semibold">{save.isPending ? t('saving') : done ? t('finished') : t('progress', { current: currentIndex + 1, total: steps.length })}</p></header>
+    <div className="grid gap-6 md:grid-cols-[minmax(0,260px)_minmax(0,1fr)]">
+      <nav aria-label={t('currentStep')}>
+        <ol className="grid gap-1">
+          {steps.map((step, position) => {
+            const complete = done || position < currentIndex;
+            const current = !done && step.id === currentStep.id;
+            return <li key={step.id}>
+              <button type="button" aria-current={current ? 'step' : undefined} disabled={save.isPending || done || position > currentIndex} onClick={() => move(step.id)}
+                className={`flex min-h-11 w-full items-start gap-3 rounded-[9px] border px-3 py-2.5 text-left text-sm disabled:cursor-default ${current ? 'border-border bg-secondary' : 'border-transparent hover:bg-secondary'}`}>
+                <span aria-hidden="true" className={`inline-flex size-6 shrink-0 items-center justify-center rounded-full border text-xs font-bold ${complete ? 'border-primary bg-primary text-primary-foreground' : current ? 'border-primary text-primary' : 'border-border text-muted-foreground'}`}>{complete ? <CheckIcon className="size-3.5" /> : position + 1}</span>
+                <span className="grid"><strong className={current ? 'font-semibold' : 'font-medium'}>{t(step.label)}</strong><span className="muted text-xs">{t(complete ? 'stepDone' : current ? 'stepCurrent' : 'stepUpcoming')}</span></span>
+              </button>
+            </li>;
+          })}
+        </ol>
+        <p className="muted mt-3 text-xs">{t('personalSourcesNote')}</p>
+      </nav>
+      <div className="grid content-start gap-5">
+        <div className="sub-panel space-y-4" aria-live="polite">{stepContent}</div>
+        {save.error && <p className="error" role="alert">{t('saveFailed')}</p>}
+        {!done && <div className="form-actions">
+          <Button type="button" className="secondary" disabled={save.isPending || currentIndex <= 0} onClick={() => move(steps[currentIndex - 1].id)}>{t('previous')}</Button>
+          <Button type="button" disabled={save.isPending || (currentStep.id === 'sample_or_import' && progress.data.data_choice === null)} onClick={() => move(steps[Math.min(steps.length - 1, currentIndex + 1)].id)}>
+            {currentStep.id === 'indexing' ? t('finish') : t('next')}
+          </Button>
+        </div>}
+      </div>
+    </div>
   </section>;
 }

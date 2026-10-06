@@ -2,7 +2,7 @@
 
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -10,6 +10,9 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ApiError } from '@/core/api';
+import { DisconnectDialog } from './disconnect-dialog';
+import { SyncHistory } from './sync-history';
+import { useSourceActions } from './use-source-actions';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { AppLocaleId, normalizeFormattingLocale } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
@@ -26,6 +29,7 @@ import {
   connectorConfigurationIsAtLeast,
   connectorKeys,
   createConnectorSource,
+  ConnectorActivation,
   getConnectorActivation,
   getConnectorCatalog,
   getMonotonicConnectorConfiguration,
@@ -44,6 +48,7 @@ import {
   resetGitHubSync,
   refreshGitHubOAuth,
   startGitHubOAuth,
+  triggerCollection,
   type GitHubPeer,
 } from './api';
 
@@ -109,16 +114,41 @@ function errorText(error: unknown): string {
   return 'actionFailed';
 }
 
+/** Pause and Disconnect controls for the editor header, sharing handlers and the confirmation dialog with the source list rows. */
+function EditorSourceActions({ source, activation, disabled, onChanged, onPurgeStarted, onClose, onBusyChange }: {
+  source: Source;
+  activation?: ConnectorActivation;
+  disabled: boolean;
+  onChanged: () => void;
+  onPurgeStarted?: (operationId: string) => void;
+  onClose: () => void;
+  onBusyChange: (busy: boolean) => void;
+}) {
+  const t = useTranslations('sources');
+  const actions = useSourceActions({ source, activation, onChanged: () => { onChanged(); onClose(); }, onPurgeStarted });
+  const { busy: actionsBusy } = actions;
+  useEffect(() => { onBusyChange(actionsBusy); return () => onBusyChange(false); }, [actionsBusy, onBusyChange]);
+  const off = disabled || actions.busy;
+  return <>
+    {source.status === 'active' && <Button className="secondary" disabled={off} onClick={() => void actions.toggleStatus()}>{actions.busy ? t('pausing') : t('pause')}</Button>}
+    <DisconnectDialog name={source.name} archived={source.status === 'archived'} disabled={off} onConfirm={(deleteData) => void actions.disconnect(deleteData)}
+      trigger={<Button className="secondary" disabled={off}>{actions.busy ? t('disconnecting') : t(source.status === 'archived' ? 'disconnectDelete' : 'disconnectAction')}</Button>} />
+    {actions.error && <p className="error" role="alert">{t('actionFailed')}</p>}
+  </>;
+}
+
 /** Edit and activate a connector using owner APIs; show uncertain GitHub visibility, actual source status, and retained owner history separately. */
 export function ConnectorEditor({
   source,
   onClose,
   onChanged,
+  onPurgeStarted,
   registerTransitionGuard,
 }: {
   source?: Source | null;
   onClose: () => void;
   onChanged: () => void;
+  onPurgeStarted?: (operationId: string) => void;
   registerTransitionGuard: (guard: (() => boolean) | null) => void;
 }) {
   const t = useTranslations('sources');
@@ -131,12 +161,10 @@ export function ConnectorEditor({
   const [name, setName] = useState(source?.name ?? '');
   const [sourceId, setSourceId] = useState(source?.id ?? '');
   const providerRef = useRef(provider);
-  providerRef.current = provider;
   const nameRef = useRef(name);
-  nameRef.current = name;
   const sourceIdRef = useRef(sourceId);
-  sourceIdRef.current = sourceId;
   const sourceGenerationRef = useRef(source?.generation ?? 0);
+  const [sourceGeneration, setSourceGeneration] = useState(source?.generation ?? 0);
   const editorGenerationId = useId();
   const editorGenerationRef = useRef(editorGenerationId);
   const requestGeneration = useRef(0);
@@ -151,7 +179,6 @@ export function ConnectorEditor({
   const [telegramSecretAction, setTelegramSecretAction] = useState<'keep' | 'replace'>('keep');
   const [revision, setRevision] = useState(0);
   const revisionRef = useRef(revision);
-  revisionRef.current = revision;
   const [activationState, setActivationState] = useState(source?.status === 'paused' ? 'disabled' : 'saved_not_active');
   const [sourceStatusOverride, setSourceStatusOverride] = useState<Source['status'] | null>(null);
   const [activationError, setActivationError] = useState<string | null>(null);
@@ -159,6 +186,7 @@ export function ConnectorEditor({
   const [dirty, setDirty] = useState(false);
   const [validation, setValidation] = useState<{ at: string; generation: number; revision: number; verifiedBotId?: string | null; scopeVerified?: boolean | null } | null>(null);
   const [busyAction, setBusyAction] = useState('');
+  const [actionsBusy, setActionsBusy] = useState(false);
   const [error, setError] = useState('');
   const [conflict, setConflict] = useState(false);
   const [notice, setNotice] = useState('');
@@ -170,7 +198,13 @@ export function ConnectorEditor({
   const loadedFor = useRef('');
   const serverConfigurationRef = useRef<ConnectorConfiguration | null>(null);
   const dirtyRef = useRef(dirty);
-  dirtyRef.current = dirty || Boolean(secret);
+  useLayoutEffect(() => {
+    providerRef.current = provider;
+    nameRef.current = name;
+    sourceIdRef.current = sourceId;
+    revisionRef.current = revision;
+    dirtyRef.current = dirty || Boolean(secret);
+  });
   /** Asks before discarding the current unsaved draft. */
   const confirmDiscard = useCallback(() => !dirtyRef.current || window.confirm(t('draftLeave')), [t]);
   /** Invalidates the current draft session and accepts leaving the editor. */
@@ -198,6 +232,7 @@ export function ConnectorEditor({
     revisionRef.current = baseline?.expected_revision ?? 0;
     if (baseline) {
       sourceGenerationRef.current = baseline.source_generation;
+      setSourceGeneration(baseline.source_generation);
       setActivationState(baseline.activation_state);
       setActivationError(baseline.activation_error_code);
       setProviderCredentialConfigured(baseline.provider_credential_configured);
@@ -266,6 +301,7 @@ export function ConnectorEditor({
     setScopeResetEpoch((current) => current + 1);
     serverConfigurationRef.current = value;
     sourceGenerationRef.current = value.source_generation;
+    setSourceGeneration(value.source_generation);
     setProvider(value.provider && isProvider(value.provider) ? value.provider : value.source_type === 'mcp' ? 'mcp' : value.source_type === 'rss' ? 'rss' : value.source_type === 'web' ? 'web' : 'rest');
     setConfiguration(value.configuration);
     setAuthMethod(value.auth_method);
@@ -309,6 +345,7 @@ export function ConnectorEditor({
       acceptLeave();
       setSourceId('');
       sourceGenerationRef.current = 0;
+      setSourceGeneration(0);
       setConfiguration(defaultConfiguration('rss'));
       setName('');
       loadedFor.current = '';
@@ -403,6 +440,26 @@ export function ConnectorEditor({
     }
   }
 
+  /** Starts one collection run for an active source and reports the accepted status. */
+  async function collectNow() {
+    const id = sourceId;
+    if (!id) return;
+    const token = beginRequest('collect');
+    if (!token) return;
+    setError('');
+    setNotice('');
+    try {
+      const result = await triggerCollection(id, csrfToken);
+      if (!requestIsCurrent(token)) return;
+      setNotice(t('collectResult', { status: result.status }));
+      await queryClient.invalidateQueries({ queryKey: connectorKeys.ingestion(id) });
+    } catch (cause) {
+      if (requestIsCurrent(token)) setError(errorText(cause));
+    } finally {
+      endRequest(token);
+    }
+  }
+
   /** Reloads server-owned connector and activation state while preserving newer local drafts and rejecting stale revisions. */
   async function refreshOwnerState(id: string, token: RequestToken): Promise<boolean> {
     if (!id) return false;
@@ -490,6 +547,7 @@ export function ConnectorEditor({
     const created = await createConnectorSource(sourceTypes[provider], name.trim(), csrfToken, token.controller.signal, nativeProviders.has(provider) ? provider : undefined);
     if (!requestIsCurrent(token)) throw new DOMException('editor_closed', 'AbortError');
     sourceGenerationRef.current = created.generation;
+    setSourceGeneration(created.generation);
     setSourceId(created.id);
     setNotice(t('sourceCreated'));
     onChanged();
@@ -559,6 +617,7 @@ export function ConnectorEditor({
       }
       serverConfigurationRef.current = acknowledged;
       sourceGenerationRef.current = acknowledged.source_generation;
+      setSourceGeneration(acknowledged.source_generation);
       loadedFor.current = id;
       setRevision(acknowledged.expected_revision);
       revisionRef.current = acknowledged.expected_revision;
@@ -917,6 +976,15 @@ export function ConnectorEditor({
     }
   }
 
+  const locked = busyAction !== '' || actionsBusy;
+  const activationLabel = t((({ queued: 'stateQueued', provisioning: 'stateProvisioning', saved_not_active: 'stateSavedNotActive', reconciliation_required: 'stateReconciliationRequired', disabled: 'stateDisabled', active: 'statusActive' } as Record<string, string>)[visibleActivationState] ?? 'stateUnknown') as 'stateUnknown');
+  const currentStep = revision > 0 ? 'collect' : validation ? 'choose' : 'connect';
+  const steps = [
+    { id: 'connect', title: t('stepConnect'), status: validation ? t('stepValidated') : providerCredentialConfigured ? t('stepCredentialSaved') : t('stepNotValidated') },
+    { id: 'choose', title: t('stepChooseData'), status: t(providerKey(provider) as 'provider') },
+    { id: 'collect', title: t('stepCollect'), status: t('everyMinutes', { minutes: configuration.schedule_interval_minutes }) },
+  ] as const;
+
   /** Formats provider availability and unsupported-operation information for the connector catalog. */
   const catalogStatus = (entry: ConnectorCatalogEntry) => entry.availability === 'available' || entry.availability === 'implemented'
     ? t('available') : entry.availability === 'requires_credentials' ? t('credentialsRequired') : entry.availability === 'planned' ? t('planned') : t('unavailable');
@@ -930,26 +998,70 @@ export function ConnectorEditor({
         {catalog.map((entry) => {
           const localProvider = entry.provider_id;
           const supported = ['available', 'implemented', 'requires_credentials'].includes(entry.availability) && isProvider(localProvider);
-          return <Button key={entry.provider_id} type="button" className={`source-provider${provider === localProvider ? ' is-selected' : ''}`} disabled={!supported || busyAction !== ''} onClick={() => { if (!supported || !isProvider(localProvider)) return; setProvider(localProvider); setConfiguration(defaultConfiguration(localProvider)); markDraftChanged(); }}>
+          return <Button key={entry.provider_id} type="button" className={`source-provider${provider === localProvider ? ' is-selected' : ''}`} disabled={!supported || locked} onClick={() => { if (!supported || !isProvider(localProvider)) return; setProvider(localProvider); setConfiguration(defaultConfiguration(localProvider)); markDraftChanged(); }}>
             <strong>{t(providerKey(entry.provider_id))}</strong><span>{catalogStatus(entry)}</span>
             {!supported && <small>{t('providerUnavailableReason')}</small>}
           </Button>;
         })}
       </div>}
       <div className="form source-editor-form">
-        <div className="field"><Label htmlFor="new-source-name">{t('sourceName')}</Label><Input id="new-source-name" maxLength={200} disabled={busyAction !== ''} value={name} onChange={(event) => { setName(event.target.value); markDraftChanged(); }} /></div>
-        <div className="form-actions"><Button disabled={busyAction !== '' || !name.trim() || !currentEntry || !['available', 'implemented', 'requires_credentials'].includes(currentEntry.availability)} onClick={createSource}>{busyAction === 'create' ? t('saving') : t('createAndContinue')}</Button><Button className="secondary" onClick={closeEditor}>{t('cancel')}</Button></div>
+        <div className="field"><Label htmlFor="new-source-name">{t('sourceName')}</Label><Input id="new-source-name" maxLength={200} disabled={locked} value={name} onChange={(event) => { setName(event.target.value); markDraftChanged(); }} /></div>
+        <div className="form-actions"><Button disabled={locked || !name.trim() || !currentEntry || !['available', 'implemented', 'requires_credentials'].includes(currentEntry.availability)} onClick={createSource}>{busyAction === 'create' ? t('saving') : t('createAndContinue')}</Button><Button className="secondary" onClick={closeEditor}>{t('cancel')}</Button></div>
       </div>
     </> : <>
-      <header className="section-heading"><div><h2>{name || source?.name || t('editTitle')}</h2><p className="muted">{t('stepChooseData')} · {t('stepCollect')}</p></div><Button className="secondary" onClick={closeEditor}>{t('close')}</Button></header>
+      <header className="section-heading">
+        <div>
+          <h2>{name || source?.name || t('editTitle')}</h2>
+          <p className="muted"><span className="badge">{sourceStatus === 'paused' ? t('statusPaused') : activationLabel}</span> {revision > 0 ? t('editorRevision', { revision }) : t('editorRevisionNew')}{(dirty || secret) ? ` · ${t('editorUnsaved')}` : ''}</p>
+        </div>
+        <div className="form-actions">
+          {sourceStatus === 'active' && visibleActivationState === 'active' && !dirty && <Button className="secondary" disabled={locked} onClick={collectNow}>{busyAction === 'collect' ? t('collecting') : t('collectNow')}</Button>}
+          {sourceStatus === 'paused' && provider !== 'mcp' && <Button className="secondary" disabled={locked} onClick={resumeSource}>{busyAction === 'resume' ? t('resuming') : t('resume')}</Button>}
+          {source && <EditorSourceActions source={{ ...source, status: sourceStatus }} activation={activationQuery.data} disabled={locked || dirty || Boolean(secret)} onChanged={onChanged} onPurgeStarted={onPurgeStarted} onClose={onClose} onBusyChange={setActionsBusy} />}
+          <Button className="secondary" onClick={closeEditor}>{t('close')}</Button>
+        </div>
+      </header>
       {configurationQuery.isPending && <p className="muted">{t('loading')}</p>}
       {configurationQuery.isError && <div className="error" role="alert">{t(errorText(configurationQuery.error) as 'conflict' | 'configurationInvalid' | 'serviceUnavailable' | 'sourceNameRequired' | 'actionFailed')} <Button className="secondary" onClick={() => configurationQuery.refetch()}>{t('retry')}</Button></div>}
       {configurationQuery.isSuccess && <>
         {provider === 'mcp' ? <McpCollectionEditor sourceId={sourceId} sourceStatus={sourceStatus} onDraftChange={setDirty} onChanged={() => { void queryClient.invalidateQueries({ queryKey: connectorKeys.configuration(sourceId) }); void queryClient.invalidateQueries({ queryKey: connectorKeys.activation(sourceId) }); onChanged(); }} /> : <>
-        <fieldset className="source-editor-fields" disabled={busyAction !== ''}>
+        {revision > 0 && (visibleActivationState === 'saved_not_active' || visibleActivationState === 'reconciliation_required' || Boolean(visibleActivationError)) && <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive p-4" role="status">
+          <p><strong>{t('activationIssueTitle')}</strong> {t('savedInactive')}{visibleActivationError ? ` ${t('activationError')}: ${visibleActivationError}` : ''}</p>
+          {!dirty && <Button className="secondary" disabled={locked} onClick={retryActivation}>{busyAction === 'activate' ? t('enabling') : t('retryActivation')}</Button>}
+        </div>}
+        <ol aria-label={t('stepperLabel')} className="m-0 grid list-none grid-cols-3 gap-3 p-0 max-[720px]:grid-cols-1">
+          {steps.map((step) => <li key={step.id}>
+            <a href={`#source-step-${step.id}`} aria-current={currentStep === step.id ? 'step' : undefined} className={`flex min-h-11 flex-col rounded-lg border p-3 no-underline ${currentStep === step.id ? 'border-primary' : 'border-border'}`}>
+              <strong>{step.title}</strong><span className="muted text-sm">{step.status}</span>
+            </a>
+          </li>)}
+        </ol>
+        <fieldset className="source-editor-fields" disabled={locked}>
         <div className="form source-editor-form">
+          <section id="source-step-connect" aria-labelledby="source-step-connect-title" className="grid gap-3 rounded-lg border border-border p-4">
+            <h3 id="source-step-connect-title" className="text-base font-semibold">{t('stepConnect')}</h3>
+            {!['telegram', 'alpha_vantage', 'rest'].includes(provider) && currentEntry && (currentEntry.auth_methods.every((method) => method === 'none')
+              ? <p className="muted">{t('connectNoCredential')}</p>
+              : currentEntry.auth_methods.includes('oauth2') && <p className="muted">{t('connectOAuth')}</p>)}
+            {provider === 'telegram' && <>
+              <div className="field"><Label htmlFor="source-telegram-secret-action">{t('telegramCredentialAction')}</Label><Select value={telegramSecretAction} onValueChange={(value) => { setTelegramSecretAction(value as 'keep' | 'replace'); setSecret(''); dirtyRef.current = dirty; draftVersion.current += 1; setValidation(null); setNotice(''); }}><SelectTrigger id="source-telegram-secret-action"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="keep">{t('keepCredential')}</SelectItem><SelectItem value="replace">{t('replaceCredential')}</SelectItem></SelectContent></Select></div>
+              {telegramSecretAction === 'replace' && <div className="field"><Label htmlFor="source-telegram-token">{t('telegramBotToken')}</Label><Input id="source-telegram-token" type="password" autoComplete="new-password" maxLength={512} required value={secret} onChange={(event) => { setSecret(event.target.value); dirtyRef.current = true; setDirty(true); draftVersion.current += 1; setValidation(null); setNotice(''); }} /><small className="muted">{t('secretHelp')}</small></div>}
+            </>}
+            {provider === 'alpha_vantage' && <div className="field"><Label htmlFor="source-alpha-key">{t('alphaVantageKey')}</Label><Input id="source-alpha-key" type="password" autoComplete="new-password" maxLength={256} required={!providerCredentialConfigured} value={secret} onChange={(event) => { setSecret(event.target.value); dirtyRef.current = true; setDirty(true); draftVersion.current += 1; setValidation(null); setNotice(''); }} /><small className="muted">{providerCredentialConfigured ? t('credentialSavedWriteOnly') : t('secretHelp')}</small></div>}
+          {provider === 'rest' && <>
+            <div className="field"><Label htmlFor="source-auth-method">{t('auth')}</Label><Select value={authMethod} onValueChange={(value) => { setAuthMethod(value as typeof authMethod); markDraftChanged(); setValidation(null); }}><SelectTrigger id="source-auth-method"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">{t('noAuthentication')}</SelectItem><SelectItem value="http_header">{t('headerAuthentication')}</SelectItem></SelectContent></Select></div>
+            {authMethod === 'http_header' && <>
+              <div className="field"><Label htmlFor="source-header-name">{t('headerName')}</Label><Input id="source-header-name" maxLength={128} value={authHeaderName} onChange={(event) => { setAuthHeaderName(event.target.value); markDraftChanged(); setValidation(null); }} /></div>
+              <div className="field"><Label htmlFor="source-provider-secret">{t('providerSecret')}</Label><Input id="source-provider-secret" type="password" autoComplete="new-password" value={secret} onChange={(event) => { setSecret(event.target.value); dirtyRef.current = dirty || Boolean(event.target.value); draftVersion.current += 1; setValidation(null); }} /><small className="muted">{t('secretHelp')}</small></div>
+            </>}
+          </>}
+            <div className="form-actions"><Button className="secondary" disabled={locked} onClick={validateDraft}>{busyAction === 'validate' ? t('validating') : t('validateDraft')}</Button></div>
+            {validation && <p className="status-panel" role="status">{t('validationPassed', { time: formatDate(validation.at, display.locale, display.timezone) })}{validation.verifiedBotId ? ` ${t('verifiedBot')}: ${validation.verifiedBotId}` : ''}{validation.scopeVerified ? ` · ${t('scopeVerified')}` : ''}</p>}
+          </section>
+          <section id="source-step-choose" aria-labelledby="source-step-choose-title" className="grid gap-3 rounded-lg border border-border p-4">
+            <h3 id="source-step-choose-title" className="text-base font-semibold">{t('stepChooseData')}</h3>
           {nativeProviders.has(provider)
-            ? <ProviderScope key={`${sourceId}:${provider}:${revision}:${sourceGenerationRef.current}:${scopeResetEpoch}`} provider={provider as NativeProvider} configuration={configuration} disabled={busyAction !== ''} resetEpoch={scopeResetEpoch} onChange={changeConfiguration} />
+            ? <ProviderScope key={`${sourceId}:${provider}:${revision}:${sourceGeneration}:${scopeResetEpoch}`} provider={provider as NativeProvider} configuration={configuration} disabled={locked} resetEpoch={scopeResetEpoch} onChange={changeConfiguration} />
             : provider === 'rss' ? <div className="field"><Label htmlFor="source-feed-url">{t('sourceUrl')}</Label><Input id="source-feed-url" type="url" value={configuration.feed_url ?? ''} onChange={(event) => changeConfiguration('feed_url', event.target.value)} /></div> : <div className="field"><Label htmlFor="source-config-url">{provider === 'rest' ? t('apiUrl') : t('pageUrl')}</Label><Input id="source-config-url" type="url" value={configuration.url ?? ''} onChange={(event) => changeConfiguration('url', event.target.value)} /></div>}
           {provider === 'rest' && <>
             <div className="field"><Label htmlFor="source-items-path">{t('itemsPath')}</Label><Input id="source-items-path" maxLength={256} value={configuration.items_path ?? ''} onChange={(event) => changeConfiguration('items_path', event.target.value)} /></div>
@@ -958,30 +1070,29 @@ export function ConnectorEditor({
             <div className="field"><Label htmlFor="source-content-field">{t('contentField')}</Label><Input id="source-content-field" maxLength={128} value={configuration.content_field ?? ''} onChange={(event) => changeConfiguration('content_field', event.target.value)} /></div>
             <div className="field"><Label htmlFor="source-updated-field">{t('updatedField')}</Label><Input id="source-updated-field" maxLength={128} value={configuration.updated_field ?? ''} onChange={(event) => changeConfiguration('updated_field', event.target.value)} /></div>
           </>}
-          {provider === 'web' && <>
+          </section>
+          <section id="source-step-collect" aria-labelledby="source-step-collect-title" className="grid gap-3 rounded-lg border border-border p-4">
+            <h3 id="source-step-collect-title" className="text-base font-semibold">{t('stepCollect')}</h3>
+          <div className="field"><Label htmlFor="source-schedule">{t('schedule')}</Label><Select value={String(configuration.schedule_interval_minutes)} onValueChange={(value) => changeConfiguration('schedule_interval_minutes', Number(value) as ConnectorConfig['schedule_interval_minutes'])}><SelectTrigger id="source-schedule"><SelectValue /></SelectTrigger><SelectContent>{(provider === 'alpha_vantage' ? [1440] : intervals).map((minutes) => <SelectItem key={minutes} value={String(minutes)}>{t('everyMinutes', { minutes })}</SelectItem>)}</SelectContent></Select></div>
+          <div className="field"><Label htmlFor="source-timezone">{t('timezone')}</Label><Input id="source-timezone" value={configuration.timezone} onChange={(event) => changeConfiguration('timezone', event.target.value)} /></div>
+            {nativeProviders.has(provider) && <>
+            <div className="field"><Label htmlFor="source-history-mode">{t('historyMode')}</Label><Input id="source-history-mode" readOnly aria-readonly="true" value={t(provider === 'telegram' ? 'pendingUpdatesOnly' : 'returnedSnapshot')} /></div>
+            </>}
+          </section>
+          {(provider === 'web' || nativeProviders.has(provider)) && <details className="rounded-lg border border-border p-4">
+            <summary className="cursor-pointer font-semibold">{t('advancedTitle')}</summary>
+            <div className="mt-3 grid gap-3">
+              {provider === 'web' && <>
             <div className="field"><Label htmlFor="source-max-pages">{t('maxPages')}</Label><Input id="source-max-pages" type="number" min={1} max={10} value={configuration.max_pages} onChange={(event) => changeConfiguration('max_pages', Number(event.target.value))} /></div>
             <div className="field"><Label htmlFor="source-max-depth">{t('maxDepth')}</Label><Input id="source-max-depth" type="number" min={0} max={2} value={configuration.max_depth} onChange={(event) => changeConfiguration('max_depth', Number(event.target.value))} /></div>
             <div className="field"><Label htmlFor="source-timeout">{t('timeout')}</Label><Input id="source-timeout" type="number" min={1} max={60} value={configuration.timeout_seconds} onChange={(event) => changeConfiguration('timeout_seconds', Number(event.target.value))} /></div>
             <div className="field field-inline"><Label htmlFor="source-js-render">{t('renderJavascript')}</Label><Checkbox id="source-js-render" checked={configuration.js_render} onCheckedChange={(checked) => changeConfiguration('js_render', checked === true)} /></div>
-          </>}
-          {nativeProviders.has(provider) && <>
+              </>}
+              {nativeProviders.has(provider) && <>
             <div className="field"><Label htmlFor="source-native-timeout">{t('timeout')}</Label><Input id="source-native-timeout" type="number" min={1} max={30} value={configuration.timeout_seconds} onChange={(event) => changeConfiguration('timeout_seconds', Number(event.target.value))} /></div>
-            <div className="field"><Label htmlFor="source-history-mode">{t('historyMode')}</Label><Input id="source-history-mode" readOnly aria-readonly="true" value={t(provider === 'telegram' ? 'pendingUpdatesOnly' : 'returnedSnapshot')} /></div>
-            {provider === 'telegram' && <>
-              <div className="field"><Label htmlFor="source-telegram-secret-action">{t('telegramCredentialAction')}</Label><Select value={telegramSecretAction} onValueChange={(value) => { setTelegramSecretAction(value as 'keep' | 'replace'); setSecret(''); dirtyRef.current = dirty; draftVersion.current += 1; setValidation(null); setNotice(''); }}><SelectTrigger id="source-telegram-secret-action"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="keep">{t('keepCredential')}</SelectItem><SelectItem value="replace">{t('replaceCredential')}</SelectItem></SelectContent></Select></div>
-              {telegramSecretAction === 'replace' && <div className="field"><Label htmlFor="source-telegram-token">{t('telegramBotToken')}</Label><Input id="source-telegram-token" type="password" autoComplete="new-password" maxLength={512} required value={secret} onChange={(event) => { setSecret(event.target.value); dirtyRef.current = true; setDirty(true); draftVersion.current += 1; setValidation(null); setNotice(''); }} /><small className="muted">{t('secretHelp')}</small></div>}
-            </>}
-            {provider === 'alpha_vantage' && <div className="field"><Label htmlFor="source-alpha-key">{t('alphaVantageKey')}</Label><Input id="source-alpha-key" type="password" autoComplete="new-password" maxLength={256} required={!providerCredentialConfigured} value={secret} onChange={(event) => { setSecret(event.target.value); dirtyRef.current = true; setDirty(true); draftVersion.current += 1; setValidation(null); setNotice(''); }} /><small className="muted">{providerCredentialConfigured ? t('credentialSavedWriteOnly') : t('secretHelp')}</small></div>}
-          </>}
-          <div className="field"><Label htmlFor="source-timezone">{t('timezone')}</Label><Input id="source-timezone" value={configuration.timezone} onChange={(event) => changeConfiguration('timezone', event.target.value)} /></div>
-          <div className="field"><Label htmlFor="source-schedule">{t('schedule')}</Label><Select value={String(configuration.schedule_interval_minutes)} onValueChange={(value) => changeConfiguration('schedule_interval_minutes', Number(value) as ConnectorConfig['schedule_interval_minutes'])}><SelectTrigger id="source-schedule"><SelectValue /></SelectTrigger><SelectContent>{(provider === 'alpha_vantage' ? [1440] : intervals).map((minutes) => <SelectItem key={minutes} value={String(minutes)}>{t('everyMinutes', { minutes })}</SelectItem>)}</SelectContent></Select></div>
-          {provider === 'rest' && <>
-            <div className="field"><Label htmlFor="source-auth-method">{t('auth')}</Label><Select value={authMethod} onValueChange={(value) => { setAuthMethod(value as typeof authMethod); markDraftChanged(); setValidation(null); }}><SelectTrigger id="source-auth-method"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">{t('noAuthentication')}</SelectItem><SelectItem value="http_header">{t('headerAuthentication')}</SelectItem></SelectContent></Select></div>
-            {authMethod === 'http_header' && <>
-              <div className="field"><Label htmlFor="source-header-name">{t('headerName')}</Label><Input id="source-header-name" maxLength={128} value={authHeaderName} onChange={(event) => { setAuthHeaderName(event.target.value); markDraftChanged(); setValidation(null); }} /></div>
-              <div className="field"><Label htmlFor="source-provider-secret">{t('providerSecret')}</Label><Input id="source-provider-secret" type="password" autoComplete="new-password" value={secret} onChange={(event) => { setSecret(event.target.value); dirtyRef.current = dirty || Boolean(event.target.value); draftVersion.current += 1; setValidation(null); }} /><small className="muted">{t('secretHelp')}</small></div>
-            </>}
-          </>}
+              </>}
+            </div>
+          </details>}
         </div>
         </fieldset>
         {historyDescription && <div className="source-capability"><strong>{t('history')}</strong><p>{historyDescription}</p>{nativeProviders.has(provider) && <p>{t('providerHistoryCaveat')}</p>}</div>}
@@ -1007,35 +1118,32 @@ export function ConnectorEditor({
           {githubStatusQuery.isError && <p className="error">{t('githubConnectionFailed')}</p>}
           {sourceId && <GitHubSummary sourceId={sourceId} />}
           <div className="form-actions">
-            {provider === 'github' && githubStatusQuery.data?.sync.scope_sha256 && <Button className="secondary" disabled={busyAction !== '' || dirty || sourceStatus !== 'active' || revision < 1} onClick={resetGitHubHistory}>{busyAction === 'github-reset' ? t('saving') : t('githubResetHistory')}</Button>}
+            {provider === 'github' && githubStatusQuery.data?.sync.scope_sha256 && <Button className="secondary" disabled={locked || dirty || sourceStatus !== 'active' || revision < 1} onClick={resetGitHubHistory}>{busyAction === 'github-reset' ? t('saving') : t('githubResetHistory')}</Button>}
             {githubStatusQuery.data?.recovery_available && ['provider_revoke_outcome_unknown', 'provider_revoke_pending'].includes(githubStatusQuery.data.coordinator_error_code ?? '')
-              ? <Button className="secondary" disabled={busyAction !== '' || dirty} onClick={reviewGitHubDisconnect}>{busyAction === 'github-peers' ? t('loading') : t('githubRetryRevoke')}</Button>
+              ? <Button className="secondary" disabled={locked || dirty} onClick={reviewGitHubDisconnect}>{busyAction === 'github-peers' ? t('loading') : t('githubRetryRevoke')}</Button>
               : githubStatusQuery.data?.recovery_available && ['authorization', 'refresh'].includes(githubStatusQuery.data.operation_kind ?? '')
-              ? <Button className="secondary" disabled={busyAction !== '' || dirty || sourceStatus !== 'active' || revision < 1 || !githubStatusQuery.data.operation_source_id} onClick={reviewGitHubRecovery}>{t('githubReviewRecovery')}</Button>
+              ? <Button className="secondary" disabled={locked || dirty || sourceStatus !== 'active' || revision < 1 || !githubStatusQuery.data.operation_source_id} onClick={reviewGitHubRecovery}>{t('githubReviewRecovery')}</Button>
               : githubStatusQuery.data?.coordinator_state !== 'idle' && githubStatusQuery.data?.coordinator_state !== undefined
               ? <p className="muted" role="status">{t('githubRecoveryWait')}</p>
               : githubStatusQuery.data?.state === 'ready'
               ? <>
-                <Button className="secondary" disabled={busyAction !== '' || dirty} onClick={refreshGitHub}>{busyAction === 'github-refresh' ? t('saving') : t('githubRefresh')}</Button>
-                <Button className="secondary" disabled={busyAction !== '' || dirty} onClick={reviewGitHubDisconnect}>{busyAction === 'github-peers' ? t('loading') : t('githubDisconnect')}</Button>
+                <Button className="secondary" disabled={locked || dirty} onClick={refreshGitHub}>{busyAction === 'github-refresh' ? t('saving') : t('githubRefresh')}</Button>
+                <Button className="secondary" disabled={locked || dirty} onClick={reviewGitHubDisconnect}>{busyAction === 'github-peers' ? t('loading') : t('githubDisconnect')}</Button>
               </>
-              : <Button className="secondary" disabled={busyAction !== '' || dirty || sourceStatus !== 'active' || revision < 1} onClick={connectGitHub}>{busyAction === 'github-connect' ? t('loading') : t('githubConnect')}</Button>}
+              : <Button className="secondary" disabled={locked || dirty || sourceStatus !== 'active' || revision < 1} onClick={connectGitHub}>{busyAction === 'github-connect' ? t('loading') : t('githubConnect')}</Button>}
           </div>
         </section>}
         {currentEntry?.quota_limits && <div className="source-capability"><strong>{t('quota')}</strong><p>{Object.entries(currentEntry.quota_limits).map(([key, value]) => `${key}: ${value}`).join(' · ')}</p></div>}
-        {validation && <p className="status-panel" role="status">{t('validationPassed', { time: formatDate(validation.at, display.locale, display.timezone) })}{validation.verifiedBotId ? ` ${t('verifiedBot')}: ${validation.verifiedBotId}` : ''}{validation.scopeVerified ? ` · ${t('scopeVerified')}` : ''}</p>}
         {error && <p className="error" role="alert">{t(error as 'conflict' | 'configurationInvalid' | 'serviceUnavailable' | 'validationOutcomeUnknown' | 'sourceNameRequired' | 'actionFailed' | 'reloadFailed')}</p>}
         {notice && <p className="muted" role="status">{notice}</p>}
         {conflict && <div className="source-conflict" role="group" aria-label={t('conflict')}>
           <p className="error">{t('conflict')}</p>
-          <Button className="secondary" disabled={busyAction !== ''} onClick={reloadServerConfiguration}>{t('reloadDiscard')}</Button>
+          <Button className="secondary" disabled={locked} onClick={reloadServerConfiguration}>{t('reloadDiscard')}</Button>
         </div>}
         <div className="form-actions">
-          <Button className="secondary" disabled={busyAction !== ''} onClick={validateDraft}>{busyAction === 'validate' ? t('validating') : t('validateDraft')}</Button>
-          {sourceStatus === 'paused' && <Button className="secondary" disabled={busyAction !== ''} onClick={resumeSource}>{busyAction === 'resume' ? t('resuming') : t('resume')}</Button>}
-          <Button className="secondary" disabled={busyAction !== '' || sourceStatus !== 'active'} onClick={() => saveConfiguration()}>{busyAction === 'save' ? t('saving') : t('save')}</Button>
-          <Button disabled={busyAction !== '' || sourceStatus !== 'active'} onClick={saveAndEnable}>{busyAction === 'activate' ? t('enabling') : t('saveEnable')}</Button>
-          {revision > 0 && visibleActivationState !== 'active' && !dirty && <Button className="secondary" disabled={busyAction !== ''} onClick={retryActivation}>{t('retryActivation')}</Button>}
+          <Button className="secondary" onClick={closeEditor}>{t('cancel')}</Button>
+          <Button className="secondary" disabled={locked || sourceStatus !== 'active'} onClick={() => saveConfiguration()}>{busyAction === 'save' ? t('saving') : t('save')}</Button>
+          <Button disabled={locked || sourceStatus !== 'active'} onClick={saveAndEnable}>{busyAction === 'activate' ? t('enabling') : t('saveEnable')}</Button>
         </div>
         <AlertDialog open={githubDisconnectOpen} onOpenChange={setGithubDisconnectOpen}>
           <AlertDialogContent>
@@ -1045,8 +1153,8 @@ export function ConnectorEditor({
             </AlertDialogHeader>
             <div><strong>{t('githubPeerList')}</strong><ul>{githubPeers.map((peer) => <li key={peer.source_id}>{peer.source_id}</li>)}</ul></div>
             <AlertDialogFooter>
-              <AlertDialogCancel disabled={busyAction !== ''}>{t('cancel')}</AlertDialogCancel>
-              <Button disabled={busyAction !== ''} onClick={confirmGitHubDisconnect}>{busyAction === 'github-disconnect' ? t('saving') : t('githubDisconnect')}</Button>
+              <AlertDialogCancel disabled={locked}>{t('cancel')}</AlertDialogCancel>
+              <Button disabled={locked} onClick={confirmGitHubDisconnect}>{busyAction === 'github-disconnect' ? t('saving') : t('githubDisconnect')}</Button>
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
@@ -1063,8 +1171,8 @@ export function ConnectorEditor({
               })}</AlertDialogDescription>}
             </AlertDialogHeader>
             <AlertDialogFooter>
-              <AlertDialogCancel disabled={busyAction !== ''}>{t('cancel')}</AlertDialogCancel>
-              <Button disabled={busyAction !== '' || !githubRecoveryReview} onClick={confirmGitHubRecovery}>{busyAction === 'github-recovery' ? t('saving') : t('githubAcknowledgeConnect')}</Button>
+              <AlertDialogCancel disabled={locked}>{t('cancel')}</AlertDialogCancel>
+              <Button disabled={locked || !githubRecoveryReview} onClick={confirmGitHubRecovery}>{busyAction === 'github-recovery' ? t('saving') : t('githubAcknowledgeConnect')}</Button>
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
@@ -1074,8 +1182,9 @@ export function ConnectorEditor({
           {visibleActivationError && <p className="error">{t('activationError')}: {visibleActivationError}</p>}
           {visibleActivationState === 'saved_not_active' && <p className="muted">{t('savedInactive')}</p>}
           {visibleActivationError === 'credential_delete_pending' && <p className="muted" role="status">{t('credentialPending')}</p>}
-          {providerCredentialConfigured && sourceStatus === 'paused' && visibleActivationError !== 'deactivation_pending' && visibleActivationError !== 'credential_delete_pending' && <Button className="secondary" disabled={busyAction !== '' || dirty || Boolean(secret)} onClick={removeCredential}>{busyAction === 'remove' ? t('saving') : t('removeCredential')}</Button>}
+          {providerCredentialConfigured && sourceStatus === 'paused' && visibleActivationError !== 'deactivation_pending' && visibleActivationError !== 'credential_delete_pending' && <Button className="secondary" disabled={locked || dirty || Boolean(secret)} onClick={removeCredential}>{busyAction === 'remove' ? t('saving') : t('removeCredential')}</Button>}
         </section>}
+        {source && <SyncHistory source={{ ...source, status: sourceStatus }} />}
         </>}
       </>}
     </>}

@@ -3,7 +3,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { NextIntlClientProvider } from 'next-intl';
 import { ThemeProvider, useTheme } from 'next-themes';
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AppLocaleId, normalizeFormattingLocale } from '@/core/i18n';
 import { ChatControllerProvider } from '@/core/app-shell/chat-controller';
 import { GuardedNavigationProvider } from '@/core/guarded-navigation';
@@ -67,7 +67,7 @@ export function QueryProvider({ children }: { children: ReactNode }) {
 function DisplayPreferencesProvider({ children }: { children: ReactNode }) {
   const { setTheme } = useTheme();
   const themeSetterRef = useRef(setTheme);
-  themeSetterRef.current = setTheme;
+  useLayoutEffect(() => { themeSetterRef.current = setTheme; });
   const [confirmedPreferences, setConfirmedPreferences] = useState<OwnerPreferences | null>(null);
   const confirmedRef = useRef<OwnerPreferences | null>(null);
   const [bootstrapValues, setBootstrapValues] = useState<PreferenceValues>({ theme: 'system', locale: 'en-us', timezone: 'Asia/Ho_Chi_Minh' });
@@ -78,6 +78,7 @@ function DisplayPreferencesProvider({ children }: { children: ReactNode }) {
   const generationRef = useRef(0);
   useEffect(() => {
     const lang = navigator.language.toLowerCase();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs state to an external or prop change; reset-on-change is intentional here
     setBrowserLocale(lang.startsWith('vi') ? 'vi-vi' : 'en-us');
   }, []);
 

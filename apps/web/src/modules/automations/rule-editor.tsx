@@ -95,6 +95,7 @@ export function RuleEditor({ rule, csrfToken, onDone }: { rule?: Automation; csr
   useEffect(() => {
     if (!caps.data) return;
     const usable = new Set(caps.data.actions.filter((item) => item.available).map((item) => item.type));
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs state to an external or prop change; reset-on-change is intentional here
     setDraft((current) => {
       const kept = current.actions.filter((item) => usable.has(item.type));
       if (kept.length === current.actions.length) return current;

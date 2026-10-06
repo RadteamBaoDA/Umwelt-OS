@@ -3,7 +3,7 @@
 import * as React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
-import { FileTextIcon, PlusIcon, XIcon } from 'lucide-react';
+import { PlusIcon } from 'lucide-react';
 import {
   cancelResponse,
   chatKeys,
@@ -18,6 +18,7 @@ import {
 } from '@/modules/chat/api';
 import { ChatComposer } from './chat-composer';
 import { ChatTranscript } from './chat-transcript';
+import { ChatContextBar } from './chat-context-bar';
 import { ConversationAgentActivity } from '@/modules/agents/conversation-agent-activity';
 import {
   PendingMessageMutationConflictError,
@@ -113,6 +114,8 @@ export function ChatSession({
     conversationId: chatCtrl.activeConversationId,
     generation: chatCtrl.activeConversationGeneration,
   });
+  // Latest-value ref consumed only by async callbacks; mirrors controller selection without re-render.
+  // eslint-disable-next-line react-hooks/refs
   selectionRef.current = {
     conversationId: chatCtrl.activeConversationId,
     generation: chatCtrl.activeConversationGeneration,
@@ -141,6 +144,8 @@ export function ChatSession({
     return conversationDetail?.messages ?? [];
   }, [conversationDetail?.messages]);
 
+  const latestAssistant = React.useMemo(() => [...messages].reverse().find((message) => message.role === 'assistant'), [messages]);
+
   const profiles = useQuery({ queryKey: ['agent-profiles'], queryFn: getAgentProfiles, enabled: mode === 'full' });
   const agentRuns = useQuery({
     queryKey: ['agent-runs', 'conversation', conversationId],
@@ -161,6 +166,8 @@ export function ChatSession({
       void queryClient.invalidateQueries({ queryKey: ['agent-runs', 'conversation', conversationId] });
     },
   });
+  // Selection change must reset local stream state synchronously with the new conversation.
+  /* eslint-disable react-hooks/set-state-in-effect */
   React.useEffect(() => {
     // Detach the previous view's local stream; this does not send a server cancellation request.
     abortControllerRef.current?.abort();
@@ -183,6 +190,7 @@ export function ChatSession({
     setIsPending(false);
     setError(null);
   }, [conversationId, chatCtrl.activeConversationGeneration]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   /**
    * Streams a durable response into the currently selected view and refreshes its transcript on exit.
@@ -610,12 +618,6 @@ export function ChatSession({
           <span className="font-semibold text-sm truncate text-foreground">
             {conversationDetail?.title || t('title')}
           </span>
-          {mode === 'full' && chatCtrl.context && (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] bg-accent/15 text-accent font-medium shrink-0">
-              <FileTextIcon className="size-3" />
-              <span>{chatCtrl.context.kind}</span>
-            </span>
-          )}
         </div>
 
         <div className="flex items-center gap-1.5 shrink-0">
@@ -650,9 +652,7 @@ export function ChatSession({
         </div>
       ) : null}
 
-      {mode === 'full' && (
-        <ConversationAgentActivity conversationId={conversationId} csrfToken={session.csrfToken} />
-      )}
+      <ConversationAgentActivity conversationId={conversationId} csrfToken={session.csrfToken} />
       {mode === 'full' && activeAgentRun.data && (
         <div className="shrink-0 border-b border-border p-3">
           <AgentRunDetail run={activeAgentRun.data} onCancel={() => cancelAgent.mutate()} cancelling={cancelAgent.isPending} />
@@ -667,32 +667,10 @@ export function ChatSession({
         </details>
       ) : null}
 
-      {/* Grounded context indicator banner if present */}
-      {mode === 'full' && chatCtrl.context && (
-        <div className="flex items-center justify-between gap-2 px-4 py-2 bg-accent/5 border-b border-accent/15 text-xs text-foreground shrink-0">
-          <span className="truncate">
-            {chatCtrl.context.kind === 'day'
-              ? t('contextDay', { date: String(chatCtrl.context.date ?? ''), timezone: String(chatCtrl.context.timezone ?? '') })
-              : chatCtrl.context.kind === 'document'
-              ? t('contextDocument', { title: String(chatCtrl.context.resource_id ?? '') })
-              : chatCtrl.context.kind === 'entity'
-                ? t('contextEntity', { name: String(chatCtrl.context.resource_id ?? '') })
-                : t('contextSelection', { count: chatCtrl.context.items?.length ?? 1 })}
-          </span>
-          <button
-            type="button"
-            onClick={() => chatCtrl.setContext(null)}
-            className="p-1 rounded-md text-muted-foreground hover:text-foreground"
-            title={t('clearContext')}
-            aria-label={t('clearContext')}
-          >
-            <XIcon className="size-3.5" />
-          </button>
-        </div>
-      )}
+      <ChatContextBar context={chatCtrl.context} onRemove={() => chatCtrl.setContext(null)} showAddNote={mode === 'full'} />
 
       {mode === 'full' && pendingMessageMutation && (
-        <div role="status" className="flex items-center justify-between gap-3 border-b border-border bg-accent/5 px-4 py-2 text-xs">
+        <div role="status" className="flex items-center justify-between gap-3 border-b border-border bg-secondary px-4 py-2 text-xs">
           <span className="text-muted-foreground">{t('revisionUnacknowledged')}</span>
           <Button
             type="button"
@@ -710,7 +688,7 @@ export function ChatSession({
       )}
 
       {mode === 'full' && effectiveEditingMessageId && !pendingMessageMutation && (
-        <div className="flex items-center justify-between gap-3 border-b border-border bg-accent/5 px-4 py-2 text-xs">
+        <div className="flex items-center justify-between gap-3 border-b border-border bg-secondary px-4 py-2 text-xs">
           <span className="text-muted-foreground">{t('editingPrompt')}</span>
           <Button
             type="button"
@@ -753,6 +731,9 @@ export function ChatSession({
         onStop={handleStop}
         isStreaming={isStreaming}
         disabled={isPending}
+        modelLabel={latestAssistant?.model_identity ?? null}
+        sourcesCount={latestAssistant?.citations?.length ?? 0}
+        showCapabilityNote={mode === 'full'}
       />
     </div>
   );
