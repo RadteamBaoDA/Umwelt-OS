@@ -51,6 +51,7 @@ export type GadgetScope = {
   symbols?: string[];
   regions?: string[];
   map_layer_ids?: string[];
+  cii_country_codes?: string[];
   metrics?: string[];
   lookback_days?: number;
 };
@@ -67,6 +68,8 @@ export type GadgetFilters = {
   keywords?: string[];
   exclude_keywords?: string[];
   limit?: number;
+  map_engine?: 'globe' | 'flat' | null;
+  show_precise_locations?: boolean;
 };
 
 /** Non-executable highlight configuration; it does not imply notification execution. */

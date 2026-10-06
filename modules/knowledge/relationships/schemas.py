@@ -97,6 +97,80 @@ class EvidencePage(BaseModel):
     next_cursor: str | None
 
 
+class RelationshipExportEvidence(BaseModel):
+    """Expose stable citation identity without excerpt, metadata, or provider payload."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    id: UUID
+    source_id: UUID | None
+    source_generation: int | None = Field(default=None, ge=1)
+    document_id: UUID | None
+    document_version_id: UUID
+    chunk_id: UUID
+    source_membership_id: UUID | None
+    target_membership_id: UUID | None
+    observed_at: datetime | None
+    confidence: float
+
+
+class RelationshipSourceExportFence(BaseModel):
+    """Capture one source generation that supports a portable relationship citation."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    source_id: UUID
+    generation: int = Field(ge=1)
+
+
+class RelationshipExportRead(BaseModel):
+    """Serialize allowlisted canonical relationship facts and exact support references."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    record_kind: Literal["relationship"] = "relationship"
+    id: UUID
+    source_entity_id: UUID
+    target_entity_id: UUID
+    type: str
+    origin: Literal["owner", "derived"]
+    confidence: float | None
+    valid_from: datetime | None
+    valid_to: datetime | None
+    created_at: datetime
+    updated_at: datetime
+    evidence: list[RelationshipExportEvidence] = Field(max_length=100)
+
+
+class RelationshipExportFence(BaseModel):
+    """Bind relationship fields and exact evidence membership to final validation."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    id: UUID
+    created_at: datetime
+    updated_at: datetime
+    evidence_ids: list[UUID] = Field(max_length=100)
+    source_fences: list[RelationshipSourceExportFence] = Field(max_length=100)
+    evidence_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class RelationshipExportPage(BaseModel):
+    """Return one bounded relationship page with fixed-cutoff and deletion fences."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    owner_id: int = Field(ge=1)
+    record_kind: Literal["relationships"]
+    snapshot_at: datetime
+    snapshot_count: int = Field(ge=0)
+    items: list[RelationshipExportRead] = Field(max_length=100)
+    fences: list[RelationshipExportFence] = Field(max_length=100)
+    payload_bytes: int = Field(ge=0, le=16_777_216)
+    max_payload_bytes: int = Field(default=16_777_216, ge=1, le=16_777_216)
+    next_cursor: str | None = None
+    available: bool = True
+    omission_reason: None = None
+
+
+class RelationshipExportFenceValidation(BaseModel):
+    """Report whether captured relationship counts and citation identities remain valid."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    valid: bool
+    reason: Literal["valid", "owner_unavailable", "snapshot_count_changed", "record_changed"]
+    observed_snapshot_count: int = Field(ge=0)
+
+
 class NeighborRead(BaseModel):
     """Pair one adjacent entity with the relationship connecting it to the focus."""
     entity: EntityGraphRead

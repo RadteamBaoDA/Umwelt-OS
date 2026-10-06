@@ -81,6 +81,15 @@ class SourceFence(BaseModel):
     local_only: bool
 
 
+class SourceExportFence(BaseModel):
+    """Capture only the source identity and generation needed by bounded exports."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_id: UUID
+    generation: int = Field(ge=0)
+
+
 class SourceMetadataExportFence(BaseModel):
     """Bind one exported source metadata record to its row revision and digest."""
 
@@ -119,7 +128,6 @@ class SourceMetadataExportValidation(BaseModel):
     valid: bool
     reason: Literal["valid", "owner_unavailable", "snapshot_count_changed", "record_changed"]
     observed_snapshot_count: int = Field(ge=0)
-
 
 class GadgetSourceSelection(BaseModel):
     """Expose source identity and lifecycle for an already-authorized dashboard caller.

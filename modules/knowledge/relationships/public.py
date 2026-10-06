@@ -6,10 +6,11 @@ from hashlib import sha256
 from copy import deepcopy
 from uuid import UUID
 
-from sqlalchemy import delete, desc, func, or_, select, tuple_, update
+from sqlalchemy import delete, desc, exists, func, or_, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.pagination import decode_cursor, encode_cursor
+from core.auth.models import Owner
 from core.realtime import commit_with_replay, make_graph_change
 from modules.knowledge.documents import public as documents
 from modules.knowledge.entities import public as entities
@@ -25,7 +26,11 @@ from modules.knowledge.relationships.schemas import (
     CorrectionRelationshipRef,
     CorrectionSupportRef,
     RelationshipSnapshot,
+    RelationshipExportEvidence, RelationshipExportFence, RelationshipExportFenceValidation,
+    RelationshipExportPage, RelationshipExportRead, RelationshipSourceExportFence,
 )
+from modules.sources import public as sources
+from modules.sources.schemas import SourceExportFence
 
 MAX_CLEANUP_SUPPORTS = 10_000
 
@@ -1169,3 +1174,206 @@ async def _remove_support(
         else:
             relationship.confidence = max(row.confidence for row in remaining)
     return len(rows)
+
+
+RELATIONSHIP_EXPORT_PAGE_MAX_BYTES = 16_777_216
+
+
+def _encode_relationship_export_cursor(
+    owner_id: int, snapshot_at: datetime, position_at: datetime, position_id: UUID,
+) -> str:
+    """Encode a canonical relationship cursor bound to owner and fixed snapshot."""
+    raw = json.dumps({"v": 1, "owner": owner_id, "kind": "relationships",
+                      "snapshot": snapshot_at.astimezone(UTC).isoformat(),
+                      "at": position_at.astimezone(UTC).isoformat(), "id": str(position_id)},
+                     sort_keys=True, separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def _decode_relationship_export_cursor(cursor: str, owner_id: int) -> tuple[datetime, datetime, UUID]:
+    """Reject malformed, overlong, future, or cross-owner relationship cursors."""
+    try:
+        if not cursor or len(cursor) > 1024 or "=" in cursor:
+            raise ValueError
+        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
+        value = json.loads(raw)
+        if not isinstance(value, dict) or set(value) != {"v", "owner", "kind", "snapshot", "at", "id"}:
+            raise ValueError
+        if value["v"] != 1 or value["owner"] != owner_id or value["kind"] != "relationships":
+            raise ValueError
+        snapshot_at, position_at = datetime.fromisoformat(value["snapshot"]), datetime.fromisoformat(value["at"])
+        if any(item.tzinfo is None or item.utcoffset() is None for item in (snapshot_at, position_at)):
+            raise ValueError
+        snapshot_at, position_at = snapshot_at.astimezone(UTC), position_at.astimezone(UTC)
+        if snapshot_at > datetime.now(UTC):
+            raise ValueError
+        position_id = UUID(value["id"])
+        if _encode_relationship_export_cursor(owner_id, snapshot_at, position_at, position_id) != cursor:
+            raise ValueError
+        return snapshot_at, position_at, position_id
+    except (ValueError, TypeError, KeyError, UnicodeDecodeError, binascii.Error, json.JSONDecodeError) as exc:
+        raise ValueError("Invalid relationship export cursor") from exc
+
+
+def _relationship_export_bytes(items: list[RelationshipExportRead]) -> int:
+    """Measure exact compact JSON bytes for the immutable relationship page."""
+    return len(json.dumps([item.model_dump(mode="json") for item in items], ensure_ascii=False,
+                          separators=(",", ":")).encode("utf-8"))
+
+
+def _relationship_export_statement(snapshot_at: datetime):
+    """Select owner relationships plus derived rows with retained eligible citations."""
+    eligible = sources.export_eligible_source_ids()
+    retained_support = exists(select(RelationshipEvidence.id).where(
+        RelationshipEvidence.relationship_id == Relationship.id,
+        RelationshipEvidence.source_id.in_(eligible),
+    ))
+    return select(Relationship).where(
+        Relationship.created_at <= snapshot_at, Relationship.updated_at <= snapshot_at,
+        or_(Relationship.origin == "owner", retained_support),
+    )
+
+
+async def _relationship_export_count(session: AsyncSession, snapshot_at: datetime) -> int:
+    """Count portable owner relationships visible at the captured source-purge boundary."""
+    statement = _relationship_export_statement(snapshot_at).with_only_columns(func.count()).order_by(None)
+    return int(await session.scalar(statement) or 0)
+
+
+async def _relationship_source_generations(session: AsyncSession, source_ids: set[UUID]) -> dict[UUID, int]:
+    """Read eligible source generations through the owner-public lifecycle projection."""
+    if not source_ids:
+        return {}
+    projection = sources.ingestion_lifecycle_projection().subquery()
+    rows = (await session.execute(select(projection.c.id, projection.c.generation).where(
+        projection.c.id.in_(source_ids), projection.c.id.in_(sources.export_eligible_source_ids()),
+    ))).all()
+    result = {source_id: int(generation) for source_id, generation in rows}
+    if result.keys() != source_ids:
+        raise ValueError("Relationship citation source is purging or no longer retained")
+    return result
+
+
+async def export_page(
+    session: AsyncSession, *, owner_id: int, record_kind: str, limit: int = 50,
+    cursor: str | None = None,
+) -> RelationshipExportPage:
+    """Return canonical relationships and stable eligible citations in a bounded keyset page.
+
+    Derived relationships require at least one citation from an export-eligible source;
+    owner-authored relations survive independently, with purging citations withheld. Raw
+    excerpts, URLs, metadata, provider payloads, and ORM entities from other modules are omitted.
+    """
+    if record_kind != "relationships" or not 1 <= limit <= 100:
+        raise ValueError("Relationship export kind or page limit is invalid")
+    if owner_id != 1 or await session.scalar(select(Owner.id).where(Owner.id == owner_id)) is None:
+        raise PermissionError("Relationship export requires the current owner")
+    if cursor is None:
+        snapshot_at, position = datetime.now(UTC), None
+    else:
+        snapshot_at, position_at, position_id = _decode_relationship_export_cursor(cursor, owner_id)
+        position = (position_at, position_id)
+    snapshot_count = await _relationship_export_count(session, snapshot_at)
+    statement = _relationship_export_statement(snapshot_at)
+    if position is not None:
+        statement = statement.where(tuple_(Relationship.created_at, Relationship.id) > position)
+    rows = list((await session.scalars(statement.order_by(Relationship.created_at, Relationship.id)
+                                       .limit(limit + 1).execution_options(populate_existing=True))).all())
+    has_more = len(rows) > limit
+    items: list[RelationshipExportRead] = []
+    fences: list[RelationshipExportFence] = []
+    eligible = sources.export_eligible_source_ids()
+    for row in rows[:limit]:
+        supports = list((await session.scalars(select(RelationshipEvidence).where(
+            RelationshipEvidence.relationship_id == row.id,
+            RelationshipEvidence.source_id.in_(eligible),
+        ).order_by(RelationshipEvidence.id).limit(101)
+          .execution_options(populate_existing=True))).all())
+        if len(supports) > 100:
+            raise ValueError("A relationship export record exceeds the citation bound")
+        generations = await _relationship_source_generations(session, {
+            support.source_id for support in supports if support.source_id is not None
+        })
+        refs = [RelationshipExportEvidence(
+            id=support.id, source_id=support.source_id,
+            source_generation=generations.get(support.source_id) if support.source_id is not None else None,
+            document_id=support.document_id, document_version_id=support.document_version_id,
+            chunk_id=support.chunk_id, source_membership_id=support.source_membership_id,
+            target_membership_id=support.target_membership_id, observed_at=support.observed_at,
+            confidence=support.confidence,
+        ) for support in supports]
+        item = RelationshipExportRead(
+            id=row.id, source_entity_id=row.source_entity_id, target_entity_id=row.target_entity_id,
+            type=row.type, origin=row.origin, confidence=row.confidence, valid_from=row.valid_from,
+            valid_to=row.valid_to, created_at=row.created_at, updated_at=row.updated_at, evidence=refs,
+        )
+        if _relationship_export_bytes(items + [item]) > RELATIONSHIP_EXPORT_PAGE_MAX_BYTES:
+            if not items:
+                raise ValueError("A relationship export record exceeds the page byte budget")
+            has_more = True
+            break
+        items.append(item)
+        digest = sha256(json.dumps([ref.model_dump(mode="json") for ref in refs], ensure_ascii=False,
+                                   separators=(",", ":")).encode()).hexdigest()
+        fences.append(RelationshipExportFence(
+            id=row.id, created_at=row.created_at, updated_at=row.updated_at,
+            evidence_ids=[ref.id for ref in refs],
+            source_fences=[RelationshipSourceExportFence(source_id=source_id, generation=generation)
+                           for source_id, generation in sorted(generations.items(), key=lambda pair: str(pair[0]))],
+            evidence_digest=digest,
+        ))
+    next_cursor = (_encode_relationship_export_cursor(owner_id, snapshot_at, items[-1].created_at, items[-1].id)
+                   if has_more and items else None)
+    return RelationshipExportPage(
+        owner_id=owner_id, record_kind="relationships", snapshot_at=snapshot_at,
+        snapshot_count=snapshot_count, items=items, fences=fences,
+        payload_bytes=_relationship_export_bytes(items), max_payload_bytes=RELATIONSHIP_EXPORT_PAGE_MAX_BYTES,
+        next_cursor=next_cursor,
+    )
+
+
+async def validate_export_fences(
+    session: AsyncSession, *, owner_id: int, record_kind: str, snapshot_at: datetime,
+    expected_snapshot_count: int, fences: list[RelationshipExportFence],
+) -> RelationshipExportFenceValidation:
+    """Recheck owner count, canonical row state, source generations, and exact citations."""
+    if record_kind != "relationships" or len(fences) > 100 or expected_snapshot_count < 0:
+        raise ValueError("Relationship export revalidation input is invalid")
+    if owner_id != 1 or await session.scalar(select(Owner.id).where(Owner.id == owner_id)) is None:
+        return RelationshipExportFenceValidation(valid=False, reason="owner_unavailable", observed_snapshot_count=0)
+    observed = await _relationship_export_count(session, snapshot_at)
+    if observed != expected_snapshot_count:
+        return RelationshipExportFenceValidation(valid=False, reason="snapshot_count_changed", observed_snapshot_count=observed)
+    eligible = sources.export_eligible_source_ids()
+    for fence in fences:
+        row = await session.scalar(select(Relationship).where(Relationship.id == fence.id).execution_options(populate_existing=True))
+        if row is None or (row.created_at, row.updated_at) != (fence.created_at, fence.updated_at):
+            return RelationshipExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
+        source_fences = [SourceExportFence(source_id=item.source_id, generation=item.generation)
+                         for item in fence.source_fences]
+        if set(await sources.filter_export_eligible_sources(session, source_fences)) != {
+            item.source_id for item in source_fences
+        }:
+            return RelationshipExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
+        supports = list((await session.scalars(select(RelationshipEvidence).where(
+            RelationshipEvidence.relationship_id == fence.id, RelationshipEvidence.source_id.in_(eligible),
+        ).order_by(RelationshipEvidence.id).limit(101)
+          .execution_options(populate_existing=True))).all())
+        if len(supports) > 100:
+            return RelationshipExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
+        generations = await _relationship_source_generations(session, {
+            support.source_id for support in supports if support.source_id is not None
+        })
+        refs = [RelationshipExportEvidence(
+            id=support.id, source_id=support.source_id,
+            source_generation=generations.get(support.source_id) if support.source_id is not None else None,
+            document_id=support.document_id, document_version_id=support.document_version_id,
+            chunk_id=support.chunk_id, source_membership_id=support.source_membership_id,
+            target_membership_id=support.target_membership_id, observed_at=support.observed_at,
+            confidence=support.confidence,
+        ) for support in supports]
+        digest = sha256(json.dumps([ref.model_dump(mode="json") for ref in refs], ensure_ascii=False,
+                                   separators=(",", ":")).encode()).hexdigest()
+        if [ref.id for ref in refs] != fence.evidence_ids or digest != fence.evidence_digest:
+            return RelationshipExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
+    return RelationshipExportFenceValidation(valid=True, reason="valid", observed_snapshot_count=observed)

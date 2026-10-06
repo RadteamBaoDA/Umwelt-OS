@@ -12,7 +12,7 @@ from uuid import UUID
 from fastapi import HTTPException
 from core.auth.models import Owner
 from redis.asyncio import Redis
-from sqlalchemy import delete, desc, func, or_, select, tuple_, update
+from sqlalchemy import delete, desc, func, or_, select, text, tuple_, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -269,6 +269,23 @@ async def validate_export_fences(
         if source_fence != expected_source_fence:
             return MemoryExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
     return MemoryExportFenceValidation(valid=True, reason="valid", observed_snapshot_count=observed)
+
+
+_PRIVACY_LOCK_NAMESPACE = 1297109577
+
+
+async def lock_export_privacy(session: AsyncSession) -> None:
+    """Serialize Chat consent fences with Memory privacy writes in the caller transaction.
+
+    The transaction-scoped owner lock also fences the absent-row default against a concurrent
+    privacy update that would otherwise insert the first MemoryPrivacyRecord after a Chat read.
+    Callers must keep the transaction open through their guarded read/write and commit or rollback
+    promptly; this never exposes Memory's ORM model across the public module boundary.
+    """
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(:namespace, :owner_id)"),
+        {"namespace": _PRIVACY_LOCK_NAMESPACE, "owner_id": 1},
+    )
 
 
 async def read_export_privacy(session: AsyncSession) -> MemoryExportPrivacy:
@@ -619,6 +636,13 @@ class MemoryService:
             from modules.settings.public import admit_write
 
             await admit_write(self.session, "memory_privacy_default")
+            # Serialize first-default insertion with consent updates and Chat's absent-row fence.
+            await lock_export_privacy(self.session)
+            rec = await self.session.scalar(
+                select(MemoryPrivacyRecord).where(MemoryPrivacyRecord.owner_id == 1)
+                .with_for_update().execution_options(populate_existing=True)
+            )
+        if rec is None:
             rec = MemoryPrivacyRecord(
                 owner_id=1,
                 store_conversation_history=True,
@@ -644,7 +668,12 @@ class MemoryService:
         Returns:
             Updated MemoryPrivacyConfig.
         """
-        rec = await self.session.get(MemoryPrivacyRecord, 1)
+        # Consent changes share the same xact lock Chat holds through admission/publication.
+        await lock_export_privacy(self.session)
+        rec = await self.session.scalar(
+            select(MemoryPrivacyRecord).where(MemoryPrivacyRecord.owner_id == 1)
+            .with_for_update().execution_options(populate_existing=True)
+        )
         if rec is None:
             rec = MemoryPrivacyRecord(owner_id=1)
             self.session.add(rec)

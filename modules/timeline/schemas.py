@@ -279,6 +279,29 @@ class EventPage(BaseModel):
     next_cursor: str | None
 
 
+class CorrelationSignalRead(BaseModel):
+    """Expose one timed, region-scoped canonical event with exact live evidence IDs only."""
+    signal_id: UUID
+    event_id: UUID
+    event_type: Literal["military", "economic", "disaster", "escalation"]
+    region: str
+    observed_at: datetime
+    source_id: UUID | None
+    event_evidence_ids: list[UUID] = Field(max_length=100)
+    chunk_ids: list[UUID] = Field(max_length=100)
+    document_ids: list[UUID] = Field(max_length=100)
+    document_version_ids: list[UUID] = Field(max_length=100)
+    omitted_event_evidence_ids: int = Field(default=0, ge=0)
+    omitted_document_ids: int = Field(default=0, ge=0)
+    omitted_document_version_ids: int = Field(default=0, ge=0)
+
+
+class CorrelationSignalPage(BaseModel):
+    """Return a fixed-size bounded domain slice and whether its query was truncated."""
+    items: list[CorrelationSignalRead] = Field(max_length=100)
+    truncated: bool = False
+
+
 class TimelineQuery(BaseModel):
     """Normalize timeline filters for cursor fingerprinting and calendar boundaries."""
     date_from: date | None = None

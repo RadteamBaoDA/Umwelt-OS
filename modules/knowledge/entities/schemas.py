@@ -142,6 +142,106 @@ class EntityPage(BaseModel):
     next_cursor: str | None
 
 
+class EntityExportAliasEvidence(BaseModel):
+    """Identify one exact alias support membership and its eligible source generation."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    membership_id: UUID
+    source_id: UUID
+    source_generation: int = Field(ge=1)
+    confidence: float = Field(ge=0, le=1)
+
+
+class EntityExportAlias(BaseModel):
+    """Expose one canonical alias and exact eligible support, without creator-source metadata."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    id: UUID
+    alias: str
+    confirmed: bool
+    origin: Literal["owner", "derived"] | None
+    confidence: float | None
+    created_at: datetime
+    supports: list[EntityExportAliasEvidence] = Field(max_length=100)
+
+
+class EntityExportEvidence(BaseModel):
+    """Expose stable citation identity for one retained entity support membership."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    id: UUID
+    source_id: UUID
+    source_generation: int = Field(ge=1)
+    document_id: UUID
+    document_version_id: UUID
+    chunk_id: UUID
+    observed_at: datetime
+    extracted_at: datetime
+    confidence: float
+
+
+class EntitySourceExportFence(BaseModel):
+    """Capture one public source generation used by the entity's citation references."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    source_id: UUID
+    generation: int = Field(ge=1)
+
+
+class EntityExportRead(BaseModel):
+    """Serialize allowlisted canonical entity facts and exact retained provenance."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    record_kind: Literal["entity"] = "entity"
+    id: UUID
+    type: EntityType
+    name: str | None
+    canonical_name: str | None
+    description: str | None
+    revision: int = Field(ge=1)
+    name_origin: Literal["owner", "derived"] | None
+    description_origin: Literal["owner", "derived"] | None
+    first_seen_at: datetime | None
+    last_seen_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+    aliases: list[EntityExportAlias] = Field(max_length=100)
+    evidence: list[EntityExportEvidence] = Field(max_length=100)
+
+
+class EntityExportFence(BaseModel):
+    """Bind a canonical entity page item to its live revision and support identities."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    id: UUID
+    created_at: datetime
+    updated_at: datetime
+    revision: int = Field(ge=1)
+    alias_ids: list[UUID] = Field(max_length=100)
+    evidence_ids: list[UUID] = Field(max_length=100)
+    source_fences: list[EntitySourceExportFence] = Field(max_length=100)
+    alias_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    evidence_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class EntityExportPage(BaseModel):
+    """Return one bounded canonical entity export page and its validation fences."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    owner_id: int = Field(ge=1)
+    record_kind: Literal["entities"]
+    snapshot_at: datetime
+    snapshot_count: int = Field(ge=0)
+    items: list[EntityExportRead] = Field(max_length=100)
+    fences: list[EntityExportFence] = Field(max_length=100)
+    payload_bytes: int = Field(ge=0, le=16_777_216)
+    max_payload_bytes: int = Field(default=16_777_216, ge=1, le=16_777_216)
+    next_cursor: str | None = None
+    available: bool = True
+    omission_reason: None = None
+
+
+class EntityExportFenceValidation(BaseModel):
+    """Report whether a captured entity count, revision, and citation set remain current."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    valid: bool
+    reason: Literal["valid", "owner_unavailable", "snapshot_count_changed", "record_changed"]
+    observed_snapshot_count: int = Field(ge=0)
+
+
 class EntityExtractionStatus(BaseModel):
     """Expose extraction progress and any facts or candidates awaiting review."""
     document_version_id: UUID

@@ -21,6 +21,7 @@ from modules.connectors.models import (
     GithubWebhookDelivery, GithubWebhookOutbox, GithubSourceHint, ConnectorWorldCredential,
     ConnectorManagedCredential, GithubOAuthCoordinator, GithubOAuthOperation,
 )
+from modules.connectors.providers.cii import CiiProjection
 from modules.ingestion.schemas import IngestionRecord, TelegramRawDelivery
 
 
@@ -275,6 +276,13 @@ class ProviderScopeSnapshot:
     source_generation: int
     provider_id: str
     discriminator: str
+
+
+def cii_v8_availability(requested_countries: list[str]) -> CiiProjection:
+    """Expose the CII provider's truthful unavailable v8 projection through the connector owner."""
+    from modules.connectors.providers.cii import unavailable_v8_projection
+
+    return unavailable_v8_projection(requested_countries)
 
 
 async def get_current_provider_scope(

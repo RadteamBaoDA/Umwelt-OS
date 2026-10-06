@@ -7,9 +7,11 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
+from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import HTTPException
-from sqlalchemy import delete, desc, func, select, tuple_, update
+from pydantic import BaseModel
+from sqlalchemy import and_, delete, desc, func, select, tuple_, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,6 +19,7 @@ from core.pagination import decode_cursor, encode_cursor
 from core.chunking import chunk_text
 from core.realtime import ReplayDraft, commit_with_replay, make_knowledge_change
 from core.tools.schemas import ToolDestination, ToolOutputFence
+from core.auth.models import Owner
 from modules.knowledge.documents.models import (
     Document, DocumentChunk, DocumentInteraction, DocumentVersion, NormalizedDocumentIdentity,
     NormalizedVersionProvenance,
@@ -28,12 +31,15 @@ from modules.knowledge.documents.schemas import (
     GadgetDocumentSelectionFence,
     GadgetHighlightProjectionPage,
     GadgetProviderMetadataRead, GadgetTelegramMediaRead, GadgetTelegramRecordRead,
+    DocumentExportFence, DocumentExportFenceValidation, DocumentExportPage,
+    DocumentExportProvenance, DocumentExportRead, DocumentVersionExportRead,
     ProviderDocumentSnapshotList,
     ProviderDocumentSnapshotRead, ProviderRecordMetadata, PROVIDER_IDS,
     TelegramDocumentOrder,
 )
 from modules.sources import public as sources
 from modules.sources.models import Source
+from modules.sources.schemas import SourceExportFence
 
 
 async def observability_quality_summary(session: AsyncSession) -> dict[str, int]:
@@ -46,6 +52,373 @@ async def observability_quality_summary(session: AsyncSession) -> dict[str, int]
 
 EXTRACTION_CHUNK_LIMIT = 100
 EXTRACTION_INPUT_BYTES = 64_000
+EXPORT_PAGE_MAX_BYTES = 16_777_216
+
+
+def _encode_document_export_cursor(
+    owner_id: int, record_kind: str, snapshot_at: datetime, position_at: datetime, position_id: UUID,
+) -> str:
+    """Encode a canonical owner/kind/cutoff-bound keyset cursor for document exports."""
+    payload = {
+        "v": 1, "owner": owner_id, "kind": record_kind,
+        "snapshot": snapshot_at.astimezone(UTC).isoformat(),
+        "at": position_at.astimezone(UTC).isoformat(), "id": str(position_id),
+    }
+    raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _decode_document_export_cursor(
+    cursor: str, owner_id: int, record_kind: str,
+) -> tuple[datetime, datetime, UUID]:
+    """Decode a canonical bounded cursor and reject cross-owner or cross-domain replay."""
+    try:
+        if not cursor or len(cursor) > 1024 or "=" in cursor:
+            raise ValueError("Invalid document export cursor")
+        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
+        payload = json.loads(raw)
+        if not isinstance(payload, dict) or set(payload) != {"v", "owner", "kind", "snapshot", "at", "id"}:
+            raise ValueError("Invalid document export cursor")
+        if payload["v"] != 1 or payload["owner"] != owner_id or payload["kind"] != record_kind:
+            raise ValueError("Document export cursor belongs to another owner or record kind")
+        snapshot_at = datetime.fromisoformat(payload["snapshot"])
+        position_at = datetime.fromisoformat(payload["at"])
+        if any(value.tzinfo is None or value.utcoffset() is None for value in (snapshot_at, position_at)):
+            raise ValueError("Document export cursor timestamps must be timezone-aware")
+        snapshot_at, position_at = snapshot_at.astimezone(UTC), position_at.astimezone(UTC)
+        if snapshot_at > datetime.now(UTC):
+            raise ValueError("Document export cursor cutoff cannot be in the future")
+        position_id = UUID(payload["id"])
+        if _encode_document_export_cursor(owner_id, record_kind, snapshot_at, position_at, position_id) != cursor:
+            raise ValueError("Document export cursor is not canonical")
+        return snapshot_at, position_at, position_id
+    except (ValueError, TypeError, KeyError, UnicodeDecodeError, binascii.Error, json.JSONDecodeError) as exc:
+        raise ValueError("Invalid document export cursor") from exc
+
+
+def _safe_export_url(value: str | None) -> str | None:
+    """Drop credentials, query strings, fragments, and non-web URLs from exported provenance."""
+    if not value:
+        return None
+    try:
+        parsed = urlsplit(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+            return None
+        host = parsed.hostname
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        if parsed.port is not None:
+            host = f"{host}:{parsed.port}"
+        return urlunsplit((parsed.scheme, host, parsed.path, "", ""))
+    except ValueError:
+        return None
+
+
+def _export_payload_bytes(items: Sequence[BaseModel]) -> int:
+    """Measure the exact JSON array bytes of typed records before returning a page."""
+    return len(json.dumps(
+        [item.model_dump(mode="json") for item in items],
+        ensure_ascii=False, separators=(",", ":"),
+    ).encode("utf-8"))
+
+
+def _export_item_bytes(item: BaseModel) -> int:
+    """Measure one serialized export record so page admission stays linear in payload size."""
+    return len(json.dumps(item.model_dump(mode="json"), ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+
+
+async def _require_document_export_owner(session: AsyncSession, owner_id: int) -> None:
+    """Require the live singleton owner before projecting source-owned documents."""
+    if owner_id != 1 or await session.scalar(select(Owner.id).where(Owner.id == owner_id)) is None:
+        raise PermissionError("Document export requires the current owner")
+
+
+def _document_export_scope(snapshot_at: datetime) -> tuple[object, ...]:
+    """Select retained documents that existed and were unchanged at the page cutoff."""
+    return Document.created_at <= snapshot_at, Document.updated_at <= snapshot_at
+
+
+async def _document_export_count(
+    session: AsyncSession, record_kind: str, snapshot_at: datetime,
+) -> int:
+    """Count owner-visible rows at the fixed cutoff so callers can detect export drift."""
+    if record_kind == "documents":
+        statement = select(func.count()).select_from(Document).join(Source, Source.id == Document.source_id)
+        statement = statement.where(
+            *_document_export_scope(snapshot_at),
+            Document.source_id.in_(sources.export_eligible_source_ids()),
+        )
+    else:
+        statement = (
+            select(func.count()).select_from(DocumentVersion)
+            .join(Document, Document.id == DocumentVersion.document_id)
+            .join(Source, Source.id == Document.source_id)
+            .where(
+                *_document_export_scope(snapshot_at), DocumentVersion.created_at <= snapshot_at,
+                Document.source_id.in_(sources.export_eligible_source_ids()),
+            )
+        )
+    return int(await session.scalar(statement) or 0)
+
+
+async def export_page(
+    session: AsyncSession,
+    *,
+    owner_id: int,
+    record_kind: str,
+    limit: int = 50,
+    cursor: str | None = None,
+) -> DocumentExportPage:
+    """Return safe document headers or full retained revisions through a bounded stable page.
+
+    The current owner must be authenticated by the calling operation and is rechecked here.
+    Archived and paused sources remain exportable while their document rows are retained. A
+    fixed cutoff, exact cursor binding, current source generation, owner count, and final row
+    fences let the caller reject changes or deletion before publishing; no path, raw file,
+    arbitrary metadata, provider payload, or content digest is included in exported items.
+    """
+    if record_kind not in {"documents", "versions"} or not 1 <= limit <= 100:
+        raise ValueError("Document export kind or page limit is invalid")
+    await _require_document_export_owner(session, owner_id)
+    if cursor is None:
+        snapshot_at = datetime.now(UTC)
+        position = None
+    else:
+        snapshot_at, position_at, position_id = _decode_document_export_cursor(cursor, owner_id, record_kind)
+        position = (position_at, position_id)
+    snapshot_count = await _document_export_count(session, record_kind, snapshot_at)
+    items: list[DocumentExportRead | DocumentVersionExportRead] = []
+    fences: list[DocumentExportFence] = []
+    has_more = False
+    payload_bytes = 2
+
+    if record_kind == "documents":
+        statement = (
+            select(
+                Document.id.label("document_id"), Document.source_id.label("source_id"),
+                Document.created_at.label("document_created_at"), Document.updated_at.label("document_updated_at"),
+                Document.current_version.label("document_current_version"), Document.title.label("document_title"),
+                Document.content_type.label("document_content_type"), Document.mime_type.label("document_mime_type"),
+                Document.canonical_url.label("document_canonical_url"), Source.status.label("source_status"),
+                Source.generation.label("source_generation"),
+                DocumentVersion.version_number.label("current_version_number"),
+                NormalizedVersionProvenance.source_generation.label("accepted_generation"),
+            )
+            .join(Source, Source.id == Document.source_id)
+            .outerjoin(DocumentVersion, and_(
+                DocumentVersion.document_id == Document.id,
+                DocumentVersion.version_number == Document.current_version,
+            ))
+            .outerjoin(NormalizedVersionProvenance, NormalizedVersionProvenance.document_version_id == DocumentVersion.id)
+            .where(
+                *_document_export_scope(snapshot_at),
+                Document.source_id.in_(sources.export_eligible_source_ids()),
+            )
+        )
+        if position is not None:
+            statement = statement.where(tuple_(Document.created_at, Document.id) > position)
+        rows = (await session.execute(
+            statement.order_by(Document.created_at, Document.id).limit(limit + 1)
+        )).all()
+        for raw_row in rows:
+            if len(items) == limit:
+                has_more = True
+                break
+            row = raw_row._mapping
+            if row["current_version_number"] is None:
+                raise ValueError("A retained document has no current immutable version")
+            item = DocumentExportRead(
+                id=row["document_id"], source_id=row["source_id"], source_status=row["source_status"],
+                current_source_generation=row["source_generation"], current_version=row["document_current_version"],
+                current_version_accepted_generation=row["accepted_generation"],
+                title=row["document_title"], content_type=row["document_content_type"],
+                mime_type=row["document_mime_type"], canonical_url=_safe_export_url(row["document_canonical_url"]),
+                created_at=row["document_created_at"], updated_at=row["document_updated_at"],
+            )
+            item_bytes = _export_item_bytes(item)
+            proposed_bytes = payload_bytes + item_bytes + (1 if items else 0)
+            if proposed_bytes > EXPORT_PAGE_MAX_BYTES:
+                if not items:
+                    raise ValueError("A document export record exceeds the page byte budget")
+                has_more = True
+                break
+            items.append(item)
+            payload_bytes = proposed_bytes
+            fences.append(DocumentExportFence(
+                document_id=row["document_id"], document_created_at=row["document_created_at"],
+                document_updated_at=row["document_updated_at"], document_current_version=row["document_current_version"],
+                source_id=row["source_id"], source_status=row["source_status"],
+                current_source_generation=row["source_generation"],
+            ))
+        if len(rows) > len(items):
+            has_more = True
+        next_cursor = (
+            _encode_document_export_cursor(owner_id, record_kind, snapshot_at, items[-1].created_at, items[-1].id)
+            if has_more and items else None
+        )
+    else:
+        statement = (
+            select(
+                Document.id.label("document_id"), Document.source_id.label("source_id"),
+                Document.created_at.label("document_created_at"), Document.updated_at.label("document_updated_at"),
+                Document.current_version.label("document_current_version"),
+                Source.status.label("source_status"), Source.generation.label("source_generation"),
+                DocumentVersion.id.label("version_id"), DocumentVersion.version_number.label("version_number"),
+                DocumentVersion.content.label("version_content"), DocumentVersion.content_hash.label("version_content_hash"),
+                DocumentVersion.observed_at.label("version_observed_at"),
+                DocumentVersion.created_at.label("version_created_at"),
+                NormalizedVersionProvenance.provider_id.label("provider_id"),
+                NormalizedVersionProvenance.provider_version.label("provider_version"),
+                NormalizedVersionProvenance.normalization_version.label("normalization_version"),
+                NormalizedVersionProvenance.source_generation.label("accepted_source_generation"),
+                NormalizedVersionProvenance.observed_at.label("provenance_observed_at"),
+                NormalizedVersionProvenance.received_at.label("received_at"),
+                NormalizedVersionProvenance.collected_at.label("collected_at"),
+                NormalizedVersionProvenance.selection_observed_at.label("selection_observed_at"),
+                NormalizedVersionProvenance.title.label("provenance_title"),
+                NormalizedVersionProvenance.canonical_url.label("provenance_canonical_url"),
+                NormalizedVersionProvenance.published_at.label("provenance_published_at"),
+                NormalizedVersionProvenance.content_type.label("provenance_content_type"),
+            )
+            .join(Source, Source.id == Document.source_id)
+            .join(DocumentVersion, DocumentVersion.document_id == Document.id)
+            .outerjoin(NormalizedVersionProvenance, NormalizedVersionProvenance.document_version_id == DocumentVersion.id)
+            .where(
+                *_document_export_scope(snapshot_at), DocumentVersion.created_at <= snapshot_at,
+                Document.source_id.in_(sources.export_eligible_source_ids()),
+            )
+        )
+        if position is not None:
+            statement = statement.where(tuple_(DocumentVersion.created_at, DocumentVersion.id) > position)
+        result = await session.stream(
+            statement.order_by(DocumentVersion.created_at, DocumentVersion.id)
+            .limit(limit + 1).execution_options(yield_per=10)
+        )
+        try:
+            async for raw_row in result.mappings():
+                if len(items) == limit:
+                    has_more = True
+                    break
+                row = raw_row
+                safe_provenance = DocumentExportProvenance(
+                    provider_id=row["provider_id"], provider_version=row["provider_version"],
+                    normalization_version=row["normalization_version"],
+                    accepted_source_generation=row["accepted_source_generation"],
+                    observed_at=row["provenance_observed_at"], received_at=row["received_at"],
+                    collected_at=row["collected_at"], selection_observed_at=row["selection_observed_at"],
+                    title=row["provenance_title"], canonical_url=_safe_export_url(row["provenance_canonical_url"]),
+                    published_at=row["provenance_published_at"], content_type=row["provenance_content_type"],
+                ) if row["provider_id"] is not None else None
+                item = DocumentVersionExportRead(
+                    id=row["version_id"], document_id=row["document_id"], source_id=row["source_id"],
+                    source_status=row["source_status"], current_source_generation=row["source_generation"],
+                    version_number=row["version_number"],
+                    is_current_version=row["version_number"] == row["document_current_version"],
+                    content=row["version_content"], observed_at=row["version_observed_at"],
+                    created_at=row["version_created_at"], provenance=safe_provenance,
+                )
+                item_bytes = _export_item_bytes(item)
+                proposed_bytes = payload_bytes + item_bytes + (1 if items else 0)
+                if proposed_bytes > EXPORT_PAGE_MAX_BYTES:
+                    if not items:
+                        raise ValueError("A document version exceeds the page byte budget")
+                    has_more = True
+                    break
+                items.append(item)
+                payload_bytes = proposed_bytes
+                fences.append(DocumentExportFence(
+                    document_id=row["document_id"], document_created_at=row["document_created_at"],
+                    document_updated_at=row["document_updated_at"], document_current_version=row["document_current_version"],
+                    source_id=row["source_id"], source_status=row["source_status"],
+                    current_source_generation=row["source_generation"], version_id=row["version_id"],
+                    version_number=row["version_number"], version_created_at=row["version_created_at"],
+                    version_content_digest=row["version_content_hash"],
+                ))
+        finally:
+            await result.close()
+        next_cursor = (
+            _encode_document_export_cursor(owner_id, record_kind, snapshot_at, items[-1].created_at, items[-1].id)
+            if has_more and items else None
+        )
+
+    if len(items) != len(fences):
+        raise RuntimeError("Document export page lost a record fence")
+    return DocumentExportPage(
+        owner_id=owner_id, record_kind=record_kind, snapshot_at=snapshot_at,
+        snapshot_count=snapshot_count, items=items, fences=fences,
+        payload_bytes=_export_payload_bytes(items), max_payload_bytes=EXPORT_PAGE_MAX_BYTES,
+        next_cursor=next_cursor, available=True, omission_reason=None,
+    )
+
+
+async def validate_export_fences(
+    session: AsyncSession,
+    *,
+    owner_id: int,
+    record_kind: str,
+    snapshot_at: datetime,
+    expected_snapshot_count: int,
+    fences: Sequence[DocumentExportFence],
+) -> DocumentExportFenceValidation:
+    """Recheck bounded document identity, source generation, deletion, and count before publication."""
+    if record_kind not in {"documents", "versions"} or not 0 <= expected_snapshot_count <= 2**63 - 1:
+        raise ValueError("Document export revalidation input is invalid")
+    if len(fences) > 100:
+        raise ValueError("Document export revalidation is limited to 100 records")
+    if owner_id != 1 or await session.scalar(select(Owner.id).where(Owner.id == owner_id)) is None:
+        return DocumentExportFenceValidation(valid=False, reason="owner_unavailable", observed_snapshot_count=0)
+    source_generations: dict[UUID, int] = {}
+    for fence in fences:
+        previous = source_generations.setdefault(fence.source_id, fence.current_source_generation)
+        if previous != fence.current_source_generation:
+            observed_count = await _document_export_count(session, record_kind, snapshot_at)
+            return DocumentExportFenceValidation(
+                valid=False, reason="source_generation_changed", observed_snapshot_count=observed_count,
+            )
+    source_fences = [
+        SourceExportFence(source_id=source_id, generation=generation)
+        for source_id, generation in source_generations.items()
+    ]
+    eligible_source_ids = set(await sources.filter_export_eligible_sources(session, source_fences))
+    if len(eligible_source_ids) != len(source_fences):
+        observed_count = await _document_export_count(session, record_kind, snapshot_at)
+        return DocumentExportFenceValidation(
+            valid=False, reason="source_generation_changed", observed_snapshot_count=observed_count,
+        )
+    observed_count = await _document_export_count(session, record_kind, snapshot_at)
+    if observed_count != expected_snapshot_count:
+        return DocumentExportFenceValidation(valid=False, reason="snapshot_count_changed", observed_snapshot_count=observed_count)
+    for fence in fences:
+        row = (await session.execute(
+            select(Document.created_at, Document.updated_at, Document.current_version,
+                   Source.id.label("source_id"), Source.status, Source.generation)
+            .join(Source, Source.id == Document.source_id)
+            .where(Document.id == fence.document_id)
+        )).one_or_none()
+        if row is None or (
+            row.created_at != fence.document_created_at
+            or row.updated_at != fence.document_updated_at
+            or row.source_id != fence.source_id
+            or fence.document_current_version is not None and row.current_version != fence.document_current_version
+        ):
+            return DocumentExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed_count)
+        if row.status != fence.source_status or row.generation != fence.current_source_generation:
+            return DocumentExportFenceValidation(valid=False, reason="source_generation_changed", observed_snapshot_count=observed_count)
+        if record_kind == "versions":
+            if fence.version_id is None or fence.version_number is None or fence.version_created_at is None:
+                raise ValueError("Version export fence is missing its immutable revision identity")
+            version = (await session.execute(
+                select(DocumentVersion.version_number, DocumentVersion.created_at, DocumentVersion.content_hash)
+                .where(DocumentVersion.id == fence.version_id, DocumentVersion.document_id == fence.document_id)
+            )).one_or_none()
+            if version is None:
+                return DocumentExportFenceValidation(valid=False, reason="evidence_unavailable", observed_snapshot_count=observed_count)
+            if (version.version_number != fence.version_number or version.created_at != fence.version_created_at
+                    or version.content_hash != fence.version_content_digest):
+                return DocumentExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed_count)
+        elif fence.version_id is not None:
+            raise ValueError("Document header export fence cannot include a version identity")
+    return DocumentExportFenceValidation(valid=True, reason="valid", observed_snapshot_count=observed_count)
 
 
 class ExtractionInputLimitError(ValueError):
@@ -69,18 +442,19 @@ class ObservationEvidenceCandidate:
     document_version_id: UUID
 
 
-async def current_observation_evidence_ids(
+async def current_observation_evidence_versions(
     session: AsyncSession,
     candidates: Sequence[ObservationEvidenceCandidate],
     current_scopes: dict[UUID, object],
-) -> frozenset[UUID]:
-    """Return candidates backed by one current document version and matching accepted provider scope.
+) -> dict[UUID, int]:
+    """Return current evidence revisions backed by matching document and provider fences.
 
-    Documents owns version/provenance reads. The result contains only accepted observation IDs;
-    foreign modules never receive Document ORM rows or provenance bodies.
+    Documents owns version/provenance reads. The result contains accepted observation IDs
+    paired with their current version numbers; foreign modules never receive Document ORM
+    rows or provenance bodies.
     """
     if not candidates or len(candidates) > 256:
-        return frozenset()
+        return {}
     rows = (await session.execute(
         select(
             Document.id, DocumentVersion.id, Source.id, Source.generation,
@@ -103,7 +477,7 @@ async def current_observation_evidence_ids(
             source_id, source_generation, version_number, current_version,
             provider_id, accepted_generation, provenance,
         ))
-    accepted: set[UUID] = set()
+    accepted: dict[UUID, int] = {}
     for candidate in candidates:
         current = current_scopes.get(candidate.source_id)
         if (
@@ -127,8 +501,8 @@ async def current_observation_evidence_ids(
             and isinstance(provenance, dict)
             and provenance.get("provider_scope_discriminator") == candidate.provider_scope_discriminator
         ):
-            accepted.add(candidate.observation_id)
-    return frozenset(accepted)
+            accepted[candidate.observation_id] = version_number
+    return accepted
 
 
 def _provider_snapshot(

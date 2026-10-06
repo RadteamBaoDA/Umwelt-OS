@@ -162,6 +162,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       client.invalidateQueries({ queryKey: ['relationships'] }),
       client.invalidateQueries({ queryKey: ['search'] }),
       client.invalidateQueries({ queryKey: ['world-observations'] }),
+      client.resetQueries({ queryKey: ['intelligence-correlations'] }),
       client.invalidateQueries({ queryKey: ['dashboards'] }),
       client.invalidateQueries({ queryKey: ['dashboard'] }),
       client.invalidateQueries({ queryKey: ['gadget-definitions'] }),
@@ -362,6 +363,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         if (!value || !UUID_RE.test(value.source_id) || !Number.isSafeInteger(value.generation)) { resync(true); return; }
         // Source policy can make cached series unauthorized; clear them before refetching.
         client.removeQueries({ queryKey: ['world-observations'] });
+        void client.resetQueries({ queryKey: ['intelligence-correlations'] });
         void Promise.all([
           client.invalidateQueries({ queryKey: ['sources'] }),
           client.invalidateQueries({ queryKey: ['connector-configuration', value.source_id] }),
@@ -433,6 +435,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
             || value.indexed_items != null || value.failed_items != null
             || typeof value.deleted !== 'boolean'
           ) { resync(true); return; }
+          void client.resetQueries({ queryKey: ['intelligence-correlations'] });
           void Promise.all([
             client.invalidateQueries({ queryKey: ['events'] }),
             client.invalidateQueries({ queryKey: ['timeline'] }),
@@ -452,6 +455,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
             || value.index_generation_id != null || value.index_status != null
             || value.indexed_items != null || value.failed_items != null
           ) { resync(true); return; }
+          void client.resetQueries({ queryKey: ['intelligence-correlations'] });
           void Promise.all([
             client.invalidateQueries({ queryKey: ['events'] }),
             client.invalidateQueries({ queryKey: ['timeline'] }),
@@ -476,6 +480,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
           // Keep ordinary updates stable while the user reads; refresh their values on focus/remount.
           void client.invalidateQueries({ queryKey: ['world-observations'], refetchType: 'none' });
         }
+        // Source/document lifecycle can revoke current support; clear cached IDs before any refetch.
+        void client.resetQueries({ queryKey: ['intelligence-correlations'] });
         // Projection updates use source invalidations even before an entity exists.
         // Refetch canonical-backed status instead of treating the event as proof.
         void Promise.all([

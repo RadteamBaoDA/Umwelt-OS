@@ -48,6 +48,9 @@ class GadgetScope(StrictConfiguration):
     map_layer_ids: list[Annotated[str, Field(min_length=1, max_length=80)]] = Field(
         default_factory=list, max_length=32
     )
+    cii_country_codes: list[Annotated[str, Field(pattern=r"^[A-Z]{2}$")]] = Field(
+        default_factory=list, max_length=31
+    )
     metrics: list[Annotated[str, Field(min_length=1, max_length=80)]] = Field(default_factory=list, max_length=32)
     lookback_days: StrictInt | None = Field(default=None, ge=1, le=366)
 
@@ -61,7 +64,11 @@ class GadgetScope(StrictConfiguration):
 
 
 class GadgetFilters(StrictConfiguration):
-    """Persist simple bounded text filters and a strict item limit, never executable queries."""
+    """Persist bounded text filters and map display preferences, never executable queries.
+
+    ``map_engine`` and ``show_precise_locations`` are renderer preferences only;
+    map data authorization and source/date/region bounds are validated separately.
+    """
 
     keywords: list[Annotated[str, Field(min_length=1, max_length=120)]] = Field(
         default_factory=list, max_length=32
@@ -70,6 +77,8 @@ class GadgetFilters(StrictConfiguration):
         default_factory=list, max_length=32
     )
     limit: Annotated[StrictInt, Field(ge=1, le=100)] = 25
+    map_engine: Literal["globe", "flat"] | None = None
+    show_precise_locations: StrictBool = False
 
 
 class HighlightRule(StrictConfiguration):

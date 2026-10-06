@@ -14,6 +14,7 @@ from modules.knowledge.documents import public
 from modules.knowledge.documents.models import Document
 from modules.knowledge.documents.schemas import (
     ContentUpdate,
+    CitationTargetRead,
     DocumentCreate,
     DocumentList,
     DocumentPatch,
@@ -268,3 +269,36 @@ async def get_version(
     if version is None:
         raise HTTPException(status_code=404, detail="Document version not found")
     return VersionRead.model_validate(version, from_attributes=True)
+
+
+@router.get("/{document_id}/citation-target", response_model=CitationTargetRead)
+async def get_citation_target(
+    document_id: UUID,
+    session: Session,
+    _owner: OwnerRead,
+    document_version_id: UUID,
+    chunk_id: UUID,
+) -> CitationTargetRead:
+    """Resolve a citation only while its exact versioned chunk remains owner-readable.
+
+    This reader uses Documents' active-source fence and accepts retained historical versions;
+    it never remaps a citation to a newer current version. Owner authentication is not replaced
+    by the version IDs supplied in the navigation URL.
+    """
+    from modules.knowledge.documents import public as documents_public
+
+    chunks = await documents_public.read_chat_evidence_chunks(
+        session, [(document_version_id, chunk_id)], require_current_version=False,
+    )
+    if not chunks or chunks[0].document_id != document_id:
+        raise HTTPException(status_code=404, detail="Citation evidence is no longer available")
+    chunk = chunks[0]
+    return CitationTargetRead(
+        document_id=chunk.document_id,
+        document_version_id=chunk.document_version_id,
+        version_number=chunk.version_number,
+        chunk_id=chunk.chunk_id,
+        title=chunk.title,
+        excerpt=chunk.content[:1000],
+        observed_at=chunk.observed_at,
+    )

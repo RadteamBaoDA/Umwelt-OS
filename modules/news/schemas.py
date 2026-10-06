@@ -1,10 +1,10 @@
 """Bounded detached contracts for news stories, trends, and recorded scoring."""
 
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError, field_validator, model_validator
 
 
 class StoryFilter(BaseModel):
@@ -144,6 +144,89 @@ class TrendPage(BaseModel):
     truncated: bool = False
     incomplete: bool = False
     incomplete_reasons: list[str] = Field(default_factory=list, max_length=8)
+
+
+class CorrelationQuery(BaseModel):
+    """Bound an evidence correlation request to explicit sources, regions, and a 30-day window."""
+    model_config = ConfigDict(extra="forbid")
+    source_ids: list[UUID] = Field(default_factory=list, max_length=32)
+    regions: list[str] = Field(min_length=1, max_length=32)
+    from_at: datetime
+    to_at: datetime
+    limit_per_domain: StrictInt = Field(default=100, ge=1, le=100)
+
+    @field_validator("from_at", "to_at")
+    @classmethod
+    def aware_utc(cls, value: datetime) -> datetime:
+        """Require explicit offsets and normalize correlation instants to UTC."""
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("correlation time bounds must be timezone-aware")
+        return value.astimezone(UTC)
+
+    @model_validator(mode="after")
+    def validate_scope(self) -> "CorrelationQuery":
+        """Reject duplicate selectors and prevent unbounded history reads."""
+        if (
+            self.from_at >= self.to_at or self.to_at - self.from_at > timedelta(days=30)
+            or len(self.source_ids) != len(set(self.source_ids))
+            or len(self.regions) != len(set(self.regions))
+            or any(not region or region != region.strip() or len(region) > 80 for region in self.regions)
+        ):
+            raise ValueError("correlation scope is invalid")
+        return self
+
+
+class CorrelationBucketRead(BaseModel):
+    """Describe one region and exact UTC hour containing evidence-backed signals."""
+    region: str
+    window_start: datetime
+    window_end: datetime
+    signal_count: StrictInt = Field(ge=1, le=500)
+    domain_counts: dict[str, StrictInt]
+    domains_present: list[str] = Field(max_length=4)
+    signal_ids: list[str] = Field(max_length=500)
+    event_ids: list[UUID] = Field(max_length=400)
+    observation_ids: list[UUID] = Field(max_length=100)
+    document_ids: list[UUID] = Field(max_length=500)
+    document_version_ids: list[UUID] = Field(max_length=500)
+    event_evidence_ids: list[UUID] = Field(max_length=500)
+    omitted_document_ids: StrictInt = Field(default=0, ge=0)
+    omitted_document_version_ids: StrictInt = Field(default=0, ge=0)
+    omitted_event_evidence_ids: StrictInt = Field(default=0, ge=0)
+
+
+class CorrelationCoverageRead(BaseModel):
+    """Show domain coverage, omitted source count, and bounded-query truncation explicitly."""
+    signal_count: StrictInt = Field(ge=0, le=100)
+    available: bool
+    truncated: bool = False
+    omitted_source_count: StrictInt = Field(default=0, ge=0, le=32)
+
+
+class CorrelationResult(BaseModel):
+    """Return deterministic temporal co-occurrence and evidence references, never causal scores."""
+    method_version: str = "co_occurrence_v1"
+    from_at: datetime
+    to_at: datetime
+    regions: list[str] = Field(max_length=32)
+    groups: list[CorrelationBucketRead] = Field(max_length=500)
+    coverage: dict[str, CorrelationCoverageRead]
+    included_domains: list[str] = Field(max_length=4)
+    missing_domains: list[str] = Field(max_length=4)
+    uncertainty_reasons: list[str] = Field(max_length=8)
+    interpretation: str = "temporal_co_occurrence_only"
+
+
+class CiiUnavailableRead(BaseModel):
+    """Return the unchanged requested CII scope while method and licensed evidence remain unverified."""
+    method_version: str = "v8"
+    requested_countries: list[str] = Field(max_length=31)
+    score: None = None
+    band: None = None
+    movement_24h: None = None
+    as_of: None = None
+    availability: str = "method_data_license_unverified"
+    reason: str = "Authoritative v8 method, source licensing, and the specified country set are not verified."
 
 
 class RecordedSignal(BaseModel):

@@ -59,6 +59,8 @@ export interface ChatMessage {
   model_identity: string | null;
   citations: Citation[];
   response_id: string | null;
+  /** Message whose prompt or assistant response this append-only revision follows. */
+  revision_of_message_id: string | null;
   created_at: string;
 }
 
@@ -67,6 +69,8 @@ export interface ChatMessage {
  */
 export interface ConversationDetail extends Conversation {
   messages: ChatMessage[];
+  /** Owner-readable active response handle to reattach to its existing replayable SSE stream. */
+  active_response_id: string | null;
 }
 
 /**
@@ -105,6 +109,14 @@ export interface SendMessageResponse {
   message_id: string;
   response_id: string;
   status: string;
+}
+
+/** Immutable idempotency envelope for one append-only message mutation. */
+export interface MessageMutationPayload {
+  action: 'edit' | 'regenerate';
+  base_content_hash: string;
+  client_request_id: string;
+  content?: string;
 }
 
 /**
@@ -249,6 +261,49 @@ export async function sendMessage(
     },
     body: JSON.stringify(payload),
   });
+}
+
+/**
+ * Appends an edited prompt or regenerated assistant answer without replacing transcript history.
+ * The server binds the operation to its original captured context and rejects request-key reuse
+ * when the payload digest differs.
+ *
+ * @param conversationId - Conversation whose history receives the new branch.
+ * @param messageId - Existing user prompt (edit) or assistant answer (regenerate).
+ * @param payload - Immutable content hash and request identity for safe retries.
+ * @param csrfToken - Session CSRF token for owner-write authorization.
+ * @returns Durable message and response-run acknowledgement.
+ */
+export async function mutateMessage(
+  conversationId: string,
+  messageId: string,
+  payload: MessageMutationPayload,
+  csrfToken: string,
+): Promise<SendMessageResponse> {
+  return apiRequest<SendMessageResponse>(
+    `/api/v1/conversations/${conversationId}/messages/${messageId}/mutations`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...csrfHeaders(csrfToken),
+      },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+/**
+ * Hashes exact UTF-8 message bytes for optimistic concurrency checks on edit/regenerate actions.
+ *
+ * @param content - Persisted message content shown to the user.
+ * @returns Lowercase SHA-256 digest accepted by the mutation API.
+ * @throws Error when secure browser hashing is unavailable.
+ */
+export async function hashMessageContent(content: string): Promise<string> {
+  if (!globalThis.crypto?.subtle) throw new Error('Secure message hashing is unavailable');
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(content));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
 /**

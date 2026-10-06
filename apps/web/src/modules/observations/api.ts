@@ -24,10 +24,14 @@ export type WorldObservation = {
   provider_delay_seconds: number | null;
   document_id: string;
   document_version_id: string;
+  document_version_number: number | null;
 };
 
 /** One bounded observation page and its continuation cursor. */
 export type WorldObservationPage = { items: WorldObservation[]; next_cursor: string | null; truncated: boolean };
+
+/** One page of current provider-coordinate points with unsupported source coverage. */
+export type GeospatialObservationPage = WorldObservationPage & { omitted_source_count: number };
 
 /** Fetch a source-authorized observation page; no provider request or credential is made in the browser. */
 export function listWorldObservations(
@@ -41,6 +45,18 @@ export function listWorldObservations(
   for (const region of filters.regions ?? []) query.append('regions', region);
   if (filters.cursor) query.set('cursor', filters.cursor);
   return apiRequest<WorldObservationPage>(`/api/v1/observations?${query.toString()}`, { signal });
+}
+
+/** Fetch one bounded owner-public point page; source/provider/evidence fences stay server-owned. */
+export function listGeospatialObservations(
+  filters: { sourceIds: string[]; regions?: string[]; from: Date; to: Date; limit?: number; cursor?: string },
+  signal?: AbortSignal,
+) {
+  const query = new URLSearchParams({ from_at: filters.from.toISOString(), to_at: filters.to.toISOString(), limit: String(filters.limit ?? 100) });
+  for (const sourceId of filters.sourceIds) query.append('source_ids', sourceId);
+  for (const region of filters.regions ?? []) query.append('regions', region);
+  if (filters.cursor) query.set('cursor', filters.cursor);
+  return apiRequest<GeospatialObservationPage>(`/api/v1/observations/geospatial?${query.toString()}`, { signal });
 }
 
 /** Fetch at most five owner-authorized pages and report either server or client truncation. */

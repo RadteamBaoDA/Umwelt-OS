@@ -60,7 +60,7 @@ export interface GadgetSettingsProps {
 /**
  * Modal dialog for configuring an individual gadget instance and its reusable definition.
  * Allows editing gadget title, max items limit, filter keywords, scope selectors,
- * and rule-based highlight triggers with severity and notification settings.
+ * map engine/layers/location disclosure, CII country request, and rule-based highlight settings.
  *
  * @param props Configuration and state handlers for the settings dialog.
  * @returns Radix Dialog element.
@@ -90,6 +90,11 @@ export function GadgetSettings({
   const [sourceId, setSourceId] = useState<string | null>(null);
   const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([]);
   const [channelIds, setChannelIds] = useState('');
+  const [regions, setRegions] = useState('');
+  const [mapLayerIds, setMapLayerIds] = useState<string[]>([]);
+  const [mapEngine, setMapEngine] = useState<'globe' | 'flat'>('globe');
+  const [showPreciseLocations, setShowPreciseLocations] = useState(false);
+  const [ciiCountryCodes, setCiiCountryCodes] = useState('');
 
   // New highlight rule subform state
   const [newRuleKeywords, setNewRuleKeywords] = useState<string>('');
@@ -106,10 +111,15 @@ export function GadgetSettings({
       setExcludeKeywords((def.filters?.exclude_keywords ?? []).join(', '));
       setSymbols((def.scope?.symbols ?? []).join(', '));
       setMetrics((def.scope?.metrics ?? []).join(', '));
-      setLookbackDays(def.scope?.lookback_days ?? 90);
+      setLookbackDays(def.scope?.lookback_days ?? (def.renderer === 'map' || def.renderer === 'intelligence_panel' ? 30 : 90));
       setSourceId(def.source_ids?.[0] ?? null);
       setSelectedSourceIds([...(def.source_ids ?? [])].slice(0, 32));
       setChannelIds((def.scope?.channel_ids ?? []).join(', '));
+      setRegions((def.scope?.regions ?? []).join(', '));
+      setMapLayerIds([...(def.scope?.map_layer_ids ?? [])]);
+      setMapEngine(def.filters?.map_engine ?? 'globe');
+      setShowPreciseLocations(def.filters?.show_precise_locations ?? false);
+      setCiiCountryCodes((def.scope?.cii_country_codes ?? []).join(', '));
       setHighlightRules(def.highlight_rules ? [...def.highlight_rules] : []);
       setSaveError(null);
     }
@@ -135,6 +145,8 @@ export function GadgetSettings({
         .map((s) => s.trim().toUpperCase())
         .filter(Boolean);
       const parsedMetrics = metrics.split(',').map((metric) => metric.trim()).filter(Boolean);
+      const parsedRegions = regions.split(',').map((region) => region.trim()).filter(Boolean);
+      const parsedCiiCountryCodes = ciiCountryCodes.split(',').map((country) => country.trim().toUpperCase()).filter(Boolean);
 
       // 1. Update instance title if changed
       if (title.trim() !== (instance.title || '')) {
@@ -162,6 +174,10 @@ export function GadgetSettings({
             limit: Math.max(1, Math.min(100, limit)),
             keywords: parsedKeywords.length > 0 ? parsedKeywords : undefined,
             exclude_keywords: parsedExcludeKeywords.length > 0 ? parsedExcludeKeywords : undefined,
+            ...(instance.definition.renderer === 'map' ? {
+              map_engine: mapEngine,
+              show_precise_locations: showPreciseLocations,
+            } : {}),
           },
           scope: {
             ...instance.definition.scope,
@@ -172,6 +188,14 @@ export function GadgetSettings({
             } : instance.definition.renderer === 'weather' ? {
               metrics: parsedMetrics,
               lookback_days: lookbackDays,
+            } : instance.definition.renderer === 'map' ? {
+              regions: parsedRegions,
+              map_layer_ids: mapLayerIds,
+              lookback_days: Math.min(30, lookbackDays),
+            } : instance.definition.renderer === 'intelligence_panel' ? {
+              regions: parsedRegions,
+              cii_country_codes: parsedCiiCountryCodes,
+              lookback_days: Math.min(30, lookbackDays),
             } : instance.definition.renderer === 'telegram_feed'
               ? { channel_ids: channelIds.split(',').map((item) => item.trim()).filter(Boolean) }
               : parsedSymbols.length > 0 ? { symbols: parsedSymbols } : {}),
@@ -267,11 +291,50 @@ export function GadgetSettings({
           {MULTI_SOURCE_RENDERERS.has(instance.definition.renderer) && (
             <SourceMultiPicker
               id="gadget-sources"
-              provider={instance.definition.renderer === 'telegram_feed' ? 'telegram' : instance.definition.renderer === 'video_panel' ? 'youtube' : undefined}
+              provider={instance.definition.renderer === 'telegram_feed' ? 'telegram' : instance.definition.renderer === 'video_panel' ? 'youtube' : instance.definition.renderer === 'map' ? 'open_meteo' : undefined}
               value={selectedSourceIds}
               onChange={setSelectedSourceIds}
             />
           )}
+          {(instance.definition.renderer === 'map' || instance.definition.renderer === 'intelligence_panel') && <section className="space-y-3 rounded-md border border-border p-3">
+            <h3 className="text-sm font-semibold">{instance.definition.renderer === 'map' ? t('mapScopeTitle') : t('intelligenceScopeTitle')}</h3>
+            <div className="space-y-1.5">
+              <Label htmlFor="gadget-regions" className="text-xs font-semibold">{t('mapRegionsLabel')}</Label>
+              <Input id="gadget-regions" value={regions} onChange={(event) => setRegions(event.target.value)} placeholder={t('mapRegionsPlaceholder')} className="h-8 text-xs font-mono" />
+              <p className="text-xs text-muted-foreground">{t('mapRegionsHelp')}</p>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="gadget-map-lookback" className="text-xs font-semibold">{t('mapLookbackLabel')}</Label>
+              <Input id="gadget-map-lookback" type="number" min={1} max={30} value={lookbackDays} onChange={(event) => setLookbackDays(Number(event.target.value))} className="h-8 text-xs font-mono" />
+            </div>
+            {instance.definition.renderer === 'map' && <>
+              <div className="space-y-1.5">
+                <Label htmlFor="gadget-map-engine" className="text-xs font-semibold">{t('mapEngineLabel')}</Label>
+                <Select value={mapEngine} onValueChange={(value) => setMapEngine(value as 'globe' | 'flat')}>
+                  <SelectTrigger id="gadget-map-engine" className="h-9"><SelectValue /></SelectTrigger>
+                  <SelectContent><SelectItem value="globe">{t('mapGlobeEngine')}</SelectItem><SelectItem value="flat">{t('mapFlatEngine')}</SelectItem></SelectContent>
+                </Select>
+              </div>
+              <fieldset className="space-y-2">
+                <legend className="text-xs font-semibold">{t('mapLayerLabel')}</legend>
+                {(['world_observations', 'military', 'economic', 'disaster', 'escalation'] as const).map((layerId) => (
+                  <label key={layerId} className="flex items-start gap-2 text-xs">
+                    <Checkbox checked={mapLayerIds.includes(layerId)} onCheckedChange={(checked) => setMapLayerIds((current) => checked === true ? [...current, layerId] : current.filter((item) => item !== layerId))} />
+                    <span>{t(`mapLayer_${layerId}`)}{layerId !== 'world_observations' && <span className="block text-muted-foreground">{t('mapLayerUnavailable')}</span>}</span>
+                  </label>
+                ))}
+              </fieldset>
+              <label className="flex items-start gap-2 text-xs">
+                <Checkbox checked={showPreciseLocations} onCheckedChange={(checked) => setShowPreciseLocations(checked === true)} />
+                <span>{t('mapPreciseLocationOptIn')}</span>
+              </label>
+            </>}
+            {instance.definition.renderer === 'intelligence_panel' && <div className="space-y-1.5">
+              <Label htmlFor="gadget-cii-countries" className="text-xs font-semibold">{t('ciiCountryScopeLabel')}</Label>
+              <Input id="gadget-cii-countries" value={ciiCountryCodes} onChange={(event) => setCiiCountryCodes(event.target.value)} placeholder="US, VN" className="h-8 text-xs font-mono uppercase" />
+              <p className="text-xs text-muted-foreground">{t('ciiCountryScopeHelp')}</p>
+            </div>}
+          </section>}
           {instance.definition.renderer === 'telegram_feed' && (
             <div className="space-y-1.5">
               <Label htmlFor="gadget-channel-ids" className="text-xs font-semibold">{t('telegramChannels')}</Label>

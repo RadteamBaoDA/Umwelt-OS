@@ -7,6 +7,8 @@ import { EntityGadget } from './gadgets/entity-gadget';
 import { FeedGadget } from './gadgets/feed-gadget';
 import { FinanceChart } from './gadgets/finance-chart';
 import { GithubProjectGadget } from './gadgets/github-project-gadget';
+import { IntelligencePanel } from './gadgets/intelligence-panel';
+import { MapGadget } from './gadgets/map-gadget';
 import { GoalsGadget } from './gadgets/goals-gadget';
 import { MetricsChart } from './gadgets/metrics-chart';
 import { NewsFeed } from './gadgets/news-feed';
@@ -48,6 +50,8 @@ const GADGET_REGISTRY: Record<string, React.ComponentType<GadgetRendererProps>> 
   metrics_chart: (props) => <MetricsChart instance={props.instance} />,
   github_project: (props) => <GithubProjectGadget instance={props.instance} />,
   weather: (props) => <WeatherPanel instance={props.instance} />,
+  map: (props) => <MapGadget instance={props.instance} isEditMode={props.isEditMode} />,
+  intelligence_panel: (props) => <IntelligencePanel instance={props.instance} />,
 };
 
 /**

@@ -2,8 +2,10 @@
 
 | Package | Locked version | License | Use |
 | --- | --- | --- | --- |
+| [AnythingLLM frontend source slices](https://github.com/Mintplex-Labs/anything-llm/tree/128a01575a50f0284aeca75a93399b6fb1db0328) | `128a01575a50f0284aeca75a93399b6fb1db0328` | MIT | Bounded adaptations of upstream scroll, composer input, markdown/sanitizer, and copy-feedback regions in `apps/web/src/modules/chat`; exact originals, local changes, and hashes are recorded in `docs/anythingllm-port.md` and `.superpowers/sdd/r07/source-regions.md`. No upstream transport, backend, provider code, CSS, or assets are included. |
 | [Authlib](https://github.com/authlib/authlib) | 1.8.0 | BSD-3-Clause | Server-side OpenID Connect discovery and Google sign-in validation, plus fixed-endpoint GitHub App OAuth code exchange and rotating-token refresh. |
 | [class-variance-authority](https://github.com/joe-bell/cva) | 0.7.1 | Apache-2.0 | Variant and size class selection for the repository-owned shared Button adapted from the official New York shadcn registry source. |
+| [DOMPurify](https://github.com/cure53/DOMPurify) | 3.4.16 | MPL-2.0 OR Apache-2.0 | Browser-side sanitization of rendered Chat markdown in `apps/web/src/modules/chat/chat-markdown.tsx`; Apache-2.0 notice from the locked npm package is reproduced in `THIRD_PARTY_NOTICES.md`. |
 | [backoff](https://github.com/litl/backoff) | 2.2.1 | MIT | Required dependency metadata for pinned PostHog; Graphiti telemetry is disabled before imports. Older release, with advisory review deferred. |
 | [FalkorDB Python client](https://github.com/FalkorDB/falkordb-py) | 1.2.0 | MIT | Graphiti's optional FalkorDB driver, isolated from ARQ Redis. `modules/knowledge/temporal/adapter.py` wraps its public driver path for bounds/redaction; no dependency source is modified. |
 | [FalkorDB server image](https://github.com/FalkorDB/FalkorDB) | 4.22.0 (`sha256:4ac83f55062d364dcf151692635138b0bd2e12578019a56eb86ef53d067b116b`) | SSPL-1.0 | Optional disabled service in `infrastructure/graph/compose.yml` for derived temporal knowledge. The selected private single-owner self-hosted scope is recorded in the Phase 5 decision report; distribution or service use needs separate license review. |
@@ -12,7 +14,13 @@
 | [Radix UI](https://github.com/radix-ui/primitives) | 1.6.7 | MIT | Primitives used by the account DropdownMenu and Dialog. |
 | [next-intl](https://github.com/amannn/next-intl) | 4.14.8 | MIT | English and Vietnamese interface catalogs and locale context. |
 | [next-themes](https://github.com/pacocoursey/next-themes) | 0.4.6 | MIT | System-aware light/dark theme class bootstrap. |
+| [markdown-it](https://github.com/markdown-it/markdown-it) | 15.0.2 | MIT | Markdown rendering for saved and streaming Chat message content in `apps/web/src/modules/chat/chat-markdown.tsx`; package notice is reproduced in `THIRD_PARTY_NOTICES.md`. |
 | [Recharts](https://github.com/recharts/recharts) | 3.10.1 | MIT | Renders standard financial, activity, and market series time-series charts through the recharts-wrapper. |
+| [globe.gl](https://github.com/vasturiano/globe.gl) | 2.45.0 | MIT | Client-side 3D globe renderer for local, owner-authorized observation points; no remote globe imagery or tiles are requested. |
+| [Three.js](https://github.com/mrdoob/three.js) | 0.186.1 | MIT | WebGL material/rendering dependency used by globe.gl. |
+| [deck.gl](https://github.com/visgl/deck.gl) (`@deck.gl/core`, `@deck.gl/layers`, `@deck.gl/react`) | 9.4.0 | MIT | Client-side flat map and point rendering using local geometry and owner-authorized observation points. |
+| [world-atlas](https://github.com/topojson/world-atlas) | 2.0.2 | ISC; bundled Natural Earth data is public domain | Local 1:110m Natural Earth land geometry for the flat map. |
+| [topojson-client](https://github.com/topojson/topojson-client) | 3.1.0 | ISC | Converts the bundled world-atlas TopoJSON land geometry to GeoJSON for deck.gl. |
 | [HTTPX](https://github.com/encode/httpx) | 0.28.1 | BSD-3-Clause | OpenAI SDK HTTP transport with DNS result CIDR approval, numeric-IP pinning, and proxy/redirect denial at the OmniRoute boundary. |
 | [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) | 2.3.0 | MIT | Maintained Model Context Protocol client/server SDK used for the remote MCP transport and typed protocol operations. |
 | [MCP Types](https://github.com/modelcontextprotocol/python-sdk/tree/main/src/mcp-types) | 2.3.0 | MIT | Typed protocol models required by the MCP Python SDK. |

@@ -1,6 +1,71 @@
+## P12-T3 onboarding API/UI milestone integration — 2026-10-06
+
+Original4dc8373 and readiness repair70d8ab7 composed with currentdevelop781c0eb intoe7eb87e62d51b850c0d4373e4e678650ef024dfa. Exact prescribed build session65210 exit0/four images and scoped source/composition re-review PASS. Integrating fourteen production paths with checkpoint batch: resumable revision-fenced owner progress, explicit completion/data choice, localized setup/onboarding, truthful semantic compatibility/index progress/error states, user-menu entry and linked p12_onboarding_state migration. No migration/runtime execution. Seed/reset and remaining mobile/drawer reconciliation still required; this does not complete wholeP12T3.
+
+Entities/Relationships export integrated781c0eb. Remaining Timeline/Observations export and finite Chat/Memory conversation deletion UoW assigned isolated Luna worktrees. Full backup/per-domain caller and P12T2/R16 remain active. No tests/push/deploy.
+## P12 Entities/Relationships export integration — 2026-10-06
+
+Accepted7b791f2 repair composed with develop34eeecd; inherited duplicate Memory reader removed by preserving exact accepted develop blob. Frozen0f4e093fa9592acb142ae57a3a45efb13661e66a has exactly four owner file delta. Prescribed composition build session95371 exit0/four images and independent composition review PASS. Integrating this coherent knowledge export milestone with checkpoint batch. Timeline/Observations still required; full export caller/backup and deletion/recovery remain open. No whole-P12 or runtime acceptance claim.
+
+Onboarding R170d8ab7 frozen and current-base composition pending final build/scoped review. Backup branch still based pre3215939; missing Chat/Documents symbols there is expected until preserved source snapshot merges currentdevelop, not permission to duplicate accepted owner contracts.
+## P12-T4 performance record delivery — 2026-10-06
+
+Frozen8d8ced8 performance report: prescribed buildexit0/four images and independent document source review PASS. Root verified exact performance-report blob equality and no production-code delta versus current developbd79c06. Integrating the report with this completed task checkpoint batch. P12-T4 production preparation delivered; actual target-host measurement/capacity acceptance remains pending/null, no deployment limits changed.
+
+Knowledge exporteb56a03 prescribed build PASS but independent review REQUEST CHANGES (fresh child reads, nullable-origin support masking, independently retained aliases); Luna finite repair active. Onboardingb5377de source review REQUEST CHANGES (semantic compatibility, indexing status/failure visibility, pending/error states); Luna finite repair active, no build yet. Full remaining backup/export/P12 deletion/onboarding seed-reset-mobile/R16 scope stays open. No tests/runtime/SQL/migration execution or push/deploy.
+## Current develop integration — 2026-10-06
+
+Verified develop HEADbd79c069276c696e40df54062d50b0d1e7201350: owner export3215939 and Chat privacybd79c06 integrated after exact build/review. Current parallel Luna tasks: full backup/export/admission, onboarding/demo/mobile, and missing knowledge domain export owner contracts (Entities/Relationships/Timeline/Observations). P12-T2 deletion/recovery waits shared-owner source freeze; capacity/release/R16 remain open. All deferred tests/runtime/restore/target capacity acceptance unproven. Status updated locally; next docs commit batched with accepted task/phase.
+## P12 chat privacy integration — 2026-10-06
+
+Accepted privacy6c22b73 composed with develop3215939 into0827281; duplicate reader repaired7929be573ab6bd8e31ab3a48c0abb90520550ba0. Exact prescribed build exit0, four images, clean author tree and independent narrow composition re-review PASS. Integrating four production files with this checkpoint batch. Consent is Memory-owned, serialized before parent/run locks; remote attempts/events/Stop and final writes recheck current consent. Runtime races/provider/SSE timing remain deferred, not proven by build.
+
+Owner-export contracts integrated3215939. Full backup/per-domain export, deletion/recovery, onboarding/demo/mobile and capacity/release/R16 remain incomplete. Continue independent Luna work in separate worktrees; tests stay deferred. No push/deploy.
+## Chat privacy composition repair milestone — 2026-10-06
+
+Frozen narrow dedup7929be573ab6bd8e31ab3a48c0abb90520550ba0: prescribed composition build session5753 exit0, four images, tracked tree clean. Root verified commit/one helper/log; receipt preserved in author worktree. Independent narrow re-review dispatched; merge remains pending. Develop stays3215939. Onboarding progress API/state/migration and backup/export canonical domain contracts are in progress, not accepted. Continue remaining P12/R16 production; tests/runtime deferred.
+## Live integration milestone — 2026-10-06
+
+- Owner-export contracts integrated into develop at3215939695f3cf4c3bf91a31be39665a43179928; exact source composition06e7073 build and independent composition review PASS. Full export UI/caller and backup remain incomplete.
+- Chat privacy original6c22b73 build/scoped re-review PASS. Composition0827281 review REQUEST CHANGES P2: identical read_export_privacy duplicated by auto-merge. Luna narrow dedup/build repair assigned, build slot granted; no merge until repaired exact source passes build/re-review.
+- Parallel Luna backup/export Settings/routes/admission implementation and isolated onboarding/demo/mobile/a11y implementation continue; additive API/locales/migration seams coordinated.
+- Active remaining original P12 and R16; deferred tests/runtime still gated. No push/deploy or test-stage commands. Current evidence supersedes earlier stop snapshots.
+## P12 owner-export contracts integration — 2026-10-06
+
+Accepted export2a98e2e composed with develop56bc8ba into06e7073. Exact composition build PASS exit0 (four images), independent composition source review PASS. Integrating eight owner contract files plus this checkpoint batch; all full-export caller/UI/restore/runtime work remains incomplete. Build receipt records process_password_restored=False; preserve that qualifier, do not claim successful restoration. No .env operations or runtime execution were performed.
+
+Chat privacy6c22b73 code/build/scoped review PASS; composition pending. Backup and onboarding continue in isolated worktrees. Stop revoked; plan ACTIVE. Older top-level snapshots below are historical.
+## Resume authorized — 2026-10-06
+
+Owner revoked stop and authorized remaining plan implementation, isolated parallel worktrees, phase integration into develop and continuous local reporting. Models: available gpt-6-luna implement/build; gpt-6.1-sol review/inference.
+
+- Develop baseline 56bc8ba; preserve unrelated dirty contributor/docs/UX changes.
+- Chat privacy6c22b73: prescribed author build PASS and independent four-finding re-review PASS; develop composition/build/review/integration pending.
+- Owner export accepted2a98e2e composed with develop into06e7073. Map dependency conflicts resolved with develop's exact package/lock files. Initial composition build failed missing installed map packages; locked npm ci then rerun prescribed build pending. Independent composition review dispatched.
+- Parallel agents: backup/export remaining production; onboarding/demo/mobile/a11y in isolated checkout; Sol composition reviewer.
+- Build slot serialized; no tests/lint/standalone typecheck/runtime/SQL/migrations in production stage. No push/deploy. Current live evidence supersedes stop snapshots below.
+## Final user-requested stop checkpoint — 2026-10-06
+
+- Develop remains `56bc8ba`: P01–P11, Collector/MCP, R07, R12, R14, R15 integrated.
+- Chat privacy repair committed `6c22b73d84fa6725afe3e79467214f35e641cc7c`; author reports clean tracked tree, prescribed build session 94198 exit 0. Root verified commit and four Built image log lines. Scoped source fingerprint `b17546c64215581305a1ca40169013e11d369957ac7030be748363308770d30c`. Independent re-review, composition and merge PENDING.
+- Owner-export repair `2a98e2e`: build/scoped review PASS, composition and merge PENDING; receipt restoration qualifier preserved.
+- Full backup dirty implementation preserved at defed36; unbuilt/unreviewed. Other P12/R16 production and deferred acceptance remain incomplete.
+- Current implementer instructed to stop after completed repair/build/commit. No new task dispatch; checkpoint saved locally without status-only commit. No main merge, push or deployment.
+- Resume from pending review/composition; do not claim full plan completion. This snapshot supersedes earlier running-agent milestones below.
+## Verified stop-request checkpoint — 2026-10-06
+
+| Status | Scope |
+| --- | --- |
+| Integrated into develop | P01–P11, Collector/MCP, R07, R12, R14, R15; HEAD 56bc8ba |
+| Build/review passed, not integrated | Owner-export repair 2a98e2e |
+| Running repair, not accepted | Chat privacy: base 378468a; dirty Memory public, Chat routes and worker; no live build at latest agent checkpoint |
+| Incomplete implementation preserved | P12 full backup author stopped; dirty source preserved at defed36, unbuilt/unreviewed/unintegrated |
+| Pending | Remaining P12 deletion/recovery, onboarding, capacity/release/OSS, R16, then deferred tests/runtime acceptance |
+
+Finish current assigned agent work, save evidence, then stop per user request. No new task dispatch, main merge, push or deploy. Older entries below are historical when inconsistent with this snapshot. Status files updated without a standalone docs commit.
 # Umwelt-OS implementation status
 
-Updated: 2026-10-05 — ACTIVE. P11 integratedc58a56e; R12 composed/build/review accepted d60d01a, production integration now. R14 accepted7086167 composition next; R07 Luna actual source port active. No runtime/provider/capacity acceptance.
+Updated: 2026-10-06 — ACTIVE. develop `1a48454` includes P01–P11, Collector/MCP, R12, R14 and R07. R15 composition `8467803` build and final independent review PASS; integrated in this task commit. Two P12 agents implement backup/restore and owner export contracts; remaining P12/R16 scope incomplete. Runtime/provider/capacity acceptance deferred.
 
 
 ## Current checkpoint — 2026-10-05
@@ -616,3 +681,6 @@ Accepted source d60d01a after composition12f165d: full prescribed build exit0, o
 
 ## R14 World Data integration — 2026-10-05
 Accepted standalone source7086167 and composed source6cde618 (develop8b0b5a3). Full prescribed composed build exit0: Next production/integrated TypeScript20pages and web/api/worker/migrate images; temporary process password restored. Independent composition review ACCEPT, no material integration findings; report retained in R14 ignored task folder. Root squash applies45production files, preserves unrelated owner AGENTS/CLAUDE/UX changes and independent tests. Includes Alpha Vantage/Open-Meteo adapters, immutable provider/version evidence, Observations persistence/public gated queries, Finance/Weather consumers, credential/scope settings and r14_observations afterR12highlightprogress. Remaining provider families stay truthfully planned/unavailable. Runtime/provider/license activation, migrations, target capacity remain deferred. R07 source active/build slot granted; R15 next production scope, P12/R16 outstanding. No tests/push/deploy by this team. Large-task source+batchedstatus commit follows.
+
+### R07 source integration complete — 2026-10-06
+Accepted composed source0b190510 integrated into develop fromdb67fd1: actual AnythingLLM frontend slices/provenance, append-only edit/regenerate receipts, exact retained citation reader, active-run SSE navigation/remount/Stop recovery, minimal drawer and guarded initial-fetch failures. Independent original review, scoped repair review and composition review PASS; exact prescribed composed build PASS exit0 Next integratedTS20routes/fourDockerimages. Newr07_chat_mutation_receipts followsr14_observations; static48revision one-head chain inspected, no migration execution. Root squash contains exactly25accepted source/OSSfiles plus completed-task checkpoint documents. R15 repair9e352e4 independently accepted; next compose against newdevelop. P12 backup/export remains incomplete, ownerexports isolated Luna task started at accepted composition source. No tests/runtime/providers/SQL/push/deploy; not whole-plan or runtime completion. Unrelated AGENTS/CLAUDE/UX deletions preserved unstaged.

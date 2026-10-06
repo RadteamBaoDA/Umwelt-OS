@@ -197,6 +197,7 @@ function ChatTriggerButton() {
                 }
               }}>
                 <DropdownMenuItem onSelect={() => openFromMenu('preferences')}>{t('userSettings')}</DropdownMenuItem>
+                <DropdownMenuItem asChild><Link href="/onboarding">{t('workspaceOnboarding')}</Link></DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => openFromMenu('account')}>{t('accountSettings')}</DropdownMenuItem>
                 <DropdownMenuItem disabled={logout.isPending} onSelect={() => logout.mutate()}>{t('signOut')}</DropdownMenuItem>
               </DropdownMenuContent>
