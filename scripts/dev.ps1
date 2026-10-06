@@ -1,9 +1,11 @@
 param(
   [Parameter(Mandatory = $true, Position = 0)]
-  [ValidateSet('setup', 'dev', 'stop', 'migrate', 'seed', 'lint', 'typecheck', 'test', 'build')]
+  [ValidateSet('setup', 'dev', 'stop', 'migrate', 'seed', 'reset-preview', 'reset', 'lint', 'typecheck', 'test', 'build')]
   [string]$Task,
   [string]$PytestTarget,
-  [string]$E2eTarget
+  [string]$E2eTarget,
+  [string]$Workspace,
+  [string]$ConfirmFingerprint
 )
 
 $ErrorActionPreference = 'Stop'
@@ -62,6 +64,12 @@ try {
     finally { $listener.Stop() }
   }
 
+  if ($Workspace -and $Workspace -notmatch '^bbd-os-ws-[0-9a-f]{12}$') {
+    throw 'Workspace must match bbd-os-ws- followed by exactly 12 lowercase hexadecimal characters'
+  }
+  if ($Workspace -and $Task -notin @('dev', 'stop', 'seed', 'reset-preview', 'reset')) {
+    throw '-Workspace applies only to named development-workspace commands'
+  }
   switch ($Task) {
     'setup' {
       if (-not (Test-Path '.env')) {
@@ -89,10 +97,27 @@ OMNIROUTE_MODELS={}
       Invoke-Checked 'uv' @('sync', '--frozen')
       Invoke-Checked 'npm' @('ci')
     }
-    'dev' { Invoke-Checked 'docker' (@('compose') + (Get-ComposeArgs) + @('up', '-d', '--build')) }
-    'stop' { Invoke-Checked 'docker' (@('compose') + (Get-ComposeArgs) + @('stop')) }
+    'dev' {
+      if ($Workspace) { Invoke-Checked 'python' @('scripts/dev_workspace.py', 'up', '--name', $Workspace) }
+      else { Invoke-Checked 'docker' (@('compose') + (Get-ComposeArgs) + @('up', '-d', '--build')) }
+    }
+    'stop' {
+      if ($Workspace) { Invoke-Checked 'python' @('scripts/dev_workspace.py', 'stop', '--name', $Workspace) }
+      else { Invoke-Checked 'docker' (@('compose') + (Get-ComposeArgs) + @('stop')) }
+    }
     'migrate' { Invoke-Checked 'docker' (@('compose') + (Get-ComposeArgs) + @('run', '--rm', 'migrate')) }
-    'seed' { Invoke-Checked 'docker' @('compose', '-f', 'docker-compose.yml', 'run', '--rm', '--build', 'api', 'python', '-m', 'modules.knowledge.documents.seed') }
+    'seed' {
+      if ($Workspace) { Invoke-Checked 'python' @('scripts/dev_workspace.py', 'seed', '--name', $Workspace) }
+      else { Invoke-Checked 'docker' @('compose', '-f', 'docker-compose.yml', 'run', '--rm', '--build', 'api', 'python', '-m', 'modules.knowledge.documents.seed') }
+    }
+    'reset-preview' {
+      if (-not $Workspace) { throw 'Specify -Workspace bbd-os-ws-<12 lowercase hex characters>' }
+      Invoke-Checked 'python' @('scripts/dev_workspace.py', 'reset-preview', '--name', $Workspace)
+    }
+    'reset' {
+      if (-not $Workspace -or -not $ConfirmFingerprint) { throw 'Specify -Workspace and the fingerprint shown by reset-preview' }
+      Invoke-Checked 'python' @('scripts/dev_workspace.py', 'reset', '--name', $Workspace, '--confirm', $ConfirmFingerprint)
+    }
     'lint' {
       Invoke-Checked 'uv' @('run', 'ruff', 'check', 'core', 'apps', 'modules', 'tests', 'infrastructure/postgres/migrations')
       Invoke-Checked 'npm' @('run', 'lint')

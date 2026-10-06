@@ -75,6 +75,7 @@ from modules.chat.worker import (
     purge_expired_chat_runs,
     run_response_generation,
 )
+from modules.chat.seed import ensure_demo_conversation
 
 __all__ = [
     "AgentActivityLink", "AgentActivityRead",
@@ -129,6 +130,7 @@ __all__ = [
     "validate_answer_citations",
     "validate_citations",
     "validate_export_fences",
+    "ensure_demo_conversation",
 ]
 
 

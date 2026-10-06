@@ -20,6 +20,7 @@ from core.realtime import commit_with_replay, make_graph_change
 from core.auth.models import Owner
 from modules.sources import public as sources
 from modules.sources.schemas import SourceExportFence
+from modules.knowledge.entities.seed import ensure_demo_entities
 from modules.knowledge.entities.models import (
     Entity,
     EntityAlias,
@@ -2267,3 +2268,4 @@ async def list_changed_entities_after(
     return [(r.updated_at, r.id, f"{r.id}:{r.updated_at.isoformat()}",
              {"entity_id": str(r.id), "entity_type": r.type,
               "change": "created" if r.revision == 1 else "updated"}) for r in rows]
+

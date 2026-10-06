@@ -1477,6 +1477,45 @@ def content_hash(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
+async def ensure_demo_article(session: AsyncSession) -> tuple[int, int, int]:
+    """Normalize one fictional article through Documents and preserve provenance and chunks.
+
+    Returns (created, existing, skipped). The stable source/provider identity and accepted content
+    hash make retries idempotent; a tombstoned normalized identity stays deleted. The caller owns
+    the transaction and receipt, while Documents owns source fencing, normalization, and chunking.
+    """
+    from core.demo_seed import P12_DEMO_NAMESPACE, p12_demo_seed_id
+
+    article_id = p12_demo_seed_id("article", "lantern-inscription-care")
+    source_id = p12_demo_seed_id("article", "source")
+    content = (
+        "Fictional field note: Mira records that the north orchard lantern inscriptions should be "
+        "photographed in soft morning light before the catalogue is assembled."
+    )
+    await sources.ensure_demo_source(session, source_id, P12_DEMO_NAMESPACE)
+    source = await sources.lock_source(session, source_id)
+    if source is None:
+        raise RuntimeError("P12 demo article source is unavailable")
+    title = "Field note: caring for orchard lantern inscriptions"
+    result = await upsert_normalized_document(session, NormalizedDocumentInput(
+        source_id=source_id,
+        expected_source_generation=source.generation,
+        observation_id=article_id,
+        provider_id=f"{P12_DEMO_NAMESPACE}/lantern-inscription-care",
+        accepted_record_hash=content_hash(content),
+        normalization_version=1,
+        observed_at=datetime(2026, 9, 20, 9, 0, tzinfo=UTC),
+        title=title,
+        canonical_url="https://example.invalid/demo/orchard-lantern-care",
+        content_type="article",
+        content=content,
+        provenance={"title": title, "content_type": "article"},
+    ))
+    if result.disposition == "tombstoned":
+        return 0, 0, 1
+    return (1, 0, 0) if result.created_version else (0, 1, 0)
+
+
 async def list_evidence_ref_keys(
     session: AsyncSession, *, document_id: UUID | None = None, source_id: UUID | None = None,
     limit: int = 10_000,
