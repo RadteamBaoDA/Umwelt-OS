@@ -1,3 +1,18 @@
+## Chat/Memory conversation deletion integration — 2026-10-06
+
+Accepted standalone `4f6624a` composed with develop `de132d8` into `77aaad115e08cede45ffde047f6f3c846ed97698`. Exact prescribed composition build exit 0/four images and independent Sol source/composition review PASS; root verified three task-file blob equality and clean author tree. Integrating Chat-owned deletion/bounded bulk contract and Memory privacy-before-purge locking with this checkpoint batch. Existing route/service commits and Agent uncertainty tombstones preserved. Composition receipt records `Process password restored: False`; retained verbatim, restoration success is not asserted. No .env operations or runtime execution.
+
+Worker expiry cleanup bypass remains next owning task. Full document/source copied-evidence cleanup, backup/export, Timeline/Observations, demo seed/reset and final release/R16 remain open. No full P12 or behavioral acceptance claim; tests remain deferred. No push/deploy.
+## Chat/Memory deletion build milestone — 2026-10-06
+
+Frozen `4f6624a` in isolated p12-deletion: Chat owns bounded public bulk cleanup; Memory acquires privacy lock before all purge rows; caller commits preserved. Controller findings from `0636e74` repaired. Verified clean author tree and exact prescribed build receipt exit 0; four images built. Independent gpt-6.1-sol source review active; composition/integration NOT complete. Failed earlier missing-next build retained; locked npm ci completed. Worker expiry bypass remains explicit next-task scope. Backup/export and Timeline/Observations implementers continue; production tests remain deferred. Local checkpoint only, batch with accepted task.
+## Live continuation checkpoint — 2026-10-06
+
+- ACTIVE; stop revoked. Verified develop `de132d817c3cb5d28ef1d95b7221e9151ba9c891`; original P01–P11 integrated, P12/R16 production incomplete.
+- Three isolated Luna implementers active: backup/export/admission, Timeline/Observations export, Chat/Memory deletion. Existing worktrees reused. gpt-6.1-sol review dispatch currently hit agent thread limit; retry when a slot is available.
+- Deletion `0636e74` frozen but NOT accepted: controller source review found Memory still queries foreign Chat ORM. Repair moves bounded keyset/count into Chat public bulk helper; existing caller commit boundaries preserved. Worker expiry bypass recorded for next owning task.
+- Onboarding API/UI integrated `de132d8`; demo seed/reset/mobile remainder pending. Capacity report preparation integrated; actual capacity unmeasured. Full deletion/recovery and final release/OSS documentation remain pending.
+- Build slot serialized. Only prescribed production build; no tests, lint, standalone typecheck, runtime, SQL/migration execution or .env operations during code stage. No push/deploy. Checkpoint edits local; batch commit with next accepted milestone.
 ## P12-T3 onboarding API/UI milestone integration — 2026-10-06
 
 Original4dc8373 and readiness repair70d8ab7 composed with currentdevelop781c0eb intoe7eb87e62d51b850c0d4373e4e678650ef024dfa. Exact prescribed build session65210 exit0/four images and scoped source/composition re-review PASS. Integrating fourteen production paths with checkpoint batch: resumable revision-fenced owner progress, explicit completion/data choice, localized setup/onboarding, truthful semantic compatibility/index progress/error states, user-menu entry and linked p12_onboarding_state migration. No migration/runtime execution. Seed/reset and remaining mobile/drawer reconciliation still required; this does not complete wholeP12T3.

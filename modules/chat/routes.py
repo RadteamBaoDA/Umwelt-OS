@@ -511,18 +511,11 @@ async def delete_conversation(
     Raises:
         HTTPException: 404 if conversation does not exist.
     """
-    # Lock the Chat parent before agent runs and approvals; take any future upstream domain
-    # lifecycle locks before this row so the cross-module deletion order remains acyclic.
-    conv = await session.scalar(select(Conversation).where(
-        Conversation.id == conversation_id,
-    ).with_for_update().execution_options(populate_existing=True))
-    if conv is None:
+    from modules.chat.public import delete_conversation as delete_chat_conversation
+
+    deleted = await delete_chat_conversation(session, conversation_id, _owner.owner_id)
+    if not deleted:
         raise HTTPException(status_code=404, detail="Conversation not found")
-
-    from modules.agents.public import purge_conversation_actions
-
-    await purge_conversation_actions(session, conversation_id, _owner.owner_id)
-    await session.delete(conv)
     await session.commit()
 
 

@@ -701,6 +701,9 @@ class MemoryService:
         Returns:
             MemoryPurgeResponse with counts of deleted records.
         """
+        # Establish the global privacy-before-Memory-row lock order for this transaction.
+        await lock_export_privacy(self.session)
+
         purged_memories = 0
         purged_candidates = 0
         purged_conversations = 0
@@ -718,11 +721,11 @@ class MemoryService:
             purged_candidates = res.rowcount or 0
 
         if options.purge_conversation_history:
-            from modules.chat.models import Conversation
+            from modules.chat.public import purge_unpinned_conversations
 
-            stmt = delete(Conversation).where(Conversation.pinned.is_(False))
-            res = await self.session.execute(stmt)
-            purged_conversations = res.rowcount or 0
+            purged_conversations = await purge_unpinned_conversations(
+                self.session, owner_id=1,
+            )
 
         await self.session.commit()
         await self._invalidate_cache()
