@@ -10,6 +10,7 @@ import hashlib
 import json
 import re
 from datetime import UTC, date, datetime
+from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -23,7 +24,7 @@ from core.config import Settings
 from core.realtime import commit_with_replay, make_dashboard_change
 from core.model_gateway.client import ModelGateway, ModelGatewayError
 from core.model_gateway.schemas import RequestPolicy
-from modules.dashboard.daily_schemas import BriefRead, BriefSchedule, DailyContext
+from modules.dashboard.daily_schemas import BriefRead, BriefSchedule, DailyWidget
 from modules.dashboard.models import BriefSchedule as BriefScheduleRow
 from modules.dashboard.models import DailyBrief
 from modules.notifications import public as notifications
@@ -100,16 +101,17 @@ async def list_briefs(session: AsyncSession, owner_id: int, day: date, timezone:
     return await _with_live_status(session, list(rows))
 
 
-async def _facts(session: AsyncSession, ctx: DailyContext) -> list[dict[str, Any]]:
-    """Flatten widgets into numbered, citable facts, failing closed on source privacy.
+async def _facts(session: AsyncSession, widgets: Sequence[DailyWidget]) -> list[dict[str, Any]]:
+    """Flatten current owner widgets into numbered citable facts under source privacy policy.
 
     A fact is kept only when every source it references resolves to an existing, active, non
     local-only source. Story facts with no source and any unresolved ID are dropped. Owner-authored
-    task/goal facts and source-less manual events carry no source and are kept.
+    task/goal facts and source-less manual events carry no source and are kept. This fact-only
+    contract deliberately does not load the saved brief, revision history or notifications.
     """
     candidates: list[dict[str, Any]] = []
     wanted: set[str] = set()
-    for widget in ctx.widgets:
+    for widget in widgets:
         for item in widget.items:
             ids = [str(s) for s in item.get("source_ids", [])] + ([item["source_id"]] if item.get("source_id") else [])
             if widget.module == "news" and not ids:
@@ -167,7 +169,7 @@ async def generate_brief(
         {"key": f"brief:{owner_id}:{day}:{timezone}"},
     )
     ctx = await context.build_daily_context(session, owner_id, day, timezone)
-    facts = await _facts(session, ctx)
+    facts = await _facts(session, ctx.widgets)
     if not facts:
         raise BriefEmpty
     fingerprint = _fingerprint(day, timezone, facts)

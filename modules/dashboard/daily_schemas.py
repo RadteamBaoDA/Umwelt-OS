@@ -4,7 +4,7 @@ from datetime import date, datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, field_validator
 
 DayRelation = Literal["past", "today", "future"]
 WidgetStatus = Literal["ok", "empty", "not_applicable", "unavailable"]
@@ -88,3 +88,111 @@ class BriefSchedule(BaseModel):
     timezone: str = "Asia/Ho_Chi_Minh"
 
     _tz = field_validator("timezone")(validate_timezone)
+
+
+class DailyBriefExport(BaseModel):
+    """Expose one immutable saved brief revision only while every exact citation remains eligible."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    brief_date: date
+    timezone: str
+    revision: int = Field(ge=1)
+    status: Literal["current"]
+    content: str
+    citations: list[dict[str, Any]] = Field(max_length=40)
+    model_alias: str = Field(min_length=1, max_length=32)
+    generated_at: datetime
+
+
+class BriefExportFence(BaseModel):
+    """Bind a saved brief and its current citation-eligibility result for final revalidation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    generated_at: datetime
+    revision: int = Field(ge=1)
+    content_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    eligible: bool
+
+
+class BriefExportPage(BaseModel):
+    """Return bounded retained revisions with a cutoff, omission accounting, and exact fences."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    owner_id: int = Field(ge=1)
+    record_kind: Literal["daily_briefs"]
+    snapshot_at: datetime
+    snapshot_count: int = Field(ge=0)
+    omitted_count: int = Field(ge=0)
+    items: list[DailyBriefExport] = Field(max_length=100)
+    fences: list[BriefExportFence] = Field(max_length=100)
+    payload_bytes: int = Field(ge=0, le=16_777_216)
+    max_payload_bytes: int = Field(default=16_777_216, ge=1, le=16_777_216)
+    next_cursor: str | None = Field(default=None, max_length=512)
+    available: bool = True
+    omission_reason: Literal["unsupported_or_deleted_citation"] | None = None
+
+
+class BriefExportValidation(BaseModel):
+    """Report whether the cutoff brief inventory and every captured eligibility fence still match."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    valid: bool
+    reason: Literal["valid", "snapshot_count_changed", "record_changed"]
+    observed_snapshot_count: int = Field(ge=0)
+
+
+class BriefScheduleExport(BaseModel):
+    """Project editable schedule fields without exposing automation slot identity or credentials."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: StrictBool
+    hour: StrictInt = Field(ge=0, le=23)
+    minute: StrictInt = Field(ge=0, le=59)
+    timezone: str
+
+    _tz = field_validator("timezone")(validate_timezone)
+
+
+class BriefScheduleExportFence(BaseModel):
+    """Bind schedule projection to persisted/default state and the owner's current row revision."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    persisted: bool
+    updated_at: datetime | None
+    content_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class BriefScheduleExportPage(BaseModel):
+    """Return the single owner schedule projection and the shared bounded-cursor page contract."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    owner_id: int = Field(ge=1)
+    record_kind: Literal["brief_schedule"]
+    snapshot_at: datetime
+    snapshot_count: int = Field(ge=0, le=1)
+    items: list[BriefScheduleExport] = Field(max_length=1)
+    fences: list[BriefScheduleExportFence] = Field(max_length=1)
+    payload_bytes: int = Field(ge=0, le=16_777_216)
+    max_payload_bytes: int = Field(default=16_777_216, ge=1, le=16_777_216)
+    next_cursor: str | None = Field(default=None, max_length=512)
+    available: bool = True
+    omission_reason: Literal["schedule_changed_after_snapshot"] | None = None
+
+
+class BriefScheduleExportValidation(BaseModel):
+    """Report whether the owner's saved/default brief schedule still matches its final fence."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    valid: bool
+    reason: Literal["valid", "record_changed"]
+    observed_snapshot_count: int = Field(ge=0, le=1)
