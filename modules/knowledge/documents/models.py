@@ -261,6 +261,7 @@ class DocumentCleanupEvidenceReference(Base):
             name="ck_document_cleanup_evidence_reference_shape",
         ),
         Index("ix_document_cleanup_evidence_operation_id", "operation_id", "id"),
+        Index("ix_document_cleanup_evidence_document_version_id", "document_version_id"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)

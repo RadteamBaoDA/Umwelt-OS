@@ -379,6 +379,11 @@ async def process_source_memory_coverage(ctx: dict[str, object], event_id: str) 
                 await session.commit()
                 return
 
+            before = (
+                operation.status, operation.error_code, operation.pending_child_count,
+                operation.failed_child_count, list(operation.pending_owner_codes or []),
+                _memory_snapshot(operation),
+            )
             next_attempt_at: datetime | None = None
             if source.generation != operation.generation:
                 # The recorded purge generation can no longer identify this Source's copies.
@@ -433,6 +438,14 @@ async def process_source_memory_coverage(ctx: dict[str, object], event_id: str) 
                 )
             else:
                 await ingestion.set_event_delivery(session, identifier, "delivered")
+            if next_attempt_at is None and before == (
+                operation.status, operation.error_code, operation.pending_child_count,
+                operation.failed_child_count, list(operation.pending_owner_codes or []),
+                _memory_snapshot(operation),
+            ):
+                # Nothing observable changed: skip the replay row and realtime push.
+                await session.commit()
+                return
             await commit_with_replay(session, [make_source_change(
                 source.id, source.generation, source.status, operation_id=operation.id,
             )])

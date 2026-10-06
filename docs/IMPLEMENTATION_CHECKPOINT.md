@@ -1,17 +1,16 @@
 <!-- current-implementation-snapshot:start -->
-## Current implementation snapshot — 2026-10-06 18:30 — ACTIVE (resumed)
+## Current implementation snapshot — 2026-10-06 18:50 — P12 PRODUCTION CODE COMPLETE (acceptance deferred)
 
-Owner revoked stop and authorized continuation. Controller Claude Opus 5.5; implementers Sonnet 5.5, reviewers Opus 5.5. Verified develop `2c06b07`. Tests/runtime remain deferred per plan. SDD ledger: `.superpowers/sdd/2026-09-25-umwelt-os-phase-12-hardening-release-acceptance/progress.md`.
+Controller Claude Opus 5.5; implementers Sonnet 5.5; reviewers Opus 5.5. SDD ledger: `.superpowers/sdd/2026-09-25-umwelt-os-phase-12-hardening-release-acceptance/progress.md`. Alembic head `p12_evidence_version_index`.
 
 | State | Tasks |
 | --- | --- |
-| Integrated | P01–P11, R01–R15, accepted reconciliation; P12 backup/recovery `5212def`, square Dashboard `a2a2cc2`, portable exports `bce670b`, Chat cleanup `f6da2e2`, Document receipt UI `4416843`, Source cleanup `fe601bc`, mobile Dashboard `98365a1`, Memory cleanup `84c25df`, expiry cleanup `32a6ccc`, demo/seed/reset `655331b`, R16 branding `44cf45a` |
-| Wave 1 DONE | Agent stage integrated `2c06b07`; Notifications/Automations owner `1350085` and saved-brief owner `dbc5b14` accepted by Opus |
-| Wave 2 DONE | Materialization + saved-brief Documents stages, migration `p12_copied_stage_cleanup` (efe8ca7): Opus ACCEPT after 2 fix rounds, build PASS, integrated this commit. GitNexus risk CRITICAL (28 files, 58 flows) — runtime/tests deferred |
-| Wave 3 DONE | Source historical receipts + Source-local Memory coverage, migration `p12_source_coverage` (562a54c): Opus ACCEPT after P1 write-fence fix, build PASS, integrated this commit. GitNexus risk CRITICAL (14 files, 61 flows) |
-| Wave 4 | Release/OSS docs `6ca2aa8` accepted; final pass fills migration head `p12_source_coverage` + P3s, then merge |
-| Wave 5 | Whole-branch final review |
-| Deferred acceptance | Tests/runtime, live providers, restore, 2-core/8GiB capacity, release acceptance |
+| Integrated before this run | P01–P11, R01–R16 production, P12 backup/recovery `5212def`, square Dashboard `a2a2cc2`, portable exports `bce670b`, Chat cleanup `f6da2e2`, receipt UI `4416843`, Source canonical cleanup `fe601bc`, mobile Dashboard `98365a1`, Memory cleanup `84c25df`, expiry `32a6ccc`, demo/seed/reset `655331b`, branding `44cf45a` |
+| Integrated this run | Agent Documents stage `2c06b07`; Notifications/Automations + saved-brief Documents stages `b4c52b1`; Source historical + Source-local Memory coverage gate `00ddd32`; final-review fixes (cache-eviction re-settle, arq keep_result=0 for outbox consumers, reconciler re-arm bound, evidence version index) + P12-T5/R16 release/OSS docs (this commit) |
+| Review/build evidence | Every task Opus-reviewed to ACCEPT (fix rounds recorded in ledger); final whole-change review FIX FIRST → one fix wave → ACCEPT; prescribed build exit 0 / four images on every accepted head (process-only placeholder env) |
+| GitNexus risk | detect_changes CRITICAL on b4c52b1 (28 files/58 flows) and 00ddd32 (14 files/61 flows): expected cross-module scope; behavior unverified until test stage |
+| Deferred acceptance | Test stage (author/run behavioral, integration, UI, recovery, security tests); live providers; restore into separate instance; 2-core/8GiB capacity; physical erasure; release acceptance `{"functional_acceptance":"pending","live_integrations":"pending","target_capacity":"pending","restore_verified":false}` |
+| Deferred minors | Listed in SDD ledger (`minor (deferred)` lines) and final-review triage; none block merge per final review |
 <!-- current-implementation-snapshot:end -->
 ## Retained Timeline/Observations export integration — 2026-10-06
 

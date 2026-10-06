@@ -399,22 +399,12 @@ async def _evict_memory_cache_after_commit(
                 session, operation,
                 progress_key=_source_cleanup_progress_key(operation, "memory-cache"),
             )
-            if (operation.raw_status in {"not_present", "retained_shared", "succeeded"}
-                    and operation.chat_status == "succeeded"
-                    and operation.memory_status in {"succeeded", "failed"}
-                    and operation.agent_status in {"succeeded", "failed"}
-                    and _copied_stage_terminal(operation.materialization_status, operation.materialization_error_code)
-                    and _copied_stage_terminal(operation.brief_status, operation.brief_error_code)):
-                await ingestion.set_event_delivery(session, event_id, "delivered")
-            elif (operation.raw_status in {"not_present", "retained_shared", "succeeded"}
-                    and operation.chat_status == "succeeded"
-                    and (operation.memory_status == "running" or operation.agent_status == "running"
-                         or not _copied_stage_terminal(operation.materialization_status, operation.materialization_error_code)
-                         or not _copied_stage_terminal(operation.brief_status, operation.brief_error_code))):
-                await ingestion.set_event_delivery(
-                    session, event_id, "pending",
-                    next_attempt_at=datetime.now(UTC) + _CONTINUATION_DELAY,
-                )
+            # Never deliver here: the aggregate was computed while the cache was pending, so the
+            # main path must re-settle status/copied_status before the event can complete.
+            await ingestion.set_event_delivery(
+                session, event_id, "pending",
+                next_attempt_at=datetime.now(UTC) + _CONTINUATION_DELAY,
+            )
             await session.commit()
         else:
             await session.rollback()
@@ -672,8 +662,9 @@ async def process_document_cleanup(ctx: dict[str, object], event_id: str) -> Non
                     and operation.chat_status == "succeeded" and memory_terminal and agent_terminal
                     and _copied_stage_terminal(operation.materialization_status, operation.materialization_error_code)
                     and _copied_stage_terminal(operation.brief_status, operation.brief_error_code)
-                    and not operation.memory_cache_pending):
-                # Duplicate deliveries must not reopen a receipt whose required active stages finished.
+                    and not operation.memory_cache_pending
+                    and operation.status in {"succeeded", "failed"}):
+                # Duplicate deliveries must not reopen a settled receipt; an unsettled one re-settles below.
                 await ingestion.set_event_delivery(session, identifier, "delivered")
                 await session.commit()
                 return

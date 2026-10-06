@@ -1,6 +1,6 @@
 # Open-source and source-available inventory
 
-Inventory reconciliation is in progress. Entries below document identified dependencies and copied source; direct application packages, runtime images and redistributed notices are being reconciled before the final release gate. This is not a complete transitive license audit.
+Inventory reconciliation is in progress. The "Direct application runtime dependencies" table covers direct runtime packages only; its license labels come from lockfile-matched installed package metadata. The transitive audit is pending. Entries below document identified dependencies and copied source; runtime images, the optional browser runtime, build tooling and redistributed notices are being reconciled before the final release gate. This is not a complete transitive license audit.
 
 | Package | Locked version | License | Use |
 | --- | --- | --- | --- |

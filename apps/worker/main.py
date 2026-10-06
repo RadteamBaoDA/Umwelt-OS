@@ -3,6 +3,7 @@ from typing import Any, Callable, ClassVar, cast
 from uuid import uuid4
 
 from arq.connections import RedisSettings
+from arq.worker import func as _arq_func
 from arq.cron import cron as _cron
 from sqlalchemy import delete, func, select
 from sqlalchemy.engine import CursorResult
@@ -18,7 +19,7 @@ from core.auth.models import AuthSession
 from core.config import Settings
 from core.telemetry import install_log_redaction, instrument_job, set_process_role
 from core.system.health import ARQ_WORKER_GENERATION_KEY, ARQ_WORKER_HEALTH_KEY
-from modules.ingestion.dispatcher import dispatch_pending_work
+from modules.ingestion.dispatcher import WORKER_BY_EVENT, dispatch_pending_work
 from modules.ingestion.worker import (
     cleanup_storage_orphans,
     process_normalize_event,
@@ -180,6 +181,13 @@ class WorkerSettings:
     ]
     functions = [_gate_module_job(function) for function in functions]
     functions = [_gate_backup_job(function) for function in functions]
+    # Outbox consumers are re-enqueued under the fixed id `ingestion:{event.id}` per continuation; a
+    # kept arq result (default 3600 s) would turn those enqueues into no-ops. Nothing reads arq
+    # results, and the in-progress job key still dedupes concurrently queued jobs.
+    functions = [
+        _arq_func(function, keep_result=0) if function.__name__ in set(WORKER_BY_EVENT.values()) else function  # type: ignore[attr-defined]
+        for function in functions
+    ]
     cron_jobs: ClassVar[list[object]] = [
         cron(purge_expired_sessions, minute=0),
         cron(run_retention_maintenance, minute=0),

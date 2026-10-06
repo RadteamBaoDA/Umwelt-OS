@@ -831,7 +831,16 @@ async def pending_source_coverage_ids(
     """Return one bounded keyset page of purge operations needing coverage reconciliation."""
     if not 1 <= limit <= 100:
         raise ValueError("Source coverage reconciliation page size must be between 1 and 100")
-    statement = select(SourcePurgeOperation.id).where(*_open_coverage_operations())
+    # A failed purge whose Memory stage is done is terminal for polling; it re-settles only through
+    # Documents/observer wakeups, which still select it via _open_coverage_operations.
+    statement = select(SourcePurgeOperation.id).where(
+        *_open_coverage_operations(),
+        ~and_(
+            SourcePurgeOperation.status == "failed",
+            SourcePurgeOperation.memory_status == "succeeded",
+            SourcePurgeOperation.memory_cache_pending.is_(False),
+        ),
+    )
     if after is not None:
         statement = statement.where(SourcePurgeOperation.id > after)
     return tuple((await session.scalars(statement.order_by(SourcePurgeOperation.id).limit(limit))).all())

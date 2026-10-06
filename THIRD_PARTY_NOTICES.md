@@ -3765,3 +3765,12 @@ SOFTWARE.
 ~~~~
 
 <!-- p12-direct-runtime-notices:end -->
+
+## Pending notices
+
+No notice text is reproduced here for the following; each remains pending until local package/image metadata or checked upstream material exists. Licenses are not inferred from names.
+
+- Optional browser runtime: beautifulsoup4 4.15.0, crawlee 1.10.2, playwright 1.63.0, and the Chromium binary installed by `playwright install`.
+- Runtime and base images (no digest pinned): `pgvector/pgvector:0.8.6-pg16-bookworm`, `redis:7.4.11-alpine`, `python:3.12.14-slim-bookworm`, `node:24.20.0-alpine3.23`, `alpine:3.22` firewall build stage.
+- Build tooling: Tailwind CSS and `@tailwindcss/postcss` 4.3.3 (MIT per package metadata; notice text not reproduced), uv 0.12.11 installer, hatchling (unresolved version).
+- Remaining transitive dependencies not listed above and the operator-installed age host binary (not distributed).
