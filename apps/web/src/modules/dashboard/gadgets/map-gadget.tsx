@@ -13,7 +13,7 @@ import { buildMapLayers, projectMapFeatures } from '../map-layers';
 const FlatMap = lazy(() => import('./flat-map').then((module) => ({ default: module.FlatMap })));
 const GlobeMap = lazy(() => import('./globe-map').then((module) => ({ default: module.GlobeMap })));
 
-/** Shared owner-scoped map controller; both engines consume one feature set and selection state. */
+/** Shared owner-scoped map controller; fixed controls and a nonshrinking plot precede scrollable evidence. */
 export function MapGadget({ instance, isEditMode = false }: { instance: GadgetInstance; isEditMode?: boolean }) {
   const t = useTranslations('dashboard');
   const display = useDisplayPreferences();
@@ -81,7 +81,7 @@ export function MapGadget({ instance, isEditMode = false }: { instance: GadgetIn
   }, [features, selectedFeatureId]);
 
   return <section className="flex h-full min-h-0 flex-col gap-2 overflow-hidden bg-card p-3 text-card-foreground">
-    <header className="flex items-center justify-between gap-2 border-b border-border pb-2">
+    <header className="flex shrink-0 items-center justify-between gap-2 border-b border-border pb-2">
       <div><h2 className="text-sm font-semibold">{instance.title || t('mapTitle')}</h2><p className="text-xs text-muted-foreground">{t('mapRange', { days })}</p></div>
       <span className="text-xs text-muted-foreground">{engine === 'globe' ? t('mapGlobeEngine') : t('mapFlatEngine')}</span>
     </header>
@@ -89,7 +89,7 @@ export function MapGadget({ instance, isEditMode = false }: { instance: GadgetIn
     {precise && sourceIds.length === 0 && <p role="status" className="text-xs text-muted-foreground">{t('mapSourceRequired')}</p>}
     {precise && sourceIds.length > 0 && observations.isPending && <p role="status" className="text-xs text-muted-foreground">{t('observationLoading')}</p>}
     {observations.isError && <p role="alert" className="text-xs text-destructive">{t('observationLoadFailed')}</p>}
-    <div ref={plotRef} role="group" className="relative min-h-48 flex-1 overflow-hidden rounded border border-border" aria-label={t('mapPlotLabel')}>
+    <div ref={plotRef} role="group" className="relative min-h-48 shrink-0 flex-1 overflow-hidden rounded border border-border" aria-label={t('mapPlotLabel')}>
       {canRenderEngine && engine === 'globe'
         ? <Suspense fallback={<p role="status" className="p-2 text-xs text-muted-foreground">{t('mapRendererLoading')}</p>}><GlobeMap features={points} selectedFeatureId={selectedFeatureId} onSelectFeature={selectFeature} width={size.width} height={size.height} visible={visible} interactive={!isEditMode} /></Suspense>
         : canRenderEngine && <Suspense fallback={<p role="status" className="p-2 text-xs text-muted-foreground">{t('mapRendererLoading')}</p>}><FlatMap features={points} selectedFeatureId={selectedFeatureId} onSelectFeature={selectFeature} width={size.width} height={size.height} visible={visible} interactive={!isEditMode} /></Suspense>}

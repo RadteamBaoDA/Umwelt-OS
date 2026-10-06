@@ -7,7 +7,7 @@ import { useDisplayPreferences } from '@/core/query-provider';
 import { listWorldObservationWindow } from '@/modules/observations/api';
 import type { GadgetInstance } from '../api';
 
-/** Show scoped Open-Meteo forecast points with original units, timezone and attribution. */
+/** Show scoped forecast points in a bounded scroll root with original units and attribution. */
 export function WeatherPanel({ instance }: { instance: GadgetInstance }) {
   const t = useTranslations('dashboard');
   const display = useDisplayPreferences();
@@ -31,7 +31,7 @@ export function WeatherPanel({ instance }: { instance: GadgetInstance }) {
   if (query.isError) return <p role="alert" className="p-3 text-sm text-destructive">{t('observationLoadFailed')}</p>;
   if (!items.length) return <p role="status" className="p-3 text-sm text-muted-foreground">{t('observationEmpty')}</p>;
 
-  return <section className="flex h-full min-h-0 flex-col gap-2 overflow-hidden bg-card p-3 text-card-foreground">
+  return <section className="flex h-full min-h-0 flex-col gap-2 overflow-y-auto overflow-x-hidden bg-card p-3 text-card-foreground">
     <header className="flex items-center justify-between gap-2 border-b border-border pb-2">
       <h2 className="text-sm font-semibold">{instance.title || t('weatherTitle')}</h2>
       <a className="text-xs text-muted-foreground underline" href="https://open-meteo.com/" target="_blank" rel="noreferrer">{t('openMeteoAttribution')}</a>

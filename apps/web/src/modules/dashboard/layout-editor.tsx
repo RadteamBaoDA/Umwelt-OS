@@ -70,6 +70,10 @@ export interface LayoutEditorProps {
   onUndo: () => void;
   /** Callback fired to re-apply undone layout snapshot. */
   onRedo: () => void;
+  /** Optional explicit adoption of the current local readable mobile projection. */
+  onUseReadableMobileSizes?: () => void;
+  /** True only after a complete measured readable projection is available. */
+  canUseReadableMobileSizes?: boolean;
   /** Callback fired when user opens the preset picker dialog. */
   onOpenPresetPicker: () => void;
   /** Callback fired when adding a selected definition or new gadget instance. */
@@ -77,13 +81,18 @@ export interface LayoutEditorProps {
     definitionId: string;
     groupId: string;
     title?: string;
+    renderer: string;
   }) => void;
+  /** Preflights bounded placement before creating a quick definition on the server. */
+  onCanAddGadgetInstance: (renderer: string) => boolean;
   /** Available groups on the active dashboard. */
   groups: DashboardGroup[];
   /** Currently selected group identifier. */
   activeGroupId?: string;
   /** Controls open state of the Save / Discard / Stay modal. */
   dirtyModalOpen: boolean;
+  /** Origin-specific text when a pending layout switch is caused by a viewport breakpoint. */
+  dirtyDescription?: string;
   /** Callback handling dirty modal resolution (save, discard, or stay). */
   onDirtyModalResolution: (action: 'save' | 'discard' | 'stay') => void;
   /** Optional error message displayed if the last save attempt failed. */
@@ -94,12 +103,13 @@ export interface LayoutEditorProps {
 
 /**
  * Toolbar and dirty navigation guard for dashboard layout editing.
- * Provides explicit Save, Cancel, Undo, Redo, Add Gadget, and Preset Picker controls.
+ * Provides explicit Save/Cancel/Undo/Redo controls, optional readable-size adoption, and Add
+ * preflight before quick definitions are created.
  * Shows a Save / Discard / Stay modal before discarding unsaved layout changes,
  * and retains draft state upon failed save attempts.
  *
  * @param props Toolbar state flags and action callbacks.
- * @returns Accessible toolbar banner and modals.
+ * @returns Accessible toolbar and owner decision dialogs.
  */
 export function LayoutEditor({
   isDirty,
@@ -110,11 +120,15 @@ export function LayoutEditor({
   onCancel,
   onUndo,
   onRedo,
+  onUseReadableMobileSizes,
+  canUseReadableMobileSizes = false,
   onOpenPresetPicker,
   onAddGadgetInstance,
+  onCanAddGadgetInstance,
   groups,
   activeGroupId,
   dirtyModalOpen,
+  dirtyDescription,
   onDirtyModalResolution,
   saveError,
   onDismissSaveError,
@@ -169,6 +183,12 @@ export function LayoutEditor({
   const handleConfirmAdd = useCallback(async () => {
     let definitionId = selectedDefinitionId;
     const finalGroupId = targetGroupId || groups[0]?.id || '';
+    const selectedDefinition = definitions.find((definition) => definition.id === definitionId);
+    const renderer = selectedDefinition?.renderer ?? selectedRenderer;
+    if (!onCanAddGadgetInstance(renderer)) {
+      setAddDialogOpen(false);
+      return;
+    }
 
     // If no existing definition selected, create a quick definition first
     if (!definitionId) {
@@ -180,13 +200,14 @@ export function LayoutEditor({
       definitionId,
       groupId: finalGroupId,
       title: instanceTitle.trim() || undefined,
+      renderer,
     });
 
     setAddDialogOpen(false);
     setSelectedDefinitionId('');
     setInstanceTitle('');
     setNewDefName('');
-  }, [createDefMutation, groups, instanceTitle, onAddGadgetInstance, selectedDefinitionId, targetGroupId]);
+  }, [createDefMutation, definitions, groups, instanceTitle, onAddGadgetInstance, onCanAddGadgetInstance, selectedDefinitionId, selectedRenderer, targetGroupId]);
 
   return (
     <>
@@ -236,9 +257,21 @@ export function LayoutEditor({
 
           <div className="w-px h-5 bg-border mx-1" />
 
+          {onUseReadableMobileSizes && (
+            <Button
+              type="button"
+              className="secondary min-h-11 text-xs px-3"
+              disabled={!canUseReadableMobileSizes || isSaving}
+              onClick={onUseReadableMobileSizes}
+            >
+              {t('useReadableMobileSizes')}
+            </Button>
+          )}
+
           {/* Add Gadget */}
           <Button
             type="button"
+            disabled={isSaving}
             className="secondary text-xs h-8 px-2.5 gap-1.5"
             onClick={() => setAddDialogOpen(true)}
           >
@@ -249,6 +282,7 @@ export function LayoutEditor({
           {/* Presets */}
           <Button
             type="button"
+            disabled={isSaving}
             className="secondary text-xs h-8 px-2.5 gap-1.5"
             onClick={onOpenPresetPicker}
           >
@@ -315,13 +349,14 @@ export function LayoutEditor({
               <span>{t('dirtyWarningTitle')}</span>
             </AlertDialogTitle>
             <AlertDialogDescription className="text-muted-foreground text-sm">
-              {t('dirtyWarningDesc')}
+              {dirtyDescription ?? t('dirtyWarningDesc')}
             </AlertDialogDescription>
           </AlertDialogHeader>
 
           <AlertDialogFooter className="flex-col sm:flex-row gap-2 mt-4">
             <Button
               type="button"
+              disabled={isSaving}
               className="secondary w-full sm:w-auto text-xs"
               onClick={() => onDirtyModalResolution('stay')}
             >
@@ -329,6 +364,7 @@ export function LayoutEditor({
             </Button>
             <Button
               type="button"
+              disabled={isSaving}
               className="secondary text-destructive hover:bg-destructive/10 w-full sm:w-auto text-xs"
               onClick={() => onDirtyModalResolution('discard')}
             >
@@ -336,6 +372,7 @@ export function LayoutEditor({
             </Button>
             <Button
               type="button"
+              disabled={isSaving}
               className="w-full sm:w-auto text-xs font-bold"
               onClick={() => onDirtyModalResolution('save')}
             >

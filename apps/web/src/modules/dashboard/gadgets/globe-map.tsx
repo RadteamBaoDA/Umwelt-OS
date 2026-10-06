@@ -30,7 +30,7 @@ function isMapFeature(value: object): value is MapFeature {
     && 'observed_at' in value && typeof value.observed_at === 'string';
 }
 
-/** Render a local bare sphere and shared point IDs without requesting remote globe imagery or tiles. */
+/** Render a local bare sphere in a nonshrinking 192px plot without requesting remote imagery or tiles. */
 export function GlobeMap({ features, selectedFeatureId, onSelectFeature, width, height, visible, interactive }: GlobeMapProps) {
   const t = useTranslations('dashboard');
   const hostRef = useRef<HTMLDivElement>(null);
@@ -129,7 +129,7 @@ export function GlobeMap({ features, selectedFeatureId, onSelectFeature, width, 
     return () => observer.disconnect();
   }, [isSized, selectedFeatureId]);
 
-  return <div className="relative h-full min-h-48 w-full" aria-hidden="true">
+  return <div className="relative h-full min-h-48 shrink-0 w-full" aria-hidden="true">
     <div ref={hostRef} className="h-full w-full" />
     {(unavailable || contextLost) && <span role="status" className="sr-only">{t('mapWebglUnavailable')}</span>}
   </div>;
