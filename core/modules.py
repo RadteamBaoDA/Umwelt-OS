@@ -26,12 +26,14 @@ from modules.agents.descriptor import descriptor as agents
 from modules.automations.descriptor import descriptor as automations
 from modules.observability.descriptor import descriptor as observability
 from modules.connectors.descriptor import descriptor as connectors
+from modules.backup.descriptor import descriptor as backup
+from modules.export.descriptor import descriptor as export
 
 
 def register_modules(descriptors: Iterable[Any] = (
         sources, ingestion, documents, observations, entities, relationships, timeline, search, temporal,
         dashboard, tasks, goals, news, notifications, chat, memory, tools, agents,
-        automations, observability, connectors,
+        automations, observability, connectors, backup, export,
 )) -> dict[str, Any]:
     """Build the descriptor registry and reject duplicate IDs or missing dependencies.
 

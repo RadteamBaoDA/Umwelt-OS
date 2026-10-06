@@ -2,6 +2,7 @@
 
 import base64 as _base64
 import binascii as _binascii
+import hashlib as _hashlib
 from datetime import UTC as _UTC, datetime as _datetime
 import json as _json
 from urllib.parse import urlsplit as _urlsplit, urlunsplit as _urlunsplit
@@ -60,6 +61,7 @@ from modules.chat.schemas import (
     ChatExportFenceValidation,
     ChatExportMessageRead,
     ChatExportPage,
+    ChatMemoryExportOrigin,
     TemporalContextItem,
     ValidatedAnswer,
 )
@@ -94,6 +96,7 @@ __all__ = [
     "ChatExportFenceValidation",
     "ChatExportMessageRead",
     "ChatExportPage",
+    "ChatMemoryExportOrigin",
     "Citation",
     "CitationValidationResult",
     "Conversation",
@@ -118,6 +121,7 @@ __all__ = [
     "build_context",
     "ensure_grounded_answer",
     "export_page",
+    "read_memory_export_origin",
     "format_grounded_context",
     "format_sse_event",
     "is_history_storage_enabled",
@@ -662,6 +666,61 @@ async def _require_chat_export_owner(session: AsyncSession, owner_id: int) -> No
     """Require the live singleton owner before reading owner-scoped chat history."""
     if owner_id != 1 or await session.scalar(_select(_Owner.id).where(_Owner.id == owner_id)) is None:
         raise PermissionError("Chat export requires the current owner")
+
+
+async def read_memory_export_origin(
+    session: AsyncSession, *, owner_id: int, conversation_id: UUID, message_id: UUID,
+) -> ChatMemoryExportOrigin | None:
+    """Fence an exact retained transcript message for Memory without exposing its text.
+
+    The read observes current history consent and the live non-ephemeral owner conversation.
+    Its digest binds content, citations, and both lifecycle rows so Memory can recheck this
+    evidence immediately before its download is published.
+    """
+    from modules.memory.public import lock_export_privacy
+
+    await lock_export_privacy(session)
+    try:
+        await _require_chat_export_owner(session, owner_id)
+    except PermissionError:
+        return None
+    history_enabled, persisted, privacy_updated_at = await _chat_export_privacy(session)
+    if not history_enabled:
+        return None
+    now = _datetime.now(_UTC)
+    conversation_scope = _chat_export_scope(now, now)
+    row = (await session.execute(
+        _select(
+            Conversation.id.label("conversation_id"),
+            Conversation.created_at.label("conversation_created_at"),
+            Conversation.updated_at.label("conversation_updated_at"),
+            Message.id.label("message_id"),
+            Message.created_at.label("message_created_at"),
+            Message.updated_at.label("message_updated_at"),
+            Message.content.label("content"),
+            Message.citations.label("citations"),
+        )
+        .join(Message, Message.conversation_id == Conversation.id)
+        .where(
+            Conversation.id == conversation_id, Message.id == message_id,
+            Message.conversation_id == conversation_id, *conversation_scope,
+            Message.created_at <= now, Message.updated_at <= now,
+        )
+    )).one_or_none()
+    if row is None:
+        return None
+    digest_input = _json.dumps(
+        {"content": row.content, "citations": row.citations},
+        ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")
+    return ChatMemoryExportOrigin(
+        conversation_id=row.conversation_id, message_id=row.message_id,
+        conversation_created_at=row.conversation_created_at,
+        conversation_updated_at=row.conversation_updated_at,
+        message_created_at=row.message_created_at, message_updated_at=row.message_updated_at,
+        content_citation_digest=_hashlib.sha256(digest_input).hexdigest(),
+        privacy_persisted=persisted, privacy_updated_at=privacy_updated_at,
+    )
 
 
 def _chat_export_privacy_marker(persisted: bool, updated_at: _datetime | None) -> tuple[bool, _datetime | None]:

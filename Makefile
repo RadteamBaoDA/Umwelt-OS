@@ -1,5 +1,7 @@
-.PHONY: setup dev stop migrate seed lint typecheck test build workspace-up workspace-stop workspace-seed reset-preview reset
+.PHONY: setup dev stop migrate seed backup restore backup-recover restore-cleanup workspace-up workspace-stop workspace-seed reset-preview reset lint typecheck test build
 export WORKSPACE CONFIRM_FINGERPRINT
+
+DRAIN_TIMEOUT ?= 600
 
 setup:
 	uv sync --frozen
@@ -32,6 +34,18 @@ reset-preview:
 
 reset:
 	python scripts/dev_workspace.py reset --name "$$WORKSPACE" --confirm "$$CONFIRM_FINGERPRINT"
+
+backup:
+	uv run python scripts/backup.py --output "$(BACKUP)" --drain-timeout "$(DRAIN_TIMEOUT)"
+
+restore:
+	uv run python scripts/restore.py "$(BACKUP)" $(if $(KEEP_ISOLATED),--keep-isolated,)
+
+backup-recover:
+	uv run python scripts/restore.py --recover-operation "$(OPERATION_ID)" $(if $(BACKUP),"$(BACKUP)",)
+
+restore-cleanup:
+	uv run python scripts/restore.py --cleanup-project "$(PROJECT_ID)"
 
 lint:
 	uv run ruff check core apps modules tests infrastructure/postgres/migrations

@@ -13,6 +13,9 @@ to the document-seed coordinator.
 from modules.news.topics import (
     TopicConflict,
     TopicCreate,
+    TopicExportFence,
+    TopicExportPage,
+    TopicExportValidation,
     TopicFilter,
     TopicMissing,
     TopicPage,
@@ -20,8 +23,10 @@ from modules.news.topics import (
     TopicUpdate,
     create_topic,
     delete_topic,
+    export_page,
     get_topic,
     list_topics,
+    validate_export_fences,
     update_topic,
 )
 from modules.news.seed import ensure_demo_topics
@@ -37,9 +42,10 @@ from modules.news.trends import list_trends
 from modules.news.worker import process_news_document_ready, recover_news_work
 
 __all__ = [
-    "TopicConflict", "TopicCreate", "TopicFilter", "TopicMissing", "TopicPage",
-    "TopicRead", "TopicUpdate", "create_topic", "delete_topic", "get_topic",
-    "ensure_demo_topics", "list_topics", "update_topic",
+    "TopicConflict", "TopicCreate", "TopicExportFence", "TopicExportPage",
+    "TopicExportValidation", "TopicFilter", "TopicMissing", "TopicPage",
+    "TopicRead", "TopicUpdate", "create_topic", "delete_topic", "export_page", "get_topic",
+    "ensure_demo_topics", "list_topics", "update_topic", "validate_export_fences",
     "RelevanceRead", "StoryDetail", "StoryFilter", "StoryPage", "StoryRead",
     "TrendFilter", "TrendPage", "TrendRead", "cluster_observation", "get_story",
     "list_stories", "list_trends", "process_news_document_ready", "recover_news_work",

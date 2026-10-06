@@ -19,7 +19,7 @@ from typing import Any
 from uuid import UUID
 
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import Settings
@@ -37,7 +37,7 @@ from modules.automations.execution import (
     origin_for_reference,
     start_manual,
 )
-from modules.automations.models import Automation, AutomationRevision
+from modules.automations.models import Automation, AutomationRevision, AutomationRunAction
 from modules.automations.schemas import (
     MAX_REVISION,
     AutomationCreate,
@@ -55,6 +55,20 @@ from modules.dashboard import public as dashboard
 from modules.tools.public import webhook_aliases
 
 MAX_AUTOMATIONS_PER_OWNER = 100
+
+
+async def unresolved_backup_effects(session: AsyncSession) -> dict[str, int]:
+    """Project automation action states with an unproven external effect outcome.
+
+    Queued and approved actions have not crossed the external dispatch boundary and are safe
+    to capture; only in-flight and review-required action journal rows block a snapshot.
+    """
+    rows = (await session.execute(
+        select(AutomationRunAction.status, func.count()).where(
+            AutomationRunAction.status.in_({"in_flight", "requires_review"}),
+        ).group_by(AutomationRunAction.status)
+    )).all()
+    return {str(status): int(count) for status, count in rows}
 
 # External or model-spending actions keep P07 approval semantics when executed later.
 APPROVAL_ACTIONS = {"run_agent", "call_webhook"}

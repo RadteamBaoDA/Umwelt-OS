@@ -16,6 +16,7 @@ from modules.knowledge.documents.schemas import (
     ContentUpdate,
     CitationTargetRead,
     DocumentCreate,
+    DocumentDeletionRead,
     DocumentList,
     DocumentPatch,
     DocumentRead,
@@ -211,13 +212,42 @@ async def update_document(
     return as_document_read(document)
 
 
-@router.delete("/{document_id}", status_code=204)
+@router.delete("/{document_id}", status_code=202, response_model=DocumentDeletionRead)
 async def delete_document(
     document_id: UUID, session: Session, _owner: OwnerWrite
-) -> None:
-    """Delete one owner-authorized document and its supported graph data."""
-    if not await public.delete_document(session, document_id):
+) -> DocumentDeletionRead:
+    """Revoke document access immediately and return its durable cleanup receipt."""
+    operation = await public.delete_document(session, document_id)
+    if operation is None:
         raise HTTPException(status_code=404, detail="Document not found")
+    return DocumentDeletionRead(
+        operation_id=operation.id,
+        status=operation.status,
+        record_status=operation.record_status,
+        graph_status=operation.graph_status,
+        raw_status=operation.raw_status,
+        immediate_access_revoked=True,
+        error_code=operation.error_code,
+    )
+
+
+@router.get("/deletion-operations/{operation_id}", response_model=DocumentDeletionRead)
+async def get_deletion_operation(
+    operation_id: UUID, session: Session, _owner: OwnerRead,
+) -> DocumentDeletionRead:
+    """Return owner-only durable status for a previously accepted document deletion."""
+    operation = await public.get_document_cleanup_operation(session, operation_id)
+    if operation is None:
+        raise HTTPException(status_code=404, detail="Document cleanup operation not found")
+    return DocumentDeletionRead(
+        operation_id=operation.id,
+        status=operation.status,
+        record_status=operation.record_status,
+        graph_status=operation.graph_status,
+        raw_status=operation.raw_status,
+        immediate_access_revoked=True,
+        error_code=operation.error_code,
+    )
 
 
 @router.put("/{document_id}/content", response_model=DocumentRead)

@@ -102,6 +102,45 @@ class TaskRead(BaseModel):
     updated_at: datetime
 
 
+class TaskExportFence(BaseModel):
+    """Bind one exported task to its version timestamps and detached content digest."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: UUID
+    created_at: datetime
+    updated_at: datetime
+    content_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class TaskExportPage(BaseModel):
+    """Return one bounded task export page with immutable record fences."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    owner_id: int = Field(ge=1)
+    record_kind: Literal["tasks"]
+    snapshot_at: datetime
+    snapshot_count: int = Field(ge=0)
+    items: list[TaskRead] = Field(max_length=100)
+    fences: list[TaskExportFence] = Field(max_length=100)
+    payload_bytes: int = Field(ge=0, le=16_777_216)
+    max_payload_bytes: int = Field(default=16_777_216, ge=1, le=16_777_216)
+    next_cursor: str | None = None
+    available: bool = True
+    omission_reason: None = None
+
+
+class TaskExportValidation(BaseModel):
+    """Report whether task rows and the fixed-cutoff inventory remain unchanged."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    valid: bool
+    reason: Literal["valid", "owner_unavailable", "snapshot_count_changed", "record_changed"]
+    observed_snapshot_count: int = Field(ge=0)
+
+
 class TaskFilter(BaseModel):
     """Query parameters for filtering, sorting, and cursor-paginating tasks."""
 

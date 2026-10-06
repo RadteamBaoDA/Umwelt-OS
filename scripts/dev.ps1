@@ -1,9 +1,15 @@
 param(
   [Parameter(Mandatory = $true, Position = 0)]
-  [ValidateSet('setup', 'dev', 'stop', 'migrate', 'seed', 'reset-preview', 'reset', 'lint', 'typecheck', 'test', 'build')]
+  [ValidateSet('setup', 'dev', 'stop', 'migrate', 'seed', 'reset-preview', 'reset', 'backup', 'restore', 'backup-recover', 'restore-cleanup', 'lint', 'typecheck', 'test', 'build')]
   [string]$Task,
   [string]$PytestTarget,
   [string]$E2eTarget,
+  [string]$BackupPath,
+  [ValidateRange(30, 3600)]
+  [int]$DrainTimeout = 600,
+  [switch]$KeepIsolated,
+  [string]$OperationId,
+  [string]$ProjectId,
   [string]$Workspace,
   [string]$ConfirmFingerprint
 )
@@ -70,6 +76,7 @@ try {
   if ($Workspace -and $Task -notin @('dev', 'stop', 'seed', 'reset-preview', 'reset')) {
     throw '-Workspace applies only to named development-workspace commands'
   }
+
   switch ($Task) {
     'setup' {
       if (-not (Test-Path '.env')) {
@@ -85,6 +92,9 @@ DATABASE_URL=postgresql+asyncpg://bbd:${dbPassword}@postgres:5432/bbd
 REDIS_URL=redis://redis:6379/0
 DATA_DIR=/data
 WEB_PORT=3000
+N8N_ENCRYPTION_KEY=$(New-Secret)
+BACKUP_AGE_RECIPIENT=
+BACKUP_AGE_IDENTITY_PATH=
 OMNIROUTE_BASE_URL=
 OMNIROUTE_API_KEY=
 OMNIROUTE_MODELS={}
@@ -117,6 +127,26 @@ OMNIROUTE_MODELS={}
     'reset' {
       if (-not $Workspace -or -not $ConfirmFingerprint) { throw 'Specify -Workspace and the fingerprint shown by reset-preview' }
       Invoke-Checked 'python' @('scripts/dev_workspace.py', 'reset', '--name', $Workspace, '--confirm', $ConfirmFingerprint)
+    }
+    'backup' {
+      if ([string]::IsNullOrWhiteSpace($BackupPath)) { throw 'Use -BackupPath to choose a new archive destination.' }
+      Invoke-Checked 'uv' @('run', 'python', 'scripts/backup.py', '--output', $BackupPath, '--drain-timeout', [string]$DrainTimeout)
+    }
+    'restore' {
+      if ([string]::IsNullOrWhiteSpace($BackupPath)) { throw 'Use -BackupPath to choose an encrypted archive.' }
+      $arguments = @('run', 'python', 'scripts/restore.py', $BackupPath)
+      if ($KeepIsolated) { $arguments += '--keep-isolated' }
+      Invoke-Checked 'uv' $arguments
+    }
+    'backup-recover' {
+      if ([string]::IsNullOrWhiteSpace($OperationId)) { throw 'Use -OperationId to resume the stored backup operation.' }
+      $arguments = @('run', 'python', 'scripts/restore.py', '--recover-operation', $OperationId)
+      if (-not [string]::IsNullOrWhiteSpace($BackupPath)) { $arguments += $BackupPath }
+      Invoke-Checked 'uv' $arguments
+    }
+    'restore-cleanup' {
+      if ([string]::IsNullOrWhiteSpace($ProjectId)) { throw 'Use -ProjectId to remove a retained isolated restore.' }
+      Invoke-Checked 'uv' @('run', 'python', 'scripts/restore.py', '--cleanup-project', $ProjectId)
     }
     'lint' {
       Invoke-Checked 'uv' @('run', 'ruff', 'check', 'core', 'apps', 'modules', 'tests', 'infrastructure/postgres/migrations')

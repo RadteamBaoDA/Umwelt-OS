@@ -371,6 +371,32 @@ class ChatExportFenceValidation(BaseModel):
         return self
 
 
+class ChatMemoryExportOrigin(BaseModel):
+    """Prove a memory's exact retained transcript origin without returning transcript text."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    conversation_id: UUID
+    message_id: UUID
+    conversation_created_at: datetime
+    conversation_updated_at: datetime
+    message_created_at: datetime
+    message_updated_at: datetime
+    content_citation_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    privacy_persisted: bool
+    privacy_updated_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def validate_privacy_marker(self) -> "ChatMemoryExportOrigin":
+        """Require a persisted privacy row to have an aware timestamp fence."""
+        if self.privacy_persisted != (self.privacy_updated_at is not None):
+            raise ValueError("Chat memory export privacy marker is inconsistent")
+        if (self.privacy_updated_at is not None
+                and (self.privacy_updated_at.tzinfo is None or self.privacy_updated_at.utcoffset() is None)):
+            raise ValueError("Chat memory export privacy timestamp must be timezone-aware")
+        return self
+
+
 class ConversationDetailRead(ConversationRead):
     """Full conversation projection including ordered messages and any active response handle."""
 

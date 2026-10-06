@@ -179,6 +179,114 @@ class MemoryExportPrivacy(BaseModel):
     updated_at: datetime | None
 
 
+class MemoryExportProvenance(BaseModel):
+    """Allowlist owner memory provenance identifiers while dropping arbitrary JSON metadata."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    conversation_id: UUID | None = None
+    message_id: UUID | None = None
+    source_id: UUID | None = None
+    document_id: UUID | None = None
+    document_version_id: UUID | None = None
+    chunk_id: UUID | None = None
+    origin: Literal["manual", "agent", "model"] | None = None
+
+
+class MemoryExportRead(BaseModel):
+    """Expose retained memory content and lifecycle through an immutable portable projection."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    record_kind: Literal["memory"] = "memory"
+    id: UUID
+    content: str = Field(max_length=MAX_MEMORY_CONTENT_LENGTH)
+    type: MemoryType
+    provenance: MemoryExportProvenance | None = None
+    confidence: float = Field(ge=0, le=1)
+    reason: str | None = Field(default=None, max_length=MAX_REASON_LENGTH)
+    status: MemoryStatus
+    is_manual: bool
+    superseded_by_id: UUID | None = None
+    candidate_id: UUID | None = None
+    created_at: datetime
+    updated_at: datetime
+    invalidated_at: datetime | None = None
+    forgotten_at: datetime | None = None
+
+
+class MemoryCandidateExportRead(BaseModel):
+    """Expose retained candidate review outcomes without arbitrary provider metadata."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    record_kind: Literal["candidate"] = "candidate"
+    id: UUID
+    content: str = Field(max_length=MAX_MEMORY_CONTENT_LENGTH)
+    type: MemoryType
+    provenance: MemoryExportProvenance | None = None
+    confidence: float = Field(ge=0, le=1)
+    novelty_score: float = Field(ge=0, le=1)
+    usefulness_score: float = Field(ge=0, le=1)
+    reason: str | None = Field(default=None, max_length=MAX_REASON_LENGTH)
+    status: CandidateStatus
+    rejection_reason: str | None = Field(default=None, max_length=MAX_REASON_LENGTH)
+    created_at: datetime
+    updated_at: datetime
+    evaluated_at: datetime | None = None
+
+
+class MemoryExportFence(BaseModel):
+    """Bind one selected memory record to its current timestamps and portable content digest."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    record_kind: Literal["memory", "candidate"]
+    id: UUID
+    created_at: datetime
+    updated_at: datetime
+    content_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_id: UUID | None = None
+    source_generation: int | None = Field(default=None, ge=1)
+    document_id: UUID | None = None
+    document_version_id: UUID | None = None
+    chunk_id: UUID | None = None
+    conversation_id: UUID | None = None
+    message_id: UUID | None = None
+    chat_evidence_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    chat_privacy_persisted: bool | None = None
+    chat_privacy_updated_at: datetime | None = None
+
+
+class MemoryExportPage(BaseModel):
+    """Return one bounded memory or candidate page and the final-validation fences."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    owner_id: int = Field(ge=1)
+    record_kind: Literal["memories", "candidates"]
+    snapshot_at: datetime
+    snapshot_count: int = Field(ge=0)
+    omitted_count: int = Field(default=0, ge=0, le=100)
+    items: list[MemoryExportRead | MemoryCandidateExportRead] = Field(max_length=100)
+    fences: list[MemoryExportFence] = Field(max_length=100)
+    payload_bytes: int = Field(ge=0, le=16_777_216)
+    max_payload_bytes: int = Field(default=16_777_216, ge=1, le=16_777_216)
+    next_cursor: str | None = None
+    available: bool = True
+    omission_reason: Literal["unsupported_provenance"] | None = None
+
+
+class MemoryExportFenceValidation(BaseModel):
+    """Report whether selected memory records and the cutoff-bound inventory remain unchanged."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    valid: bool
+    reason: Literal["valid", "owner_unavailable", "snapshot_count_changed", "record_changed"]
+    observed_snapshot_count: int = Field(ge=0)
+
+
 class MemoryPrivacyUpdate(BaseModel):
     """Payload for updating owner memory privacy settings."""
 

@@ -1,0 +1,75 @@
+"""ASGI finalization for durable API activity receipts."""
+
+from typing import Any
+
+from starlette.requests import Request
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+
+class BackupActivityMiddleware:
+    """Keep an admitted owner request active through the final streamed response byte."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        """Wrap one ASGI application; tracked owner receipts settle only after its full call ends.
+
+        ``app`` is the downstream ASGI callable. Non-HTTP scopes pass through unchanged, and
+        HTTP work without a registered activity receipt is also forwarded without DB writes.
+        """
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Forward an ASGI request and settle its registered activity after response completion.
+
+        ``scope``, ``receive``, and ``send`` are the standard ASGI request inputs. Streaming
+        sends and response background work remain inside the wrapped call; transport failure
+        marks only this request interrupted, never uncertainty about a separate external effect.
+        """
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        request = Request(scope)
+        response_status = 500
+        finalized = False
+        send_failed = False
+
+        async def finalize(*, uncertain: bool, interrupted: bool = False) -> None:
+            """Finish this request's durable receipt once after its response lifetime."""
+            nonlocal finalized
+            if finalized:
+                return
+            finalized = True
+            receipt = getattr(request.state, "backup_activity", None)
+            if receipt is None:
+                return
+            factory: Any = request.app.state.session_factory
+            async with factory() as session:
+                from modules.settings.public import finish_activity
+
+                await finish_activity(session, receipt, uncertain=uncertain, interrupted=interrupted)
+                await session.commit()
+
+        async def send_and_finalize(message: Message) -> None:
+            """Forward one ASGI message while recording status and transport failure."""
+            nonlocal response_status, send_failed
+            try:
+                await send(message)
+            except BaseException:
+                send_failed = True
+                raise
+            if message["type"] == "http.response.start":
+                response_status = int(message["status"])
+
+        try:
+            await self.app(scope, receive, send_and_finalize)
+        except BaseException:
+            # This receipt tracks only the API request lifetime. Effect-owning callbacks
+            # maintain their own durable activity, which remains uncertain after cancellation.
+            await finalize(uncertain=False, interrupted=True)
+            raise
+        finally:
+            # Wait for the entire ASGI app call, including streaming generators and response
+            # background tasks, before settling this request identity. A client send failure
+            # is recorded as interrupted; it is not evidence that an external effect is unknown.
+            if not finalized:
+                await finalize(uncertain=False, interrupted=send_failed or response_status >= 500)

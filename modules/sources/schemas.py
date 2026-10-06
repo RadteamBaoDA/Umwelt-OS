@@ -90,6 +90,45 @@ class SourceExportFence(BaseModel):
     generation: int = Field(ge=0)
 
 
+class SourceMetadataExportFence(BaseModel):
+    """Bind one exported source metadata record to its row revision and digest."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_id: UUID
+    created_at: datetime
+    updated_at: datetime
+    generation: int = Field(ge=1)
+    content_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class SourceMetadataExportPage(BaseModel):
+    """Return one bounded credential-free source metadata page and source eligibility fences."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    owner_id: int = Field(ge=1)
+    record_kind: Literal["sources"]
+    snapshot_at: datetime
+    snapshot_count: int = Field(ge=0)
+    items: list[SourceRead] = Field(max_length=100)
+    fences: list[SourceMetadataExportFence] = Field(max_length=100)
+    payload_bytes: int = Field(ge=0, le=16_777_216)
+    max_payload_bytes: int = Field(default=16_777_216, ge=1, le=16_777_216)
+    next_cursor: str | None = None
+    available: bool = True
+    omission_reason: None = None
+
+
+class SourceMetadataExportValidation(BaseModel):
+    """Report whether source metadata records remain eligible and unchanged before publication."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    valid: bool
+    reason: Literal["valid", "owner_unavailable", "snapshot_count_changed", "record_changed"]
+    observed_snapshot_count: int = Field(ge=0)
+
 class GadgetSourceSelection(BaseModel):
     """Expose source identity and lifecycle for an already-authorized dashboard caller.
 

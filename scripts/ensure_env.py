@@ -10,6 +10,7 @@ def main() -> None:
         return
 
     db_password = secrets.token_urlsafe(48)
+    n8n_key = secrets.token_urlsafe(48)
     values = {
         "PUBLIC_ORIGIN": "http://localhost:3000",
         "SECURE_COOKIES": "false",
@@ -21,6 +22,9 @@ def main() -> None:
         "REDIS_URL": "redis://redis:6379/0",
         "DATA_DIR": "/data",
         "WEB_PORT": "3000",
+        "N8N_ENCRYPTION_KEY": n8n_key,
+        "BACKUP_AGE_RECIPIENT": "",
+        "BACKUP_AGE_IDENTITY_PATH": "",
         "OMNIROUTE_BASE_URL": "",
         "OMNIROUTE_API_KEY": "",
     }

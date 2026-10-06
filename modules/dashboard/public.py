@@ -10,12 +10,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import base64
+import binascii
 from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid5, NAMESPACE_URL
 
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import HTTPException
 
 from core.realtime import commit_with_replay, make_dashboard_change
 from modules.dashboard import gadgets, layouts
@@ -29,6 +33,9 @@ from modules.dashboard.models import (
 )
 from modules.dashboard.schemas import (
     DashboardCreate,
+    DashboardExportFence,
+    DashboardExportPage,
+    DashboardExportValidation,
     DashboardPatch,
     GadgetDefinitionCreate,
     GadgetDefinitionPatch,
@@ -415,6 +422,130 @@ async def list_dashboards(session: AsyncSession, owner_id: int) -> list[Dashboar
     )
     return [DashboardSummary(id=row.id, name=row.name, revision=row.revision,
             created_at=row.created_at, updated_at=row.updated_at) for row in rows.all()]
+
+
+def _encode_dashboard_export_cursor(snapshot_at: datetime, created_at: datetime, identifier: UUID) -> str:
+    """Bind a canonical dashboard keyset position to one fixed export cutoff."""
+    raw = json.dumps([1, "dashboards", snapshot_at.isoformat(), created_at.isoformat(), str(identifier)],
+                     separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def _decode_dashboard_export_cursor(cursor: str) -> tuple[datetime, datetime, UUID]:
+    """Reject oversized, noncanonical, cross-dataset, or future dashboard cursors."""
+    try:
+        if len(cursor) > 512 or "=" in cursor:
+            raise ValueError
+        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
+        if base64.urlsafe_b64encode(raw).decode().rstrip("=") != cursor:
+            raise ValueError
+        value = json.loads(raw)
+        if not isinstance(value, list) or len(value) != 5 or value[:2] != [1, "dashboards"]:
+            raise ValueError
+        snapshot_at, created_at = datetime.fromisoformat(value[2]), datetime.fromisoformat(value[3])
+        identifier = UUID(value[4])
+        if (any(item.tzinfo is None or item.utcoffset() is None for item in (snapshot_at, created_at))
+                or snapshot_at.isoformat() != value[2] or created_at.isoformat() != value[3]
+                or created_at > snapshot_at or snapshot_at > datetime.now(UTC)
+                or str(identifier) != value[4]
+                or _encode_dashboard_export_cursor(snapshot_at, created_at, identifier) != cursor):
+            raise ValueError
+        return snapshot_at, created_at, identifier
+    except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError, binascii.Error) as exc:
+        raise HTTPException(status_code=422, detail="Dashboard export cursor is invalid") from exc
+
+
+def _dashboard_export_scope(owner_id: int, snapshot_at: datetime) -> tuple[object, ...]:
+    """Select parent dashboard revisions that existed unchanged at the cutoff."""
+    return Dashboard.owner_id == owner_id, Dashboard.created_at <= snapshot_at, Dashboard.updated_at <= snapshot_at
+
+
+def _newer_export_definition_exists(owner_id: int, snapshot_at: datetime):
+    """Find child definitions updated after the cutoff but used by a retained dashboard."""
+    return select(GadgetInstance.id).join(
+        GadgetDefinition, GadgetDefinition.id == GadgetInstance.definition_id,
+    ).where(
+        GadgetInstance.dashboard_id == Dashboard.id,
+        GadgetDefinition.owner_id == owner_id,
+        GadgetDefinition.updated_at > snapshot_at,
+    ).correlate(Dashboard).exists()
+
+
+async def export_page(
+    session: AsyncSession, *, owner_id: int, record_kind: str, limit: int = 50, cursor: str | None = None,
+) -> DashboardExportPage:
+    """Return bounded saved dashboard structure, excluding runtime payloads and source content."""
+    if owner_id != 1 or record_kind != "dashboards" or not 1 <= limit <= 100:
+        raise ValueError("Dashboard export owner, kind or page limit is invalid")
+    if cursor is None:
+        snapshot_at, position = datetime.now(UTC), None
+    else:
+        snapshot_at, position_at, position_id = _decode_dashboard_export_cursor(cursor)
+        position = (position_at, position_id)
+    scope = _dashboard_export_scope(owner_id, snapshot_at)
+    snapshot_count = int(await session.scalar(select(func.count()).select_from(Dashboard).where(*scope)) or 0)
+    # Gadget definitions have independent revisions. If one changed after the owner cutoff,
+    # omit the whole dataset because the prior definition version is not retained here.
+    if await session.scalar(select(Dashboard.id).where(*scope, _newer_export_definition_exists(owner_id, snapshot_at)).limit(1)) is not None:
+        return DashboardExportPage(
+            owner_id=owner_id, record_kind="dashboards", snapshot_at=snapshot_at,
+            snapshot_count=snapshot_count, items=[], fences=[], payload_bytes=2,
+            available=False, omission_reason="definition_changed_after_snapshot",
+        )
+    statement = select(Dashboard).where(*scope)
+    if position is not None:
+        from sqlalchemy import tuple_
+        statement = statement.where(tuple_(Dashboard.created_at, Dashboard.id) > position)
+    rows = list((await session.scalars(
+        statement.order_by(Dashboard.created_at, Dashboard.id).limit(limit + 1)
+        .execution_options(populate_existing=True)
+    )).all())
+    has_more, rows = len(rows) > limit, rows[:limit]
+    items = [await _dashboard_read(session, row) for row in rows]
+    encoded = [item.model_dump_json().encode("utf-8") for item in items]
+    payload_bytes = 2 + sum(map(len, encoded)) + max(0, len(items) - 1)
+    if payload_bytes > 16_777_216:
+        raise HTTPException(status_code=413, detail="Dashboard export page exceeds its byte bound")
+    fences = [DashboardExportFence(
+        id=row.id, created_at=row.created_at, updated_at=row.updated_at, revision=row.revision,
+        content_digest=hashlib.sha256(raw).hexdigest(),
+    ) for row, raw in zip(rows, encoded, strict=True)]
+    return DashboardExportPage(
+        owner_id=owner_id, record_kind="dashboards", snapshot_at=snapshot_at,
+        snapshot_count=snapshot_count, items=items, fences=fences, payload_bytes=payload_bytes,
+        next_cursor=_encode_dashboard_export_cursor(snapshot_at, rows[-1].created_at, rows[-1].id)
+        if has_more and rows else None,
+    )
+
+
+async def validate_export_fences(
+    session: AsyncSession, *, owner_id: int, record_kind: str, snapshot_at: datetime,
+    expected_snapshot_count: int, fences: list[DashboardExportFence],
+) -> DashboardExportValidation:
+    """Re-read full configuration DTO digests and parent/child fences before publication."""
+    if owner_id != 1 or record_kind != "dashboards" or len(fences) > 100:
+        raise ValueError("Dashboard export validation input is invalid")
+    observed = int(await session.scalar(
+        select(func.count()).select_from(Dashboard).where(*_dashboard_export_scope(owner_id, snapshot_at))
+    ) or 0)
+    if observed != expected_snapshot_count:
+        return DashboardExportValidation(valid=False, reason="snapshot_count_changed", observed_snapshot_count=observed)
+    if fences and await session.scalar(select(Dashboard.id).where(
+        *_dashboard_export_scope(owner_id, snapshot_at), _newer_export_definition_exists(owner_id, snapshot_at),
+    ).limit(1)) is not None:
+        return DashboardExportValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
+    for fence in fences:
+        row = await session.scalar(select(Dashboard).where(
+            Dashboard.id == fence.id, *_dashboard_export_scope(owner_id, snapshot_at),
+        ).execution_options(populate_existing=True))
+        if row is None:
+            return DashboardExportValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
+        item = await _dashboard_read(session, row)
+        if (item.created_at != fence.created_at or item.updated_at != fence.updated_at
+                or item.revision != fence.revision
+                or hashlib.sha256(item.model_dump_json().encode("utf-8")).hexdigest() != fence.content_digest):
+            return DashboardExportValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
+    return DashboardExportValidation(valid=True, reason="valid", observed_snapshot_count=observed)
 
 
 async def get_dashboard(session: AsyncSession, owner_id: int, dashboard_id: UUID) -> DashboardDetail | None:

@@ -1,5 +1,6 @@
 from functools import wraps
 from typing import Any, Callable, ClassVar, cast
+from uuid import uuid4
 
 from arq.connections import RedisSettings
 from arq.cron import cron as _cron
@@ -16,7 +17,7 @@ from redis.asyncio import Redis
 from core.auth.models import AuthSession
 from core.config import Settings
 from core.telemetry import install_log_redaction, instrument_job, set_process_role
-from core.system.health import ARQ_WORKER_HEALTH_KEY
+from core.system.health import ARQ_WORKER_GENERATION_KEY, ARQ_WORKER_HEALTH_KEY
 from modules.ingestion.dispatcher import dispatch_pending_work
 from modules.ingestion.worker import (
     cleanup_storage_orphans,
@@ -32,6 +33,7 @@ from modules.knowledge.entities.worker import (
     process_entity_extraction_work,
     recover_entity_extraction_work,
 )
+from modules.knowledge.documents.worker import process_document_cleanup
 from modules.timeline.worker import process_timeline_extraction_work, recover_timeline_extraction_work
 from modules.knowledge.temporal.worker import process_graph_operation, recover_graph_work
 from modules.news.worker import process_news_document_ready, recover_news_work
@@ -66,9 +68,44 @@ def _gate_module_job(function: Callable[..., Any]) -> Callable[..., Any]:
     return guarded
 
 
+def _gate_backup_job(function: Callable[..., Any]) -> Callable[..., Any]:
+    """Durably register worker execution before owner claims or external effects, then close it."""
+    @wraps(function)
+    async def guarded(ctx: dict[str, object], *args: Any, **kwargs: Any) -> Any:
+        """Leave denied durable jobs for their owner recovery poll instead of executing them."""
+        factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+        from modules.backup.public import BackupAdmissionDenied
+        from modules.settings.public import register_activity, finish_activity
+
+        work_id = str(args[0]) if args and isinstance(args[0], (str, int)) else None
+        try:
+            async with factory() as session:
+                receipt = await register_activity(session, function.__name__, work_id)
+                await session.commit()
+        except BackupAdmissionDenied:
+            # Owner durable rows remain the source of truth; dispatch/recovery polls will retry.
+            return None
+
+        try:
+            result = await function(ctx, *args, **kwargs)
+        except BaseException:
+            async with factory() as session:
+                # Handler exit only closes this admission lease. Any unresolved external effect
+                # must remain visible in its owner's durable journal and block snapshot there.
+                await finish_activity(session, receipt)
+                await session.commit()
+            raise
+        async with factory() as session:
+            await finish_activity(session, receipt)
+            await session.commit()
+        return result
+
+    return guarded
+
+
 def cron(function: Callable[..., Any], *args: Any, **kwargs: Any) -> object:
-    """Attach a fresh persisted owner-module check to declared scheduled dispatch jobs."""
-    return _cron(_gate_module_job(function), *args, **kwargs)
+    """Attach both fresh owner-module and global backup admission checks to worker schedules."""
+    return _cron(_gate_backup_job(_gate_module_job(function)), *args, **kwargs)
 
 async def startup(ctx: dict[str, object]) -> None:
     """Load the bounded database pool and compose the worker-owned native/MCP agent registry."""
@@ -87,6 +124,7 @@ async def startup(ctx: dict[str, object]) -> None:
         ctx["agent_tool_registry"] = registry
         ctx["agent_mcp_admission"] = admission
         ctx["agent_mcp_runtime"] = runtime
+        await cast(Redis, ctx["redis"]).set(ARQ_WORKER_GENERATION_KEY, uuid4().hex)
     except Exception:
         await engine.dispose()
         raise
@@ -128,6 +166,7 @@ class WorkerSettings:
         purge_expired_sessions, instrument_job(process_ingestion_event, success_return_outcome="returned"),
         instrument_job(process_normalize_event, success_return_outcome="returned"),
         instrument_job(process_uploaded_file, success_return_outcome="returned"), process_source_purge,
+        process_document_cleanup,
         reconcile_connectors, instrument_job(process_document_ready, success_return_outcome="returned"),
         instrument_job(process_entity_extraction_work),
         instrument_job(process_timeline_extraction_work), instrument_job(process_graph_operation),
@@ -135,6 +174,7 @@ class WorkerSettings:
         instrument_job(process_agent_run, run_id_kind="agent_run_id"), instrument_job(process_automation_run),
     ]
     functions = [_gate_module_job(function) for function in functions]
+    functions = [_gate_backup_job(function) for function in functions]
     cron_jobs: ClassVar[list[object]] = [
         cron(purge_expired_sessions, minute=0),
         cron(run_retention_maintenance, minute=0),
