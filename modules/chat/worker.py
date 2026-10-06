@@ -10,14 +10,21 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from redis.asyncio import Redis
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
 from core.model_gateway.client import ModelGateway, ModelGatewayError, PrivacyPolicyDenied
 from core.model_gateway.schemas import RequestPolicy
 from modules.chat.citations import ensure_grounded_answer
-from modules.chat.models import AgentActivityLink, Conversation, Message, ResponseRun, StreamEvent
+from modules.chat.models import (
+    AgentActivityLink,
+    Conversation,
+    Message,
+    MessageMutationReceipt,
+    ResponseRun,
+    StreamEvent,
+)
 from modules.chat.retrieval import (
     build_context,
     format_grounded_context,
@@ -180,55 +187,159 @@ async def _next_event_seq(session: AsyncSession, response_id: UUID, current_seq:
 
 
 async def purge_expired_chat_runs(ctx: dict[str, object]) -> int:
-    """Clean expired Chat data and redact linked agent payloads while preserving effect tombstones.
+    """Reconcile one bounded slice of expired Chat rows under the deletion lock order.
 
     Args:
         ctx: ARQ worker context containing the database session factory.
 
     Returns:
-        Total number of expired response runs, conversations, and ephemeral activity links removed.
+        Number of Chat-owned rows removed in this slice, including transcripts and stream events.
 
-    Side effects:
-        Linked agent runs are cancelled and their prompts, checkpoints, approval arguments, and
-        tool-call arguments are purged before expired activity links disappear. Possibly sent
-        actions remain review-only in the independent effect ledger.
+        Side effects:
+        At most 100 candidates of each row kind are examined per invocation. Each path serializes
+        Memory privacy before the Chat parent and locks Agent-owned state only after those fences;
+        it rechecks current expiry and link identity before mutation. Pinned ephemeral conversations
+        still expire; pinning only excludes a conversation from ordinary unpinned-history cleanup.
+        Run-only expiry never
+        deletes a persistent parent. Agent cleanup uses its public owner contract, which preserves
+        effect identities and uncertainty tombstones and never makes an external effect replayable.
     """
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
-    now = datetime.now(UTC)
+    page_size = 100
+    removed = 0
     async with factory() as session:
-        expired_activity_rows = list((await session.execute(select(
-            AgentActivityLink.id, AgentActivityLink.agent_run_id,
-        ).join(Conversation, Conversation.id == AgentActivityLink.conversation_id).where(or_(
-            AgentActivityLink.ephemeral.is_(True) & (AgentActivityLink.expires_at <= now),
-            Conversation.ephemeral.is_(True) & (Conversation.expires_at <= now),
-        )).order_by(AgentActivityLink.id).limit(100))).all())
-        expired_agent_run_ids = [run_id for _link_id, run_id in expired_activity_rows]
-        if expired_agent_run_ids:
+        from modules.chat.public import delete_conversation as delete_chat_conversation
+        from modules.memory.public import lock_export_privacy
+
+        # Parent expiry owns the entire transcript and its links. Delete through Chat's public
+        # contract so activity payloads are purged before the FK cascade removes their links.
+        candidate_conversations = list((await session.scalars(
+            select(Conversation.id).where(
+                Conversation.ephemeral.is_(True),
+                Conversation.expires_at.is_not(None),
+                Conversation.expires_at <= datetime.now(UTC),
+            ).order_by(Conversation.id).limit(page_size)
+        )).all())
+        for conversation_id in candidate_conversations:
+            await lock_export_privacy(session)
+            conversation = await session.scalar(
+                select(Conversation).where(Conversation.id == conversation_id)
+                .with_for_update().execution_options(populate_existing=True)
+            )
+            now = datetime.now(UTC)
+            if (conversation is None or not conversation.ephemeral or conversation.expires_at is None
+                    or conversation.expires_at > now):
+                continue
+            # Count every row in Chat's child tables covered by this cascade. The locked parent
+            # prevents supported send/stream/link writers from adding more rows during the count.
+            run_count = await session.scalar(select(func.count()).select_from(ResponseRun).where(
+                ResponseRun.conversation_id == conversation_id,
+            )) or 0
+            message_count = await session.scalar(select(func.count()).select_from(Message).where(
+                Message.conversation_id == conversation_id,
+            )) or 0
+            receipt_count = await session.scalar(select(func.count()).select_from(MessageMutationReceipt).where(
+                MessageMutationReceipt.conversation_id == conversation_id,
+            )) or 0
+            stream_count = await session.scalar(select(func.count()).select_from(StreamEvent).join(
+                ResponseRun, StreamEvent.response_id == ResponseRun.id,
+            ).where(ResponseRun.conversation_id == conversation_id)) or 0
+            link_count = await session.scalar(select(func.count()).select_from(AgentActivityLink).where(
+                AgentActivityLink.conversation_id == conversation_id,
+            )) or 0
+            # This single-owner app uses owner id 1; the public helper verifies that owner exists.
+            if await delete_chat_conversation(session, conversation_id, owner_id=1):
+                removed += 1 + run_count + message_count + receipt_count + stream_count + link_count
+
+        # Expired activity links can belong to an otherwise retained conversation. Retain the
+        # Agent run identity and effect rows while removing only payloads through the Agent API.
+        candidate_links = list((await session.execute(
+            select(AgentActivityLink.id, AgentActivityLink.conversation_id)
+            .join(Conversation, Conversation.id == AgentActivityLink.conversation_id)
+            .where(
+                AgentActivityLink.ephemeral.is_(True),
+                AgentActivityLink.expires_at.is_not(None),
+                AgentActivityLink.expires_at <= datetime.now(UTC),
+            ).order_by(AgentActivityLink.id).limit(page_size)
+        )).all())
+        for link_id, conversation_id in candidate_links:
+            await lock_export_privacy(session)
+            conversation = await session.scalar(
+                select(Conversation).where(Conversation.id == conversation_id)
+                .with_for_update().execution_options(populate_existing=True)
+            )
+            if conversation is None:
+                continue
+            link = await session.scalar(select(AgentActivityLink).where(
+                AgentActivityLink.id == link_id,
+                AgentActivityLink.conversation_id == conversation_id,
+            ).execution_options(populate_existing=True))
+            now = datetime.now(UTC)
+            if (link is None or (conversation.ephemeral and conversation.expires_at is not None
+                                 and conversation.expires_at <= now)
+                    or not link.ephemeral or link.expires_at is None or link.expires_at > now):
+                continue
+
             from modules.agents.public import purge_agent_runs
 
-            await purge_agent_runs(session, expired_agent_run_ids)
-        expired_activity = await session.execute(delete(AgentActivityLink).where(
-            AgentActivityLink.id.in_([link_id for link_id, _run_id in expired_activity_rows]),
-        )) if expired_activity_rows else None
-        expired_runs = await session.execute(
-            delete(ResponseRun).where(
+            await purge_agent_runs(session, [link.agent_run_id], owner_id=link.owner_id)
+            # The parent lock serializes supported Chat link writers; refresh and lock only after
+            # Agent locks, matching conversation deletion's parent-before-Agent lock ordering.
+            current_link = await session.scalar(select(AgentActivityLink).where(
+                AgentActivityLink.id == link_id,
+                AgentActivityLink.conversation_id == conversation_id,
+            ).with_for_update().execution_options(populate_existing=True))
+            now = datetime.now(UTC)
+            if (current_link is not None and current_link.ephemeral
+                    and current_link.expires_at is not None and current_link.expires_at <= now
+                    and not (conversation.ephemeral and conversation.expires_at is not None
+                             and conversation.expires_at <= now)):
+                await session.delete(current_link)
+                removed += 1
+
+        # A response can expire before its persistent conversation. Remove that run, its stream
+        # events, and its idempotency receipt only; the parent and transcript messages remain.
+        candidate_runs = list((await session.execute(
+            select(ResponseRun.id, ResponseRun.conversation_id)
+            .join(Conversation, Conversation.id == ResponseRun.conversation_id)
+            .where(
                 ResponseRun.ephemeral.is_(True),
-                ResponseRun.expires_at <= now,
+                ResponseRun.expires_at.is_not(None),
+                ResponseRun.expires_at <= datetime.now(UTC),
+                ~(
+                    Conversation.ephemeral.is_(True)
+                    & Conversation.expires_at.is_not(None)
+                    & (Conversation.expires_at <= datetime.now(UTC))
+                ),
+            ).order_by(ResponseRun.id).limit(page_size)
+        )).all())
+        for run_id, conversation_id in candidate_runs:
+            await lock_export_privacy(session)
+            conversation = await session.scalar(
+                select(Conversation).where(Conversation.id == conversation_id)
+                .with_for_update().execution_options(populate_existing=True)
             )
-        )
-        has_activity_links = select(AgentActivityLink.id).where(
-            AgentActivityLink.conversation_id == Conversation.id,
-        ).exists()
-        expired_convs = await session.execute(
-            delete(Conversation).where(
-                Conversation.ephemeral.is_(True),
-                Conversation.expires_at <= now,
-                ~has_activity_links,
-            )
-        )
+            run = await session.scalar(select(ResponseRun).where(
+                ResponseRun.id == run_id,
+                ResponseRun.conversation_id == conversation_id,
+            ).with_for_update().execution_options(populate_existing=True))
+            now = datetime.now(UTC)
+            if (conversation is None or run is None or not run.ephemeral or run.expires_at is None
+                    or run.expires_at > now
+                    or conversation.ephemeral and conversation.expires_at is not None
+                    and conversation.expires_at <= now):
+                continue
+            stream_count = await session.scalar(select(func.count()).select_from(StreamEvent).where(
+                StreamEvent.response_id == run_id,
+            )) or 0
+            receipt_count = await session.scalar(select(func.count()).select_from(
+                MessageMutationReceipt,
+            ).where(MessageMutationReceipt.response_id == run_id)) or 0
+            await session.delete(run)
+            removed += 1 + stream_count + receipt_count
+
         await session.commit()
-        removed_links = (expired_activity.rowcount or 0) if expired_activity is not None else 0
-        return (expired_runs.rowcount or 0) + (expired_convs.rowcount or 0) + removed_links
+        return removed
 
 
 async def run_response_generation(

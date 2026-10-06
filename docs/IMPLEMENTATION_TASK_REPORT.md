@@ -228,3 +228,33 @@ Accepted standalone source7086167 and composed source6cde618 (develop8b0b5a3). F
 
 ### R07 source integration complete — 2026-10-06
 Accepted composed source0b190510 integrated into develop fromdb67fd1: actual AnythingLLM frontend slices/provenance, append-only edit/regenerate receipts, exact retained citation reader, active-run SSE navigation/remount/Stop recovery, minimal drawer and guarded initial-fetch failures. Independent original review, scoped repair review and composition review PASS; exact prescribed composed build PASS exit0 Next integratedTS20routes/fourDockerimages. Newr07_chat_mutation_receipts followsr14_observations; static48revision one-head chain inspected, no migration execution. Root squash contains exactly25accepted source/OSSfiles plus completed-task checkpoint documents. R15 repair9e352e4 independently accepted; next compose against newdevelop. P12 backup/export remains incomplete, ownerexports isolated Luna task started at accepted composition source. No tests/runtime/providers/SQL/push/deploy; not whole-plan or runtime completion. Unrelated AGENTS/CLAUDE/UX deletions preserved unstaged.
+
+## Active continuation checkpoint — 2026-10-06
+
+Stop revoked; continue approved production plan. Verified develop HEAD: 72d72c6.
+- Integrated: owner conversation deletion (94c7c1b), retained Timeline/Observations exports (72d72c6). Accepted source/build/review milestones; whole P12/R16 remains incomplete.
+- Backup/recovery: composed 19f37f4 requires repairs for syntax, API/ARQ readiness, fence batch size, archive recovery integrity/association and helper documentation. Luna backup_finish repairing; not accepted/built.
+- Demo workspace seed/reset: composed 690f092 prescribed build passed; independent review requires refusing pre-existing unowned Compose resources and binding named workspace DB/Redis to isolated project resources. Luna p12_workspace_reset_repair repairing; no reset/seed execution.
+- Chat expiry: Luna p12_chat_expiry frozen d8d7577 (worker.py), develop72d72c6 ancestor; prescribed build slot granted. Review pending; live Agent retention policy question must be resolved before acceptance.
+- Remaining production: portable DailyBrief/schedule/unplaced GadgetDefinition coverage; P12-T2 durable document cleanup and copied evidence fences; P12-T3 mobile/a11y reconciliation; P12-T5/R16 final docs/OSS and visible Umwelt-OS branding.
+- Four concurrency slots occupied (controller and three implementers). Reviews use Sol when a slot frees. Implementation uses approved available gpt-6-luna fallback.
+- Code/build/review only. No tests/runtime/provider/SQL/seed/reset execution, push, deployment or main merge. Update checkpoints locally; batch status commit with accepted task/phase.
+- Preserve unrelated AGENTS.md/CLAUDE.md, deployment draft, old UX deletions and untracked security/release drafts. Deletion composition build receipt has password restoration=False; retain qualification. Export accepted build restoration=True. Target capacity and runtime acceptance remain unmeasured.
+
+### Chat expiry frozen/build passed — 2026-10-06
+Exact d8d75774ee5b2d20bc902371bfaa710b872ad39d, one production file modules/chat/worker.py, develop72d72c6 ancestor and tracked tree clean. Prescribed scripts/dev.ps1 build exit0 (Next production and four Compose images), process password restoration=True; receipt/log in author .superpowers/sdd/p12-deletion. Independent Sol p12_expiry_review dispatched; not accepted/merged. Ruling: TTL revokes linked access even for a running Agent; public cleanup preserves effect identity/uncertainty, so running state is not an expiry exemption. Named-workspace repair receives next serialized build slot; backup R1 waits. Remaining production and deferred acceptance gates unchanged; no tests/runtime/SQL/push/deploy or status-only commit.
+
+### Chat expiry scoped review finding — 2026-10-06
+Sol reviewer found P2 run-only expiry count omits MessageMutationReceipt rows cascaded by response_id FK. Source d8d7577 remains unaccepted; scoped count repair required. Retained author followup currently rejected by agent thread limit; retry once review releases capacity. No merge/completion claim; workspace and backup repair agents continue.
+
+### P12 repair wave frozen — 2026-10-06
+- Named workspace repair9590bc42c58d3bd012237c1b50b69ed8b0002f7e: four scoped files; prescribed build exit0 Next/four images. Process-only password/DB/Redis placeholders restored; transcript receipt, no runtime operations. Sol scoped review dispatched against690f092 and both original P1 findings; acceptance pending.
+- Chat expiry R1 8101cdd55e12abeb8feb0eee9cd2ab8b5a8a70d8 closes receipt-cascade count finding, one file, clean author tree. Prescribed build slot granted; scoped rereview next.
+- Backup R1 89b19722174e54ef42ca409331bf12c23de5235b frozen clean; syntax/readiness/archive proof/batch/documentation repairs authored. Build waits Chat slot release; independent rereview required. Recovery without proof must not claim completed archive. DailyBrief/schedule/unplaced definitions remain export omissions.
+Develop remains72d72c6. No new integration or phase completion; remaining code and deferred acceptance gates retained. Status files locally updated, no status-only commit.
+
+### P12 review/build progression — 2026-10-06
+Chat expiry R1 exact8101cdd prescribed build passed exit0/restoration=True; Sol scoped rereview dispatched. Workspace9590bc4 review closes original two P1 for sequential operations but finds P2 concurrent marker publication/removal race; Luna retained author assigned R2 serialization repair, not accepted. Backup89b1972 receives serialized build slot. develop72d72c6 unchanged; no phase completion/status-only commit/tests/runtime/push/deploy.
+
+### P12 Chat expiry integrated source — 2026-10-06
+Accepted8101cdd exact prescribed build exit0/restoration=True and independent original+R1 review PASS after receipt-count repair. Root applies identical one-file worker delta onto its unchanged develop72d72c6 base and batches four checkpoint files into this accepted milestone commit. Evidence copied into root .superpowers/sdd/p12-expiry-integrated. Bounded candidates, fresh expiry/link checks, Memory->Chat->Agent locks, persistent-parent retention and pinned ephemeral TTL retained; effect identity/uncertainty survives. Whole P12-T2 remains incomplete (document/copied-evidence cleanup pending); no runtime/test/target-capacity claim. Backup R1 building and workspace R2 repairing; unrelated owner files preserved.
