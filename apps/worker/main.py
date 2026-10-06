@@ -1,5 +1,6 @@
 from functools import wraps
 from typing import Any, Callable, ClassVar, cast
+from uuid import uuid4
 
 from arq.connections import RedisSettings
 from arq.cron import cron as _cron
@@ -16,7 +17,7 @@ from redis.asyncio import Redis
 from core.auth.models import AuthSession
 from core.config import Settings
 from core.telemetry import install_log_redaction, instrument_job, set_process_role
-from core.system.health import ARQ_WORKER_HEALTH_KEY
+from core.system.health import ARQ_WORKER_GENERATION_KEY, ARQ_WORKER_HEALTH_KEY
 from modules.ingestion.dispatcher import dispatch_pending_work
 from modules.ingestion.worker import (
     cleanup_storage_orphans,
@@ -122,6 +123,7 @@ async def startup(ctx: dict[str, object]) -> None:
         ctx["agent_tool_registry"] = registry
         ctx["agent_mcp_admission"] = admission
         ctx["agent_mcp_runtime"] = runtime
+        await cast(Redis, ctx["redis"]).set(ARQ_WORKER_GENERATION_KEY, uuid4().hex)
     except Exception:
         await engine.dispose()
         raise

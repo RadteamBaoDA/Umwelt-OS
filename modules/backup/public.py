@@ -299,7 +299,7 @@ def _safe_stage_receipt(receipt: dict[str, object]) -> dict[str, object]:
     allowed = {
         "status", "files", "bytes", "schema_version", "detail_code", "components",
         "workflow_states", "workflow_id", "original_active", "effect_status", "archive_name",
-        "sha256", "manifest_sha256", "operation_id",
+        "sha256", "manifest_sha256", "operation_id", "generation_sha256",
     }
     if not receipt or set(receipt) - allowed:
         raise HTTPException(status_code=422, detail="Backup stage receipt contains unsupported fields")
@@ -318,7 +318,7 @@ def _safe_stage_receipt(receipt: dict[str, object]) -> dict[str, object]:
             if (not isinstance(value, str) or not value or len(value) > 255
                     or "/" in value or "\\" in value or any(ord(char) < 32 for char in value)):
                 raise HTTPException(status_code=422, detail="Backup archive name is invalid")
-        elif key in {"sha256", "manifest_sha256"}:
+        elif key in {"sha256", "manifest_sha256", "generation_sha256"}:
             if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
                 raise HTTPException(status_code=422, detail="Backup archive digest is invalid")
         elif key == "operation_id":

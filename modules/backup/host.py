@@ -22,6 +22,7 @@ from dotenv import dotenv_values
 from sqlalchemy.engine import make_url
 
 from core.config import Settings
+from core.system.health import ARQ_WORKER_GENERATION_KEY, ARQ_WORKER_HEALTH_KEY
 from modules.backup.manifest import BackupManifest
 from modules.backup.service import _digest_file, build_manifest, extract_snapshot_tar, write_snapshot_tar
 
@@ -356,14 +357,37 @@ class N8nScheduleGate:
         expected = operation.get("status")
         if not isinstance(receipts, dict) or expected not in {"resuming", "failed_recovery_required"}:
             raise BackupHostError("Backup operation receipts are unavailable")
+        live_workflows = {str(item["id"]): item["active"] for item in self._workflows()}
+        expected_ids = {str(item["workflow_id"]) for item in workflow_states}
+        if set(live_workflows) != expected_ids:
+            raise BackupHostError("n8n workflow inventory differs from its durable snapshot")
         failures: list[str] = []
         for workflow in reversed(workflow_states):
-            if workflow.get("original_active") is not True:
-                continue
             identifier = str(workflow["workflow_id"])
+            if workflow.get("original_active") is not True:
+                if live_workflows[identifier]:
+                    failures.append(identifier)
+                continue
             stage = _workflow_schedule_stage(identifier, True)
             existing = receipts.get(stage)
-            if isinstance(existing, dict) and existing.get("effect_status") == "succeeded":
+            effect = existing.get("effect_status") if isinstance(existing, dict) else None
+            if effect == "succeeded":
+                if live_workflows[identifier]:
+                    continue
+            if effect in {"attempted", "uncertain"} and live_workflows[identifier]:
+                reconciled = {
+                    "status": "complete", "workflow_id": identifier,
+                    "original_active": True, "effect_status": "succeeded",
+                }
+                try:
+                    self._persist_effect(stage, reconciled, create=False, expected=expected)
+                except BackupHostError:
+                    failures.append(identifier)
+                    continue
+                receipts[stage] = reconciled
+                continue
+            if effect is None and live_workflows[identifier]:
+                failures.append(identifier)
                 continue
             intent = {
                 "status": "incomplete", "workflow_id": identifier,
@@ -510,6 +534,18 @@ def _load_workflow_states(operation: dict[str, Any]) -> list[dict[str, object]]:
     return states
 
 
+def _worker_recovery_baseline(operation: dict[str, Any]) -> tuple[str | None, bool]:
+    """Return the redacted worker token baseline and whether this operation stopped its worker."""
+    receipts = operation.get("stage_receipts")
+    if not isinstance(receipts, dict):
+        return None, False
+    baseline = receipts.get("worker_startup_baseline")
+    digest = baseline.get("generation_sha256") if isinstance(baseline, dict) else None
+    if digest is not None and (not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)):
+        raise BackupHostError("Worker startup baseline receipt is invalid")
+    return digest, "worker_stop" in receipts
+
+
 def _verify_services_running(compose: Compose, required: set[str]) -> None:
     """Require all core services and configured components to be running before release."""
     if not required.issubset(compose.service_names()):
@@ -533,16 +569,47 @@ def _wait_for_api_ready(compose: Compose, timeout_seconds: int = 180) -> None:
     raise BackupHostError("Isolated API did not become ready")
 
 
-def _wait_for_worker_ready(compose: Compose, timeout_seconds: int = 180) -> None:
-    """Wait for the ARQ worker heartbeat while its owner admission fence is closed."""
+def _worker_generation(compose: Compose) -> str | None:
+    """Read the opaque startup generation published after the worker registry initializes."""
+    try:
+        value = compose.capture("exec", "-T", "redis", "redis-cli", "--raw", "GET",
+                               ARQ_WORKER_GENERATION_KEY).decode("ascii", "strict").strip()
+    except (BackupHostError, UnicodeDecodeError) as exc:
+        raise BackupHostError("Worker generation baseline is unavailable") from exc
+    if value and not re.fullmatch(r"[0-9a-f]{32}", value):
+        raise BackupHostError("Worker generation receipt is invalid")
+    return value or None
+
+
+def _clear_worker_generation(compose: Compose) -> None:
+    """Invalidate the previous worker startup token before starting its replacement."""
+    compose.capture("exec", "-T", "redis", "redis-cli", "DEL", ARQ_WORKER_GENERATION_KEY)
+
+
+def _worker_generation_digest(value: str | None) -> str | None:
+    """Return a portable one-way baseline for the opaque per-process startup token."""
+    return hashlib.sha256(value.encode("ascii")).hexdigest() if value else None
+
+
+def _wait_for_worker_ready(
+    compose: Compose, timeout_seconds: int = 180, *,
+    generation_baseline: str | None = None, require_new_generation: bool = False,
+) -> None:
+    """Wait for ARQ health and registry-start generation newer than a stopped worker baseline."""
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         try:
             ttl = int(compose.capture(
-                "exec", "-T", "redis", "redis-cli", "TTL", "bbd:worker:health",
+                "exec", "-T", "redis", "redis-cli", "TTL", ARQ_WORKER_HEALTH_KEY,
             ).decode("ascii", "strict").strip())
-            # ARQ .28 publishes the configured 15-second heartbeat with a 2x TTL.
-            if 0 < ttl <= 30:
+            generation = _worker_generation(compose)
+            generation_is_fresh = (
+                generation is not None
+                and (not require_new_generation or generation_baseline is None
+                     or _worker_generation_digest(generation) != generation_baseline)
+            )
+            # ARQ .28 refreshes the configured 15-second heartbeat with a 2x TTL.
+            if 0 < ttl <= 30 and generation_is_fresh:
                 return
         except (BackupHostError, UnicodeDecodeError):
             pass
@@ -696,13 +763,17 @@ def cleanup_isolated_restore(
 
 
 def _record_ready_services(compose: Compose, operation_id: str, expected: str,
-                           required: set[str]) -> None:
+                           required: set[str], *, worker_baseline: str | None = None,
+                           require_new_worker: bool = False) -> None:
     """Probe applicable service readiness before persisting the recovered component receipt."""
     _verify_services_running(compose, required)
     if "api" in required:
         _wait_for_api_ready(compose)
     if "worker" in required:
-        _wait_for_worker_ready(compose)
+        _wait_for_worker_ready(
+            compose, generation_baseline=worker_baseline,
+            require_new_generation=require_new_worker,
+        )
     if "graph" in required:
         _verify_graph_volume(compose)
     _record_receipt(compose, operation_id, expected, "core_services", {
@@ -712,13 +783,32 @@ def _record_ready_services(compose: Compose, operation_id: str, expected: str,
 
 def _verify_n8n_readiness(
     gate: N8nScheduleGate, workflow_states: list[dict[str, object]],
+    operation: dict[str, Any], *, admission_closed: bool,
 ) -> None:
-    """Require a live authenticated workflow inventory matching the saved paused state."""
+    """Check live schedules against original state and activation receipts before continuing."""
     current = gate._workflows()
-    expected_ids = {str(item["workflow_id"]) for item in workflow_states}
-    if ({str(item["id"]) for item in current} != expected_ids
-            or any(item["active"] for item in current)):
-        raise BackupHostError("n8n workflow inventory did not recover under its paused schedule")
+    expected = {str(item["workflow_id"]): item["original_active"] for item in workflow_states}
+    observed = {str(item["id"]): item["active"] for item in current}
+    if set(observed) != set(expected):
+        raise BackupHostError("n8n workflow inventory differs from its durable snapshot")
+    receipts = operation.get("stage_receipts")
+    receipts = receipts if isinstance(receipts, dict) else {}
+    for identifier, was_active in expected.items():
+        active = observed[identifier]
+        if not was_active:
+            if active:
+                raise BackupHostError("An originally paused n8n workflow is unexpectedly active")
+            continue
+        stage = _workflow_schedule_stage(identifier, True)
+        receipt = receipts.get(stage)
+        effect = receipt.get("effect_status") if isinstance(receipt, dict) else None
+        if admission_closed:
+            if active:
+                raise BackupHostError("n8n workflows must remain paused before admission release")
+        elif effect in {"succeeded", "attempted", "uncertain"}:
+            continue
+        elif active:
+            raise BackupHostError("An active n8n workflow has no matching activation receipt")
 
 
 def _verify_archive_receipt(
@@ -793,11 +883,15 @@ def _stop_service(compose: Compose, names: set[str], stopped: list[str], service
         stopped.append(service)
 
 
-def _start_services(compose: Compose, stopped: list[str]) -> None:
-    """Restart previously stopped services in dependency-reverse order."""
+def _start_services(compose: Compose, stopped: list[str]) -> bool:
+    """Restart stopped services and invalidate the worker generation before its new startup hook."""
+    worker_restarted = "worker" in stopped
     for service in reversed(stopped):
+        if service == "worker":
+            _clear_worker_generation(compose)
         compose.quiet("start", service)
     stopped.clear()
+    return worker_restarted
 
 
 def _encrypt_age(
@@ -1197,10 +1291,15 @@ def restore_backup(
                 verification["n8n_credentials"] = "decryption_verified"
                 verification["n8n_workflows"] = "inventory_verified"
                 verification["n8n_schedules"] = f"{expected_active}_left_paused_for_review"
+            compose.quiet("up", "-d", "redis")
+            worker_baseline = _worker_generation_digest(_worker_generation(compose))
+            _clear_worker_generation(compose)
             compose.quiet("up", "-d", "api", "worker")
             _verify_services_running(compose, {"postgres", "redis", "api", "worker"})
             _wait_for_api_ready(compose)
-            _wait_for_worker_ready(compose)
+            _wait_for_worker_ready(
+                compose, generation_baseline=worker_baseline, require_new_generation=True,
+            )
             verification["api"] = "ready"
             verification["worker"] = "fresh_heartbeat_under_quiesced_fence"
             succeeded = True
@@ -1264,6 +1363,8 @@ def create_backup(output: Path, *, root: Path | None = None, drain_timeout: int 
     recovery_blocked = False
     admission_released = False
     operation_finished = False
+    worker_baseline_digest: str | None = None
+    worker_restarted = False
     try:
         if n8n_configured:
             schedule_gate = _build_schedule_gate(compose, settings, operation_id, drain_timeout)
@@ -1285,6 +1386,11 @@ def create_backup(output: Path, *, root: Path | None = None, drain_timeout: int 
         phase = "quiesced"
         _publish_phase(compose, operation_id, phase, "snapshotting")
         phase = "snapshotting"
+        worker_baseline_digest = _worker_generation_digest(_worker_generation(compose))
+        baseline_receipt: dict[str, object] = {"status": "validated"}
+        if worker_baseline_digest is not None:
+            baseline_receipt["generation_sha256"] = worker_baseline_digest
+        _record_receipt(compose, operation_id, phase, "worker_startup_baseline", baseline_receipt)
         # Keep PostgreSQL and effect-bearing services available until their
         # respective snapshot boundary. API/worker are the durable-write fence:
         # admitted jobs have drained, so no new owner writes can begin.
@@ -1465,13 +1571,17 @@ def create_backup(output: Path, *, root: Path | None = None, drain_timeout: int 
             })
         _publish_phase(compose, operation_id, phase, "resuming")
         phase = "resuming"
-        _start_services(compose, stopped)
+        worker_restarted = _start_services(compose, stopped)
         ready_services = required | ({"graph"} if graph_enabled else set()) | ({"n8n"} if n8n_configured else set())
         if schedule_gate is not None:
             # The exact workflow inventory request is also the post-restart n8n readiness probe.
-            expected_workflows = _load_workflow_states(_load_operation(compose, operation_id))
-            _verify_n8n_readiness(schedule_gate, expected_workflows)
-        _record_ready_services(compose, operation_id, phase, ready_services)
+            operation = _load_operation(compose, operation_id)
+            expected_workflows = _load_workflow_states(operation)
+            _verify_n8n_readiness(schedule_gate, expected_workflows, operation, admission_closed=True)
+        _record_ready_services(
+            compose, operation_id, phase, ready_services,
+            worker_baseline=worker_baseline_digest, require_new_worker=worker_restarted,
+        )
         compose.coordinator("release", "--operation-id", operation_id)
         admission_released = True
         if schedule_gate is not None:
@@ -1518,8 +1628,14 @@ def create_backup(output: Path, *, root: Path | None = None, drain_timeout: int 
                     ready_services = required | ({"graph"} if graph_enabled else set()) | ({"n8n"} if n8n_configured else set())
                     if schedule_gate is not None:
                         expected_workflows = _load_workflow_states(operation)
-                        _verify_n8n_readiness(schedule_gate, expected_workflows)
-                    _record_ready_services(compose, operation_id, phase, ready_services)
+                        _verify_n8n_readiness(
+                            schedule_gate, expected_workflows, operation, admission_closed=True,
+                        )
+                    _record_ready_services(
+                        compose, operation_id, phase, ready_services,
+                        worker_baseline=worker_baseline_digest,
+                        require_new_worker=_worker_recovery_baseline(operation)[1],
+                    )
                     compose.coordinator("release", "--operation-id", operation_id)
                     admission_released = True
                     if snapshot_exists:
@@ -1532,12 +1648,16 @@ def create_backup(output: Path, *, root: Path | None = None, drain_timeout: int 
                             operation_finished = True
                             services_recovered = False
                 else:
-                    _start_services(compose, stopped)
+                    worker_restarted = _start_services(compose, stopped)
                     if phase != "resuming":
                         _publish_phase(compose, operation_id, phase, "resuming")
                         phase = "resuming"
                     ready_services = required | ({"graph"} if graph_enabled else set()) | ({"n8n"} if n8n_configured else set())
-                    _record_ready_services(compose, operation_id, phase, ready_services)
+                    _record_ready_services(
+                        compose, operation_id, phase, ready_services,
+                        worker_baseline=worker_baseline_digest,
+                        require_new_worker=worker_restarted,
+                    )
                     compose.coordinator(
                         "resume", "--operation-id", operation_id, "--outcome", "incomplete",
                     )
@@ -1577,6 +1697,7 @@ def recover_operation(
     receipts = operation.get("stage_receipts")
     if not isinstance(receipts, dict):
         raise BackupHostError("Backup operation receipts are unavailable")
+    worker_baseline, worker_was_stopped = _worker_recovery_baseline(operation)
     workflow_snapshot = receipts.get("n8n_workflow_states")
     workflow_states = _load_workflow_states(operation) if isinstance(workflow_snapshot, dict) else None
     if workflow_states is not None and not settings.n8n_api_key.get_secret_value():
@@ -1608,12 +1729,24 @@ def recover_operation(
     services = required | ({"graph"} if graph_enabled else set()) | ({"n8n"} if n8n_configured else set())
     if control.get("phase") == "failed_recovery_required":
         running = compose.service_names()
+        worker_started_now = False
         for service in ("graph", "api", "worker", "n8n"):
             if service in services and service not in running:
+                if service == "worker":
+                    _clear_worker_generation(compose)
+                    worker_started_now = True
                 compose.quiet("start", service)
+        if (worker_was_stopped and not worker_started_now
+                and _worker_generation_digest(_worker_generation(compose)) == worker_baseline):
+            _clear_worker_generation(compose)
+            compose.quiet("restart", "worker")
+            worker_started_now = True
         _verify_services_running(compose, services)
         _wait_for_api_ready(compose)
-        _wait_for_worker_ready(compose)
+        _wait_for_worker_ready(
+            compose, generation_baseline=worker_baseline,
+            require_new_generation=worker_was_stopped,
+        )
         if graph_enabled:
             _verify_graph_volume(compose)
         if workflow_states is not None:
@@ -1621,11 +1754,14 @@ def recover_operation(
             gate = _build_schedule_gate(compose, settings, operation_id, timeout_seconds=60)
             try:
                 gate.pause_saved_and_drain(workflow_states, "failed_recovery_required")
-                _verify_n8n_readiness(gate, workflow_states)
+                _verify_n8n_readiness(gate, workflow_states, operation, admission_closed=True)
             finally:
                 gate.close()
         if "core_services" not in receipts:
-            _record_ready_services(compose, operation_id, "failed_recovery_required", services)
+            _record_ready_services(
+                compose, operation_id, "failed_recovery_required", services,
+                worker_baseline=worker_baseline, require_new_worker=worker_was_stopped,
+            )
         compose.coordinator(
             "transition", "--operation-id", operation_id,
             "--expected", "failed_recovery_required", "--phase", "resuming",
@@ -1638,14 +1774,21 @@ def recover_operation(
     if not services.issubset(compose.service_names()):
         raise BackupHostError("Core service readiness failed during recovery")
     _wait_for_api_ready(compose)
-    _wait_for_worker_ready(compose)
+    _wait_for_worker_ready(
+        compose, generation_baseline=worker_baseline,
+        require_new_generation=worker_was_stopped,
+    )
     if graph_enabled and control.get("phase") == "idle":
         _verify_graph_volume(compose)
     if workflow_states is not None:
         _verify_live_n8n_key(compose, settings)
         readiness_gate = _build_schedule_gate(compose, settings, operation_id, timeout_seconds=60)
         try:
-            _verify_n8n_readiness(readiness_gate, workflow_states)
+            operation = _load_operation(compose, operation_id)
+            _verify_n8n_readiness(
+                readiness_gate, workflow_states, operation,
+                admission_closed=control.get("phase") != "idle",
+            )
         finally:
             readiness_gate.close()
     if control.get("phase") == "resuming":

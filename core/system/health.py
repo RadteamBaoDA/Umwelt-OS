@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.config import Settings
 
 ARQ_WORKER_HEALTH_KEY = "bbd:worker:health"
+ARQ_WORKER_GENERATION_KEY = "bbd:worker:generation"
 PROBE_TIMEOUT_SECONDS = 1.0
 
 
