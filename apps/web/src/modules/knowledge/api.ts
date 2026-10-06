@@ -21,6 +21,10 @@ export type DocumentDeletionReceipt = {
   copied_status: 'queued' | 'running' | 'failed';
   chat_status: 'queued' | 'running' | 'succeeded' | 'failed';
   chat_error_code: string | null;
+  memory_status: 'queued' | 'running' | 'succeeded' | 'failed';
+  memory_error_code: string | null;
+  memory_unresolved_count: number;
+  memory_cache_pending: boolean;
   immediate_access_revoked: true;
   error_code: string | null;
   copied_error_code: string | null;

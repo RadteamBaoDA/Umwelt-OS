@@ -65,6 +65,10 @@ class DocumentDeletionRead(BaseModel):
     copied_status: Literal["queued", "running", "failed"]
     chat_status: Literal["queued", "running", "succeeded", "failed"]
     chat_error_code: str | None = Field(default=None, max_length=64)
+    memory_status: Literal["queued", "running", "succeeded", "failed"]
+    memory_error_code: str | None = Field(default=None, max_length=64)
+    memory_unresolved_count: int = Field(ge=0)
+    memory_cache_pending: bool
     immediate_access_revoked: Literal[True] = True
     error_code: str | None = Field(default=None, max_length=64)
     copied_error_code: str | None = Field(default=None, max_length=64)

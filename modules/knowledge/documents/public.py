@@ -95,6 +95,28 @@ class SourceCleanupProgress:
     pending_owner_codes: tuple[str, ...]
 
 
+async def pending_document_memory_cleanup_ids(
+    session: AsyncSession, *, limit: int = 100,
+) -> tuple[UUID, ...]:
+    """Return a bounded keyset page of captured receipts ready for their Memory stage.
+
+    The worker uses stable receipt-derived event IDs, so repeated reconciliation is idempotent.
+    Chat must be terminal-success before Memory is admitted; unavailable scopes are not retried.
+    """
+    if not 1 <= limit <= 100:
+        raise ValueError("Memory cleanup reconciliation page size must be between 1 and 100")
+    return tuple((await session.scalars(
+        select(DocumentCleanupOperation.id)
+        .where(
+            DocumentCleanupOperation.evidence_scope_status == "captured",
+            DocumentCleanupOperation.chat_status == "succeeded",
+            DocumentCleanupOperation.memory_status == "queued",
+        )
+        .order_by(DocumentCleanupOperation.id)
+        .limit(limit)
+    )).all())
+
+
 def _encode_document_export_cursor(
     owner_id: int, record_kind: str, snapshot_at: datetime, position_at: datetime, position_id: UUID,
 ) -> str:
@@ -1718,30 +1740,43 @@ async def source_cleanup_progress(
 
     The Source owner supplies its durable capture receipt because only that owner can
     distinguish a successfully empty Source from a legacy operation whose rows vanished.
-    This query is read-only and does not lock child receipts while Source is held.
+    This query is read-only and does not lock child receipts while Source is held. Memory cache
+    eviction is an independent pending obligation and remains visible until its postcommit retry
+    clears the durable marker.
     """
     failed = or_(
         DocumentCleanupOperation.evidence_scope_status == "unavailable",
         DocumentCleanupOperation.raw_status == "failed",
         DocumentCleanupOperation.chat_status == "failed",
+        DocumentCleanupOperation.memory_status == "failed",
         DocumentCleanupOperation.copied_status == "failed",
     )
     raw_pending = DocumentCleanupOperation.raw_status.not_in(
         ("not_present", "retained_shared", "succeeded", "failed")
     )
     chat_pending = DocumentCleanupOperation.chat_status.not_in(("succeeded", "failed"))
+    memory_pending = or_(
+        DocumentCleanupOperation.memory_status != "succeeded",
+        DocumentCleanupOperation.memory_cache_pending.is_(True),
+    )
     copy_pending = DocumentCleanupOperation.copied_status != "succeeded"
-    pending = and_(~failed, or_(raw_pending, chat_pending, copy_pending))
+    # Cache eviction is a separate durable Memory obligation, including while a prior
+    # content-cleanup stage is terminally failed and awaits its retryable postcommit work.
+    pending = or_(
+        DocumentCleanupOperation.memory_cache_pending.is_(True),
+        and_(~failed, or_(raw_pending, chat_pending, memory_pending, copy_pending)),
+    )
     row = (await session.execute(select(
         func.count(DocumentCleanupOperation.id),
         func.sum(case((pending, 1), else_=0)),
         func.sum(case((failed, 1), else_=0)),
         func.sum(case((and_(~failed, raw_pending), 1), else_=0)),
         func.sum(case((and_(~failed, chat_pending), 1), else_=0)),
+        func.sum(case((or_(and_(~failed, memory_pending), DocumentCleanupOperation.memory_cache_pending.is_(True)), 1), else_=0)),
     ).where(
         DocumentCleanupOperation.source_purge_operation_id == source_purge_operation_id,
     ))).one()
-    child_count, pending_count, failed_count, raw_waiting, chat_waiting = (
+    child_count, pending_count, failed_count, raw_waiting, chat_waiting, memory_waiting = (
         int(value or 0) for value in row
     )
     owners: list[str] = []
@@ -1751,9 +1786,11 @@ async def source_cleanup_progress(
         owners.append("raw")
     if chat_waiting:
         owners.append("chat")
+    if memory_waiting:
+        owners.append("memory")
     if child_count:
         # These owner contracts are deliberately pending until their own cleanup stages exist.
-        owners.extend(("memory", "agents", "dashboard", "notifications", "automations"))
+        owners.extend(("agents", "dashboard", "notifications", "automations"))
     all_required_complete = capture_recorded and child_count == 0
     return SourceCleanupProgress(
         child_count=child_count,
@@ -2454,7 +2491,7 @@ async def delete_document(session: AsyncSession, document_id: UUID) -> DocumentC
     from modules.ingestion import public as ingestion
 
     await ingestion.publish_event(session, DomainEvent(
-        id=uuid4(),
+        id=uuid5(operation.id, "document-cleanup-requested"),
         type="document.cleanup.requested",
         version=1,
         occurred_at=datetime.now(UTC),

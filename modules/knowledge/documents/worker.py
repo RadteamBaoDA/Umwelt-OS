@@ -7,35 +7,181 @@ from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from redis.asyncio import Redis
 
 from core.config import Settings
 from core.storage import storage_path
 from modules.ingestion import public as ingestion
 from modules.knowledge.documents import public as documents
 from modules.knowledge.documents.models import DocumentCleanupOperation
+from modules.memory.public import invalidate_memory_cache, lock_export_privacy, purge_document_copied_evidence_page
+from core.events import DomainEvent
+from uuid import uuid5
 
 logger = logging.getLogger(__name__)
 _RETRY_DELAY = timedelta(seconds=30)
 _CONTINUATION_DELAY = timedelta(seconds=1)
+_MEMORY_RECONCILE_LIMIT = 100
+
+
+async def _advance_memory_cleanup(
+    session: AsyncSession, operation: DocumentCleanupOperation,
+) -> tuple[bool, bool]:
+    """Flush one Memory-owned identity page and update only its bounded receipt state.
+
+    Returns whether payload rows changed and whether the stage reached a terminal result. The
+    caller commits this cursor with the page mutations and performs cache eviction afterward.
+    """
+    if operation.evidence_scope_status != "captured":
+        operation.memory_status = "failed"
+        operation.memory_error_code = "evidence_identity_unavailable"
+        operation.memory_cursor = None
+        return False, True
+    cursor_state = operation.memory_cursor or {}
+    if not isinstance(cursor_state, dict) or set(cursor_state) - {"reference_after", "owner_cursor"}:
+        raise ValueError("Stored Memory cleanup cursor is malformed")
+    reference_value = cursor_state.get("reference_after")
+    owner_cursor = cursor_state.get("owner_cursor")
+    if reference_value is not None and not isinstance(reference_value, str):
+        raise ValueError("Stored Memory reference cursor is malformed")
+    if owner_cursor is not None and not isinstance(owner_cursor, str):
+        raise ValueError("Stored Memory owner cursor is malformed")
+    reference_after = UUID(reference_value) if reference_value else None
+    scope = await documents.list_document_cleanup_evidence_scope(
+        session, operation.id, after=reference_after, limit=100,
+    )
+    if scope is None:
+        raise ValueError("Document cleanup evidence scope is unavailable")
+    progress = await purge_document_copied_evidence_page(
+        session, scope, cursor=owner_cursor, limit=100,
+    )
+    # A provenance reference outside this bounded page can still be an exact match in a later
+    # captured reference page. Keep uncertainty provisional until the final reference page so
+    # an early page cannot permanently overcount a record that a later page will scrub.
+    if scope.next_cursor is None:
+        operation.memory_unresolved_count += progress.unresolved_count
+        operation.memory_error_code = progress.unresolved_reason or None
+    if progress.changed:
+        operation.memory_cache_pending = True
+    if not progress.complete:
+        if progress.next_cursor is None:
+            raise ValueError("Memory cleanup page is incomplete without a continuation cursor")
+        operation.memory_status = "running"
+        operation.memory_cursor = {
+            "reference_after": str(reference_after) if reference_after else None,
+            "owner_cursor": progress.next_cursor,
+        }
+        return progress.changed, False
+    if scope.next_cursor is not None:
+        operation.memory_status = "running"
+        operation.memory_cursor = {
+            "reference_after": str(scope.next_cursor),
+            "owner_cursor": None,
+        }
+        return progress.changed, False
+    operation.memory_cursor = None
+    if operation.memory_unresolved_count:
+        operation.memory_status = "failed"
+        operation.memory_error_code = "legacy_provenance_unresolved"
+    else:
+        operation.memory_status = "succeeded"
+        operation.memory_error_code = None
+    return progress.changed, True
+
+
+async def _evict_memory_cache_after_commit(
+    factory: async_sessionmaker[AsyncSession], redis: Redis, operation_id: UUID, event_id: UUID,
+) -> None:
+    """Evict committed Memory state, clear its durable marker, and wake Source aggregation."""
+    try:
+        await invalidate_memory_cache(redis)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Memory cleanup cache eviction deferred (%s)", type(exc).__name__)
+        return
+    async with factory() as session:
+        await lock_export_privacy(session)
+        operation = await session.scalar(select(DocumentCleanupOperation).where(
+            DocumentCleanupOperation.id == operation_id,
+        ).with_for_update().execution_options(populate_existing=True))
+        if operation is not None and operation.memory_cache_pending:
+            operation.memory_cache_pending = False
+            # Source's aggregate must observe the independent cache obligation clearing,
+            # even when the Memory stage itself had already reached a terminal status.
+            await documents.publish_source_cleanup_wakeup(
+                session, operation,
+                progress_key=(
+                    f"raw={operation.raw_status};chat={operation.chat_status};"
+                    f"memory={operation.memory_status}:{operation.memory_error_code or 'none'}:"
+                    f"{operation.memory_unresolved_count};cache=0"
+                ),
+            )
+            if (operation.raw_status in {"not_present", "retained_shared", "succeeded"}
+                    and operation.chat_status == "succeeded"
+                    and operation.memory_status in {"succeeded", "failed"}):
+                await ingestion.set_event_delivery(session, event_id, "delivered")
+            elif (operation.raw_status in {"not_present", "retained_shared", "succeeded"}
+                    and operation.chat_status == "succeeded" and operation.memory_status == "running"):
+                await ingestion.set_event_delivery(
+                    session, event_id, "pending",
+                    next_attempt_at=datetime.now(UTC) + _CONTINUATION_DELAY,
+                )
+            await session.commit()
+        else:
+            await session.rollback()
+
+
+async def reconcile_document_memory_cleanup(ctx: dict[str, object]) -> int:
+    """Requeue at most 100 captured historical receipts whose Chat stage already succeeded."""
+    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    now = datetime.now(UTC)
+    async with factory() as session:
+        operation_ids = await documents.pending_document_memory_cleanup_ids(
+            session, limit=_MEMORY_RECONCILE_LIMIT,
+        )
+        enqueued = 0
+        for operation_id in operation_ids:
+            event_id = uuid5(operation_id, "document-cleanup-requested")
+            event = await ingestion.get_event_delivery(session, event_id)
+            if event is None:
+                await ingestion.publish_event(session, DomainEvent(
+                    id=event_id,
+                    type="document.cleanup.requested",
+                    version=1,
+                    occurred_at=now,
+                    producer="modules.knowledge.documents",
+                    payload={"operation_id": str(operation_id)},
+                ))
+                enqueued += 1
+            elif event.status in {"delivered", "failed"}:
+                await ingestion.set_event_delivery(
+                    session, event_id, "pending", next_attempt_at=now,
+                )
+                enqueued += 1
+        if enqueued:
+            await session.commit()
+        else:
+            await session.rollback()
+        return enqueued
 
 
 async def process_document_cleanup(ctx: dict[str, object], event_id: str) -> None:
-    """Advance one bounded raw and Chat copy-cleanup page after canonical deletion commits.
+    """Advance bounded raw, Chat, and Memory cleanup stages after canonical deletion commits.
 
-    The event payload contains only a Documents receipt ID. Documents locks the exact raw URI
-    before the receipt, checks surviving references, and unlinks only a contained unshared path;
-    it then passes one bounded detached evidence-reference page to Chat. Terminal receipts are
-    rechecked after locking, and raw/Chat cursor state plus deterministic Source progress events
-    commit atomically. Incomplete work reuses its child event with a bounded retry; copied status
-    remains running until every owner stage is integrated. Failure handlers compare the locked
-    receipt's raw/Chat cursor progress with this attempt's starting snapshot before changing it.
+    The event payload contains only a Documents receipt ID. Privacy precedes URI, receipt, Chat,
+    and Memory locks. Each owner consumes detached evidence identities; stage cursors and Source
+    wakeups commit with their owner changes. Memory cache eviction follows commit under a durable
+    retry marker. Incomplete pages reuse their child event with bounded retry, while other copied
+    owners remain pending. Error recovery compares all stage cursors to this attempt's snapshot.
     Recovery without that snapshot leaves event delivery untouched; the dispatcher reclaims stale
     queued work after its bounded interval instead of overwriting a newer delivery schedule.
     """
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     settings = cast(Settings, ctx["settings"])
+    redis = cast(Redis, ctx["redis"])
     identifier = UUID(event_id)
-    attempt_progress: tuple[str, str, str, str, object] | None = None
+    attempt_progress: tuple[object, ...] | None = None
+    evict_after_commit: UUID | None = None
+    attempt_stage = "unknown"
 
     try:
         async with factory() as session:
@@ -56,6 +202,8 @@ async def process_document_cleanup(ctx: dict[str, object], event_id: str) -> Non
                 await ingestion.set_event_delivery(session, identifier, "failed")
                 await session.commit()
                 return
+            # Shared Memory consent lock precedes URI, receipt, Chat and Memory owner locks.
+            await lock_export_privacy(session)
             if operation_hint.raw_uri and operation_hint.raw_status not in {
                 "not_present", "retained_shared", "succeeded",
             }:
@@ -80,9 +228,21 @@ async def process_document_cleanup(ctx: dict[str, object], event_id: str) -> Non
                 operation.chat_status,
                 operation.copied_status,
                 cursor_snapshot,
+                operation.memory_status,
+                operation.memory_error_code,
+                dict(operation.memory_cursor) if isinstance(operation.memory_cursor, dict) else operation.memory_cursor,
+                operation.memory_unresolved_count,
+                operation.memory_cache_pending,
             )
 
-            if operation.raw_status in {"not_present", "retained_shared", "succeeded"} and operation.chat_status == "succeeded":
+            memory_terminal = operation.memory_status == "succeeded" or (
+                operation.memory_status == "failed" and operation.memory_error_code in {
+                    "legacy_provenance_unresolved", "evidence_identity_unavailable",
+                }
+            )
+            if (operation.raw_status in {"not_present", "retained_shared", "succeeded"}
+                    and operation.chat_status == "succeeded" and memory_terminal
+                    and not operation.memory_cache_pending):
                 # Duplicate deliveries must not reopen a receipt whose required active stages finished.
                 await ingestion.set_event_delivery(session, identifier, "delivered")
                 await session.commit()
@@ -117,6 +277,7 @@ async def process_document_cleanup(ctx: dict[str, object], event_id: str) -> Non
                 operation.error_code = "evidence_identity_unavailable"
                 terminal_scope_failure = True
             elif operation.chat_status != "succeeded":
+                attempt_stage = "chat"
                 operation.chat_status = "running"
                 operation.chat_error_code = None
                 cursor_state = operation.copied_cursor or {}
@@ -156,6 +317,26 @@ async def process_document_cleanup(ctx: dict[str, object], event_id: str) -> Non
                     }
                     next_attempt_at = datetime.now(UTC) + _CONTINUATION_DELAY
 
+            if operation.chat_status == "succeeded" and operation.memory_status not in {
+                "succeeded",
+            } and not (
+                operation.memory_status == "failed"
+                and operation.memory_error_code in {
+                    "legacy_provenance_unresolved", "evidence_identity_unavailable",
+                }
+            ):
+                if operation.memory_cache_pending:
+                    next_attempt_at = next_attempt_at or datetime.now(UTC) + _RETRY_DELAY
+                else:
+                    attempt_stage = "memory"
+                    operation.memory_status = "running"
+                    operation.memory_error_code = None
+                    changed, terminal = await _advance_memory_cleanup(session, operation)
+                    if changed:
+                        evict_after_commit = operation.id
+                    if not terminal:
+                        next_attempt_at = next_attempt_at or datetime.now(UTC) + _CONTINUATION_DELAY
+
             if operation.raw_status == "failed":
                 operation.error_code = operation.error_code or "file_cleanup_failed"
                 next_attempt_at = next_attempt_at or datetime.now(UTC) + _RETRY_DELAY
@@ -165,18 +346,28 @@ async def process_document_cleanup(ctx: dict[str, object], event_id: str) -> Non
                 operation.error_code = operation.copied_error_code
                 next_attempt_at = next_attempt_at or datetime.now(UTC) + _RETRY_DELAY
 
-            if operation.chat_status in {"succeeded", "failed"}:
+            if operation.chat_status in {"succeeded", "failed"} or operation.memory_status in {"succeeded", "failed"}:
                 await documents.publish_source_cleanup_wakeup(
                     session, operation,
-                    progress_key=f"raw={operation.raw_status};chat={operation.chat_status}",
+                    progress_key=(
+                        f"raw={operation.raw_status};chat={operation.chat_status};"
+                        f"memory={operation.memory_status}:{operation.memory_error_code or 'none'}:"
+                        f"{operation.memory_unresolved_count};cache={int(operation.memory_cache_pending)}"
+                    ),
                 )
 
-            if operation.raw_status == "failed" or operation.chat_status == "failed":
+            if (operation.raw_status == "failed" or operation.chat_status == "failed"
+                    or operation.memory_status == "failed"):
                 operation.status = "failed"
             else:
-                # This task cleans Chat only; keep aggregate deletion visibly pending for other owners.
+                # Other copied-evidence owners are not implemented by this worker.
                 operation.status = "running"
-                operation.copied_status = "running"
+            local_failed = operation.raw_status == "failed" or operation.chat_status == "failed" or operation.memory_status == "failed"
+            operation.copied_status = "failed" if local_failed else "running"
+
+            if operation.memory_cache_pending:
+                evict_after_commit = operation.id
+                next_attempt_at = next_attempt_at or datetime.now(UTC) + _RETRY_DELAY
 
             if next_attempt_at is not None:
                 await ingestion.set_event_delivery(
@@ -186,6 +377,8 @@ async def process_document_cleanup(ctx: dict[str, object], event_id: str) -> Non
                 # The event is complete for Documents and Chat even while other copy owners remain pending.
                 await ingestion.set_event_delivery(session, identifier, "delivered")
             await session.commit()
+        if evict_after_commit is not None:
+            await _evict_memory_cache_after_commit(factory, redis, evict_after_commit, identifier)
     except ValueError:
         # A malformed local continuation restarts idempotently from the first exact identity page.
         async with factory() as session:
@@ -205,6 +398,7 @@ async def process_document_cleanup(ctx: dict[str, object], event_id: str) -> Non
                 await ingestion.set_event_delivery(session, identifier, "failed")
                 await session.commit()
                 return
+            await lock_export_privacy(session)
             if operation_hint.raw_uri and operation_hint.raw_status not in {
                 "not_present", "retained_shared", "succeeded",
             }:
@@ -220,8 +414,37 @@ async def process_document_cleanup(ctx: dict[str, object], event_id: str) -> Non
                 and recovery_operation.chat_status == attempt_progress[2]
                 and recovery_operation.copied_status == attempt_progress[3]
                 and recovery_operation.copied_cursor == attempt_progress[4]
+                and recovery_operation.memory_status == attempt_progress[5]
+                and recovery_operation.memory_error_code == attempt_progress[6]
+                and recovery_operation.memory_cursor == attempt_progress[7]
+                and recovery_operation.memory_unresolved_count == attempt_progress[8]
+                and recovery_operation.memory_cache_pending == attempt_progress[9]
             )
-            if recovery_operation is not None and progress_unchanged and recovery_operation.chat_status != "succeeded":
+            if (recovery_operation is not None and progress_unchanged
+                    and attempt_stage == "memory" and recovery_operation.memory_status not in {"succeeded"}
+                    and recovery_operation.memory_error_code not in {
+                        "legacy_provenance_unresolved", "evidence_identity_unavailable",
+                    }):
+                recovery_operation.memory_status = "failed"
+                recovery_operation.memory_error_code = "memory_cursor_reset"
+                recovery_operation.memory_cursor = None
+                recovery_operation.memory_unresolved_count = 0
+                recovery_operation.copied_status = "failed"
+                recovery_operation.error_code = "memory_cursor_reset"
+                recovery_operation.copied_error_code = "memory_cursor_reset"
+                recovery_operation.status = "failed"
+                await documents.publish_source_cleanup_wakeup(
+                    session, recovery_operation,
+                    progress_key=(
+                        f"raw={recovery_operation.raw_status};chat={recovery_operation.chat_status};"
+                        f"memory={recovery_operation.memory_status}:{recovery_operation.memory_error_code}:"
+                        f"{recovery_operation.memory_unresolved_count};cache={int(recovery_operation.memory_cache_pending)}"
+                    ),
+                )
+                await ingestion.set_event_delivery(
+                    session, identifier, "pending", next_attempt_at=datetime.now(UTC) + _RETRY_DELAY,
+                )
+            elif recovery_operation is not None and progress_unchanged and recovery_operation.chat_status != "succeeded":
                 recovery_operation.copied_cursor = None
                 recovery_operation.chat_status = "failed"
                 recovery_operation.chat_error_code = "chat_cursor_reset"
@@ -231,7 +454,11 @@ async def process_document_cleanup(ctx: dict[str, object], event_id: str) -> Non
                 recovery_operation.error_code = "chat_cursor_reset"
                 await documents.publish_source_cleanup_wakeup(
                     session, recovery_operation,
-                    progress_key=f"raw={recovery_operation.raw_status};chat={recovery_operation.chat_status}",
+                    progress_key=(
+                        f"raw={recovery_operation.raw_status};chat={recovery_operation.chat_status};"
+                        f"memory={recovery_operation.memory_status}:{recovery_operation.memory_error_code or 'none'}:"
+                        f"{recovery_operation.memory_unresolved_count};cache={int(recovery_operation.memory_cache_pending)}"
+                    ),
                 )
                 await ingestion.set_event_delivery(
                     session, identifier, "pending", next_attempt_at=datetime.now(UTC) + _RETRY_DELAY,
@@ -265,6 +492,7 @@ async def process_document_cleanup(ctx: dict[str, object], event_id: str) -> Non
                 await ingestion.set_event_delivery(session, identifier, "failed")
                 await session.commit()
                 return
+            await lock_export_privacy(session)
             if operation_hint.raw_uri and operation_hint.raw_status not in {
                 "not_present", "retained_shared", "succeeded",
             }:
@@ -280,8 +508,35 @@ async def process_document_cleanup(ctx: dict[str, object], event_id: str) -> Non
                 and recovery_operation.chat_status == attempt_progress[2]
                 and recovery_operation.copied_status == attempt_progress[3]
                 and recovery_operation.copied_cursor == attempt_progress[4]
+                and recovery_operation.memory_status == attempt_progress[5]
+                and recovery_operation.memory_error_code == attempt_progress[6]
+                and recovery_operation.memory_cursor == attempt_progress[7]
+                and recovery_operation.memory_unresolved_count == attempt_progress[8]
+                and recovery_operation.memory_cache_pending == attempt_progress[9]
             )
-            if recovery_operation is not None and progress_unchanged and recovery_operation.chat_status != "succeeded":
+            if (recovery_operation is not None and progress_unchanged and attempt_stage == "memory"
+                    and recovery_operation.memory_status not in {"succeeded"}
+                    and recovery_operation.memory_error_code not in {
+                        "legacy_provenance_unresolved", "evidence_identity_unavailable",
+                    }):
+                recovery_operation.memory_status = "failed"
+                recovery_operation.memory_error_code = "memory_cleanup_failed"
+                recovery_operation.copied_status = "failed"
+                recovery_operation.copied_error_code = "memory_cleanup_failed"
+                recovery_operation.status = "failed"
+                recovery_operation.error_code = "memory_cleanup_failed"
+                await documents.publish_source_cleanup_wakeup(
+                    session, recovery_operation,
+                    progress_key=(
+                        f"raw={recovery_operation.raw_status};chat={recovery_operation.chat_status};"
+                        f"memory={recovery_operation.memory_status}:{recovery_operation.memory_error_code}:"
+                        f"{recovery_operation.memory_unresolved_count};cache={int(recovery_operation.memory_cache_pending)}"
+                    ),
+                )
+                await ingestion.set_event_delivery(
+                    session, identifier, "pending", next_attempt_at=datetime.now(UTC) + _RETRY_DELAY,
+                )
+            elif recovery_operation is not None and progress_unchanged and recovery_operation.chat_status != "succeeded":
                 recovery_operation.chat_status = "failed"
                 recovery_operation.chat_error_code = "chat_cleanup_failed"
                 recovery_operation.copied_status = "failed"
@@ -290,7 +545,11 @@ async def process_document_cleanup(ctx: dict[str, object], event_id: str) -> Non
                 recovery_operation.error_code = "chat_cleanup_failed"
                 await documents.publish_source_cleanup_wakeup(
                     session, recovery_operation,
-                    progress_key=f"raw={recovery_operation.raw_status};chat={recovery_operation.chat_status}",
+                    progress_key=(
+                        f"raw={recovery_operation.raw_status};chat={recovery_operation.chat_status};"
+                        f"memory={recovery_operation.memory_status}:{recovery_operation.memory_error_code or 'none'}:"
+                        f"{recovery_operation.memory_unresolved_count};cache={int(recovery_operation.memory_cache_pending)}"
+                    ),
                 )
                 await ingestion.set_event_delivery(
                     session, identifier, "pending", next_attempt_at=datetime.now(UTC) + _RETRY_DELAY,
