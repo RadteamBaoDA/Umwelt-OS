@@ -30,9 +30,19 @@ FAKE_BASE_URL = "http://fake-model:8000/v1"
 TOKENS = 300
 
 
-def _docker(*args: str) -> str:
-    result = subprocess.run(["docker", *args], capture_output=True, text=True, check=True, timeout=120)
+def _docker(*args: str, timeout: float = 120) -> str:
+    result = subprocess.run(["docker", *args], capture_output=True, text=True, check=True, timeout=timeout)
     return result.stdout.strip()
+
+
+def _start_after_exit(container: str) -> None:
+    """Restore a SIGTERMed container. `docker kill` returns before arq's graceful shutdown ends, and
+    `docker start` on a still-running container is a silent no-op, after which it exits and stays down."""
+    try:
+        _docker("wait", container, timeout=60)
+    finally:
+        _docker("start", container)
+        assert _docker("inspect", "-f", "{{.State.Running}}", container) == "true", "container not restarted"
 
 
 def _service_container(service: str) -> str:
@@ -95,12 +105,14 @@ async def _events(
     """Yield (event_id, event, data) frames until message.done / terminal status, or `stop_after` frames."""
     headers = {"Last-Event-ID": last_id} if last_id else {}
     seen = 0
+    deadline = time.monotonic() + 120  # heartbeats keep a stalled stream alive; never hang the suite
     async with client.stream(
         "GET", f"/api/v1/responses/{response_id}/events", headers=headers, timeout=120,
     ) as response:
         assert response.status_code == 200
         frame: dict[str, str] = {}
         async for line in response.aiter_lines():
+            assert time.monotonic() < deadline, f"stream {response_id} did not finish within 120 s"
             if line:
                 key, _, value = line.partition(": ")
                 frame[key] = value
@@ -196,7 +208,7 @@ async def test_chat_worker_sigterm_mid_stream_recovers_within_30s(
             assert time.monotonic() < deadline, "run stayed streaming after SIGTERM"
             await asyncio.sleep(0.5)
     finally:
-        await asyncio.to_thread(_docker, "start", worker_container)
+        await asyncio.to_thread(_start_after_exit, worker_container)
     deadline = time.monotonic() + 30
     while await status() in {"pending", "streaming"}:
         assert time.monotonic() < deadline, "run did not reach a terminal state within 30 s of restart"
@@ -232,7 +244,7 @@ async def test_chat_worker_sigterm_before_first_delta_returns_pending_then_compl
             await asyncio.sleep(0.5)
         assert await status() == "pending"
     finally:
-        await asyncio.to_thread(_docker, "start", worker_container)
+        await asyncio.to_thread(_start_after_exit, worker_container)
     deadline = time.monotonic() + 60
     while await status() != "completed":
         assert time.monotonic() < deadline, "run did not complete after chat-worker restart"
