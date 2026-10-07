@@ -11,6 +11,7 @@ import { ApiError } from '@/core/api';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { getSource } from '@/modules/sources/api';
 import { deleteDocument, documentDeletionKeys, documentKeys, getCitationTarget, getDocument, getVersion, listVersions, updateContent, updateDocument } from './api';
+import { useTranslations } from 'next-intl';
 import { DocumentDeletionReceiptPanel } from './document-deletion-receipt';
 
 /**
@@ -19,6 +20,7 @@ import { DocumentDeletionReceiptPanel } from './document-deletion-receipt';
  */
 export function DocumentDetail({ id, citedVersion, citationVersionId, citationChunkId, deletionOperationId }: { id: string; citedVersion: number | null; citationVersionId?: string | null; citationChunkId?: string | null; deletionOperationId?: string | null }) {
   const { csrfToken } = useWorkspaceSession();
+  const t = useTranslations('shell');
   const queryClient = useQueryClient();
   const router = useRouter();
   const [acceptedOperation, setAcceptedOperation] = useState<{ documentId: string; operationId: string } | null>(null);
@@ -101,7 +103,7 @@ export function DocumentDetail({ id, citedVersion, citationVersionId, citationCh
   if (document.isPending) return <div className="content-panel skeleton" aria-label="Loading document" />;
   if (document.isError) return <section className="content-panel"><h1>Document unavailable</h1><p className="error" role="alert">{document.error instanceof ApiError ? document.error.message : 'Could not load document.'}</p><Button className="secondary" onClick={() => document.refetch()}>Retry</Button></section>;
 
-  return <section className="content-panel"><Link href="/knowledge/documents">← Documents</Link><div className="section-heading"><div><span className="brand">Knowledge</span><h1>{document.data.title}</h1><p className="muted">Source: {source.data?.name ?? document.data.source_id} · Version {document.data.current_version} · Updated {new Date(document.data.updated_at).toLocaleString()}</p>{document.data.raw_uri && <a href={`/api/v1/documents/${document.data.id}/raw`}>Inspect original file and provenance</a>}</div><Button className="secondary" disabled={remove.isPending} onClick={() => { if (window.confirm(`Permanently delete ${document.data.title} and its version history?`)) remove.mutate(id); }}>Delete document</Button></div>
+  return <section className="content-panel"><Link href="/knowledge/documents">← Documents</Link><div className="section-heading"><div><span className="brand">Knowledge</span><h1>{document.data.title}</h1><p className="muted">Source: {source.data?.name ?? document.data.source_id} · Version {document.data.current_version} · Updated {new Date(document.data.updated_at).toLocaleString()}</p>{Array.isArray(document.data.metadata.warnings) && document.data.metadata.warnings.includes('parsed_text_truncated') && <p className="error" role="status">{t('parsedTextTruncated')}</p>}{document.data.raw_uri && <a href={`/api/v1/documents/${document.data.id}/raw`}>Inspect original file and provenance</a>}</div><Button className="secondary" disabled={remove.isPending} onClick={() => { if (window.confirm(`Permanently delete ${document.data.title} and its version history?`)) remove.mutate(id); }}>Delete document</Button></div>
     {remove.error && <p className="error" role="alert">{remove.error instanceof ApiError ? remove.error.message : 'Could not delete document.'}</p>}
     {citationTarget.isError && <p className="error" role="alert">Cited evidence is no longer available under the current source access policy.</p>}
     {citationTarget.data && <section className="sub-panel" id="cited-chunk"><h2>Cited chunk · Version {citationTarget.data.version_number}</h2><pre>{citationTarget.data.excerpt}</pre></section>}

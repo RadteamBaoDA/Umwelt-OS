@@ -25,7 +25,7 @@ The web port binds to loopback by default. For remote access, terminate HTTPS at
 | redis | 384 MiB / 64 MiB | 128 | `maxmemory 256mb`, `noeviction` (never drop queued ARQ jobs; writes fail loudly instead) |
 | api | 1 GiB / 512 MiB | 1024 | `WEB_CONCURRENCY=2`, uvicorn `asyncio` + `httptools` via `apps.api.protocol:NoDelayHttpToolsProtocol` (sets TCP_NODELAY; pre-bound multi-worker sockets lack it) (no `--proxy-headers`: uvicorn never takes the client address from request headers), keep-alive 15 s, graceful shutdown 8 s, `--limit-concurrency 400`; `stop_grace_period` 15 s |
 | worker | 1 GiB / 256 MiB | 512 | `max_jobs=6`, DB pool 7 + 10 |
-| chat-worker | 768 MiB / 256 MiB | 512 | `max_jobs=10`, `job_timeout=600`, DB pool 10 + 10 |
+| chat-worker | 768 MiB / 256 MiB | 512 | `max_jobs=15`, `job_timeout=600`, DB pool 10 + 10 |
 | web | 768 MiB / 256 MiB | 512 | `NODE_OPTIONS=--max-old-space-size=512`, `experimental.proxyTimeout=120000` |
 | migrate | 512 MiB (one-shot, exits before the others start) | - | - |
 

@@ -27,4 +27,6 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """Restore the pre-dashboard event-type check."""
+    # Retained rows would violate the old check; clients resync through the replay_gap path.
+    op.execute("DELETE FROM realtime_replay_events WHERE event_type = 'dashboard.changed'")
     _recreate(_OLD)

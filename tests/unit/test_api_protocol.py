@@ -1,4 +1,5 @@
 import socket
+from pathlib import Path
 
 from apps.api.protocol import NoDelayHttpToolsProtocol
 
@@ -18,8 +19,13 @@ def test_protocol_sets_tcp_nodelay_on_accepted_socket() -> None:
     p = NoDelayHttpToolsProtocol.__new__(NoDelayHttpToolsProtocol)
     try:
         p.connection_made(T())  # type: ignore[arg-type]
-    except Exception:  # base class needs a real loop/config; only the option matters here
+    except AttributeError:  # base class needs a real loop/config; only the option matters here
         pass
     assert conn.getsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY) == 1
     for s in (srv, cli, conn):
         s.close()
+
+
+def test_api_dockerfile_uses_nodelay_protocol() -> None:
+    cmd = (Path(__file__).resolve().parents[2] / "infrastructure/docker/api.Dockerfile").read_text()
+    assert '"--http", "apps.api.protocol:NoDelayHttpToolsProtocol"' in cmd

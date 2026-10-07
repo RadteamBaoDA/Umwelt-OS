@@ -334,7 +334,7 @@ def test_chat_worker_settings_isolated_queue() -> None:
     from apps.worker.main import ChatWorkerSettings, WorkerSettings
 
     assert ChatWorkerSettings.queue_name == "arq:chat"
-    assert (ChatWorkerSettings.max_jobs, ChatWorkerSettings.job_timeout, ChatWorkerSettings.max_tries) == (20, 600, 1)
+    assert (ChatWorkerSettings.max_jobs, ChatWorkerSettings.job_timeout, ChatWorkerSettings.max_tries) == (15, 600, 1)
     assert [f.name for f in ChatWorkerSettings.functions] == ["process_chat_response"]
     assert ChatWorkerSettings.keep_result == 0
     main_names = [getattr(f, "name", getattr(f, "__name__", "")) for f in WorkerSettings.functions]

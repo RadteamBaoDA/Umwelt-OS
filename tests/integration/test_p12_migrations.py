@@ -20,12 +20,16 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _p12_revisions() -> tuple[str, list[str]]:
-    """Return (head, P12 revision ids) and the pre-P12 parent, derived from the migration scripts."""
+    """Return the pre-P12 parent and P12 revision ids (newest first), skipping any later revisions."""
     script = ScriptDirectory.from_config(Config(str(REPOSITORY_ROOT / "alembic.ini")))
     head = script.get_current_head()
     assert head is not None
     chain: list[str] = []
     revision = script.get_revision(head)
+    while revision is not None and not revision.revision.startswith("p12_"):
+        parent = revision.down_revision
+        assert isinstance(parent, str), "post-P12 revisions form a linear chain"
+        revision = script.get_revision(parent)
     while revision is not None and revision.revision.startswith("p12_"):
         chain.append(revision.revision)
         parent = revision.down_revision
@@ -36,7 +40,7 @@ def _p12_revisions() -> tuple[str, list[str]]:
 
 
 PRE_P12, P12_CHAIN = _p12_revisions()
-HEAD = P12_CHAIN[0]
+HEAD = ScriptDirectory.from_config(Config(str(REPOSITORY_ROOT / "alembic.ini"))).get_current_head()
 
 
 def _alembic(database_url: str, *arguments: str) -> str:

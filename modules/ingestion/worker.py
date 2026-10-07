@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import random
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from typing import Any, cast
@@ -43,7 +44,7 @@ from modules.ingestion.models import (
     SourceIngestionState,
     SourceObservation,
 )
-from modules.ingestion.parsers import parse_file_bounded
+from modules.ingestion.parsers import ParsedDocument, parse_file_bounded
 from modules.ingestion.schemas import IngestionRecord
 from modules.knowledge.documents import public as documents
 from modules.knowledge.documents.schemas import NormalizedDocumentInput
@@ -1198,7 +1199,8 @@ async def process_uploaded_file(ctx: dict[str, object], event_id: str) -> None:
             settings.docx_expanded_max_bytes,
             settings.pdf_page_max,
         )
-        parsed_text = _cap_parsed_text(parsed.text, settings.parsed_text_max_chars)
+        parsed = _cap_parsed_text(parsed, settings.parsed_text_max_chars)
+        parsed_text = parsed.text
         drafts = await to_thread_joined(chunk_text, parsed_text)
         extraction_status = "needs_ocr" if parsed.warnings and not parsed.text else "succeeded"
         async with factory() as session:
@@ -1303,12 +1305,18 @@ async def process_uploaded_file(ctx: dict[str, object], event_id: str) -> None:
                 await session.commit()
 
 
-def _cap_parsed_text(text: str, limit: int) -> str:
-    """Bound chunking input: keep the first `limit` chars and log the truncation instead of failing the upload."""
+def _cap_parsed_text(parsed: ParsedDocument, limit: int) -> ParsedDocument:
+    """Bound chunking input: keep the first `limit` chars and record the truncation as a document warning."""
+    text = parsed.text
     if len(text) <= limit:
-        return text
+        return parsed
     logger.warning("Parsed text truncated to %s of %s chars", limit, len(text))
-    return text[:limit]
+    return replace(
+        parsed,
+        text=text[:limit],
+        warnings=[*parsed.warnings, "parsed_text_truncated"],
+        metadata={**parsed.metadata, "truncated_from_chars": len(text), "kept_chars": limit},
+    )
 
 
 def _failure_code(exc: Exception) -> str:
