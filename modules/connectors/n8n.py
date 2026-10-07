@@ -48,7 +48,6 @@ def build_workflow(
     collector_credential_id: str,
     manual_credential_id: str,
     provider_credential_id: str | None,
-    backend_revision: int = 1,
 ) -> dict[str, Any]:
     """Bind source-fenced credentials and select a workflow by trusted stored provider.
 
@@ -71,7 +70,6 @@ def build_workflow(
     workflow = deepcopy(json.loads(path.read_text(encoding="utf-8")))
     source_id = str(source.id)
     collector_names = {
-        "Request collection admission",
         "Read bounded RSS / Atom pages",
         "Validate source",
         "Validate source and load cursor",
@@ -142,7 +140,6 @@ def build_workflow(
                 .replace("__BBD_SOURCE_ID__", source_id)
                 .replace("__BBD_SOURCE_GENERATION__", str(source.generation))
                 .replace("__BBD_CONNECTOR_REVISION__", str(desired_revision))
-                .replace("__BBD_BACKEND_REVISION__", str(backend_revision))
                 .replace("__BBD_MCP_CONNECTION_ID__", str(source.configuration.get("connection_id", "")))
             )
         if isinstance(value, list):

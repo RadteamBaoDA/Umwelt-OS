@@ -45,7 +45,12 @@ ENQUEUE_CLAIM = timedelta(seconds=60)
 REENQUEUE_AFTER = timedelta(minutes=5)  # lost Redis job: the durable row is enqueued again
 TICK_WORKSPACES = 50
 # Failures that need owner action: never auto-retried, they gate the source's schedule.
-ACTION_REQUIRED = frozenset({"invalid_credential", "schema_changed", "terms_not_accepted"})
+# The value is the blocked dimension; clear_collection_block re-opens it once that dimension moves.
+ACTION_REQUIRED = {"invalid_credential": "credential", "schema_changed": "config", "terms_not_accepted": "terms"}
+_FREE_SLOT = {
+    "occupied_request_id": None, "workspace_id": None, "admission_token": None,
+    "lease_kind": None, "source_owner_id": None, "expires_at": None,
+}
 Outcome = Literal["succeeded", "no_changes", "failed", "cancelled", "deferred"]
 
 
@@ -101,12 +106,15 @@ async def upsert_schedule(
 
 async def _open_request(
     session: AsyncSession, scope: Scope, source_id: UUID, trigger: CollectionTrigger,
-    expected_revision: int | None, *, multi_workspace_enabled: bool,
+    expected_revision: int | None, *, multi_workspace_enabled: bool, existing_first: bool = False,
 ) -> ConnectorCollectionRequest:
     """Validate fences under Source/provisioning locks and return the coalesced active request.
 
-    A scheduled trigger also requires the schedule to be due and advances it exactly once.
-    The caller commits; HTTPException reports missing/stale/blocked state.
+    A queued request whose captured fences are stale is cancelled and replaced, so a click after
+    a reconfigure is never absorbed. A scheduled trigger also requires the schedule to be due and
+    advances it exactly once; with existing_first (managed n8n admission) a current active
+    request is returned before the due/enabled checks. The caller commits; HTTPException reports
+    missing/stale/blocked state.
     """
     from modules.sources import public as sources
 
@@ -142,6 +150,15 @@ async def _open_request(
         .with_for_update().execution_options(populate_existing=True))
     if schedule is not None and schedule.blocked_error_code is not None:
         raise HTTPException(status_code=409, detail=f"Action required: {schedule.blocked_error_code}")
+    if active is not None and active.status == "queued" and (
+        active.source_generation != source.generation or active.connector_revision != row.desired_revision
+        or active.backend_revision != row.backend_revision or active.captured_backend != row.execution_backend
+    ):
+        active.status, active.error_code = "cancelled", "revision_changed"
+        await session.flush()  # free the partial-unique slot before the replacement insert
+        active = None
+    if active is not None and existing_first:
+        return active
     if trigger == "scheduled":
         if schedule is None or not schedule.enabled or schedule.next_due_at > now or (
             schedule.next_eligible_at is not None and schedule.next_eligible_at > now
@@ -217,6 +234,31 @@ def _penalize(schedule: ConnectorSchedule | None, until: datetime | None) -> Non
         schedule.next_eligible_at = until
 
 
+async def _stale_reason(
+    session: AsyncSession, request: ConnectorCollectionRequest, scope: InternalJobScope,
+    source_fence: object, source: object, row: ConnectorProvisioning | None, *, multi_workspace_enabled: bool,
+) -> str | None:
+    """Return why a request may no longer send (source_inactive/revision_changed), or None if current."""
+    if (
+        source_fence is None or source is None or getattr(source, "status", None) != "active"
+        or row is None or row.state != "active"
+    ):
+        return "source_inactive"
+    if not (
+        getattr(source, "generation") == request.source_generation
+        and row.source_generation == request.source_generation
+        and row.applied_revision == row.desired_revision == request.connector_revision
+        and row.execution_backend == request.captured_backend
+        and row.backend_revision == request.backend_revision
+        and await connectors.require_collection_fence(
+            session, source, connectors.CollectionFence(  # type: ignore[arg-type]
+                source_generation=request.source_generation, connector_revision=request.connector_revision),
+            lock=True, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    ):
+        return "revision_changed"
+    return None
+
+
 async def admit_collection_request(
     session: AsyncSession, request_id: UUID, *, multi_workspace_enabled: bool,
 ) -> CollectionAdmissionRead | None:
@@ -257,22 +299,12 @@ async def admit_collection_request(
     if request is None or request.status != "queued" or request.available_at > now:
         await session.rollback()
         return None
-    current = (
-        source_fence is not None and source is not None and source.status == "active"
-        and source.generation == request.source_generation and row is not None and row.state == "active"
-        and row.source_generation == request.source_generation
-        and row.applied_revision == row.desired_revision == request.connector_revision
-        and row.execution_backend == request.captured_backend
-        and row.backend_revision == request.backend_revision
-        and await connectors.require_collection_fence(
-            session, source, connectors.CollectionFence(
-                source_generation=request.source_generation, connector_revision=request.connector_revision),
-            lock=True, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    )
-    if not current or request.attempt >= MAX_ATTEMPTS:
-        request.status = "cancelled" if not current else "failed"
-        request.error_code = "revision_changed" if not current else "attempts_exhausted"
-        if current:
+    stale = await _stale_reason(
+        session, request, scope, source_fence, source, row, multi_workspace_enabled=multi_workspace_enabled)
+    if stale is not None or request.attempt >= MAX_ATTEMPTS:
+        request.status = "cancelled" if stale else "failed"
+        request.error_code = stale or "attempts_exhausted"
+        if stale is None:
             _penalize(await session.get(ConnectorSchedule, source_id, with_for_update=True), request.provider_deadline)
         await session.commit()
         return None
@@ -295,6 +327,7 @@ async def admit_collection_request(
     slot.occupied_request_id = request.id
     slot.workspace_id = request.workspace_id
     slot.admission_token = token
+    slot.lease_kind = "collection"
     slot.expires_at = now + SLOT_TTL
     request.status = "running"
     request.attempt += 1
@@ -313,8 +346,46 @@ async def admit_collection_request(
     return result
 
 
-async def renew_admission(session: AsyncSession, request_id: UUID, admission_token: UUID) -> bool:
-    """Extend a still-valid slot to now+120 s; an expired or replaced slot is never resurrected."""
+async def renew_admission(
+    session: AsyncSession, request_id: UUID, admission_token: UUID, *, multi_workspace_enabled: bool,
+) -> bool:
+    """Extend a still-valid, still-current slot to now+120 s; never resurrect expired occupancy.
+
+    Revalidates Source status and generation/connector/backend revisions under the Source ->
+    provisioning lock. A paused, disabled, deleted or reconfigured source cancels the request and
+    frees the slot, so the executor sees False and sends nothing more. (Extending the ingestion
+    source lease belongs to the C3 owner API.)
+    """
+    from modules.sources import public as sources
+
+    peek = await session.get(ConnectorCollectionRequest, request_id)
+    if peek is None or peek.status != "running" or peek.active_admission_token != admission_token:
+        await session.rollback()
+        return False
+    scope = _request_scope(peek)
+    source_id = peek.source_id
+    await session.rollback()
+    reason: str | None = None
+    try:
+        await connectors._connector_access(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        source_fence, row, _ = await provisioning.lock_connector(
+            session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        source = await sources.get_connector_source(
+            session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        request = await session.scalar(
+            select(ConnectorCollectionRequest).where(ConnectorCollectionRequest.id == request_id)
+            .with_for_update().execution_options(populate_existing=True))
+        if request is None or request.status != "running" or request.active_admission_token != admission_token:
+            await session.rollback()
+            return False
+        reason = await _stale_reason(
+            session, request, scope, source_fence, source, row, multi_workspace_enabled=multi_workspace_enabled)
+    except HTTPException:
+        reason = "access_lost"
+    if reason is not None:
+        await session.rollback()
+        await settle_admission(session, request_id, admission_token, outcome="cancelled", error_code=reason)
+        return False
     now = datetime.now(UTC)
     result = await session.execute(
         update(ConnectorAdmissionSlot)
@@ -347,7 +418,7 @@ async def settle_admission_in_uow(
         update(ConnectorAdmissionSlot)
         .where(ConnectorAdmissionSlot.occupied_request_id == request_id,
                ConnectorAdmissionSlot.admission_token == admission_token)
-        .values(occupied_request_id=None, workspace_id=None, admission_token=None, expires_at=None))
+        .values(**_FREE_SLOT))
     schedule = await session.scalar(
         select(ConnectorSchedule).where(ConnectorSchedule.source_id == request.source_id)
         .with_for_update().execution_options(populate_existing=True))
@@ -368,6 +439,10 @@ async def settle_admission_in_uow(
         request.status, request.error_code = "failed", error_code
         if schedule is not None:
             schedule.blocked_error_code = error_code
+            schedule.blocked_dimensions = [ACTION_REQUIRED[error_code]]
+            schedule.blocked_connector_revision = request.connector_revision
+            schedule.blocked_credential_revision = request.credential_revision
+            schedule.blocked_terms_revision = request.terms_revision
     elif retryable and request.attempt < MAX_ATTEMPTS:
         request.status, request.error_code = "queued", error_code
         request.available_at = request.enqueue_next_at = retry_at(now, request.attempt, request.provider_deadline)
@@ -389,18 +464,51 @@ async def settle_admission(session: AsyncSession, request_id: UUID, admission_to
     return settled
 
 
+async def clear_collection_block(
+    session: AsyncSession, source_id: UUID, *, connector_revision: int | None = None,
+    credential_revision: int | None = None, terms_revision: int | None = None,
+) -> bool:
+    """Lift an action-required gate; flush only, the caller commits (C4/P1 call this).
+
+    Rule: every blocked dimension (config, credential, terms) must now be at a revision strictly
+    newer than the one it failed at, and the caller must have just passed fresh validation or
+    eligibility. An unrelated revision bump or a replayed old operation leaves the gate in place.
+    The failed request stays failed; corrected work creates a new request.
+    """
+    schedule = await session.get(ConnectorSchedule, source_id, with_for_update=True)
+    if schedule is None or schedule.blocked_error_code is None:
+        return False
+    now_revision = {"config": connector_revision, "credential": credential_revision, "terms": terms_revision}
+    failed_at = {
+        "config": schedule.blocked_connector_revision, "credential": schedule.blocked_credential_revision,
+        "terms": schedule.blocked_terms_revision,
+    }
+    for dimension in schedule.blocked_dimensions or ():
+        current = now_revision[dimension]
+        if current is None or (failed_at[dimension] is not None and current <= failed_at[dimension]):
+            return False
+    schedule.blocked_error_code = None
+    schedule.blocked_dimensions = None
+    schedule.blocked_connector_revision = schedule.blocked_credential_revision = schedule.blocked_terms_revision = None
+    await session.flush()
+    return True
+
+
 async def admit_managed_collection(
     session: AsyncSession, scope: Scope, source_id: UUID, fence: CollectionAdmissionRequest,
-    *, multi_workspace_enabled: bool,
+    *, trigger: Literal["manual", "scheduled"] = "scheduled", multi_workspace_enabled: bool,
 ) -> CollectionAdmissionRead:
-    """Admit a managed n8n Schedule/Manual run: queued request or due schedule, else 409.
+    """Admit a managed n8n run: an existing current request first, else a new one, else 409.
 
-    The caller (service-token route) supplies the original scope. A busy source/workspace/slot
-    or an already running request raises 409 so n8n skips provider I/O.
+    A queued request (manual, busy-deferred or retry) is admissible without waiting for a tick.
+    Only a brand-new "scheduled" request needs the schedule enabled and due; "manual" does not.
+    The caller (service-token route) supplies the original scope and trigger. A busy
+    source/workspace/slot or an already running request raises 409 so n8n skips provider I/O.
     """
     try:
         request = await _open_request(
-            session, scope, source_id, "scheduled", None, multi_workspace_enabled=multi_workspace_enabled)
+            session, scope, source_id, trigger, None, multi_workspace_enabled=multi_workspace_enabled,
+            existing_first=True)
         if (
             request.captured_backend != "n8n" or request.source_generation != fence.source_generation
             or request.connector_revision != fence.connector_revision
@@ -438,7 +546,7 @@ async def _recover_expired_slots(factory: async_sessionmaker[AsyncSession], now:
                 await session.execute(
                     update(ConnectorAdmissionSlot)
                     .where(ConnectorAdmissionSlot.slot_id == slot_id, ConnectorAdmissionSlot.admission_token == token)
-                    .values(occupied_request_id=None, workspace_id=None, admission_token=None, expires_at=None))
+                    .values(**_FREE_SLOT))
             await session.commit()
     return len(expired)
 

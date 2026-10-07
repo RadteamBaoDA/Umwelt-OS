@@ -16,7 +16,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
@@ -445,6 +445,7 @@ class ConnectorSchedule(Base):
         CheckConstraint("failure_count >= 0", name="ck_connector_schedules_failures"),
         Index("ix_connector_schedules_due", "enabled", "next_due_at"),
         Index("ix_connector_schedules_workspace", "workspace_id", "last_considered_at"),
+        Index("ix_connector_schedules_eligible", "enabled", "next_eligible_at", "next_due_at"),
     )
 
     source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
@@ -458,6 +459,11 @@ class ConnectorSchedule(Base):
     next_eligible_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Set when credential/schema/terms failures need owner action; gates manual and scheduled calls.
     blocked_error_code: Mapped[str | None] = mapped_column(String(64))
+    # Failed dimensions (config/credential/terms) and the revision each failed at; see clear_collection_block.
+    blocked_dimensions: Mapped[list[str] | None] = mapped_column(ARRAY(String(16)))
+    blocked_connector_revision: Mapped[int | None] = mapped_column(Integer)
+    blocked_credential_revision: Mapped[int | None] = mapped_column(Integer)
+    blocked_terms_revision: Mapped[int | None] = mapped_column(Integer)
 
 
 class ConnectorCollectionRequest(Base):
@@ -489,6 +495,10 @@ class ConnectorCollectionRequest(Base):
             postgresql_where=text("status = 'queued'"),
         ),
         Index("ix_connector_collection_requests_workspace", "workspace_id", "source_id", "created_at"),
+        Index(
+            "uq_connector_collection_requests_receipt", "accepted_receipt_id", unique=True,
+            postgresql_where=text("accepted_receipt_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -505,6 +515,19 @@ class ConnectorCollectionRequest(Base):
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     attempt: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     active_admission_token: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    # Reserved by collection-protocol for C3/C4/P1; C2 only stores them.
+    access_configuration_revision: Mapped[int | None] = mapped_column(Integer)
+    template_revision: Mapped[int | None] = mapped_column(Integer)
+    credential_revision: Mapped[int | None] = mapped_column(Integer)
+    terms_revision: Mapped[int | None] = mapped_column(Integer)
+    source_lease_token: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    attempt_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    attempt_deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    accepted_receipt_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    wake_next_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    wake_claim_token: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    wake_claim_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    wake_attempt: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     ingestion_run_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     error_code: Mapped[str | None] = mapped_column(String(64))
     provider_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -527,8 +550,10 @@ class ConnectorAdmissionSlot(Base):
     __table_args__ = (
         ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_connector_admission_slots_workspace", ondelete="RESTRICT"),
         CheckConstraint("slot_id IN (1, 2)", name="ck_connector_admission_slots_id"),
+        CheckConstraint("lease_kind IN ('collection', 'run')", name="ck_connector_admission_slots_lease_kind"),
         CheckConstraint(
-            "(occupied_request_id IS NULL) = (workspace_id IS NULL) "
+            "(occupied_request_id IS NULL) = (lease_kind IS NULL) "
+            "AND (occupied_request_id IS NULL) = (workspace_id IS NULL) "
             "AND (occupied_request_id IS NULL) = (admission_token IS NULL) "
             "AND (occupied_request_id IS NULL) = (expires_at IS NULL)",
             name="ck_connector_admission_slots_occupancy",
@@ -547,6 +572,9 @@ class ConnectorAdmissionSlot(Base):
     occupied_request_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     workspace_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     admission_token: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    lease_kind: Mapped[str | None] = mapped_column(String(16))
+    # Collection lease token or crawl run id per lease_kind; C3 fills it, it never grants ownership.
+    source_owner_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 

@@ -2847,10 +2847,10 @@ async def get_collection_request(
 
 async def admit_managed_collection(
     session: AsyncSession, scope: Scope, source_id: UUID, fence: "CollectionAdmissionRequest",
-    *, multi_workspace_enabled: bool,
+    *, trigger: Literal["manual", "scheduled"] = "scheduled", multi_workspace_enabled: bool,
 ) -> "CollectionAdmissionRead":
     """Admit a managed n8n run and return its fenced token, or raise 409 when busy."""
     from modules.connectors import scheduler
 
     return await scheduler.admit_managed_collection(
-        session, scope, source_id, fence, multi_workspace_enabled=multi_workspace_enabled)
+        session, scope, source_id, fence, trigger=trigger, multi_workspace_enabled=multi_workspace_enabled)

@@ -1,7 +1,9 @@
 """Add durable collection schedules, requests and global admission slots.
 
-Backfills one disabled schedule per existing provisioned source; nothing is activated.
-Existing provisioning rows keep the n8n backend at backend_revision 1.
+Backfills one schedule per existing provisioned source. Native dispatch never sees n8n rows, so
+an n8n schedule is enabled only when its source is already active, desired-enabled and has a
+workflow (n8n already owns that trigger): nothing new is activated and managed admission is not
+locked out. Existing provisioning rows keep the n8n backend at backend_revision 1.
 """
 
 from collections.abc import Sequence
@@ -39,6 +41,10 @@ def upgrade() -> None:
         sa.Column("failure_count", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("next_eligible_at", sa.DateTime(timezone=True)),
         sa.Column("blocked_error_code", sa.String(64)),
+        sa.Column("blocked_dimensions", postgresql.ARRAY(sa.String(16))),
+        sa.Column("blocked_connector_revision", sa.Integer()),
+        sa.Column("blocked_credential_revision", sa.Integer()),
+        sa.Column("blocked_terms_revision", sa.Integer()),
         sa.ForeignKeyConstraint(["workspace_id"], ["workspaces.id"],
                                 name="fk_connector_schedules_workspace", ondelete="RESTRICT"),
         sa.ForeignKeyConstraint(["workspace_id", "source_id"], ["sources.workspace_id", "sources.id"],
@@ -48,6 +54,8 @@ def upgrade() -> None:
     )
     op.create_index("ix_connector_schedules_due", "connector_schedules", ["enabled", "next_due_at"])
     op.create_index("ix_connector_schedules_workspace", "connector_schedules", ["workspace_id", "last_considered_at"])
+    op.create_index(
+        "ix_connector_schedules_eligible", "connector_schedules", ["enabled", "next_eligible_at", "next_due_at"])
 
     op.create_table(
         "connector_collection_requests",
@@ -65,6 +73,18 @@ def upgrade() -> None:
         sa.Column("available_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.Column("attempt", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("active_admission_token", postgresql.UUID(as_uuid=True)),
+        sa.Column("access_configuration_revision", sa.Integer()),
+        sa.Column("template_revision", sa.Integer()),
+        sa.Column("credential_revision", sa.Integer()),
+        sa.Column("terms_revision", sa.Integer()),
+        sa.Column("source_lease_token", postgresql.UUID(as_uuid=True)),
+        sa.Column("attempt_started_at", sa.DateTime(timezone=True)),
+        sa.Column("attempt_deadline_at", sa.DateTime(timezone=True)),
+        sa.Column("accepted_receipt_id", postgresql.UUID(as_uuid=True)),
+        sa.Column("wake_next_at", sa.DateTime(timezone=True)),
+        sa.Column("wake_claim_token", postgresql.UUID(as_uuid=True)),
+        sa.Column("wake_claim_expires_at", sa.DateTime(timezone=True)),
+        sa.Column("wake_attempt", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("ingestion_run_id", postgresql.UUID(as_uuid=True)),
         sa.Column("error_code", sa.String(64)),
         sa.Column("provider_deadline", sa.DateTime(timezone=True)),
@@ -96,6 +116,9 @@ def upgrade() -> None:
     op.create_index(
         "ix_connector_collection_requests_workspace", "connector_collection_requests",
         ["workspace_id", "source_id", "created_at"])
+    op.create_index(
+        "uq_connector_collection_requests_receipt", "connector_collection_requests", ["accepted_receipt_id"],
+        unique=True, postgresql_where=sa.text("accepted_receipt_id IS NOT NULL"))
 
     op.create_table(
         "connector_admission_slots",
@@ -103,12 +126,16 @@ def upgrade() -> None:
         sa.Column("occupied_request_id", postgresql.UUID(as_uuid=True)),
         sa.Column("workspace_id", postgresql.UUID(as_uuid=True)),
         sa.Column("admission_token", postgresql.UUID(as_uuid=True)),
+        sa.Column("lease_kind", sa.String(16)),
+        sa.Column("source_owner_id", postgresql.UUID(as_uuid=True)),
         sa.Column("expires_at", sa.DateTime(timezone=True)),
         sa.ForeignKeyConstraint(["workspace_id"], ["workspaces.id"],
                                 name="fk_connector_admission_slots_workspace", ondelete="RESTRICT"),
         sa.CheckConstraint("slot_id IN (1, 2)", name="ck_connector_admission_slots_id"),
+        sa.CheckConstraint("lease_kind IN ('collection', 'run')", name="ck_connector_admission_slots_lease_kind"),
         sa.CheckConstraint(
-            "(occupied_request_id IS NULL) = (workspace_id IS NULL) "
+            "(occupied_request_id IS NULL) = (lease_kind IS NULL) "
+            "AND (occupied_request_id IS NULL) = (workspace_id IS NULL) "
             "AND (occupied_request_id IS NULL) = (admission_token IS NULL) "
             "AND (occupied_request_id IS NULL) = (expires_at IS NULL)",
             name="ck_connector_admission_slots_occupancy"),
@@ -130,10 +157,11 @@ def upgrade() -> None:
                                 name="connector_workspace_dispatch_workspace_id_fkey", ondelete="CASCADE"),
     )
 
-    # Disabled schedules only; activation (C4) enables them. Cadence comes from stored configuration.
+    # Cadence comes from stored configuration. Only already-running n8n triggers stay enabled.
     op.execute("""
         INSERT INTO connector_schedules (source_id, workspace_id, enabled, interval_minutes, next_due_at)
-        SELECT s.id, s.workspace_id, false,
+        SELECT s.id, s.workspace_id,
+               (p.state = 'active' AND p.desired_enabled AND p.workflow_id IS NOT NULL),
                CASE WHEN s.configuration ->> 'schedule_interval_minutes' IN ('15', '30', '60', '360', '1440')
                     THEN (s.configuration ->> 'schedule_interval_minutes')::int
                     WHEN s.type = 'rss' THEN 15 ELSE 30 END,
