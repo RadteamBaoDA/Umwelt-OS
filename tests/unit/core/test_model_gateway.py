@@ -7,12 +7,14 @@ and error mapping.
 
 from __future__ import annotations
 
+import asyncio
 import json
-from contextlib import asynccontextmanager
+from contextlib import aclosing, asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from openai import APIStatusError, APITimeoutError
+from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import RedisError
 
 from core.model_gateway.cache import (
@@ -140,8 +142,7 @@ class TestModelGatewaySlotLeasing:
     async def test_slot_acquisition_success_and_release(self) -> None:
         """Verify _slot acquires candidate key and releases it on exit."""
         redis = AsyncMock()
-        redis.set.return_value = True
-        redis.eval = AsyncMock()
+        redis.eval = AsyncMock(return_value=0)
 
         gateway = ModelGateway(
             redis=redis,
@@ -153,14 +154,13 @@ class TestModelGatewaySlotLeasing:
         async with gateway._slot():
             pass
 
-        redis.set.assert_awaited()
-        redis.eval.assert_awaited_once()
+        assert redis.eval.await_count == 2  # acquire + release
 
     @pytest.mark.asyncio
     async def test_slot_acquisition_failure_raises_model_gateway_error(self) -> None:
         """Verify _slot raises ModelGatewayError when Redis fails."""
         redis = AsyncMock()
-        redis.set.side_effect = RedisError("Redis unavailable")
+        redis.eval.side_effect = RedisError("Redis unavailable")
 
         gateway = ModelGateway(
             redis=redis,
@@ -182,8 +182,7 @@ class TestModelGatewayRequestExecution:
     def mock_gateway(self) -> ModelGateway:
         """Return ModelGateway configured with mock redis."""
         redis = AsyncMock()
-        redis.set.return_value = True
-        redis.eval = AsyncMock()
+        redis.eval = AsyncMock(return_value=0)
         redis.get = AsyncMock(return_value=json.dumps({
             "result": "supported",
             "gateway_identity": "test-gw",
@@ -278,26 +277,35 @@ class TestModelGatewayRequestExecution:
 
 class _LeaseRedis:
     """In-memory stand-in for the lease subset of Redis (set NX, token-matched release/refresh)."""
-
     def __init__(self) -> None:
         self.keys: dict[str, str] = {}
         self.refreshes = 0
+        self.acquires = 0
+        self.eval_errors: list[Exception] = []
 
-    async def set(self, key: str, token: str, nx: bool = False, ex: int | None = None) -> bool:
-        if nx and key in self.keys:
-            return False
-        self.keys[key] = token
-        return True
-
-    async def eval(self, script: str, _n: int, key: str, token: str, *args: object) -> int:
-        if self.keys.get(key) != token:
-            return 0
+    async def eval(self, script: str, n: int, *args: object) -> int:
+        await asyncio.sleep(0)  # real interleaving between callers
+        if self.eval_errors:
+            raise self.eval_errors.pop(0)
+        keys, token = [str(k) for k in args[:n]], str(args[n])
+        if "'NX'" in script:
+            self.acquires += 1
+            for i, k in enumerate(keys):
+                if k not in self.keys:
+                    self.keys[k] = token
+                    return i
+            return -1
         if "pexpire" in script:
+            if self.keys.get(keys[0]) != token:
+                return 0
             self.refreshes += 1
-        else:
-            del self.keys[key]
-        return 1
-
+            return 1
+        removed = 0
+        for k in keys:
+            if self.keys.get(k) == token:
+                del self.keys[k]
+                removed += 1
+        return removed
 
 def _lease_gateway(redis: _LeaseRedis, timeout: float = 5.0) -> ModelGateway:
     return ModelGateway(redis=redis, base_url="https://x/v1", api_key="k",  # type: ignore[arg-type]
@@ -324,8 +332,6 @@ class TestModelGatewayCapacityAndTimeouts:
 
     @pytest.mark.asyncio
     async def test_waiter_proceeds_when_slot_frees(self) -> None:
-        import asyncio
-
         redis = _LeaseRedis()
         gw = _lease_gateway(redis)
         with patch("core.model_gateway.client._SLOTS", 1),              patch("core.model_gateway.client._LEASE_WAIT_SECONDS", 2.0):
@@ -337,8 +343,6 @@ class TestModelGatewayCapacityAndTimeouts:
 
     @pytest.mark.asyncio
     async def test_slot_body_not_bounded_by_lease_wait(self) -> None:
-        import asyncio
-
         redis = _LeaseRedis()
         gw = _lease_gateway(redis)
         with patch("core.model_gateway.client._LEASE_WAIT_SECONDS", 0.1):
@@ -348,8 +352,6 @@ class TestModelGatewayCapacityAndTimeouts:
 
     @pytest.mark.asyncio
     async def test_non_stream_total_deadline_enforced_and_lease_released(self) -> None:
-        import asyncio
-
         redis = _LeaseRedis()
         gw = _lease_gateway(redis, timeout=0.1)
         with pytest.raises(ModelGatewayError, match="timed out"):
@@ -358,8 +360,6 @@ class TestModelGatewayCapacityAndTimeouts:
 
     @pytest.mark.asyncio
     async def test_lease_released_on_error_and_cancellation(self) -> None:
-        import asyncio
-
         redis = _LeaseRedis()
         gw = _lease_gateway(redis)
         with pytest.raises(RuntimeError):
@@ -383,8 +383,6 @@ class TestModelGatewayCapacityAndTimeouts:
 
     @pytest.mark.asyncio
     async def test_lease_ttl_refreshed_and_release_only_own_token(self) -> None:
-        import asyncio
-
         redis = _LeaseRedis()
         gw = _lease_gateway(redis)
         with patch("core.model_gateway.client._LEASE_REFRESH_SECONDS", 0.05):
@@ -397,8 +395,6 @@ class TestModelGatewayCapacityAndTimeouts:
 
     @pytest.mark.asyncio
     async def test_long_stream_not_cut_off_and_fences_run_per_attempt(self) -> None:
-        import asyncio
-
         redis = _LeaseRedis()
         redis.get = AsyncMock(return_value=json.dumps({  # type: ignore[attr-defined]
             "result": "supported", "gateway_identity": "legacy", "model": "m", "version": "1"}))
@@ -439,4 +435,127 @@ class TestModelGatewayCapacityAndTimeouts:
             lines = [x async for x in gw.stream("fast", mapping, policy, [], after_send=after)]
         assert len(lines) == 6 and lines[-1] == "data: [DONE]"
         assert before.await_count == 2 and after.await_count == 2  # per attempt
+        assert redis.keys == {}
+
+    @pytest.mark.asyncio
+    async def test_nine_concurrent_callers_peak_eight_one_unavailable(self) -> None:
+        redis = _LeaseRedis()
+        gw = _lease_gateway(redis)
+        live = peak = 0
+
+        async def work() -> str:
+            nonlocal live, peak
+            live += 1
+            peak = max(peak, live)
+            await asyncio.sleep(0.3)
+            live -= 1
+            return "ok"
+
+        with patch("core.model_gateway.client._LEASE_WAIT_SECONDS", 0.2):
+            results = await asyncio.gather(*(gw._with_slot(work) for _ in range(9)), return_exceptions=True)
+        errors = [r for r in results if isinstance(r, ModelGatewayError)]
+        assert peak == 8 and results.count("ok") == 8
+        assert len(errors) == 1 and "Model capacity is unavailable" in str(errors[0])
+        assert redis.keys == {}
+
+    @pytest.mark.asyncio
+    async def test_acquire_is_one_round_trip_per_poll(self) -> None:
+        redis = _LeaseRedis()
+        async with _lease_gateway(redis)._slot():
+            assert redis.acquires == 1
+
+    @pytest.mark.asyncio
+    async def test_transient_redis_connection_error_retried_until_deadline(self) -> None:
+        redis = _LeaseRedis()
+        redis.eval_errors = [RedisConnectionError("Too many connections")] * 2
+        gw = _lease_gateway(redis)
+        async with gw._slot():
+            assert len(redis.keys) == 1
+        assert redis.keys == {}
+        redis.eval_errors = [RedisConnectionError("down")] * 1000
+        with patch("core.model_gateway.client._LEASE_WAIT_SECONDS", 0.3), \
+             pytest.raises(ModelGatewayError, match="Model capacity is unavailable"):
+            async with gw._slot():
+                raise AssertionError("must not acquire")
+
+    @pytest.mark.asyncio
+    async def test_cancel_during_acquire_sweeps_possibly_applied_lease(self) -> None:
+        redis = _LeaseRedis()
+        gw = _lease_gateway(redis)
+        real = redis.eval
+
+        async def applied_then_hang(script: str, n: int, *args: object) -> int:
+            if "'NX'" in script:
+                await real(script, n, *args)  # server applied it; the reply never arrives
+                await asyncio.sleep(10)
+            return await real(script, n, *args)
+
+        redis.eval = applied_then_hang  # type: ignore[method-assign]
+        with patch("core.model_gateway.client._LEASE_WAIT_SECONDS", 0.1), \
+             pytest.raises(ModelGatewayError, match="Model capacity is unavailable"):
+            async with gw._slot():
+                raise AssertionError("must not acquire")
+        assert redis.keys == {}
+
+    @pytest.mark.asyncio
+    async def test_redis_error_during_call_maps_to_gateway_error(self) -> None:
+        gw = _lease_gateway(_LeaseRedis())
+
+        async def boom() -> None:
+            raise RedisError("x")
+
+        with pytest.raises(ModelGatewayError, match="request failed"):
+            await gw._with_slot(boom)
+
+    @staticmethod
+    def _stream_fixture(create):  # type: ignore[no-untyped-def]
+        redis = _LeaseRedis()
+        redis.get = AsyncMock(return_value=json.dumps({  # type: ignore[attr-defined]
+            "result": "supported", "gateway_identity": "legacy", "model": "m", "version": "1"}))
+        gw = _lease_gateway(redis, timeout=0.1)
+        policy = RequestPolicy(reasoning_allowed=True, permitted_destinations=frozenset({"d"}))
+        mapping = ModelMapping(model="m", version="1", destination="remote")
+        client = MagicMock()
+        client.chat.completions.create = create
+
+        @asynccontextmanager
+        async def fake_openai(*_a: object, **_k: object):  # type: ignore[no-untyped-def]
+            yield client
+
+        return redis, gw, policy, mapping, fake_openai
+
+    @pytest.mark.asyncio
+    async def test_slow_stream_open_times_out_and_after_send_runs(self) -> None:
+        async def create(**_: object):  # type: ignore[no-untyped-def]
+            await asyncio.sleep(5)
+
+        redis, gw, policy, mapping, fake_openai = self._stream_fixture(create)
+        after = AsyncMock()
+        with patch("core.model_gateway.client.AsyncOpenAI", side_effect=fake_openai), \
+             patch.object(gw, "_http_client", return_value=MagicMock()), \
+             pytest.raises(ModelGatewayError, match="stream failed"):
+            [x async for x in gw.stream("fast", mapping, policy, [], after_send=after)]
+        assert after.await_count == 2  # both attempts released the fence
+        assert redis.keys == {}
+
+    @pytest.mark.asyncio
+    async def test_consumer_stopping_stream_early_releases_slot(self) -> None:
+        class Chunk:
+            def model_dump(self, **_: object) -> dict[str, int]:
+                return {"n": 1}
+
+        async def chunks():  # type: ignore[no-untyped-def]
+            for _ in range(5):
+                yield Chunk()
+
+        async def create(**_: object):  # type: ignore[no-untyped-def]
+            return chunks()
+
+        redis, gw, policy, mapping, fake_openai = self._stream_fixture(create)
+        with patch("core.model_gateway.client.AsyncOpenAI", side_effect=fake_openai), \
+             patch.object(gw, "_http_client", return_value=MagicMock()):
+            async with aclosing(gw.stream("fast", mapping, policy, [])) as gen:
+                async for _line in gen:
+                    assert len(redis.keys) == 1
+                    break
         assert redis.keys == {}

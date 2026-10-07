@@ -11,7 +11,9 @@ from typing import Any, cast
 import httpx
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI
 from redis.asyncio import Redis
+from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import RedisError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from core.model_gateway.cache import capability_key
 from core.model_gateway.policy import may_send
@@ -25,7 +27,10 @@ _LEASE_WAIT_SECONDS = 10.0
 _LEASE_TTL_SECONDS = 60
 _LEASE_REFRESH_SECONDS = 20.0
 _REFRESH = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('pexpire', KEYS[1], ARGV[2]) else return 0 end"
-_RELEASE = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end"
+# One round trip per poll: take the first free slot (owner token, PX TTL) or return -1.
+_ACQUIRE = "for i, k in ipairs(KEYS) do if redis.call('set', k, ARGV[1], 'NX', 'PX', ARGV[2]) then return i - 1 end end return -1"
+# Token-checked; one key (normal release) or all slots (sweep after an acquire cut short mid-flight).
+_RELEASE = "local n = 0 for _, k in ipairs(KEYS) do if redis.call('get', k) == ARGV[1] then n = n + redis.call('del', k) end end return n"
 
 
 class ModelGatewayError(RuntimeError):
@@ -89,18 +94,23 @@ class ModelGateway:
         The timeout bounds lease acquisition only; the body runs outside it.
         """
         token = secrets.token_urlsafe(18)
+        keys = [f"{_LEASE_PREFIX}{slot}" for slot in range(_SLOTS)]
         key = None
+        attempted = False
         refresher: asyncio.Task[None] | None = None
         try:
             try:
                 async with asyncio.timeout(_LEASE_WAIT_SECONDS):
                     while key is None:
-                        for slot in range(_SLOTS):
-                            candidate = f"{_LEASE_PREFIX}{slot}"
-                            if await self.redis.set(candidate, token, nx=True, ex=_LEASE_TTL_SECONDS):
-                                key = candidate
-                                break
-                        if key is None:
+                        attempted = True
+                        try:
+                            slot = int(await cast("Awaitable[Any]", self.redis.eval(
+                                _ACQUIRE, len(keys), *keys, token, str(_LEASE_TTL_SECONDS * 1000))))
+                        except (RedisConnectionError, RedisTimeoutError):
+                            slot = -1  # transient (e.g. pool exhausted): retry until the lease deadline
+                        if slot >= 0:
+                            key = keys[slot]
+                        else:
                             await asyncio.sleep(0.1 + random.uniform(0, 0.05))
             except (RedisError, TimeoutError) as exc:
                 raise ModelGatewayError("Model capacity is unavailable") from exc
@@ -109,9 +119,11 @@ class ModelGateway:
         finally:
             if refresher is not None:
                 refresher.cancel()
-            if key is not None:
+            # An acquire cut short mid-flight may still have been applied server-side: sweep all slots by token.
+            held = [key] if key is not None else keys if attempted else []
+            if held:
                 try:
-                    await cast("Awaitable[Any]", self.redis.eval(_RELEASE, 1, key, token))
+                    await asyncio.shield(cast("Awaitable[Any]", self.redis.eval(_RELEASE, len(held), *held, token)))
                 except RedisError:
                     pass
 
@@ -123,6 +135,8 @@ class ModelGateway:
                     return await call()
             except TimeoutError as exc:
                 raise ModelGatewayError("Model gateway request timed out") from exc
+            except RedisError as exc:
+                raise ModelGatewayError("Model gateway request failed") from exc
 
     async def _request(
         self,
@@ -327,11 +341,13 @@ class ModelGateway:
                         if self.before_send is not None:
                             await self.before_send()
                         try:
-                            stream = await client.chat.completions.create(
-                                model=mapping.model,
-                                messages=cast("Any", messages),  # OpenAI param TypedDicts; built by prompt layer
-                                stream=True,
-                            )
+                            # Bound header/first-byte wait: the I6 send fence is held until create() returns.
+                            async with asyncio.timeout(self.timeout_seconds):
+                                stream = await client.chat.completions.create(
+                                    model=mapping.model,
+                                    messages=cast("Any", messages),  # OpenAI param TypedDicts; built by prompt layer
+                                    stream=True,
+                                )
                         finally:
                             if after_send is not None:
                                 await after_send()
@@ -340,9 +356,11 @@ class ModelGateway:
                             yield f"data: {json.dumps(chunk.model_dump(mode='json', exclude_none=True))}"
                         yield "data: [DONE]"
                         return
-                    except (APITimeoutError, APIConnectionError) as exc:
+                    except (APITimeoutError, APIConnectionError, TimeoutError) as exc:
                         if attempt == 1 or emitted:
                             raise ModelGatewayError("Model gateway stream failed") from exc
+                    except RedisError as exc:
+                        raise ModelGatewayError("Model gateway request failed") from exc
                     except APIStatusError as exc:
                         if exc.status_code in {408, 425, 429} or exc.status_code >= 500:  # noqa: SIM102  # style-only rewrite skipped to avoid touching control flow
                             if attempt == 0:
