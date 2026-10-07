@@ -1,6 +1,6 @@
 """Every arq job that can lose `heavy_job_slot` must outlast the longest slot hold in retries."""
 
-import re
+import ast
 from pathlib import Path
 
 from apps.worker.main import HEAVY_SLOT_JOBS, WorkerSettings
@@ -10,12 +10,23 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def _heavy_slot_users() -> set[str]:
+    """Async defs in modules that are wrapped by @bounded_heavy_work or call heavy_job_slot() themselves."""
     names: set[str] = set()
     for path in (ROOT / "modules").rglob("*.py"):
         text = path.read_text(encoding="utf-8")
-        names.update(re.findall(r"@bounded_heavy_work\s+(?:@.*\s+)*async def (\w+)", text))
-        if "heavy_job_slot(" in text and path.name == "worker.py":
-            names.update(re.findall(r"async def (process_graph_operation)\b", text))
+        if "bounded_heavy_work" not in text and "heavy_job_slot" not in text:
+            continue
+        for node in ast.walk(ast.parse(text)):
+            if not isinstance(node, ast.AsyncFunctionDef):
+                continue
+            decorated = any(isinstance(d, ast.Name) and d.id == "bounded_heavy_work" for d in node.decorator_list)
+            direct = any(
+                isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "heavy_job_slot"
+                for n in ast.walk(node)
+            )
+            # direct slot users only count in worker.py (modules/tools/browser.py is a request path, not an arq job)
+            if decorated or (direct and path.name == "worker.py"):
+                names.add(node.name)
     return names
 
 

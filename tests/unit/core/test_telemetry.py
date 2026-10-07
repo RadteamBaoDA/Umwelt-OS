@@ -308,6 +308,23 @@ class TestRedactionStableRecords:
         assert "SECRETVALUE" not in out
         assert "SECRETVALUE" not in record.getMessage()
 
+    def test_decimal_and_fraction_args_stay_formattable(self) -> None:
+        from decimal import Decimal
+        from fractions import Fraction
+
+        record = self._record("amount %.2f count %d ratio %s", (Decimal("12.345"), Decimal(3), Fraction(1, 3)))
+        assert record.getMessage() == "amount 12.35 count 3 ratio 1/3"
+
+    def test_decimal_subclass_with_custom_str_is_still_frozen(self) -> None:
+        from decimal import Decimal
+
+        class Sneaky(Decimal):
+            def __str__(self) -> str:
+                return "api_key=sk-abcdefghijklmnop1234"
+
+        record = self._record("v %s", (Sneaky("1"),))
+        assert "sk-abcdefghijklmnop1234" not in logging.Formatter("%(message)s").format(record)
+
     def test_non_str_args_are_frozen_by_value(self) -> None:
         class Odd:
             def __str__(self) -> str:

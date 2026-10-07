@@ -22,6 +22,8 @@ import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from decimal import Decimal
+from fractions import Fraction
 from typing import Any, TypeVar
 
 from pydantic import BaseModel, Field
@@ -128,6 +130,11 @@ def redact_mapping(value: Any, _depth: int = 0) -> Any:
     return value
 
 
+# Exact stdlib numeric types render digits only; matching by exact type keeps a subclass with a custom
+# __str__ out, so numbers stay formattable with %d/%.2f without opening a text channel.
+_EXACT_NUMERIC_TYPES = (Decimal, Fraction)
+
+
 def _stable_record(record: logging.LogRecord, redacted: str) -> tuple[str, Any]:
     """Return (msg, args) whose rendering holds no secret yet keeps the positional shape formatters unpack.
 
@@ -167,7 +174,7 @@ def install_log_redaction() -> None:
                 # Redact by value: freeze non-primitives to their redacted str so a later __str__/__repr__
                 # call by a handler can never emit text that was not checked here.
                 record.args = tuple(
-                    item if isinstance(item, (int, float, bool, type(None)))
+                    item if isinstance(item, (int, float, bool, type(None))) or type(item) in _EXACT_NUMERIC_TYPES
                     else redact_text(item) if isinstance(item, str)
                     else redact_text(str(redact_mapping(item)))
                     for item in record.args
