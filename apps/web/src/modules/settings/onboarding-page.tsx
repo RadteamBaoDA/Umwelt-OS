@@ -9,6 +9,7 @@ import { ApiError, apiRequest } from '@/core/api';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { listSources } from '@/modules/sources/api';
 import { getSearchIndexStatus } from '@/modules/search/api';
+import { OnboardingTopics } from './onboarding-topics';
 import { getOnboardingState, saveOnboardingStep, type OnboardingStep } from './onboarding-api';
 
 type ReadinessAI = {
@@ -96,7 +97,7 @@ export function OnboardingPage() {
     : currentStep.id === 'capability'
       ? <><h2>{t('capabilityTitle')}</h2><p>{t('capabilityText')}</p><p role="status">{status(chatCapability && chatAlias?.destination === 'remote', aiUnresolved)} · {ai.isError && networkUnavailable(ai.error) ? t('offline') : aiUnresolved ? t('unknown') : chatCapability ? t('capabilityReady') : t('capabilityNeedsProbe')}</p><Button asChild className="secondary"><Link href="/settings/ai">{t('openAiSettings')}</Link></Button></>
       : currentStep.id === 'sources'
-        ? <><h2>{t('sourcesTitle')}</h2><p>{t('sourcesText')}</p><p role="status">{sources.isPending ? t('unknown') : sources.isError && networkUnavailable(sources.error) ? t('offline') : sources.isError ? t('sourceUnknown') : activeSources ? t('sourceCount', { count: activeSources }) : t('sourceNone')}</p><Button asChild className="secondary"><Link href="/sources">{t('openSources')}</Link></Button></>
+        ? <><h2>{t('sourcesTitle')}</h2><p>{t('sourcesText')}</p><p role="status">{sources.isPending ? t('unknown') : sources.isError && networkUnavailable(sources.error) ? t('offline') : sources.isError ? t('sourceUnknown') : activeSources ? t('sourceCount', { count: activeSources }) : t('sourceNone')}</p><Button asChild className="secondary"><Link href="/sources">{t('openSources')}</Link></Button><OnboardingTopics /></>
         : currentStep.id === 'sample_or_import'
           ? <><h2>{t('samplesTitle')}</h2><p>{t('samplesText')}</p><p><code>{t('seedCommand')}</code></p><div className="form-actions"><Button type="button" aria-pressed={progress.data.data_choice === 'sample'} className={progress.data.data_choice === 'sample' ? '' : 'secondary'} disabled={save.isPending} onClick={() => move('sample_or_import', 'sample')}>{t(progress.data.data_choice === 'sample' ? 'sampleSelected' : 'chooseSample')}</Button><Button type="button" aria-pressed={progress.data.data_choice === 'personal_import'} className={progress.data.data_choice === 'personal_import' ? '' : 'secondary'} disabled={save.isPending} onClick={() => move('sample_or_import', 'personal_import')}>{t(progress.data.data_choice === 'personal_import' ? 'importSelected' : 'choosePersonalImport')}</Button><Button asChild className="secondary"><Link href="/sources">{t('openSources')}</Link></Button></div></>
           : currentStep.id === 'indexing'
