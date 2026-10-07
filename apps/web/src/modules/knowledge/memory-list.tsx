@@ -1,6 +1,6 @@
 'use client';
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeftIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useState } from 'react';
@@ -39,6 +39,8 @@ import {
   type MemoryCandidate,
   type MemoryItem,
 } from './api';
+
+const COUNT_CAP = 200; // mirrors COUNT_VERIFIED_CAP in modules/memory/public.py
 
 type MemoryFilterType = 'all' | 'fact' | 'preference' | 'instruction';
 
@@ -214,6 +216,7 @@ export function MemoryList() {
   const memoriesQuery = useQuery({
     queryKey: memoryKeys.list('active', queryType, searchQuery || undefined),
     queryFn: () => listMemories(undefined, queryType, 'active', searchQuery || undefined),
+    placeholderData: keepPreviousData, // chip counts do not flicker while the type filter switches
   });
 
   const candidatesQuery = useQuery({
@@ -245,9 +248,10 @@ export function MemoryList() {
 
   const items = memoriesQuery.data?.items ?? [];
   const candidates = candidatesQuery.data?.items ?? [];
-  // Per-kind counts come from the server's single aggregate (same status/search filters, forgotten and invalidated
-  // rows excluded). They are absent while loading or on error, so no chip shows an invented number.
+  // Counts cover only rows the list itself would show (server verifies each row). Past the cap the server sends no
+  // numbers, so only the All chip shows "200+"; "All" also includes decision/procedural kinds that have no chip.
   const kindCounts = memoriesQuery.data?.kind_counts ?? null;
+  const capped = memoriesQuery.data?.counts_capped === true;
   const countFor = (key: MemoryFilterType) =>
     kindCounts ? (key === 'all' ? Object.values(kindCounts).reduce((a, b) => a + b, 0) : (kindCounts[key] ?? 0)) : null;
 
@@ -268,7 +272,10 @@ export function MemoryList() {
       {/* Filter and search toolbar */}
       <div className="flex flex-wrap items-center gap-3">
         <div role="group" aria-label={t('filterByType')} className="flex rounded-md border border-input bg-background p-0.5">
-          {(['all', 'fact', 'preference', 'instruction'] as const).map((typeKey) => (
+          {(['all', 'fact', 'preference', 'instruction'] as const).map((typeKey) => {
+            const n = countFor(typeKey);
+            const showCap = capped && typeKey === 'all';
+            return (
             <button
               key={typeKey}
               type="button"
@@ -281,11 +288,21 @@ export function MemoryList() {
               }`}
             >
               {typeKey === 'all' ? t('filterAll') : t(typeKey)}
-              {countFor(typeKey) !== null && (
-                <span className="ml-1.5 tabular-nums opacity-80" aria-label={t('kindCount', { count: countFor(typeKey) ?? 0 })}>{countFor(typeKey)}</span>
+              {n !== null && (
+                <>
+                  <span className="ml-1.5 tabular-nums" aria-hidden="true">{n}</span>
+                  <span className="sr-only">{t('kindCount', { count: n })}</span>
+                </>
+              )}
+              {showCap && (
+                <>
+                  <span className="ml-1.5 tabular-nums" aria-hidden="true">{COUNT_CAP}+</span>
+                  <span className="sr-only">{t('kindCountCapped', { count: COUNT_CAP })}</span>
+                </>
               )}
             </button>
-          ))}
+            );
+          })}
         </div>
 
         <div className="min-w-[200px] flex-1">

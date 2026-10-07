@@ -1,6 +1,7 @@
-"""Unit tests for per-kind Memory counts on the list page (BM-16)."""
+"""Unit tests for per-kind Memory counts on the list page (BM-16): counts mirror the verified list."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -12,41 +13,68 @@ from modules.memory.public import MemoryService
 from modules.memory.schemas import MemoryPage
 
 
-def _service(counts: list[tuple[str, int]]) -> tuple[MemoryService, AsyncMock]:
+def _rows(kinds: list[str]) -> list[SimpleNamespace]:
+    base = datetime.now(UTC)
+    return [
+        SimpleNamespace(id=uuid4(), memory_type=k, created_at=base - timedelta(seconds=i))
+        for i, k in enumerate(kinds)
+    ]
+
+
+async def _page(rows: list[SimpleNamespace], hidden: set[int] | None = None, **kwargs: object) -> MemoryPage:
+    """Run get_memories with `rows` served in batches; rows whose index is in `hidden` fail verification."""
+    hidden_ids = {rows[i].id for i in (hidden or set())}
+    pending = list(rows)
+
+    async def scalars(_stmt: object) -> MagicMock:
+        batch, pending[:] = pending[:public._COUNT_BATCH], pending[public._COUNT_BATCH:]
+        return MagicMock(all=lambda: batch)
+
+    async def verified(_session: object, row: SimpleNamespace) -> object | None:
+        return None if row.id in hidden_ids else SimpleNamespace()
+
     session = MagicMock()
-    result = MagicMock()
-    result.tuples.return_value.all.return_value = counts
-    session.execute = AsyncMock(return_value=result)
-    session.scalars = AsyncMock(return_value=MagicMock(all=list))
-    return MemoryService(session), session.execute
+    session.scalars = AsyncMock(side_effect=scalars)
+    with (
+        patch.object(public, "lock_export_privacy", AsyncMock()),
+        patch.object(public, "_verified_memory_read", verified),
+    ):
+        return await MemoryService(session).get_memories(**kwargs)  # type: ignore[arg-type]
 
 
-async def _page(svc: MemoryService, **kwargs: object) -> MemoryPage:
-    with patch.object(public, "lock_export_privacy", AsyncMock()):
-        return await svc.get_memories(**kwargs)  # type: ignore[arg-type]
+async def test_hidden_rows_are_not_counted() -> None:
+    rows = _rows(["fact", "fact", "preference", "fact", "preference"])
+    page = await _page(rows, hidden={0, 2})  # 2 of 5 fail verification
+    assert page.kind_counts == {"fact": 2, "preference": 1}
+    assert page.total_count == 3
+    assert page.counts_capped is False
 
 
-async def test_mixed_kinds_total_is_sum_and_single_aggregate_query() -> None:
-    svc, execute = _service([("fact", 3), ("preference", 2)])
-    page = await _page(svc)
-    assert page.kind_counts == {"fact": 3, "preference": 2}
-    assert page.total_count == 5
-    execute.assert_awaited_once()
+async def test_counts_never_exceed_visible_list() -> None:
+    rows = _rows(["fact"] * 4 + ["preference"] * 2)
+    page = await _page(rows, hidden={1, 4})
+    assert page.total_count == 4 and page.kind_counts == {"fact": 3, "preference": 1}
 
 
-async def test_type_filter_total_uses_that_kind_and_keeps_all_kinds() -> None:
-    svc, _ = _service([("fact", 3), ("preference", 2)])
-    page = await _page(svc, memory_type="preference")
-    assert page.total_count == 2 and page.kind_counts == {"fact": 3, "preference": 2}
-    page = await _page(svc, memory_type="instruction")
-    assert page.total_count == 0
+async def test_type_filter_total_uses_that_kind() -> None:
+    page = await _page(_rows(["fact", "preference", "fact"]), memory_type="preference")
+    assert page.total_count == 1 and page.kind_counts == {"fact": 2, "preference": 1}
+
+
+async def test_capped_returns_flag_and_no_numbers() -> None:
+    page = await _page(_rows(["fact"] * (public.COUNT_VERIFIED_CAP + 1)))
+    assert page.counts_capped is True
+    assert page.kind_counts is None and page.total_count is None
+
+
+async def test_exactly_at_cap_is_not_capped() -> None:
+    page = await _page(_rows(["fact"] * public.COUNT_VERIFIED_CAP))
+    assert page.counts_capped is False and page.total_count == public.COUNT_VERIFIED_CAP
 
 
 async def test_cursor_pages_omit_counts() -> None:
-    svc, execute = _service([("fact", 1)])
-    page = await _page(svc, cursor=encode_cursor(datetime.now(UTC), uuid4()))
-    assert page.total_count is None and page.kind_counts is None
-    execute.assert_not_awaited()
+    page = await _page([], cursor=encode_cursor(datetime.now(UTC), uuid4()))
+    assert page.total_count is None and page.kind_counts is None and page.counts_capped is False
 
 
 def test_counts_share_the_list_visibility_filters() -> None:

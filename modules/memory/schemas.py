@@ -109,6 +109,7 @@ class MemoryPage(BaseModel):
     next_cursor: str | None = None
     total_count: int | None = None
     kind_counts: dict[str, int] | None = None
+    counts_capped: bool = False
 
 
 class MemoryCandidateCreate(BaseModel):

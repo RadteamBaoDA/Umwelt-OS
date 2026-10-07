@@ -1063,6 +1063,45 @@ def _list_filters(status: str, query: str | None) -> list[ColumnElement[bool]]:
     return filters
 
 
+COUNT_VERIFIED_CAP = 200
+COUNT_SCAN_CAP = 2000
+_COUNT_BATCH = 100
+
+
+async def _visible_kind_counts(
+    session: AsyncSession, filters: list[ColumnElement[bool]],
+) -> dict[str, int] | None:
+    """Tally kinds over rows that pass the same per-row privacy check as the list.
+
+    Never counts rows the list would hide. Returns None when more than COUNT_VERIFIED_CAP
+    visible rows (or COUNT_SCAN_CAP scanned rows) exist, so no number can leak hidden rows
+    or exceed what the list shows.
+    """
+    counts: dict[str, int] = {}
+    visible = scanned = 0
+    last: tuple[datetime, UUID] | None = None
+    while True:
+        stmt = select(Memory).where(*filters)
+        if last is not None:
+            stmt = stmt.where(tuple_(Memory.created_at, Memory.id) < last)
+        batch = list((await session.scalars(
+            stmt.order_by(desc(Memory.created_at), desc(Memory.id)).limit(_COUNT_BATCH)
+        )).all())
+        for row in batch:
+            scanned += 1
+            if await _verified_memory_read(session, row) is None:
+                continue
+            visible += 1
+            if visible > COUNT_VERIFIED_CAP:
+                return None
+            counts[row.memory_type] = counts.get(row.memory_type, 0) + 1
+        if len(batch) < _COUNT_BATCH:
+            return counts
+        if scanned >= COUNT_SCAN_CAP:
+            return None
+        last = (batch[-1].created_at, batch[-1].id)
+
+
 class MemoryService:
     """Service managing memory lifecycle, candidates, evaluation, and privacy settings."""
 
@@ -1120,12 +1159,10 @@ class MemoryService:
 
         await lock_export_privacy(self.session)
         kind_counts: dict[str, int] | None = None
-        if cursor is None:  # one aggregate over the same filters; later pages keep the first page's counts
-            kind_counts = {
-                kind: count for kind, count in (await self.session.execute(
-                    select(Memory.memory_type, func.count()).where(*filters).group_by(Memory.memory_type)
-                )).tuples().all()
-            }
+        counts_capped = False
+        if cursor is None:  # later pages keep the first page's counts
+            kind_counts = await _visible_kind_counts(self.session, filters)
+            counts_capped = kind_counts is None
         rows = list((await self.session.scalars(
             stmt.order_by(desc(Memory.created_at), desc(Memory.id)).limit(101)
         )).all())
@@ -1148,6 +1185,7 @@ class MemoryService:
             items=items,
             next_cursor=next_cursor,
             kind_counts=kind_counts,
+            counts_capped=counts_capped,
             total_count=(
                 None if kind_counts is None
                 else kind_counts.get(memory_type, 0) if memory_type else sum(kind_counts.values())
