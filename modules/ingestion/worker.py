@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from core.chunking import chunk_text
 from core.config import Settings
 from core.events import DomainEvent
-from core.heavy_work import bounded_heavy_work
+from core.heavy_work import bounded_heavy_work, to_thread_joined
 from core.realtime import (
     ReplayDraft,
     commit_with_replay,
@@ -1198,7 +1198,8 @@ async def process_uploaded_file(ctx: dict[str, object], event_id: str) -> None:
             settings.docx_expanded_max_bytes,
             settings.pdf_page_max,
         )
-        drafts = await asyncio.to_thread(chunk_text, parsed.text)
+        _check_parsed_text(parsed.text, settings.parsed_text_max_chars)
+        drafts = await to_thread_joined(chunk_text, parsed.text)
         extraction_status = "needs_ocr" if parsed.warnings and not parsed.text else "succeeded"
         async with factory() as session:
             source = await sources.lock_source(session, source_id)
@@ -1276,14 +1277,14 @@ async def process_uploaded_file(ctx: dict[str, object], event_id: str) -> None:
                 return
             if stage is not None:
                 stage.status = "failed"
-                stage.error_code = "parser_timeout" if isinstance(exc, TimeoutError) else "parse_failed"
+                stage.error_code = _failure_code(exc)
                 stage.lease_expires_at = None
             if run is not None:
                 run.status = "failed"
-                run.error_code = "parser_timeout" if isinstance(exc, TimeoutError) else "parse_failed"
+                run.error_code = _failure_code(exc)
             await documents.set_extraction_status(session, document_id, source_id, "failed")
             if source is not None:
-                code = "parser_timeout" if isinstance(exc, TimeoutError) else "parse_failed"
+                code = _failure_code(exc)
                 source_changed = await sources.record_processing_result(session, source_id, source.generation, datetime.now(UTC), code)
             else:
                 source_changed = False
@@ -1300,6 +1301,21 @@ async def process_uploaded_file(ctx: dict[str, object], event_id: str) -> None:
                 count("ingestion_documents_total", outcome="failed")
             else:
                 await session.commit()
+
+
+class ParsedTextTooLarge(ValueError):
+    """Parsed text exceeds the chunking cap; the document must be split."""
+
+
+def _check_parsed_text(text: str, limit: int) -> None:
+    if len(text) > limit:
+        raise ParsedTextTooLarge("parsed_text_too_large")
+
+
+def _failure_code(exc: Exception) -> str:
+    if isinstance(exc, TimeoutError):
+        return "parser_timeout"
+    return "parsed_text_too_large" if isinstance(exc, ParsedTextTooLarge) else "parse_failed"
 
 
 async def cleanup_storage_orphans(ctx: dict[str, object]) -> int:
