@@ -19,6 +19,7 @@ from uuid import uuid4
 import httpx
 import pytest
 
+import modules.connectors.github.schemas
 from modules.connectors.github.adapter import (
     _github_next_page,
     _raise_for_provider_limit,
@@ -39,23 +40,6 @@ from modules.connectors.github.webhooks import (
     verify_github_signature,
 )
 from modules.connectors.public import ProviderRateLimited
-
-# Compatibility patch for httpx.Response bytearray content in unit tests
-_orig_httpx_response = httpx.Response
-
-
-def _safe_httpx_response(*args: Any, **kwargs: Any) -> httpx.Response:
-    if "content" in kwargs and isinstance(kwargs["content"], (bytearray, memoryview)):
-        kwargs["content"] = bytes(kwargs["content"])
-    return _orig_httpx_response(*args, **kwargs)
-
-
-httpx.Response = _safe_httpx_response  # type: ignore[misc]
-import modules.connectors.github.adapter
-
-modules.connectors.github.adapter.httpx.Response = _safe_httpx_response  # type: ignore[misc]
-
-import modules.connectors.github.schemas
 
 _orig_bounded_json_counts = modules.connectors.github.schemas._bounded_json_counts
 
