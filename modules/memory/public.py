@@ -1059,7 +1059,8 @@ def _list_filters(status: str, query: str | None) -> list[ColumnElement[bool]]:
     """Visibility filters shared by the Memory list page and its per-kind counts (type excluded)."""
     filters: list[ColumnElement[bool]] = [Memory.status == status]
     if query:
-        filters.append(Memory.content.ilike(f"%{query.strip()}%"))
+        escaped = query.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        filters.append(Memory.content.ilike(f"%{escaped}%", escape="\\"))
     return filters
 
 
@@ -1160,7 +1161,9 @@ class MemoryService:
         await lock_export_privacy(self.session)
         kind_counts: dict[str, int] | None = None
         counts_capped = False
-        if cursor is None and memory_type is None:  # counts are per kind: only unfiltered first pages carry them
+        # Counts are per kind: only unfiltered first pages carry them. A search skips them so each debounced
+        # keystroke does not re-run up to COUNT_SCAN_CAP verified reads while holding the global privacy lock.
+        if cursor is None and memory_type is None and not query:
             kind_counts = await _visible_kind_counts(self.session, filters)
             counts_capped = kind_counts is None
         rows = list((await self.session.scalars(

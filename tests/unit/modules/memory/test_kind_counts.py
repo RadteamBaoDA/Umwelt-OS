@@ -95,3 +95,18 @@ def test_counts_share_the_list_visibility_filters() -> None:
     )
     assert "memories.status =" in sql and "ILIKE" in sql.upper()
     assert len(public._list_filters("forgotten", None)) == 1
+
+
+async def test_search_skips_counts_and_scan_under_privacy_lock() -> None:
+    """A search page must not run the verified count scan (only the list query), and escapes ILIKE wildcards."""
+    session = MagicMock()
+    session.scalars = AsyncMock(return_value=MagicMock(all=list))
+    with (
+        patch.object(public, "lock_export_privacy", AsyncMock()),
+        patch.object(public, "_verified_memory_read", AsyncMock(return_value=SimpleNamespace())),
+    ):
+        page = await MemoryService(session).get_memories(query="50%_off")
+    assert session.scalars.await_count == 1  # list only; counts would add a second scan
+    assert page.kind_counts is None and page.total_count is None and page.counts_capped is False
+    sql = str(public.select(public.Memory).where(*public._list_filters("active", "50%_off")).compile(dialect=postgresql.dialect()))
+    assert "ESCAPE" in sql

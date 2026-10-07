@@ -260,8 +260,8 @@ export function MemoryList() {
 
   const items = memoriesQuery.data?.items ?? [];
   const candidates = candidatesQuery.data?.items ?? [];
-  // Counts cover only rows the list itself would show (server verifies each row). Past the cap the server sends no
-  // numbers (no cap marker either, so a capped result never hints at hidden rows); "All" also includes decision/procedural kinds that have no chip.
+  // Counts cover only rows the list itself would show (server verifies each row). Past the cap (or while searching) the server sends
+  // no numbers; counts_capped marks the cap case; "All" also includes decision/procedural kinds that have no chip.
   const kindCounts = countsQuery.data?.kind_counts ?? null;
   const countFor = (key: MemoryFilterType) =>
     kindCounts ? (key === 'all' ? Object.values(kindCounts).reduce((a, b) => a + b, 0) : (kindCounts[key] ?? 0)) : null;

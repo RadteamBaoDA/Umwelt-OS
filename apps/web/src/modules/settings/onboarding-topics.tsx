@@ -21,6 +21,9 @@ const PRESETS = [
 const MAX_PAGES = 10;
 const key = ['topics', 'onboarding'] as const;
 
+/** Chip-owned topics are name matches without entity links; entity Follow topics (entity_ids set) are never touched. */
+const ownsPreset = (topic: Topic, id: string) => topic.entity_ids.length === 0 && topic.name.toLowerCase() === id.toLowerCase();
+
 /** Reads every owner topic (bounded) so selected state never depends on one page. */
 async function fetchAll(): Promise<Topic[]> {
   const items: Topic[] = [];
@@ -42,7 +45,7 @@ export function OnboardingTopics() {
   const topics = useQuery({ queryKey: key, queryFn: fetchAll });
   const toggle = useMutation({
     mutationFn: async (preset: (typeof PRESETS)[number]) => {
-      const matches = topics.data?.filter((topic) => topic.name.toLowerCase() === preset.id.toLowerCase()) ?? [];
+      const matches = topics.data?.filter((topic) => ownsPreset(topic, preset.id)) ?? [];
       const active = matches.filter((topic) => topic.is_active);
       // Deselect clears exactly what `pressed` reflects; select reactivates before it creates.
       if (active.length) return Promise.all(active.map((topic) => updateTopic(topic.id, { expected_revision: topic.revision, is_active: false }, csrfToken)));
@@ -59,7 +62,7 @@ export function OnboardingTopics() {
     {topics.isError ? <p role="alert" className="error">{t('topicsLoadFailed')} <Button type="button" variant="outline" size="sm" onClick={() => { void topics.refetch(); }}>{t('retry')}</Button></p> : null}
     {topics.data ? <div className="flex flex-wrap gap-2" role="group" aria-label={t('topicsTitle')}>
       {PRESETS.map((preset) => {
-        const pressed = topics.data.some((topic) => topic.name.toLowerCase() === preset.id.toLowerCase() && topic.is_active);
+        const pressed = topics.data.some((topic) => ownsPreset(topic, preset.id) && topic.is_active);
         return <Button key={preset.id} type="button" size="sm" className="min-h-11" variant={pressed ? 'default' : 'outline'} aria-pressed={pressed}
           disabled={toggle.isPending} onClick={() => toggle.mutate(preset)}>{t(preset.label)}</Button>;
       })}

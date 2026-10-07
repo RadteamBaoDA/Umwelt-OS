@@ -80,7 +80,7 @@ export function listTimeline(query: TimelineQuery, cursor?: string) {
 /** Searches event titles and summaries through the visibility-filtered events list (server-side, one bounded page). */
 export function searchEvents(q: string) {
   const params = new URLSearchParams({ limit: '8', q: q.trim().slice(0, 200) });
-  return apiRequest<TimelinePageResult>(`/api/v1/events?${params}`);
+  return apiRequest<{ items: TimelineEvent[]; next_cursor: string | null }>(`/api/v1/events?${params}`);
 }
 
 /** Fetches one event by id (id-only navigation keeps titles out of URLs and access logs). */
