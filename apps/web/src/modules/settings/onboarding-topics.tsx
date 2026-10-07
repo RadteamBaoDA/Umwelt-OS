@@ -9,14 +9,14 @@ import type { Topic } from '@/modules/news/types';
 
 /** Stable English topic names: the stored name is the identity so re-running onboarding in any locale never duplicates. */
 const PRESETS = [
-  { id: 'Economy', label: 'topicEconomy' },
-  { id: 'Technology', label: 'topicTechnology' },
-  { id: 'Health', label: 'topicHealth' },
-  { id: 'Climate', label: 'topicClimate' },
-  { id: 'Science', label: 'topicScience' },
-  { id: 'Politics', label: 'topicPolitics' },
-  { id: 'Sports', label: 'topicSports' },
-  { id: 'Culture', label: 'topicCulture' },
+  { id: 'Economy', vi: 'kinh tế', label: 'topicEconomy' },
+  { id: 'Technology', vi: 'công nghệ', label: 'topicTechnology' },
+  { id: 'Health', vi: 'sức khỏe', label: 'topicHealth' },
+  { id: 'Climate', vi: 'khí hậu', label: 'topicClimate' },
+  { id: 'Science', vi: 'khoa học', label: 'topicScience' },
+  { id: 'Politics', vi: 'chính trị', label: 'topicPolitics' },
+  { id: 'Sports', vi: 'thể thao', label: 'topicSports' },
+  { id: 'Culture', vi: 'văn hóa', label: 'topicCulture' },
 ] as const;
 const MAX_PAGES = 10;
 const key = ['topics', 'onboarding'] as const;
@@ -41,10 +41,13 @@ export function OnboardingTopics() {
   const client = useQueryClient();
   const topics = useQuery({ queryKey: key, queryFn: fetchAll });
   const toggle = useMutation({
-    mutationFn: async (name: string) => {
-      const existing = topics.data?.find((topic) => topic.name.toLowerCase() === name.toLowerCase());
-      if (!existing) return createTopic({ name, keywords: [name.toLowerCase()] }, csrfToken);
-      return updateTopic(existing.id, { expected_revision: existing.revision, is_active: !existing.is_active }, csrfToken);
+    mutationFn: async (preset: (typeof PRESETS)[number]) => {
+      const matches = topics.data?.filter((topic) => topic.name.toLowerCase() === preset.id.toLowerCase()) ?? [];
+      const active = matches.filter((topic) => topic.is_active);
+      // Deselect clears exactly what `pressed` reflects; select reactivates before it creates.
+      if (active.length) return Promise.all(active.map((topic) => updateTopic(topic.id, { expected_revision: topic.revision, is_active: false }, csrfToken)));
+      if (matches[0]) return updateTopic(matches[0].id, { expected_revision: matches[0].revision, is_active: true }, csrfToken);
+      return createTopic({ name: preset.id, keywords: [preset.id.toLowerCase(), preset.vi] }, csrfToken);
     },
     // Refetch on success or conflict so chips always show server state.
     onSettled: () => Promise.all([client.invalidateQueries({ queryKey: ['topics'] }), client.invalidateQueries({ queryKey: ['news-stories'] })]),
@@ -58,7 +61,7 @@ export function OnboardingTopics() {
       {PRESETS.map((preset) => {
         const pressed = topics.data.some((topic) => topic.name.toLowerCase() === preset.id.toLowerCase() && topic.is_active);
         return <Button key={preset.id} type="button" size="sm" className="min-h-11" variant={pressed ? 'default' : 'outline'} aria-pressed={pressed}
-          disabled={toggle.isPending} onClick={() => toggle.mutate(preset.id)}>{t(preset.label)}</Button>;
+          disabled={toggle.isPending} onClick={() => toggle.mutate(preset)}>{t(preset.label)}</Button>;
       })}
     </div> : null}
     {toggle.isError ? <p role="alert" className="error">{t('topicsSaveFailed')}</p> : null}

@@ -17,7 +17,7 @@ export const onboardingMessages = {
       openAiSettings: 'Open AI and privacy settings', openSources: 'Open data sources', openSearch: 'Open search', openDashboard: 'Open Dashboard',
       currentStep: 'Current step', progress: 'Step {current} of {total}',
       chooseSample: 'Use fictional sample data', choosePersonalImport: 'Import personal data', sampleSelected: 'Fictional sample data selected', importSelected: 'Personal import selected',
-      topicsTitle: 'Topics to follow', topicsText: 'Optional. Pick topics to personalise your news; you can change them any time in news settings. Skip this and continue if you prefer.', topicsLoading: 'Loading topics…', topicsLoadFailed: 'Could not load topics.', topicsSaveFailed: 'Could not update the topic. Try again.',
+      topicsTitle: 'Topics to follow', topicsText: 'Pick topics to personalize your news; you can change them any time in news settings.', topicsLoading: 'Loading topics…', topicsLoadFailed: 'Could not load topics.', topicsSaveFailed: 'Could not update the topic. Try again.',
       topicEconomy: 'Economy', topicTechnology: 'Technology', topicHealth: 'Health', topicClimate: 'Climate', topicScience: 'Science', topicPolitics: 'Politics', topicSports: 'Sports', topicCulture: 'Culture',
       eyebrow: 'Setup',
       stepDone: 'Done',
