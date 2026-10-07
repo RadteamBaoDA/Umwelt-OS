@@ -18,6 +18,7 @@ import {
 } from '@/modules/chat/api';
 import { ChatComposer } from './chat-composer';
 import { ChatTranscript } from './chat-transcript';
+import { ApiError } from '@/core/api';
 import { ChatContextBar } from './chat-context-bar';
 import { ConversationAgentActivity } from '@/modules/agents/conversation-agent-activity';
 import {
@@ -441,7 +442,12 @@ export function ChatSession({
         ? { date: chatCtrl.context.date, timezone: chatCtrl.context.timezone }
         : null;
 
+      const selItems = chatCtrl.context?.kind === 'selection' ? chatCtrl.context.items ?? [] : [];
       try {
+        // Pre-validate the server's 1..32 distinct-document limit before the draft is cleared.
+        if (selItems.length > 32 || new Set(selItems.map((i) => i.documentId)).size !== selItems.length) {
+          throw new ApiError(422, 'selection limit');
+        }
         const selected = mode === 'full' && selectedProfileId !== 'assistant'
           ? profiles.data?.find((profile) => profile.id === selectedProfileId)
           : undefined;
@@ -547,9 +553,14 @@ export function ChatSession({
           setIsPending(false);
           setIsStreaming(false);
           setActiveResponseId(null);
-          const errMsg = attemptedProfileRun?.prompt === content
-            ? tAgents('agentStartFailed')
-            : err instanceof Error ? err.message : t('errorSending');
+          const selectionFailure = selItems.length > 0 && err instanceof ApiError && (err.status === 409 || err.status === 422);
+          // Server detail strings are English-only, so selection failures get localized copy and keep the draft.
+          if (selectionFailure) chatCtrl.setDraft(content);
+          const errMsg = selectionFailure
+            ? t(err.status === 422 ? 'contextSelectionTooLarge' : 'contextSelectionUnavailable')
+            : attemptedProfileRun?.prompt === content
+              ? tAgents('agentStartFailed')
+              : err instanceof Error ? err.message : t('errorSending');
           setError(errMsg);
         }
       }
