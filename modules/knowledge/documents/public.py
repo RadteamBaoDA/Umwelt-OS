@@ -1704,8 +1704,14 @@ async def add_content_chunks(session: AsyncSession, version: DocumentVersion) ->
     return len(drafts)
 
 
-async def backfill_current_chunks(session: AsyncSession, limit: int = 2) -> int:
-    """Fill legacy manual revisions created before chunking was enabled."""
+async def backfill_current_chunks(session: AsyncSession, limit: int = 2, *, multi_workspace_enabled: bool) -> int:
+    """Fill legacy manual revisions created before chunking was enabled.
+
+    System path: each version's Source resolves its own internal job scope, then admission,
+    Source and Document locks are taken in order and held through publish and commit. One
+    transaction per version, so no two workspaces' locks are ever held together. A version
+    whose lineage is denied or stale is skipped; nothing is rebased onto another actor.
+    """
     versions = list((await session.scalars(
         select(DocumentVersion)
         .join(Document, Document.id == DocumentVersion.document_id)
@@ -1719,21 +1725,43 @@ async def backfill_current_chunks(session: AsyncSession, limit: int = 2) -> int:
         )
         .order_by(DocumentVersion.id).limit(limit)
     )).all())
+    await session.rollback()
     for version in versions:
-        hint = await session.get(Document, version.document_id)
-        source = await sources.lock_source(session, hint.source_id) if hint else None
-        document = await session.scalar(
-            select(Document).where(Document.id == version.document_id).with_for_update()
-        )
-        if (
-            source is None or source.status != "active" or document is None
-            or document.current_version != version.version_number
-        ):
-            continue
-        if await add_content_chunks(session, version):
-            await _publish_document_ready(session, document, version)
-    if versions:
-        await session.commit()
+        try:
+            hint = await session.get(Document, version.document_id)
+            scope = (await sources.resolve_source_job_scope(
+                session, hint.source_id, multi_workspace_enabled=multi_workspace_enabled,
+            )) if hint else None
+            if scope is None:
+                await session.rollback()
+                continue
+            access_fence = await read_access_fence(
+                session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
+            source = await sources.lock_source(
+                session, hint.source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                expected_access_fence=access_fence,
+            )
+            document = await session.scalar(
+                select(Document).where(Document.id == version.document_id,
+                                       Document.workspace_id == scope.workspace_id).with_for_update()
+            )
+            if (
+                source is None or source.status != "active" or document is None
+                or document.current_version != version.version_number
+            ):
+                await session.rollback()
+                continue
+            if await add_content_chunks(session, version):
+                await _publish_document_ready(
+                    session, document, version, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                    access_fence=access_fence, source_fence=source,
+                )
+            await session.commit()
+        except HTTPException as exc:
+            await session.rollback()
+            if exc.status_code not in {401, 403, 404, 409}:
+                raise
     return len(versions)
 
 
