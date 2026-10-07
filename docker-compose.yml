@@ -98,6 +98,12 @@ services:
       DATABASE_URL: ${DATABASE_URL:?Run setup to create .env}
       REDIS_URL: ${REDIS_URL:?Run setup to create .env}
       BBD_LANGFUSE_ENABLED: "false"
+    healthcheck:
+      test: ["CMD", "arq", "--check", "apps.worker.main.ChatWorkerSettings"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     init: true
     volumes:
       - app-data:/data

@@ -286,8 +286,9 @@ class WorkerSettings:
 
 class ChatWorkerSettings:
     """Dedicated arq worker for chat generation, isolated from the main worker's cron and heavy jobs."""
-    # keep_result=0: a gated (disabled module / backup) job that returns None must not block the
-    # fixed job id, or recovery could not re-enqueue the still-pending run.
+    # keep_result=0 (worker-level too: arq finish_failed_job ignores the per-function value): neither a
+    # gated return nor an interrupted/failed job may block the fixed job id, or recovery could not re-enqueue.
+    keep_result = 0
     functions: ClassVar[list[Any]] = [
         _arq_func(_gate_backup_job(_gate_module_job(instrument_job(process_chat_response))), keep_result=0),
     ]
