@@ -486,3 +486,21 @@ class TestDayScopedTemporalContext:
             ctx = await retrieval.build_context(MagicMock(), MagicMock(), MagicMock(), MagicMock(), request)
         assert (seen[0].date_from, seen[0].date_to) == (day, day + timedelta(days=1))
         assert len(ctx.temporal_summaries) == 1
+
+
+async def test_build_context_releases_connection_during_embed() -> None:
+    from types import SimpleNamespace
+
+    from modules.chat import retrieval
+    from modules.chat.schemas import AnswerContextRequest
+
+    search = AsyncMock(return_value=SimpleNamespace(warnings=[], items=[]))
+    with (
+        patch.object(retrieval.search_public, "search", search),
+        patch.object(retrieval.documents_public, "read_chat_evidence_chunks", AsyncMock(return_value=[])),
+        patch.object(retrieval, "_apply_configured_reranking", AsyncMock(return_value=([], "skipped", []))),
+    ):
+        await retrieval.build_context(
+            MagicMock(), MagicMock(), MagicMock(), MagicMock(), AnswerContextRequest(query="q"),
+        )
+    assert search.call_args.kwargs["release_during_embed"] is True

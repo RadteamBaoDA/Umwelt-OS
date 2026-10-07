@@ -86,7 +86,7 @@ async def global_search(
 @router.post("", response_model=SearchResponse)
 async def search(payload: SearchRequest, request: Request, session: Session, _owner: OwnerRead) -> SearchResponse:
     """Run owner-authenticated search using the request-scoped Redis and settings."""
-    # Request session is read-only here (require_owner takes no locks), so release it across the embed.
+    # Auth/module deps have committed their admission row; the session holds no locks or pending writes here.
     return await public.search(
         session, request.app.state.redis, request.app.state.settings, payload, release_during_embed=True,
     )

@@ -261,7 +261,10 @@ async def build_context(
                 mode=request.mode if request.allow_hybrid else "lexical",
                 limit=min(request.limit, MAX_RETRIEVAL_LIMIT),
             )
-            search_res = await search_public.search(session, redis, settings, search_req)
+            # worker.py commits right before build_context, so the session holds no locks here.
+            search_res = await search_public.search(
+                session, redis, settings, search_req, release_during_embed=True,
+            )
             warnings.extend(search_res.warnings)
             for hit in search_res.items:
                 ref = (hit.document_version_id, hit.chunk_id)

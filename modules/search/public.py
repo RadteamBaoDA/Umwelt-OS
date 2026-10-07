@@ -322,6 +322,8 @@ async def search(
     ``release_during_embed`` commits the read-only transaction before the embedding call and at
     the end of every send recheck so the pooled connection is not idle in transaction during the
     network wait. Only callers whose session holds no row/advisory locks or pending writes may set it.
+    The session must also use ``expire_on_commit=False``: ``generation`` and ``config`` are read after
+    the commits, and an expired ORM object would lazy-load (``MissingGreenlet``) under asyncio.
     """
     if source_generation_fences is not None and len(source_generation_fences) > 100:
         raise ValueError("Search source fence exceeds its supported bound")

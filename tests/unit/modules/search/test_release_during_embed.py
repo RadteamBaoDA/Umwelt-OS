@@ -2,9 +2,11 @@
 
 from types import SimpleNamespace
 from typing import Any
+from uuid import uuid4
 
 import pytest
 
+from core.tools.schemas import ToolExecutionPrincipal
 from modules.search import public
 from modules.search.schemas import SearchRequest
 from modules.tools import builtins
@@ -111,13 +113,93 @@ async def test_before_embedding_send_runs_before_final_commit(monkeypatch: pytes
     assert log == ["config", "commit", "config", "before_send", "commit", "embed", "vector"]
 
 
-def test_callers_pass_flag() -> None:
-    """Lock-free callers opt in; the tool handler only for a session it created itself."""
-    import inspect
+async def test_hydration_and_revalidation_still_filter_after_commit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A hit is dropped when post-commit revalidation no longer finds it, kept when it does."""
+    chunk_id = uuid4()
+    row = (
+        chunk_id, "content", uuid4(), 1, None, uuid4(), "t", None, None, "text/plain", None,
+        uuid4(), "s", "note", 1,
+    )
 
+    class _Result:
+        def all(self) -> list[Any]:
+            return [row]
+
+    class _HydratingSession(_Session):
+        async def execute(self, *_a: Any, **_k: Any) -> Any:
+            return _Result()
+
+    async def vector(*_a: Any) -> list[Any]:
+        return [chunk_id]
+
+    for revalidated, expected in ((set(), 0), ({chunk_id}, 1)):
+        log: list[str] = []
+        _setup(monkeypatch, log)
+        monkeypatch.setattr(public, "_vector_ids", vector)
+
+        async def revalidate(*_a: Any, keep: set[Any] = revalidated) -> set[Any]:
+            return keep
+
+        monkeypatch.setattr(public, "_revalidate_tool_result_fences", revalidate)
+        request = SearchRequest(query="q", mode="hybrid")
+        result = await public.search(
+            _HydratingSession(log), None, None, request, release_during_embed=True,  # type: ignore[arg-type]
+        )
+        assert len(result.items) == expected
+        assert "embed" in log
+
+
+async def test_route_passes_flag(monkeypatch: pytest.MonkeyPatch) -> None:
     from modules.search import routes
 
-    assert "release_during_embed=True" in inspect.getsource(routes.search)
-    assert 'release_during_embed=context.get("session") is None' in inspect.getsource(
-        builtins._handle_search_query,
-    )
+    seen: dict[str, Any] = {}
+
+    async def recorder(*_a: Any, **kwargs: Any) -> str:
+        seen.update(kwargs)
+        return "ok"
+
+    monkeypatch.setattr(public, "search", recorder)
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(redis=None, settings=None)))
+    out = await routes.search(SearchRequest(query="q"), request, object(), object())  # type: ignore[arg-type]
+    assert out == "ok" and seen["release_during_embed"] is True
+
+
+@pytest.mark.parametrize("own_session", [True, False])
+async def test_tool_handler_flag_follows_session_ownership(
+    monkeypatch: pytest.MonkeyPatch, own_session: bool,
+) -> None:
+    """Handler opts in only for a session it created itself."""
+    from modules.sources import public as sources
+
+    source_id = uuid4()
+    seen: dict[str, Any] = {}
+
+    class _Factory:
+        def __call__(self) -> "_Factory":
+            return self
+
+        async def __aenter__(self) -> object:
+            return object()
+
+        async def __aexit__(self, *_a: object) -> None:
+            return None
+
+    async def get_tool_source(*_a: Any, **_k: Any) -> Any:
+        return SimpleNamespace(generation=1)
+
+    async def recorder(*_a: Any, **kwargs: Any) -> Any:
+        seen.update(kwargs)
+        return SimpleNamespace(items=[], model_dump=lambda **_k: {})
+
+    monkeypatch.setattr(sources, "get_tool_source", get_tool_source)
+    monkeypatch.setattr(public, "search", recorder)
+    context: dict[str, Any] = {
+        "principal": ToolExecutionPrincipal(
+            actor_id="a", is_owner=True, source_ids=frozenset({str(source_id)}),
+        ),
+        "destination_kind": "local", "session_factory": _Factory(), "redis": None, "settings": None,
+    }
+    if not own_session:
+        context["session"] = object()
+    await builtins._handle_search_query({"query": "q"}, context)
+    assert seen["release_during_embed"] is own_session
