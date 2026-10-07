@@ -308,6 +308,7 @@ async def search(
     *, destination: ToolDestination = ToolDestination.LOCAL,
     source_generation_fences: dict[UUID, int] | None = None,
     before_embedding_send: Callable[[AIExecutionConfig, ModelMapping | None, RequestPolicy, dict[UUID, int]], Awaitable[None]] | None = None,
+    release_during_embed: bool = False,
 ) -> SearchResponse:
     """Retrieve and return current evidence under a trusted destination privacy class.
 
@@ -318,6 +319,9 @@ async def search(
     When supplied, ``before_embedding_send`` runs after the existing embedding privacy/revision
     recheck on every gateway attempt and receives the fresh config, mapping, policy, and original
     pre-await source generations; its authorization or cancellation exceptions propagate.
+    ``release_during_embed`` commits the read-only transaction before the embedding call and at
+    the end of every send recheck so the pooled connection is not idle in transaction during the
+    network wait. Only callers whose session holds no row/advisory locks or pending writes may set it.
     """
     if source_generation_fences is not None and len(source_generation_fences) > 100:
         raise ValueError("Search source fence exceeds its supported bound")
@@ -354,7 +358,11 @@ async def search(
                     await before_embedding_send(
                         latest, latest_mapping, latest_policy, dict(source_generation_fences or {}),
                     )
+                if release_during_embed:
+                    await session.commit()
 
+            if release_during_embed:
+                await session.commit()
             response = await gateway(config, redis, recheck_send).embed("embedding", mapping, policy, [request.query])
             values, returned_model = embedding_values(response, generation.dimensions)
             if returned_model != generation.response_model_id:
