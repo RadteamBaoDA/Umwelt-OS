@@ -23,7 +23,6 @@ from collections.abc import Awaitable, Callable, Iterator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from decimal import Decimal
-from fractions import Fraction
 from typing import Any, TypeVar
 
 from pydantic import BaseModel, Field
@@ -130,9 +129,20 @@ def redact_mapping(value: Any, _depth: int = 0) -> Any:
     return value
 
 
-# Exact stdlib numeric types render digits only; matching by exact type keeps a subclass with a custom
-# __str__ out, so numbers stay formattable with %d/%.2f without opening a text channel.
-_EXACT_NUMERIC_TYPES = (Decimal, Fraction)
+# Exact-type Decimal passes un-frozen so %d/%.2f keep working; its str/repr hold a digit coefficient only
+# (repr is "Decimal('...')"). Matching by exact type keeps a subclass with a custom __str__ out.
+_EXACT_NUMERIC_TYPES = (Decimal,)
+
+
+def _freeze_arg(item: Any) -> Any:
+    """Freeze one log arg by value so a handler's later __str__/__repr__ cannot emit unchecked text."""
+    if type(item) in (int, float, bool, type(None), *_EXACT_NUMERIC_TYPES):
+        return item
+    if isinstance(item, int):  # int subclass (IntEnum...): drop its own __str__, keep %d/%s rendering
+        return int(item)
+    if isinstance(item, float):
+        return float(item)
+    return redact_text(item) if isinstance(item, str) else redact_text(str(redact_mapping(item)))
 
 
 def _stable_record(record: logging.LogRecord, redacted: str) -> tuple[str, Any]:
@@ -173,12 +183,7 @@ def install_log_redaction() -> None:
             elif isinstance(record.args, tuple):
                 # Redact by value: freeze non-primitives to their redacted str so a later __str__/__repr__
                 # call by a handler can never emit text that was not checked here.
-                record.args = tuple(
-                    item if isinstance(item, (int, float, bool, type(None))) or type(item) in _EXACT_NUMERIC_TYPES
-                    else redact_text(item) if isinstance(item, str)
-                    else redact_text(str(redact_mapping(item)))
-                    for item in record.args
-                )
+                record.args = tuple(_freeze_arg(item) for item in record.args)
             message = record.getMessage()
             redacted = redact_text(message)
             if redacted != message or not isinstance(record.msg, str):

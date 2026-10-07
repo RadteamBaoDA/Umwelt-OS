@@ -42,3 +42,23 @@ def test_retry_budget_outlasts_maximum_heavy_slot_hold() -> None:
     for name in HEAVY_SLOT_JOBS:
         assert registered[name].max_tries * HEAVY_RETRY_DEFER_SECONDS > MAX_OPERATION_SECONDS, name
     assert HEAVY_JOB_MAX_TRIES * HEAVY_RETRY_DEFER_SECONDS > MAX_OPERATION_SECONDS
+
+
+def _is_heavy(coroutine: object) -> bool:
+    """True when any `__wrapped__` layer is the bounded_heavy_work wrapper or calls heavy_job_slot itself."""
+    layer = coroutine
+    while layer is not None:
+        code = getattr(layer, "__code__", None)
+        if getattr(layer, "__qualname__", "") == "bounded_heavy_work.<locals>.bounded" or (
+            code is not None and "heavy_job_slot" in code.co_names
+        ):
+            return True
+        layer = getattr(layer, "__wrapped__", None)
+    return False
+
+
+def test_every_registered_heavy_job_is_in_the_retry_budget_set() -> None:
+    # Runtime view of what arq really registers: catches aliased/attribute/call-form wrapping the AST scan misses.
+    jobs = WorkerSettings.functions  # arq Function objects (heavy ones) or plain callables
+    heavy = {getattr(f, "name", None) or f.__name__ for f in jobs if _is_heavy(getattr(f, "coroutine", f))}
+    assert heavy == HEAVY_SLOT_JOBS
