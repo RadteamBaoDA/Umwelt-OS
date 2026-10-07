@@ -1,7 +1,7 @@
 """Data transfer objects and validation schemas for chat retrieval, context assembly, and citations."""
 
 from datetime import date, datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -16,6 +16,9 @@ MAX_QUERY_LENGTH = 1000
 MAX_QUOTE_LENGTH = 1000
 DEFAULT_CONTEXT_BUDGET_BYTES = 32_000
 MAX_CONTEXT_BUDGET_BYTES = 64_000
+# ResponseRun.retrieval_context keys: the route writes WEB_SEARCH_KEY, only the worker writes the outcome.
+WEB_SEARCH_KEY = "_web_search"
+WEB_SEARCH_OUTCOME_KEY = "_web_search_outcome"
 
 
 class SelectedEvidenceRef(BaseModel):
@@ -58,6 +61,33 @@ class Citation(BaseModel):
     url: str | None = None
     observedAt: datetime | None = Field(default=None, alias="observed_at")
     quote: str = Field(min_length=1, max_length=MAX_QUOTE_LENGTH)
+
+
+class WebCitation(BaseModel):
+    """Server-built citation for a cited public web search result (no Source, no evidence fence).
+
+    Canonical shape: {"sourceType":"web","url":"https://…","title":"…","quote":"…","provider":"tavily",
+    "retrievedAt":"2026-10-07T00:00:00Z"}. The model only supplies a number; the server fills the rest.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    sourceType: Literal["web"] = "web"
+    url: str = Field(min_length=1, max_length=2048)
+    title: str = Field(min_length=1, max_length=500)
+    quote: str = Field(default="", max_length=MAX_QUOTE_LENGTH)
+    provider: str = Field(min_length=1, max_length=32)
+    retrievedAt: datetime
+
+
+class WebSearchOutcomeRead(BaseModel):
+    """Truthful, URL-free outcome of an opted-in web search, shared by MessageRead and the SSE event."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["used", "unavailable", "skipped"]
+    reason: str | None = Field(default=None, max_length=64)
+    result_count: int = Field(default=0, ge=0, le=100)
 
 
 class EvidenceItem(BaseModel):
@@ -228,6 +258,7 @@ class MessageRead(BaseModel):
     response_id: UUID | None = None
     revision_of_message_id: UUID | None = None
     created_at: datetime
+    web_search: WebSearchOutcomeRead | None = None
 
 
 class ChatExportCitation(BaseModel):
@@ -245,6 +276,19 @@ class ChatExportCitation(BaseModel):
     observed_at: datetime | None = None
     quote: str = Field(min_length=1, max_length=MAX_QUOTE_LENGTH)
     current_source_generation: int = Field(ge=0)
+
+
+class ChatExportWebCitation(BaseModel):
+    """Export shape of a cited web result; the URL is query-stripped and there is no evidence fence."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_type: Literal["web"] = "web"
+    url: str = Field(min_length=1, max_length=2048)
+    title: str = Field(min_length=1, max_length=500)
+    quote: str = Field(default="", max_length=MAX_QUOTE_LENGTH)
+    provider: str = Field(min_length=1, max_length=32)
+    retrieved_at: datetime
 
 
 class ChatExportConversationRead(BaseModel):
@@ -275,7 +319,9 @@ class ChatExportMessageRead(BaseModel):
     content: str
     response_id: UUID | None = None
     revision_of_message_id: UUID | None = None
-    citations: list[ChatExportCitation] = Field(default_factory=list, max_length=100)
+    citations: list[Annotated[ChatExportCitation | ChatExportWebCitation, Field(discriminator="source_type")]] = Field(
+        default_factory=list, max_length=100,
+    )
     omitted_citation_count: int = Field(default=0, ge=0)
     created_at: datetime
     updated_at: datetime
@@ -413,6 +459,7 @@ class SendMessageRequest(BaseModel):
     content: str = Field(min_length=1, max_length=20000)
     client_request_id: str | None = Field(default=None, max_length=128)
     context: dict[str, Any] | None = None
+    web_search: bool = False
 
 
 class MessageMutationRequest(BaseModel):
@@ -424,6 +471,7 @@ class MessageMutationRequest(BaseModel):
     base_content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     client_request_id: str = Field(min_length=1, max_length=128)
     content: str | None = Field(default=None, min_length=1, max_length=20_000)
+    web_search: bool = False
 
 
 class SendMessageResponse(BaseModel):

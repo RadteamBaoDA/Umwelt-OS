@@ -54,6 +54,7 @@ from modules.chat.schemas import (
     ChatExportFenceValidation,
     ChatExportMessageRead,
     ChatExportPage,
+    ChatExportWebCitation,
     ChatMemoryExportOrigin,
     Citation,
     CitationValidationResult,
@@ -71,6 +72,7 @@ from modules.chat.schemas import (
     SendMessageResponse,
     TemporalContextItem,
     ValidatedAnswer,
+    WebCitation,
 )
 from modules.chat.seed import ensure_demo_conversation
 from modules.chat.stream import (
@@ -121,6 +123,7 @@ __all__ = [
     "ChatExportFenceValidation",
     "ChatExportMessageRead",
     "ChatExportPage",
+    "ChatExportWebCitation",
     "ChatMemoryExportOrigin",
     "Citation",
     "CitationValidationResult",
@@ -143,6 +146,7 @@ __all__ = [
     "StreamEvent",
     "TemporalContextItem",
     "ValidatedAnswer",
+    "WebCitation",
     "authorize_agent_run_access",
     "build_context",
     "delete_conversation",
@@ -1006,7 +1010,7 @@ async def export_page(
             message_statement.order_by(Message.created_at, Message.id)
             .limit(limit + 1).execution_options(yield_per=10)
         )
-        candidates: list[tuple[dict[str, _Any], list[Citation], int]] = []
+        candidates: list[tuple[dict[str, _Any], list[Citation | WebCitation], int]] = []
         page_ref_set: set[tuple[UUID, UUID]] = set()
         page_citation_count = 0
         predicted_candidate_bytes = 0
@@ -1022,14 +1026,18 @@ async def export_page(
                 raw_citations = message_row["citations"] if isinstance(message_row["citations"], list) else []
                 if len(raw_citations) > 100:
                     raise ValueError("A retained message exceeds the citation export bound")
-                parsed: list[Citation] = []
+                parsed: list[Citation | WebCitation] = []
                 omitted = 0 if isinstance(message_row["citations"], list) else 1
                 for raw in raw_citations:
                     try:
-                        parsed.append(Citation.model_validate(raw))
+                        is_web = isinstance(raw, dict) and raw.get("sourceType") == "web"
+                        parsed.append(WebCitation.model_validate(raw) if is_web else Citation.model_validate(raw))
                     except ValueError:
                         omitted += 1
-                refs_for_message = {(message_item.documentVersionId, message_item.chunkId) for message_item in parsed}
+                refs_for_message = {
+                    (message_item.documentVersionId, message_item.chunkId)
+                    for message_item in parsed if isinstance(message_item, Citation)
+                }
                 predicted_record_bytes = (
                     len(_json.dumps(content, ensure_ascii=False).encode("utf-8"))
                     + len(parsed) * 32_768 + 1024
@@ -1048,10 +1056,21 @@ async def export_page(
 
         evidence = await _chat_export_evidence_fences(session, list(page_ref_set))
         for message_row, parsed, initially_omitted in candidates:
-            citations: list[ChatExportCitation] = []
+            citations: list[ChatExportCitation | ChatExportWebCitation] = []
             citation_fences: list[ChatExportCitationFence] = []
             omitted = initially_omitted
             for citation in parsed:
+                if isinstance(citation, WebCitation):
+                    # No Source, evidence fence or omission: the URL is query-stripped like document URLs.
+                    safe_url = _safe_chat_export_url(citation.url)
+                    if safe_url is None:
+                        omitted += 1
+                        continue
+                    citations.append(ChatExportWebCitation(
+                        url=safe_url, title=citation.title, quote=citation.quote,
+                        provider=citation.provider, retrieved_at=citation.retrievedAt,
+                    ))
+                    continue
                 resolved = evidence.get((citation.documentVersionId, citation.chunkId))
                 if resolved is None:
                     omitted += 1
@@ -1403,9 +1422,17 @@ async def filter_current_citations(
     if not isinstance(citations, list) or not citations:
         return []
     refs: list[tuple[UUID, UUID]] = []
-    parsed: list[tuple[dict[str, object], UUID, UUID, UUID, UUID]] = []
+    parsed: list[tuple[dict[str, object], UUID, UUID, UUID, UUID] | dict[str, object]] = []
     for raw in citations:
         if not isinstance(raw, dict):
+            continue
+        if raw.get("sourceType") == "web":
+            # Web results reference no Source or evidence: keep valid ones in place (markers are positional).
+            try:
+                WebCitation.model_validate(raw)
+            except ValueError:
+                continue
+            parsed.append(raw)
             continue
         source_id = _cleanup_uuid(raw.get("sourceId") or raw.get("source_id"))
         document_id = _cleanup_uuid(raw.get("documentId") or raw.get("document_id"))
@@ -1416,21 +1443,25 @@ async def filter_current_citations(
         refs.append((version_id, chunk_id))  # type: ignore[arg-type]
         parsed.append((raw, source_id, document_id, version_id, chunk_id))  # type: ignore[arg-type]
     unique_refs = sorted(set(refs), key=lambda item: (str(item[0]), str(item[1])))
-    if not unique_refs:
-        return []
-    from modules.knowledge.documents import public as documents_public
-
     current = {}
-    for start in range(0, len(unique_refs), 100):
-        evidence = await documents_public.lock_chat_evidence_chunks(
-            session, unique_refs[start:start + 100], require_active_source=False,
-        )
-        current.update({(item.document_version_id, item.chunk_id): item for item in evidence})
-    return [
-        raw for raw, source_id, document_id, version_id, chunk_id in parsed
-        if (item := current.get((version_id, chunk_id))) is not None
-        and item.source_id == source_id and item.document_id == document_id
-    ]
+    if unique_refs:
+        from modules.knowledge.documents import public as documents_public
+
+        for start in range(0, len(unique_refs), 100):
+            evidence = await documents_public.lock_chat_evidence_chunks(
+                session, unique_refs[start:start + 100], require_active_source=False,
+            )
+            current.update({(item.document_version_id, item.chunk_id): item for item in evidence})
+    kept: list[dict[str, object]] = []
+    for entry in parsed:
+        if isinstance(entry, dict):
+            kept.append(entry)
+            continue
+        raw, source_id, document_id, version_id, chunk_id = entry
+        if ((item := current.get((version_id, chunk_id))) is not None
+                and item.source_id == source_id and item.document_id == document_id):
+            kept.append(raw)
+    return kept
 
 
 async def purge_document_copied_evidence_page(
