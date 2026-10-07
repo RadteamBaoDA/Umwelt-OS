@@ -18,7 +18,7 @@ from redis.exceptions import TimeoutError as RedisTimeoutError
 from core.model_gateway.cache import capability_key
 from core.model_gateway.policy import may_send
 from core.model_gateway.schemas import ModelMapping, RequestPolicy
-from core.model_gateway.transport import EndpointNetworkPolicyError, approved_http_client
+from core.model_gateway.transport import EndpointNetworkPolicyError, approved_http_client, body_sent
 from core.telemetry import record_model_call
 
 _LEASE_PREFIX = "bbd:model-gateway:slot:"
@@ -187,6 +187,9 @@ class ModelGateway:
                             await self.before_send()
                         if before_send is not None and before_send is not self.before_send:
                             await before_send()
+                        # Gated (P2-3): with no after_send the ContextVar is never touched, so the
+                        # transport sends request.stream unwrapped exactly as before.
+                        hook = body_sent.set(after_send) if after_send is not None else None
                         try:
                             if path == "chat/completions":
                                 response = await client.chat.completions.create(**body)
@@ -197,6 +200,9 @@ class ModelGateway:
                             else:
                                 raise ModelGatewayError("Unsupported model gateway operation")
                         finally:
+                            if hook is not None:
+                                body_sent.reset(hook)
+                            # Fallback release (connect/write failure, timeout); after_send is idempotent.
                             if after_send is not None:
                                 await after_send()
                     except (APITimeoutError, APIConnectionError) as exc:
@@ -259,8 +265,13 @@ class ModelGateway:
         messages: list[dict[str, Any]], probe: bool = False, *,
         max_tokens: int | None = None, temperature: float | None = None,
         before_send: Callable[[], Awaitable[None]] | None = None,
+        after_send: Callable[[], Awaitable[None]] | None = None,
     ) -> Any:
-        """Send bounded chat requests under gateway policy and optional per-attempt authorization."""
+        """Send bounded chat requests under gateway policy and optional per-attempt authorization.
+
+        ``after_send`` (idempotent) runs once the request body is handed to the transport and again
+        after each attempt, so callers can release send fences before the response arrives.
+        """
         if max_tokens is not None and not 1 <= max_tokens <= 8192:
             raise ValueError("max_tokens must be between 1 and 8192")
         if temperature is not None and not 0 <= temperature <= 2:
@@ -271,7 +282,7 @@ class ModelGateway:
         if temperature is not None:
             payload["temperature"] = temperature
         return await self._request(
-            alias, mapping, policy, "chat", "chat/completions", payload, probe, before_send
+            alias, mapping, policy, "chat", "chat/completions", payload, probe, before_send, after_send
         )
 
     async def stream(
@@ -282,7 +293,8 @@ class ModelGateway:
         """Stream with telemetry and a per-attempt lock release after request opening.
 
         ``self.before_send`` runs immediately before every request attempt. ``after_send`` runs as
-        soon as request creation succeeds or fails so callers can release short-lived send locks.
+        soon as the request body is handed to the transport, and again when request creation
+        succeeds or fails, so callers can release short-lived send locks (it must be idempotent).
         Telemetry is observational; errors and cancellation propagate, and missing usage stays null.
         """
         started = time.perf_counter()
@@ -340,8 +352,12 @@ class ModelGateway:
                     try:
                         if self.before_send is not None:
                             await self.before_send()
+                        # I6/T7: the transport releases the send fence once the body is handed to
+                        # transport.write; publication is re-fenced per flush (T3). Gated (P2-3).
+                        # Keep set/reset free of any `yield` (P3-2): reset fails across a context switch.
+                        hook = body_sent.set(after_send) if after_send is not None else None
                         try:
-                            # Bound header/first-byte wait: the I6 send fence is held until create() returns.
+                            # Bound header/first-byte wait.
                             async with asyncio.timeout(self.timeout_seconds):
                                 stream = await client.chat.completions.create(
                                     model=mapping.model,
@@ -349,6 +365,8 @@ class ModelGateway:
                                     stream=True,
                                 )
                         finally:
+                            if hook is not None:
+                                body_sent.reset(hook)
                             if after_send is not None:
                                 await after_send()
                         async for chunk in stream:
