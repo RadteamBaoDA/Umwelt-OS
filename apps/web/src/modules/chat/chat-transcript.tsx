@@ -17,13 +17,13 @@ import { formatDateTime } from '@/core/i18n';
 const KNOWN_REASONS = ['not_configured', 'query_too_long', 'local_only_context', 'daily_limit', 'timeout', 'provider_error', 'network_denied', 'run_inactive'];
 
 /** Announced notice for a requested web search that was skipped or unavailable; renders nothing otherwise. */
-function WebSearchNotice({ outcome }: { outcome?: WebSearchOutcome | null }) {
+function WebSearchNotice({ outcome, live = false }: { outcome?: WebSearchOutcome | null; live?: boolean }) {
   const t = useTranslations('chat');
   if (!outcome || (outcome.status !== 'unavailable' && outcome.status !== 'skipped')) return null;
   const reason = outcome.reason && KNOWN_REASONS.includes(outcome.reason) ? t(`webReason_${outcome.reason}`) : t('webReason_unknown');
   const title = outcome.status === 'skipped' ? t('webSkipped') : t('webUnavailable');
   return (
-    <p role="status" data-testid="web-search-notice" className={`mt-1 text-[11px] ${outcome.status === 'unavailable' ? 'text-destructive' : 'text-muted-foreground'}`}>
+    <p role={live ? 'status' : undefined} data-testid="web-search-notice" className={`mt-1 text-[11px] ${outcome.status === 'unavailable' ? 'text-destructive' : 'text-muted-foreground'}`}>
       {title} {reason}
     </p>
   );
@@ -45,7 +45,12 @@ function CitationChips({ citations }: { citations: Citation[] }) {
                   <sup className="font-semibold text-foreground">{index + 1}</sup>
                   <span className="truncate">{webHost(citation.url)}</span>
                 </a>
-              ) : null}
+              ) : (
+                <span className={chipClass.replace('hover:text-foreground', '')}>
+                  <sup className="font-semibold text-foreground">{index + 1}</sup>
+                  <span className="truncate">{webHost(citation.url)}</span>
+                </span>
+              )}
             </li>
           );
         }
@@ -289,7 +294,7 @@ export function ChatTranscript({
 
             <ChatMarkdown content={streamingText || ''} />
 
-            {mode === 'full' && <WebSearchNotice outcome={streamingWebSearch} />}
+            {mode === 'full' && <WebSearchNotice outcome={streamingWebSearch} live />}
             {mode === 'full' && streamingCitations && streamingCitations.length > 0 && (
               <CitationPanel citations={streamingCitations} variant="inline" />
             )}

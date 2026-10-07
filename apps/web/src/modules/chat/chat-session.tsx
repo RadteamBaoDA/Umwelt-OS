@@ -17,6 +17,7 @@ import {
   type ChatMessage,
   type Citation,
   type WebSearchOutcome,
+  WEB_SEARCH_SEND_ENABLED,
 } from '@/modules/chat/api';
 import { ChatComposer } from './chat-composer';
 import { ChatTranscript } from './chat-transcript';
@@ -160,6 +161,9 @@ export function ChatSession({
     aiSettings.data && aiSettings.data.web_search_provider !== 'none'
     && aiSettings.data.web_search_credential_configured && aiSettings.data.privacy?.allow_remote_web_search,
   );
+  // Specialist-agent sends (non-assistant profile or a pending profile retry) do not carry web_search.
+  const webSearchProfileBlocked = selectedProfileId !== 'assistant' || Boolean(pendingProfileRun);
+  const webSearchUsable = WEB_SEARCH_SEND_ENABLED && webSearchAvailable && !webSearchProfileBlocked;
 
   const profiles = useQuery({ queryKey: ['agent-profiles'], queryFn: getAgentProfiles, enabled: mode === 'full' });
   const agentRuns = useQuery({
@@ -363,7 +367,7 @@ export function ChatSession({
 
     setError(null);
     setIsPending(true);
-    const webSearchRequested = mode === 'full' && webSearchAvailable && webSearchOn;
+    const webSearchRequested = mode === 'full' && webSearchUsable && webSearchOn;
     try {
       const baseContentHash = await hashMessageContent(target.content);
       const envelope = chatCtrl.getOrCreatePendingMessageMutation(targetConversationId, {
@@ -410,7 +414,7 @@ export function ChatSession({
           : mutationError instanceof Error ? mutationError.message : t('revisionFailed'));
       }
     }
-  }, [chatCtrl, conversationId, isPending, isStreaming, messages, mode, queryClient, session.csrfToken, streamResponseRun, t, webSearchAvailable, webSearchOn]);
+  }, [chatCtrl, conversationId, isPending, isStreaming, messages, mode, queryClient, session.csrfToken, streamResponseRun, t, webSearchUsable, webSearchOn]);
 
   /** Opens the full Chat composer with a user message's content for an append-only edit. */
   const handleEditMessage = React.useCallback((message: ChatMessage) => {
@@ -551,7 +555,7 @@ export function ChatSession({
             content,
             client_request_id: clientRequestId,
             context: chatCtrl.context ?? undefined,
-            ...(mode === 'full' && webSearchAvailable && webSearchOn ? { web_search: true } : {}),
+            ...(mode === 'full' && webSearchUsable && webSearchOn ? { web_search: true } : {}),
           },
           session.csrfToken,
         );
@@ -598,7 +602,7 @@ export function ChatSession({
       effectiveEditingMessageId,
       handleMessageMutation,
       streamResponseRun,
-      webSearchAvailable,
+      webSearchUsable,
       webSearchOn,
     ],
   );
@@ -638,6 +642,7 @@ export function ChatSession({
     setStreamingText('');
     setStreamingCitations([]);
     setStreamingWebSearch(null);
+    setWebSearchOn(false);
     setIsStreaming(false);
     setIsPending(false);
   }, [chatCtrl]);
@@ -767,7 +772,7 @@ export function ChatSession({
         modelLabel={latestAssistant?.model_identity ?? null}
         sourcesCount={latestAssistant?.citations?.length ?? 0}
         showCapabilityNote={mode === 'full'}
-        webSearch={mode === 'full' ? { available: webSearchAvailable, enabled: webSearchOn, onChange: setWebSearchOn } : undefined}
+        webSearch={mode === 'full' && WEB_SEARCH_SEND_ENABLED ? { available: webSearchAvailable, provider: aiSettings.data?.web_search_provider === 'brave' ? 'Brave' : 'Tavily', profileBlocked: webSearchProfileBlocked, enabled: webSearchOn, onChange: setWebSearchOn } : undefined}
       />
     </div>
   );

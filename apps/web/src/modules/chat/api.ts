@@ -31,10 +31,16 @@ export interface WebCitation {
 /** Citation shown with an answer; discriminated by `sourceType`. */
 export type Citation = DocumentCitation | WebCitation;
 
+/**
+ * Gates the web_search toggle and request flag.
+ * ponytail: W3 (backend accepts `web_search`) flips this to true; until then the field would 422 (extra="forbid").
+ */
+export const WEB_SEARCH_SEND_ENABLED = false;
+
 /** Reason codes the backend may report for a skipped or unavailable web search. */
 export type WebSearchReason =
   | 'not_configured' | 'query_too_long' | 'local_only_context' | 'daily_limit'
-  | 'timeout' | 'provider_error' | 'network_denied' | 'run_inactive';
+  | 'timeout' | 'provider_error' | 'network_denied' | 'run_inactive' | 'no_results';
 
 /** Outcome of a requested web search; absent when the message did not opt in. */
 export interface WebSearchOutcome {

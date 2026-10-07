@@ -85,7 +85,7 @@ export function CitationPanel({
               <div key={`web-${idx}`} className="flex flex-col gap-1.5 p-2.5 rounded-lg border border-border bg-background text-xs">
                 <div className="flex items-start justify-between gap-2">
                   <span className="font-semibold text-foreground line-clamp-2">[{idx + 1}] {citation.title}</span>
-                  <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-border bg-surface px-1.5 text-[10px] text-muted-foreground">
+                  <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-border bg-secondary px-1.5 text-[10px] text-muted-foreground">
                     <GlobeIcon className="size-3" />{t('webBadge')}
                   </span>
                 </div>

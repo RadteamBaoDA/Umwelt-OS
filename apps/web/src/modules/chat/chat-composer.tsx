@@ -32,7 +32,7 @@ export interface ChatComposerProps {
   /** Full page shows the truthful web search and attachment availability note. */
   showCapabilityNote?: boolean;
   /** Per-message web search opt-in; passed only by the full Chat page. */
-  webSearch?: { available: boolean; enabled: boolean; onChange: (enabled: boolean) => void };
+  webSearch?: { available: boolean; profileBlocked?: boolean; provider?: string; enabled: boolean; onChange: (enabled: boolean) => void };
 }
 
 /**
@@ -151,15 +151,15 @@ export function ChatComposer({
           <div className="flex items-center gap-2">
             <Checkbox
               id="chat-web-search"
-              checked={webSearch.available && webSearch.enabled}
-              disabled={!webSearch.available || isStreaming}
+              checked={webSearch.available && !webSearch.profileBlocked && webSearch.enabled}
+              disabled={!webSearch.available || webSearch.profileBlocked || isStreaming || disabled}
               onCheckedChange={(checked) => webSearch.onChange(checked === true)}
               aria-describedby="chat-web-search-help"
             />
             <Label htmlFor="chat-web-search" className="text-xs text-foreground">{t('webSearchToggle')}</Label>
           </div>
           <p id="chat-web-search-help" className="text-[11px] text-muted-foreground">
-            {!webSearch.available ? t('webSearchDisabledHelp') : webSearch.enabled ? t('webSearchEnabledHelp') : t('webSearchIdleHelp')}
+            {!webSearch.available ? t('webSearchDisabledHelp') : webSearch.profileBlocked ? t('webSearchProfileHelp') : webSearch.enabled ? t('webSearchEnabledHelp', { provider: webSearch.provider ?? '' }) : t('webSearchIdleHelp')}
           </p>
         </div>
       )}
