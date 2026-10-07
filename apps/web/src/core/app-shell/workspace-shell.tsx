@@ -91,6 +91,8 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   const menuTriggerRef = useRef<HTMLButtonElement>(null);
   const sessionEndedRef = useRef(false);
+  /** Set while the owner's own logout is in flight: the server has revoked the session, so 401s are expected. */
+  const signingOutRef = useRef(false);
   const session = useQuery({ queryKey: ['session'], queryFn: () => apiRequest<Session>('/api/v1/auth/session') });
   const moduleAvailability = useQuery({
     queryKey: ['module-lifecycle'],
@@ -125,7 +127,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
     display.endAuthSession();
     setPreferencesOpen(false);
     setAccountOpen(false);
-    router.replace(expired ? '/login?reason=expired' : '/login');
+    router.replace(expired && !signingOutRef.current ? '/login?reason=expired' : '/login');
   }, [client, display.endAuthSession, router]);
 
   useEffect(() => {
@@ -146,11 +148,15 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
   }, [endSession, session.error]);
 
   const logout = useMutation({
-    mutationFn: () => apiRequest<void>('/api/v1/auth/logout', {
-      method: 'POST',
-      headers: csrfHeaders(session.data?.csrfToken ?? ''),
-    }),
+    mutationFn: () => {
+      signingOutRef.current = true;
+      return apiRequest<void>('/api/v1/auth/logout', {
+        method: 'POST',
+        headers: csrfHeaders(session.data?.csrfToken ?? ''),
+      });
+    },
     onSuccess: () => endSession(),
+    onError: () => { signingOutRef.current = false; },
   });
 
   /** Loads owner preferences for the dialog retry; returns null on request failure, abort, or stale auth generation. */

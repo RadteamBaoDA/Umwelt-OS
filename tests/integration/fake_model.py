@@ -10,6 +10,9 @@ the query selects `search=down` (503), `search=slow` (sleep FAKE_SEARCH_SLOW_MS,
 `search=inject` (prompt-injection snippet), `search=empty` (zero results) and `search_delay_ms=N`.
 Env `FAKE_SEARCH_MODE` / `FAKE_SEARCH_DELAY_MS` set the defaults. Every request is logged (path, query, body,
 header names, auth present) at `GET /_fake/search-log`; `DELETE /_fake/search-log` clears it.
+Non-stream chat honours `first_delay_ms` too (slept after the body is read, before the headers).
+`GET /_fake/received?contains=X` counts the chat bodies received whose last user message contains X
+(tests wait on it to know the body was written).
 """
 
 import asyncio
@@ -31,6 +34,7 @@ SEARCH_MODE = os.getenv("FAKE_SEARCH_MODE", "")
 SEARCH_DELAY_MS = int(os.getenv("FAKE_SEARCH_DELAY_MS", "0"))
 SEARCH_SLOW_MS = int(os.getenv("FAKE_SEARCH_SLOW_MS", "10000"))
 SEARCH_LOG: list[dict[str, object]] = []
+RECEIVED: list[str] = []
 
 
 def fake_text(tokens: int) -> str:
@@ -87,13 +91,22 @@ def _chunk(content: str | None, finish: str | None = None) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
 
+async def received(request: Request) -> Response:
+    needle = request.query_params.get("contains", "")
+    return JSONResponse({"count": sum(1 for text in RECEIVED if needle in text)})
+
+
 async def chat_completions(request: Request) -> Response:
     body = await request.json()
+    RECEIVED.append(_last_user(body))
     tokens, delay, first_delay = _options(request, body)
     cite = _marker(_last_user(body)).get("cite")
     if not body.get("stream"):
+        if first_delay:
+            await asyncio.sleep(first_delay / 1000)
+        content = fake_text(tokens) + (f" [{int(cite)}]" if cite else "")
         return JSONResponse({"id": "chatcmpl-fake", "object": "chat.completion", "created": 0, "model": MODEL,
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": fake_text(tokens)},
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": content},
                          "finish_reason": "stop"}],
             "usage": {"prompt_tokens": 1, "completion_tokens": tokens, "total_tokens": tokens + 1}})
 
@@ -163,4 +176,5 @@ app = Starlette(routes=[
     Route("/search", tavily_search, methods=["POST"]),
     Route("/res/v1/web/search", brave_search, methods=["GET"]),
     Route("/_fake/search-log", search_log, methods=["GET", "DELETE"]),
+    Route("/_fake/received", received),
 ])

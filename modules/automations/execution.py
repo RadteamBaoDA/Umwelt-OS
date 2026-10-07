@@ -1150,14 +1150,24 @@ async def _generate_brief(ctx: dict[str, Any], run: AutomationRun, row: Automati
                 return "dropped"
             schedule = await dashboard.read_schedule(session, run.owner_id)
             day = datetime.now(UTC).astimezone(ZoneInfo(schedule.timezone)).date()
+            run_id = run.id
+
+            async def evidence_guard(guarded: AsyncSession) -> bool:
+                """Re-take the trigger-evidence fence before the brief's own locks (egress and publish)."""
+                fresh = await guarded.get(AutomationRun, run_id, populate_existing=True)
+                return fresh is not None and await _run_evidence_current(guarded, fresh)
+
             brief = await dashboard.generate_brief(
                 session, run.owner_id, day, schedule.timezone, settings=cast(Settings, ctx["settings"]),
-                redis=cast(Redis, ctx["redis"]), force=False)
+                redis=cast(Redis, ctx["redis"]), force=False, publish_guard=evidence_guard)
         await _mark(factory, run.id, row.ordinal, "succeeded", None, f"brief:{getattr(brief, 'id', 'daily')}")
         return "succeeded"
     except dashboard.BriefEmpty:
         await _mark(factory, run.id, row.ordinal, "succeeded", None, "brief:empty")
         return "succeeded"
+    except dashboard.BriefEvidenceRevoked:  # purge landed mid-call: drop like the step-start check, any attempt
+        await _mark(factory, run.id, row.ordinal, "skipped", "document_evidence_unavailable")
+        return "dropped"
     except dashboard.BriefUnavailable:
         return await _transient(factory, run.id, row.ordinal)
     except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues

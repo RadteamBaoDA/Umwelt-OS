@@ -577,6 +577,7 @@ class _SlowModelServer:
         self.request_lines: list[bytes] = []
         self.headers_sent_at: list[float] = []
         self.server: asyncio.Server | None = None
+        self.release: asyncio.Event | None = None  # when set, headers wait for it instead of sleeping
 
     async def __aenter__(self) -> Self:
         self.server = await asyncio.start_server(self._handle, "127.0.0.1", 0)
@@ -604,7 +605,14 @@ class _SlowModelServer:
                 length = next(int(x.split(b":")[1]) for x in lines if x.lower().startswith(b"content-length:"))
                 body = await reader.readexactly(length)
                 self.bodies.append(body)
-                await asyncio.sleep(self.delay)
+                if self.release is not None:
+                    try:
+                        await asyncio.wait_for(self.release.wait(), 5)
+                    except TimeoutError:
+                        pass  # hook never fired before headers: the test's assertions fail, no hang
+                    self.release.clear()
+                else:
+                    await asyncio.sleep(self.delay)
                 status = self.statuses.pop(0) if self.statuses else 200
                 payload = self._payload(lines[0], json.loads(body), status)
                 ctype = b"text/event-stream" if payload.startswith(b"data:") else b"application/json"
@@ -690,16 +698,18 @@ class TestBodySentHook:
         # rerank covers design T6: _apply_configured_reranking's evidence-lock release rides this hook.
         # stream covers D4/T7: the chat send fence is released before the response headers.
         calls: list[tuple[float, int, int]] = []
-        async with _SlowModelServer(delay=1.0) as server:
+        async with _SlowModelServer(delay=0) as server:
+            release = server.release = asyncio.Event()
 
             async def after_send() -> None:
                 calls.append((time.monotonic(), written[0], len(server.headers_sent_at)))
+                release.set()
 
             result = await _call(_loopback_gateway(server.base_url), op, after_send)
         assert result
         assert len(server.bodies) == 1 and len(server.headers_sent_at) == 1
         hook_at, written_then, headers_then = calls[0]
-        assert headers_then == 0 and hook_at < server.headers_sent_at[0] - 0.8
+        assert headers_then == 0 and hook_at <= server.headers_sent_at[0]  # <=: coarse Windows clock; headers_then==0 is the real ordering proof
         # Every request byte (head + full body) had been handed to transport.write when the hook ran.
         assert written_then == written[0] and written_then > len(server.bodies[0]) > len(_BIG)
         assert len(calls) == 2  # hook once + the idempotent finally fallback
@@ -715,13 +725,16 @@ class TestBodySentHook:
     @pytest.mark.asyncio
     async def test_retry_fires_hook_per_attempt_and_refences(self) -> None:
         events: list[str] = []
-        async with _SlowModelServer(delay=0.3, statuses=[503]) as server:
+        async with _SlowModelServer(delay=0, statuses=[503]) as server:
+            release = server.release = asyncio.Event()
 
             async def before() -> None:
                 events.append("before")
 
             async def after_send() -> None:
                 events.append(f"after:{len(server.headers_sent_at)}")
+                if len(server.headers_sent_at) < events.count("before"):  # this request's headers still pending
+                    release.set()
 
             gw = _loopback_gateway(server.base_url)
             gw.before_send = before
