@@ -1600,3 +1600,13 @@ async def purge_document_copied_evidence_page(
     return CopiedEvidenceCleanupProgress(
         next_cursor=None, complete=True, rows_examined=examined, rows_changed=changed,
     )
+
+
+async def count_source_conversations(session: AsyncSession, source_id: UUID, cap: int = 1000) -> int:
+    """Return an owner-UI-only count of conversations citing a source, saturating at ``cap``."""
+    capped = (
+        _select(Message.conversation_id)
+        .where(Message.citations.contains([{"sourceId": str(source_id)}]))
+        .distinct().limit(cap).subquery()
+    )
+    return int(await session.scalar(_select(_func.count()).select_from(capped)) or 0)

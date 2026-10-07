@@ -190,3 +190,12 @@ class OperationRead(BaseModel):
     memory_error_code: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class SourceImpactRead(BaseModel):
+    """Counts only, no content or names; each value saturates at 1000."""
+
+    document_count: int
+    gadget_definition_count: int
+    gadget_placement_count: int
+    conversation_count: int

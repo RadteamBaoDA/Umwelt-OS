@@ -3600,3 +3600,8 @@ async def lock_chat_evidence_chunks(
         raise ValueError("One or more exact selected evidence chunks are unavailable")
     return evidence
 
+
+async def count_source_documents(session: AsyncSession, source_id: UUID, cap: int = 1000) -> int:
+    """Return an owner-UI-only document count for one source, saturating at ``cap``."""
+    capped = select(Document.id).where(Document.source_id == source_id).limit(cap).subquery()
+    return int(await session.scalar(select(func.count()).select_from(capped)) or 0)

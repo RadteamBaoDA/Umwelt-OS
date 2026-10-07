@@ -338,6 +338,9 @@ async def test_source_purge_erases_derived_data_and_replays_never_resurrect_it(
     assert await _scalar(
         engine, "SELECT count(*) FROM documents WHERE source_id = :id", id=source_id) == 0
     assert (await client.get(f"/api/v1/sources/{source_id}")).json()["status"] == "archived"
+    impact = await client.get(f"/api/v1/sources/{source_id}/impact")
+    assert impact.status_code == 200 and impact.json()["document_count"] == 0
+    assert impact.json()["gadget_definition_count"] == 0 and impact.json()["conversation_count"] == 0
 
 
 async def test_purge_reports_success_only_after_source_memory_coverage_completes(

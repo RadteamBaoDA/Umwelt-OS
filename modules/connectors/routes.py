@@ -326,6 +326,13 @@ async def _await_with_github_segment_deadline(  # noqa: UP047  # keep TypeVar/Ty
     return await asyncio.wait_for(operation, timeout=remaining)
 
 
+def _collection_error_code(exc: BaseException) -> str:
+    """Map provider 401/403 to a reconnect-needed code; everything else stays a collection failure."""
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in {401, 403}:
+        return "provider_unauthorized"
+    return "provider_collection_failed"
+
+
 async def _release_failed_collection(
     session: AsyncSession,
     lease: ConnectorCollectionLease,
@@ -821,7 +828,7 @@ async def fetch_native_provider(
         raise
     except (TimeoutError, httpx.HTTPError, ValueError) as exc:
         await _release_failed_collection(
-            session, active_lease[0], error_code="provider_collection_failed"
+            session, active_lease[0], error_code=_collection_error_code(exc)
         )
         raise HTTPException(status_code=503, detail="Provider collection failed") from exc
     except BaseException:
