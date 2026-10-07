@@ -10,6 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { entityKeys, getEntity, getEntityNeighbors, getEntityTimeline, getRelationshipEvidence, listEntityEvidence } from '@/modules/knowledge/api';
+import { FollowEntityButton } from './follow-entity';
 import { EventDetail } from '@/modules/timeline/event-detail';
 
 const badgeClass = 'inline-flex h-6 items-center rounded-full border border-border bg-background px-2 text-xs font-semibold text-muted-foreground';
@@ -118,6 +119,7 @@ export function EntityDialogBody({ entityId, canGoBack, onBack, onOpenEntity }: 
       </TabsContent>
     </Tabs>
     <footer className="mt-auto flex flex-wrap items-center gap-2 border-t border-border pt-3">
+      <FollowEntityButton entityId={value.id} name={value.name} />
       <Button asChild variant="outline"><Link href={`/knowledge/entities/${value.id}`}>{d('openFullEntity')}</Link></Button>
       <span className="text-xs text-muted-foreground">{d('correctionsNote')}</span>
     </footer>

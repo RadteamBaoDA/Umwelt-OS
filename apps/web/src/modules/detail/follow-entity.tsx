@@ -1,0 +1,58 @@
+'use client';
+
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Check, Plus } from 'lucide-react';
+import { useTranslations } from 'next-intl';
+import { ApiError } from '@/core/api';
+import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
+import { Button } from '@/components/ui/button';
+import { createTopic, fetchTopics, updateTopic } from '@/modules/news/api';
+import type { Topic } from '@/modules/news/types';
+
+const topicsKey = ['topics', 'follow-lookup'] as const;
+const MAX_PAGES = 10;
+
+/** Reads every owner topic (bounded) so followed state never depends on one page. */
+async function fetchAllTopics(): Promise<Topic[]> {
+  const items: Topic[] = [];
+  let cursor: string | undefined;
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const result = await fetchTopics({ limit: 100, cursor });
+    items.push(...result.items);
+    if (!result.next_cursor) return items;
+    cursor = result.next_cursor;
+  }
+  return items;
+}
+
+/**
+ * Follow = a topic whose entity_ids contain this entity. Idempotent: an active linked topic means
+ * "Following" and the button is disabled; an inactive linked topic is reactivated rather than duplicated.
+ */
+export function FollowEntityButton({ entityId, name }: { entityId: string; name: string | null }) {
+  const t = useTranslations('detail');
+  const { csrfToken } = useWorkspaceSession();
+  const queryClient = useQueryClient();
+  const topics = useQuery({ queryKey: topicsKey, queryFn: fetchAllTopics });
+  const linked = topics.data?.filter((topic) => topic.entity_ids.includes(entityId)) ?? [];
+  const following = linked.some((topic) => topic.is_active);
+  const follow = useMutation({
+    mutationFn: async () => {
+      const inactive = linked[0];
+      if (inactive) return updateTopic(inactive.id, { expected_revision: inactive.revision, is_active: true }, csrfToken);
+      return createTopic({ name: name ?? '', entity_ids: [entityId] }, csrfToken);
+    },
+    // A conflict means another write won; refetch so the button reflects the real state.
+    onSettled: () => queryClient.invalidateQueries({ queryKey: topicsKey }),
+  });
+  if (topics.isError) return <p role="alert" className="text-xs text-destructive">{t('followLoadFailed')} <Button type="button" variant="outline" size="sm" onClick={() => { void topics.refetch(); }}>{t('retry')}</Button></p>;
+  return <div className="flex flex-col items-start gap-1">
+    <Button type="button" variant={following ? 'secondary' : 'outline'} aria-pressed={following}
+      disabled={topics.isPending || follow.isPending || following || !name}
+      onClick={() => follow.mutate()}>
+      {following ? <Check aria-hidden="true" className="mr-2 size-4" /> : <Plus aria-hidden="true" className="mr-2 size-4" />}
+      {following ? t('following') : t('follow')}
+    </Button>
+    {follow.isError ? <p role="alert" className="text-xs text-destructive">{follow.error instanceof ApiError && follow.error.status === 409 ? t('followConflict') : t('followFailed')}</p> : null}
+  </div>;
+}

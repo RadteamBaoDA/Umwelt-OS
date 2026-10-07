@@ -52,6 +52,11 @@ export const detailMessages = {
       currentVersion: 'version {version}',
       contentPreview: 'Current content',
       openFullDocument: 'Open full document',
+      follow: 'Follow',
+      following: 'Following',
+      followLoadFailed: 'Could not check whether you follow this entity.',
+      followFailed: 'Could not follow this entity.',
+      followConflict: 'A topic with this name already exists or changed. Check your topics and try again.',
   },
   'vi-vi': {
       close: 'Đóng',
@@ -105,5 +110,10 @@ export const detailMessages = {
       currentVersion: 'phiên bản {version}',
       contentPreview: 'Nội dung hiện tại',
       openFullDocument: 'Mở tài liệu đầy đủ',
+      follow: 'Theo dõi',
+      following: 'Đang theo dõi',
+      followLoadFailed: 'Không thể kiểm tra bạn có đang theo dõi thực thể này không.',
+      followFailed: 'Không thể theo dõi thực thể này.',
+      followConflict: 'Đã có chủ đề cùng tên hoặc chủ đề đã thay đổi. Hãy kiểm tra chủ đề của bạn rồi thử lại.',
   },
 } as const;
