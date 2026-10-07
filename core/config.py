@@ -79,6 +79,7 @@ class Settings(BaseSettings):
         default="", validation_alias="MCP_STDIO_PROFILE_MANIFEST", repr=False
     )
     webhook_profiles_json: str = Field(default="", validation_alias="WEBHOOK_PROFILES", repr=False)
+    web_search_daily_limit: int = Field(default=50, ge=0, le=1000, validation_alias="WEB_SEARCH_DAILY_LIMIT")
     approval_expiry_hours: int = Field(default=24, ge=1, le=72, validation_alias="APPROVAL_EXPIRY_HOURS")
 
     @field_validator("ai_allowed_endpoint_hosts")
