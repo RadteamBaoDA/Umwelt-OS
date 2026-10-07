@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     secure_cookies: bool = False
     setup_token: SecretStr = SecretStr("")
     csrf_signing_secret: SecretStr = SecretStr("")
+    # Key the per-IP auth limiter on the rightmost X-Forwarded-For entry. Enable only behind a front proxy that
+    # OVERWRITES the header with the real client address; otherwise clients can spoof it and dodge the per-IP limit.
+    auth_trust_forwarded_for: bool = Field(default=False, validation_alias="AUTH_TRUST_FORWARDED_FOR")
     session_lifetime_hours: int = Field(default=24, gt=0, le=720)
     google_client_id: str = ""
     google_client_secret: SecretStr = SecretStr("")

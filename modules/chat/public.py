@@ -240,7 +240,8 @@ async def resolve_gadget_context(session: AsyncSession, context: dict[str, _Any]
         return {}
     if context.get("kind") != "selection":
         # This server-derived flag is reserved for validated exact gadget selections.
-        return {key: value for key, value in context.items() if key != "selected_only"}
+        # Strip server-reserved keys: "selected_only" and every "_"-prefixed private key.
+        return {key: value for key, value in context.items() if key != "selected_only" and not key.startswith("_")}
     from fastapi import HTTPException
 
     from modules.knowledge.documents import public as documents_public

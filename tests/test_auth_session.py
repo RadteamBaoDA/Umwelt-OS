@@ -85,6 +85,9 @@ class MemoryRedis:
     async def get(self, _key):
         return None
 
+    async def info(self, _section):
+        return {"used_memory": 1024, "maxmemory": 268435456}
+
     def incr(self, key):
         self.keys.append(key)
         return self

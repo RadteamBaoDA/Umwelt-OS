@@ -55,6 +55,13 @@ async def embeddings(request: Request) -> Response:
         "usage": {"prompt_tokens": 1, "total_tokens": 1}})
 
 
+async def rerank(request: Request) -> Response:
+    body = await request.json()
+    docs = body.get("documents", [])
+    return JSONResponse({"results": [{"index": i, "relevance_score": 1.0 - i / (len(docs) + 1)}
+                                     for i in reversed(range(len(docs)))]})
+
+
 def _chunk(content: str | None, finish: str | None = None) -> str:
     delta = {"content": content} if content is not None else {}
     payload = {"id": "chatcmpl-fake", "object": "chat.completion.chunk", "created": 0, "model": MODEL,
@@ -87,5 +94,6 @@ async def chat_completions(request: Request) -> Response:
 app = Starlette(routes=[
     Route("/v1/models", models),
     Route("/v1/embeddings", embeddings, methods=["POST"]),
+    Route("/v1/rerank", rerank, methods=["POST"]),
     Route("/v1/chat/completions", chat_completions, methods=["POST"]),
 ])

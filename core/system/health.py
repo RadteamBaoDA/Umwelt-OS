@@ -24,10 +24,16 @@ async def system_health(
     except (SQLAlchemyError, TimeoutError):
         postgres = "unavailable"
 
+    redis_memory: dict[str, int] = {}
     try:
         async with asyncio.timeout(PROBE_TIMEOUT_SECONDS):
             await redis.ping()
             worker_heartbeat = await redis.get(ARQ_WORKER_HEALTH_KEY)
+            try:
+                memory = await redis.info("memory")
+                redis_memory = {"used_bytes": int(memory.get("used_memory", 0)), "max_bytes": int(memory.get("maxmemory", 0))}
+            except RedisError:
+                pass  # INFO may be ACL-denied; memory is optional and must not mark Redis or the worker down
         redis_status = "healthy"
         worker_status = "healthy" if worker_heartbeat is not None else "unavailable"
     except (RedisError, TimeoutError):
@@ -41,7 +47,7 @@ async def system_health(
     )
     components = {
         "postgres": {"status": postgres},
-        "redis": {"status": redis_status},
+        "redis": {"status": redis_status, **({"memory": redis_memory} if redis_memory else {})},
         "worker": {"status": worker_status},
         "model_gateway": {"status": gateway_status, "connectivity": "not_tested"},
         "graph": {"status": "not_installed"},

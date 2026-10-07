@@ -245,3 +245,27 @@ async def test_chat_worker_sigterm_before_first_delta_returns_pending_then_compl
     seqs = [r[0] for r in rows]
     assert len(seqs) == len(set(seqs)) and len({r[1] for r in rows}) == len(rows)
     assert seqs.count(1) == 1 and rows[0][0] == 1
+
+
+@pytest.mark.asyncio
+async def test_reranker_alias_probe_and_chat_with_reranking(chat_ready: AsyncClient) -> None:
+    """Regression: /rerank replies used to fail SDK parsing (probe 500, reranking silently unavailable)."""
+    client = chat_ready
+    current = (await client.get("/api/v1/settings/ai")).json()
+    saved = await client.put("/api/v1/settings/ai", json={
+        "omniroute_base_url": FAKE_BASE_URL,
+        "omniroute_credential_action": "replaced", "omniroute_api_key": "fake-model-key",
+        "chat_alias": "reasoning-large", "brief_alias": "reasoning-large",
+        "aliases": {"reasoning-large": {"model": "fake-chat", "destination": "remote"},
+                    "reranker": {"model": "fake-rerank", "destination": "remote"}},
+        "privacy": {"allow_remote_reasoning": True, "allow_remote_embeddings": True},
+        "request_timeout_seconds": 30,
+        "expected_revision": current["configuration_revision"],
+    })
+    assert saved.status_code == 200, saved.text
+    probe = await client.post("/api/v1/settings/models/reranker/test", json={"capability": "reranking"})
+    assert probe.status_code == 200 and probe.json()["result"] == "supported", probe.text
+
+    response_id = await _send(client, "hello [fake:tokens=5]")
+    frames = [frame async for frame in _events(client, response_id, None)]
+    assert frames[-1][1] == "message.done" and frames[-1][2]["status"] == "completed"

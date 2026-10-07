@@ -133,7 +133,7 @@ def _privacy(raw: dict[str, object] | None, destination: str | None, web_destina
         allow_remote_web_search=web_search,
         reasoning_destinations=[destination] if reasoning else [],
         embedding_destinations=[destination] if embeddings else [],
-        web_search_destinations=[destination] if web_search else [],
+        web_search_destinations=[web_destination] if web_search and web_destination else [],
     )
 
 

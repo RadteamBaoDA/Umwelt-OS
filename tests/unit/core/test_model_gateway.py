@@ -9,9 +9,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from contextlib import aclosing, asynccontextmanager
+from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from openai import APIStatusError, APITimeoutError
 from redis.exceptions import ConnectionError as RedisConnectionError
@@ -559,3 +562,286 @@ class TestModelGatewayCapacityAndTimeouts:
                     assert len(redis.keys) == 1
                     break
         assert redis.keys == {}
+
+
+class _SlowModelServer:
+    """Real HTTP/1.1 server on 127.0.0.1: reads the full Content-Length body, waits, then answers.
+
+    ``statuses`` is consumed per request (default 200); ``bodies`` records each received body.
+    """
+
+    def __init__(self, delay: float, statuses: list[int] | None = None) -> None:
+        self.delay = delay
+        self.statuses = statuses or []
+        self.bodies: list[bytes] = []
+        self.request_lines: list[bytes] = []
+        self.headers_sent_at: list[float] = []
+        self.server: asyncio.Server | None = None
+
+    async def __aenter__(self) -> Self:
+        self.server = await asyncio.start_server(self._handle, "127.0.0.1", 0)
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        assert self.server is not None
+        self.server.close()
+        await self.server.wait_closed()
+
+    @property
+    def base_url(self) -> str:
+        assert self.server is not None
+        return f"http://127.0.0.1:{self.server.sockets[0].getsockname()[1]}"
+
+    async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            while True:  # keep-alive: attempt 2 may reuse the connection
+                try:
+                    head = await reader.readuntil(b"\r\n\r\n")
+                except (asyncio.IncompleteReadError, ConnectionError):
+                    return
+                lines = head.split(b"\r\n")
+                self.request_lines.append(lines[0])
+                length = next(int(x.split(b":")[1]) for x in lines if x.lower().startswith(b"content-length:"))
+                body = await reader.readexactly(length)
+                self.bodies.append(body)
+                await asyncio.sleep(self.delay)
+                status = self.statuses.pop(0) if self.statuses else 200
+                payload = self._payload(lines[0], json.loads(body), status)
+                ctype = b"text/event-stream" if payload.startswith(b"data:") else b"application/json"
+                self.headers_sent_at.append(time.monotonic())
+                writer.write(b"HTTP/1.1 %d X\r\nContent-Type: %s\r\nContent-Length: %d\r\n\r\n%s"
+                             % (status, ctype, len(payload), payload))
+                await writer.drain()
+        finally:
+            writer.close()
+
+    @staticmethod
+    def _payload(request_line: bytes, body: dict[str, object], status: int) -> bytes:
+        if status != 200:
+            return b'{"error": {"message": "busy"}}'
+        if b"/rerank" in request_line:
+            return b'{"results": [{"index": 0, "relevance_score": 1.0}]}'
+        if body.get("stream"):
+            chunk = {"id": "c", "object": "chat.completion.chunk", "created": 0, "model": "m",
+                     "choices": [{"index": 0, "delta": {"content": "hi"}, "finish_reason": None}]}
+            return b"data: " + json.dumps(chunk).encode() + b"\n\ndata: [DONE]\n\n"
+        return json.dumps({"id": "c", "object": "chat.completion", "created": 0, "model": "m",
+                           "choices": [{"index": 0, "finish_reason": "stop",
+                                        "message": {"role": "assistant", "content": "hi"}}]}).encode()
+
+
+def _loopback_gateway(base_url: str, timeout: float = 5.0) -> ModelGateway:
+    """Real gateway through approved_http_client; transport.py has no built-in loopback deny, so 127.0.0.0/8 is approved."""
+    redis = _LeaseRedis()
+    redis.get = AsyncMock(return_value=json.dumps({  # type: ignore[attr-defined]
+        "result": "supported", "gateway_identity": "legacy", "model": "m", "version": "1"}))
+    return ModelGateway(redis=redis, base_url=base_url, api_key="k", destination_id="d",  # type: ignore[arg-type]
+                        timeout_seconds=timeout, approved_endpoint_cidrs=("127.0.0.0/8",))
+
+
+_POLICY = RequestPolicy(reasoning_allowed=True, embeddings_allowed=True, permitted_destinations=frozenset({"d"}))
+_MAPPING = ModelMapping(model="m", version="1", destination="remote")
+_BIG = "x" * 200_000  # several socket writes' worth of body
+
+
+async def _call(gw: ModelGateway, op: str, after_send: Any) -> object:
+    if op == "chat":
+        return await gw.chat("fast", _MAPPING, _POLICY, [{"role": "user", "content": _BIG}], after_send=after_send)
+    if op == "rerank":
+        return await gw.rerank("reranker", _MAPPING, _POLICY, "q", [_BIG], after_send=after_send)
+    return [x async for x in gw.stream("fast", _MAPPING, _POLICY, [{"role": "user", "content": _BIG}],
+                                       after_send=after_send)]
+
+
+@pytest.fixture
+def written(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Count bytes httpcore hands to its network stream (the AnyIO ``transport.write`` boundary)."""
+    from httpcore._backends.anyio import AnyIOStream
+
+    total = [0]
+    original = AnyIOStream.write
+
+    async def write(self: AnyIOStream, buffer: bytes, timeout: float | None = None) -> None:
+        await original(self, buffer, timeout)
+        total[0] += len(buffer)
+
+    monkeypatch.setattr(AnyIOStream, "write", write)
+    return total
+
+
+def _fake_openai_with(create: Any) -> Any:
+    client = MagicMock()
+    client.chat.completions.create = create
+    client.embeddings.create = create
+
+    @asynccontextmanager
+    async def fake_openai(*_a: object, **_k: object):  # type: ignore[no-untyped-def]
+        yield client
+
+    return fake_openai
+
+
+class TestBodySentHook:
+    """P14-T1: after_send fires when the request body is handed to transport.write (real httpcore)."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("op", ["chat", "rerank", "stream"])
+    async def test_after_send_fires_after_body_written_before_headers(self, op: str, written: list[int]) -> None:
+        # rerank covers design T6: _apply_configured_reranking's evidence-lock release rides this hook.
+        # stream covers D4/T7: the chat send fence is released before the response headers.
+        calls: list[tuple[float, int, int]] = []
+        async with _SlowModelServer(delay=1.0) as server:
+
+            async def after_send() -> None:
+                calls.append((time.monotonic(), written[0], len(server.headers_sent_at)))
+
+            result = await _call(_loopback_gateway(server.base_url), op, after_send)
+        assert result
+        assert len(server.bodies) == 1 and len(server.headers_sent_at) == 1
+        hook_at, written_then, headers_then = calls[0]
+        assert headers_then == 0 and hook_at < server.headers_sent_at[0] - 0.8
+        # Every request byte (head + full body) had been handed to transport.write when the hook ran.
+        assert written_then == written[0] and written_then > len(server.bodies[0]) > len(_BIG)
+        assert len(calls) == 2  # hook once + the idempotent finally fallback
+        assert server.request_lines[0].endswith(b"HTTP/1.1")
+
+    @pytest.mark.asyncio
+    async def test_real_rerank_response_parses(self) -> None:
+        # Regression: cast_to=dict made openai 2.x raise ValueError on every real /rerank reply.
+        async with _SlowModelServer(delay=0.0) as server:
+            result = await _call(_loopback_gateway(server.base_url), "rerank", None)
+        assert result == {"results": [{"index": 0, "relevance_score": 1.0}]}
+
+    @pytest.mark.asyncio
+    async def test_retry_fires_hook_per_attempt_and_refences(self) -> None:
+        events: list[str] = []
+        async with _SlowModelServer(delay=0.3, statuses=[503]) as server:
+
+            async def before() -> None:
+                events.append("before")
+
+            async def after_send() -> None:
+                events.append(f"after:{len(server.headers_sent_at)}")
+
+            gw = _loopback_gateway(server.base_url)
+            gw.before_send = before
+            await _call(gw, "chat", after_send)
+        assert len(server.bodies) == 2
+        # attempt 1: before, hook (pre-headers), finally; attempt 2: before (re-fence), hook, finally
+        assert events == ["before", "after:0", "after:1", "before", "after:1", "after:2"]
+
+    @pytest.mark.asyncio
+    async def test_callback_exception_never_retries_or_resends(self, caplog: pytest.LogCaptureFixture) -> None:
+        calls = 0
+
+        async def after_send() -> None:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("secret prompt text")
+
+        async with _SlowModelServer(delay=0.1) as server:
+            with caplog.at_level("WARNING", logger="core.model_gateway.transport"):
+                result = await _call(_loopback_gateway(server.base_url), "chat", after_send)
+        assert result and len(server.bodies) == 1  # no APIConnectionError retry, no second egress
+        assert calls == 2  # the finally fallback still ran
+        assert "RuntimeError" in caplog.text and "secret prompt text" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_cancelled_error_from_callback_propagates(self) -> None:
+        from core.model_gateway.transport import _NotifyOnEnd
+
+        async def cancel() -> None:
+            raise asyncio.CancelledError
+
+        with pytest.raises(asyncio.CancelledError):
+            [c async for c in _NotifyOnEnd(httpx.ByteStream(b"x"), cancel)]
+
+    def test_approved_client_is_http1_only(self) -> None:
+        # Pinned assumption: _NotifyOnEnd's ordering relies on httpcore's HTTP/1.1 write-then-pull body
+        # loop. HTTP/2 frames bodies differently, so enabling it must fail here first.
+        from core.model_gateway.transport import approved_http_client
+
+        client = approved_http_client("https://example.com", ("0.0.0.0/0",))
+        pool = client._transport._delegate._pool  # type: ignore[attr-defined]
+        assert pool._http1 is True and pool._http2 is False
+
+    @pytest.mark.asyncio
+    async def test_ungated_transport_passes_stream_unwrapped(self) -> None:
+        from core.model_gateway.transport import ApprovedEndpointTransport, _NotifyOnEnd, body_sent
+
+        seen: list[httpx.Request] = []
+
+        class Delegate(httpx.AsyncBaseTransport):
+            async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+                seen.append(request)
+                return httpx.Response(200)
+
+        transport = ApprovedEndpointTransport(httpx.URL("http://127.0.0.1:9"), ("127.0.0.0/8",), Delegate())
+        request = httpx.Request("POST", "http://127.0.0.1:9/v1/x", content=b"{}")
+        assert body_sent.get() is None
+        await transport.handle_async_request(request)
+        assert seen[0].stream is request.stream  # P2-3: byte-identical without after_send
+
+        token = body_sent.set(AsyncMock())
+        try:
+            await transport.handle_async_request(request)
+        finally:
+            body_sent.reset(token)
+        assert isinstance(seen[1].stream, _NotifyOnEnd)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("op", ["chat", "embed", "structured", "tools", "stream"])
+    async def test_contextvar_never_set_without_after_send(self, op: str) -> None:
+        from core.model_gateway import client as client_module
+        from core.model_gateway.transport import body_sent
+
+        seen: list[object] = []
+
+        async def create(**_: object) -> object:
+            seen.append(body_sent.get())
+            if op == "stream":
+                async def empty():  # type: ignore[no-untyped-def]
+                    return
+                    yield
+                return empty()
+            return {"ok": True}
+
+        spy = MagicMock(wraps=body_sent)
+        gw = _loopback_gateway("https://x")
+        with patch("core.model_gateway.client.AsyncOpenAI", side_effect=_fake_openai_with(create)), \
+             patch.object(gw, "_http_client", return_value=MagicMock()), \
+             patch.object(client_module, "body_sent", spy):
+            if op == "chat":
+                await gw.chat("fast", _MAPPING, _POLICY, [])
+            elif op == "embed":
+                await gw.embed("fast", _MAPPING, _POLICY, ["x"])
+            elif op == "structured":
+                await gw.structured("fast", _MAPPING, _POLICY, [], {})
+            elif op == "tools":
+                await gw.tools("fast", _MAPPING, _POLICY, [], [])
+            else:
+                [x async for x in gw.stream("fast", _MAPPING, _POLICY, [])]
+        assert seen == [None] and spy.set.call_count == 0 and spy.reset.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_hook_scoped_to_create_not_before_send(self) -> None:
+        # A nested gateway call made inside before_send must not see (and fire) the outer hook.
+        from core.model_gateway.transport import body_sent
+
+        after = AsyncMock()
+        during: dict[str, object] = {}
+
+        async def before() -> None:
+            during["before"] = body_sent.get()
+
+        async def create(**_: object) -> object:
+            during["create"] = body_sent.get()
+            return {"ok": True}
+
+        gw = _loopback_gateway("https://x")
+        with patch("core.model_gateway.client.AsyncOpenAI", side_effect=_fake_openai_with(create)), \
+             patch.object(gw, "_http_client", return_value=MagicMock()):
+            await gw.chat("fast", _MAPPING, _POLICY, [], before_send=before, after_send=after)
+        assert during == {"before": None, "create": after}
+        assert body_sent.get() is None
