@@ -1,7 +1,7 @@
 """Grounded context retrieval, context budgeting, permitted reranking, and fence revalidation."""
 
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -340,15 +340,15 @@ async def build_context(
             date_to: date | None = None
             if isinstance(request.date_context, datetime):
                 date_from = request.date_context.date()
-                date_to = date_from
+                date_to = date_from + timedelta(days=1)  # TimelineQuery is half-open
             elif isinstance(request.date_context, date):
                 date_from = request.date_context
-                date_to = date_from
+                date_to = date_from + timedelta(days=1)  # TimelineQuery is half-open
             elif isinstance(request.date_context, str):
                 try:
                     parsed_dt = datetime.fromisoformat(request.date_context)
                     date_from = parsed_dt.date()
-                    date_to = date_from
+                    date_to = date_from + timedelta(days=1)  # TimelineQuery is half-open
                 except ValueError:
                     pass
 
