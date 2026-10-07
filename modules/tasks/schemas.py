@@ -32,7 +32,7 @@ class TaskCreate(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def due_fields_are_exclusive(self) -> TaskCreate:
+    def due_fields_are_exclusive(self) -> "TaskCreate":
         """Require exactly one due representation when a task has a deadline."""
         if self.due_date is not None and self.due_at is not None:
             raise ValueError("due_date and due_at are mutually exclusive")
@@ -65,7 +65,7 @@ class TaskUpdate(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def due_fields_are_exclusive(self) -> TaskUpdate:
+    def due_fields_are_exclusive(self) -> "TaskUpdate":
         """Reject simultaneous non-null due representations in a patch."""
         if self.model_fields_set <= {"expected_revision"}:
             raise ValueError("task patch must contain at least one mutation field")

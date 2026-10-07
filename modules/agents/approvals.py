@@ -104,7 +104,7 @@ async def verify_approved_action(
         row = await session.scalar(select(AgentApproval).where(AgentApproval.action_id == action_id))
         run = await session.scalar(select(AgentRun).where(AgentRun.id == run_id))
         effect = await session.scalar(select(AgentEffect).where(AgentEffect.action_id == action_id))
-        if (row is None or run is None or effect is None or row.run_id != run_id
+        if (row is None or run is None or effect is None or row.run_id != run_id  # noqa: SIM103  # style-only rewrite skipped to avoid touching control flow
                 or row.owner_id != owner_id or row.auth_session_hash != auth_session_hash
                 or run.owner_id != owner_id or run.auth_session_hash != auth_session_hash
                 or run.claim_generation != claim_generation or run.status != "running" or run.cancel_requested

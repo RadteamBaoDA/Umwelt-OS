@@ -1,21 +1,26 @@
 """Shared bounded Redis leases for inbound and outbound MCP operations."""
 
 import asyncio
-from collections.abc import AsyncIterator
+import secrets
+from collections.abc import AsyncIterator, Awaitable
 from contextlib import asynccontextmanager
 from contextvars import ContextVar, Token
+from typing import Any, cast
 from uuid import UUID
-import secrets
 
 import anyio
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
-
 _NAMESPACE = "bbd:mcp:admission:"
 _LEASE_TTL_MS = 90_000
 _MAX_OPERATION_SECONDS = 60.0
 _REDIS_PHASE_SECONDS = 1.0
+
+
+def _redis_eval(redis: Redis, *args: Any) -> Awaitable[Any]:
+    """Await-only view of Redis.eval; the asyncio client always returns an awaitable at runtime."""
+    return cast("Awaitable[Any]", redis.eval(*args))
 
 _CLAIM_OPERATION = """
 if redis.call('exists', KEYS[3]) == 1 then return 0 end
@@ -82,7 +87,7 @@ class McpAdmission:
             raise RuntimeError("MCP admission is unavailable")
         try:
             result = await asyncio.wait_for(
-                self.redis.eval(script, len(keys), *keys, token, str(_LEASE_TTL_MS)),
+                _redis_eval(self.redis, script, len(keys), *keys, token, str(_LEASE_TTL_MS)),
                 timeout=min(_REDIS_PHASE_SECONDS, remaining),
             )
         except (RedisError, TimeoutError) as exc:
@@ -96,7 +101,7 @@ class McpAdmission:
             return
         try:
             await asyncio.wait_for(
-                self.redis.eval(_RELEASE, len(keys), *keys, token), timeout=remaining,
+                _redis_eval(self.redis, _RELEASE, len(keys), *keys, token), timeout=remaining,
             )
         except (RedisError, TimeoutError):
             # The bounded TTL is the fallback when Redis cleanup is unavailable.
@@ -116,7 +121,7 @@ class McpAdmission:
             _, keys, token = lease
         try:
             result = await asyncio.wait_for(
-                self.redis.eval(_CURRENT, len(keys), *keys, token), timeout=_REDIS_PHASE_SECONDS,
+                _redis_eval(self.redis, _CURRENT, len(keys), *keys, token), timeout=_REDIS_PHASE_SECONDS,
             )
         except (RedisError, TimeoutError):
             return False
@@ -230,7 +235,7 @@ class McpInboundLease:
         client_key = f"{_NAMESPACE}client:{client_id}"
         try:
             result = await asyncio.wait_for(
-                self.admission.redis.eval(
+                _redis_eval(self.admission.redis, 
                     _BIND_CLIENT, 2, self.global_key, client_key, self.token,
                 ), timeout=min(_REDIS_PHASE_SECONDS, remaining),
             )

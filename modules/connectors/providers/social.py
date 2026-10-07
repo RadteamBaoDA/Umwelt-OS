@@ -1,18 +1,18 @@
 """Bounded unauthenticated GitHub public Releases REST snapshots."""
 
 import asyncio
-from datetime import UTC, datetime
 import json
 import re
 import time
+from datetime import UTC, datetime
 from urllib.parse import parse_qs, quote, unquote, urljoin, urlsplit
 
 import httpx
 
-from modules.connectors.public import ConnectorConfig, ProviderCollectionPage, ProviderRateLimited
 from modules.connectors.providers.feed_catalog import _plain_text, _retry_deadline, _selected_hash
-from modules.knowledge.documents.public import ProviderRecordMetadata
+from modules.connectors.public import ConnectorConfig, ProviderCollectionPage, ProviderRateLimited
 from modules.ingestion.schemas import IngestionRecord
+from modules.knowledge.documents.public import ProviderRecordMetadata
 from modules.sources.schemas import ConnectorSource
 
 _MAX_PAGE_BYTES = 10 * 1024 * 1024
@@ -78,7 +78,7 @@ async def _get_page(
     """Fetch one public releases page without following redirects or reading unbounded JSON."""
     try:
         async with asyncio.timeout(timeout_seconds):
-            async with httpx.AsyncClient(
+            async with httpx.AsyncClient(  # noqa: SIM117  # style-only rewrite skipped to avoid touching control flow
                 timeout=httpx.Timeout(timeout_seconds), trust_env=False, follow_redirects=False, verify=True
             ) as client:
                 async with client.stream("GET", url, headers=_API_HEADERS) as response:
@@ -147,7 +147,7 @@ async def collect_github_releases(
             raise ValueError("github_response_invalid")
         for release in values:
             if not isinstance(release, dict):
-                raise ValueError("github_response_invalid")
+                raise ValueError("github_response_invalid")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
             release_id = release.get("id")
             if isinstance(release_id, bool) or not isinstance(release_id, int) or release_id <= 0:
                 raise ValueError("github_response_invalid")
@@ -193,7 +193,7 @@ async def collect_github_releases(
             draft = release.get("draft", False)
             prerelease = release.get("prerelease", False)
             if not isinstance(draft, bool) or not isinstance(prerelease, bool):
-                raise ValueError("github_response_invalid")
+                raise ValueError("github_response_invalid")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
             title = name or tag or f"Release {release_id}"
             source_fields: dict[str, object] = {
                 "draft": draft,

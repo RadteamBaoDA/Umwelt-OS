@@ -8,8 +8,8 @@ Covers:
 """
 
 import pytest
+
 from modules.automations.conditions import (
-    TRIGGER_FIELDS,
     _is_type,
     check_condition,
     evaluate,

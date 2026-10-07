@@ -8,11 +8,12 @@ Covers:
 - Authority revalidation: revalidate_browser_run_authority verifying claim generation, auth session, and profile revision.
 """
 
-from datetime import UTC, datetime, timedelta
 import hashlib
 import json
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import UUID, uuid4
+from uuid import uuid4
+
 import pytest
 from fastapi import HTTPException
 
@@ -372,7 +373,7 @@ class TestBrowserBudgetTrackingAndAuthority:
         session.get.return_value = MagicMock(spec=AgentProfile)
 
         with patch("modules.agents.public._browser_profile_current", return_value=True), \
-             patch("modules.chat.public.live_agent_conversation_id", return_value=uuid4()):
+             patch("modules.chat.public.live_agent_conversation_id", return_value=uuid4()):  # noqa: SIM117  # style-only; nested with kept
             with pytest.raises(PermissionError, match="Browser run budget is exhausted"):
                 await reserve_browser_run_budget_in_uow(
                     session, owner_id=1, run_id=run_id, claim_generation=1,
@@ -413,7 +414,7 @@ class TestBrowserBudgetTrackingAndAuthority:
         session.get.return_value = MagicMock(spec=AgentProfile)
 
         with patch("modules.agents.public._browser_profile_current", return_value=True), \
-             patch("modules.chat.public.live_agent_conversation_id", return_value=uuid4()):
+             patch("modules.chat.public.live_agent_conversation_id", return_value=uuid4()):  # noqa: SIM117  # style-only; nested with kept
             with pytest.raises(PermissionError, match="Browser run budget is exhausted"):
                 await reserve_browser_run_budget_in_uow(
                     session, owner_id=1, run_id=run_id, claim_generation=1,
@@ -455,7 +456,7 @@ class TestBrowserBudgetTrackingAndAuthority:
         session.get.return_value = MagicMock(spec=AgentProfile)
 
         with patch("modules.agents.public._browser_profile_current", return_value=True), \
-             patch("modules.chat.public.live_agent_conversation_id", return_value=uuid4()):
+             patch("modules.chat.public.live_agent_conversation_id", return_value=uuid4()):  # noqa: SIM117  # style-only; nested with kept
             with pytest.raises(PermissionError, match="Browser run active-time budget is exhausted"):
                 await reserve_browser_run_budget_in_uow(
                     session, owner_id=1, run_id=run_id, claim_generation=1,

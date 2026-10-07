@@ -9,20 +9,16 @@ Covers:
 - Token refresh and OAuth token cipher validation (_validate_expiring_token, _token_cipher, _open_token_cipher, refresh_github_grant)
 """
 
-import base64
 from datetime import UTC, datetime, timedelta
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import UUID, uuid4
+from uuid import uuid4
+
 import pytest
 from cryptography.fernet import Fernet
 
 from core.config import Settings
 from modules.connectors.credentials import (
     CredentialEncryptionUnavailable,
-    CredentialOutcomeUnknown,
-    CredentialRequestRejected,
-    N8nCredentials,
     decrypt_credential_input,
     decrypt_native_token,
     encrypt_credential_input,
@@ -42,39 +38,19 @@ from modules.connectors.models import (
     GithubOAuthGrant,
 )
 from modules.connectors.provisioning import (
-    ConnectorObservation,
     _connector_observation,
-    _new_deactivation,
-    _required_credentials_match,
-    _step,
-    acknowledge_credential_delete,
     acknowledge_workflow_step,
-    begin_activation_bundle,
     begin_enable,
-    claim_credential_operation,
     claim_workflow_step,
     clear_retired_source_credentials,
     complete_credential_operation,
-    create_delete_intent,
-    fail_credential_operation,
-    fail_workflow_step,
     fence_source_collection,
     finish_deleted_source_grant_revoke,
-    get_native_credential_snapshot,
-    get_retained_native_credential_snapshot,
-    mark_reconciliation,
-    new_workflow_operation,
-    prepare_workflow_step,
     reject_activation,
-    require_collection_fence,
-    require_validation_fence,
-    revoke_native_credential,
     save_desired,
-    save_native_credential,
-    unresolved_credential_error,
 )
 from modules.connectors.public import NativeCredentialSnapshot
-from modules.sources.schemas import ConnectorSource, SourceFence
+from modules.sources.schemas import SourceFence
 
 
 @pytest.fixture

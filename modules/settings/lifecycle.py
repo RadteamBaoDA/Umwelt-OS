@@ -1,8 +1,9 @@
 """Owner-facing persistence and request fences for retention and module availability."""
 
+from collections.abc import Awaitable, Callable
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,8 +14,11 @@ from core.database import get_session
 from core.modules import effective_modules, register_modules
 from modules.settings.models import ModuleLifecycleRecord, RetentionSettingsRecord
 from modules.settings.schemas import (
-    ModuleLifecycleEntry, ModuleLifecycleRead, ModuleLifecycleUpdate,
-    RetentionSettingsRead, RetentionSettingsUpdate,
+    ModuleLifecycleEntry,
+    ModuleLifecycleRead,
+    ModuleLifecycleUpdate,
+    RetentionSettingsRead,
+    RetentionSettingsUpdate,
 )
 
 OWNER_ID = 1
@@ -156,7 +160,7 @@ async def _require_owner_for_module(request: Request, session: Annotated[AsyncSe
     return await require_owner_write(request, session, origin, csrf)
 
 
-def module_dependency(module_id: str):
+def module_dependency(module_id: str) -> Callable[..., Awaitable[None]]:
     """Build a router dependency that checks owner authorization before the persisted module gate."""
     async def require_enabled_module(
         request: Request,
@@ -183,11 +187,11 @@ def module_dependency(module_id: str):
     return require_enabled_module
 
 
-def sync_application_modules(app: object, state: ModuleLifecycleRead) -> None:
+def sync_application_modules(app: FastAPI, state: ModuleLifecycleRead) -> None:
     """Apply the persisted effective descriptor set to this API process and its native registry."""
     disabled = {item.id for item in state.modules if item.explicitly_disabled}
     current = effective_modules(disabled, MODULES)
-    setattr(app.state, "modules", current)
+    app.state.modules = current
     tool_registry = getattr(app.state, "tool_registry", None)
     if tool_registry is not None:
         tool_registry.set_module_registry(current)

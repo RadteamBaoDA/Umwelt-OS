@@ -1,12 +1,12 @@
+import json
+from copy import deepcopy
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
-from copy import deepcopy
-import json
 from pathlib import Path
-from xml.etree import ElementTree
-from urllib.parse import urljoin
 from typing import Any
+from urllib.parse import urljoin
 from uuid import UUID
+from xml.etree import ElementTree
 
 import httpx
 
@@ -50,7 +50,7 @@ def build_workflow(
 ) -> dict[str, Any]:
     """Bind packaged workflow settings and credentials to one source fence, selecting native dispatch by immutable provider."""
     native = source.provider in {"youtube", "arxiv", "huggingface", "github_releases", "github", "telegram"}
-    if native and source.type != {"youtube": "rss", "arxiv": "rss"}.get(source.provider, "api"):
+    if native and source.type != {"youtube": "rss", "arxiv": "rss"}.get(source.provider or "", "api"):
         raise ValueError("Source type does not match the registered provider")
     filename = (
         "mcp.json" if source.type == "mcp" else
@@ -176,7 +176,7 @@ class N8nApi:
             payload = response.json()
             workflows = payload.get("data", [])
             if not isinstance(workflows, list):
-                raise ValueError("n8n workflow lookup returned an invalid list")
+                raise ValueError("n8n workflow lookup returned an invalid list")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
             matches.extend(
                 workflow for workflow in workflows
                 if isinstance(workflow, dict) and workflow.get("name") == name
@@ -198,7 +198,7 @@ class N8nApi:
             response.raise_for_status()
         payload = response.json()
         if not isinstance(payload, dict):
-            raise ValueError("n8n workflow response is invalid")
+            raise ValueError("n8n workflow response is invalid")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
         return payload
 
     async def create_workflow(self, workflow: dict[str, Any]) -> str:
@@ -322,7 +322,7 @@ async def read_rss(url: str, cursor: str | None) -> dict[str, object]:
                     if not raw_value:
                         return None
                     try:
-                        parsed = datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
+                        parsed = datetime.fromisoformat(raw_value.replace("Z", "+00:00"))  # noqa: FURB162  # keeps exact parsing of 'Z' suffix; fromisoformat(Z) is not strictly equivalent
                     except ValueError:
                         try:
                             parsed = parsedate_to_datetime(raw_value)

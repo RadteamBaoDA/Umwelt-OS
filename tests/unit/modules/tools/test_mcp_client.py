@@ -7,7 +7,6 @@ and fenced tool / resource execution.
 
 from __future__ import annotations
 
-import asyncio
 from contextlib import asynccontextmanager
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -21,12 +20,9 @@ from modules.tools.mcp_client import McpSdkClient
 from modules.tools.mcp_schemas import (
     CapabilityDescriptor,
     ConnectionRead,
-    DiscoveryPersist,
-    DiscoveryRead,
     ExecutionFence,
     McpTransport,
 )
-from modules.tools.mcp_stdio import StdioDeploymentProfile
 from modules.tools.mcp_transport import McpOperationNetworkBudget, McpTransportError
 
 
@@ -46,6 +42,7 @@ class DummyResult(BaseModel):
 
 
 from datetime import UTC, datetime
+
 
 @pytest.fixture
 def dummy_connection() -> ConnectionRead:
@@ -572,7 +569,7 @@ class TestMcpSdkClientToolAndResourceCalls:
             yield mock_client
 
         with patch.object(client, "_open_client", side_effect=mock_open_client), \
-             patch.object(client, "_list_capability_pages", AsyncMock(return_value=([descriptor], 1, 1))):
+             patch.object(client, "_list_capability_pages", AsyncMock(return_value=([descriptor], 1, 1))):  # noqa: SIM117  # style-only; nested with kept
             with pytest.raises(mcp_repository.McpConflict, match="descriptor changed"):
                 await client.call_tool(
                     owner_id=1,

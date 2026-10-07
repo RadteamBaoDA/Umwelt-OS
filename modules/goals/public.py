@@ -7,27 +7,44 @@ Cross-module task reads/writes go through modules.tasks.public DTO contracts.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import base64
 import binascii
-from datetime import UTC, datetime
+import hashlib
+import json
+from collections.abc import Sequence
 from copy import deepcopy
-from typing import Any, Sequence
+from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID, uuid5
 
 from fastapi import HTTPException
-from sqlalchemy import func, select, tuple_
+from sqlalchemy import ColumnElement, func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.pagination import decode_cursor, encode_cursor
 from modules.goals.models import Goal
 from modules.goals.schemas import (
-    GoalCreate, GoalExportFence, GoalExportPage, GoalExportValidation,
-    GoalFilter, GoalPage, GoalRead, GoalUpdate, MilestoneSchema,
-    PlanAcceptanceResult, PlanProposal, TaskProposal,
+    GoalCreate,
+    GoalExportFence,
+    GoalExportPage,
+    GoalExportValidation,
+    GoalFilter,
+    GoalPage,
+    GoalRead,
+    GoalUpdate,
+    MilestoneSchema,
+    PlanAcceptanceResult,
+    PlanProposal,
+    TaskProposal,
 )
-from modules.goals.seed import ensure_demo_goals
+from modules.goals.seed import (
+    ensure_demo_goals,  # re-export: used by documents seed
+)
+
+# Explicit re-exports consumed by other modules (mypy strict forbids implicit re-export).
+__all__ = [
+    "ensure_demo_goals",
+]
 
 MAX_REVISION = 9_007_199_254_740_991
 GOAL_EXPORT_PAGE_BYTES = 16_777_216
@@ -66,7 +83,7 @@ def _decode_goal_export_cursor(cursor: str) -> tuple[datetime, datetime, UUID]:
         raise HTTPException(status_code=422, detail="Goal export cursor is invalid") from exc
 
 
-def _goal_export_scope(owner_id: int, snapshot_at: datetime) -> tuple[object, ...]:
+def _goal_export_scope(owner_id: int, snapshot_at: datetime) -> tuple[ColumnElement[bool], ...]:
     """Select one owner's stored goal revisions present at the export cutoff."""
     return Goal.owner_id == owner_id, Goal.created_at <= snapshot_at, Goal.updated_at <= snapshot_at
 
@@ -95,7 +112,8 @@ async def export_page(
     statement = select(Goal).where(*scope).execution_options(populate_existing=True)
     if position is not None:
         statement = statement.where(tuple_(Goal.created_at, Goal.id) > position)
-    rows = list((await session.execute(statement.order_by(Goal.created_at, Goal.id).limit(limit + 1))).all())
+    # PRODUCTION FIX: execute().all() yields Row[Goal] tuples, not Goal instances; scalars() returns the ORM rows.
+    rows = list((await session.scalars(statement.order_by(Goal.created_at, Goal.id).limit(limit + 1))).all())
     has_more, rows = len(rows) > limit, rows[:limit]
     items = [await _goal_export_read(session, row) for row in rows]
     encoded = [item.model_dump_json().encode("utf-8") for item in items]
@@ -538,7 +556,7 @@ async def accept_plan(session: AsyncSession, owner_id: int, goal_id: UUID, propo
         milestone_id = item.id or uuid5(goal.id, f"accepted:{proposal.proposal_id}:milestone:{index}")
         task_id = task_ids[item.task_index] if item.task_index is not None and item.task_index < len(task_ids) else None
         milestone_values.append(MilestoneSchema(
-            id=milestone_id, title=item.title, completed=bool(task_id and proposal.tasks[item.task_index].status == "done"),
+            id=milestone_id, title=item.title, completed=bool(task_id and item.task_index is not None and proposal.tasks[item.task_index].status == "done"),
             due_date=item.due_date, order=item.order, task_id=task_id,
         ).model_dump(mode="json"))
     goal.milestones = milestone_values
@@ -611,4 +629,4 @@ async def list_deadlines_within(
         Goal.owner_id == owner_id, Goal.status == "active", Goal.deadline.is_not(None),
         Goal.deadline.between(today - timedelta(days=1), today + timedelta(days=lead_days)),
     ).order_by(Goal.deadline, Goal.id).limit(limit))).all()
-    return [(g.id, g.status, g.deadline.isoformat(), (g.deadline - today).days, float(g.progress)) for g in rows]
+    return [(g.id, g.status, d.isoformat(), (d - today).days, float(g.progress)) for g in rows if (d := g.deadline) is not None]

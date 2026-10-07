@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import Annotated, Any, Literal, Union
+from typing import Annotated, Any, Literal
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -105,10 +105,7 @@ class ConnectorSyncResultTrigger(_Trigger):
 
 
 Trigger = Annotated[
-    Union[
-        ScheduleTrigger, NewEventTrigger, NewDocumentTrigger, EntityChangedTrigger,
-        TaskDueTrigger, GoalDeadlineTrigger, WebhookTrigger, ConnectorSyncResultTrigger,
-    ],
+    ScheduleTrigger | NewEventTrigger | NewDocumentTrigger | EntityChangedTrigger | TaskDueTrigger | GoalDeadlineTrigger | WebhookTrigger | ConnectorSyncResultTrigger,
     Field(discriminator="type"),
 ]
 
@@ -178,7 +175,7 @@ class CallWebhookAction(_Action):
 
 
 Action = Annotated[
-    Union[RunAgentAction, CreateTaskAction, CreateNotificationAction, GenerateBriefAction, CallWebhookAction],
+    RunAgentAction | CreateTaskAction | CreateNotificationAction | GenerateBriefAction | CallWebhookAction,
     Field(discriminator="type"),
 ]
 

@@ -1,7 +1,6 @@
 """Model Context Protocol (MCP) client adapter supporting stdio and SSE transports with strict owner allowlists."""
 
 import asyncio
-from dataclasses import dataclass, field
 import json
 import logging
 import os
@@ -188,10 +187,10 @@ class MCPClientAdapter:
                 "tools/call",
                 {"name": tool_name, "arguments": arguments},
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
             return ToolResult(
                 success=False,
-                error=f"MCP tool call failed: {str(exc)}",
+                error=f"MCP tool call failed: {exc!s}",
                 execution_time_ms=0.0,
             )
 
@@ -313,7 +312,8 @@ class MCPClientAdapter:
                 err = decoded["error"]
                 raise RuntimeError(f"MCP RPC error from '{config.id}': {err.get('message', err)}")
 
-            return decoded.get("result", {})
+            decoded_result: dict[str, Any] = decoded.get("result", {})
+            return decoded_result
 
     async def _ensure_stdio_process(self, config: MCPServerConfig) -> asyncio.subprocess.Process:
         """Ensure a running initialized stdio subprocess for an approved server.
@@ -420,7 +420,8 @@ class MCPClientAdapter:
             if "error" in data:
                 err = data["error"]
                 raise RuntimeError(f"MCP RPC error from '{config.id}': {err.get('message', err)}")
-            return data.get("result", {})
+            data_result: dict[str, Any] = data.get("result", {})
+            return data_result
 
     async def close(self) -> None:
         """Terminate all open stdio child processes cleanly."""
@@ -429,6 +430,6 @@ class MCPClientAdapter:
                 try:
                     proc.terminate()
                     await asyncio.wait_for(proc.wait(), timeout=2.0)
-                except Exception:
+                except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
                     proc.kill()
         self._stdio_processes.clear()

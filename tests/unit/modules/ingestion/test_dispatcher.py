@@ -4,15 +4,13 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID, uuid4
 
-from fastapi import HTTPException
 import httpx
 import pytest
+from fastapi import HTTPException
 
 from modules.ingestion import dispatcher, public
 from modules.ingestion.models import (
-    COLLECTION_LEASE,
     EventOutbox,
-    IngestionBatch,
     IngestionRun,
     IngestionStage,
     SourceIngestionState,
@@ -294,7 +292,7 @@ class TestCursorCasLogic:
 
         cursor_after = older_item_time.isoformat()
         # Verify cursor monotonic guard
-        latest = datetime.fromisoformat(cursor_after.replace("Z", "+00:00"))
+        latest = datetime.fromisoformat(cursor_after.replace("Z", "+00:00"))  # noqa: FURB162  # keeps exact parsing of 'Z' suffix; fromisoformat(Z) is not strictly equivalent
         if prior_cursor > latest:
             cursor_after = prior_cursor.isoformat()
 

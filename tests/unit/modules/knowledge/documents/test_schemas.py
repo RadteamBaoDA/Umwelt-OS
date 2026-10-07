@@ -1,9 +1,7 @@
 """Unit tests for knowledge documents schemas, byte boundaries, validators, and cursors."""
 
-from datetime import UTC, datetime, timezone
-import json
-import math
-from uuid import UUID, uuid4
+from datetime import UTC, datetime
+from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
@@ -17,16 +15,10 @@ from modules.knowledge.documents.schemas import (
     DocumentList,
     DocumentPatch,
     DocumentRead,
-    EvidenceReferenceRead,
-    NormalizedDocumentInput,
-    NormalizedDocumentResult,
-    ProviderDocumentSnapshotList,
-    ProviderDocumentSnapshotRead,
     ProviderRecordMetadata,
     ProviderSnapshotRequest,
     ProviderTelegramMedia,
     ProviderTelegramMetadata,
-    TelegramDocumentOrder,
     VersionList,
     VersionRead,
     validate_content,
@@ -246,7 +238,7 @@ class TestProviderMetadataAndTelegram:
         assert tg_meta.update_id == 10
 
         # Naive datetime rejected
-        naive_now = datetime(2026, 1, 1, 12, 0, 0)
+        naive_now = datetime(2026, 1, 1, 12, 0, 0)  # noqa: DTZ001  # intentionally naive: wall-clock/DST math or naive-rejection test
         with pytest.raises(ValidationError, match="Telegram timestamps must include a timezone"):
             ProviderTelegramMetadata(
                 bot_id="123456",
@@ -348,7 +340,7 @@ class TestPaginationCursors:
     """Test keyset pagination encoding and decoding for document listings."""
 
     def test_cursor_roundtrip_utc(self) -> None:
-        ts = datetime(2026, 5, 20, 15, 30, 45, 123456, tzinfo=timezone.utc)
+        ts = datetime(2026, 5, 20, 15, 30, 45, 123456, tzinfo=UTC)
         ident = uuid4()
         cursor_str = encode_cursor(ts, ident)
         assert isinstance(cursor_str, str)

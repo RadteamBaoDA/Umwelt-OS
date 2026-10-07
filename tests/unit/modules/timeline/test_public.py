@@ -11,13 +11,13 @@ Covers:
 
 from datetime import UTC, date, datetime, timedelta
 from uuid import UUID, uuid4
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfoNotFoundError
+
 import pytest
 
 from modules.timeline.public import (
     day_window,
 )
-from modules.timeline.schemas import TimelineQuery
 
 
 class TestDayWindow:
@@ -52,7 +52,7 @@ class TestDayWindow:
 
     def test_invalid_timezone_raises_exception(self) -> None:
         """Verify unknown timezone name raises error."""
-        with pytest.raises(Exception):
+        with pytest.raises(ZoneInfoNotFoundError):
             day_window(date(2025, 1, 1), "NonExistent/Timezone")
 
 
@@ -100,9 +100,7 @@ class TestTemporalOrdering:
 
     def test_partition_traversal_order(self) -> None:
         """Verify partition order always visits 0 (timed) -> 1 (date) -> 2 (unknown)."""
-        partitions_visited = []
-        for partition in range(3):
-            partitions_visited.append(partition)
+        partitions_visited = list(range(3))
         assert partitions_visited == [0, 1, 2]
 
 

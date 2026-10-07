@@ -13,16 +13,15 @@ from core.model_gateway.client import ModelGateway, ModelGatewayError
 from core.model_gateway.policy import may_send
 from core.model_gateway.schemas import RequestPolicy
 from modules.chat.schemas import (
-    AnswerContext,
-    AnswerContextRequest,
-    Citation,
-    DEFAULT_CONTEXT_BUDGET_BYTES,
-    EntityContextItem,
-    EvidenceItem,
     MAX_CONTEXT_BUDGET_BYTES,
     MAX_ENTITY_SCOPE,
     MAX_RETRIEVAL_LIMIT,
     MAX_SELECTED_REFS,
+    AnswerContext,
+    AnswerContextRequest,
+    Citation,
+    EntityContextItem,
+    EvidenceItem,
     TemporalContextItem,
 )
 from modules.knowledge.documents import public as documents_public
@@ -98,7 +97,6 @@ async def _apply_configured_reranking(
     if any(item.local_only for item in evidence_items):
         return evidence_items, "unavailable", ["Remote reranking skipped because evidence contains local-only sources"]
 
-    warnings: list[str] = []
     try:
         config = await settings_public.get_ai_execution_config(session, settings, redis)
         rerank_mapping = config.aliases.get("reranker")
@@ -133,10 +131,16 @@ async def _apply_configured_reranking(
         if not is_permitted:
             return evidence_items, "unavailable", ["Reranking denied by destination or privacy policy"]
 
+        # PRODUCTION FIX: the previous call used a nonexistent `timeout=` kwarg and omitted the
+        # required redis/destination_id, so reranking always raised TypeError.
         gateway = ModelGateway(
+            redis=redis,
             base_url=config.omniroute_base_url or "http://localhost:8000",
             api_key=config.omniroute_api_key,
-            timeout=config.request_timeout_seconds,
+            destination_id=destination_id,
+            timeout_seconds=config.request_timeout_seconds,
+            gateway_identity=config.gateway_identity,
+            approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
         )
 
         documents = [item.content for item in evidence_items]
@@ -198,7 +202,7 @@ async def _apply_configured_reranking(
 
         return evidence_items, "unavailable", ["Reranker output could not be parsed; preserved retrieval ranking"]
 
-    except (ModelGatewayError, Exception) as exc:
+    except (ModelGatewayError, Exception) as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
         logger.warning("Reranking failed or unavailable: %s", exc)
         return evidence_items, "unavailable", ["Reranking unavailable; preserved retrieval ranking"]
 
@@ -238,7 +242,7 @@ async def build_context(
         if not request.selected_refs or len(request.selected_refs) > MAX_SELECTED_REFS:
             raise ValueError("Exact gadget retrieval requires bounded selected evidence references")
         for selected in request.selected_refs:
-            fence = fence_by_document.get(selected.document_id)
+            fence = fence_by_document.get(selected.document_id) if selected.document_id is not None else None
             if (
                 selected.document_id is None or selected.source_id is None or fence is None
                 or selected.document_version_id != fence.document_version_id
@@ -263,7 +267,7 @@ async def build_context(
                 ref = (hit.document_version_id, hit.chunk_id)
                 collected_refs.append(ref)
                 hit_scores[ref] = hit.score
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
             logger.error("Search retrieval failed in build_context: %s", exc)
             warnings.append("Search retrieval encountered an error")
 
@@ -307,10 +311,11 @@ async def build_context(
 
             neighbor_dicts = [
                 {
-                    "relationship_id": n.relationship_id,
-                    "target_entity_id": n.target_entity_id,
-                    "type": n.type,
-                    "target_name": n.target_name,
+                    # PRODUCTION FIX: NeighborRead nests these under .relationship/.entity.
+                    "relationship_id": n.relationship.id,
+                    "target_entity_id": n.entity.id,
+                    "type": n.relationship.type,
+                    "target_name": n.entity.name,
                 }
                 for n in (neighbors.items if neighbors else [])
             ]
@@ -324,7 +329,7 @@ async def build_context(
                 backing_refs=backing_refs,
                 neighbors=neighbor_dicts,
             ))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
             logger.warning("Entity resolution failed for %s: %s", entity_id, exc)
 
     # 4. Temporal context resolution
@@ -384,7 +389,7 @@ async def build_context(
                         summary=event.summary,
                         backing_refs=event_backing,
                     ))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
             logger.warning("Timeline context retrieval failed: %s", exc)
 
     # 5. Read full evidence chunks from document owner
@@ -436,6 +441,7 @@ async def build_context(
         raise ValueError("The exact selected evidence exceeds the bounded chat context budget")
 
     # 7. Apply configured permitted reranking
+    rerank_warnings: list[str]
     if request.selected_only:
         # Exact gadget selections are not sent to a separate reranker destination.
         reranked_items, rerank_status, rerank_warnings = budgeted_items, "skipped", []
@@ -468,7 +474,7 @@ async def build_context(
         entity_summaries=entity_summaries,
         temporal_summaries=temporal_summaries,
         warnings=warnings,
-        rerank_status=rerank_status,  # type: ignore[arg-type]
+        rerank_status=rerank_status,
         has_sufficient_evidence=has_sufficient,
         total_evidence_bytes=total_bytes,
         fence_snapshot=fence_snapshot,

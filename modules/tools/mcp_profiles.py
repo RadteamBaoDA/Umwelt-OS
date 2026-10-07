@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import re
 import stat
+from pathlib import Path
 from types import MappingProxyType
-from typing import Literal
+from typing import Any, Literal, cast
 
 from modules.tools.mcp_repository import McpUnavailable
 from modules.tools.mcp_stdio import StdioDeploymentProfile
@@ -90,7 +90,7 @@ class StdioProfileCatalog:
 
     def get_identity(self, profile_id: str | None) -> str:
         """Return only the deployment-selected lowercase hash, never launch arguments or environment."""
-        profile = self._profiles.get(profile_id)
+        profile = self._profiles.get(profile_id) if profile_id is not None else None
         if profile is None or profile["enabled"] is not True:
             raise McpUnavailable("MCP stdio deployment profile is unavailable")
         return str(profile["profile_hash"])
@@ -108,7 +108,8 @@ class StdioProfileCatalog:
         ancestry, UID/mode checks, process bounds and teardown. No command material is accepted
         from a connection, UI or model, and the catalog does not reimplement policy hashing.
         """
-        profile = self._profiles.get(profile_id)
+        stored_profile = self._profiles.get(profile_id)
+        profile = cast("dict[str, Any] | None", stored_profile)  # catalog entries are validated at load
         if (profile is None or profile["enabled"] is not True
                 or profile["profile_hash"] != reviewed_profile_hash
                 or operation_kind not in {"ordinary", "discovery"}):

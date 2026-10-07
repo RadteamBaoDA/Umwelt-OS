@@ -1,15 +1,15 @@
 """Canonical registration and bounded dispatch boundary for native tools."""
 
 import asyncio
-from collections.abc import Awaitable, Callable
 import inspect
 import json
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any
-from fastapi.encoders import jsonable_encoder
-
 from uuid import uuid4
+
+from fastapi.encoders import jsonable_encoder
 
 from core.telemetry import bind_trace, count, observe_ms
 from core.tools.policy import ToolPolicy
@@ -132,7 +132,7 @@ class ToolRegistry:
             disabled = {item.id for item in lifecycle.modules if item.explicitly_disabled}
             self.set_module_registry(effective_modules(disabled, register_modules()))
             return True
-        except Exception:
+        except Exception:  # noqa: BLE001  # fail-closed boundary: any failure denies/degrades
             return False
 
     async def invoke_tool(
@@ -211,7 +211,7 @@ class ToolRegistry:
                 approval_required and callable(approval_verifier)
                 and await approval_verifier(definition, args, principal, "admission")
             )
-        except Exception:
+        except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
             trusted_approval = False
         decision = self.policy.evaluate(
             principal.actor_id, definition, args, trusted_approval=trusted_approval,
@@ -235,7 +235,7 @@ class ToolRegistry:
                             approval_required and callable(approval_verifier) and queued_definition is not None
                             and await approval_verifier(queued_definition, args, principal, "dispatch")
                         ) if principal_current else False
-                    except Exception:
+                    except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
                         queued_approval = False
                     # Resolve again after the awaited owner recheck; no await separates this from dispatch.
                     registered = self._tools.get(name)
@@ -295,6 +295,6 @@ class ToolRegistry:
             return result
         except TimeoutError:
             return ToolResult(success=False, error="Tool execution timed out", error_code="timeout", execution_time_ms=(time.perf_counter()-started)*1000)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
             logger.warning("Tool dispatch failed (%s)", type(exc).__name__)
             return ToolResult(success=False, error="Tool execution failed", error_code="execution_failed", execution_time_ms=(time.perf_counter()-started)*1000)

@@ -44,7 +44,7 @@ class TraceContext(BaseModel):
     tool_call_id: str | None = None
 
 
-_trace: contextvars.ContextVar[TraceContext] = contextvars.ContextVar("trace_context", default=TraceContext())
+_trace: contextvars.ContextVar[TraceContext] = contextvars.ContextVar("trace_context", default=TraceContext())  # noqa: B039  # TraceContext is an immutable dataclass
 
 
 def current_trace() -> TraceContext:
@@ -81,8 +81,8 @@ def set_trace(**ids: str | None) -> None:
 _MASK = "[redacted]"
 _SECRET_KEY = re.compile(
     r"(authorization|cookie|set-cookie|api[-_]?key|secret|password|passwd|token|credential|"
-    r"csrf|session|signature|private[-_]?key)", re.I)
-_CONTENT_KEY = re.compile(r"^(prompt|messages|content|document|documents|text|body|input|output|completion|query)$", re.I)
+    r"csrf|session|signature|private[-_]?key)", re.IGNORECASE)
+_CONTENT_KEY = re.compile(r"^(prompt|messages|content|document|documents|text|body|input|output|completion|query)$", re.IGNORECASE)
 _TEXT_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}"), r"\1 " + _MASK),
     (re.compile(r"(?i)\b(authorization|set-cookie|cookie|x-api-key|x-csrf-token)\s*[:=]\s*[^\r\n]+"), r"\1: " + _MASK),
@@ -164,7 +164,7 @@ def install_log_redaction() -> None:
         return record
 
     safe_make_record._bbd_redacting = True  # type: ignore[attr-defined]
-    logging.Logger.makeRecord = safe_make_record
+    logging.Logger.makeRecord = safe_make_record  # type: ignore[method-assign]  # deliberate process-wide log redaction hook
 
 
 def log_event(log: logging.Logger, level: int, event: str, **fields: Any) -> None:
@@ -280,12 +280,12 @@ class MetricsRegistry:
         self._series[name] = self._series.get(name, 0) + 1
         return key
 
-    def inc(self, name: str, value: float = 1, **labels: str) -> None:
+    def inc(self, name: str, value: float = 1, /, **labels: str) -> None:
         """Add ``value`` to a counter."""
         key = self._key(name, labels, self.counters)
         self.counters[key] = self.counters.get(key, 0) + value
 
-    def observe(self, name: str, value_ms: float, **labels: str) -> None:
+    def observe(self, name: str, value_ms: float, /, **labels: str) -> None:
         """Record a millisecond observation in a fixed-bucket histogram."""
         key = self._key(name, labels, self.histograms)
         row = self.histograms.setdefault(key, [0.0] * (2 + len(BUCKETS_MS) + 1))
@@ -324,7 +324,7 @@ def _isolated(call: Callable[[], Any]) -> None:
         logger.debug("telemetry sink failure (%s)", type(exc).__name__)
 
 
-def count(name: str, value: float = 1, **labels: str) -> None:
+def count(name: str, value: float = 1, /, **labels: str) -> None:
     """Failure-isolated counter increment."""
     _isolated(lambda: registry.inc(name, value, **labels))
 
@@ -417,7 +417,7 @@ async def read_snapshots(redis: Any) -> list[dict[str, Any]]:
     return out
 
 
-def instrument_job(fn: F, *, run_id_kind: str | None = None, success_return_outcome: str = "ok") -> F:
+def instrument_job(fn: F, *, run_id_kind: str | None = None, success_return_outcome: str = "ok") -> F:  # noqa: UP047  # keep TypeVar/TypeAlias spelling; PEP 695 rewrite is style-only
     """Wrap an ARQ job to record queue delay, duration and outcome by function name; behavior is unchanged.
 
     ``run_id_kind`` ("agent_run_id"/"ingestion_run_id") binds the first argument; domain jobs can
@@ -462,7 +462,7 @@ def instrument_job(fn: F, *, run_id_kind: str | None = None, success_return_outc
                     task = asyncio.current_task()
                     if task is not None and task.cancelling():
                         raise
-                except Exception:  # noqa: BLE001 - telemetry errors never replace the job outcome
+                except Exception:  # noqa: BLE001, S110  # telemetry errors never replace the job outcome
                     pass
 
     return wrapper  # type: ignore[return-value]

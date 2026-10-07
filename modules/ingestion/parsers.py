@@ -63,7 +63,7 @@ def _parse_docx(path: Path, expanded_limit: int) -> str:
         names = set(archive.namelist())
         if "word/document.xml" not in names or "[Content_Types].xml" not in names:
             raise ValueError("Invalid DOCX file")
-    document = DocxDocument(path)
+    document = DocxDocument(str(path))
     parts = [paragraph.text for paragraph in document.paragraphs if paragraph.text]
     parts.extend(" | ".join(cell.text for cell in row.cells) for table in document.tables for row in table.rows)
     return "\n".join(parts)
@@ -100,7 +100,7 @@ def _parse_process(
     """Run parsing in a child process and serialize either result or error details."""
     try:
         output.put(("ok", parse_file(path, mime, docx_expanded_limit, pdf_page_limit)))
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
         output.put((type(exc).__name__, str(exc)))
 
 
@@ -127,7 +127,7 @@ async def parse_file_bounded(
         if status != "ok":
             raise ValueError(str(result))
         if not isinstance(result, ParsedDocument):
-            raise RuntimeError("File parser returned an invalid result")
+            raise RuntimeError("File parser returned an invalid result")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
         return result
     finally:
         if process.is_alive():

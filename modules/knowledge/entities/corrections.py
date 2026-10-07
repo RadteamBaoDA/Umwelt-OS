@@ -1,27 +1,37 @@
 from __future__ import annotations
 
 import json
-from hashlib import sha256
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from hashlib import sha256
 from uuid import UUID, uuid4
 
 from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.realtime import commit_with_replay, make_graph_change
+from core.realtime import ReplayDraft, commit_with_replay, make_graph_change
 from modules.knowledge.documents import public as documents
 from modules.knowledge.entities import public as entities
 from modules.knowledge.entities.models import (
-    Entity, EntityAlias, EntityAliasEvidence, EntityCorrectionDecision,
-    EntityEvidenceMembership, EntityFieldEvidence, EntityRedirect,
+    Entity,
+    EntityAlias,
+    EntityAliasEvidence,
+    EntityCorrectionDecision,
+    EntityEvidenceMembership,
+    EntityFieldEvidence,
+    EntityRedirect,
 )
 from modules.knowledge.entities.schemas import (
-    EntityCorrectionConflict, EntityCorrectionPreview, EntityCorrectionResult,
-    EntityCreate, EntityMergeRequest, EntitySplitRequest, canonicalize_name,
+    EntityCorrectionConflict,
+    EntityCorrectionPreview,
+    EntityCorrectionResult,
+    EntityMergeRequest,
+    EntitySplitRequest,
     EntitySuppressionRequest,
+    canonicalize_name,
 )
 from modules.knowledge.relationships import public as relationships
+from modules.knowledge.relationships.schemas import CorrectionRelationshipRef
 from modules.sources import public as sources
 from modules.timeline import public as timeline
 
@@ -33,8 +43,8 @@ MAX_CORRECTION_EVIDENCE_REFS = 100
 class CorrectionConflictError(ValueError):
     """Carry an API-ready correction conflict alongside its validation error."""
 
-    def __init__(self, code: str, message: str, *, entity_ids: list[UUID] = [],
-                 membership_ids: list[UUID] = [], relationship_ids: list[UUID] = []) -> None:
+    def __init__(self, code: str, message: str, *, entity_ids: list[UUID] = [],  # noqa: B006  # never mutated; FastAPI/DTO copies the default
+                 membership_ids: list[UUID] = [], relationship_ids: list[UUID] = []) -> None:  # noqa: B006  # never mutated; FastAPI/DTO copies the default
         """Build a conflict DTO containing the involved entity and support IDs."""
         super().__init__(message)
         self.conflict = EntityCorrectionConflict(
@@ -51,7 +61,7 @@ class _Closure:
     aliases: list[EntityAlias]
     alias_supports: list[EntityAliasEvidence]
     field_supports: list[EntityFieldEvidence]
-    relationship_refs: list[relationships.CorrectionRelationshipRef]
+    relationship_refs: list[CorrectionRelationshipRef]
     redirect_rows: list[EntityRedirect]
     relationship_entity_ids: list[UUID]
     entity_ids: list[UUID]
@@ -97,7 +107,7 @@ class _DeleteClosure:
     alias_supports: list[EntityAliasEvidence]
     field_supports: list[EntityFieldEvidence]
     decisions: list[EntityCorrectionDecision]
-    relationship_refs: list[relationships.CorrectionRelationshipRef]
+    relationship_refs: list[CorrectionRelationshipRef]
     evidence_pairs: list[tuple[UUID, UUID]]
     source_ids: list[UUID]
     document_ids: list[UUID]
@@ -133,8 +143,8 @@ class _DeleteClosure:
         }, sort_keys=True, separators=(",", ":"))
 
 
-def _conflict(code: str, message: str, *, entity_ids: list[UUID] = [],
-              membership_ids: list[UUID] = [], relationship_ids: list[UUID] = []) -> CorrectionConflictError:
+def _conflict(code: str, message: str, *, entity_ids: list[UUID] = [],  # noqa: B006  # never mutated; FastAPI/DTO copies the default
+              membership_ids: list[UUID] = [], relationship_ids: list[UUID] = []) -> CorrectionConflictError:  # noqa: B006  # never mutated; FastAPI/DTO copies the default
     """Build a structured correction conflict with the supplied affected IDs."""
     return CorrectionConflictError(code, message, entity_ids=entity_ids,
                                    membership_ids=membership_ids, relationship_ids=relationship_ids)
@@ -504,7 +514,7 @@ async def delete_canonical_entity(
         stub.metadata_json = {}
         stub.revision += 1
     root = next(item for item in after.entity_rows if item.id == entity_id)
-    previous_revisions = {str(item.id): item.revision for item in after.entity_rows}
+    previous_revisions: dict[str, int | None] = {str(item.id): item.revision for item in after.entity_rows}
     await session.delete(root)
     affected_ids = sorted({
         *after.entity_ids, *relationship_ids, *support_ids,
@@ -517,7 +527,7 @@ async def delete_canonical_entity(
         affected_ids=affected_ids, revisions=previous_revisions,
     )
     await session.flush()
-    drafts = [make_graph_change(entity_id=identifier, deleted=True) for identifier in after.entity_ids]
+    drafts: list[ReplayDraft] = [make_graph_change(entity_id=identifier, deleted=True) for identifier in after.entity_ids]
     drafts.extend(make_graph_change(relationship_id=identifier, deleted=True) for identifier in relationship_ids)
     drafts.extend(await timeline.revise_corrected_events(session, changed_timeline_ids, entity_id=entity_id))
     await commit_with_replay(session, drafts)
@@ -702,7 +712,7 @@ async def merge_entity(
     closure = await _locked_closure(session, [source_id, payload.into_id], include_target_memberships=True)
     await _temporal_before_relationships(session, closure.relationship_ids)
     source, target, memberships, target_aliases, source_aliases = await _validate_merge_request(source_id, payload, closure)
-    previous_revisions = {str(source.id): source.revision, str(target.id): target.revision}
+    previous_revisions: dict[str, int | None] = {str(source.id): source.revision, str(target.id): target.revision}
     for field_name in ("name", "description"):
         source_origin = getattr(source, f"{field_name}_origin")
         target_origin = getattr(target, f"{field_name}_origin")
@@ -742,19 +752,19 @@ async def merge_entity(
     for alias in source_aliases:
         existing = target_aliases.get(alias.normalized_alias)
         if existing is None:
-            for support in closure.alias_supports:
-                if support.alias_id == alias.id and support.membership_id in membership_by_id:
-                    support.alias_id = alias.id
+            for alias_support in closure.alias_supports:
+                if alias_support.alias_id == alias.id and alias_support.membership_id in membership_by_id:
+                    alias_support.alias_id = alias.id
             alias.entity_id = target.id
             continue
         supports = [item for item in closure.alias_supports if item.alias_id == alias.id]
         target_supports = {item.membership_id: item for item in closure.alias_supports if item.alias_id == existing.id}
-        for support in supports:
-            target_support = target_supports.get(support.membership_id)
+        for alias_support in supports:
+            target_support = target_supports.get(alias_support.membership_id)
             if target_support is None:
-                support.alias_id = existing.id
+                alias_support.alias_id = existing.id
             else:
-                target_support.confidence = max(target_support.confidence, support.confidence)
+                target_support.confidence = max(target_support.confidence, alias_support.confidence)
                 await session.delete(support)
         await session.delete(alias)
     await _record_assignments(session, memberships, target.id, actor_id=actor_id, reason=payload.reason, future_document_id=payload.future_document_id)
@@ -801,7 +811,7 @@ async def merge_entity(
         replacement_entity_ids=sorted({new for _, new in replacements}, key=str),
         revision=target.revision,
     )
-    drafts = [make_graph_change(entity_id=target.id)]
+    drafts: list[ReplayDraft] = [make_graph_change(entity_id=target.id)]
     drafts.extend(make_graph_change(relationship_id=new) for _, new in replacements)
     drafts.extend(await timeline.revise_corrected_events(session, changed_timeline_ids, entity_id=target.id))
     await _temporal_correction(session, closure.memberships,
@@ -863,9 +873,9 @@ async def split_entity(
     for item in selected:
         item.entity_id = new_id
     # New identity fields are owner-authored; selected derived support cannot override them.
-    for support in closure.field_supports:
-        if support.membership_id in selected_ids:
-            await session.delete(support)
+    for field_support in closure.field_supports:
+        if field_support.membership_id in selected_ids:
+            await session.delete(field_support)
     for alias in closure.aliases:
         if alias.entity_id != entity_id or alias.origin != "derived":
             continue
@@ -909,7 +919,7 @@ async def split_entity(
         operation="split", entity_id=source.id, canonical_entity_id=source.id,
         replacement_entity_ids=[new_id], revision=source.revision,
     )
-    drafts = [make_graph_change(entity_id=source.id), make_graph_change(entity_id=new_id)]
+    drafts: list[ReplayDraft] = [make_graph_change(entity_id=source.id), make_graph_change(entity_id=new_id)]
     drafts.extend(make_graph_change(relationship_id=new) for _, new in replacements)
     drafts.extend(await timeline.revise_corrected_events(session, changed_timeline_ids, entity_id=source.id))
     await _temporal_correction(session, closure.memberships,
@@ -997,7 +1007,7 @@ async def _temporal_before_relationships(session: AsyncSession, relationship_ids
         await relationships.record_relationship_history(session, relationship_id)
 
 
-async def _temporal_correction(session: AsyncSession, memberships, entity_revisions: list[tuple[UUID, int]],
+async def _temporal_correction(session: AsyncSession, memberships: list[EntityEvidenceMembership], entity_revisions: list[tuple[UUID, int]],
                                operation: str, *, deleted: bool = False) -> None:
     """Flush identifier-only desired-state changes with the canonical correction's existing atomic commit."""
     from modules.knowledge.temporal import public as temporal

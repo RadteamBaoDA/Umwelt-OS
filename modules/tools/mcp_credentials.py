@@ -51,7 +51,7 @@ def decrypt_connection_credential(
         json.dumps(expected, sort_keys=True, separators=(",", ":")),
     ) or not isinstance(payload.get("value"), str) or not payload["value"]:
         raise ValueError("MCP credential envelope context does not match")
-    return payload["value"]
+    return str(payload["value"])
 
 
 def issue_inbound_token() -> tuple[str, str, str]:

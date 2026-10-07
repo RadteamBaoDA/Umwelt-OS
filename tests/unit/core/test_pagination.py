@@ -10,6 +10,7 @@ import base64
 import json
 from datetime import UTC, datetime, timedelta, timezone
 from uuid import UUID, uuid4
+
 import pytest
 from fastapi import HTTPException
 
@@ -90,7 +91,7 @@ class TestPaginationCursor:
 
     def test_decode_cursor_rejects_invalid_json(self) -> None:
         """decode_cursor raises HTTP 422 if decoded bytes do not form valid JSON."""
-        non_json = "not a json string at all".encode()
+        non_json = b"not a json string at all"
         cursor = base64.urlsafe_b64encode(non_json).decode().rstrip("=")
 
         with pytest.raises(HTTPException) as exc_info:

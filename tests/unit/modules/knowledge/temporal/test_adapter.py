@@ -14,24 +14,19 @@ Tests cover:
 
 from __future__ import annotations
 
-import asyncio
-from datetime import UTC, datetime
 import hashlib
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
 import pytest
 
 from modules.knowledge.temporal.adapter import (
-    MAX_SUPPORT,
     CandidateNodeReplacement,
     CanonicalEntityBinding,
     CanonicalNodeRecoveryAction,
     EvidenceIdentity,
-    ExactFactReplacement,
     ExactFactState,
-    ExactFactSupport,
     ExactGraphLink,
     GraphConfiguration,
     GraphOperationError,
@@ -39,12 +34,12 @@ from modules.knowledge.temporal.adapter import (
     GraphState,
     GraphWriteReceipt,
     TemporalGraph,
-    _OwnedDispatchTransport,
     _canonical_json,
     _entity_state_fingerprint,
     _episode_state_fingerprint,
     _fact_state,
     _normalized_graph_timestamp,
+    _OwnedDispatchTransport,
 )
 
 

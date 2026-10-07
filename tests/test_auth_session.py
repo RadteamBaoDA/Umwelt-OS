@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -29,6 +30,10 @@ class MemorySession:
 
     async def scalar(self, statement):
         str_stmt = str(statement)
+        if "backup_control" in str_stmt.lower():
+            return SimpleNamespace(phase="idle", epoch=1)
+        if "backup_activity" in str_stmt.lower():
+            return None
         if "auth_session" in str_stmt.lower():
             return next(iter(self.store.sessions.values()), None)
         return self.store.owner
@@ -41,12 +46,21 @@ class MemorySession:
     def add(self, value) -> None:
         self.pending = value
 
+    async def __aenter__(self) -> "MemorySession":  # noqa: PYI034  # async context-manager signature kept; typing-only
+        return self
+
+    async def __aexit__(self, *_exc) -> None:
+        return None
+
+    async def flush(self) -> None:
+        return None
+
     async def commit(self) -> None:
         async with self.store.lock:
             if isinstance(self.pending, AuthSession):
                 self.store.sessions[self.pending.token_hash] = self.pending
 
-    async def execute(self, _statement):
+    async def execute(self, _statement, _params=None):
         return object()
 
     async def delete(self, value) -> None:
@@ -105,6 +119,7 @@ async def test_login_requires_csrf_and_rotates_session_tokens() -> None:
 
     app.dependency_overrides[get_session] = session_override
     app.dependency_overrides[get_auth_redis] = lambda: MemoryRedis()
+    app.state.session_factory = lambda: MemorySession(store)  # backup middleware finalizes outside DI
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://localhost:3000"
     ) as client:

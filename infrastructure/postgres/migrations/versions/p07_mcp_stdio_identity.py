@@ -1,8 +1,7 @@
 """Persist administrator-reviewed MCP stdio profile identities without changing history."""
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision = "p07_mcp_stdio_identity"
 down_revision = "p07_mcp_connections"

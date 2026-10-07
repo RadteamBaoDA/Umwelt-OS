@@ -1,11 +1,11 @@
 """Owner-authenticated portable export aggregation and download routes."""
 
 import csv
-from datetime import UTC, datetime
-from enum import StrEnum
 import io
 import json
 import re
+from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -137,7 +137,7 @@ async def _collect_dataset(
                     "privacy_updated_at": page.privacy_updated_at,
                     "history_enabled": page.history_enabled,
                 })
-        elif page.snapshot_at != snapshot or page.snapshot_count != metadata["snapshot_count"]:
+        elif metadata is None or page.snapshot_at != snapshot or page.snapshot_count != metadata["snapshot_count"]:
             raise HTTPException(status_code=409, detail="Export snapshot changed while reading owner pages")
         else:
             metadata["available"] = metadata["available"] and page.available

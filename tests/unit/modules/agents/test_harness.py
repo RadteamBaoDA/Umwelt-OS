@@ -8,9 +8,9 @@ Covers:
 - Loop detection and recursion limits in harness workflow
 """
 
-import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 from uuid import uuid4
+
 import pytest
 
 from modules.agents.handoff import (
@@ -21,9 +21,8 @@ from modules.agents.handoff import (
 )
 from modules.agents.harness import (
     HarnessContext,
-    HandoffContext,
-    RunLimitReached,
     RunCancelled,
+    RunLimitReached,
     StrictJsonSerializer,
     run_specialist_handoff,
 )
@@ -143,7 +142,8 @@ class TestSupervisorHandoffDepthLimits:
         parent_context.handoff_depth = 0
         parent_context.profile_snapshot = {"id": "supervisor"}
 
-        state = {"pending_tool_calls": [{"id": "call_1"}]}
+        # Frozen parent input fences are required before the target is judged.
+        state = {"pending_tool_calls": [{"id": "call_1"}], "pending_source_fences": [], "source_fences": []}
         arguments = {"specialist": "unknown_specialist", "request": "Do work"}
 
         with pytest.raises(HandoffRefused) as exc_info:

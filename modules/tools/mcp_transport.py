@@ -1,13 +1,15 @@
 """Pinned, bounded outbound MCP HTTP transport built on public httpx2 APIs."""
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 import ipaddress
 import socket
 import time
-from typing import Any
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from types import TracebackType
+from typing import Any, cast
 
 from httpx2 import (
+    URL,
     AsyncBaseTransport,
     AsyncByteStream,
     AsyncClient,
@@ -16,7 +18,6 @@ from httpx2 import (
     Request,
     Response,
     Timeout,
-    URL,
 )
 
 from core.mcp_endpoint import normalize_mcp_url
@@ -293,7 +294,7 @@ class McpPinnedHttpTransport(AsyncBaseTransport):
         teardown = request.method == "DELETE"
         await self._budget.claim_request(teardown=teardown)
         delegated_response = False
-        request_stream = _BoundedRequestByteStream(request.stream, self._budget, teardown=teardown)
+        request_stream = _BoundedRequestByteStream(cast(AsyncByteStream, request.stream), self._budget, teardown=teardown)
         try:
             origin = self._validate_origin(request.url)
             if origin != self._configured_origin:
@@ -308,7 +309,7 @@ class McpPinnedHttpTransport(AsyncBaseTransport):
                 raise McpTransportError("MCP durable execution fence is no longer current")
             self._budget.remaining_seconds()
 
-            headers = [
+            headers: list[tuple[str, str | bytes]] = [
                 (name, value) for name, value in request.headers.multi_items()
                 if name.lower() not in {"host", "accept-encoding"}
             ]
@@ -323,7 +324,7 @@ class McpPinnedHttpTransport(AsyncBaseTransport):
             pinned_request = Request(
                 request.method,
                 request.url.copy_with(host=pinned_host),
-                headers=headers,
+                headers=cast(Any, headers),  # mixed str/bytes items are normalised per header by httpx
                 stream=request_stream,
                 extensions=extensions,
             )
@@ -347,7 +348,7 @@ class McpPinnedHttpTransport(AsyncBaseTransport):
             bounded_response = Response(
                 status_code=response.status_code,
                 headers=response.headers,
-                stream=_BoundedResponseByteStream(response.stream, self._budget, teardown=teardown),
+                stream=_BoundedResponseByteStream(cast(AsyncByteStream, response.stream), self._budget, teardown=teardown),
                 extensions=response.extensions,
             )
             delegated_response = True
@@ -363,12 +364,15 @@ class McpPinnedHttpTransport(AsyncBaseTransport):
         """Close the owned direct HTTP transport and its bounded connection pool."""
         await self._delegate.aclose()
 
-    async def __aenter__(self) -> "McpPinnedHttpTransport":
+    async def __aenter__(self) -> "McpPinnedHttpTransport":  # noqa: PYI034  # async context-manager signature kept; typing-only
         """Enter the delegated HTTP transport so httpx2 clients can manage it as a context."""
         await self._delegate.__aenter__()
         return self
 
-    async def __aexit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
+    async def __aexit__(
+        self, exc_type: type[BaseException] | None = None, exc_value: BaseException | None = None,
+        traceback: TracebackType | None = None,
+    ) -> None:
         """Close the delegated connection pool when the caller-owned client exits."""
         await self.aclose()
 

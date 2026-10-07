@@ -9,11 +9,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.auth.dependencies import require_owner, require_owner_write
 from core.auth.models import AuthSession
 from core.database import get_session
-from modules.timeline import public
-from modules.timeline.schemas import EventCreate, EventPage, EventPatch, EventRead, TimelinePage, TimelineQuery
 from modules.settings.public import module_dependency
+from modules.timeline import public
+from modules.timeline.schemas import (
+    EventCreate,
+    EventPage,
+    EventPatch,
+    EventRead,
+    TimelinePage,
+    TimelineQuery,
+)
 
-router = APIRouter(tags=["timeline"], dependencies=[Depends(module_dependency("timeline"))])
+router = APIRouter(tags=["timeline"], dependencies=[Depends(module_dependency("knowledge.timeline"))])
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[AuthSession, Depends(require_owner)]
 OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]

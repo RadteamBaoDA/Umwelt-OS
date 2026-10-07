@@ -2,19 +2,55 @@ import asyncio
 import os
 from logging.config import fileConfig
 
+import sqlalchemy as sa
 from alembic import context
-from sqlalchemy import pool
+from alembic.ddl.postgresql import PostgresqlImpl
+from sqlalchemy import pool, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 import modules  # noqa: F401  # Domain model packages are imported here as they are added.
 from core.auth.models import AuthSession, Owner
-from core.demo_seed import DemoSeedReceipt
-from core.remote_heavy_models import RemoteHeavyGuard
 from core.database import Base
-from modules.knowledge.documents.models import (
-    Document, DocumentChunk, DocumentCleanupOperation, DocumentVersion, NormalizedDocumentIdentity, NormalizedVersionProvenance,
+from core.demo_seed import DemoSeedReceipt
+from core.realtime import ReplayHead, ReplayRecord
+from core.remote_heavy_models import RemoteHeavyGuard
+from modules.agents.models import AgentApproval, AgentEffect, AgentRun, AgentToolCall
+from modules.automations.models import (
+    Automation,
+    AutomationCursor,
+    AutomationRevision,
+    AutomationRun,
+    AutomationRunAction,
+    AutomationSchedule,
+    AutomationTrigger,
 )
+from modules.backup.models import BackupActivity, BackupControl, BackupOperation
+from modules.chat.models import AgentActivityLink, Conversation, Message, ResponseRun, StreamEvent
+from modules.connectors.models import (
+    AgentBrowserGrant,
+    ConnectorManagedCredential,
+    ConnectorNativeCredential,
+    ConnectorProvisioning,
+    ConnectorWorldCredential,  # noqa: F401  # registers table metadata
+    GithubOAuthOperation,
+    GithubSourceHint,
+    GithubWebhookCapacity,
+    GithubWebhookDelivery,
+    GithubWebhookOutbox,
+)
+from modules.dashboard.models import (
+    BriefSchedule,
+    DailyBrief,
+    Dashboard,
+    DashboardGroup,
+    DashboardLayout,
+    GadgetDefinition,
+    GadgetHighlightProgress,
+    GadgetInstance,
+    GadgetPlacement,
+)
+from modules.goals.models import Goal
 from modules.ingestion.models import (
     CollectorCredential,
     EventOutbox,
@@ -25,66 +61,71 @@ from modules.ingestion.models import (
     SourceIngestionState,
     SourceObservation,
 )
-from modules.connectors.models import (
-    AgentBrowserGrant,
-    ConnectorManagedCredential,
-    ConnectorNativeCredential,
-    ConnectorProvisioning,
-    GithubOAuthOperation,
-    GithubWebhookCapacity,
-    GithubWebhookDelivery,
-    GithubWebhookOutbox,
-    GithubSourceHint,
-    ConnectorWorldCredential,
+from modules.knowledge.documents.models import (
+    Document,
+    DocumentChunk,
+    DocumentCleanupOperation,  # noqa: F401  # registers table metadata
+    DocumentVersion,
+    NormalizedDocumentIdentity,
+    NormalizedVersionProvenance,
 )
-from modules.knowledge.observations.models import Observation
-from modules.sources.models import Source, SourcePurgeOperation
-from modules.search.models import IndexGeneration, SearchIndexItem
 from modules.knowledge.entities.models import (
     Entity,
     EntityAlias,
-    EntityEvidenceMembership,
     EntityAliasEvidence,
+    EntityCorrectionDecision,
+    EntityEvidenceMembership,
+    EntityExtractionResult,
+    EntityExtractionWork,
     EntityFieldEvidence,
     EntityOwnerAction,
     EntityRedirect,
-    EntityCorrectionDecision,
-    EntityExtractionWork,
-    EntityExtractionResult,
 )
-from modules.knowledge.relationships.models import Relationship, RelationshipEvidence, RelationshipSnapshotHistory
+from modules.knowledge.observations.models import (
+    Observation,  # noqa: F401  # registers table metadata
+)
+from modules.knowledge.relationships.models import (
+    Relationship,
+    RelationshipEvidence,
+    RelationshipSnapshotHistory,
+)
 from modules.knowledge.temporal.models import (
-    GraphAllocation, GraphPartition, GraphMapping, GraphSupport, GraphOperation,
-    GraphReceipt, GraphChange, GraphReconcileRun, GraphDispatch, GraphReconcileMember, GraphRebuildDependency,
+    GraphAllocation,
+    GraphChange,
+    GraphDispatch,
+    GraphMapping,
+    GraphOperation,
+    GraphPartition,
+    GraphRebuildDependency,
+    GraphReceipt,
+    GraphReconcileMember,
+    GraphReconcileRun,
+    GraphSupport,
 )
-from modules.timeline.models import Event, EventParticipant, EventEvidence, ParticipantEvidence, EventAudit, EventSuppression, TimelineExtractionWork, TimelineExtractionResult
-from modules.settings.models import AISettingsRecord, OnboardingStateRecord, OwnerPreferencesRecord
-from modules.dashboard.models import (
-    Dashboard,
-    DashboardGroup,
-    DashboardLayout,
-    GadgetDefinition,
-    GadgetHighlightProgress,
-    GadgetInstance,
-    GadgetPlacement,
-    BriefSchedule,
-    DailyBrief,
-)
-from modules.notifications.models import Notification
-from modules.tasks.models import Task
-from modules.goals.models import Goal
-from modules.news.topics import Topic
-from modules.news.models import NewsObservation, NewsRecoveryCheckpoint, NewsStory, NewsStoryIdentity
-from core.realtime import ReplayHead, ReplayRecord
-from modules.chat.models import AgentActivityLink, Conversation, Message, ResponseRun, StreamEvent
 from modules.memory.models import Memory, MemoryCandidate, MemoryPrivacyRecord
-from modules.tools.models import BrowserPageEvidence, BrowserReadJob
-from modules.agents.models import AgentApproval, AgentEffect, AgentRun, AgentToolCall
-from modules.automations.models import (
-    Automation, AutomationCursor, AutomationRevision, AutomationRun, AutomationRunAction, AutomationSchedule,
-    AutomationTrigger,
+from modules.news.models import (
+    NewsObservation,
+    NewsRecoveryCheckpoint,
+    NewsStory,
+    NewsStoryIdentity,
 )
-from modules.backup.models import BackupActivity, BackupControl, BackupOperation
+from modules.news.topics import Topic
+from modules.notifications.models import Notification
+from modules.search.models import IndexGeneration, SearchIndexItem
+from modules.settings.models import AISettingsRecord, OnboardingStateRecord, OwnerPreferencesRecord
+from modules.sources.models import Source, SourcePurgeOperation
+from modules.tasks.models import Task
+from modules.timeline.models import (
+    Event,
+    EventAudit,
+    EventEvidence,
+    EventParticipant,
+    EventSuppression,
+    ParticipantEvidence,
+    TimelineExtractionResult,
+    TimelineExtractionWork,
+)
+from modules.tools.models import BrowserPageEvidence, BrowserReadJob
 
 _auth_models = (AuthSession, Owner)
 _demo_seed_models = (DemoSeedReceipt,)
@@ -159,6 +200,19 @@ _temporal_models = (
     GraphReceipt, GraphChange, GraphReconcileRun, GraphDispatch, GraphReconcileMember, GraphRebuildDependency,
 )
 _settings_models = (AISettingsRecord, OnboardingStateRecord, OwnerPreferencesRecord)
+
+
+class _WideVersionImpl(PostgresqlImpl):
+    """Several shipped revision ids exceed Alembic's default VARCHAR(32) version column (online and --sql)."""
+
+    __dialect__ = "postgresql"
+
+    def version_table_impl(self, **kw):  # type: ignore[no-untyped-def]
+        table = super().version_table_impl(**kw)
+        table.c.version_num.type = sa.String(255)
+        return table
+
+
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
@@ -183,6 +237,14 @@ def run_migrations_offline() -> None:
 
 def do_run_migrations(connection: Connection) -> None:
     """Run the Alembic migration context against the supplied database connection."""
+    # Widen only databases created before the wide version table (read-only commands stay DDL-free).
+    width = connection.execute(text(
+        "SELECT character_maximum_length FROM information_schema.columns "
+        "WHERE table_schema = current_schema() AND table_name = 'alembic_version' AND column_name = 'version_num'"
+    )).scalar()
+    if width is not None and width < 255:
+        connection.execute(text("ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(255)"))
+    connection.commit()
     context.configure(connection=connection, target_metadata=Base.metadata, compare_type=True)
     with context.begin_transaction():
         context.run_migrations()

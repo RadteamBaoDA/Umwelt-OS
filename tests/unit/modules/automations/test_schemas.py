@@ -10,32 +10,23 @@ Covers:
 - AutomationCreate, AutomationUpdate, and AutomationRead schemas
 """
 
-from uuid import UUID, uuid4
 import pytest
 from pydantic import ValidationError
 
 from modules.automations.schemas import (
-    MAX_ACTIONS,
-    MAX_CONDITIONS,
-    Action,
     AutomationCreate,
     AutomationDefinition,
-    AutomationRead,
     AutomationUpdate,
     CallWebhookAction,
     Condition,
-    ConnectorSyncResultTrigger,
     CreateNotificationAction,
     CreateTaskAction,
-    EntityChangedTrigger,
     GenerateBriefAction,
-    GoalDeadlineTrigger,
     NewDocumentTrigger,
     NewEventTrigger,
     RunAgentAction,
     ScheduleTrigger,
     TaskDueTrigger,
-    Trigger,
     WebhookTrigger,
 )
 

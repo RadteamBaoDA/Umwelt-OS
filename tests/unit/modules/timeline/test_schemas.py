@@ -7,19 +7,16 @@ Covers:
 - Cursor encoding, decoding, fingerprint verification, partition checking, and tampering detection.
 """
 
-from datetime import UTC, date, datetime, timedelta
-import hashlib
-import json
-from uuid import UUID, uuid4
+from datetime import UTC, date, datetime
+from uuid import uuid4
+
 import pytest
 from pydantic import ValidationError
 
 from modules.timeline.public import _cursor_decode, _cursor_encode
 from modules.timeline.schemas import (
     EventCreate,
-    EventPage,
     EventPatch,
-    EventRead,
     ParticipantInput,
     TimelinePage,
     TimelineQuery,
@@ -192,7 +189,7 @@ class TestEventCreate:
 
     def test_naive_timestamp_rejected(self) -> None:
         """Verify naive timestamps without UTC offset raise ValidationError."""
-        naive_dt = datetime(2025, 1, 1, 10, 0)
+        naive_dt = datetime(2025, 1, 1, 10, 0)  # noqa: DTZ001  # intentionally naive: wall-clock/DST math or naive-rejection test
         with pytest.raises(ValidationError, match="timestamps must include an explicit UTC offset"):
             EventCreate(
                 type="talk",

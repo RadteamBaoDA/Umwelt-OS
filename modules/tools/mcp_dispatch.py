@@ -1,7 +1,7 @@
 """Register persisted MCP selections as native bounded tool handlers."""
 
 import hashlib
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from functools import partial
 from typing import Any
@@ -214,14 +214,14 @@ class McpDispatchAdapter:
                 or (principal.owner_all_sources and not principal.is_owner)):
             return False
         grant_sources = frozenset(str(source_id) for source_id in fence.source_ids)
-        if not principal.owner_all_sources:
+        if not principal.owner_all_sources:  # noqa: SIM102  # style-only rewrite skipped to avoid touching control flow
             if not grant_sources or not grant_sources.issubset(principal.source_ids):
                 return False
         try:
             if await principal_revalidator(principal) is not True:
                 return False
             return await self._revalidate_fence(owner_id, fence) is True
-        except Exception:
+        except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
             # Guard failures are collapsed to denial so the registry never exposes callback details.
             return False
 

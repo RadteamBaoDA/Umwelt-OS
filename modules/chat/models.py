@@ -1,6 +1,7 @@
 """Private persistence models for chat conversations, messages, response runs, and stream events."""
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
@@ -40,7 +41,7 @@ class Conversation(Base):
     archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     ephemeral: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    metadata_json: Mapped[dict[str, object]] = mapped_column("metadata", JSONB, nullable=False, server_default="{}")
+    metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, nullable=False, server_default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
@@ -73,8 +74,8 @@ class Message(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     client_request_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     model_identity: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    citations: Mapped[list[dict[str, object]]] = mapped_column(JSONB, nullable=False, server_default="[]")
-    metadata_json: Mapped[dict[str, object]] = mapped_column("metadata", JSONB, nullable=False, server_default="{}")
+    citations: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, nullable=False, server_default="{}")
     response_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     revision_of_message_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("chat_messages.id", ondelete="SET NULL"), nullable=True
@@ -117,9 +118,9 @@ class ResponseRun(Base):
     provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    token_usage: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False, server_default="{}")
-    citations: Mapped[list[dict[str, object]]] = mapped_column(JSONB, nullable=False, server_default="[]")
-    retrieval_context: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    token_usage: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    citations: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    retrieval_context: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
     ephemeral: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
@@ -181,7 +182,7 @@ class StreamEvent(Base):
     seq: Mapped[int] = mapped_column(Integer, nullable=False)
     event_type: Mapped[str] = mapped_column(String(64), nullable=False)
     event_id: Mapped[str] = mapped_column(String(128), nullable=False)
-    data: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    data: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     response_run: Mapped["ResponseRun"] = relationship("ResponseRun", back_populates="stream_events")
@@ -205,7 +206,7 @@ class AgentActivityLink(Base):
     agent_run_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     owner_id: Mapped[int] = mapped_column(Integer, nullable=False)
     auth_session_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    activities: Mapped[list[dict[str, object]]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    activities: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, server_default="[]")
     ephemeral: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

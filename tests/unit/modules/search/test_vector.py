@@ -9,6 +9,7 @@ Covers:
 
 import math
 from uuid import UUID, uuid4
+
 import pytest
 
 from modules.search.indexing import MAX_VECTOR_DIMENSIONS, embedding_values

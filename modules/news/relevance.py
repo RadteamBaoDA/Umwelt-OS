@@ -3,16 +3,15 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.goals import public as goals
 from modules.goals.schemas import GoalFilter
+from modules.news import topics
 from modules.news.schemas import RecordedSignal, RelevanceRead, StoryRead
 from modules.news.stories import _tokens
 from modules.news.topics import TopicFilter
-from modules.news import topics
 
 SIGNAL_NAMES = ("topic", "entity", "goal", "project", "recency", "importance", "novelty")
 
@@ -40,9 +39,8 @@ async def score_relevance(
     entity_ids: set[str] = set()
     membership_incomplete: str | None = None
     # Story evidence records exact versions; memberships are resolved from each version below.
-    from modules.knowledge.entities import public as entities
-
     from modules.knowledge.documents import public as documents
+    from modules.knowledge.entities import public as entities
 
     for item in story.evidence[:100]:
         current = await documents.get_news_document_projection(
@@ -99,9 +97,9 @@ async def score_relevance(
     cursor = None
     goal_complete = True
     for _ in range(10):
-        page = await goals.list_goals(session, owner_id, GoalFilter(status="active", limit=100, cursor=cursor))
-        goal_records.extend(page.items)
-        cursor = page.next_cursor
+        goal_page = await goals.list_goals(session, owner_id, GoalFilter(status="active", limit=100, cursor=cursor))
+        goal_records.extend(goal_page.items)
+        cursor = goal_page.next_cursor
         if cursor is None:
             break
     else:

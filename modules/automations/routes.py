@@ -3,11 +3,22 @@
 import asyncio
 import json
 import re
+from collections.abc import Awaitable
 from datetime import UTC, datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, Request, Response, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    Header,
+    HTTPException,
+    Path,
+    Query,
+    Request,
+    Response,
+    status,
+)
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,7 +27,6 @@ from core.auth.dependencies import require_owner, require_owner_write
 from core.auth.models import AuthSession, Owner
 from core.database import get_session
 from modules.automations import public
-from modules.settings.public import module_dependency, module_is_enabled, register_request_activity
 from modules.automations.execution import enqueue_trigger
 from modules.automations.models import AutomationTrigger, AutomationWebhookCredential
 from modules.automations.schemas import (
@@ -32,6 +42,7 @@ from modules.automations.schemas import (
     RunPage,
     RunRead,
 )
+from modules.settings.public import module_dependency, module_is_enabled, register_request_activity
 
 router = APIRouter(prefix="/api/v1/automations", tags=["automations"], dependencies=[Depends(module_dependency("automations"))])
 webhook_router = APIRouter(prefix="/api/v1/automations", tags=["automation-webhooks"])
@@ -50,12 +61,12 @@ class InboundEvent(BaseModel):
     event: str = Field(min_length=1, max_length=2000)
 
 
-def _error(code: int, name: str, message: str, details: dict | None = None) -> HTTPException:
+def _error(code: int, name: str, message: str, details: dict[str, Any] | None = None) -> HTTPException:
     """Build the standard error envelope without echoing rule content."""
     return HTTPException(status_code=code, detail={"code": name, "message": message, "details": details or {}})
 
 
-async def _call(operation):
+async def _call[T](operation: Awaitable[T]) -> T:
     """Await a service call and map domain exceptions to HTTP errors."""
     try:
         return await operation

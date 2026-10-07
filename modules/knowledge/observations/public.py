@@ -1,28 +1,33 @@
 """Owner-scoped observation revision writes, selection and bounded reads."""
 
-from datetime import UTC, datetime
 import base64
 import hashlib
 import json
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Any, cast
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import and_, func, or_, select, tuple_, update
+from sqlalchemy import Table, and_, func, or_, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modules.knowledge.observations.models import Observation
-from modules.knowledge.observations.schemas import (
-    GeospatialObservationPage, GeospatialObservationRead, ObservationQuery, WorldMeasurement,
-    ObservationExportRead, ObservationExportFence, ObservationExportPage,
-    ObservationExportFenceValidation,
-)
 from core.auth.models import Owner
 from modules.connectors import public as connectors
 from modules.knowledge.documents import public as documents
+from modules.knowledge.observations.models import Observation
+from modules.knowledge.observations.schemas import (
+    GeospatialObservationPage,
+    GeospatialObservationRead,
+    ObservationExportFence,
+    ObservationExportFenceValidation,
+    ObservationExportPage,
+    ObservationExportRead,
+    ObservationQuery,
+    WorldMeasurement,
+)
 from modules.sources import public as sources
 from modules.sources.schemas import SourceExportFence
-
 
 OBSERVATION_EXPORT_PAGE_MAX_BYTES = 16_777_216
 
@@ -79,7 +84,7 @@ async def _observation_export_count(session: AsyncSession, snapshot_at: datetime
                                            .limit(256).execution_options(populate_existing=True))).all())
         if not rows:
             return count
-        scope_by_source = {}
+        scope_by_source: dict[UUID, Any] = {}
         candidates = []
         for row in rows:
             scope = scope_by_source.get(row.source_id)
@@ -479,12 +484,12 @@ async def purge_source_in_uow(session: AsyncSession, source_id: UUID) -> None:
     """Remove every derived observation revision in the source's existing deletion transaction."""
     await session.execute(update(Observation).where(Observation.source_id == source_id).values(is_current=False))
     await session.execute(
-        Observation.__table__.delete().where(Observation.source_id == source_id)
+        cast(Table, Observation.__table__).delete().where(Observation.source_id == source_id)
     )
 
 
 async def purge_document_in_uow(session: AsyncSession, document_id: UUID) -> None:
     """Remove evidence-supported measurement revisions before their document is deleted."""
     await session.execute(
-        Observation.__table__.delete().where(Observation.document_id == document_id)
+        cast(Table, Observation.__table__).delete().where(Observation.document_id == document_id)
     )

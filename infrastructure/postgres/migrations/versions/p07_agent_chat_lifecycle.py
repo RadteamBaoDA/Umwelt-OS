@@ -2,9 +2,8 @@
 
 from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision: str = "p07_agent_chat_lifecycle"
 down_revision: str | Sequence[str] | None = "p07_approvals_effects"

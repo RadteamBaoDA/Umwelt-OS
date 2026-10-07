@@ -7,13 +7,12 @@ and error mapping.
 
 from __future__ import annotations
 
-import asyncio
-from contextlib import asynccontextmanager
 import json
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from openai import APIConnectionError, APIStatusError, APITimeoutError
+from openai import APIStatusError
 from redis.exceptions import RedisError
 
 from core.model_gateway.cache import (
@@ -29,17 +28,10 @@ from core.model_gateway.client import (
 )
 from core.model_gateway.policy import may_send
 from core.model_gateway.schemas import (
-    AIExecutionConfig,
-    AISettingsUpdate,
-    ConnectionCheck,
-    ConnectionDraft,
-    DraftProbeRequest,
     ModelMapping,
-    PrivacySettings,
     RequestPolicy,
 )
 from core.model_gateway.transport import (
-    ApprovedEndpointTransport,
     EndpointNetworkPolicyError,
     _address,
     _networks,
@@ -259,7 +251,7 @@ class TestModelGatewayRequestExecution:
             yield mock_client
 
         with patch("core.model_gateway.client.AsyncOpenAI", side_effect=mock_async_openai), \
-             patch.object(mock_gateway, "_http_client", return_value=MagicMock()):
+             patch.object(mock_gateway, "_http_client", return_value=MagicMock()):  # noqa: SIM117  # style-only; nested with kept
             with pytest.raises(CapabilityUnsupported):
                 await mock_gateway.chat("fast", mapping, policy, [{"role": "user", "content": "hi"}])
 

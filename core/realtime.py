@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Sequence
 from datetime import UTC, datetime
-from typing import Annotated, Literal, TypeAlias
+from typing import Annotated, Any, Literal, TypeAlias
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from sqlalchemy import BigInteger, DateTime, Integer, SmallInteger, String, delete, func, select
-from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
+from sqlalchemy import BigInteger, DateTime, SmallInteger, String, delete, func, select
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -65,7 +67,7 @@ class KnowledgeChanged(_Payload):
     failed_items: int | None = Field(default=None, ge=0)
 
     @model_validator(mode="after")
-    def validate_scope(self) -> "KnowledgeChanged":
+    def validate_scope(self) -> KnowledgeChanged:
         """Enforce mutually exclusive identity fields for source, index, graph, event, and collection invalidations."""
         if self.scope == "source":
             if self.source_id is None or any((
@@ -132,7 +134,7 @@ class DashboardChanged(_Payload):
     deleted: bool = Field(strict=True)
 
 
-ReplayDraft: TypeAlias = Annotated[
+ReplayDraft: TypeAlias = Annotated[  # noqa: UP040  # keep TypeVar/TypeAlias spelling; PEP 695 rewrite is style-only
     SourceChanged | IngestionChanged | KnowledgeChanged | DashboardChanged,
     Field(discriminator="type"),
 ]
@@ -156,7 +158,7 @@ class ReplayRecord(Base):
     sequence: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     epoch: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
     event_type: Mapped[str] = mapped_column(String(32), nullable=False)
-    payload: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
@@ -277,7 +279,7 @@ def make_dashboard_change(scope: str, resource_id: UUID, revision: int, *, delet
 
 
 
-async def commit_with_replay(session: AsyncSession, drafts: list[ReplayDraft] | tuple[ReplayDraft, ...] = ()) -> None:
+async def commit_with_replay(session: AsyncSession, drafts: Sequence[ReplayDraft] = ()) -> None:
     """Commit domain writes and replay rows atomically, taking the replay lock last."""
     try:
         if len(drafts) > MAX_REPLAY_BATCH:

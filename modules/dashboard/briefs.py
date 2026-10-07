@@ -9,8 +9,9 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from datetime import UTC, date, datetime
 from collections.abc import Sequence
+from collections.abc import Set as AbstractSet
+from datetime import UTC, date, datetime
 from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -21,17 +22,23 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import Settings
-from core.realtime import commit_with_replay, make_dashboard_change
 from core.model_gateway.client import ModelGateway, ModelGatewayError
 from core.model_gateway.schemas import RequestPolicy
-from modules.dashboard.daily_schemas import BriefCleanupProgress, BriefLegacyCoverage, BriefRead, BriefSchedule, DailyWidget
+from core.realtime import commit_with_replay, make_dashboard_change
+from modules.dashboard.daily_schemas import (
+    BriefCleanupProgress,
+    BriefLegacyCoverage,
+    BriefRead,
+    BriefSchedule,
+    DailyWidget,
+)
 from modules.dashboard.models import BriefSchedule as BriefScheduleRow
 from modules.dashboard.models import DailyBrief, DailyBriefEvidence
+from modules.knowledge.documents import public as documents
 from modules.notifications import public as notifications
 from modules.notifications.schemas import NotificationEmit
 from modules.settings import public as settings_public
 from modules.sources import public as sources
-from modules.knowledge.documents import public as documents
 
 MAX_FACTS = 40
 MAX_BRIEF_EVIDENCE = 100
@@ -163,17 +170,17 @@ async def _facts(
                 for item in support.evidence
             ]
         elif fact["kind"] == "events":
-            support = await timeline.brief_event_support(
+            event_support = await timeline.brief_event_support(
                 session, UUID(fact["id"]), expected_title=fact["_canonical_title"],
                 expected_source_ids=fact["source_ids"],
             )
-            if not support.complete:
+            if not event_support.complete:
                 raise BriefUnavailable("A timeline fact has incomplete exact document support")
-            fact["_lineage_status"] = "supported" if not support.independent else "independent"
+            fact["_lineage_status"] = "supported" if not event_support.independent else "independent"
             fact["_supports"] = [
                 {"document_id": str(item.document_id), "document_version_id": str(item.document_version_id),
                  "chunk_id": str(item.chunk_id), "source_id": str(item.source_id)}
-                for item in support.evidence
+                for item in event_support.evidence
             ]
         else:
             fact["_lineage_status"] = "independent"
@@ -232,7 +239,7 @@ async def _lock_fact_dependencies(
 
 
 async def _lock_dependency_sets(
-    session: AsyncSession, source_ids: set[UUID], document_ids: set[UUID], event_ids: set[UUID] = frozenset(),
+    session: AsyncSession, source_ids: set[UUID], document_ids: set[UUID], event_ids: AbstractSet[UUID] = frozenset(),
 ) -> tuple[dict[UUID, Any], set[UUID]]:
     """Lock Sources, then Documents, then Events, each globally sorted, in bounded chunks.
 
@@ -257,8 +264,8 @@ async def _lock_dependency_sets(
 
 async def prelock_captured_inputs(
     session: AsyncSession, brief_ids: Sequence[UUID], *,
-    extra_sources: set[UUID] = frozenset(), extra_documents: set[UUID] = frozenset(),
-    extra_events: set[UUID] = frozenset(),
+    extra_sources: AbstractSet[UUID] = frozenset(), extra_documents: AbstractSet[UUID] = frozenset(),
+    extra_events: AbstractSet[UUID] = frozenset(),
 ) -> None:
     """Lock the union of a bounded brief page's detached dependencies once, in canonical order.
 
@@ -283,8 +290,8 @@ async def prelock_captured_inputs(
             except (TypeError, ValueError):
                 continue  # malformed marker; the per-row checker rejects it
     await _lock_dependency_sets(
-        session, {row[0] for row in rows} | set(extra_sources),
-        {row[1] for row in rows} | set(extra_documents), event_ids | set(extra_events),
+        session, {row[0] for row in rows if row[0] is not None} | set(extra_sources),
+        {row[1] for row in rows if row[1] is not None} | set(extra_documents), event_ids | set(extra_events),
     )
 
 
@@ -344,12 +351,13 @@ async def _captured_inputs_match(
                 continue
             if any(value is None for value in triple) or item.source_id is None:
                 return False
-            normalized = tuple(str(value) for value in triple)
+            normalized = (str(triple[0]), str(triple[1]), str(triple[2]))
             if normalized in observed:
                 return False
             observed.add(normalized)
             seen.add(normalized)
             captured_sources.add(item.source_id)
+            assert item.document_id is not None  # all-None triples were handled above
             captured_documents.add(item.document_id)
         if exemplar.fact_kind == "stories" and not observed:
             return False
@@ -444,19 +452,19 @@ async def _captured_inputs_match(
                 for item in support.evidence
             }
         elif exemplar.fact_kind == "events":
-            support = await timeline.brief_event_support(
+            event_support = await timeline.brief_event_support(
                 session, fact_uuid, expected_title=None,
                 expected_source_ids=expected_sources,
             )
-            if not support.complete or support.independent:
+            if not event_support.complete or event_support.independent:
                 return False
             current = {
-                "kind": "events", "id": str(support.event_id), "title": _prompt_title(support.title),
-                "detail": support.event_type, "source_ids": [str(value) for value in support.source_ids],
+                "kind": "events", "id": str(event_support.event_id), "title": _prompt_title(event_support.title),
+                "detail": event_support.event_type, "source_ids": [str(value) for value in event_support.source_ids],
             }
             observed = {
                 (str(item.document_id), str(item.document_version_id), str(item.chunk_id))
-                for item in support.evidence
+                for item in event_support.evidence
             }
         else:
             return False
@@ -466,10 +474,10 @@ async def _captured_inputs_match(
         }
         if observed != expected or _prompt_fact_digest(current) != exemplar.fact_hash:
             return False
-        citation = citation_by_ref.get(reference)
-        if citation is not None and (
-            citation["title"] != current["title"]
-            or sorted(set(citation["source_ids"])) != sorted(current["source_ids"])
+        cited = citation_by_ref.get(reference)
+        if cited is not None and (
+            cited["title"] != current["title"]
+            or sorted(set(cited["source_ids"])) != sorted(current["source_ids"])
         ):
             return False
     return True
@@ -543,7 +551,7 @@ async def generate_brief(
     )
     # ponytail: a revision appended after the unlocked read has unlocked dependencies, so it is not
     # reused (an extra revision beats a lock-order inversion); revisit if races become common.
-    if (latest is not None and reuse_candidate is not None and latest.id == reuse_candidate.id
+    if (latest is not None and reuse_candidate is not None and latest.id == reuse_candidate.id  # noqa: SIM102  # style-only rewrite skipped to avoid touching control flow
             and latest.input_fingerprint == fingerprint and latest.status == "current" and not force):
         if await _captured_inputs_match(session, latest):
             result = (await _with_live_status(session, [latest]))[0]
@@ -748,6 +756,7 @@ async def claim_brief_slot(session: AsyncSession, owner_id: int, automation_id: 
     """
     await session.execute(pg_insert(BriefScheduleRow).values(owner_id=owner_id).on_conflict_do_nothing())
     row = await session.scalar(select(BriefScheduleRow).where(BriefScheduleRow.owner_id == owner_id).with_for_update())
+    assert row is not None
     if row.schedule_owner == "automation" and row.automation_id != automation_id:
         raise BriefSlotOwned
     row.schedule_owner, row.automation_id = "automation", automation_id

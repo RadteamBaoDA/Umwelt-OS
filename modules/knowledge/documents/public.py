@@ -1,46 +1,81 @@
 import base64
 import binascii
 import hashlib
-from collections.abc import Sequence
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
-from uuid import UUID, uuid5
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlsplit, urlunsplit
+from uuid import UUID, uuid4, uuid5
 
 from fastapi import HTTPException
 from pydantic import BaseModel
-from sqlalchemy import and_, case, delete, desc, func, insert, literal, or_, select, text, tuple_, update
+from sqlalchemy import (
+    ColumnElement,
+    and_,
+    case,
+    delete,
+    desc,
+    func,
+    insert,
+    literal,
+    or_,
+    select,
+    text,
+    true,
+    tuple_,
+    update,
+)
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.pagination import decode_cursor, encode_cursor
-from core.events import DomainEvent
+from core.auth.models import Owner
 from core.chunking import chunk_text
+from core.events import DomainEvent
+from core.pagination import decode_cursor, encode_cursor
 from core.realtime import ReplayDraft, commit_with_replay, make_knowledge_change
 from core.tools.schemas import ToolDestination, ToolOutputFence
-from core.auth.models import Owner
 from modules.knowledge.documents.models import (
-    Document, DocumentChunk, DocumentCleanupEvidenceReference, DocumentCleanupOperation, DocumentInteraction,
-    DocumentVersion, NormalizedDocumentIdentity,
+    Document,
+    DocumentChunk,
+    DocumentCleanupEvidenceReference,
+    DocumentCleanupOperation,
+    DocumentInteraction,
+    DocumentVersion,
+    NormalizedDocumentIdentity,
     NormalizedVersionProvenance,
 )
 from modules.knowledge.documents.schemas import (
-    DocumentCreate, DocumentPatch, EvidenceReferenceRead, NormalizedDocumentInput,
-    NormalizedDocumentResult, GadgetDocumentInteractionPatch, GadgetDocumentInteractionRead,
-    GadgetDocumentProjectionList, GadgetDocumentProjectionRead,
+    PROVIDER_IDS,
+    DocumentCreate,
+    DocumentExportFence,
+    DocumentExportFenceValidation,
+    DocumentExportPage,
+    DocumentExportProvenance,
+    DocumentExportRead,
+    DocumentPatch,
+    DocumentVersionExportRead,
+    EvidenceReferenceRead,
+    GadgetDocumentInteractionPatch,
+    GadgetDocumentInteractionRead,
+    GadgetDocumentProjectionList,
+    GadgetDocumentProjectionRead,
     GadgetDocumentSelectionFence,
     GadgetHighlightProjectionPage,
-    GadgetProviderMetadataRead, GadgetTelegramMediaRead, GadgetTelegramRecordRead,
-    DocumentExportFence, DocumentExportFenceValidation, DocumentExportPage,
-    DocumentExportProvenance, DocumentExportRead, DocumentVersionExportRead,
+    GadgetProviderMetadataRead,
+    GadgetTelegramMediaRead,
+    GadgetTelegramRecordRead,
+    NormalizedDocumentInput,
+    NormalizedDocumentResult,
+    ObservationExportEvidenceCandidate,
+    ObservationExportEvidenceRead,
     ProviderDocumentSnapshotList,
-    ProviderDocumentSnapshotRead, ProviderRecordMetadata, PROVIDER_IDS,
-    ObservationExportEvidenceCandidate, ObservationExportEvidenceRead,
-    TimelineExportEvidenceCandidate, TimelineExportEvidenceRead,
-    TelegramDocumentOrder,
+    ProviderDocumentSnapshotRead,
+    ProviderRecordMetadata,
+    TimelineExportEvidenceCandidate,
+    TimelineExportEvidenceRead,
 )
 from modules.sources import public as sources
 from modules.sources.models import Source
@@ -57,6 +92,14 @@ async def observability_quality_summary(session: AsyncSession) -> dict[str, int]
         DocumentVersion, DocumentVersion.id == DocumentChunk.document_version_id,
     ).where(DocumentVersion.id.is_(None))) or 0)
     return {"document_count": document_count, "orphan_chunks": orphan_chunks}
+
+# Explicit re-exports consumed by other modules (mypy strict forbids implicit re-export).
+__all__ = [
+    "EvidenceReferenceRead",
+    "ObservationExportEvidenceCandidate",
+    "ProviderRecordMetadata",
+    "TimelineExportEvidenceCandidate",
+]
 
 EXTRACTION_CHUNK_LIMIT = 100
 EXTRACTION_INPUT_BYTES = 64_000
@@ -241,7 +284,7 @@ async def _require_document_export_owner(session: AsyncSession, owner_id: int) -
         raise PermissionError("Document export requires the current owner")
 
 
-def _document_export_scope(snapshot_at: datetime) -> tuple[object, ...]:
+def _document_export_scope(snapshot_at: datetime) -> tuple[ColumnElement[bool], ...]:
     """Select retained documents that existed and were unchanged at the page cutoff."""
     return Document.created_at <= snapshot_at, Document.updated_at <= snapshot_at
 
@@ -365,7 +408,7 @@ async def export_page(
             if has_more and items else None
         )
     else:
-        statement = (
+        version_statement = (
             select(
                 Document.id.label("document_id"), Document.source_id.label("source_id"),
                 Document.created_at.label("document_created_at"), Document.updated_at.label("document_updated_at"),
@@ -397,50 +440,50 @@ async def export_page(
             )
         )
         if position is not None:
-            statement = statement.where(tuple_(DocumentVersion.created_at, DocumentVersion.id) > position)
+            version_statement = version_statement.where(tuple_(DocumentVersion.created_at, DocumentVersion.id) > position)
         result = await session.stream(
-            statement.order_by(DocumentVersion.created_at, DocumentVersion.id)
+            version_statement.order_by(DocumentVersion.created_at, DocumentVersion.id)
             .limit(limit + 1).execution_options(yield_per=10)
         )
         try:
-            async for raw_row in result.mappings():
+            async for version_raw_row in result.mappings():
                 if len(items) == limit:
                     has_more = True
                     break
-                row = raw_row
+                version_row = version_raw_row
                 safe_provenance = DocumentExportProvenance(
-                    provider_id=row["provider_id"], provider_version=row["provider_version"],
-                    normalization_version=row["normalization_version"],
-                    accepted_source_generation=row["accepted_source_generation"],
-                    observed_at=row["provenance_observed_at"], received_at=row["received_at"],
-                    collected_at=row["collected_at"], selection_observed_at=row["selection_observed_at"],
-                    title=row["provenance_title"], canonical_url=_safe_export_url(row["provenance_canonical_url"]),
-                    published_at=row["provenance_published_at"], content_type=row["provenance_content_type"],
-                ) if row["provider_id"] is not None else None
-                item = DocumentVersionExportRead(
-                    id=row["version_id"], document_id=row["document_id"], source_id=row["source_id"],
-                    source_status=row["source_status"], current_source_generation=row["source_generation"],
-                    version_number=row["version_number"],
-                    is_current_version=row["version_number"] == row["document_current_version"],
-                    content=row["version_content"], observed_at=row["version_observed_at"],
-                    created_at=row["version_created_at"], provenance=safe_provenance,
+                    provider_id=version_row["provider_id"], provider_version=version_row["provider_version"],
+                    normalization_version=version_row["normalization_version"],
+                    accepted_source_generation=version_row["accepted_source_generation"],
+                    observed_at=version_row["provenance_observed_at"], received_at=version_row["received_at"],
+                    collected_at=version_row["collected_at"], selection_observed_at=version_row["selection_observed_at"],
+                    title=version_row["provenance_title"], canonical_url=_safe_export_url(version_row["provenance_canonical_url"]),
+                    published_at=version_row["provenance_published_at"], content_type=version_row["provenance_content_type"],
+                ) if version_row["provider_id"] is not None else None
+                version_item = DocumentVersionExportRead(
+                    id=version_row["version_id"], document_id=version_row["document_id"], source_id=version_row["source_id"],
+                    source_status=version_row["source_status"], current_source_generation=version_row["source_generation"],
+                    version_number=version_row["version_number"],
+                    is_current_version=version_row["version_number"] == version_row["document_current_version"],
+                    content=version_row["version_content"], observed_at=version_row["version_observed_at"],
+                    created_at=version_row["version_created_at"], provenance=safe_provenance,
                 )
-                item_bytes = _export_item_bytes(item)
+                item_bytes = _export_item_bytes(version_item)
                 proposed_bytes = payload_bytes + item_bytes + (1 if items else 0)
                 if proposed_bytes > EXPORT_PAGE_MAX_BYTES:
                     if not items:
                         raise ValueError("A document version exceeds the page byte budget")
                     has_more = True
                     break
-                items.append(item)
+                items.append(version_item)
                 payload_bytes = proposed_bytes
                 fences.append(DocumentExportFence(
-                    document_id=row["document_id"], document_created_at=row["document_created_at"],
-                    document_updated_at=row["document_updated_at"], document_current_version=row["document_current_version"],
-                    source_id=row["source_id"], source_status=row["source_status"],
-                    current_source_generation=row["source_generation"], version_id=row["version_id"],
-                    version_number=row["version_number"], version_created_at=row["version_created_at"],
-                    version_content_digest=row["version_content_hash"],
+                    document_id=version_row["document_id"], document_created_at=version_row["document_created_at"],
+                    document_updated_at=version_row["document_updated_at"], document_current_version=version_row["document_current_version"],
+                    source_id=version_row["source_id"], source_status=version_row["source_status"],
+                    current_source_generation=version_row["source_generation"], version_id=version_row["version_id"],
+                    version_number=version_row["version_number"], version_created_at=version_row["version_created_at"],
+                    version_content_digest=version_row["version_content_hash"],
                 ))
         finally:
             await result.close()
@@ -563,7 +606,7 @@ async def current_observation_evidence_versions(
     """
     if not candidates or len(candidates) > 256:
         return {}
-    rows = (await session.execute(
+    rows: Any = (await session.execute(
         select(
             Document.id, DocumentVersion.id, Source.id, Source.generation,
             DocumentVersion.version_number, Document.current_version,
@@ -1015,7 +1058,7 @@ async def get_news_document_projection(
         canonical_url=provenance.canonical_url if provenance else document.canonical_url,
         content_hash=version.content_hash,
         provider_item_id=(document.external_id[:512] if document.external_id else None),
-        scope_discriminator=(provenance.provenance_json.get("provider_scope_discriminator") if provenance else None),
+        scope_discriminator=(cast("str | None", provenance.provenance_json.get("provider_scope_discriminator")) if provenance else None),
         title=provenance.title if provenance else document.title,
         published_at=provenance.published_at if provenance else document.published_at,
         observed_at=provenance.selection_observed_at if provenance else (document.observed_at or version.observed_at),
@@ -1156,7 +1199,7 @@ async def news_retained_observation_allowed(
     the document's present ready revision, active source generation, and current
     provider scope without loading chunks or exposing metadata to News.
     """
-    rows = list((await session.execute(
+    rows: list[Any] = list((await session.execute(
         select(
             Source.type, Source.generation,
             NormalizedVersionProvenance.source_generation,
@@ -1218,7 +1261,7 @@ async def news_projection_scope_unavailable(
     )).one_or_none()
     if row is None:
         return False
-    document, version, source = row
+    _document, version, source = row
     if source.type not in {"rss", "web", "api"}:
         return False
     provenance_rows = list((await session.scalars(
@@ -1250,7 +1293,7 @@ async def news_current_scope_status(
     """
     if not source_ids or len(source_ids) > 32 or len(set(source_ids)) != len(source_ids):
         raise ValueError("News scope status requires 1 to 32 unique sources")
-    rows = list((await session.execute(
+    rows: list[Any] = list((await session.execute(
         select(
             Document.id, Source.id, Source.type, Source.generation,
             NormalizedVersionProvenance.source_generation,
@@ -1553,7 +1596,6 @@ def _decode_news_projection_cursor(cursor: str) -> tuple[datetime, UUID]:
 
 
 
-@dataclass(frozen=True)
 @dataclass(frozen=True)
 class ToolDocumentRead:
     """Detached current-version document metadata exposed to the registered tool owner."""
@@ -2271,11 +2313,11 @@ async def upsert_normalized_document(
             raise ValueError("Telegram delivery proof already exists with a different normalization version")
         selected = current_rank is None or incoming_rank > current_rank
     else:
-        current_rank = (
+        current_hash_rank = (
             (current_provenance.selection_observed_at, current_provenance.accepted_record_hash)
             if current_provenance is not None else None
         )
-        selected = current_rank is None or (payload.observed_at, payload.accepted_record_hash) > current_rank
+        selected = current_hash_rank is None or (payload.observed_at, payload.accepted_record_hash) > current_hash_rank
     max_number = await session.scalar(
         select(func.coalesce(func.max(DocumentVersion.version_number), 0))
         .where(DocumentVersion.document_id == document.id)
@@ -2502,8 +2544,8 @@ async def save_extraction(
                     chunk_index=index,
                     content=content,
                     content_hash=content_hash(content),
-                    token_count=int(chunk["token_count"]),
-                    metadata_json=dict(chunk.get("metadata", {})),
+                    token_count=int(cast("int", chunk["token_count"])),
+                    metadata_json=dict(cast("dict[str, object]", chunk.get("metadata", {}))),
                 )
             )
     if extraction_status == "succeeded" and chunks:
@@ -2542,9 +2584,9 @@ async def update_document(
         changed = changed or document.title != value
         document.title = value
     if "metadata" in payload.model_fields_set:
-        value = payload.metadata or {}
-        changed = changed or document.metadata_json != value
-        document.metadata_json = value
+        metadata_value = payload.metadata or {}
+        changed = changed or document.metadata_json != metadata_value
+        document.metadata_json = metadata_value
     drafts = [make_knowledge_change(document.source_id, document.id, document.current_version)] if changed else []
     await commit_with_replay(session, drafts)
     await session.refresh(document)
@@ -2603,22 +2645,22 @@ async def delete_document(session: AsyncSession, document_id: UUID) -> DocumentC
     from modules.knowledge.observations import public as observations
     await observations.purge_document_in_uow(session, document.id)
     if document.external_id is not None:
-        identity = await session.scalar(
+        doc_identity = await session.scalar(
             select(NormalizedDocumentIdentity).where(
                 NormalizedDocumentIdentity.source_id == source_id,
                 NormalizedDocumentIdentity.external_id == document.external_id,
             ).with_for_update()
         )
-        if identity is None:
-            identity = NormalizedDocumentIdentity(
+        if doc_identity is None:
+            doc_identity = NormalizedDocumentIdentity(
                 source_id=source_id,
                 external_id=document.external_id,
                 document_id=document.id,
             )
-        session.add(identity)
+        session.add(doc_identity)
         await session.flush()
-        identity.tombstoned_at = datetime.now(UTC)
-        identity.document_id = None
+        doc_identity.tombstoned_at = datetime.now(UTC)
+        doc_identity.document_id = None
         from modules.ingestion import public as ingestion
         await ingestion.tombstone_document_materializations(session, document.id)
     timeline_drafts = await _remove_graph_support(
@@ -2778,8 +2820,8 @@ async def _remove_graph_support(
         raise ValueError("A replay source identity is valid only for document cleanup")
     from modules.knowledge.entities import public as entities
     from modules.knowledge.relationships import public as relationships
-    from modules.timeline import public as timeline
     from modules.knowledge.temporal import public as temporal
+    from modules.timeline import public as timeline
 
     refs = await list_evidence_ref_keys(session, document_id=document_id, source_id=source_id)
     membership_ids, entity_ids = await entities.support_cleanup_ids(
@@ -2813,6 +2855,7 @@ async def _remove_graph_support(
             raise ValueError("Document support cleanup requires its locked source identity")
         timeline_drafts = await timeline.remove_document_support(session, document_id=document_id, source_id=cleanup_source_id)
     else:
+        assert source_id is not None  # document_id is None only for source-scoped cleanup
         await relationships.remove_source_support(
             session, source_id=source_id, refs=refs, membership_ids=membership_ids
         )
@@ -2917,9 +2960,9 @@ async def read_extraction_input(
     stats = await session.execute(
         select(func.count(DocumentChunk.id), func.coalesce(func.sum(func.octet_length(DocumentChunk.content)), 0))
         .where(DocumentChunk.document_version_id == actual_version_id)
-        .where(DocumentChunk.id.in_(allowed_chunk_ids) if allowed_chunk_ids is not None else True)
+        .where(DocumentChunk.id.in_(allowed_chunk_ids) if allowed_chunk_ids is not None else true())
     )
-    chunk_count, byte_count = stats.one()
+    chunk_count, byte_count = cast("tuple[int, int]", tuple(stats.one()))
     if not chunk_count or chunk_count > EXTRACTION_CHUNK_LIMIT or byte_count > EXTRACTION_INPUT_BYTES:
         raise ExtractionInputLimitError("Extraction input exceeds its chunk or byte limit")
     chunks = list((await session.execute(chunks_query.order_by(DocumentChunk.chunk_index))).all())
@@ -3220,6 +3263,7 @@ async def lock_review_version_evidence(
     generation, source_name = source_row if source_row else (None, None)
     if version is None or generation != source_generation:
         return None
+    assert source_name is not None  # generation matched, so the source row exists
     refs = await read_evidence_refs(session, [(version_id, chunk_id) for chunk_id in chunk_ids])
     if len(refs) != len(chunk_ids) or any(
         ref.document_id != document_id or ref.source_id != source_id for ref in refs

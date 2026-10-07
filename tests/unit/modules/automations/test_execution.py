@@ -7,9 +7,7 @@ Covers:
 - `_finish`: updating run status, finished_at instant, and failure reason.
 """
 
-from datetime import UTC, datetime
 from uuid import UUID, uuid4
-import pytest
 
 from modules.automations.execution import (
     _approval_hash,

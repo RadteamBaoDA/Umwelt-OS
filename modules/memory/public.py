@@ -1,35 +1,41 @@
 """Public contract and service interface for selective memory, candidates, and privacy management."""
 
-from datetime import UTC, datetime
 import base64
 import binascii
-from dataclasses import dataclass
 import hashlib
 import json
 import logging
-from typing import Any
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
+if TYPE_CHECKING:
+    from modules.knowledge.documents.public import (
+        DocumentCleanupEvidenceScope,
+        EvidenceReferenceRead,
+    )
+
 from fastapi import HTTPException
-from core.auth.models import Owner
 from redis.asyncio import Redis
-from sqlalchemy import delete, desc, func, or_, select, text, tuple_, update
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy import ColumnElement, delete, desc, func, or_, select, text, tuple_
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.auth.models import Owner
 from core.pagination import decode_cursor, encode_cursor
 from modules.memory.models import Memory, MemoryCandidate, MemoryPrivacyRecord
 from modules.memory.schemas import (
+    MemoryCandidateExportRead,
     MemoryCandidatePage,
     MemoryCandidateRead,
     MemoryCreate,
-    MemoryExportPrivacy,
     MemoryExportFence,
     MemoryExportFenceValidation,
     MemoryExportPage,
+    MemoryExportPrivacy,
     MemoryExportProvenance,
     MemoryExportRead,
-    MemoryCandidateExportRead,
     MemoryPage,
     MemoryPrivacyConfig,
     MemoryPrivacyUpdate,
@@ -169,10 +175,10 @@ async def _memory_export_source_fence(
     Explicitly manual Memory remains exportable after optional evidence is removed. Every
     model-derived or candidate copy needs exact retained Chat message or document evidence.
     """
+    from modules.chat import public as chat_public
     from modules.knowledge.documents import public as documents_public
     from modules.sources import public as sources_public
     from modules.sources.schemas import SourceExportFence
-    from modules.chat import public as chat_public
 
     raw = row.provenance if isinstance(row.provenance, dict) else {}
     allowed = {"conversation_id", "message_id", "source_id", "document_id",
@@ -198,7 +204,7 @@ async def _memory_export_source_fence(
     raw_doc_fields = any(raw.get(key) is not None for key in ("document_id", "document_version_id", "chunk_id"))
     complete_doc = all(value is not None for value in (document_id, version_id, chunk_id))
     explicit_source_id = optional_uuid("source_id")
-    if not manual_memory:
+    if not manual_memory:  # noqa: SIM102  # style-only rewrite skipped to avoid touching control flow
         if ((raw.get("conversation_id") is not None and conversation_id is None)
                 or (raw.get("message_id") is not None and message_id is None)
                 or (raw.get("source_id") is not None and explicit_source_id is None)
@@ -209,7 +215,7 @@ async def _memory_export_source_fence(
     safe_provenance: dict[str, object] = {}
     source_fence_data: dict[str, object] = {}
     chat_evidence: dict[str, object] = {}
-    doc_evidence: object | None = None
+    doc_evidence: EvidenceReferenceRead | None = None
 
     if conversation_id is not None or message_id is not None:
         if conversation_id is None or message_id is None:
@@ -238,6 +244,7 @@ async def _memory_export_source_fence(
                 raise HTTPException(status_code=409, detail="Memory export cannot verify incomplete document provenance")
         else:
             try:
+                assert version_id is not None and chunk_id is not None  # complete_doc
                 refs = await documents_public.read_evidence_refs(session, [(version_id, chunk_id)])
             except ValueError:
                 refs = []
@@ -270,6 +277,7 @@ async def _memory_export_source_fence(
                 doc_evidence = None
         else:
             safe_provenance["source_id"] = source_id
+            assert source is not None
             source_fence_data = {"source_id": source.id, "source_generation": source.generation}
 
     if doc_evidence is not None and source_fence_data:
@@ -292,7 +300,7 @@ async def _memory_export_source_fence(
     return {**source_fence_data, **chat_evidence}, projected
 
 
-def _memory_export_scope(record_kind: str, snapshot_at: datetime) -> tuple[object, ...]:
+def _memory_export_scope(record_kind: str, snapshot_at: datetime) -> tuple[ColumnElement[bool], ...]:
     """Select only records created and last changed by the immutable page cutoff."""
     if record_kind == "memories":
         return (Memory.status != "forgotten", Memory.created_at <= snapshot_at, Memory.updated_at <= snapshot_at)
@@ -301,7 +309,7 @@ def _memory_export_scope(record_kind: str, snapshot_at: datetime) -> tuple[objec
 
 async def _memory_export_count(session: AsyncSession, record_kind: str, snapshot_at: datetime) -> int:
     """Count the retained owner inventory at one fixed cutoff for page and final checks."""
-    model = Memory if record_kind == "memories" else MemoryCandidate
+    model: type[Memory | MemoryCandidate] = Memory if record_kind == "memories" else MemoryCandidate
     return int(await session.scalar(
         select(func.count()).select_from(model).where(*_memory_export_scope(record_kind, snapshot_at))
     ) or 0)
@@ -325,16 +333,19 @@ async def export_page(
     else:
         snapshot_at, position_at, position_id = _decode_memory_export_cursor(cursor, owner_id, record_kind)
         position = (position_at, position_id)
-    model = Memory if record_kind == "memories" else MemoryCandidate
+    model: type[Memory | MemoryCandidate] = Memory if record_kind == "memories" else MemoryCandidate
     statement = select(model).where(*_memory_export_scope(record_kind, snapshot_at))
     if position is not None:
         statement = statement.where(tuple_(model.created_at, model.id) > position)
-    rows = list((await session.scalars(
+    # `model` is chosen by record_kind, so every row is exactly one of the two ORM types.
+    rows = cast(list[Memory | MemoryCandidate], list((await session.scalars(
         statement.order_by(model.created_at, model.id).limit(limit + 1)
         .execution_options(populate_existing=True)
-    )).all())
+    )).all()))
     has_more, rows = len(rows) > limit, rows[:limit]
-    items, fences, omitted_count = [], [], 0
+    items: list[MemoryExportRead | MemoryCandidateExportRead] = []
+    fences: list[MemoryExportFence] = []
+    omitted_count = 0
     payload_bytes = 2
     for row in rows:
         try:
@@ -344,8 +355,8 @@ async def export_page(
                 raise
             omitted_count += 1
             continue
-        item = (_memory_export_read(row, provenance) if record_kind == "memories"
-                else _candidate_export_read(row, provenance))
+        item = (_memory_export_read(cast(Memory, row), provenance) if record_kind == "memories"
+                else _candidate_export_read(cast(MemoryCandidate, row), provenance))
         raw = item.model_dump_json().encode("utf-8")
         proposed_bytes = payload_bytes + len(raw) + (1 if items else 0)
         if proposed_bytes > MEMORY_EXPORT_PAGE_MAX_BYTES:
@@ -384,9 +395,9 @@ async def validate_export_fences(
     observed = await _memory_export_count(session, record_kind, snapshot_at)
     if observed != expected_snapshot_count:
         return MemoryExportFenceValidation(valid=False, reason="snapshot_count_changed", observed_snapshot_count=observed)
-    model = Memory if record_kind == "memories" else MemoryCandidate
+    model: type[Memory | MemoryCandidate] = Memory if record_kind == "memories" else MemoryCandidate
     for fence in fences:
-        row = await session.scalar(select(model).where(
+        row: Memory | MemoryCandidate | None = await session.scalar(select(model).where(
             model.id == fence.id, *_memory_export_scope(record_kind, snapshot_at),
         ).execution_options(populate_existing=True))
         if row is None or row.created_at != fence.created_at or row.updated_at != fence.updated_at:
@@ -395,8 +406,8 @@ async def validate_export_fences(
             source_fence, provenance = await _memory_export_source_fence(session, row)
         except HTTPException:
             return MemoryExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
-        item = (_memory_export_read(row, provenance) if record_kind == "memories"
-                else _candidate_export_read(row, provenance))
+        item = (_memory_export_read(cast(Memory, row), provenance) if record_kind == "memories"
+                else _candidate_export_read(cast(MemoryCandidate, row), provenance))
         digest = hashlib.sha256(item.model_dump_json().encode("utf-8")).hexdigest()
         if digest != fence.content_digest:
             return MemoryExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
@@ -407,6 +418,16 @@ async def validate_export_fences(
 
 
 _PRIVACY_LOCK_NAMESPACE = 1297109577
+# Cleanup stages run on the worker's job slot: a contended row lock must fail fast so the stage's
+# own retry path reschedules it instead of the slot waiting on someone else's transaction. The cap
+# lasts for the rest of the caller transaction, so it also bounds the later materialization and
+# brief stage locks of the same cleanup pass.
+CLEANUP_LOCK_TIMEOUT_MS = 5000
+
+
+async def bound_cleanup_lock_waits(session: AsyncSession) -> None:
+    """Cap lock waits for the rest of the caller transaction so a cleanup stage retries, not stalls."""
+    await session.execute(text(f"SET LOCAL lock_timeout = {CLEANUP_LOCK_TIMEOUT_MS}"))
 
 
 async def lock_export_privacy(session: AsyncSession) -> None:
@@ -433,10 +454,10 @@ async def _lock_live_provenance_evidence(
     """
     if not isinstance(provenance, dict):
         raise HTTPException(status_code=409, detail="Memory provenance is not verifiable")
+    from modules.chat import public as chat_public
     from modules.knowledge.documents import public as documents_public
     from modules.sources import public as sources_public
     from modules.sources.schemas import SourceExportFence
-    from modules.chat import public as chat_public
 
     raw = provenance
     if require_copy_evidence and raw.keys() - {
@@ -455,9 +476,14 @@ async def _lock_live_provenance_evidence(
         document_id, version_id, chunk_id = (_provenance_uuid(value) for value in document_values)
         if document_id is None or version_id is None or chunk_id is None:
             raise HTTPException(status_code=409, detail="Memory document provenance is incomplete")
-        refs = await documents_public.read_evidence_refs(
-            session, [(version_id, chunk_id)], for_write=True,
-        )
+        try:
+            refs = await documents_public.read_evidence_refs(
+                session, [(version_id, chunk_id)], for_write=True,
+            )
+        except ValueError:
+            # Documents raises (rather than returning fewer rows) when the evidence Source vanishes
+            # while lock_source waits; a pending purge must hide the copy, not fail with a 500.
+            refs = []
         if (len(refs) != 1 or refs[0].document_id != document_id
                 or (source_id is not None and refs[0].source_id != source_id)):
             raise HTTPException(status_code=409, detail="Memory document evidence is removed or unavailable")
@@ -593,10 +619,6 @@ def _document_provenance_match(
     has_document_fields = any(
         key in provenance for key in ("document_id", "document_version_id", "chunk_id")
     )
-    has_identity_value = any(
-        provenance.get(key) is not None
-        for key in ("document_id", "document_version_id", "chunk_id")
-    )
     malformed = (
         provenance.get("document_id") is not None and document_id is None
         or provenance.get("document_version_id") is not None and version_id is None
@@ -612,8 +634,10 @@ def _document_provenance_match(
         "conversation_id", "message_id", "source_id", "document_id",
         "document_version_id", "chunk_id", "origin",
     })
+    # A Source-scoped copy carrying no Document identity at all is not attributable to this
+    # Document: the Source-wide sweep owns it, so it is skipped here rather than failed.
     unresolved = not matched and not identified_elsewhere and source_tied and (
-        malformed or not has_identity_value or unsupported
+        malformed or unsupported
         or (has_document_fields and not all(
             provenance.get(key) is not None
             for key in ("document_id", "document_version_id", "chunk_id")
@@ -681,6 +705,7 @@ async def purge_document_copied_evidence_page(
     """
     if not 1 <= limit <= 100:
         raise ValueError("Memory cleanup page size must be between 1 and 100")
+    await bound_cleanup_lock_waits(session)
     kind, after = _decode_document_memory_cleanup_cursor(cursor, scope) if cursor else ("memories", None)
     scrubbed_memories = scrubbed_candidates = unresolved = examined = 0
     now = datetime.now(UTC)
@@ -842,6 +867,7 @@ async def purge_source_copied_evidence_page(
     """
     if not 1 <= limit <= 100:
         raise ValueError("Source Memory cleanup page size must be between 1 and 100")
+    await bound_cleanup_lock_waits(session)
     kind, after = _decode_source_memory_cursor(cursor, scope) if cursor else ("memories", None)
     source_text = str(scope.source_id)
     now = datetime.now(UTC)
@@ -898,13 +924,13 @@ async def purge_source_copied_evidence_page(
             )
 
     remaining = limit - processed
-    statement = select(MemoryCandidate).where(
+    candidate_statement = select(MemoryCandidate).where(
         MemoryCandidate.provenance["source_id"].astext == source_text,
     ).order_by(MemoryCandidate.id).limit(remaining + 1)
     if after is not None:
-        statement = statement.where(MemoryCandidate.id > after)
+        candidate_statement = candidate_statement.where(MemoryCandidate.id > after)
     candidates = list((await session.scalars(
-        statement.with_for_update().execution_options(populate_existing=True)
+        candidate_statement.with_for_update().execution_options(populate_existing=True)
     )).all())
     has_more = len(candidates) > remaining
     candidates = candidates[:remaining]
@@ -936,7 +962,7 @@ def _to_memory_read(item: Memory, provenance: dict[str, Any] | None = None) -> M
     return MemoryRead(
         id=item.id,
         content=item.content,
-        type=item.memory_type,
+        memory_type=item.memory_type,  # populated by alias; `type=` left the required alias field missing
         provenance=provenance if provenance is not None else (item.provenance or {}),
         confidence=item.confidence,
         reason=item.reason,
@@ -1015,7 +1041,7 @@ def _to_candidate_read(
     return MemoryCandidateRead(
         id=item.id,
         content=item.content,
-        type=item.memory_type,
+        memory_type=item.memory_type,  # populated by alias; `type=` left the required alias field missing
         provenance=provenance if provenance is not None else (item.provenance or {}),
         confidence=item.confidence,
         novelty_score=item.novelty_score,
@@ -1630,9 +1656,9 @@ class MemoryService:
         await self._invalidate_cache()
         safe_results: list[MemoryCandidateRead] = []
         for result in results:
-            row = await self.session.get(MemoryCandidate, result.id)
-            if row is not None:
-                projected = await _verified_candidate_read(self.session, row)
+            candidate_row = await self.session.get(MemoryCandidate, result.id)
+            if candidate_row is not None:
+                projected = await _verified_candidate_read(self.session, candidate_row)
                 if projected is not None:
                     safe_results.append(projected)
         return safe_results
@@ -1800,16 +1826,14 @@ class MemoryService:
         purged_conversations = 0
 
         if options.purge_forgotten_memories:
-            stmt = delete(Memory).where(Memory.status == "forgotten")
-            res = await self.session.execute(stmt)
-            purged_memories = res.rowcount or 0
+            memory_purge = await self.session.execute(delete(Memory).where(Memory.status == "forgotten"))
+            purged_memories = cast("CursorResult[Any]", memory_purge).rowcount or 0
 
         if options.purge_rejected_candidates:
-            stmt = delete(MemoryCandidate).where(
+            candidate_purge = await self.session.execute(delete(MemoryCandidate).where(
                 MemoryCandidate.status.in_(["rejected", "expired", "superseded"])
-            )
-            res = await self.session.execute(stmt)
-            purged_candidates = res.rowcount or 0
+            ))
+            purged_candidates = cast("CursorResult[Any]", candidate_purge).rowcount or 0
 
         if options.purge_conversation_history:
             from modules.chat.public import purge_unpinned_conversations

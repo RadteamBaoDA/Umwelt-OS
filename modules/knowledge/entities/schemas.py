@@ -5,7 +5,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-
 EntityType = Literal[
     "person", "organization", "company", "project", "repository", "place", "country",
     "product", "topic", "technology", "asset", "device", "website", "event_subject", "other",

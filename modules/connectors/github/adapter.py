@@ -1,23 +1,28 @@
 """Fetch one bounded read-only snapshot from a verified GitHub repository."""
 
-from datetime import UTC, datetime, timedelta
-from email.utils import parsedate_to_datetime
-from typing import Any, Awaitable, Callable
-from hashlib import sha256
 import json
 import re
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime, timedelta
+from email.utils import parsedate_to_datetime
+from hashlib import sha256
+from typing import Any
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 import httpx
 
 from modules.connectors.github.normalization import normalize_github_record
 from modules.connectors.github.schemas import (
-    GitHubBindingFence, GitHubSegmentProof, GitHubSourceConfig,
-    GitHubHintClaimProof,
     MAX_GITHUB_PAGE_BYTES,
+    GitHubBindingFence,
+    GitHubHintClaimProof,
+    GitHubSegmentProof,
+    GitHubSourceConfig,
 )
 from modules.connectors.github.sync import (
-    _next_segment, decode_github_cursor, github_segment_path,
+    _next_segment,
+    decode_github_cursor,
+    github_segment_path,
 )
 from modules.connectors.public import ProviderCollectionPage, ProviderRateLimited
 
@@ -78,16 +83,17 @@ async def collect_github_segment(
         if selected is None:
             raise ValueError("github_scope_exhausted")
         _, _, state, page = selected
+        resource = state.resource
         path = github_segment_path(fence, state.resource, state, page)
         scan_floor, scan_upper, sweep_revision = state.floor, state.upper, state.sweep_revision
     else:
-        state = None
+        resource = hint_claim.resource
         page = hint_claim.reconcile_page if hint_claim.intent == "reconcile" else 1
         path = github_target_path(config, fence, hint_claim)
         scan_floor = scan_upper = collected_at
         sweep_revision = hint_claim.dirty_revision
     await before_request()
-    async with httpx.AsyncClient(timeout=httpx.Timeout(20), follow_redirects=False, trust_env=False) as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(20), follow_redirects=False, trust_env=False) as client:  # noqa: SIM117  # style-only rewrite skipped to avoid touching control flow
         async with client.stream("GET", f"{API}{path}", headers={**HEADERS, "Authorization": f"Bearer {access_token}"}) as response:
             try:
                 await _raise_for_provider_limit(response)
@@ -110,7 +116,7 @@ async def collect_github_segment(
                 if len(body) > MAX_GITHUB_PAGE_BYTES:
                     raise ValueError("github_response_too_large")
             try:
-                raw_items = httpx.Response(200, content=body).json()
+                raw_items = httpx.Response(200, content=bytes(body)).json()
             except ValueError as exc:
                 raise ValueError("github_response_invalid") from exc
             if hint_claim is not None:
@@ -128,7 +134,7 @@ async def collect_github_segment(
     if len(encoded) > MAX_GITHUB_PAGE_BYTES:
         raise ValueError("github_response_too_large")
     return GitHubSegmentProof(
-        fence=fence, resource=hint_claim.resource if hint_claim else state.resource, page=page,
+        fence=fence, resource=resource, page=page,
         sweep_revision=sweep_revision, scan_floor=scan_floor,
         scan_upper=scan_upper, raw_items=tuple(raw_items),
         raw_sha256=sha256(encoded).hexdigest(), transport_bytes=len(body),
@@ -161,9 +167,7 @@ def github_target_path(
     if claim.locator_kind == "repository" and claim.locator == fence.repository_id and claim.intent == "reconcile":
         endpoint = {"issue": "issues", "pull": "pulls", "commit": "commits", "release": "releases"}[claim.resource]
         parameters: dict[str, str | int] = {"per_page": 100, "page": claim.reconcile_page}
-        if claim.resource == "issue":
-            parameters.update({"state": "all", "sort": "updated", "direction": "desc"})
-        elif claim.resource == "pull":
+        if claim.resource == "issue" or claim.resource == "pull":
             parameters.update({"state": "all", "sort": "updated", "direction": "desc"})
         return f"/repositories/{repo_id}/{endpoint}?{urlencode(parameters)}"
     if claim.locator_kind == "repository" and claim.locator == fence.repository_id:
@@ -194,7 +198,7 @@ def _target_items(
             raise ValueError("github_response_invalid")
         return payload[:1], "found" if payload else "not_found"
     if not isinstance(payload, dict):
-        raise ValueError("github_response_invalid")
+        raise ValueError("github_response_invalid")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
     return [payload], "found"
 
 
@@ -261,7 +265,7 @@ async def _raise_for_provider_limit(response: httpx.Response) -> None:
         if len(body) > MAX_RESPONSE_BYTES:
             raise ValueError("github_response_too_large")
     try:
-        value = httpx.Response(response.status_code, content=body).json()
+        value = httpx.Response(response.status_code, content=bytes(body)).json()
     except ValueError:
         value = None
     message = value.get("message", "").casefold() if isinstance(value, dict) and isinstance(value.get("message"), str) else ""
@@ -282,7 +286,7 @@ async def _read_json(client: httpx.AsyncClient, path: str, token: str) -> Any:
             payload.extend(chunk)
             if len(payload) > MAX_RESPONSE_BYTES:
                 raise ValueError("github_response_too_large")
-    return httpx.Response(200, content=payload).json()
+    return httpx.Response(200, content=bytes(payload)).json()
 
 
 async def validate_github_scope(config: GitHubSourceConfig, access_token: str) -> dict[str, str]:
@@ -295,7 +299,7 @@ async def validate_github_scope(config: GitHubSourceConfig, access_token: str) -
         user = await _read_json(client, "/user", access_token)
         installations = await _read_json(client, "/user/installations?per_page=100", access_token)
         if not isinstance(installations, dict) or not isinstance(installations.get("installations"), list):
-            raise ValueError("github_installations_unavailable")
+            raise ValueError("github_installations_unavailable")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
         response = None
         for installation in installations["installations"][:100]:
             installation_id = installation.get("id") if isinstance(installation, dict) else None
@@ -349,12 +353,12 @@ async def collect_github_repository(config: GitHubSourceConfig, access_token: st
                     data.extend(chunk)
                     if len(data) > MAX_RESPONSE_BYTES:
                         raise ValueError("github_response_too_large")
-                raw_items = httpx.Response(200, content=data).json()
+                raw_items = httpx.Response(200, content=bytes(data)).json()
             if not isinstance(raw_items, list):
-                raise ValueError("github_response_invalid")
+                raise ValueError("github_response_invalid")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
             for raw in raw_items:
                 if not isinstance(raw, dict):
-                    raise ValueError("github_response_invalid")
+                    raise ValueError("github_response_invalid")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
                 # GitHub issue lists also include pull request-shaped objects; prevent duplicates.
                 if kind == "issue" and "pull_request" in raw:
                     continue

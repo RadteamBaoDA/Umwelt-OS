@@ -62,16 +62,17 @@ async def run_approved_write(
     if not await before(action_id):
         await mark_effect_outcome(factory, action_id, "failed", None)
         return ToolResult(success=False, error="Approved action is unavailable", error_code="forbidden")
+    caught: tuple[type[BaseException], ...] = (*domain_errors, ValidationError, ValueError)
     try:
         async with factory() as session:
             reference = await perform(session, 1)
     except asyncio.CancelledError:
         await asyncio.shield(mark_effect_outcome(factory, action_id, "requires_review", f"action:{action_id}"))
         raise
-    except (*domain_errors, ValidationError, ValueError) as exc:
+    except caught as exc:
         await mark_effect_outcome(factory, action_id, "failed", None)
         return ToolResult(success=False, error=type(exc).__name__, error_code="execution_failed")
-    except Exception:
+    except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
         await mark_effect_outcome(factory, action_id, "requires_review", f"action:{action_id}")
         return ToolResult(success=False, error="Write outcome requires review", error_code="execution_failed")
     await mark_effect_outcome(factory, action_id, "succeeded", reference, result_status_code=200)

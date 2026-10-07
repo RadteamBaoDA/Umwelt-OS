@@ -1,24 +1,24 @@
 """Owner contracts for durable, source-fenced static browser observations."""
 
-from collections.abc import Callable
-from contextlib import AbstractAsyncContextManager
-from dataclasses import dataclass
-from datetime import datetime
 import asyncio
 import hashlib
 import hmac
 import json
-from typing import Literal
+from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Literal, cast
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
-from sqlalchemy import select, update
+from sqlalchemy import select
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.agents.public import BrowserRunAuthorization
 from modules.connectors.public import AgentBrowserScope
-from modules.tools.models import BrowserReadJob
-from modules.tools.models import BrowserPageEvidence
+from modules.tools.models import BrowserPageEvidence, BrowserReadJob
 
 
 def browser_capability_verified() -> bool:
@@ -37,7 +37,7 @@ async def _erase_evidence_in_uow(session: AsyncSession, job_ids: list[UUID] | tu
     result = await session.execute(
         delete(BrowserPageEvidence).where(BrowserPageEvidence.job_id.in_(tuple(job_ids)))
     )
-    return int(result.rowcount or 0)
+    return int(cast("CursorResult[Any]", result).rowcount or 0)
 
 
 async def _fail_job(
@@ -237,10 +237,12 @@ async def execute_browser_read(
     """
     import base64
     import time
+
     import httpx
+
+    from core.auth.public import revalidate_owner_session
     from core.config import Settings
     from core.remote_heavy import mark_remote_heavy_uncertain_in_uow
-    from core.auth.public import revalidate_owner_session
     from modules.agents.public import revalidate_browser_run_authority
     from modules.connectors import public as connectors
     from modules.sources import public as sources
@@ -305,7 +307,7 @@ async def execute_browser_read(
             await session.commit()
             return BrowserReadResult(job=_read(row), pages=())
         target_url = scope.origin + ("" if scope.path_prefix == "/" else scope.path_prefix)
-        payload = {
+        payload: dict[str, Any] = {
             "job_id": str(row.id), "operation_id": str(row.operation_id),
             "claim_generation": row.claim_generation,
             "service_instance_id": "", "job_token": job_token,
@@ -315,7 +317,7 @@ async def execute_browser_read(
         }
         service_url = str(settings.browser_service_url).rstrip("/")
         shared_token = service_secret
-        operation_id, instance = row.operation_id, row.service_instance_id
+        operation_id, _instance = row.operation_id, row.service_instance_id
 
     response_data: dict[str, object] | None = None
     http_status = 0
@@ -361,14 +363,14 @@ async def execute_browser_read(
                         )
                     value = json.loads(body)
                     if not isinstance(value, dict):
-                        raise ValueError("Browser service response is invalid")
+                        raise ValueError("Browser service response is invalid")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
                     response_data = value
     except httpx.HTTPStatusError as exc:
         http_status = exc.response.status_code
     except asyncio.CancelledError:
         # Cancelled mid-dispatch: still run cleanup below, then propagate.
         interrupted = True
-    except (httpx.HTTPError, TimeoutError, asyncio.TimeoutError, ValueError, TypeError, json.JSONDecodeError):
+    except (httpx.HTTPError, TimeoutError, ValueError, TypeError, json.JSONDecodeError):
         http_status = 0
 
     async def _recover() -> BrowserReadResult:
@@ -459,7 +461,7 @@ async def execute_browser_read(
         persisted_rows: list[BrowserPageEvidence] = []
         for index, item in enumerate(pages_wire, start=1):
             if not isinstance(item, dict):
-                raise ValueError("Browser page evidence is invalid")
+                raise ValueError("Browser page evidence is invalid")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
             raw_value, text_value = item.get("raw_content"), item.get("extracted_text")
             from modules.connectors.public import agent_browser_target_in_scope
 
@@ -590,6 +592,7 @@ async def read_browser_result(
 ) -> BrowserReadResult | None:
     """Return successful observations only while the original session/run/Chat/profile/source grant stays current."""
     from sqlalchemy import select
+
     from core.auth.public import revalidate_owner_session
     from modules.agents.public import BrowserRunAuthorization, revalidate_browser_run_authority
     from modules.connectors import public as connectors
@@ -647,8 +650,13 @@ async def read_browser_result(
 
 
 __all__ = [
-    "BrowserReadArgs", "BrowserReadBudget", "BrowserReadJobRead",
-    "submit_browser_read_in_uow", "cancel_browser_job_in_uow", "read_browser_result",
+    "BrowserPageRead",
+    "BrowserReadArgs",
+    "BrowserReadBudget",
+    "BrowserReadJobRead",
+    "BrowserReadResult",
     "browser_capability_verified",
-    "BrowserPageRead", "BrowserReadResult",
+    "cancel_browser_job_in_uow",
+    "read_browser_result",
+    "submit_browser_read_in_uow",
 ]

@@ -1,9 +1,9 @@
 from datetime import UTC, datetime
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
 import httpx
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +13,7 @@ from core.auth.models import AuthSession
 from core.database import get_session
 from core.realtime import commit_with_replay, make_source_change
 from modules.connectors import catalog, provisioning, registry
+from modules.connectors import public as connector_owner
 from modules.connectors.activation import drive_activation, prepare_credential_assignment
 from modules.connectors.credentials import (
     CredentialEncryptionUnavailable,
@@ -21,10 +22,14 @@ from modules.connectors.credentials import (
     encrypt_native_token,
     secret_fingerprint,
 )
+from modules.connectors.models import ConnectorProvisioning
 from modules.connectors.n8n import N8nApi
-from modules.connectors import public as connector_owner
-from modules.connectors.public import ConnectorConfig, ProviderRateLimited, validate_public_url
-from modules.connectors.public import serialize_source_configuration
+from modules.connectors.public import (
+    ConnectorConfig,
+    ProviderRateLimited,
+    serialize_source_configuration,
+    validate_public_url,
+)
 from modules.ingestion import public as ingestion
 from modules.sources import public as sources
 from modules.sources.schemas import ConnectorSource
@@ -245,7 +250,7 @@ async def validate_draft_configuration(
         from modules.connectors.providers.telegram import validate_telegram_scope
 
         try:
-            verified = await validate_telegram_scope(token, tuple(candidate.configuration["telegram_chat_ids"]))
+            verified = await validate_telegram_scope(token, tuple(cast("list[str]", candidate.configuration["telegram_chat_ids"])))
         except ProviderRateLimited as exc:
             raise HTTPException(status_code=503, detail="Telegram provider rate limit reached") from exc
         except (TimeoutError, httpx.TimeoutException) as exc:
@@ -476,7 +481,7 @@ async def activate_source(
         await session.rollback()
         try:
             verified = await validate_telegram_scope(
-                native_token, tuple(source.configuration.get("telegram_chat_ids", ()))
+                native_token, tuple(cast("list[str]", source.configuration.get("telegram_chat_ids", ())))
             )
         except ProviderRateLimited as exc:
             raise HTTPException(status_code=503, detail="Telegram provider rate limit reached") from exc
@@ -529,7 +534,7 @@ async def activate_source(
 
     try:
         credential_intents: dict[str, dict[str, object]] = {}
-        required_credentials: dict[str, object] = {}
+        required_credentials: dict[str, dict[str, object]] = {}
 
         collector = await provisioning.get_managed_credential(session, source_id, "collector")
         collector_token: str | None = None
@@ -738,11 +743,11 @@ async def remove_provider_credential(
 
 
 async def _activation_read(
-    session: AsyncSession, source_id: UUID, row: object
+    session: AsyncSession, source_id: UUID, row: ConnectorProvisioning
 ) -> ActivationRead:
     """Project durable activation state and unresolved credential errors."""
-    state = getattr(row, "state")
-    error_code = getattr(row, "error_code")
+    state = row.state
+    error_code = row.error_code
     unresolved = await provisioning.unresolved_credential_error(session, source_id)
     if unresolved:
         error_code = unresolved
@@ -750,8 +755,8 @@ async def _activation_read(
             state = "reconciliation_required"
     return ActivationRead(
         source_id=source_id,
-        desired_revision=getattr(row, "desired_revision"),
-        applied_revision=getattr(row, "applied_revision"),
+        desired_revision=row.desired_revision,
+        applied_revision=row.applied_revision,
         state=state,
         error_code=error_code,
         credential_recovery=(

@@ -4,30 +4,29 @@ from collections.abc import Iterable
 from dataclasses import replace
 from typing import Any
 
+from modules.agents.descriptor import descriptor as agents
+from modules.automations.descriptor import descriptor as automations
+from modules.backup.descriptor import descriptor as backup
+from modules.chat.descriptor import descriptor as chat
+from modules.connectors.descriptor import descriptor as connectors
 from modules.dashboard.descriptor import descriptor as dashboard
+from modules.export.descriptor import descriptor as export
 from modules.goals.descriptor import descriptor as goals
-from modules.knowledge.documents.descriptor import descriptor as documents
-from modules.knowledge.observations.descriptor import descriptor as observations
 from modules.ingestion.descriptor import descriptor as ingestion
+from modules.knowledge.documents.descriptor import descriptor as documents
 from modules.knowledge.entities.descriptor import descriptor as entities
+from modules.knowledge.observations.descriptor import descriptor as observations
 from modules.knowledge.relationships.descriptor import descriptor as relationships
 from modules.knowledge.temporal.descriptor import descriptor as temporal
+from modules.memory.descriptor import descriptor as memory
 from modules.news.descriptor import descriptor as news
 from modules.notifications.descriptor import descriptor as notifications
+from modules.observability.descriptor import descriptor as observability
 from modules.search.descriptor import descriptor as search
 from modules.sources.descriptor import descriptor as sources
 from modules.tasks.descriptor import descriptor as tasks
 from modules.timeline.descriptor import descriptor as timeline
-
-from modules.chat.descriptor import descriptor as chat
-from modules.memory.descriptor import descriptor as memory
 from modules.tools.descriptor import descriptor as tools
-from modules.agents.descriptor import descriptor as agents
-from modules.automations.descriptor import descriptor as automations
-from modules.observability.descriptor import descriptor as observability
-from modules.connectors.descriptor import descriptor as connectors
-from modules.backup.descriptor import descriptor as backup
-from modules.export.descriptor import descriptor as export
 
 
 def register_modules(descriptors: Iterable[Any] = (

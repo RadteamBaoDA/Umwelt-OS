@@ -9,31 +9,24 @@ Covers:
 - Deterministic layout generators: default_desktop_layout and default_mobile_layout
 """
 
-from uuid import UUID, uuid4
+from uuid import uuid4
+
 import pytest
 from pydantic import ValidationError
 
 from modules.dashboard.layouts import (
-    MAX_COLUMNS,
-    MAX_LAYOUT_ITEMS,
-    MAX_LAYOUT_ROWS,
     default_desktop_layout,
     default_mobile_layout,
     validate_layout,
 )
 from modules.dashboard.schemas import (
     DashboardCreate,
-    DashboardGroupRead,
     GadgetConfiguration,
     GadgetDefinitionCreate,
-    GadgetDefinitionPatch,
-    GadgetFilters,
-    GadgetInstanceRead,
     GadgetScope,
     HighlightRule,
     InstanceCreate,
     LayoutItem,
-    LayoutReplace,
 )
 
 

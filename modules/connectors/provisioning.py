@@ -8,7 +8,12 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.realtime import ReplayDraft, commit_with_replay, make_source_change
-from modules.connectors.models import ConnectorManagedCredential, ConnectorNativeCredential, ConnectorProvisioning, ConnectorWorldCredential
+from modules.connectors.models import (
+    ConnectorManagedCredential,
+    ConnectorNativeCredential,
+    ConnectorProvisioning,
+    ConnectorWorldCredential,
+)
 from modules.connectors.public import NativeCredentialSnapshot
 from modules.sources import public as sources
 from modules.sources.schemas import ConnectorSource, SourceFence
@@ -441,7 +446,7 @@ def new_workflow_operation(
     }
 
 
-def _new_deactivation(row: ConnectorProvisioning, generation: int) -> dict[str, object] | None:
+def _new_deactivation(row: ConnectorProvisioning, generation: int) -> dict[str, Any] | None:
     """Build cleanup work for the known workflow, or None when no workflow exists."""
     if not row.workflow_id:
         return None
@@ -538,6 +543,7 @@ async def save_desired(
                     and envelope.get("activation_id") == activation.get("id")
                 ):
                     if envelope.get("state") == "prepared":
+                        assert credential is not None
                         credential.operation_id = None
                         credential.operation_envelope = None
                         credential.state = "ready" if credential.credential_id else "queued"
@@ -557,9 +563,9 @@ async def save_desired(
             row.error_code = "deactivation_pending"
         elif isinstance(step, dict) and step.get("state") in {"prepared", "blocked"}:
             row.workflow_operation = None
-            operation = _new_deactivation(row, source_generation) if prior_enabled else None
-            if operation is not None:
-                row.workflow_operation = operation
+            new_operation = _new_deactivation(row, source_generation) if prior_enabled else None
+            if new_operation is not None:
+                row.workflow_operation = new_operation
                 row.error_code = "deactivation_pending"
             else:
                 row.error_code = None
@@ -569,9 +575,9 @@ async def save_desired(
             row.workflow_operation = operation
             row.error_code = "workflow_operation_pending"
     elif prior_enabled:
-        operation = _new_deactivation(row, source_generation)
-        if operation is not None:
-            row.workflow_operation = operation
+        new_operation = _new_deactivation(row, source_generation)
+        if new_operation is not None:
+            row.workflow_operation = new_operation
             row.error_code = "deactivation_pending"
     await session.flush()
     return row
@@ -876,6 +882,7 @@ async def fence_source_collection(
                     and envelope.get("activation_id") == activation.get("id")
                 ):
                     if envelope.get("state") == "prepared":
+                        assert credential is not None
                         credential.operation_id = None
                         credential.operation_envelope = None
                         credential.state = "ready" if credential.credential_id else "queued"
@@ -899,9 +906,9 @@ async def fence_source_collection(
             row.error_code = "workflow_operation_pending"
             await session.flush()
             return True
-    operation = _new_deactivation(row, source.generation)
-    if operation is not None:
-        row.workflow_operation = operation
+    new_operation = _new_deactivation(row, source.generation)
+    if new_operation is not None:
+        row.workflow_operation = new_operation
         row.error_code = "deactivation_pending"
     else:
         row.error_code = None
@@ -1027,7 +1034,7 @@ async def claim_credential_operation(
         row.operation_id = None
         row.state = "ready" if row.credential_id else "queued"
         row.error_code = "prepared_credential_intent_stale"
-        if isinstance(activation_id, str) and desired is not None and isinstance(desired.activation_intent, dict):
+        if isinstance(activation_id, str) and desired is not None and isinstance(desired.activation_intent, dict):  # noqa: SIM102  # style-only rewrite skipped to avoid touching control flow
             if desired.activation_intent.get("id") == activation_id:
                 for sibling in slots.values():
                     sibling_envelope = sibling.operation_envelope
@@ -1063,10 +1070,10 @@ async def drive_credential_operation(
 ) -> bool:
     """Decrypt and execute one credential operation, retaining ambiguous outcomes for recovery."""
     from modules.connectors.credentials import (
+        CredentialEncryptionUnavailable,
         CredentialOutcomeUnknown,
         CredentialRequestRejected,
         CredentialUpdateOutcomeUnknown,
-        CredentialEncryptionUnavailable,
         decrypt_credential_input,
     )
 
@@ -1204,7 +1211,7 @@ async def fail_credential_operation(
     Unknown outcomes retain recovery information; returns False for a stale
     operation identity. Flushes only, so the operation driver owns commit/rollback.
     """
-    source, desired, slots = await lock_connector(
+    _source, desired, slots = await lock_connector(
         session, source_id, ("collector", "manual_trigger", "provider")
     )
     row = slots.get(slot)
@@ -1572,6 +1579,7 @@ async def defer_unknown_workflow_create(
     now = datetime.now(UTC)
     if latest is not None and now <= latest:
         now = latest + timedelta(microseconds=1)
+    assert row is not None
     row.updated_at = now
     await session.flush()
     return True
@@ -1706,7 +1714,7 @@ async def drive_workflow_operation(
                 workflow_id = None
             else:
                 raise ValueError("Unsupported prepared workflow step")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
             from httpx import HTTPStatusError
 
             response = exc.response if isinstance(exc, HTTPStatusError) else None

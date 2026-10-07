@@ -1,5 +1,5 @@
-from typing import Annotated
 from datetime import datetime
+from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -10,10 +10,15 @@ from core.auth.models import AuthSession
 from core.database import get_session
 from modules.knowledge.entities.public import RedirectedEntityConflict
 from modules.knowledge.relationships import public
-from modules.knowledge.relationships.schemas import EvidencePage, RelationshipCreate, RelationshipPage, RelationshipRead
+from modules.knowledge.relationships.schemas import (
+    EvidencePage,
+    RelationshipCreate,
+    RelationshipPage,
+    RelationshipRead,
+)
 from modules.settings.public import module_dependency
 
-router = APIRouter(prefix="/api/v1/relationships", tags=["knowledge"], dependencies=[Depends(module_dependency("relationships"))])
+router = APIRouter(prefix="/api/v1/relationships", tags=["knowledge"], dependencies=[Depends(module_dependency("knowledge.relationships"))])
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[AuthSession, Depends(require_owner)]
 OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]

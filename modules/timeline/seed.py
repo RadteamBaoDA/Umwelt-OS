@@ -1,6 +1,7 @@
 """Owner-local fictional timeline fixtures for the explicit P12 demo seed."""
 
 from datetime import UTC, date, datetime
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 

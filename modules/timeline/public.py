@@ -4,28 +4,58 @@ import base64
 import hashlib
 import json
 from datetime import UTC, date, datetime, time, timedelta
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from pydantic import ValidationError
-from sqlalchemy import delete, desc, exists, func, or_, select, tuple_
+from sqlalchemy import Select, delete, desc, exists, false, func, or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.realtime import ReplayDraft, commit_with_replay, make_timeline_change, make_timeline_collection_change
+from core.auth.models import Owner
+from core.realtime import (
+    ReplayDraft,
+    commit_with_replay,
+    make_timeline_change,
+    make_timeline_collection_change,
+)
 from modules.knowledge.documents import public as documents
+from modules.knowledge.entities import public as entities
 from modules.sources import public as sources
 from modules.sources.schemas import SourceExportFence
-from core.auth.models import Owner
-from modules.knowledge.entities import public as entities
-from modules.timeline.models import Event, EventAudit, EventEvidence, EventParticipant, EventSuppression, ParticipantEvidence
-from modules.timeline.schemas import (
-    BriefEventSupport, CorrelationSignalPage, CorrelationSignalRead, EventCreate, EventPage, EventPatch,
-    EventRead, TimelinePage, TimelineQuery,
-    TimelineExportEvidence, TimelineExportFence, TimelineExportFenceValidation,
-    TimelineExportPage, TimelineExportParticipant, TimelineExportRead,
+from modules.timeline.models import (
+    Event,
+    EventAudit,
+    EventEvidence,
+    EventParticipant,
+    EventSuppression,
+    ParticipantEvidence,
 )
-from modules.timeline.seed import ensure_demo_events
+from modules.timeline.schemas import (
+    BriefEventSupport,
+    CorrelationSignalPage,
+    CorrelationSignalRead,
+    EventCreate,
+    EventPage,
+    EventPatch,
+    EventRead,
+    TimelineExportEvidence,
+    TimelineExportFence,
+    TimelineExportFenceValidation,
+    TimelineExportPage,
+    TimelineExportParticipant,
+    TimelineExportRead,
+    TimelinePage,
+    TimelineQuery,
+)
+from modules.timeline.seed import (
+    ensure_demo_events,  # re-export: used by documents seed
+)
+
+# Explicit re-exports consumed by other modules (mypy strict forbids implicit re-export).
+__all__ = [
+    "ensure_demo_events",
+]
 
 MAX_PAGE = 100
 TIMELINE_EXPORT_PAGE_MAX_BYTES = 16_777_216
@@ -69,7 +99,7 @@ def _timeline_export_json(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
-def _timeline_export_statement(snapshot_at: datetime):
+def _timeline_export_statement(snapshot_at: datetime) -> Select[Event]:
     """Select undeleted owner events and derived events with retained eligible evidence."""
     eligible = sources.export_eligible_source_ids()
     support = exists(select(EventEvidence.id).where(
@@ -277,7 +307,7 @@ def _cursor_encode(value: dict[str, object]) -> str:
     return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
 
-def _cursor_decode(value: str | None, fingerprint: str) -> dict[str, object]:
+def _cursor_decode(value: str | None, fingerprint: str) -> dict[str, Any]:
     """Validate cursor version and normalized-filter fingerprint before paging."""
     if not value:
         return {"v": 1, "f": fingerprint, "p": 0, "k": None}
@@ -309,7 +339,8 @@ def _cursor_decode(value: str | None, fingerprint: str) -> dict[str, object]:
                 parsed_instant = datetime.fromisoformat(key[0])
                 if parsed_instant.tzinfo is None or parsed_instant.utcoffset() is None:
                     raise ValueError("cursor timestamp must be aware")
-                if parsed_instant.utcoffset().total_seconds() != 0 or parsed_instant.astimezone(UTC).isoformat() != key[0]:
+                assert parsed_instant is not None
+                if parsed_instant.utcoffset() != timedelta(0) or parsed_instant.astimezone(UTC).isoformat() != key[0]:
                     raise ValueError("cursor timestamp is not canonical UTC")
         except (ValueError, TypeError) as exc:
             raise ValueError("cursor key is malformed") from exc
@@ -373,7 +404,9 @@ async def list_event_evidence(session: AsyncSession, event_id: UUID) -> list[dic
     event = await session.scalar(select(Event.id).where(Event.id == event_id, Event.deleted_at.is_(None)))
     if event is None:
         return None
-    result = await _event_read(session, await session.get(Event, event_id))
+    event_row = await session.get(Event, event_id)
+    assert event_row is not None  # id was just selected above
+    result = await _event_read(session, event_row)
     return result.evidence if result else None
 
 
@@ -429,7 +462,8 @@ async def brief_event_support(
         row.document_version_id is None or row.chunk_id is None for row in evidence_rows
     ):
         return unavailable.model_copy(update={"origin": event.origin})
-    pairs = [(row.document_version_id, row.chunk_id) for row in evidence_rows]
+    pairs = [(row.document_version_id, row.chunk_id) for row in evidence_rows
+             if row.document_version_id is not None and row.chunk_id is not None]  # None rows returned above
     refs = await documents.read_evidence_refs(session, pairs)
     if len(refs) != len(pairs):
         return unavailable.model_copy(update={"origin": event.origin})
@@ -540,7 +574,7 @@ async def list_correlation_signals(
     return CorrelationSignalPage(items=signals[:limit], truncated=truncated)
 
 
-async def _list_partition(session: AsyncSession, query: TimelineQuery, partition: int, key: object | None, limit: int) -> list[Event]:
+async def _list_partition(session: AsyncSession, query: TimelineQuery, partition: int, key: Any, limit: int) -> list[Event]:
     """Read a stable occurrence partition with shared visibility and type filters applied."""
     statement = select(Event).where(Event.deleted_at.is_(None)).where(
         (Event.origin == "manual") | Event.id.in_(select(EventEvidence.event_id).where(
@@ -558,12 +592,13 @@ async def _list_partition(session: AsyncSession, query: TimelineQuery, partition
         statement = statement.where(Event.date_precision == "timed")
         if query.date_from is not None:
             start, _ = day_window(query.date_from, query.timezone)
-            _, end = day_window(query.date_to - timedelta(days=1), query.timezone)  # type: ignore[operator]
+            assert query.date_to is not None  # validated together with date_from
+            _, end = day_window(query.date_to - timedelta(days=1), query.timezone)
             statement = statement.where(Event.started_at >= start, Event.started_at < end)
         if query.entity_id is not None:
             statement = statement.where(Event.id.in_(select(EventParticipant.event_id).where(EventParticipant.entity_id == query.entity_id)))
         if key is not None:
-            instant, identifier = key  # type: ignore[misc]
+            instant, identifier = key
             statement = statement.where(tuple_(Event.started_at, Event.id) < (datetime.fromisoformat(str(instant)), UUID(str(identifier))))
         statement = statement.order_by(desc(Event.started_at), desc(Event.id))
     elif partition == 1:
@@ -573,17 +608,17 @@ async def _list_partition(session: AsyncSession, query: TimelineQuery, partition
         if query.entity_id is not None:
             statement = statement.where(Event.id.in_(select(EventParticipant.event_id).where(EventParticipant.entity_id == query.entity_id)))
         if key is not None:
-            day, identifier = key  # type: ignore[misc]
+            day, identifier = key
             statement = statement.where(tuple_(Event.occurred_date, Event.id) < (date.fromisoformat(str(day)), UUID(str(identifier))))
         statement = statement.order_by(desc(Event.occurred_date), desc(Event.id))
     else:
         statement = statement.where(Event.date_precision == "unknown")
         if query.precision != "unknown" and query.date_from is not None:
-            statement = statement.where(False)
+            statement = statement.where(false())
         if query.entity_id is not None:
             statement = statement.where(Event.id.in_(select(EventParticipant.event_id).where(EventParticipant.entity_id == query.entity_id)))
         if key is not None:
-            instant, identifier = key  # type: ignore[misc]
+            instant, identifier = key
             statement = statement.where(tuple_(Event.created_at, Event.id) < (datetime.fromisoformat(str(instant)), UUID(str(identifier))))
         statement = statement.order_by(desc(Event.created_at), desc(Event.id))
     return list((await session.scalars(statement.limit(limit))).all())
@@ -621,6 +656,7 @@ async def _list_page(session: AsyncSession, query: TimelineQuery, limit: int, cu
         if len(rows) > room:
             last = rows[room - 1]
             value = last.started_at if partition == 0 else last.occurred_date if partition == 1 else last.created_at
+            assert value is not None
             next_position = {"v": 1, "f": fingerprint, "p": partition, "k": [value.isoformat(), str(last.id)]}
             break
         partition += 1
@@ -893,6 +929,7 @@ async def delete_event(session: AsyncSession, event_id: UUID, *, expected_revisi
 async def schedule_extraction_work(session: AsyncSession, ready: Any, extractor_version: str, prompt_version: str) -> UUID:
     """Idempotently create timeline extraction work and flush without committing the caller transaction."""
     from sqlalchemy.dialects.postgresql import insert
+
     from modules.timeline.models import TimelineExtractionWork
     statement = insert(TimelineExtractionWork).values(
         document_id=ready.document_id, document_version_id=ready.document_version_id,
@@ -907,6 +944,7 @@ async def schedule_extraction_work(session: AsyncSession, ready: Any, extractor_
             TimelineExtractionWork.extractor_version == extractor_version,
             TimelineExtractionWork.prompt_version == prompt_version,
         ))
+    assert work_id is not None  # the conflicting identity row exists
     await session.flush()
     # GitHub events are produced deterministically by the connector mapper and are canonical;
     # model extraction would only add duplicates. Terminal-block the work (an error code the
@@ -928,6 +966,7 @@ async def schedule_extraction_work(session: AsyncSession, ready: Any, extractor_
 async def claim_extraction_work(session: AsyncSession, work_id: UUID, lease_owner: str, now: datetime) -> Any | None:
     """Claim due work or terminalize an exhausted expired lease; flush without committing."""
     from datetime import timedelta
+
     from modules.timeline.models import TimelineExtractionWork
     work = await session.scalar(select(TimelineExtractionWork).where(
         TimelineExtractionWork.id == work_id,
@@ -979,7 +1018,8 @@ async def list_blocked_extraction_work(
         TimelineExtractionWork.dependency_fingerprint.is_not(None),
         TimelineExtractionWork.next_attempt_at <= datetime.now(UTC),
     ).order_by(TimelineExtractionWork.updated_at, TimelineExtractionWork.id).limit(limit))).all()
-    return [(row[0], row[1], row[2], row[3], row[4]) for row in rows]
+    # error_code is an in_() match and dependency_fingerprint is filtered non-NULL above.
+    return [(row[0], row[1], row[2], cast(str, row[3]), cast(str, row[4])) for row in rows]
 
 
 async def requeue_blocked_extraction_work(
@@ -1024,6 +1064,7 @@ async def set_extraction_work_error(session: AsyncSession, work_id: UUID, lease_
     discards stale output so a newly permitted configuration can be retried.
     """
     from datetime import timedelta
+
     from modules.timeline.models import TimelineExtractionWork
     now = datetime.now(UTC)
     work = await session.scalar(select(TimelineExtractionWork).where(
@@ -1094,7 +1135,9 @@ async def publish_extracted_events(session: AsyncSession, *, work_id: UUID, leas
     It flushes only; the worker commits results, replay and success atomically.
     """
     from hashlib import sha256
+
     from sqlalchemy.dialects.postgresql import insert
+
     from modules.timeline.extraction import EXTRACTOR_VERSION, PROMPT_VERSION
     from modules.timeline.models import TimelineExtractionWork
     work = await session.scalar(select(TimelineExtractionWork).where(
@@ -1170,15 +1213,15 @@ async def publish_extracted_events(session: AsyncSession, *, work_id: UUID, leas
     # No graph lock is held during provider inference; acquire sorted canonical
     # entity revisions and then events only after a validated response exists.
     if entity_ids:
-        refs = await entities.get_entity_refs(session, sorted(entity_ids, key=str), for_write=True)
-        if {item.canonical_id for item in refs} != entity_ids:
+        entity_refs = await entities.get_entity_refs(session, sorted(entity_ids, key=str), for_write=True)
+        if {item.canonical_id for item in entity_refs} != entity_ids:
             raise ValueError("participant canonical identity changed during extraction")
         expected_revisions = {
             membership_by_id[participant.membership_id].entity_id:
             membership_revisions[participant.membership_id]
             for proposal in proposals.events for participant in proposal.participants
         }
-        if any(item.revision != expected_revisions.get(item.canonical_id) for item in refs):
+        if any(item.revision != expected_revisions.get(item.canonical_id) for item in entity_refs):
             raise ValueError("participant canonical revision changed during extraction")
     candidates = [item[1] for item in normalized]
     existing = list((await session.scalars(select(Event).where(
@@ -1292,9 +1335,9 @@ async def publish_extracted_events(session: AsyncSession, *, work_id: UUID, leas
                 rows = (await session.scalars(select(EventEvidence).where(
                     EventEvidence.event_id == event.id, EventEvidence.chunk_id.in_(participant.chunk_ids)
                 ))).all()
-                for item in rows:
+                for evidence_row in rows:
                     await session.execute(insert(ParticipantEvidence).values(
-                        participant_id=row.id, event_evidence_id=item.id
+                        participant_id=row.id, event_evidence_id=evidence_row.id
                     ).on_conflict_do_nothing(constraint="uq_timeline_participant_evidence"))
     await session.flush()
     proposals_json = [{
@@ -1320,7 +1363,6 @@ async def summarize_source_events(
     Applies the same visibility rule as timeline listing (not deleted, backed by exact evidence)
     so counts never exceed what the Timeline can show. Read-only; no authorization of its own.
     """
-    from sqlalchemy import func
     escaped = type_prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     rows = (await session.execute(
         select(Event.type, func.count(), func.max(Event.observed_at)).where(
@@ -1350,6 +1392,7 @@ async def publish_provider_event(
     Returns None when the evidence is no longer the current ready version.
     """
     from hashlib import sha256
+
     from sqlalchemy.dialects.postgresql import insert
     refs = await documents.read_extraction_evidence_refs(
         session, document_id=document_id, document_version_id=document_version_id,
@@ -1665,7 +1708,6 @@ async def _hide_unsupported(session: AsyncSession, event_ids: list[UUID]) -> Non
             date_owner = event.date_precision == "date" and bool(
                 owners.intersection({"occurred_date", "end_date", "date_precision"})
             )
-            precision_owner = "date_precision" in owners
             if timed_owner:
                 # A start instant is the minimum shape-required anchor when an
                 # owner corrected only the end or precision of a timed event.
@@ -1713,7 +1755,7 @@ async def list_changed_events_after(
     if position is not None:
         stmt = stmt.where(tuple_(Event.updated_at, Event.id) > tuple_(*position))
     rows = (await session.scalars(stmt.order_by(Event.updated_at, Event.id).limit(limit))).all()
-    result = []
+    result: list[tuple[datetime, UUID, str, dict[str, Any] | None]] = []
     for r in rows:
         if r.deleted_at is not None:
             result.append((r.updated_at, r.id, f"{r.id}:{r.revision}", None))

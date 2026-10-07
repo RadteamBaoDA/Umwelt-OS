@@ -15,8 +15,8 @@ Tests cover:
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import json
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID, uuid4
 
@@ -25,8 +25,8 @@ import pytest
 from modules.knowledge.entities.corrections import (
     CorrectionConflictError,
     _Closure,
-    _DeleteClosure,
     _conflict,
+    _DeleteClosure,
     _validate_merge_request,
     _validate_split_request,
     merge_entity,
@@ -37,18 +37,13 @@ from modules.knowledge.entities.corrections import (
 )
 from modules.knowledge.entities.models import (
     Entity,
-    EntityAlias,
-    EntityAliasEvidence,
     EntityCorrectionDecision,
     EntityEvidenceMembership,
-    EntityFieldEvidence,
-    EntityRedirect,
 )
 from modules.knowledge.entities.schemas import (
-    EntityCreate,
-    EntityCorrectionConflict,
     EntityCorrectionPreview,
     EntityCorrectionResult,
+    EntityCreate,
     EntityMergeRequest,
     EntitySplitRequest,
     EntitySuppressionRequest,
@@ -309,7 +304,7 @@ class TestValidateMergeRequest:
             source_ids=[], document_ids=[], membership_ids=[mem.id], timeline_event_ids=[],
         )
 
-        s, t, memberships, target_aliases, source_aliases = await _validate_merge_request(src.id, payload, closure)
+        s, t, memberships, _target_aliases, _source_aliases = await _validate_merge_request(src.id, payload, closure)
         assert s.id == src.id
         assert t.id == tgt.id
         assert memberships == [mem]
@@ -395,7 +390,7 @@ class TestValidateSplitRequest:
             source_ids=[], document_ids=[], membership_ids=[mem.id], timeline_event_ids=[],
         )
 
-        with patch("modules.knowledge.relationships.public.validate_entity_split_plan", side_effect=ValueError("Split conflict")):
+        with patch("modules.knowledge.relationships.public.validate_entity_split_plan", side_effect=ValueError("Split conflict")):  # noqa: SIM117  # style-only rewrite skipped to avoid touching control flow
             with pytest.raises(CorrectionConflictError) as exc_info:
                 await _validate_split_request(src.id, payload, closure)
         assert exc_info.value.conflict.code == "relationship_split_conflict"

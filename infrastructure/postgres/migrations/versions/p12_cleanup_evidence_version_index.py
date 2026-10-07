@@ -9,7 +9,6 @@ from collections.abc import Sequence
 
 from alembic import op
 
-
 revision: str = "p12_evidence_version_index"
 down_revision: str | Sequence[str] | None = "p12_source_coverage"
 branch_labels: str | Sequence[str] | None = None

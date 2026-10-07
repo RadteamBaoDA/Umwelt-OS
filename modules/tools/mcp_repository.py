@@ -1,10 +1,11 @@
 """Async owner repository for revisioned MCP records and detached authorization fences."""
 
-from copy import deepcopy
-from datetime import UTC, datetime
 import hashlib
 import json
 import secrets
+from copy import deepcopy
+from datetime import UTC, datetime
+from typing import cast as typing_cast
 from uuid import UUID, uuid4
 
 from sqlalchemy import Text, bindparam, cast, func, or_, select
@@ -12,15 +13,33 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.tools.mcp_credentials import (
-    decrypt_connection_credential, encrypt_connection_credential,
-    hash_inbound_token, issue_inbound_token, verify_inbound_token,
+    decrypt_connection_credential,
+    encrypt_connection_credential,
+    hash_inbound_token,
+    issue_inbound_token,
 )
 from modules.tools.mcp_schemas import (
-    CapabilityRead, ConnectionDraft, ConnectionRead, DiscoveryPersist, DiscoveryRead,
-    ExecutionFence, GrantChoice, GrantRead, InboundBinding, InboundClientCreate,
-    InboundClientIssued, InboundClientRead, InboundPrincipal,
+    CapabilityRead,
+    ConnectionDraft,
+    ConnectionRead,
+    DiscoveryPersist,
+    DiscoveryRead,
+    ExecutionFence,
+    GrantChoice,
+    GrantRead,
+    InboundBinding,
+    InboundClientCreate,
+    InboundClientIssued,
+    InboundClientRead,
+    InboundPrincipal,
 )
-from modules.tools.models import McpCapability, McpCapabilityGrant, McpConnection, McpDiscovery, McpInboundClient
+from modules.tools.models import (
+    McpCapability,
+    McpCapabilityGrant,
+    McpConnection,
+    McpDiscovery,
+    McpInboundClient,
+)
 
 
 class McpConflict(Exception):
@@ -175,6 +194,8 @@ async def save_connection(
         raise ValueError("stdio connections cannot retain an existing bearer credential")
     if op.action == "replace":
         row.credential_revision += 1
+        assert op is not None
+        assert op.value is not None
         row.encrypted_credential = encrypt_connection_credential(
             op.value.get_secret_value(), key=encryption_key, owner_id=owner_id,
             connection_id=row.id, credential_revision=row.credential_revision)
@@ -331,7 +352,7 @@ async def persist_discovery(session: AsyncSession, owner_id: int, connection_id:
         func.max(func.octet_length(cast(descriptor_rows.c.value, Text))),
         func.octet_length(cast(descriptor_array, Text)),
     ).select_from(descriptor_rows))
-    largest_descriptor_bytes, rendered_array_bytes = sizes.one()
+    largest_descriptor_bytes, rendered_array_bytes = typing_cast("tuple[int | None, int | None]", tuple(sizes.one()))
     if ((largest_descriptor_bytes or 0) > 65_536 or
             (rendered_array_bytes or 0) > 1_000_000):
         raise ValueError("Discovery exceeds PostgreSQL JSONB storage byte limits")

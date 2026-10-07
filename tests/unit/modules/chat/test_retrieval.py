@@ -11,7 +11,8 @@ Covers:
 
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import UUID, uuid4
+from uuid import uuid4
+
 import pytest
 
 from modules.chat.citations import (
@@ -30,10 +31,8 @@ from modules.chat.retrieval import (
     revalidate_context_fence,
 )
 from modules.chat.schemas import (
-    MAX_QUOTE_LENGTH,
     AnswerContext,
     Citation,
-    CitationValidationResult,
     EntityContextItem,
     EvidenceItem,
     TemporalContextItem,

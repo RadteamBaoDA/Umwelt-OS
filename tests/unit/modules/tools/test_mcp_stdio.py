@@ -9,23 +9,21 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import signal
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import anyio
 import pytest
 from anyio.abc import ByteReceiveStream, ByteSendStream
 from mcp.shared.message import SessionMessage
-from mcp.types import JSONRPCResponse, JSONRPCMessage
+from mcp.types import JSONRPCResponse
 
 from modules.tools.mcp_stdio import (
     StdioDeploymentProfile,
+    _read_stdio_stdout,
     _StdioProcess,
     _StdioReadPipe,
     _StdioWritePipe,
-    _read_stdio_stdout,
     _write_stdio_stdin,
     stdio_client_transport,
 )
@@ -60,6 +58,7 @@ class TestStdioDeploymentProfile:
 
 
 import time
+
 
 class TestStdioProcess:
     """Unit tests for the _StdioProcess asyncio subprocess protocol."""
@@ -167,7 +166,6 @@ class MockByteSendStream(ByteSendStream):
 
     async def aclose(self) -> None:
         """Close stream."""
-        pass
 
 
 class TestStdioFraming:
@@ -371,7 +369,7 @@ class TestStdioClientTransportPlatform:
             runtime_kind="native",
             entry_script=None,
         )
-        with patch("os.name", "nt"):
+        with patch("os.name", "nt"):  # noqa: SIM117  # style-only rewrite skipped to avoid touching control flow
             with pytest.raises(McpTransportError, match="MCP stdio requires POSIX"):
                 async with stdio_client_transport(profile, AsyncMock(return_value=True)):
                     pass  # pragma: no cover

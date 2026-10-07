@@ -1,7 +1,7 @@
 """Request and response schemas for memory items, candidates, and privacy configuration."""
 
 from datetime import datetime
-from typing import Annotated, Any, Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool

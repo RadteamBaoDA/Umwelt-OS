@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -13,7 +14,6 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from core.tools.schemas import ToolExecutionPrincipal
 from modules.tools.mcp_admission import McpAdmission, McpInboundLease
 from modules.tools.mcp_schemas import InboundBinding, InboundPrincipal
-
 
 _CLEANUP_RESERVE_SECONDS = 2.0
 
@@ -207,7 +207,7 @@ class InboundMcpGuard:
                 async with asyncio.timeout_at(deadline):
                     try:
                         identity = await self._authenticate_inbound(raw_token)
-                    except Exception:
+                    except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
                         await self._send_fixed_error(send, 401, "unauthorized", bearer_challenge=True)
                         return
                     finally:
@@ -245,7 +245,7 @@ class InboundMcpGuard:
                     if content_encodings and content_encodings != [b"identity"]:
                         await self._send_fixed_error(send, 415, "unsupported_encoding")
                         return
-                    if len(content_types) != 1 or not content_types[0].split(b";", 1)[0].strip().lower() == b"application/json":
+                    if len(content_types) != 1 or not content_types[0].split(b";", 1)[0].strip().lower() == b"application/json":  # noqa: SIM201  # style-only rewrite skipped to avoid touching control flow
                         await self._send_fixed_error(send, 415, "unsupported_media_type")
                         return
                     if len(content_lengths) > 1:
@@ -300,7 +300,7 @@ class InboundMcpGuard:
                     )
                     try:
                         await self._emit_response(send, start, response_body, state)
-                    except Exception:
+                    except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
                         # A failed client send cannot be repaired with a second response start.
                         return
         except TimeoutError:
@@ -309,7 +309,7 @@ class InboundMcpGuard:
             await self._send_fixed_error(send, 503, "admission_unavailable")
         except (ValueError, TypeError):
             await self._send_fixed_error(send, 500, "request_failed")
-        except Exception:
+        except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
             await self._send_fixed_error(send, 500, "request_failed")
 
     async def _read_request_body(
@@ -328,7 +328,7 @@ class InboundMcpGuard:
                     raise ValueError("Invalid request stream")
                 chunk = message.get("body", b"")
                 if not isinstance(chunk, bytes):
-                    raise ValueError("Invalid request body")
+                    raise ValueError("Invalid request body")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
                 if len(chunks) + len(chunk) > 128_000:
                     raise OverflowError("Request exceeds its byte limit")
                 chunks.extend(chunk)
@@ -358,7 +358,8 @@ class InboundMcpGuard:
         """
         receiver = InboundReplayReceiver(body, source_receive)
         response = InboundResponseBuffer(max_body_bytes=1_048_576, deadline=cleanup_deadline)
-        child_task = asyncio.create_task(self._app(scope, receiver, response))
+        # ASGI apps are coroutine functions at runtime; typing exposes them as generic Awaitables.
+        child_task = asyncio.create_task(cast("Coroutine[Any, Any, None]", self._app(scope, receiver, response)))
         disconnect_task = asyncio.create_task(receiver.wait_for_disconnect())
         completed = False
         try:
@@ -436,7 +437,7 @@ class InboundMcpGuard:
                 )
             # The explicit lease/TTL check is last so no authorization await separates it from response.start.
             current = current and await self._admission.lease_current(inbound=state.lease)
-        except Exception:
+        except Exception:  # noqa: BLE001  # fail-closed boundary: any failure denies/degrades
             current = False
         if not current:
             await self._send_fixed_error(send, 409, "authorization_changed")

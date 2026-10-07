@@ -1,28 +1,32 @@
 """Owner-authenticated HTTP routes for chat conversations, messages, SSE streaming, and run cancellation."""
 
 import asyncio
-from datetime import UTC, datetime, timedelta
 import hashlib
 import hmac
 import json
 import logging
 import re
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from redis.asyncio import Redis
-from sqlalchemy import delete, desc, func, or_, select, update
+from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.auth.dependencies import SESSION_COOKIE, require_owner, require_owner_write
 from core.auth.models import AuthSession
 from core.database import get_session
-from modules.chat.models import Conversation, Message, MessageMutationReceipt, ResponseRun, StreamEvent
 from modules.chat import public as chat_public
-from modules.settings.public import module_dependency
-from modules.memory.public import lock_export_privacy, read_export_privacy
+from modules.chat.models import (
+    Conversation,
+    Message,
+    MessageMutationReceipt,
+    ResponseRun,
+    StreamEvent,
+)
 from modules.chat.schemas import (
     CancelResponse,
     ConversationCreate,
@@ -34,7 +38,7 @@ from modules.chat.schemas import (
     SendMessageRequest,
     SendMessageResponse,
 )
-from modules.chat.stream import format_sse_event, make_event_id, parse_event_id
+from modules.chat.stream import format_sse_event, parse_event_id
 from modules.chat.worker import (
     CANCEL_KEY_PREFIX,
     _cancel_response_locked,
@@ -43,6 +47,8 @@ from modules.chat.worker import (
     _require_privacy_fence,
     run_response_generation,
 )
+from modules.memory.public import lock_export_privacy, read_export_privacy
+from modules.settings.public import module_dependency
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +133,7 @@ async def _dispatch_response_run(request: Request, response_id: UUID) -> None:
                 str(response_id),
                 _job_id=f"chat-response:{response_id}",
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
             logger.warning("Failed to enqueue ARQ job: %s", exc)
 
     asyncio.create_task(
@@ -473,7 +479,7 @@ async def patch_conversation(
         current_meta.update(payload.metadata)
         conv.metadata_json = current_meta
 
-    conv.updated_at = func.now()  # type: ignore[assignment]
+    conv.updated_at = func.now()
     await session.commit()
     await session.refresh(conv)
 
@@ -600,7 +606,7 @@ async def send_message(
     )
     session.add(response_run)
 
-    conv.updated_at = func.now()  # type: ignore[assignment]
+    conv.updated_at = func.now()
     await session.commit()
     await session.refresh(response_run)
 
@@ -768,7 +774,7 @@ async def mutate_message(
         result_user_message_id=user_message.id,
         response_id=response_run.id,
     ))
-    conversation.updated_at = func.now()  # type: ignore[assignment]
+    conversation.updated_at = func.now()
     await session.commit()
 
     await _dispatch_response_run(request, response_run.id)
@@ -878,7 +884,7 @@ async def get_response_events(
                         stamp = (current_run.retrieval_context or {}).get("_chat_privacy_fence")
                         try:
                             await _require_privacy_fence(session, stamp)
-                        except Exception:
+                        except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
                             # A failed read can poison the transaction; release locks and retry
                             # redaction in a fresh transaction before emitting only terminal status.
                             await session.rollback()
@@ -917,7 +923,7 @@ async def get_response_events(
                     else:
                         terminal_without_event = current_run.status in ("completed", "cancelled", "failed")
                         await session.commit()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
                 logger.warning("Error querying stream events: %s", type(exc).__name__)
                 yield format_sse_event("status", {"status": "unavailable"})
                 return
@@ -981,7 +987,7 @@ async def cancel_response(
     redis: Redis = request.app.state.redis
     try:
         await redis.set(f"{CANCEL_KEY_PREFIX}{response_id}", "1", ex=300)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
         logger.warning("Failed to set Redis cancellation key: %s", exc)
 
     # Memory -> parent -> run is the same lock order as worker publications. The response row
@@ -1004,11 +1010,11 @@ async def cancel_response(
     fence = (run.retrieval_context or {}).get("_chat_privacy_fence")
     try:
         await _require_privacy_fence(session, fence)
-    except Exception:
+    except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
         try:
             await _privacy_cancel_locked(session, run)
             await session.commit()
-        except Exception:
+        except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
             # A failed Memory read can leave this transaction aborted; retry durable redaction
             # under the same public Memory lock in a fresh Chat transaction before returning.
             await session.rollback()

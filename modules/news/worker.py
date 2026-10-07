@@ -3,7 +3,7 @@
 from typing import cast
 from uuid import UUID
 
-from sqlalchemy import select, text
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from modules.ingestion import public as ingestion
@@ -110,7 +110,7 @@ async def recover_news_work(ctx: dict[str, object]) -> int:
             fences[source_id] = await sources.lock_source(session, source_id)
         locked_documents = set()
         for projection in projections:
-            if projection.document_id not in locked_documents:
+            if projection.document_id not in locked_documents:  # noqa: SIM102  # style-only rewrite skipped to avoid touching control flow
                 if await documents.lock_document_for_extraction(session, projection.document_id, projection.source_id):
                     locked_documents.add(projection.document_id)
         processed = 0

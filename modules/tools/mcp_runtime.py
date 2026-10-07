@@ -18,7 +18,6 @@ from modules.tools.mcp_admission import McpAdmission
 from modules.tools.mcp_client import McpSdkClient
 from modules.tools.mcp_dispatch import McpDispatchAdapter, build_mcp_tool_definition
 from modules.tools.mcp_profiles import StdioProfileCatalog
-from modules.tools.mcp_stdio import StdioDeploymentProfile
 from modules.tools.mcp_schemas import (
     ConnectionRead,
     DiscoveryPersist,
@@ -29,6 +28,7 @@ from modules.tools.mcp_schemas import (
     McpRisk,
     McpTransport,
 )
+from modules.tools.mcp_stdio import StdioDeploymentProfile
 
 
 def derive_mcp_public_endpoint(settings: Settings) -> tuple[str, str, str]:
@@ -194,7 +194,7 @@ class McpRuntime:
                 destinations=frozenset({identity.destination_id}),
                 capabilities=capabilities,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
             # Owner/query uncertainty cannot widen a detached inbound principal.
             return None
 
@@ -253,7 +253,7 @@ class McpRuntime:
                     destination_kind=ToolDestination.REMOTE.value,
                 ):
                     return False
-            except Exception:
+            except Exception:  # noqa: BLE001  # fail-closed boundary: any failure denies/degrades
                 return False
 
             # A successful result is rechecked against the exact current registry binding.
@@ -386,7 +386,7 @@ class McpRuntime:
                 for item in connections
             )
             return is_current and await self.admission.lease_current()
-        except Exception:
+        except Exception:  # noqa: BLE001  # fail-closed boundary: any failure denies/degrades
             return False
 
     async def resolve_fence(
@@ -506,7 +506,7 @@ class McpRuntime:
                 and current_definition.version == expected_definition.version
                 and current_definition.schema_fingerprint == expected_definition.schema_fingerprint
             )
-        except Exception:
+        except Exception:  # noqa: BLE001  # fail-closed boundary: any failure denies/degrades
             return False
 
     async def refresh_connection(self, owner_id: int, connection_id: UUID) -> tuple[str, ...]:

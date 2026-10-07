@@ -7,22 +7,17 @@ public auth contracts, auth schemas, and rate limiters.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 import hashlib
 import time
-from typing import Any
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
-from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
 from pydantic import SecretStr, ValidationError
 from redis.exceptions import RedisError
-from sqlalchemy.exc import IntegrityError
 
 from core.auth.dependencies import (
-    CSRF_COOKIE,
-    CSRF_MAX_AGE_SECONDS,
     SESSION_COOKIE,
     _csrf_signature,
     _current_session,
@@ -32,16 +27,13 @@ from core.auth.dependencies import (
     require_owner,
     require_owner_write,
 )
-from core.auth.models import AuthSession, Owner
+from core.auth.models import AuthSession
 from core.auth.public import get_demo_owner_id, revalidate_owner_session
-from core.auth.routes import _allow_attempt, _is_owner_conflict, _new_csrf
+from core.auth.routes import _allow_attempt, _new_csrf
 from core.auth.schemas import (
     AuthState,
-    CsrfResponse,
     LoginRequest,
     SetupRequest,
-    SetupResponse,
-    SetupStatus,
 )
 from core.auth.service import hash_password, verify_password
 from core.config import Settings
@@ -127,7 +119,7 @@ class TestTokenAndCsrfHelpers:
     def test_valid_csrf_rejects_mismatched_token(self) -> None:
         """Verify _valid_csrf rejects submitted header token not matching cookie token."""
         settings = Settings(csrf_signing_secret=SecretStr("csrf-secret"))
-        token, cookie_val = _new_csrf(settings)
+        _token, cookie_val = _new_csrf(settings)
         assert _valid_csrf(cookie_val, "different-token", settings) is False
 
 

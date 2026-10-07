@@ -3,8 +3,11 @@
 import json
 from typing import Any
 
-from jsonschema import Draft202012Validator, FormatChecker
-from jsonschema.exceptions import SchemaError
+from jsonschema import (  # type: ignore[import-untyped]  # no stubs
+    Draft202012Validator,
+    FormatChecker,
+)
+from jsonschema.exceptions import SchemaError  # type: ignore[import-untyped]  # no stubs
 
 MAX_SCHEMA_BYTES = 64_000
 MAX_INSTANCE_BYTES = 256_000

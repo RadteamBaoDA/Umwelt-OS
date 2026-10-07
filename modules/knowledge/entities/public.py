@@ -1,65 +1,73 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
-from hashlib import sha256
 import base64
 import binascii
-from copy import deepcopy
 import json
 import math
-from typing import TYPE_CHECKING, Literal
+from copy import deepcopy
+from datetime import UTC, datetime, timedelta
+from hashlib import sha256
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
 
-from sqlalchemy import delete, desc, exists, func, or_, select, tuple_, and_
+from sqlalchemy import and_, delete, desc, exists, func, or_, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.auth.models import Owner
 from core.pagination import decode_cursor, encode_cursor
 from core.realtime import commit_with_replay, make_graph_change
-from core.auth.models import Owner
-from modules.sources import public as sources
-from modules.sources.schemas import SourceExportFence
-from modules.knowledge.entities.seed import ensure_demo_entities
 from modules.knowledge.entities.models import (
     Entity,
     EntityAlias,
-    EntityEvidenceMembership,
     EntityAliasEvidence,
+    EntityCorrectionDecision,
+    EntityEvidenceMembership,
+    EntityExtractionResult,
+    EntityExtractionWork,
     EntityFieldEvidence,
     EntityOwnerAction,
     EntityRedirect,
-    EntityCorrectionDecision,
-    EntityExtractionWork,
-    EntityExtractionResult,
 )
-
-
 from modules.knowledge.entities.schemas import (
-    EntityTemporalNodeSeed, EntityHistoryItem, EntityHistoryPage,
     AliasCreate,
     EntityAliasRead,
+    EntityCreate,
     EntityEvidencePage,
     EntityEvidenceRead,
-    EntityReviewEvidence,
-    EntityReviewEndpoint,
-    EntityCreate,
+    EntityExportAlias,
+    EntityExportAliasEvidence,
+    EntityExportEvidence,
+    EntityExportFence,
+    EntityExportFenceValidation,
+    EntityExportPage,
+    EntityExportRead,
+    EntityHistoryItem,
+    EntityHistoryPage,
     EntityMembershipReferenceRead,
-    VersionMembershipReference,
     EntityPage,
     EntityPatch,
     EntityRead,
     EntityReferenceRead,
-    EntityReviewCandidate,
-    EntityReviewPage,
-    EntityReviewAssignmentRequest,
-    EntityReviewAssignmentResult,
     EntityRelationshipReviewRequest,
     EntityRelationshipReviewResult,
-    EntityExportAlias, EntityExportAliasEvidence, EntityExportEvidence, EntityExportFence, EntityExportFenceValidation,
-    EntityExportPage, EntityExportRead, EntitySourceExportFence,
+    EntityReviewAssignmentRequest,
+    EntityReviewAssignmentResult,
+    EntityReviewCandidate,
+    EntityReviewEndpoint,
+    EntityReviewEvidence,
+    EntityReviewPage,
+    EntitySourceExportFence,
+    EntityTemporalNodeSeed,
+    VersionMembershipReference,
     canonicalize_name,
 )
+from modules.knowledge.entities.seed import (
+    ensure_demo_entities,  # re-export: used by documents seed
+)
+from modules.sources import public as sources
+from modules.sources.schemas import SourceExportFence
 
 
 async def observability_quality_summary(session: AsyncSession) -> dict[str, int]:
@@ -72,6 +80,11 @@ async def observability_quality_summary(session: AsyncSession) -> dict[str, int]
     )) or 0)
     return {"unresolved_entities": unresolved, "failed_extraction": failed_extraction}
 
+
+# Explicit re-exports consumed by other modules (mypy strict forbids implicit re-export).
+__all__ = [
+    "ensure_demo_entities",
+]
 
 ENTITY_EXPORT_PAGE_MAX_BYTES = 16_777_216
 
@@ -146,7 +159,7 @@ async def _entity_export_source_generations(
     if not source_ids:
         return {}
     projection = sources.ingestion_lifecycle_projection().subquery()
-    rows = (await session.execute(select(projection.c.id, projection.c.generation).where(
+    rows: Any = (await session.execute(select(projection.c.id, projection.c.generation).where(
         projection.c.id.in_(source_ids), projection.c.id.in_(sources.export_eligible_source_ids()),
     ))).all()
     generations = {source_id: int(generation) for source_id, generation in rows}
@@ -237,7 +250,7 @@ async def export_page(
           .execution_options(populate_existing=True))).all())
         if len(aliases) > 100 or len(evidence) > 100:
             raise ValueError("An entity export record exceeds the alias or citation reference bound")
-        alias_support_rows: dict[UUID, list[tuple[EntityAliasEvidence, EntityEvidenceMembership]]] = {}
+        alias_support_rows: dict[UUID, list[Any]] = {}
         for alias in aliases:
             support_rows = list((await session.execute(select(EntityAliasEvidence, EntityEvidenceMembership).join(
                 EntityEvidenceMembership, EntityEvidenceMembership.id == EntityAliasEvidence.membership_id,
@@ -359,7 +372,7 @@ async def validate_export_fences(
           .execution_options(populate_existing=True))).all())
         if len(aliases) > 100 or len(evidence) > 100:
             return EntityExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
-        alias_support_rows: dict[UUID, list[tuple[EntityAliasEvidence, EntityEvidenceMembership]]] = {}
+        alias_support_rows: dict[UUID, list[Any]] = {}
         for alias in aliases:
             support_rows = list((await session.execute(select(EntityAliasEvidence, EntityEvidenceMembership).join(
                 EntityEvidenceMembership, EntityEvidenceMembership.id == EntityAliasEvidence.membership_id,
@@ -568,6 +581,7 @@ class TerminalEntityConflict(LookupError):
     """Signal that an entity identity was deleted and cannot be followed."""
 if TYPE_CHECKING:
     from modules.knowledge.documents.public import ExtractionEvidenceRef
+    from modules.knowledge.entities.schemas import EntityExtractionStatus as _ExtractionStatus
 
 
 def _entity_read(entity: Entity, aliases: list[EntityAlias] | None = None) -> EntityRead:
@@ -1070,13 +1084,13 @@ async def list_review_candidates(session: AsyncSession, limit: int = 50, cursor:
                 endpoint_dtos.append(EntityReviewEndpoint(state="ambiguous" if matches else "unassigned"))
                 continue
             member = matches[0]
-            ref = entity_refs_by_id.get(member.entity_id)
-            if ref is None:
+            endpoint_ref = entity_refs_by_id.get(member.entity_id)
+            if endpoint_ref is None:
                 endpoint_dtos.append(EntityReviewEndpoint(state="unassigned"))
                 continue
             endpoint_dtos.append(EntityReviewEndpoint(
-                state="assigned", entity_id=ref.canonical_id, entity_name=ref.name,
-                entity_type=ref.type, membership_id=member.id,
+                state="assigned", entity_id=endpoint_ref.canonical_id, entity_name=endpoint_ref.name,
+                entity_type=endpoint_ref.type, membership_id=member.id,
             ))
         item.source_endpoint, item.target_endpoint = endpoint_dtos
         if (len(endpoint_dtos) != 2 or any(endpoint.state != "assigned" for endpoint in endpoint_dtos)
@@ -1097,7 +1111,7 @@ def _review_snapshot_digest(candidate: dict[str, object]) -> str:
     return sha256(json.dumps(snapshot, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def _review_entity_bindings(review: list[object]) -> dict[str, tuple[str, set[UUID]]]:
+def _review_entity_bindings(review: list[Any]) -> dict[str, tuple[str, set[UUID]]]:
     """Validate entity review selectors and return bounded fingerprint/chunk bindings."""
     bindings: dict[str, tuple[str, set[UUID]]] = {}
     for item in review:
@@ -1590,7 +1604,7 @@ async def defer_blocked_extraction_recheck(
         work.next_attempt_at = datetime.now(UTC) + timedelta(minutes=minutes)
 
 
-async def get_extraction_status(session: AsyncSession, document_version_id: UUID):
+async def get_extraction_status(session: AsyncSession, document_version_id: UUID) -> _ExtractionStatus | None:
     """Return the newest work status and stored facts for one document version."""
     from modules.knowledge.entities.schemas import EntityExtractionStatus
 

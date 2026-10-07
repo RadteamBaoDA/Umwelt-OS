@@ -29,7 +29,7 @@ def normalize_mcp_url(value: str, *, origin_only: bool = False) -> tuple[str, st
         if "%" in parsed.hostname:
             raise ValueError("Scoped IP destinations are not supported")
         port = parsed.port
-    except ValueError:
+    except ValueError:  # noqa: TRY203  # explicit re-raise kept to preserve the exact error contract
         raise
     if port == 0:
         raise ValueError("MCP endpoint port must be between 1 and 65535")

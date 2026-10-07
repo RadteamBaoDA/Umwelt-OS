@@ -1,13 +1,17 @@
 """Register only implemented, scoped, read-only Knowledge, Search and Source tools."""
 
-from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 from uuid import UUID
 
 from core.tools.registry import ToolRegistry
 from core.tools.schemas import (
-    ToolDefinition, ToolDestination, ToolExecutionPrincipal, ToolOutputFence, ToolRisk,
+    ToolDefinition,
+    ToolDestination,
+    ToolExecutionPrincipal,
+    ToolOutputFence,
+    ToolRisk,
 )
 
 
@@ -201,18 +205,18 @@ async def _handle_search_query(args: dict[str, Any], context: dict[str, Any]) ->
             if len(candidates) > 100:
                 raise PermissionError("Search source scope exceeds the bounded fence")
             for source_id in candidates:
-                source = await sources.get_tool_source(
+                candidate_source = await sources.get_tool_source(
                     session, source_id, source_ids=source_ids, owner_all=owner_all,
                     destination=destination,
                 )
-                if source is not None:
+                if candidate_source is not None:
                     allowed_set.add(source_id)
-                    source_generations[source_id] = source.generation
+                    source_generations[source_id] = candidate_source.generation
         allowed = frozenset(allowed_set)
         if not allowed:
             _record_output_fences(context, [], source_generations)
             return {"items": [], "next_cursor": None, "effective_mode": "lexical", "warnings": []}
-    if destination != ToolDestination.LOCAL:
+    if destination != ToolDestination.LOCAL:  # noqa: SIM102  # style-only rewrite skipped to avoid touching control flow
         # Remote search is fail-closed unless every queried source has a pre-await generation.
         if set(source_generations) != set(allowed):
             _record_output_fences(context, [], source_generations)

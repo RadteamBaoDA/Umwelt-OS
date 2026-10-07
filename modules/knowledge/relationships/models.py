@@ -1,7 +1,18 @@
 from datetime import datetime
+from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Index, String, UniqueConstraint, func, literal_column
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    func,
+    literal_column,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
@@ -22,8 +33,8 @@ class RelationshipSnapshotHistory(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     relationship_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    state: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
-    support: Mapped[list[dict[str, object]]] = mapped_column(JSONB, nullable=False)
+    state: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    support: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
     deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
 
 
@@ -47,7 +58,7 @@ class Relationship(Base):
     confidence: Mapped[float | None]
     valid_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     valid_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    metadata_json: Mapped[dict[str, object]] = mapped_column("metadata", JSONB, nullable=False, server_default="{}")
+    metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, nullable=False, server_default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 

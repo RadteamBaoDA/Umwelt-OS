@@ -6,7 +6,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-
 BackupPhase = Literal["idle", "draining", "quiesced", "snapshotting", "resuming", "failed_recovery_required"]
 BackupStatus = Literal["pending", "draining", "quiesced", "snapshotting", "resuming", "completed", "incomplete", "failed", "failed_recovery_required"]
 

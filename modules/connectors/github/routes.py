@@ -1,9 +1,9 @@
 """Owner-session routes for browser-bound GitHub App authorization and explicit grant revocation."""
 
-from datetime import UTC, datetime, timedelta
 import asyncio
 import hashlib
 import re
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
@@ -14,16 +14,30 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.auth.dependencies import require_owner, require_owner_write
-from core.auth.dependencies import SESSION_COOKIE
+from core.auth.dependencies import SESSION_COOKIE, require_owner, require_owner_write
 from core.auth.models import AuthSession
 from core.config import Settings
 from core.database import get_session
 from modules.connectors import provisioning, registry
 from modules.connectors.github import oauth
 from modules.connectors.github.schemas import GitHubCursor, project_github_source_config
-from modules.connectors.github.webhooks import MAX_GITHUB_WEBHOOK_BYTES, parse_github_delivery, verify_github_signature
-from modules.connectors.models import ConnectorProvisioning, GithubOAuthAttempt, GithubOAuthCoordinator, GithubOAuthGrant, GithubOAuthOperation, GithubSyncReset, GithubWebhookCapacity, GithubWebhookDelivery, GithubWebhookOutbox, GithubSourceHint
+from modules.connectors.github.webhooks import (
+    MAX_GITHUB_WEBHOOK_BYTES,
+    parse_github_delivery,
+    verify_github_signature,
+)
+from modules.connectors.models import (
+    ConnectorProvisioning,
+    GithubOAuthAttempt,
+    GithubOAuthCoordinator,
+    GithubOAuthGrant,
+    GithubOAuthOperation,
+    GithubSourceHint,
+    GithubSyncReset,
+    GithubWebhookCapacity,
+    GithubWebhookDelivery,
+    GithubWebhookOutbox,
+)
 from modules.connectors.provisioning import activation_status
 from modules.sources import public as sources
 
@@ -461,7 +475,7 @@ async def refresh_github_authorization(source_id: str, session: Session, request
         await _require_current_owner_session(request, session, _owner)
         tokens = await oauth.refresh_github_grant(request.app.state.settings, refresh_token)
         await _require_current_owner_session(request, session, _owner)
-    except Exception:
+    except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
         await session.rollback()
         await _mark_github_reconciliation(session, source_uuid, _owner.owner_id, operation_id, "token_refresh_outcome_unknown")
         raise HTTPException(status_code=503, detail="GitHub token refresh failed; reconnect to restore collection") from None
@@ -530,7 +544,7 @@ async def complete_github_authorization(request: Request, session: Session, owne
         binding = oauth._open_token_cipher(key, attempt.encrypted_verifier, source_id, attempt_id, attempt.source_generation, attempt.configuration_revision)
         verifier = binding.get("verifier")
         if not isinstance(verifier, str):
-            raise ValueError
+            raise ValueError  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=503, detail="GitHub authorization attempt is unavailable") from exc
     attempt.consumed_at = now
@@ -580,7 +594,7 @@ async def complete_github_authorization(request: Request, session: Session, owne
                 await _require_current_owner_session(request, session, owner)
                 await oauth.probe_resource(f"/repositories/{identity['repository_id']}/{resource}", tokens["access_token"])
         await _require_current_owner_session(request, session, owner)
-    except Exception:
+    except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
         # No exception text is returned or logged because provider libraries may include sensitive request detail.
         await session.rollback()
         await _mark_github_reconciliation(session, source_id, owner.owner_id, attempt_id, "authorization_outcome_unknown")
@@ -806,7 +820,7 @@ async def revoke_github_grant(source_id: str, payload: DisconnectRequest, sessio
     await _require_current_owner_session(request, session, _owner)
     try:
         await oauth.revoke_github_grant(request.app.state.settings, token)
-    except Exception as exc:
+    except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
         # Local grants remain fenced; the owner can see cleanup is unresolved without exposing credentials.
         coordinator = await session.scalar(select(GithubOAuthCoordinator).where(GithubOAuthCoordinator.owner_id == _owner.owner_id).with_for_update())
         if coordinator is not None and coordinator.operation_id == revocation_operation:

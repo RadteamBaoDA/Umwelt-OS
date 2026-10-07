@@ -5,9 +5,15 @@ from __future__ import annotations
 import argparse
 import sys
 import tarfile
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
-from modules.backup.service import BackupArchiveError, CHUNK_SIZE, MAX_ARCHIVE_MEMBERS, MAX_EXPANDED_BYTES, _safe_relative
+from modules.backup.service import (
+    CHUNK_SIZE,
+    MAX_ARCHIVE_MEMBERS,
+    MAX_EXPANDED_BYTES,
+    BackupArchiveError,
+    _safe_relative,
+)
 
 VOLUME_ROOTS = {
     "raw_files": Path("/vol/raw_files"),
@@ -87,7 +93,7 @@ def main() -> None:
             export_volume(args.volume)
         else:
             restore_volume(args.volume)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001  # error boundary: re-mapped to a sanitized error
         print(type(exc).__name__, file=sys.stderr)
         raise SystemExit(1) from None
 

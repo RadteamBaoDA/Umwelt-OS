@@ -11,7 +11,7 @@ Covers:
 import hashlib
 import hmac
 from datetime import UTC, datetime
-from uuid import UUID, uuid4
+
 import pytest
 from pydantic import ValidationError
 
@@ -20,8 +20,6 @@ from modules.connectors.github.mapping import (
     _repository_name,
 )
 from modules.connectors.github.schemas import (
-    GitHubBindingFence,
-    GitHubResourceCursor,
     GitHubSourceConfig,
 )
 from modules.connectors.github.webhooks import (
@@ -152,7 +150,7 @@ class TestGitHubWebhookDeliverySchemas:
 
     def test_verified_github_delivery_naive_time_rejected(self) -> None:
         """Naive receipt timestamps without timezone must be rejected."""
-        naive = datetime(2026, 10, 5, 12, 0)
+        naive = datetime(2026, 10, 5, 12, 0)  # noqa: DTZ001  # intentionally naive: wall-clock/DST math or naive-rejection test
         with pytest.raises(ValidationError, match="GitHub receipt timestamp must be timezone-aware"):
             VerifiedGitHubDelivery(
                 receiver_revision="rev-1",

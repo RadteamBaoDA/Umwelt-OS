@@ -42,7 +42,7 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
                 operation = await public.mark_open_recovery_required(session, UUID(args.operation_id))
             elif args.action == "status":
                 control = await public.read_control(session)
-                revisions = list((await session.execute(
+                revisions: list[str] = list((await session.execute(
                     text("SELECT version_num FROM alembic_version ORDER BY version_num"),
                 )).scalars())
                 return {"phase": control.phase, "epoch": control.epoch,
@@ -89,7 +89,7 @@ def main() -> None:
     arguments = parser.parse_args()
     try:
         print(json.dumps(asyncio.run(_run(arguments)), separators=(",", ":")))
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
         # Exception classes are useful to the host runner; URLs, SQL parameters and secrets are not.
         print(json.dumps({"error": type(exc).__name__}, separators=(",", ":")))
         raise SystemExit(1) from None

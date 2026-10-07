@@ -9,12 +9,13 @@ Covers:
 - Evidence linkage and derived event visibility enforcement (derived events hidden without active evidence).
 """
 
-from datetime import UTC, date, datetime
 import hashlib
 import json
+from datetime import UTC, date, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import UUID, uuid4
+from uuid import uuid4
+
 import pytest
 
 from modules.timeline.models import (

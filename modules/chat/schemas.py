@@ -5,6 +5,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
 from modules.knowledge.documents.schemas import GadgetDocumentSelectionFence
 
 MAX_RETRIEVAL_LIMIT = 50

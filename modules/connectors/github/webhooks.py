@@ -100,9 +100,7 @@ def _json_shape(value: Any) -> None:
             stack.extend((child, depth + 1) for child in node.values())
         elif isinstance(node, list):
             stack.extend((child, depth + 1) for child in node)
-        elif node is None or isinstance(node, (str, bool, int)):
-            continue
-        elif isinstance(node, float) and node == node and abs(node) != float("inf"):
+        elif node is None or isinstance(node, (str, bool, int)) or isinstance(node, float) and node == node and abs(node) != float("inf"):  # noqa: PLR0124  # style-only rewrite skipped to avoid touching control flow
             continue
         else:
             raise ValueError("Webhook JSON contains a non-JSON value")

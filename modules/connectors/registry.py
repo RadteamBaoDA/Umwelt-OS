@@ -2,12 +2,11 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from modules.connectors.public import (
-    ConnectorConfig,
     DEFAULT_TIMEZONE,
     NATIVE_PROVIDERS,
     PROVIDER_SOURCE_TYPES,
+    ConnectorConfig,
     is_native_provider,
-    overlap_floor,
 )
 from modules.sources.schemas import ConnectorSource
 
@@ -36,11 +35,11 @@ def validate(source: ConnectorSource) -> dict[str, Any]:
     if source.type == "mcp":
         from modules.connectors.mcp import validate as validate_mcp
 
-        config = validate_mcp(source)
+        mcp_config = validate_mcp(source)
         return {
             "source_id": str(source.id), "source_generation": source.generation,
-            "type": "mcp", "timezone": config.timezone,
-            "configuration": config.model_dump(mode="json"),
+            "type": "mcp", "timezone": mcp_config.timezone,
+            "configuration": mcp_config.model_dump(mode="json"),
         }
     if source.type not in SUPPORTED_TYPES:
         raise ValueError("This source type has no packaged connector")
@@ -144,7 +143,7 @@ def normalize(record: dict[str, Any]) -> dict[str, Any]:
     from datetime import UTC, datetime
 
     raw_timestamp = str(record.get("observed_at") or "")
-    timestamp = datetime.fromisoformat(raw_timestamp.replace("Z", "+00:00")) if raw_timestamp else datetime.now(UTC)
+    timestamp = datetime.fromisoformat(raw_timestamp.replace("Z", "+00:00")) if raw_timestamp else datetime.now(UTC)  # noqa: FURB162  # keeps exact parsing of 'Z' suffix; fromisoformat(Z) is not strictly equivalent
     if timestamp.tzinfo is None:
         timestamp = timestamp.replace(tzinfo=UTC)
     return {

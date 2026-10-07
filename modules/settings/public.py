@@ -3,24 +3,33 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import json
+from collections.abc import Awaitable, Callable
 from urllib.parse import urlsplit, urlunsplit
 
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import HTTPException
+from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
-from redis.asyncio import Redis
 from starlette.requests import Request
 
 from core.config import Settings
-from core.model_gateway.schemas import AIExecutionConfig, AISettingsRead, AISettingsUpdate, ModelMapping, PrivacySettings
-from modules.settings.models import AISettingsRecord, legacy_aliases
-from modules.settings.models import OwnerPreferencesRecord
-from modules.settings.schemas import (
-    ModuleLifecycleRead, OwnerPreferencesRead, OwnerPreferencesUpdate, RetentionSettingsRead,
+from core.model_gateway.schemas import (
+    AIExecutionConfig,
+    AISettingsRead,
+    AISettingsUpdate,
+    ModelMapping,
+    PrivacySettings,
 )
 from modules.backup.schemas import ActivityReceipt, AdmissionReceipt
+from modules.settings.models import AISettingsRecord, OwnerPreferencesRecord, legacy_aliases
+from modules.settings.schemas import (
+    ModuleLifecycleRead,
+    OwnerPreferencesRead,
+    OwnerPreferencesUpdate,
+    RetentionSettingsRead,
+)
 
 OWNER_ID = 1
 ALIASES = ("reasoning-large", "reasoning-small", "fast", "embedding", "reranker", "vision", "local-private")
@@ -378,7 +387,7 @@ async def finish_activity(
     return await _finish_activity(session, receipt, uncertain=uncertain, interrupted=interrupted)
 
 
-def module_dependency(module_id: str):
+def module_dependency(module_id: str) -> Callable[..., Awaitable[None]]:
     """Build the owner-first request dependency for routes owned by another module."""
     from modules.settings.lifecycle import module_dependency as _module_dependency
 

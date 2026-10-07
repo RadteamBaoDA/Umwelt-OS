@@ -1,7 +1,7 @@
 """Shared owner-fenced receipt and deterministic identity contract for explicit demo seeding."""
 
-from hashlib import blake2b
 from datetime import datetime
+from hashlib import blake2b
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, func, select

@@ -1,6 +1,7 @@
 """Private SQLAlchemy persistence models for dashboard configuration and layout."""
 
 from datetime import date, datetime
+from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
@@ -23,6 +24,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
 from core.database import Base
+
 
 class Dashboard(Base):
     """Own a named dashboard and one safe-integer revision for all structural edits."""
@@ -82,13 +84,13 @@ class GadgetDefinition(Base):
     source_ids: Mapped[list[str]] = mapped_column(
         JSONB, nullable=False, server_default="[]"
     )
-    scope: Mapped[dict[str, object]] = mapped_column(
+    scope: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default="{}"
     )
-    filters: Mapped[dict[str, object]] = mapped_column(
+    filters: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default="{}"
     )
-    highlight_rules: Mapped[list[dict[str, object]]] = mapped_column(
+    highlight_rules: Mapped[list[dict[str, Any]]] = mapped_column(
         JSONB, nullable=False, server_default="[]"
     )
     created_at: Mapped[datetime] = mapped_column(
@@ -231,7 +233,7 @@ class DailyBrief(Base):
     input_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="current")
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    citations: Mapped[list[dict[str, object]]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    citations: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, server_default="[]")
     model_alias: Mapped[str] = mapped_column(String(32), nullable=False)
     generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     evidence_capture_version: Mapped[int | None] = mapped_column(Integer)

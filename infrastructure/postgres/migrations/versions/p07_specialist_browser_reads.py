@@ -2,10 +2,9 @@
 
 from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects import postgresql
-
 
 revision: str = "p07_specialist_browser_reads"
 down_revision: str | Sequence[str] | None = "p07_specialist_profiles"

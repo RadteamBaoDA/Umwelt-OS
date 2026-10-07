@@ -3,11 +3,11 @@ import json
 import logging
 import secrets
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import aclosing, asynccontextmanager
-from collections.abc import AsyncIterator
 from typing import Any, cast
 
+import httpx
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
@@ -15,8 +15,8 @@ from redis.exceptions import RedisError
 from core.model_gateway.cache import capability_key
 from core.model_gateway.policy import may_send
 from core.model_gateway.schemas import ModelMapping, RequestPolicy
-from core.telemetry import record_model_call
 from core.model_gateway.transport import EndpointNetworkPolicyError, approved_http_client
+from core.telemetry import record_model_call
 
 _LEASE_PREFIX = "bbd:model-gateway:slot:"
 _RELEASE = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end"
@@ -24,17 +24,14 @@ _RELEASE = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del
 
 class ModelGatewayError(RuntimeError):
     """Base exception for unavailable, rejected, or invalid model gateway operations."""
-    pass
 
 
 class PrivacyPolicyDenied(ModelGatewayError):
     """Raised when request policy forbids sending a capability to the configured destination."""
-    pass
 
 
 class CapabilityUnsupported(ModelGatewayError):
     """Raised when the gateway rejects a requested model capability."""
-    pass
 
 
 class ModelGateway:
@@ -63,7 +60,7 @@ class ModelGateway:
         self.before_send = before_send
         self.approved_endpoint_cidrs = approved_endpoint_cidrs
 
-    def _http_client(self, base_url: str):
+    def _http_client(self, base_url: str) -> httpx.AsyncClient:
         """Create a redirect-disabled HTTP client pinned to an endpoint approved by network policy."""
         try:
             return approved_http_client(base_url, self.approved_endpoint_cidrs)
@@ -91,11 +88,11 @@ class ModelGateway:
         finally:
             if key is not None:
                 try:
-                    await self.redis.eval(_RELEASE, 1, key, token)
+                    await cast("Awaitable[Any]", self.redis.eval(_RELEASE, 1, key, token))
                 except RedisError:
                     pass
 
-    async def _with_slot(self, call: Callable[[], Awaitable[Any]]) -> Any:
+    async def _with_slot[T](self, call: Callable[[], Awaitable[T]]) -> T:
         """Run one async gateway operation while holding a bounded-capacity lease."""
         async with self._slot():
             return await call()
@@ -166,7 +163,7 @@ class ModelGateway:
                             continue
                         raise ModelGatewayError("Model gateway request failed") from exc
                     except APIStatusError as exc:
-                        if exc.status_code in {408, 425, 429} or exc.status_code >= 500:
+                        if exc.status_code in {408, 425, 429} or exc.status_code >= 500:  # noqa: SIM102  # style-only rewrite skipped to avoid touching control flow
                             if attempt == 0:
                                 await asyncio.sleep(0.1)
                                 continue
@@ -211,7 +208,8 @@ class ModelGateway:
                     raise ModelGatewayError("Model gateway discovery failed") from exc
                 except EndpointNetworkPolicyError as exc:
                     raise ModelGatewayError("Model gateway network policy denied the destination") from exc
-                return [item.id for item in page.data if isinstance(item.id, str) and item.id]
+                model_ids: list[str] = [item.id for item in page.data if isinstance(item.id, str) and item.id]
+                return model_ids
 
         return await self._with_slot(send)
 
@@ -272,7 +270,7 @@ class ModelGateway:
         self, alias: str, mapping: ModelMapping | None, policy: RequestPolicy,
         messages: list[dict[str, Any]], probe: bool = False, *,
         after_send: Callable[[], Awaitable[None]] | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncGenerator[str, None]:
         """Open each fenced request attempt, then stream without retrying emitted chunks."""
         if not may_send(policy, alias, mapping, self.destination_id, bool(self.api_key), "streaming") or self.base_url is None or mapping is None:
             raise PrivacyPolicyDenied("Model request denied by privacy policy")
@@ -304,7 +302,7 @@ class ModelGateway:
                         try:
                             stream = await client.chat.completions.create(
                                 model=mapping.model,
-                                messages=messages,
+                                messages=cast("Any", messages),  # OpenAI param TypedDicts; built by prompt layer
                                 stream=True,
                             )
                         finally:
@@ -319,7 +317,7 @@ class ModelGateway:
                         if attempt == 1 or emitted:
                             raise ModelGatewayError("Model gateway stream failed") from exc
                     except APIStatusError as exc:
-                        if exc.status_code in {408, 425, 429} or exc.status_code >= 500:
+                        if exc.status_code in {408, 425, 429} or exc.status_code >= 500:  # noqa: SIM102  # style-only rewrite skipped to avoid touching control flow
                             if attempt == 0:
                                 await asyncio.sleep(0.1)
                                 continue

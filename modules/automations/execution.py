@@ -24,7 +24,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
@@ -40,6 +40,8 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
+from modules.agents import public as agents
+from modules.agents.public import ProfileRunStart
 from modules.automations.conditions import TRIGGER_FIELDS, evaluate, validate_sample
 from modules.automations.models import (
     Automation,
@@ -49,8 +51,6 @@ from modules.automations.models import (
     AutomationTrigger,
 )
 from modules.automations.schemas import RunActionRead, RunPage, RunRead
-from modules.agents import public as agents
-from modules.agents.public import ProfileRunStart
 from modules.chat.public import Conversation
 from modules.dashboard import public as dashboard
 from modules.notifications.public import NotificationEmit, emit
@@ -112,7 +112,7 @@ class RunConflict(Exception):
         self.current_revision = current_revision
 
 
-def loop_guard(trigger: Mapping[str, Any], actions: list[Mapping[str, Any]]) -> str | None:
+def loop_guard(trigger: Mapping[str, Any], actions: Sequence[Mapping[str, Any]]) -> str | None:
     """Name a known self-feeding trigger/action pair, or None.
 
     Pairs: ``task_due`` + ``create_task`` whose new task is already inside the lead window
@@ -342,9 +342,9 @@ async def _retained_document_evidence_current(
         source_id = UUID(str(payload.get("source_id")))
     except (TypeError, ValueError):
         return False
-    from modules.sources import public as sources
-    from modules.knowledge.documents import public as documents
     from modules.ingestion import public as ingestion
+    from modules.knowledge.documents import public as documents
+    from modules.sources import public as sources
 
     proof = await ingestion.resolve_ready_event_provenance(session, event_id)
     if (proof is None or proof.document_id != document_id or proof.document_version_id != document_version_id
@@ -452,7 +452,7 @@ async def _run_evidence_current(session: AsyncSession, run: AutomationRun) -> bo
         run.document_id, run.document_version_id = proof.document_id, proof.document_version_id
         return True
 
-    event_id: UUID | None = None
+    event_id = None
     if run.trigger_event_id is not None:
         try:
             candidate = UUID(run.trigger_event_id)
@@ -782,6 +782,7 @@ async def start_manual(
     rev = await session.scalar(select(AutomationRevision).where(
         AutomationRevision.automation_id == head.id, AutomationRevision.revision == head.revision))
     key = f"manual:{client_request_id}"
+    assert rev is not None  # the head's current revision snapshot always exists
     await plan_run(
         session, owner_id=owner_id, rev=rev, trigger_type="manual", trigger_key=key, trigger_event_id=None,
         slot=None, payload={}, depth=1, origin_automation_id=None, origin_run_id=None, apply_conditions=False)
@@ -789,6 +790,7 @@ async def start_manual(
     run = await session.scalar(select(AutomationRun).where(
         AutomationRun.automation_id == head.id, AutomationRun.revision == head.revision,
         AutomationRun.trigger_key == key))
+    assert run is not None  # plan_run committed the manual run above
     return (await _reads(session, [run]))[0]
 
 
@@ -905,7 +907,7 @@ async def decide_action(
         problem = ("stale_revision", "Rule changed after this run was queued")
     elif _destination_stale(settings, spec, row.destination_revision):
         problem = ("stale_destination", "Webhook destination changed after this approval was requested")
-    elif dependencies_missing(rev):
+    elif rev is not None and dependencies_missing(rev):
         problem = ("dependency_unavailable", "A required module is unavailable")
     if problem is not None:
         dropped = problem[0] in (
@@ -964,9 +966,12 @@ async def _action_step(ctx: dict[str, Any], run_id: UUID, ordinal: int) -> str:
         run = await session.get(AutomationRun, run_id, with_for_update=True)
         row = await session.scalar(select(AutomationRunAction).where(
             AutomationRunAction.run_id == run_id, AutomationRunAction.ordinal == ordinal).with_for_update())
+        assert run is not None
         rev = await session.scalar(select(AutomationRevision).where(
             AutomationRevision.automation_id == run.automation_id, AutomationRevision.revision == run.revision))
+        assert rev is not None
         spec = rev.actions[ordinal - 1]
+        assert row is not None
         state = row.status
         if state == "succeeded":
             return "succeeded"
@@ -975,18 +980,23 @@ async def _action_step(ctx: dict[str, Any], run_id: UUID, ordinal: int) -> str:
         if not await _run_evidence_current(session, run):
             if state in {"in_flight", "requires_review"}:
                 # The dispatch boundary may already have been crossed; retain uncertainty and never replay it.
+                assert row is not None
                 row.status, row.error_code = "requires_review", "document_evidence_unavailable"
                 _finish(run, "requires_review", "document_evidence_unavailable")
+                assert run is not None
                 await _skip_pending(session, run.id, "document_evidence_unavailable")
                 await session.commit()
                 return "requires_review"
+            assert row is not None
             row.status, row.error_code = "skipped", "document_evidence_unavailable"
             _finish(run, "dropped", "document_evidence_unavailable")
+            assert run is not None
             await _skip_pending(session, run.id, "document_evidence_unavailable")
             await session.commit()
             return "dropped"
         # run_agent is idempotent (client_request_id), so an interrupted one is simply attempted again.
         if state == "requires_review" or (state == "in_flight" and spec["type"] != "run_agent"):
+            assert row is not None
             row.status, row.error_code = "requires_review", row.error_code or "ambiguous_after_restart"
             await session.commit()
             return "requires_review"
@@ -1003,6 +1013,7 @@ async def _action_step(ctx: dict[str, Any], run_id: UUID, ordinal: int) -> str:
         elif state == "approved" and _destination_stale(settings, spec, row.destination_revision):
             stale = "stale_destination"
         if stale is not None:
+            assert row is not None
             row.status, row.error_code = "skipped", stale
             await session.commit()
             return "dropped"
@@ -1012,17 +1023,22 @@ async def _action_step(ctx: dict[str, Any], run_id: UUID, ordinal: int) -> str:
             except ValueError:
                 destination = None
             if kind == "call_webhook" and destination is None:
+                assert row is not None
                 row.status, row.error_code = "failed", "webhook_unavailable"
                 await session.commit()
                 return "failed"
+            assert row is not None
             row.destination_revision = destination
             row.status, row.approval_hash = "awaiting_approval", _approval_hash(run, ordinal, spec, destination)
             row.approval_expires_at = datetime.now(UTC) + timedelta(hours=settings.approval_expiry_hours)
+            assert rev is not None
+            assert run is not None
             await emit(session, run.owner_id, NotificationEmit(
                 dedupe_key=f"automation-approval:{run.id}:{ordinal}", kind="automation.approval",
                 title=rev.name[:300], body="An automation action is waiting for your approval."))
             await session.commit()
             return "awaiting_approval"
+        assert row is not None
         row.attempts += 1
         if kind in ("create_notification", "create_task"):
             return await _in_database_action(session, run, row, rev, spec, factory)
@@ -1031,11 +1047,13 @@ async def _action_step(ctx: dict[str, Any], run_id: UUID, ordinal: int) -> str:
             return await _generate_brief(ctx, run, row)
         session_hash, destination = row.approved_session_hash, row.destination_revision
         if kind == "call_webhook":
+            assert row is not None
             row.approved_session_hash = None  # restore only if the final pre-send lifecycle fence pauses
         # run_agent keeps the digest until success: its idempotent start may be re-attempted.
         row.status = "in_flight"  # point of no return: committed before the external call
         await session.commit()
     if kind == "run_agent":
+        assert rev is not None
         return await _start_agent(ctx, run, ordinal, spec, session_hash, rev.name)
     return await _send_webhook(ctx, run, ordinal, spec, factory, destination, session_hash)
 
@@ -1091,7 +1109,7 @@ async def _in_database_action(
         await session.rollback()
         await _mark(factory, run.id, row.ordinal, "failed", "rejected_by_owner_module")
         return "failed"
-    except Exception:
+    except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
         await session.rollback()
         return await _transient(factory, run.id, row.ordinal)
 
@@ -1104,7 +1122,9 @@ async def _transient(factory: async_sessionmaker[AsyncSession], run_id: UUID, or
     async with factory() as session:
         row = await session.scalar(select(AutomationRunAction).where(
             AutomationRunAction.run_id == run_id, AutomationRunAction.ordinal == ordinal).with_for_update())
+        assert row is not None
         if row.attempts >= MAX_ACTION_ATTEMPTS:
+            assert row is not None
             row.status, row.error_code = "failed", "retries_exhausted"
             await session.commit()
             return "failed"
@@ -1140,7 +1160,7 @@ async def _generate_brief(ctx: dict[str, Any], run: AutomationRun, row: Automati
         return "succeeded"
     except dashboard.BriefUnavailable:
         return await _transient(factory, run.id, row.ordinal)
-    except Exception:
+    except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
         return await _transient(factory, run.id, row.ordinal)
 
 
@@ -1210,14 +1230,14 @@ async def _start_agent(
         try:  # PostgreSQL is the queue; a lost push is replayed by the agent reconciler.
             await cast(ArqRedis, ctx["redis"]).enqueue_job(
                 "process_agent_run", str(started.id), 1, _job_id=f"agent-run:{started.id}:1")
-        except Exception:
+        except Exception:  # noqa: BLE001, S110  # best-effort cleanup/optional step; failure intentionally ignored
             pass
     except asyncio.CancelledError:
         raise  # stays in_flight; the idempotent start is attempted again on resume
     except HTTPException:
         await _mark(factory, run.id, ordinal, "failed", "agent_rejected")
         return "failed"
-    except Exception:
+    except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
         return await _transient(factory, run.id, ordinal)
     await _mark(factory, run.id, ordinal, "succeeded", None, f"agent_run:{started.id}")
     return "succeeded"
@@ -1354,6 +1374,7 @@ async def _heartbeat(factory: async_sessionmaker[AsyncSession], run_id: UUID) ->
     """Refresh ``updated_at`` so a long multi-action run is not mistaken for a dead worker."""
     async with factory() as session:
         run = await session.get(AutomationRun, run_id, with_for_update=True)
+        assert run is not None
         run.updated_at = datetime.now(UTC)
         await session.commit()
 
@@ -1412,6 +1433,7 @@ async def dispatch_runs(factory: async_sessionmaker[AsyncSession], redis: ArqRed
         for row in expired:
             row.status, row.error_code = "failed", "approval_expired"
             run = await session.get(AutomationRun, row.run_id, with_for_update=True)
+            assert run is not None
             _finish(run, "failed", "approval_expired")
             await _skip_pending(session, run.id, "approval_expired")
         runs = (await session.scalars(select(AutomationRun).where(

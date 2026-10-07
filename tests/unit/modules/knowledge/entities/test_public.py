@@ -9,9 +9,10 @@ Covers:
 - response_schema strict JSON schema generation.
 """
 
-from hashlib import sha256
 import json
-from uuid import UUID, uuid4
+from hashlib import sha256
+from uuid import uuid4
+
 import pytest
 from pydantic import ValidationError
 
@@ -29,7 +30,6 @@ from modules.knowledge.entities.resolution import (
     candidate_match_fingerprint,
     resolve_candidate,
 )
-from modules.knowledge.entities.schemas import canonicalize_name
 
 
 class TestEntityResolutionAndDeduplication:

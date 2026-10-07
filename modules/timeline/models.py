@@ -1,9 +1,21 @@
 """Private persistence models for canonical timeline events and extraction."""
 
 from datetime import date, datetime
+from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    CheckConstraint,
+    Date,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
@@ -40,7 +52,7 @@ class Event(Base):
     summary: Mapped[str | None] = mapped_column(Text)
     importance_score: Mapped[float | None]
     confidence: Mapped[float | None]
-    metadata_json: Mapped[dict[str, object]] = mapped_column("metadata", JSONB, nullable=False, server_default="{}")
+    metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, nullable=False, server_default="{}")
     origin: Mapped[str] = mapped_column(String(16), nullable=False)
     extraction_identity: Mapped[str | None] = mapped_column(String(256))
     candidate_hash: Mapped[str | None] = mapped_column(String(64))
@@ -72,7 +84,7 @@ class EventParticipant(Base):
     event_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("timeline_events.id", ondelete="CASCADE"), nullable=False)
     entity_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("entities.id", ondelete="RESTRICT"), nullable=False)
     role: Mapped[str] = mapped_column(String(64), nullable=False)
-    metadata_json: Mapped[dict[str, object]] = mapped_column("metadata", JSONB, nullable=False, server_default="{}")
+    metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, nullable=False, server_default="{}")
     origin: Mapped[str] = mapped_column(String(16), nullable=False)
 
 
@@ -99,7 +111,7 @@ class EventEvidence(Base):
     observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     title_snapshot: Mapped[str | None] = mapped_column(String(500))
     url_snapshot: Mapped[str | None] = mapped_column(Text)
-    evidence_metadata: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    evidence_metadata: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
     excerpt: Mapped[str | None] = mapped_column(Text)
     metadata_is_version_snapshot: Mapped[bool] = mapped_column(nullable=False, server_default="false")
 
@@ -123,7 +135,7 @@ class EventAudit(Base):
     reason: Mapped[str] = mapped_column(String(300), nullable=False)
     prior_revision: Mapped[int] = mapped_column(Integer, nullable=False)
     resulting_revision: Mapped[int] = mapped_column(Integer, nullable=False)
-    changed_json: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    changed_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
@@ -174,5 +186,5 @@ class TimelineExtractionResult(Base):
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     work_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("timeline_extraction_work.id", ondelete="CASCADE"), nullable=False)
     model: Mapped[str | None] = mapped_column(String(200))
-    proposals_json: Mapped[list[dict[str, object]]] = mapped_column(JSONB, nullable=False)
+    proposals_json: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

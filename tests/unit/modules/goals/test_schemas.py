@@ -11,16 +11,13 @@ Covers:
 
 from datetime import UTC, date, datetime
 from uuid import UUID, uuid4
+
 import pytest
 from pydantic import ValidationError
 
 from modules.goals.public import _calculate_progress
 from modules.goals.schemas import (
     GoalCreate,
-    GoalFilter,
-    GoalPage,
-    GoalRead,
-    GoalStatus,
     GoalUpdate,
     MilestoneSchema,
     PlanProposal,
@@ -134,7 +131,7 @@ class TestPlanProposalSchemas:
 
     def test_plan_proposal_task_naive_due_at_rejected(self) -> None:
         """Naive datetime in proposal tasks must be rejected."""
-        naive = datetime(2026, 11, 1, 10, 0)
+        naive = datetime(2026, 11, 1, 10, 0)  # noqa: DTZ001  # intentionally naive: wall-clock/DST math or naive-rejection test
         task = TaskProposal(title="Implement feature", due_at=naive)
 
         with pytest.raises(ValidationError, match="proposal due_at must include a timezone offset"):

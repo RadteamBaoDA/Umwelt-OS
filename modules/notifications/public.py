@@ -1,5 +1,6 @@
 """Public notification service used by dashboard, tasks and later automation (P10)."""
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
@@ -10,13 +11,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.notifications.models import Notification
 from modules.notifications.schemas import (
-    NotificationEmit, NotificationEvidence, NotificationPage, NotificationRead,
+    NotificationEmit,
+    NotificationEvidence,
+    NotificationPage,
+    NotificationRead,
 )
 
 __all__ = [
-    "NotificationEmit", "NotificationEvidence", "NotificationMissing", "NotificationPage",
-    "NotificationCleanupProgress", "emit", "list_notifications", "set_read",
+    "NotificationCleanupProgress",
+    "NotificationEmit",
+    "NotificationEvidence",
+    "NotificationMissing",
+    "NotificationPage",
+    "emit",
+    "list_notifications",
     "scrub_document_evidence",
+    "set_read",
 ]
 MAX_CLEANUP_PAGE = 100
 
@@ -41,7 +51,7 @@ class NotificationCleanupProgress:
     unavailable_ids: tuple[UUID, ...] = ()
 
 
-def _highlight_identity(kind: str, dedupe_key: str, params: dict[str, object]) -> tuple[UUID, int, UUID, UUID] | None:
+def _highlight_identity(kind: str, dedupe_key: str, params: Mapping[str, object]) -> tuple[UUID, int, UUID, UUID] | None:
     """Parse only the exact historical highlight dedupe grammar and its independent metadata copy."""
     if kind != "dashboard_highlight" or not isinstance(params, dict):
         return None
@@ -151,15 +161,15 @@ async def emit(
         identity = _highlight_identity(payload.kind, payload.dedupe_key, payload.params)
         if payload.kind != "dashboard_highlight" or identity is None or identity[3] != evidence.document_version_id:
             raise ValueError("Copied notification evidence does not match a supported highlight identity")
-        from modules.sources import public as sources
         from modules.knowledge.documents import public as documents
+        from modules.sources import public as sources
 
         locator = await documents.review_version_locator(session, evidence.document_version_id)
         if locator is None or locator[0] != evidence.document_id:
             return False
         fence = await sources.lock_retained_evidence_source(session, locator[1])
         current = await documents.get_ready_version_ref(session, evidence.document_version_id) if fence else None
-        if (current is None or current.document_id != evidence.document_id
+        if (fence is None or current is None or current.document_id != evidence.document_id
                 or current.source_id != fence.id or current.source_generation != fence.generation):
             return False
         values.update(
@@ -279,6 +289,7 @@ async def scrub_document_evidence(
                 (unavailable if final_reference_page else provisional).append(row.id)
                 continue
             version_id = version_id or parsed_version
+        assert version_id is not None  # every surviving branch above resolved a version
         if not exact_match and version_id not in known_versions:
             from modules.knowledge.documents import public as documents
 

@@ -1,22 +1,30 @@
 import hashlib
 import json
 import secrets
-from core.telemetry import RunMeta as _RunMeta
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Any, Literal
+from typing import cast as typing_cast
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
 from sqlalchemy import String, and_, case, cast, delete, func, not_, or_, select, tuple_, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from core.events import DomainEvent
 from core.pagination import decode_cursor, encode_cursor
-from core.realtime import commit_with_replay, make_ingestion_change, make_knowledge_change, make_source_change
+from core.realtime import (
+    ReplayDraft,
+    commit_with_replay,
+    make_ingestion_change,
+    make_knowledge_change,
+    make_source_change,
+)
+from core.telemetry import RunMeta as _RunMeta
 from modules.ingestion.models import (
     COLLECTION_LEASE,
     CollectorCredential,
@@ -29,10 +37,22 @@ from modules.ingestion.models import (
     SourceObservation,
 )
 from modules.ingestion.schemas import (
-    ConnectorCollectionLease, CrawlReceipt, EventDelivery, NativeCollectionBatch,
-    NativeCollectionReceipt, Receipt, ReceiveBatch, RunRead, SourceIngestionRead,
-    StageRead, TelegramCursor, TelegramDeliveryProof, TelegramProbeClassification,
-    TelegramRawDelivery, classify_telegram_probe,
+    ConnectorCollectionLease,
+    CrawlReceipt,
+    EventDelivery,
+    IngestionRecord,
+    NativeCollectionBatch,
+    NativeCollectionReceipt,
+    Receipt,
+    ReceiveBatch,
+    RunRead,
+    SourceIngestionRead,
+    StageRead,
+    TelegramCursor,
+    TelegramDeliveryProof,
+    TelegramProbeClassification,
+    TelegramRawDelivery,
+    classify_telegram_probe,
 )
 from modules.knowledge.documents import public as documents
 from modules.sources import public as sources
@@ -47,7 +67,7 @@ class NewsDocumentReadyEvent:
     id: UUID
     version: int
     status: str
-    payload: dict[str, object]
+    payload: dict[str, Any]
     valid_payload: bool
 
 
@@ -627,10 +647,11 @@ def validate_telegram_record_delivery(
         raise ValueError("Telegram channel is outside configured source scope")
     try:
         published_at = datetime.fromtimestamp(date_value, UTC)
-        edited_at = datetime.fromtimestamp(edit_date_value, UTC) if edited_present else None
+        edited_at = datetime.fromtimestamp(edit_date_value, UTC) if edited_present and edit_date_value is not None else None
     except (OverflowError, OSError, ValueError) as exc:
         raise ValueError("Telegram raw timestamps are invalid") from exc
     observed_at = edited_at if edited_present else published_at
+    assert observed_at is not None
     expected_version = f"telegram:{proof.epoch}:{proof.update_id}:{observed_at.isoformat()}"
     if (
         metadata.provider != "telegram"
@@ -842,7 +863,7 @@ async def accept_native_collection(
             raw = next((item for item in payload.telegram_raw_deliveries if detail is not None and item.update_id == detail.update_id), None)
             if (
                 detail is None or proof is None or raw is None or detail.bot_id != bot_id
-                or detail.channel_id not in tuple(source.configuration.get("telegram_chat_ids", ()))
+                or detail.channel_id not in tuple(typing_cast("Iterable[str]", source.configuration.get("telegram_chat_ids", ())))
                 or proof.raw_update_sha256 != raw.raw_update_sha256
                 or detail.raw_update_sha256 is not None
                 or detail.update_id in seen_update_ids
@@ -854,16 +875,17 @@ async def accept_native_collection(
             try:
                 validate_telegram_record_delivery(
                     record, metadata, proof, raw,
-                    allowed_chat_ids=tuple(source.configuration.get("telegram_chat_ids", ())),
+                    allowed_chat_ids=tuple(typing_cast("Iterable[str]", source.configuration.get("telegram_chat_ids", ()))),
                 )
             except (TypeError, ValueError) as exc:
                 raise HTTPException(status_code=422, detail="Telegram document does not match its raw delivery") from exc
             seen_update_ids.add(detail.update_id)
             proof_envelope = proof.model_dump(mode="json")
         record_data = record.model_dump(mode="json", exclude={"collected_at"})
-        telegram_envelope = None
+        telegram_envelope: dict[str, object] | None = None
         if proof_envelope is not None:
-            raw = next(item for item in payload.telegram_raw_deliveries if item.update_id == metadata.telegram.update_id)
+            assert detail is not None  # a proof envelope is only built for a validated Telegram detail
+            raw = next(item for item in payload.telegram_raw_deliveries if item.update_id == detail.update_id)
             telegram_envelope = {
                 "proof": proof_envelope,
                 "raw_update": raw.model_dump(mode="json"),
@@ -915,7 +937,7 @@ async def accept_native_collection(
             payload=observation_payload, observed_at=record.observed_at,
             received_at=received_at, collected_at=payload.collected_at,
         ))
-    changes = [make_source_change(source.id, source.generation, source.status)]
+    changes: list[ReplayDraft] = [make_source_change(source.id, source.generation, source.status)]
     if provider_records:
         event = DomainEvent(
             id=uuid4(), type="ingestion.stage.requested", version=1,
@@ -976,7 +998,7 @@ async def accept_native_collection(
         visibility_unverified = (
             github_proof.target_outcome in {"not_found", "forbidden", "partial"}
         )
-        disposition = (
+        disposition: Literal["accepted_ingestion", "completed", "visibility_unverified"] = (
             "visibility_unverified"
             if deletion_unverified or visibility_unverified
             else "accepted_ingestion" if provider_records else "completed"
@@ -1148,9 +1170,9 @@ async def receive_batch(
             collection_lease_token=None, lease_expires_at=now + COLLECTION_LEASE,
         )
     )
-    if result.rowcount != 1:
+    if typing_cast("CursorResult[Any]", result).rowcount != 1:
         raise HTTPException(status_code=409, detail="Collection cursor changed")
-    changes = [
+    changes: list[ReplayDraft] = [
         make_source_change(source.id, source.generation, source.status),
         make_ingestion_change(source.id, run.id, run.status, stage.stage_key, stage.status),
     ]
@@ -1589,7 +1611,7 @@ async def retry_run(
 
 async def list_ready_events_after(
     session: AsyncSession, position: tuple[datetime, UUID] | None, limit: int = 100,
-) -> list[tuple[datetime, UUID, str, dict[str, str | int] | None]]:
+) -> list[tuple[datetime, UUID, str, dict[str, Any] | None]]:
     """Read-only cursor page of ``document.version.ready`` outbox rows for the automations sweep.
 
     Ordered by ``(created_at, id)`` strictly after ``position``; returns a validated private metadata
@@ -1606,9 +1628,9 @@ async def list_ready_events_after(
     return [(row.created_at, row.id, str(row.id), _ready_document_payload(row)) for row in rows]
 
 
-def _ready_document_payload(event: EventOutbox) -> dict[str, str | int] | None:
+def _ready_document_payload(event: EventOutbox) -> dict[str, Any] | None:
     """Validate the exact bounded producer payload used by document-ready events."""
-    payload = event.payload
+    payload: Any = event.payload
     fields = {"source_id", "document_id", "document_version_id", "source_generation", "version_number"}
     if (
         event.type != "document.version.ready" or event.version != 1
@@ -1701,7 +1723,7 @@ async def resolve_ready_event_provenance(
 
 async def list_terminal_runs_after(
     session: AsyncSession, position: tuple[datetime, UUID] | None, limit: int = 100,
-) -> list[tuple[datetime, UUID, str, dict[str, str]]]:
+) -> list[tuple[datetime, UUID, str, dict[str, str | int]]]:
     """Read-only cursor page of ingestion runs in a terminal state for connector sync results.
 
     Ordered by ``(updated_at, id)``; the key combines run id and status so a later status change

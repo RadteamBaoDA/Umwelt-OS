@@ -1,19 +1,21 @@
 """Bounded Telegram Bot API validation, update transport, and channel-post mapping."""
 
 import asyncio
-from datetime import UTC, datetime, timedelta
-from hashlib import sha256
 import json
 import re
+from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from typing import Any
 from urllib.parse import quote
 
 import httpx
 
-from modules.connectors.public import TelegramScopeValidation, TelegramUpdatePage
-from modules.connectors.public import ProviderRateLimited
-from modules.ingestion.schemas import TelegramDeliveryProof, TelegramRawDelivery
-from modules.ingestion.schemas import IngestionRecord
+from modules.connectors.public import (
+    ProviderRateLimited,
+    TelegramScopeValidation,
+    TelegramUpdatePage,
+)
+from modules.ingestion.schemas import IngestionRecord, TelegramDeliveryProof, TelegramRawDelivery
 
 _METHODS = frozenset({"getMe", "getWebhookInfo", "getChat", "getChatMember", "getUpdates"})
 _MAX_RESPONSE_BYTES = 10 * 1024 * 1024
@@ -61,7 +63,7 @@ async def _telegram_call(
                 payload_json = json.loads(body)
                 retry_after = payload_json["parameters"]["retry_after"]
                 if isinstance(retry_after, bool) or not isinstance(retry_after, int):
-                    raise ValueError
+                    raise ValueError  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
                 if retry_after <= 0:
                     raise ValueError
             except KeyError:
@@ -244,7 +246,7 @@ def map_telegram_update(
         media_truncated = media_truncated or (isinstance(file_id, str) and len(file_id) > 512)
         media.append({
             "kind": kind if kind != "video_note" else "other",
-            "caption": (message.get("caption")[:4096] if isinstance(message.get("caption"), str) else None),
+            "caption": (caption[:4096] if isinstance(caption := message.get("caption"), str) else None),
             "count": min(max(count, 1), 100),
             "file_id": file_id[:512] if isinstance(file_id, str) else None,
         })
@@ -271,7 +273,7 @@ def map_telegram_update(
         or (isinstance(thread_id, int) and len(str(thread_id)) > 20)
         or (isinstance(reply_id, int) and len(str(reply_id)) > 20)
     )
-    metadata = {
+    metadata: dict[str, Any] = {
         "provider_record": {
             "provider": "telegram",
             "identity": f"telegram:{chat_id}:{message_id}",

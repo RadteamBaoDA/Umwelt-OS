@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 import hashlib
 import ipaddress
 import json
 import re
 import time
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, cast
 
 from core.config import Settings
 from core.mcp_endpoint import normalize_mcp_url
@@ -62,7 +62,7 @@ def load_webhook_profiles(settings: Settings) -> dict[str, WebhookProfile]:
             network = ipaddress.ip_network(value_cidr, strict=False)
             if (network.prefixlen == 0
                     or isinstance(network, ipaddress.IPv6Network) and network.network_address.ipv4_mapped is not None
-                    or not any(network.version == allowed.version and network.subnet_of(allowed) for allowed in private_networks)):
+                    or not any(network.version == allowed.version and network.subnet_of(cast("Any", allowed)) for allowed in private_networks)):
                 raise ValueError("Webhook CIDRs must be bounded private or loopback networks")
             cidrs.append(network.with_prefixlen)
         origin = (scheme, host, port)
@@ -105,6 +105,7 @@ async def _send_webhook(arguments: dict[str, Any], context: dict[str, Any]) -> T
     the transport's pre-send fence marks the attempt in flight, ambiguous outcomes become review-only.
     """
     from httpx2 import AsyncClient, Timeout
+
     from modules.agents.approvals import mark_effect_outcome
 
     profiles = load_webhook_profiles(context["settings"])
@@ -124,8 +125,8 @@ async def _send_webhook(arguments: dict[str, Any], context: dict[str, Any]) -> T
         """Revalidate current run/action/profile after DNS and immediately before the one socket send."""
         nonlocal started
         allowed = await before_send(profile, action_id)
-        started = allowed
-        return allowed
+        started = bool(allowed)
+        return started
 
     budget = McpOperationNetworkBudget(
         deadline=time.monotonic() + 30, max_requests=1, max_request_bytes=64_000,
@@ -165,7 +166,7 @@ async def _send_webhook(arguments: dict[str, Any], context: dict[str, Any]) -> T
             "requires_review" if started else "failed", result_reference if started else None,
         ))
         raise
-    except Exception:
+    except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
         await mark_effect_outcome(
             context["session_factory"], action_id,
             "requires_review" if started else "failed", result_reference if started else None,
@@ -213,7 +214,7 @@ async def send_once(
                 profile.endpoint, json=payload, headers={**headers, "Idempotency-Key": idempotency_key})
             await response.aread()
             return "succeeded" if 200 <= response.status_code < 300 else "ambiguous"
-    except Exception:
+    except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
         # CancelledError is not caught here: the caller's committed in-flight row stays review-only.
         return "ambiguous" if started else "unsent"
     finally:

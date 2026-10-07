@@ -7,8 +7,8 @@ and all make_*_change event constructors in core.realtime.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta, timezone
-from typing import Any
-from uuid import UUID, uuid4
+from uuid import uuid4
+
 import pytest
 from pydantic import ValidationError
 

@@ -1,59 +1,63 @@
-from typing import Annotated, Any, Awaitable, Literal, TypeVar
-from datetime import UTC, datetime, timedelta
-from uuid import UUID, uuid4
-import hashlib
 import asyncio
+import hashlib
 import secrets
+from collections.abc import Awaitable
+from datetime import UTC, datetime, timedelta
+from typing import Annotated, Any, Literal, TypeVar, cast
+from uuid import UUID, uuid4
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.dependencies import require_owner_write
 from core.auth.models import AuthSession
 from core.database import get_session
 from core.realtime import commit_with_replay, make_source_change
-from modules.connectors.public import (
-    ConnectorConfigurationRequest,
-    ConnectorPreview,
-    ConnectorReceipt,
-    CollectionFence,
-    CrawlRequest,
-    CrawlResult,
-    RSSRequest,
-    AgentBrowserGrantPatch,
-    resolve_agent_browser_scope,
-    update_agent_browser_grant_in_uow,
-    validate_public_url,
-    save_connector_configuration,
-    serialize_source_configuration,
-    is_native_provider,
-    ProviderRateLimited,
-    get_native_credential_snapshot,
-    wake_packaged_collection,
-)
 from modules.connectors import mcp as mcp_collection
-from modules.connectors import registry
-from modules.connectors import provisioning
+from modules.connectors import provisioning, registry
 from modules.connectors.github import oauth as github_oauth
 from modules.connectors.github.adapter import collect_github_segment
 from modules.connectors.github.schemas import GitHubHintClaimProof, project_github_source_config
 from modules.connectors.github.sync import validate_github_segment
-from modules.connectors.models import GithubOAuthGrant, ConnectorProvisioning, ConnectorWorldCredential
+from modules.connectors.models import (
+    ConnectorProvisioning,
+    ConnectorWorldCredential,
+    GithubOAuthGrant,
+)
+from modules.connectors.public import (
+    AgentBrowserGrantPatch,
+    CollectionFence,
+    ConnectorConfigurationRequest,
+    ConnectorPreview,
+    ConnectorReceipt,
+    CrawlRequest,
+    CrawlResult,
+    ProviderRateLimited,
+    RSSRequest,
+    get_native_credential_snapshot,
+    is_native_provider,
+    resolve_agent_browser_scope,
+    save_connector_configuration,
+    serialize_source_configuration,
+    update_agent_browser_grant_in_uow,
+    validate_public_url,
+    wake_packaged_collection,
+)
 from modules.ingestion import public as ingestion
-from modules.ingestion.schemas import Receipt, ReceiveBatch
 from modules.ingestion.schemas import (
     ConnectorCollectionLease,
     NativeCollectionBatch,
     NativeCollectionReceipt,
-    TelegramCursor,
+    Receipt,
+    ReceiveBatch,
     classify_telegram_probe,
 )
+from modules.settings.public import module_dependency, module_is_enabled
 from modules.sources import public as sources
 from modules.sources.schemas import ConnectorSource
-from modules.settings.public import module_dependency, module_is_enabled
 
 router = APIRouter(prefix="/api/v1/connectors/sources", tags=["connectors"])
 Session = Annotated[AsyncSession, Depends(get_session)]
@@ -120,7 +124,9 @@ async def save_world_provider_credential(
     source = await sources.lock_source(session, source_id)
     if source is None:
         raise HTTPException(status_code=404, detail="Source not found")
-    if source.provider != "alpha_vantage" or source.status != "active" or source.generation != payload.expected_generation:
+    # PRODUCTION FIX: SourceFence has no provider; read it from the connector projection (row is locked above).
+    connector = await sources.get_connector_source(session, source_id)
+    if connector is None or connector.provider != "alpha_vantage" or source.status != "active" or source.generation != payload.expected_generation:
         raise HTTPException(status_code=409, detail="Alpha Vantage source generation changed")
     provisioning_row = await session.get(ConnectorProvisioning, source_id, with_for_update=True)
     if provisioning_row is None or provisioning_row.desired_revision != payload.expected_connector_revision:
@@ -303,7 +309,7 @@ class ProviderAdmissionBusy(RuntimeError):
 _T = TypeVar("_T")
 
 
-async def _await_with_github_segment_deadline(
+async def _await_with_github_segment_deadline(  # noqa: UP047  # keep TypeVar/TypeAlias spelling; PEP 695 rewrite is style-only
     operation: Awaitable[_T], *, deadline: float | None
 ) -> _T:
     """Bound one pre-lease await by the shared GitHub segment deadline.
@@ -336,7 +342,7 @@ async def _release_failed_collection(
         async with asyncio.timeout(3):
             await session.rollback()
             await ingestion.release_connector_collection(session, lease, error_code=error_code)
-    except BaseException:
+    except BaseException:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
         return
 
 
@@ -433,7 +439,7 @@ async def _release_github_network_permit(request: Request, token: str) -> None:
     script = "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end"
     try:
         await request.app.state.redis.eval(script, 1, "connectors:provider:active:github", token)
-    except Exception:
+    except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
         # The bounded permit expires automatically; never release another collector's token.
         return
 
@@ -589,7 +595,6 @@ async def fetch_native_provider(
                         raise HTTPException(status_code=409, detail="GitHub grant is expired or requires reconnection")
                     token_revision = grant.token_revision
                     grant_operation = grant.operation_id
-                    repo_id = grant.repository_id
                     key = request.app.state.settings.connector_credential_encryption_key.get_secret_value()
                     token_pair = github_oauth._open_token_cipher(
                         key, grant.encrypted_tokens, source.id, grant.operation_id,
@@ -645,7 +650,10 @@ async def fetch_native_provider(
                 else:
                     if source.provider in {"alpha_vantage", "open_meteo"}:
                         from modules.connectors.providers.world_data import collect_world_data
-                        from modules.ingestion.models import CollectorCredential, SourceIngestionState
+                        from modules.ingestion.models import (
+                            CollectorCredential,
+                            SourceIngestionState,
+                        )
 
                         async def before_world_request(credential_operation_id: UUID | None) -> None:
                             """Recheck bearer, source, revision, exact lease and provider credential before each GET."""
@@ -762,6 +770,12 @@ async def fetch_native_provider(
                         or current_grant.expires_at is None or current_grant.expires_at <= datetime.now(UTC)
                     ):
                         raise HTTPException(status_code=409, detail="GitHub grant or source changed during collection")
+                batch_coverage: Literal["returned_snapshot", "pending_updates_only", "truncated"]
+                if github_validated is not None:
+                    batch_records, batch_coverage = github_validated.records, github_validated.coverage
+                else:
+                    assert page is not None
+                    batch_records, batch_coverage = page.records, page.coverage
                 native_batch = NativeCollectionBatch(
                     source_id=source.id,
                     source_generation=source.generation,
@@ -769,8 +783,8 @@ async def fetch_native_provider(
                     lease_token=lease.token,
                     cursor_before=lease.cursor_before,
                     cursor_after=github_validated.cursor_after if github_validated is not None else lease.cursor_before,
-                    records=list(github_validated.records if github_validated is not None else page.records), telegram_deliveries=(),
-                    telegram_raw_deliveries=(), coverage=github_validated.coverage if github_validated is not None else page.coverage,
+                    records=list(batch_records), telegram_deliveries=(),
+                    telegram_raw_deliveries=(), coverage=batch_coverage,
                     github_segment=github_proof,
                     collected_at=collected_at,
                 )
@@ -868,7 +882,7 @@ async def _collect_telegram_page(
                 remaining_bytes=min(10 * 1024 * 1024, remaining_bytes),
             )
         except ProviderRateLimited as exc:
-            deadline = await _extend_provider_cooldown(request, source.provider, exc.next_eligible_at)
+            deadline = await _extend_provider_cooldown(request, source.provider or "telegram", exc.next_eligible_at)
             await ingestion.release_connector_collection(
                 session, lease, error_code="provider_rate_limited"
             )
@@ -908,7 +922,7 @@ async def _collect_telegram_page(
         records = [
             record for delivery in page.deliveries if delivery.update_id not in replay_ids
             if (record := map_telegram_update(
-                delivery.update, allowed_chat_ids=frozenset(source.configuration["telegram_chat_ids"]),
+                delivery.update, allowed_chat_ids=frozenset(cast("list[str]", source.configuration["telegram_chat_ids"])),
                 proof=proof_by_id[delivery.update_id], collected_at=page.collected_at,
             )) is not None
         ]

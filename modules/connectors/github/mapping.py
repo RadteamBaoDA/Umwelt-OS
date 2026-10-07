@@ -5,8 +5,8 @@ caller). Everything goes through the Documents, Entities, Relationships and Time
 public APIs; this module never touches another module's tables.
 """
 
-from hashlib import sha256
 import logging
+from hashlib import sha256
 from urllib.parse import urlsplit
 from uuid import UUID
 

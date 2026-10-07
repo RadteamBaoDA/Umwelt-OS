@@ -7,6 +7,7 @@ RequestValidationError redaction, and generic 500 error sanitization.
 from __future__ import annotations
 
 from typing import Any
+
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient

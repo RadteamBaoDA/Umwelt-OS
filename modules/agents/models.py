@@ -1,9 +1,20 @@
 """Private PostgreSQL records for agent runs and bounded run activity."""
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
@@ -48,13 +59,13 @@ class AgentRun(Base):
     checkpoint_schema_version: Mapped[int] = mapped_column(Integer, nullable=False)
     checkpoint_thread_id: Mapped[str] = mapped_column(String(36), nullable=False, unique=True)
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
-    profile_snapshot: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    profile_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     profile_revision_hash: Mapped[str | None] = mapped_column(String(64))
     client_request_id: Mapped[str | None] = mapped_column(String(128))
     request_hash: Mapped[str | None] = mapped_column(String(64))
     allowed_tools: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
     tool_contracts: Mapped[dict[str, dict[str, str]]] = mapped_column(JSONB, nullable=False)
-    source_fences: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False, default=dict)
+    source_fences: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     # This durable denial survives any later selective scrub of the evidence fence itself.
     evidence_revoked: Mapped[bool] = mapped_column(nullable=False, default=False)
     # Retain the original link requirement after Chat's cascading link row is deleted.
@@ -70,13 +81,13 @@ class AgentRun(Base):
     browser_jobs: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     browser_pages: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     browser_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    browser_budget_reservations: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False, default=dict)
+    browser_budget_reservations: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     token_usage: Mapped[int | None] = mapped_column(Integer)
     token_usage_unknown: Mapped[bool] = mapped_column(nullable=False, default=False)
     token_budget: Mapped[int | None] = mapped_column(Integer)
     answer: Mapped[str | None] = mapped_column(Text)
     error_code: Mapped[str | None] = mapped_column(String(64))
-    activities: Mapped[list[dict[str, object]]] = mapped_column(JSONB, nullable=False, default=list)
+    activities: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
@@ -116,9 +127,9 @@ class AgentToolCall(Base):
     tool_name: Mapped[str] = mapped_column(String(160), nullable=False)
     tool_version: Mapped[str | None] = mapped_column(String(40))
     schema_fingerprint: Mapped[str | None] = mapped_column(String(64))
-    arguments: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    arguments: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     # NULL means legacy provenance was never captured; an empty strict fence is evidence-free.
-    input_source_fences: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    input_source_fences: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     input_provenance_version: Mapped[int | None] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     error_code: Mapped[str | None] = mapped_column(String(32))
@@ -151,11 +162,11 @@ class AgentApproval(Base):
     tool_name: Mapped[str] = mapped_column(String(160), nullable=False)
     tool_version: Mapped[str] = mapped_column(String(40), nullable=False)
     schema_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
-    arguments: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    arguments: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     argument_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     destination_id: Mapped[str] = mapped_column(String(200), nullable=False)
     destination_revision: Mapped[str] = mapped_column(String(64), nullable=False)
-    source_fences: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False, default=dict)
+    source_fences: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -184,7 +195,7 @@ class AgentEvidenceCleanup(Base):
     scope_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
     # First exact immutable version/chunk identity that proved this run matched the operation.
     # NULL records an operation-level coverage gate where no exact run dependency was proven.
-    matched_identity: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    matched_identity: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     state: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     finalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -206,7 +217,7 @@ class AgentEffect(Base):
     provider_key: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     profile_alias: Mapped[str] = mapped_column(String(40), nullable=False)
     profile_revision: Mapped[str] = mapped_column(String(64), nullable=False)
-    payload: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     state: Mapped[str] = mapped_column(String(24), nullable=False, default="reserved")
     result_status_code: Mapped[int | None] = mapped_column(Integer)
@@ -253,6 +264,6 @@ class AgentProfileRevision(Base):
     profile_id: Mapped[str] = mapped_column(String(24), nullable=False)
     owner_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     revision: Mapped[int] = mapped_column(Integer, nullable=False)
-    snapshot: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     snapshot_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

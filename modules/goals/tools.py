@@ -4,13 +4,18 @@ Plan proposals are not a tool: tasks are only created by the owner accepting a p
 an individually approved ``tasks.create`` call.
 """
 
+from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from core.tools import ToolDefinition, ToolRegistry, ToolResult, ToolRisk
+from core.tools.registry import ToolHandler
 from modules.goals import public
 from modules.goals.schemas import GoalCreate, GoalFilter, GoalUpdate
 
+_Action = Callable[[AsyncSession, int, dict[str, Any], Callable[[Any], UUID]], Awaitable[str]]
 _UUID = {"type": "string", "format": "uuid"}
 _REVISION = {"type": "integer", "minimum": 1, "maximum": 9007199254740991}
 _WRITE_OUT = {
@@ -58,13 +63,13 @@ async def _get(arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult
     return ToolResult(success=True, data=goal.model_dump(mode="json"))
 
 
-def _writer(action):
+def _writer(action: _Action) -> ToolHandler:
     """Wrap an owner-scoped goal mutation in the approved-write lifecycle."""
     async def handler(arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
         """Execute exactly one approved goal mutation and record its effect outcome."""
         from modules.agents.internal_writes import run_approved_write, uuid_arg
 
-        async def perform(session, owner_id: int) -> str:
+        async def perform(session: AsyncSession, owner_id: int) -> str:
             """Run the public goal service call and return its reference."""
             return await action(session, owner_id, arguments, uuid_arg)
 
@@ -72,19 +77,25 @@ def _writer(action):
     return handler
 
 
-async def _create(session, owner_id, args, uuid_arg) -> str:
+async def _create(
+    session: AsyncSession, owner_id: int, args: dict[str, Any], uuid_arg: Callable[[Any], UUID],
+) -> str:
     """Create a goal from validated arguments."""
     return f"goal:{(await public.create_goal(session, owner_id, GoalCreate.model_validate(args))).id}"
 
 
-async def _update(session, owner_id, args, uuid_arg) -> str:
+async def _update(
+    session: AsyncSession, owner_id: int, args: dict[str, Any], uuid_arg: Callable[[Any], UUID],
+) -> str:
     """Patch a goal under its expected revision."""
     body = {key: value for key, value in args.items() if key != "goal_id"}
     updated = await public.update_goal(session, owner_id, uuid_arg(args["goal_id"]), GoalUpdate.model_validate(body))
     return f"goal:{updated.id}"
 
 
-async def _delete(session, owner_id, args, uuid_arg) -> str:
+async def _delete(
+    session: AsyncSession, owner_id: int, args: dict[str, Any], uuid_arg: Callable[[Any], UUID],
+) -> str:
     """Delete a goal under its expected revision."""
     goal_id = uuid_arg(args["goal_id"])
     await public.delete_goal(session, owner_id, goal_id, args["expected_revision"])
@@ -93,7 +104,8 @@ async def _delete(session, owner_id, args, uuid_arg) -> str:
 
 def register_goal_tools(registry: ToolRegistry, allowed_names: frozenset[str]) -> None:
     """Register goal tools the Goals descriptor declares; writes always require durable approval."""
-    def add(name: str, description: str, schema: dict[str, Any], handler, *, write: bool, output=None) -> None:
+    def add(name: str, description: str, schema: dict[str, Any], handler: ToolHandler, *, write: bool,
+        output: dict[str, Any] | None = None) -> None:
         """Register one definition when declared by an enabled descriptor."""
         if name not in allowed_names:
             return

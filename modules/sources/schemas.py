@@ -30,7 +30,7 @@ class SourceCreate(BaseModel):
             "telegram": "api",
             "alpha_vantage": "api",
             "open_meteo": "api",
-        }.get(self.provider)
+        }.get(self.provider or "")
         if self.provider is not None and expected is None:
             raise ValueError("Provider is not registered")
         if expected is not None and self.type != expected:

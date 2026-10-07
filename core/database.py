@@ -9,7 +9,6 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 class Base(DeclarativeBase):
     """Declarative SQLAlchemy metadata base shared by application persistence models."""
-    pass
 
 
 class CreatedAtMixin:

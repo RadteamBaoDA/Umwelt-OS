@@ -1,5 +1,5 @@
-from authlib.integrations.starlette_client import OAuth
 import httpx
+from authlib.integrations.starlette_client import OAuth  # type: ignore[import-untyped]  # no stubs
 
 from core.config import Settings
 

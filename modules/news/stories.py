@@ -8,6 +8,7 @@ import hashlib
 import json
 import re
 from datetime import UTC, datetime, timedelta
+from typing import cast
 from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
 
@@ -18,9 +19,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.knowledge.documents import public as documents
 from modules.knowledge.entities import public as entities
-from modules.news.models import NewsObservation, NewsStory, NewsStoryIdentity
-from modules.news.schemas import StoryCursor, StoryDetail, StoryEvidence, StoryFilter, StoryPage, StoryRead
 from modules.news import topics
+from modules.news.models import NewsObservation, NewsStory, NewsStoryIdentity
+from modules.news.schemas import (
+    StoryCursor,
+    StoryDetail,
+    StoryEvidence,
+    StoryFilter,
+    StoryPage,
+    StoryRead,
+)
 from modules.search import public as search
 from modules.sources import public as sources
 
@@ -204,7 +212,7 @@ async def _fuzzy_candidate(
     )).all())
     if len(candidate_rows) > MAX_CANDIDATES:
         return None
-    live_candidates = []
+    live_candidates: list[tuple[NewsObservation, NewsStory, list[str]]] = []
     for observation, story in candidate_rows:
         if abs((observation.observed_at - observed_at).total_seconds()) > FUZZY_WINDOW.total_seconds():
             continue
@@ -223,17 +231,17 @@ async def _fuzzy_candidate(
         overlap = sorted(current_entity_ids.intersection(str(item.entity_id) for item in refs))
         if overlap:
             live_candidates.append((observation, story, overlap))
-    candidate_rows = live_candidates
-    if not candidate_rows:
+    scored_rows = live_candidates
+    if not scored_rows:
         return None
     similarity = await search.compare_news_evidence_embeddings(
         session, projection.chunks[0].id,
-        tuple(item.chunk_id for item, _story, _entity_overlap in candidate_rows),
+        tuple(item.chunk_id for item, _story, _entity_overlap in scored_rows),
     )
     scores = {item.right_chunk_id: item for item in similarity.items}
     ranked = sorted(
         ((scores[observation.chunk_id].cosine_similarity, str(story.id), story, observation, overlap, scores[observation.chunk_id])
-         for observation, story, overlap in candidate_rows if observation.chunk_id in scores),
+         for observation, story, overlap in scored_rows if observation.chunk_id in scores),
         key=lambda item: (-item[0], item[1], str(item[3].id)),
     )
     if not ranked or ranked[0][0] < FUZZY_THRESHOLD:
@@ -359,7 +367,8 @@ async def _live_story_rows(
             NewsObservation.source_id, NewsObservation.document_version_id, NewsObservation.chunk_id,
         ) > evidence_after] if story_id is not None and evidence_after is not None else []),
     ).subquery()
-    rows = list((await session.execute(
+    # The subquery column is untyped to SQLAlchemy's stubs; the select order fixes the row shape.
+    rows = cast(list[tuple[NewsStory, NewsObservation, int]], list((await session.execute(
         select(NewsStory, NewsObservation, support_rank.c.support_rank)
         .join(NewsObservation, NewsObservation.story_id == NewsStory.id)
         .join(support_rank, support_rank.c.observation_id == NewsObservation.id)
@@ -370,7 +379,7 @@ async def _live_story_rows(
             if story_id is not None else
             (NewsObservation.story_id, NewsObservation.observed_at.desc(), NewsObservation.id)
         ))
-    )).all())
+    )).all()))
     grouped: dict[UUID, tuple[NewsStory, list[NewsObservation], list[StoryEvidence]]] = {}
     last_evidence_key: dict[UUID, tuple[UUID, UUID, UUID]] = {}
     next_evidence = None
@@ -549,14 +558,14 @@ async def list_stories(session: AsyncSession, owner_id: int, filters: StoryFilte
             observation.document_id: observation.source_generation
             for observation in story_row[1]
         } if story_row is not None else {}
-        for evidence in enriched.evidence:
+        for story_evidence in enriched.evidence:
             current = await documents.get_news_document_projection(
-                session, evidence.document_id,
-                expected_source_generation=generation_by_document.get(evidence.document_id),
+                session, story_evidence.document_id,
+                expected_source_generation=generation_by_document.get(story_evidence.document_id),
             )
             if (
-                current is None or current.document_version_id != evidence.document_version_id
-                or current.source_id != evidence.source_id or current.source_id not in source_ids
+                current is None or current.document_version_id != story_evidence.document_version_id
+                or current.source_id != story_evidence.source_id or current.source_id not in source_ids
             ):
                 still_current = False
                 break
@@ -624,7 +633,7 @@ async def get_story(
             as_of = datetime.fromisoformat(parts["as_of"])
             if as_of.utcoffset() is None:
                 raise ValueError
-            after_key = tuple(UUID(value) for value in parts["after"])
+            after_key = (UUID(parts["after"][0]), UUID(parts["after"][1]), UUID(parts["after"][2]))
             source_selection_incomplete = parts["source_selection_incomplete"]
         except (ValueError, TypeError, KeyError, UnicodeDecodeError, binascii.Error) as exc:
             raise HTTPException(status_code=422, detail="Invalid story evidence cursor") from exc

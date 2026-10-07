@@ -2,7 +2,7 @@
 
 import hashlib
 import json
-from uuid import UUID
+from typing import Any
 
 from fastapi import HTTPException
 from sqlalchemy import select, text
@@ -12,10 +12,13 @@ from core.model_gateway.schemas import AIExecutionConfig
 from core.tools import ToolRegistry, ToolRisk
 from modules.agents.handoff import HANDOFF_TOOL
 from modules.agents.internal_writes import (
-    AUTOMATION_PROFILE_TOOLS, INTERNAL_PROFILE_TOOLS, INTERNAL_WRITE_PROFILES, is_internal_write,
+    AUTOMATION_PROFILE_TOOLS,
+    INTERNAL_PROFILE_TOOLS,
+    INTERNAL_WRITE_PROFILES,
+    is_internal_write,
 )
 from modules.agents.models import AgentProfile, AgentProfileRevision
-from modules.agents.schemas import AgentProfilePatch, AgentProfileRead, AgentProfileTool
+from modules.agents.schemas import AgentProfilePatch, AgentProfileRead
 
 PROFILE_TITLES = {
     "supervisor": "Supervisor", "knowledge": "Knowledge", "research": "Research",
@@ -59,12 +62,7 @@ def _tool_contracts(registry: ToolRegistry) -> dict[str, dict[str, str]]:
     """Expose only registered non-confirmed read tools and the established webhook approval contract."""
     result: dict[str, dict[str, str]] = {}
     for definition in registry.list_tools():
-        if definition.risk == ToolRisk.READ_ONLY and not definition.confirmation_required:
-            result[definition.name] = {
-                "name": definition.name, "version": definition.version,
-                "fingerprint": definition.schema_fingerprint,
-            }
-        elif ((definition.name == "webhook.send" and definition.risk == ToolRisk.EXTERNAL_WRITE
+        if definition.risk == ToolRisk.READ_ONLY and not definition.confirmation_required or ((definition.name == "webhook.send" and definition.risk == ToolRisk.EXTERNAL_WRITE
                and definition.confirmation_required) or is_internal_write(definition)):
             result[definition.name] = {
                 "name": definition.name, "version": definition.version,
@@ -75,7 +73,7 @@ def _tool_contracts(registry: ToolRegistry) -> dict[str, dict[str, str]]:
 
 def _snapshot(
     row: AgentProfile | None, profile_id: str, registry: ToolRegistry,
-) -> dict[str, object]:
+) -> dict[str, Any]:
     """Build the secret-free profile view, retaining exact registry fingerprints as authority ceilings."""
     contracts = _tool_contracts(registry)
     defaults = NATIVE_READ_TOOLS - ({PROJECT_ONLY_TOOL} if profile_id not in {"project", "supervisor"} else frozenset())
@@ -240,7 +238,7 @@ async def update_profile_in_uow(
 async def resolve_profile_snapshot(
     session: AsyncSession, owner_id: int, profile_id: str, expected_revision: int,
     registry: ToolRegistry, config: AIExecutionConfig,
-) -> tuple[dict[str, object], str]:
+) -> tuple[dict[str, Any], str]:
     """Resolve a selected enabled revision and bind its exact current tool/model contracts before enqueue."""
     profile = await get_profile(session, owner_id, profile_id, registry, config)
     if profile.revision != expected_revision:

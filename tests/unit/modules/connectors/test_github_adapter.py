@@ -8,18 +8,18 @@ Covers:
 - Webhook signature verification (verify_github_signature, payload limits, timing-safe checks)
 """
 
-from datetime import UTC, datetime, timedelta
 import hashlib
 import hmac
 import json
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
+
 import httpx
 import pytest
 
 from modules.connectors.github.adapter import (
-    MAX_RESPONSE_BYTES,
     _github_next_page,
     _raise_for_provider_limit,
     _rate_limit_deadline,
@@ -27,16 +27,12 @@ from modules.connectors.github.adapter import (
     _target_items,
     _target_proof,
     collect_github_repository,
-    collect_github_segment,
     github_target_path,
-    validate_github_scope,
 )
 from modules.connectors.github.schemas import (
     GitHubBindingFence,
     GitHubHintClaimProof,
-    GitHubSegmentProof,
     GitHubSourceConfig,
-    MAX_GITHUB_PAGE_BYTES,
 )
 from modules.connectors.github.webhooks import (
     MAX_GITHUB_WEBHOOK_BYTES,
@@ -56,9 +52,11 @@ def _safe_httpx_response(*args: Any, **kwargs: Any) -> httpx.Response:
 
 httpx.Response = _safe_httpx_response  # type: ignore[misc]
 import modules.connectors.github.adapter
+
 modules.connectors.github.adapter.httpx.Response = _safe_httpx_response  # type: ignore[misc]
 
 import modules.connectors.github.schemas
+
 _orig_bounded_json_counts = modules.connectors.github.schemas._bounded_json_counts
 
 
@@ -462,3 +460,28 @@ class TestWebhookSignatureVerification:
         sig = "sha256=" + "a" * 64
 
         assert verify_github_signature(oversized_body, sig, secret) is False
+
+
+class TestHintDrivenSegment:
+    """Regression (B1c P1-1): a webhook-hint segment has no cursor state and must still return a proof."""
+
+    async def test_collect_github_segment_hint_claim_returns_claim_resource(
+        self, monkeypatch: pytest.MonkeyPatch, github_source_config: GitHubSourceConfig,
+        github_fence: GitHubBindingFence,
+    ) -> None:
+        from modules.connectors.github.adapter import collect_github_segment
+
+        real_client = httpx.AsyncClient
+        transport = httpx.MockTransport(lambda request: httpx.Response(200, json={"number": 42}))
+        monkeypatch.setattr(
+            modules.connectors.github.adapter.httpx, "AsyncClient",
+            lambda **kwargs: real_client(transport=transport, **kwargs),
+        )
+        claim = make_hint_claim(resource="issue", locator_kind="number", locator="42")
+        proof = await collect_github_segment(
+            github_source_config, "token", fence=github_fence, cursor_before=None,
+            collected_at=datetime.now(UTC), before_request=AsyncMock(), hint_claim=claim,
+        )
+        assert proof.resource == "issue"
+        assert proof.hint_claim is claim
+        assert proof.raw_items == ({"number": 42},)

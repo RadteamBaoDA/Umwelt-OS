@@ -1,7 +1,6 @@
 import json
 from datetime import UTC, datetime
 from typing import Any, Literal
-import re
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, model_validator
@@ -196,7 +195,7 @@ class ProviderRecordMetadata(BaseModel):
                     raise ValueError(f"Provider {key} must be a bounded string")
                 if key in {"created_at", "published_at", "last_modified", "provider_updated_at"}:
                     try:
-                        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))  # noqa: FURB162  # keeps exact parsing of 'Z' suffix; fromisoformat(Z) is not strictly equivalent
                     except ValueError as exc:
                         raise ValueError(f"Provider {key} must be an ISO timestamp") from exc
                     if parsed.tzinfo is None or parsed.utcoffset() is None:

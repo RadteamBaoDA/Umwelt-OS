@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import BigInteger, CheckConstraint, DateTime, Integer, String, func
-from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from core.database import Base
@@ -53,7 +55,7 @@ class BackupOperation(Base):
     consistency: Mapped[str] = mapped_column(String(32), nullable=False, server_default="quiesced")
     completeness: Mapped[str] = mapped_column(String(32), nullable=False, server_default="incomplete")
     archive_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    stage_receipts: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    stage_receipts: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

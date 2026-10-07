@@ -1,6 +1,7 @@
 """Private persistence models for selective memory, candidates, and privacy management."""
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
@@ -10,7 +11,6 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Index,
-    Integer,
     String,
     Text,
     func,
@@ -56,7 +56,7 @@ class Memory(Base):
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     memory_type: Mapped[str] = mapped_column(String(32), nullable=False, default="fact")
-    provenance: Mapped[dict[str, object]] = mapped_column(
+    provenance: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default="{}"
     )
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
@@ -125,7 +125,7 @@ class MemoryCandidate(Base):
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     memory_type: Mapped[str] = mapped_column(String(32), nullable=False, default="fact")
-    provenance: Mapped[dict[str, object]] = mapped_column(
+    provenance: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default="{}"
     )
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.5)

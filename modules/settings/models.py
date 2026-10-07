@@ -1,15 +1,16 @@
+from collections.abc import Awaitable
 from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 
+from redis.asyncio import Redis
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from redis.asyncio import Redis
-
 from core.config import Settings
+from core.database import Base
 from core.model_gateway.cache import capability_alias_pattern, capability_key
 from core.model_gateway.schemas import CapabilityResult, ModelMapping
-from core.database import Base
 
 
 class AISettingsRecord(Base):
@@ -29,8 +30,8 @@ class AISettingsRecord(Base):
     configuration_revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     omniroute_base_url: Mapped[str | None] = mapped_column(Text)
     omniroute_api_key_ciphertext: Mapped[str | None] = mapped_column(Text)
-    aliases: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
-    privacy: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
+    aliases: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    privacy: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
     chat_alias: Mapped[str] = mapped_column(String(32), nullable=False, server_default="reasoning-large")
     brief_alias: Mapped[str] = mapped_column(String(32), nullable=False, server_default="reasoning-small")
     web_search_provider: Mapped[str] = mapped_column(String(32), nullable=False, server_default="none")
@@ -127,7 +128,7 @@ async def legacy_aliases(redis: Redis | None, settings: Settings) -> dict[str, M
     """
     configured = {name: ModelMapping(model=model, destination="remote") for name, model in settings.omniroute_models.items() if name in ALIASES}
     if redis is not None:
-        for alias, value in (await redis.hgetall(_MAPPINGS)).items():
+        for alias, value in (await cast("Awaitable[dict[Any, Any]]", redis.hgetall(_MAPPINGS))).items():
             try:
                 if alias in ALIASES:
                     configured[alias] = ModelMapping.model_validate_json(value)

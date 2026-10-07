@@ -10,13 +10,13 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, m
 from core.mcp_endpoint import normalize_mcp_url
 
 
-class McpTransport(str, Enum):
+class McpTransport(str, Enum):  # str+Enum kept: StrEnum changes str()/format() behavior
     """Supported server transport names; stdio authority is an admin deployment profile only."""
     STREAMABLE_HTTP = "streamable_http"
     STDIO = "stdio"
 
 
-class McpRisk(str, Enum):
+class McpRisk(str, Enum):  # str+Enum kept: StrEnum changes str()/format() behavior
     """Explicit owner review classification for a selected immutable capability."""
     READ_ONLY = "READ_ONLY"
     INTERNAL_WRITE = "INTERNAL_WRITE"
@@ -177,7 +177,8 @@ class GrantChoice(McpStrictModel):
     @classmethod
     def normalize_expiry(cls, value: datetime | None) -> datetime | None:
         """Preserve no-expiry grants; supplied expiries must be future timezone-aware values normalized to UTC."""
-        from datetime import UTC, datetime as dt
+        from datetime import UTC
+        from datetime import datetime as dt
         if value is None:
             return None
         if value.tzinfo is None or value.utcoffset() is None:
@@ -263,7 +264,8 @@ class InboundClientCreate(McpStrictModel):
     @model_validator(mode="after")
     def validate_bindings(self) -> "InboundClientCreate":
         """Require bounded nonempty scope labels, a future aware expiry, and unique exact tool contracts."""
-        from datetime import UTC, datetime as dt
+        from datetime import UTC
+        from datetime import datetime as dt
         if self.expires_at.tzinfo is None or self.expires_at.utcoffset() is None:
             raise ValueError("Inbound client expiry must include a timezone")
         object.__setattr__(self, "expires_at", self.expires_at.astimezone(UTC))

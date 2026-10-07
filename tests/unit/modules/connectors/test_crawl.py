@@ -7,14 +7,12 @@ Covers:
 - Rate limiters, concurrency locks, and byte budgets (_job_lock 429, MAX_BYTES 413, _job_tokens_match)
 """
 
-import asyncio
-from datetime import UTC, datetime
 import re
 import sys
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
-from urllib.parse import urljoin
 from uuid import uuid4
+
+import httpx
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
@@ -46,8 +44,6 @@ if "crawlee" not in sys.modules:
 
 from modules.connectors.crawl import (
     MAX_BYTES,
-    _SERVICE_INSTANCE_ID,
-    AgentReadCancel,
     AgentReadRequest,
     _agent_target_allowed,
     _dns_safe,
@@ -253,7 +249,7 @@ class TestDepthBoundsAndTraversalLimits:
         html_p1 = b'<html><body><a href="/p3">Page 3</a></body></html>'
 
         # Mock httpx client response stream
-        mock_response_root = MagicMock()
+        mock_response_root = MagicMock(spec=httpx.Response)  # no __aenter__: real httpx.Response is not an async context manager
         mock_response_root.status_code = 200
         mock_response_root.headers = {"content-type": "text/html"}
         mock_response_root.url = "https://example.com/start"
@@ -261,10 +257,9 @@ class TestDepthBoundsAndTraversalLimits:
         async def aiter_root():
             yield html_root
         mock_response_root.aiter_bytes = aiter_root
-        mock_response_root.__aenter__ = AsyncMock(return_value=mock_response_root)
-        mock_response_root.__aexit__ = AsyncMock(return_value=None)
+        mock_response_root.aclose = AsyncMock()
 
-        mock_response_p1 = MagicMock()
+        mock_response_p1 = MagicMock(spec=httpx.Response)  # no __aenter__: real httpx.Response is not an async context manager
         mock_response_p1.status_code = 200
         mock_response_p1.headers = {"content-type": "text/html"}
         mock_response_p1.url = "https://example.com/p1"
@@ -272,8 +267,7 @@ class TestDepthBoundsAndTraversalLimits:
         async def aiter_p1():
             yield html_p1
         mock_response_p1.aiter_bytes = aiter_p1
-        mock_response_p1.__aenter__ = AsyncMock(return_value=mock_response_p1)
-        mock_response_p1.__aexit__ = AsyncMock(return_value=None)
+        mock_response_p1.aclose = AsyncMock()
 
         with patch("modules.connectors.crawl._dns_safe", new_callable=AsyncMock), \
              patch("httpx.AsyncClient.send", side_effect=[mock_response_root, mock_response_p1]):
@@ -283,6 +277,9 @@ class TestDepthBoundsAndTraversalLimits:
         assert len(records) == 2
         assert records[0]["metadata"]["url"] == "https://example.com/start"
         assert records[1]["metadata"]["url"] == "https://example.com/p1"
+        # Each streamed response must be closed exactly once (httpx.Response has aclose, not __aenter__).
+        mock_response_root.aclose.assert_awaited_once()
+        mock_response_p1.aclose.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_crawl_redirect_limit_exceeded(self) -> None:
@@ -305,7 +302,7 @@ class TestDepthBoundsAndTraversalLimits:
         mock_redirect.aclose = AsyncMock()
 
         with patch("modules.connectors.crawl._dns_safe", new_callable=AsyncMock), \
-             patch("httpx.AsyncClient.send", return_value=mock_redirect):
+             patch("httpx.AsyncClient.send", return_value=mock_redirect):  # noqa: SIM117  # style-only; nested with kept
             with pytest.raises(ValueError, match="Web redirect limit exceeded"):
                 await crawl(req)
 
@@ -376,12 +373,11 @@ class TestRateLimitersAndConcurrencyGuards:
             timeout_seconds=10,
         )
 
-        mock_resp = MagicMock()
+        mock_resp = MagicMock(spec=httpx.Response)  # no __aenter__: real httpx.Response is not an async context manager
         mock_resp.status_code = 200
         mock_resp.headers = {"content-length": str(MAX_BYTES + 1024), "content-type": "text/html"}
         mock_resp.raise_for_status = MagicMock()
-        mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
-        mock_resp.__aexit__ = AsyncMock(return_value=None)
+        mock_resp.aclose = AsyncMock()
 
         with patch("modules.connectors.crawl._dns_safe", new_callable=AsyncMock), \
              patch("httpx.AsyncClient.send", return_value=mock_resp):
@@ -389,3 +385,4 @@ class TestRateLimitersAndConcurrencyGuards:
                 await crawl(req)
             assert exc.value.status_code == 413
             assert "Browser download limit exceeded" in exc.value.detail
+            mock_resp.aclose.assert_awaited_once()  # closed even when the byte budget aborts the read

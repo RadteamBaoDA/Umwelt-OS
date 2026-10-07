@@ -6,10 +6,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modules.connectors import provisioning
 from modules.connectors.credentials import (
     CredentialEncryptionUnavailable,
+    N8nCredentials,
     encrypt_credential_input,
     secret_fingerprint,
 )
-from modules.connectors.n8n import N8nApi, N8nCredentials, build_workflow, workflow_name
+from modules.connectors.n8n import N8nApi, build_workflow, workflow_name
 from modules.sources import public as sources
 
 
@@ -66,7 +67,7 @@ def prepare_credential_assignment(
 
     operation_id = uuid4()
     target_id = existing.credential_id if existing is not None else None
-    request = {
+    request: dict[str, object] = {
         "name": credential_name,
         "type": "httpHeaderAuth",
         "data": {"name": header_name, "value": secret},
@@ -118,7 +119,6 @@ async def drive_activation(
         observed = await provisioning.activation_status(session, source_id)
         intent = observed.activation_intent if observed is not None else None
         required = intent.get("required_credentials", {}) if isinstance(intent, dict) else {}
-        slots_to_lock = tuple(required.keys()) if isinstance(required, dict) else ()
         source_fence, row, slots = await provisioning.lock_connector(
             session, source_id, provisioning._ALL_CREDENTIAL_SLOTS
         )
@@ -144,7 +144,7 @@ async def drive_activation(
 
         pending: tuple[str, UUID] | None = None
         ready_ids: dict[str, str] = {}
-        for slot, value in required.items():
+        for slot, value in (required or {}).items():
             if not isinstance(value, dict):
                 row.state = "reconciliation_required"
                 row.error_code = "activation_credential_intent_invalid"

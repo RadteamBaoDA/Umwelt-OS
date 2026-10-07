@@ -1,5 +1,6 @@
 """Protected REST routes for owner task management."""
 
+from collections.abc import Awaitable
 from datetime import date, datetime
 from typing import Annotated
 from uuid import UUID
@@ -11,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.auth.dependencies import require_owner, require_owner_write
 from core.auth.models import AuthSession
 from core.database import get_session
+from modules.settings.public import module_dependency
 from modules.tasks import public
 from modules.tasks.public import TaskConflict, TaskMissing
 from modules.tasks.schemas import (
@@ -22,7 +24,6 @@ from modules.tasks.schemas import (
     TaskUpdate,
     TaskView,
 )
-from modules.settings.public import module_dependency
 
 router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"], dependencies=[Depends(module_dependency("tasks"))])
 Session = Annotated[AsyncSession, Depends(get_session)]
@@ -35,7 +36,7 @@ def _no_store(response: Response) -> None:
     response.headers["Cache-Control"] = "private, no-store"
 
 
-async def _call(operation):
+async def _call[T](operation: Awaitable[T]) -> T:
     """Execute a task operation and translate domain exceptions to HTTP statuses."""
     try:
         return await operation

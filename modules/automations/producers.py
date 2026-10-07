@@ -17,7 +17,7 @@ those events enter as root events.
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
@@ -46,7 +46,7 @@ CURSOR_LAG = timedelta(seconds=30)
 DUE_GRACE = timedelta(days=1)  # a due moment missed by more than a day is not announced late
 _Reader = Callable[
     [AsyncSession, tuple[datetime, UUID] | None, int],
-    Awaitable[list[tuple[datetime, UUID, str, dict[str, Any] | None]]],
+    Awaitable[Sequence[tuple[datetime, UUID, str, Mapping[str, Any] | None]]],
 ]
 _CURSORS: dict[str, _Reader] = {
     "new_document": ingestion.list_ready_events_after,
@@ -129,7 +129,9 @@ async def _cursor_sweep(session: AsyncSession, name: str, reader: _Reader, now: 
             # Acquiring a newly discovered lower UUID here could invert the already-held lock order.
             return 0
     last = (items[-1][0], items[-1][1]) if items else None  # advance past dropped items too
-    offerable = [item for item in items if item[3] is not None]
+    offerable: list[tuple[datetime, UUID, str, Mapping[str, Any]]] = [
+        (ts, item_id, key, payload) for ts, item_id, key, payload in items if payload is not None
+    ]
     document_items: list[tuple[datetime, UUID, str, dict[str, Any], UUID, UUID]] | None = None
     if name == "new_document":
         document_items = await _enrich_documents(session, offerable)
@@ -155,7 +157,7 @@ async def _cursor_sweep(session: AsyncSession, name: str, reader: _Reader, now: 
 
 
 async def _enrich_documents(
-    session: AsyncSession, items: list[tuple[datetime, UUID, str, dict[str, Any]]],
+    session: AsyncSession, items: Sequence[tuple[datetime, UUID, str, Mapping[str, Any]]],
 ) -> list[tuple[datetime, UUID, str, dict[str, Any], UUID, UUID]]:
     """Add title, mime type and source type (metadata only, no content) to ready-document events.
 
@@ -257,7 +259,7 @@ async def sweep(factory: async_sessionmaker[AsyncSession], now: datetime | None 
             async with factory() as session:
                 total += await run(session)
                 await session.commit()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
             # Name and class only: never the exception text, which could carry item content.
             logger.warning("automation producer sweep %s failed (%s)", name, type(exc).__name__)
     return total

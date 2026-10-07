@@ -11,7 +11,7 @@ class DashboardDescriptor:
     description: str = "Save owner-selected dashboard layouts and gadget configuration."
     enabled: bool = True
     dependencies: tuple[str, ...] = (
-        "sources", "tasks", "goals", "news", "timeline", "notifications",
+        "sources", "tasks", "goals", "news", "knowledge.timeline", "notifications",
         "knowledge.documents", "knowledge.observations",
     )
     scheduled_jobs: tuple[str, ...] = ("run_scheduled_brief", "run_scheduled_highlights")

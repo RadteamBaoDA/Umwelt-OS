@@ -1,22 +1,23 @@
-from copy import deepcopy
-from collections.abc import Sequence
-from dataclasses import dataclass
-from datetime import UTC, datetime
 import base64
 import binascii
 import hashlib
 import json
+from collections.abc import Sequence
+from copy import deepcopy
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
-from sqlalchemy import Integer, Select, and_, case, cast, desc, func, select, tuple_
+from sqlalchemy import ColumnElement, Integer, Select, and_, case, cast, desc, func, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import InstrumentedAttribute
 
-from core.pagination import decode_cursor, encode_cursor
 from core.auth.models import Owner
 from core.events import DomainEvent
+from core.pagination import decode_cursor, encode_cursor
 from core.realtime import commit_with_replay, make_source_change
 from core.tools.schemas import ToolDestination
 from modules.sources.models import Source, SourcePurgeOperation
@@ -24,14 +25,14 @@ from modules.sources.schemas import (
     ConnectorSource,
     GadgetSourceSelection,
     GadgetSourceSelectionPage,
+    OperationRead,
     SourceCreate,
-    SourceFence,
-    SourcePatch,
     SourceExportFence,
+    SourceFence,
     SourceMetadataExportFence,
     SourceMetadataExportPage,
     SourceMetadataExportValidation,
-    OperationRead,
+    SourcePatch,
     SourceRead,
 )
 
@@ -69,7 +70,7 @@ def _decode_source_export_cursor(cursor: str) -> tuple[datetime, datetime, UUID]
         raise HTTPException(status_code=422, detail="Source export cursor is invalid") from exc
 
 
-def _source_export_scope(snapshot_at: datetime) -> tuple[object, ...]:
+def _source_export_scope(snapshot_at: datetime) -> tuple[ColumnElement[bool], ...]:
     """Select source rows retained at the fixed cutoff without unfinished data purges."""
     return (
         Source.created_at <= snapshot_at,
@@ -78,7 +79,7 @@ def _source_export_scope(snapshot_at: datetime) -> tuple[object, ...]:
     )
 
 
-def _source_export_columns():
+def _source_export_columns() -> tuple[InstrumentedAttribute[Any], ...]:
     """Return only credential-free fields supported by the current SourceRead DTO."""
     return (
         Source.id, Source.type, Source.name, Source.provider, Source.status, Source.local_only,
@@ -168,7 +169,7 @@ async def validate_export_fences(
     return SourceMetadataExportValidation(valid=True, reason="valid", observed_snapshot_count=observed)
 
 
-def export_eligible_source_ids() -> Select[tuple[UUID]]:
+def export_eligible_source_ids() -> Select[UUID]:
     """Return a SQL source-ID projection excluding committed, unfinished data purges.
 
     The predicate is deliberately source-owned so export consumers can filter and count
@@ -380,7 +381,7 @@ async def get_source_fence(session: AsyncSession, source_id: UUID) -> SourceFenc
     )
 
 
-def ingestion_lifecycle_projection():
+def ingestion_lifecycle_projection() -> Select[UUID, str, int]:
     """Return the minimal source lifecycle read projection for ingestion retry aggregation.
 
     Cross-module callers may correlate ingestion-owned retry records against the
@@ -667,14 +668,15 @@ async def update_source(
     transaction. Explicit reactivation rearms only hints whose current grant and provisioning
     binding match the new source generation; it never resumes a stale OAuth binding.
     """
-    source = await session.scalar(
+    locked_source = await session.scalar(
         select(Source)
         .where(Source.id == source.id)
         .with_for_update()
         .execution_options(populate_existing=True)
     )
-    if source is None:
+    if locked_source is None:
         return None
+    source = locked_source
     changed = False
     if source.status == "archived" and payload.status not in (None, "archived"):
         raise ValueError("Archived sources cannot be reactivated")
@@ -791,7 +793,7 @@ async def start_source_purge(
 SOURCE_MEMORY_TERMINAL_CODES = frozenset({"evidence_identity_unavailable", "legacy_provenance_unresolved"})
 
 
-def _open_coverage_operations() -> tuple[object, ...]:
+def _open_coverage_operations() -> tuple[ColumnElement[bool], ...]:
     """Select canonical-complete operations whose full-copy status can still change.
 
     Terminal-unavailable Memory coverage is excluded so a permanent gap never starves queued work

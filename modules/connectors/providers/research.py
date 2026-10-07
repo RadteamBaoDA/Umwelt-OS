@@ -1,16 +1,16 @@
 """Bounded public Hugging Face author metadata snapshots."""
 
 import asyncio
-from datetime import UTC, datetime
 import json
+from datetime import UTC, datetime
 from urllib.parse import quote
 
 import httpx
 
-from modules.connectors.public import ConnectorConfig, ProviderCollectionPage, ProviderRateLimited
 from modules.connectors.providers.feed_catalog import _parse_time, _retry_deadline, _selected_hash
-from modules.knowledge.documents.public import ProviderRecordMetadata
+from modules.connectors.public import ConnectorConfig, ProviderCollectionPage, ProviderRateLimited
 from modules.ingestion.schemas import IngestionRecord
+from modules.knowledge.documents.public import ProviderRecordMetadata
 from modules.sources.schemas import ConnectorSource
 
 _MAX_PAGE_BYTES = 10 * 1024 * 1024
@@ -23,7 +23,7 @@ async def _fetch_models(author: str) -> list[dict[str, object]]:
     )
     try:
         async with asyncio.timeout(30):
-            async with httpx.AsyncClient(
+            async with httpx.AsyncClient(  # noqa: SIM117  # style-only rewrite skipped to avoid touching control flow
                 timeout=httpx.Timeout(30), trust_env=False, follow_redirects=False, verify=True
             ) as client:
                 async with client.stream("GET", url, headers={"Accept": "application/json"}) as response:
@@ -49,7 +49,7 @@ async def _fetch_models(author: str) -> list[dict[str, object]]:
     except (httpx.HTTPError, TimeoutError, json.JSONDecodeError, UnicodeDecodeError):
         raise ValueError("huggingface_provider_unavailable") from None
     if not isinstance(result, list):
-        raise ValueError("huggingface_response_invalid")
+        raise ValueError("huggingface_response_invalid")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
     models = [item for item in result if isinstance(item, dict)]
     if len(models) != len(result):
         raise ValueError("huggingface_response_invalid")

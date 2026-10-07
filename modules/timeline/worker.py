@@ -14,9 +14,19 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from core.config import Settings
 from core.heavy_work import bounded_heavy_work
 from core.model_gateway.cache import capability_key
-from core.model_gateway.client import CapabilityUnsupported, ModelGateway, ModelGatewayError, PrivacyPolicyDenied
+from core.model_gateway.client import (
+    CapabilityUnsupported,
+    ModelGateway,
+    ModelGatewayError,
+    PrivacyPolicyDenied,
+)
 from core.model_gateway.policy import may_send
-from core.model_gateway.schemas import CapabilityResult, RequestPolicy
+from core.model_gateway.schemas import (
+    AIExecutionConfig,
+    CapabilityResult,
+    ModelMapping,
+    RequestPolicy,
+)
 from core.realtime import commit_with_replay, make_timeline_change
 from modules.knowledge.documents import public as documents
 from modules.knowledge.entities import public as entities
@@ -24,7 +34,11 @@ from modules.settings import public as settings_public
 from modules.sources import public as sources
 from modules.timeline import public as timeline
 from modules.timeline.extraction import (
-    EXTRACTOR_VERSION, PROMPT_VERSION, extraction_messages, response_content, response_schema,
+    EXTRACTOR_VERSION,
+    PROMPT_VERSION,
+    extraction_messages,
+    response_content,
+    response_schema,
 )
 from modules.timeline.models import Event, TimelineExtractionWork
 
@@ -37,10 +51,10 @@ def _factory(ctx: dict[str, object]) -> async_sessionmaker[AsyncSession]:
     return cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
 
 
-async def _dependency_snapshot(config: object, redis: Redis) -> tuple[str, bool]:
+async def _dependency_snapshot(config: AIExecutionConfig, redis: Redis) -> tuple[str, bool]:
     """Fingerprint nonsecret extraction policy and verify a current structured capability result."""
-    mapping = getattr(config, "aliases").get(ALIAS)
-    key = capability_key(ALIAS, mapping.model, mapping.version, "structured", getattr(config, "gateway_identity")) if mapping else None
+    mapping = config.aliases.get(ALIAS)
+    key = capability_key(ALIAS, mapping.model, mapping.version, "structured", config.gateway_identity) if mapping else None
     raw = await redis.get(key) if key else None
     if isinstance(raw, bytes):
         raw = raw.decode("utf-8", errors="replace")
@@ -55,19 +69,19 @@ async def _dependency_snapshot(config: object, redis: Redis) -> tuple[str, bool]
     except ValueError:
         fresh = False
     supported = bool(
-        fresh and capability.result == "supported" and capability.alias == ALIAS
-        and capability.capability == "structured" and capability.gateway_identity == getattr(config, "gateway_identity")
+        capability is not None and fresh and capability.result == "supported" and capability.alias == ALIAS
+        and capability.capability == "structured" and capability.gateway_identity == config.gateway_identity
         and mapping is not None and capability.model == mapping.model
         and capability.version == mapping.version
-        and capability.configuration_revision == getattr(config, "configuration_revision")
+        and capability.configuration_revision == config.configuration_revision
     )
-    privacy = getattr(config, "privacy")
+    privacy = config.privacy
     values = {
-        "revision": getattr(config, "configuration_revision"),
-        "gateway": getattr(config, "gateway_identity"),
-        "destination": getattr(config, "endpoint_destination_id"),
-        "denied": getattr(config, "endpoint_policy_denied"),
-        "credential": getattr(config, "omniroute_credential_configured"),
+        "revision": config.configuration_revision,
+        "gateway": config.gateway_identity,
+        "destination": config.endpoint_destination_id,
+        "denied": config.endpoint_policy_denied,
+        "credential": config.omniroute_credential_configured,
         "mapping": (mapping.model, mapping.version) if mapping else None,
         "remote": privacy.allow_remote_reasoning,
         "destinations": sorted(privacy.reasoning_destinations),
@@ -77,25 +91,25 @@ async def _dependency_snapshot(config: object, redis: Redis) -> tuple[str, bool]
     return fingerprint, supported
 
 
-def _policy(config: object, mapping: object, destination: str | None, local_only: bool) -> RequestPolicy:
+def _policy(config: AIExecutionConfig, mapping: ModelMapping | None, destination: str | None, local_only: bool) -> RequestPolicy:
     """Build the current structured extraction destination/privacy policy."""
-    privacy = getattr(config, "privacy")
+    privacy = config.privacy
     return RequestPolicy(
         reasoning_allowed=privacy.allow_remote_reasoning,
         local_only=local_only,
         permitted_destinations=frozenset({destination}) if destination else frozenset(),
         reasoning_destinations=frozenset(privacy.reasoning_destinations),
-        configuration_revision=getattr(config, "configuration_revision"),
+        configuration_revision=config.configuration_revision,
     )
 
 
-def _allowed(config: object, mapping: object, destination: str | None, local_only: bool) -> bool:
+def _allowed(config: AIExecutionConfig, mapping: ModelMapping | None, destination: str | None, local_only: bool) -> bool:
     """Check the selected alias, credential, destination, and privacy gates."""
-    if mapping is None or not destination or getattr(config, "endpoint_policy_denied"):
+    if mapping is None or not destination or config.endpoint_policy_denied:
         return False
     return may_send(
         _policy(config, mapping, destination, local_only), ALIAS, mapping, destination,
-        getattr(config, "omniroute_credential_configured"), "structured",
+        config.omniroute_credential_configured, "structured",
     )
 
 
@@ -205,7 +219,7 @@ async def process_timeline_extraction_work(ctx: dict[str, object], work_id_value
 
             gateway = ModelGateway(
                 redis=redis, base_url=config.omniroute_base_url, api_key=config.omniroute_api_key,
-                destination_id=destination, timeout_seconds=min(config.request_timeout_seconds, TIMEOUT_SECONDS),
+                destination_id=cast(str, destination), timeout_seconds=min(config.request_timeout_seconds, TIMEOUT_SECONDS),
                 gateway_identity=config.gateway_identity, before_send=before_send,
                 approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
             )
@@ -218,7 +232,7 @@ async def process_timeline_extraction_work(ctx: dict[str, object], work_id_value
                 response_schema(), probe=False,
             )
             if not isinstance(response, dict):
-                raise ValueError("invalid_model_response")
+                raise ValueError("invalid_model_response")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
             proposals, model = response_content(response)
             async with factory() as check_session:
                 current_config = await settings_public.get_ai_execution_config(check_session, settings, redis)
@@ -340,7 +354,7 @@ async def recover_timeline_extraction_work(ctx: dict[str, object]) -> int:
             source = await sources.lock_source(session, ready.source_id) if ready is not None else None
             current = await documents.get_ready_version_ref(session, version_id) if ready is not None else None
             if (
-                source is None or source.status != "active" or source.local_only
+                ready is None or source is None or source.status != "active" or source.local_only
                 or source.generation != captured_generation or current is None
                 or current.document_id != ready.document_id or current.source_id != source.id
                 or current.source_generation != captured_generation

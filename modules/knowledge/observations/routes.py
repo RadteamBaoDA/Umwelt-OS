@@ -4,8 +4,7 @@ from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
-from fastapi import Response
+from fastapi import APIRouter, Depends, Query, Response
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,7 +13,10 @@ from core.auth.models import AuthSession
 from core.database import get_session
 from modules.knowledge.observations import public
 from modules.knowledge.observations.schemas import (
-    GeospatialObservationPage, ObservationPage, ObservationQuery, ObservationRead,
+    GeospatialObservationPage,
+    ObservationPage,
+    ObservationQuery,
+    ObservationRead,
 )
 from modules.settings.public import module_dependency
 
@@ -31,7 +33,7 @@ async def read_geospatial_observations(
     session: Session, _owner: OwnerRead, response: Response,
     source_ids: Annotated[list[UUID], Query(min_length=1, max_length=32)],
     from_at: datetime, to_at: datetime,
-    regions: Annotated[list[str], Query(max_length=32)] = Query(default=[]),
+    regions: Annotated[list[str], Query(max_length=32)] = [],  # noqa: B006  # never mutated; FastAPI/DTO copies the default
     limit: Annotated[int, Query(ge=1, le=100)] = 100,
     cursor: Annotated[str | None, Query(max_length=2048)] = None,
 ) -> GeospatialObservationPage:
@@ -59,9 +61,9 @@ async def read_observations(
     session: Session, _owner: OwnerRead, response: Response,
     source_ids: Annotated[list[UUID], Query(min_length=1, max_length=32)],
     from_at: datetime, to_at: datetime,
-    metrics: Annotated[list[str], Query(max_length=32)] = Query(default=[]),
-    symbols: Annotated[list[str], Query(max_length=32)] = Query(default=[]),
-    regions: Annotated[list[str], Query(max_length=32)] = Query(default=[]),
+    metrics: Annotated[list[str], Query(max_length=32)] = [],  # noqa: B006  # never mutated; FastAPI/DTO copies the default
+    symbols: Annotated[list[str], Query(max_length=32)] = [],  # noqa: B006  # never mutated; FastAPI/DTO copies the default
+    regions: Annotated[list[str], Query(max_length=32)] = [],  # noqa: B006  # never mutated; FastAPI/DTO copies the default
     limit: Annotated[int, Query(ge=1, le=100)] = 100,
     cursor: Annotated[str | None, Query(max_length=2048)] = None,
     geospatial_only: bool = False,

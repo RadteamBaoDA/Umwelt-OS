@@ -7,13 +7,16 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
-from starlette.requests import Request
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.requests import Request
 
 from modules.backup.models import BackupActivity, BackupControl, BackupOperation
 from modules.backup.schemas import (
-    ActivityReceipt, AdmissionReceipt, BackupControlRead, BackupOperationRead,
+    ActivityReceipt,
+    AdmissionReceipt,
+    BackupControlRead,
+    BackupOperationRead,
     UnresolvedEffectRead,
 )
 
@@ -151,8 +154,8 @@ async def unresolved_owner_effects(session: AsyncSession) -> list[UnresolvedEffe
     from modules.agents import public as agents
     from modules.automations import public as automations
     from modules.connectors import public as connectors
-    from modules.tools import public as tools
     from modules.knowledge.temporal import public as temporal
+    from modules.tools import public as tools
 
     owners = (
         ("agents", agents), ("automations", automations), ("connectors", connectors),
@@ -349,7 +352,7 @@ def _safe_stage_receipt(receipt: dict[str, object]) -> dict[str, object]:
         elif key == "effect_status":
             if value not in {"attempted", "succeeded", "uncertain", "failed"}:
                 raise HTTPException(status_code=422, detail="Backup workflow effect state is invalid")
-        elif key == "components":
+        elif key == "components":  # noqa: SIM102  # style-only rewrite skipped to avoid touching control flow
             if (not isinstance(value, dict) or len(value) > 16
                     or any(not isinstance(name, str) or len(name) > 64
                            or state not in {"complete", "incomplete", "not_configured"}

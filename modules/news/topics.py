@@ -12,7 +12,20 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from sqlalchemy import Boolean, BigInteger, CheckConstraint, DateTime, Float, ForeignKey, Index, String, func, select, tuple_
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    ColumnElement,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    String,
+    func,
+    select,
+    tuple_,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
@@ -126,7 +139,7 @@ class TopicUpdate(BaseModel):
     weight: float | None = Field(default=None, ge=0.0, le=10.0, allow_inf_nan=False)
 
     @model_validator(mode="after")
-    def require_change(self) -> "TopicUpdate":
+    def require_change(self) -> TopicUpdate:
         """Reject revision-only patches so every accepted write changes a field."""
         if set(self.model_fields_set) <= {"expected_revision"}:
             raise ValueError("At least one topic field must be updated")
@@ -396,7 +409,7 @@ def _decode_topic_export_cursor(cursor: str) -> tuple[datetime, datetime, UUID]:
         raise HTTPException(status_code=422, detail="Topic export cursor is invalid") from exc
 
 
-def _topic_export_scope(owner_id: int, snapshot_at: datetime) -> tuple[object, ...]:
+def _topic_export_scope(owner_id: int, snapshot_at: datetime) -> tuple[ColumnElement[bool], ...]:
     """Select only live owner topics that existed unchanged at the export cutoff."""
     return (
         Topic.owner_id == owner_id, Topic.deleted_at.is_(None),

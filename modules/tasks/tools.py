@@ -1,12 +1,18 @@
 """Task agent tools on the P07 ToolRegistry: one read tool and approval-gated writes."""
 
+from collections.abc import Awaitable, Callable
 from typing import Any
+from uuid import UUID
+
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.tools import ToolDefinition, ToolRegistry, ToolResult, ToolRisk
+from core.tools.registry import ToolHandler
 from modules.tasks import public
 from modules.tasks.schemas import TaskCreate, TaskFilter, TaskUpdate
 
 _STATUS = ["inbox", "todo", "in_progress", "blocked", "done", "cancelled"]
+_Action = Callable[[AsyncSession, int, dict[str, Any], Callable[[Any], UUID]], Awaitable[str]]
 _UUID = {"type": "string", "format": "uuid"}
 _WRITE_OUT = {
     "type": "object", "required": ["accepted", "status_code", "result_reference"], "additionalProperties": False,
@@ -34,13 +40,13 @@ async def _list(arguments: dict[str, Any], context: dict[str, Any]) -> ToolResul
     return ToolResult(success=True, data=page.model_dump(mode="json"))
 
 
-def _writer(action):
+def _writer(action: _Action) -> ToolHandler:
     """Wrap an owner-scoped task mutation in the approved-write lifecycle."""
     async def handler(arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
         """Execute exactly one approved task mutation and record its effect outcome."""
         from modules.agents.internal_writes import run_approved_write, uuid_arg
 
-        async def perform(session, owner_id: int) -> str:
+        async def perform(session: AsyncSession, owner_id: int) -> str:
             """Run the public task service call and return its reference."""
             return await action(session, owner_id, arguments, uuid_arg)
 
@@ -48,25 +54,33 @@ def _writer(action):
     return handler
 
 
-async def _create(session, owner_id, args, uuid_arg) -> str:
+async def _create(
+    session: AsyncSession, owner_id: int, args: dict[str, Any], uuid_arg: Callable[[Any], UUID],
+) -> str:
     """Create a task from validated arguments."""
     return f"task:{(await public.create_task(session, owner_id, TaskCreate.model_validate(args))).id}"
 
 
-async def _update(session, owner_id, args, uuid_arg) -> str:
+async def _update(
+    session: AsyncSession, owner_id: int, args: dict[str, Any], uuid_arg: Callable[[Any], UUID],
+) -> str:
     """Patch a task under its expected revision."""
     body = {key: value for key, value in args.items() if key != "task_id"}
     updated = await public.update_task(session, owner_id, uuid_arg(args["task_id"]), TaskUpdate.model_validate(body))
     return f"task:{updated.id}"
 
 
-async def _complete(session, owner_id, args, uuid_arg) -> str:
+async def _complete(
+    session: AsyncSession, owner_id: int, args: dict[str, Any], uuid_arg: Callable[[Any], UUID],
+) -> str:
     """Mark a task done under its expected revision."""
     payload = TaskUpdate(status="done", expected_revision=args["expected_revision"])
     return f"task:{(await public.update_task(session, owner_id, uuid_arg(args['task_id']), payload)).id}"
 
 
-async def _delete(session, owner_id, args, uuid_arg) -> str:
+async def _delete(
+    session: AsyncSession, owner_id: int, args: dict[str, Any], uuid_arg: Callable[[Any], UUID],
+) -> str:
     """Soft-delete a task under its expected revision."""
     task_id = uuid_arg(args["task_id"])
     await public.delete_task(session, owner_id, task_id, args["expected_revision"])
@@ -75,7 +89,8 @@ async def _delete(session, owner_id, args, uuid_arg) -> str:
 
 def register_task_tools(registry: ToolRegistry, allowed_names: frozenset[str]) -> None:
     """Register task tools the Tasks descriptor declares; writes always require durable approval."""
-    def add(name: str, description: str, schema: dict[str, Any], handler, *, write: bool, output=None) -> None:
+    def add(name: str, description: str, schema: dict[str, Any], handler: ToolHandler, *, write: bool,
+        output: dict[str, Any] | None = None) -> None:
         """Register one definition when declared by an enabled descriptor."""
         if name not in allowed_names:
             return

@@ -3,13 +3,21 @@
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
-from sqlalchemy import func, select, update
 
+from sqlalchemy import func, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.tools import ToolDefinition, ToolDestination, ToolExecutionPrincipal, ToolRegistry, ToolResult, ToolRisk
+from core.tools import (
+    ToolDefinition,
+    ToolDestination,
+    ToolExecutionPrincipal,
+    ToolRegistry,
+    ToolResult,
+    ToolRisk,
+)
 from core.tools.schemas import ToolOutputFence
 from modules.tools.mcp_admission import McpAdmission, McpInboundLease
 from modules.tools.mcp_collection import McpCollectionRead, read_collection_capability
@@ -18,10 +26,10 @@ from modules.tools.mcp_runtime import McpRuntime, derive_mcp_public_endpoint
 from modules.tools.mcp_schemas import (
     CapabilityDescriptor,
     CapabilityRead,
-    CredentialUpdate,
     ConnectionDraft,
     ConnectionRead,
     ConnectionSave,
+    CredentialUpdate,
     DiscoveryPersist,
     DiscoveryRead,
     ExecutionFence,
@@ -153,7 +161,7 @@ async def revalidate_native_output_fences(
                 )
             if not valid:
                 return False
-    except Exception:
+    except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
         # Database/owner validation failures suppress output instead of bypassing the fence.
         return False
     return True
@@ -179,6 +187,7 @@ async def purge_browser_results_in_uow(
     commit; this contract acquires no Sources, Agents, or Chat ORM objects.
     """
     from sqlalchemy import or_
+
     from modules.tools.models import BrowserPageEvidence, BrowserReadJob
 
     selectors = []
@@ -211,7 +220,7 @@ async def purge_browser_results_in_uow(
         )
     )
     await session.flush()
-    return int(result.rowcount or 0)
+    return int(cast("CursorResult[Any]", result).rowcount or 0)
 
 
 async def purge_expired_browser_evidence(session: AsyncSession, *, limit: int = 200) -> int:
@@ -222,6 +231,7 @@ async def purge_expired_browser_evidence(session: AsyncSession, *, limit: int = 
     orders the eligibility scan by terminal status and expiry.
     """
     from sqlalchemy import delete, exists
+
     from modules.tools.models import BrowserPageEvidence, BrowserReadJob
 
     if not 1 <= limit <= 1000:
@@ -236,7 +246,7 @@ async def purge_expired_browser_evidence(session: AsyncSession, *, limit: int = 
         return 0
     result = await session.execute(delete(BrowserPageEvidence).where(BrowserPageEvidence.job_id.in_(ids)))
     await session.flush()
-    return int(result.rowcount or 0)
+    return int(cast("CursorResult[Any]", result).rowcount or 0)
 
 
 def webhook_aliases(settings: Any) -> set[str]:
@@ -277,16 +287,47 @@ async def send_webhook_once(
 
 
 __all__ = [
-    "send_webhook_once", "webhook_aliases", "webhook_profile_revision",
-    "ToolDefinition", "ToolDestination", "ToolExecutionPrincipal", "ToolOutputFence",
-    "ToolRegistry", "ToolResult", "ToolRisk", "revalidate_native_output_fences",
+    "CapabilityDescriptor",
+    "CapabilityRead",
+    "ConnectionDraft",
+    "ConnectionRead",
+    "ConnectionSave",
+    "CredentialUpdate",
+    "DiscoveryPersist",
+    "DiscoveryRead",
+    "ExecutionFence",
+    "GrantChoice",
+    "GrantRead",
+    "GrantSelection",
+    "InboundBinding",
+    "InboundClientCreate",
+    "InboundClientIssued",
+    "InboundClientRead",
+    "InboundPrincipal",
+    "McpAdmission",
+    "McpCollectionRead",
+    "McpConflict",
+    "McpInboundLease",
+    "McpNotFound",
+    "McpRisk",
+    "McpRuntime",
+    "McpServerBundle",
+    "McpTransport",
+    "McpUnavailable",
+    "ToolDefinition",
+    "ToolDestination",
+    "ToolExecutionPrincipal",
+    "ToolOutputFence",
+    "ToolRegistry",
+    "ToolResult",
+    "ToolRisk",
+    "create_inbound_mcp_bundle",
+    "derive_mcp_public_endpoint",
     "purge_browser_results_in_uow",
     "purge_expired_browser_evidence",
-    "CapabilityDescriptor", "CapabilityRead", "CredentialUpdate", "ConnectionDraft",
-    "ConnectionRead", "ConnectionSave", "DiscoveryPersist", "DiscoveryRead", "ExecutionFence",
-    "GrantChoice", "GrantRead", "GrantSelection", "InboundBinding", "InboundClientCreate",
-    "InboundClientIssued", "InboundClientRead", "InboundPrincipal", "McpRisk", "McpTransport",
-    "McpAdmission", "McpInboundLease", "McpRuntime", "McpServerBundle",
-    "create_inbound_mcp_bundle", "derive_mcp_public_endpoint",
-    "McpCollectionRead", "read_collection_capability", "McpConflict", "McpNotFound", "McpUnavailable",
+    "read_collection_capability",
+    "revalidate_native_output_fences",
+    "send_webhook_once",
+    "webhook_aliases",
+    "webhook_profile_revision",
 ]

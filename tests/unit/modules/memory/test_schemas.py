@@ -10,31 +10,23 @@ Covers:
 """
 
 from datetime import UTC, datetime
-from uuid import UUID, uuid4
+from uuid import uuid4
+
 import pytest
 from pydantic import ValidationError
 
 from modules.memory.schemas import (
     MAX_MEMORY_CONTENT_LENGTH,
-    MAX_REASON_LENGTH,
     MemoryCandidateCreate,
     MemoryCandidateRead,
-    MemoryCandidateRejectRequest,
     MemoryCreate,
-    MemoryForgetRequest,
-    MemoryInvalidateRequest,
     MemoryPrivacyConfig,
-    MemoryPrivacyUpdate,
-    MemoryProvenance,
     MemoryPurgeRequest,
     MemoryPurgeResponse,
     MemoryRead,
-    MemorySupersedeRequest,
-    MemoryType,
     MemoryUpdate,
 )
 from modules.memory.selection import (
-    CandidateEvaluation,
     _jaccard_similarity,
     _tokenize,
     evaluate_candidate,

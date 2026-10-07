@@ -5,7 +5,6 @@ they are never presented as historical task-state snapshots. Only the saved brie
 """
 
 from datetime import UTC, date, datetime, timedelta
-from typing import Any
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession

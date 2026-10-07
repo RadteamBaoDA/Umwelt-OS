@@ -1,10 +1,11 @@
 """Private SQLAlchemy persistence model for owner notifications."""
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, UniqueConstraint, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
@@ -27,7 +28,7 @@ class Notification(Base):
     kind: Mapped[str] = mapped_column(String(64), nullable=False)
     # Legacy display fallback only; new rows carry just ``kind`` + ``params`` and the UI localizes.
     title: Mapped[str | None] = mapped_column(String(300))
-    params: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    params: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
     body: Mapped[str | None] = mapped_column(String(2000))
     link: Mapped[str | None] = mapped_column(String(300))
     # Private sidecar: copied dashboard titles must remain addressable after Document cascades.

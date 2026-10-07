@@ -90,8 +90,8 @@ async def require_owner_write(
     """
     auth_session = await _authorize_owner_write(request, session, origin, csrf_token)
     if getattr(request.state, "backup_activity", None) is None:
-        from modules.settings.public import register_activity
         from modules.backup.public import BackupAdmissionDenied
+        from modules.settings.public import register_activity
 
         try:
             receipt = await register_activity(session, "api_owner_write", request.url.path)

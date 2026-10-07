@@ -9,18 +9,17 @@ Covers:
 """
 
 from uuid import UUID, uuid4
+
 import pytest
 from fastapi import HTTPException
 
 from core.tools.schemas import ToolDestination
 from modules.search.public import (
-    MAX_CANDIDATES,
     MAX_RANKED_CANDIDATES,
-    _cursor_scope,
     _encode_cursor,
     _offset,
 )
-from modules.search.schemas import SearchFilters, SearchRequest
+from modules.search.schemas import SearchRequest
 
 
 def rrf_fuse(

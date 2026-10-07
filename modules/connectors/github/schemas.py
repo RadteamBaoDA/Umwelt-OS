@@ -1,12 +1,21 @@
 """Bound GitHub App source configuration and safe collection projections."""
 
-from datetime import UTC, datetime
-from typing import Any, Literal, Mapping
 import json
+from collections.abc import Mapping
+from datetime import UTC, datetime
 from hashlib import sha256
+from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictInt,
+    StrictStr,
+    field_validator,
+    model_validator,
+)
 
 GitHubResource = Literal["issue", "pull", "commit", "release"]
 GITHUB_RESOURCES: tuple[GitHubResource, ...] = ("issue", "pull", "commit", "release")
@@ -31,9 +40,7 @@ def _bounded_json_counts(value: Any) -> tuple[int, int]:
             stack.extend((child, depth + 1) for child in current.values())
         elif isinstance(current, list):
             stack.extend((child, depth + 1) for child in current)
-        elif current is None or isinstance(current, (str, bool, int)):
-            continue
-        elif isinstance(current, float) and current == current and abs(current) != float("inf"):
+        elif current is None or isinstance(current, (str, bool, int)) or isinstance(current, float) and current == current and abs(current) != float("inf"):  # noqa: PLR0124  # style-only rewrite skipped to avoid touching control flow
             continue
         else:
             raise ValueError("GitHub response contains a non-JSON value")

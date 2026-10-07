@@ -23,7 +23,7 @@ __all__ = [
     "ToolRegistry",
     "ToolResult",
     "ToolRisk",
-    "compute_argument_hash",
     "check_json_schema",
+    "compute_argument_hash",
     "validate_json_schema",
 ]

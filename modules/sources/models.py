@@ -1,7 +1,18 @@
 from datetime import datetime
+from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, func, text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
@@ -35,7 +46,7 @@ class Source(Base):
     processing_error_code: Mapped[str | None] = mapped_column(String(64))
     generation: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    configuration: Mapped[dict[str, object]] = mapped_column(
+    configuration: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default="{}"
     )
     created_at: Mapped[datetime] = mapped_column(
@@ -91,7 +102,7 @@ class SourcePurgeOperation(Base):
     # evidence_identity_unavailable / legacy_provenance_unresolved and is never retried automatically.
     memory_status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="queued")
     memory_error_code: Mapped[str | None] = mapped_column(String(64))
-    memory_cursor: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    memory_cursor: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     memory_unresolved_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     memory_cache_pending: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     coverage_reopened: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")

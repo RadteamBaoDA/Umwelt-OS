@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import re
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Annotated
 
@@ -137,9 +138,9 @@ async def stream_events(
     except TimeoutError as exc:
         raise HTTPException(status_code=503, detail="Realtime connection limit reached") from exc
 
-    async def body():
+    async def body() -> AsyncIterator[str]:
         """Poll replay state, recheck session validity, emit events or heartbeats, and release the stream permit on every exit."""
-        nonlocal initial_reason
+        nonlocal initial_reason, latest_cursor
         try:
             position = initial_cursor
             if initial_reason is not None:

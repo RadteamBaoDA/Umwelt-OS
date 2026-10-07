@@ -1,26 +1,29 @@
 """Protected native tool catalog and owner invocation endpoints."""
 
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
+from uuid import UUID
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.dependencies import require_owner, require_owner_write
-from core.auth.public import revalidate_owner_session
 from core.auth.models import AuthSession
+from core.auth.public import revalidate_owner_session
 from core.database import get_session
 from core.tools import ToolExecutionPrincipal
-from modules.tools.models import BrowserReadJob
+from modules.settings.public import module_dependency
 from modules.tools.browser_public import (
     _read as read_browser_job,
+)
+from modules.tools.browser_public import (
     cancel_browser_job_in_uow,
+    derive_browser_job_token,
     read_browser_result,
 )
-from sqlalchemy import select
-import httpx
-from modules.tools.browser_public import derive_browser_job_token
-from modules.settings.public import module_dependency
+from modules.tools.models import BrowserReadJob
 
 router = APIRouter(prefix="/api/v1/tools", tags=["tools"], dependencies=[Depends(module_dependency("tools"))])
 browser_jobs_router = APIRouter(prefix="/api/v1/agent-browser-jobs", tags=["agent-browser-jobs"])
@@ -95,7 +98,7 @@ async def invoke_tool(
                 return await revalidate_owner_session(
                     fresh_session, owner_token_hash, owner_id,
                 )
-        except Exception:
+        except Exception:  # noqa: BLE001  # fail-closed boundary: any failure denies/degrades
             return False
 
     await session.rollback()
@@ -112,7 +115,7 @@ async def invoke_tool(
     if not result.success:
         raise HTTPException(status_code=403 if result.error_code == "forbidden" else 422,
                             detail={"code": result.error_code, "message": "Tool invocation failed"})
-    return result.model_dump(mode="json")
+    return cast("dict[str, Any]", result.model_dump(mode="json"))
 
 
 @browser_jobs_router.get("/{job_id}")

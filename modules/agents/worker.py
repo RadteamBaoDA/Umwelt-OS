@@ -1,13 +1,16 @@
 """Durable ARQ dispatch, exclusive PostgreSQL claims, bounded LangGraph segments, and recovery."""
 
 import asyncio
-from contextlib import asynccontextmanager
-from datetime import UTC, datetime
 import logging
 import math
-from typing import Any, AsyncIterator, cast
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime
+from typing import Any, cast
 from uuid import UUID
 
+from arq.connections import ArqRedis
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from redis.asyncio import Redis
 from sqlalchemy import func, select, text, update
@@ -17,27 +20,38 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, a
 from core.config import Settings
 from core.modules import register_modules
 from core.tools import ToolRegistry
+from modules.agents.approvals import expire_pending_approvals
+from modules.agents.handoff import register_handoff_tool
 from modules.agents.harness import (
-    MAX_ACTIVE_SECONDS, HarnessContext, RunCancelled, RunIncompatible, RunLimitReached, StrictJsonSerializer,
+    MAX_ACTIVE_SECONDS,
+    HarnessContext,
+    HarnessState,
+    RunCancelled,
+    RunIncompatible,
+    RunLimitReached,
+    StrictJsonSerializer,
     build_workflow,
 )
 from modules.agents.leases import agent_run_lease_key
 from modules.agents.models import AgentApproval, AgentEffect, AgentRun, AgentToolCall
 from modules.agents.public import (
-    APPROVAL_PROMPT_VERSION, APPROVAL_WORKFLOW_VERSION, CHECKPOINT_SCHEMA_VERSION,
-    PROMPT_VERSION, WORKFLOW_VERSION, SPECIALIST_CHECKPOINT_SCHEMA_VERSION,
-    SPECIALIST_PROMPT_VERSION, SPECIALIST_WORKFLOW_VERSION,
+    APPROVAL_PROMPT_VERSION,
+    APPROVAL_WORKFLOW_VERSION,
+    CHECKPOINT_SCHEMA_VERSION,
+    PROMPT_VERSION,
+    SPECIALIST_CHECKPOINT_SCHEMA_VERSION,
+    SPECIALIST_PROMPT_VERSION,
+    SPECIALIST_WORKFLOW_VERSION,
+    WORKFLOW_VERSION,
     publish_agent_activity_safely,
 )
-from modules.agents.approvals import expire_pending_approvals
-from modules.tools.builtins import register_builtin_tools
-from modules.tools.webhook import register_webhook_tool
-from modules.tools.browser import register_browser_tool
-from modules.agents.handoff import register_handoff_tool
-from modules.goals.tools import register_goal_tools
 from modules.automations.tools import register_automation_tools
+from modules.goals.tools import register_goal_tools
 from modules.tasks.tools import register_task_tools
+from modules.tools.browser import register_browser_tool
+from modules.tools.builtins import register_builtin_tools
 from modules.tools.public import McpAdmission, McpRuntime
+from modules.tools.webhook import register_webhook_tool
 
 logger = logging.getLogger(__name__)
 SEGMENT_TIMEOUT_SECONDS = 145
@@ -74,7 +88,7 @@ async def _run_lease(engine: AsyncEngine, run_id: UUID) -> AsyncIterator[tuple[A
             try:
                 await connection.scalar(text("SELECT pg_advisory_unlock(:key)"), {"key": key})
                 await connection.commit()
-            except Exception:
+            except Exception:  # noqa: BLE001, S110  # best-effort cleanup/optional step; failure intentionally ignored
                 # Closing a lost connection releases its PostgreSQL session lock.
                 pass
         await connection.close()
@@ -194,8 +208,7 @@ async def _account_segment(
         else:
             row.status = "failed"
             row.error_code = (
-                "active_time_limit" if row.active_seconds >= MAX_ACTIVE_SECONDS else
-                outcome if outcome == "token_budget_unavailable" else outcome
+                "active_time_limit" if row.active_seconds >= MAX_ACTIVE_SECONDS else outcome
             )
             row.completed_at = datetime.now(UTC)
             row.token_usage_unknown = row.token_usage_unknown or outcome == "segment_timeout"
@@ -221,8 +234,8 @@ async def _finish_run(
             status, error_code = "failed", "invalid_output"
         else:
             try:
-                await context.authorize_remote_send(state)
-            except Exception:
+                await context.authorize_remote_send(cast(HarnessState, state))
+            except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
                 status, error_code = "failed", "source_or_policy_fence_changed"
     async with session_factory() as session:
         row = await session.scalar(select(AgentRun).where(AgentRun.id == context.run_id).with_for_update())
@@ -264,7 +277,7 @@ async def _delete_checkpoints(session: AsyncSession, thread_id: str) -> None:
         await session.execute(text(f"DELETE FROM {table} WHERE thread_id = :thread_id"), {"thread_id": thread_id})
 
 
-async def _enqueue_generation(redis: Redis, run_id: UUID, generation: int) -> bool:
+async def _enqueue_generation(redis: ArqRedis, run_id: UUID, generation: int) -> bool:
     """Enqueue one deterministic ARQ job ID while PostgreSQL remains the dispatch source of truth."""
     result = await redis.enqueue_job(
         "process_agent_run", str(run_id), generation,
@@ -339,7 +352,7 @@ async def _recover_abandoned(
         try:
             await lease[0].scalar(text("SELECT pg_advisory_unlock(:key)"), {"key": key})
             await lease[0].commit()
-        except Exception:
+        except Exception:  # noqa: BLE001, S110  # best-effort cleanup/optional step; failure intentionally ignored
             pass
         # The context manager retries this unlock; closing the backend also releases its session lock.
         return True
@@ -354,7 +367,7 @@ async def _refresh_stale_mcp_tools(ctx: dict[str, object], registry: ToolRegistr
     a connection another run is dispatching. Failures are swallowed: the unchanged registry keeps
     revalidation fail-closed.
     """
-    runtime = ctx.get("agent_mcp_runtime")
+    runtime: Any = ctx.get("agent_mcp_runtime")
     if runtime is None:
         return
     stale: set[str] = set()
@@ -371,7 +384,7 @@ async def _refresh_stale_mcp_tools(ctx: dict[str, object], registry: ToolRegistr
     for connection_hex in stale:
         try:
             await runtime.refresh_connection(row.owner_id, UUID(hex=connection_hex))
-        except Exception:
+        except Exception:  # noqa: BLE001, S112  # best-effort cleanup/optional step; failure intentionally ignored
             continue
 
 
@@ -386,7 +399,7 @@ async def process_agent_run(ctx: dict[str, object], run_id: str, dispatch_genera
     settings = cast(Settings, ctx["settings"])
     session_factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     engine = cast(AsyncEngine, ctx["db_engine"])
-    redis = cast(Redis, ctx["redis"])
+    redis = cast(ArqRedis, ctx["redis"])  # arq worker context carries its ArqRedis pool
     registry = cast(ToolRegistry, ctx["agent_tool_registry"])
     async with session_factory() as availability_session:
         from modules.settings.public import read_module_availability
@@ -458,7 +471,7 @@ async def process_agent_run(ctx: dict[str, object], run_id: str, dispatch_genera
                     checkpoint_url, serde=StrictJsonSerializer(),
                 ) as saver:
                     graph = build_workflow(context, saver)
-                    graph_config = {
+                    graph_config: RunnableConfig = {
                         "configurable": {"thread_id": row.checkpoint_thread_id},
                         "recursion_limit": 32,
                     }
@@ -477,7 +490,7 @@ async def process_agent_run(ctx: dict[str, object], run_id: str, dispatch_genera
                         if profile_snapshot is not None:
                             if not isinstance(values, dict):
                                 raise RunIncompatible("Profile checkpoint context is invalid")
-                            context.assert_profile_checkpoint(values)
+                            context.assert_profile_checkpoint(cast(HarnessState, values))
                         # Keep checkpointed partial usage when a crash happened before row accounting.
                         if row.token_usage_unknown:
                             initial["token_usage_unknown"] = True
@@ -489,8 +502,8 @@ async def process_agent_run(ctx: dict[str, object], run_id: str, dispatch_genera
                         })
                     state = await graph.ainvoke(initial, graph_config)
             if not isinstance(state, dict):
-                raise RuntimeError("Workflow state is invalid")
-            context.assert_profile_checkpoint(state)
+                raise RuntimeError("Workflow state is invalid")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+            context.assert_profile_checkpoint(cast(HarnessState, state))
             await context._run_snapshot()
             if state.get("answer") is not None and not state.get("segment_done"):
                 await _finish_run(session_factory, context, state=state, status="succeeded", error_code=None)
@@ -512,7 +525,7 @@ async def process_agent_run(ctx: dict[str, object], run_id: str, dispatch_genera
         except PermissionError:
             await _finish_run(session_factory, context, state=state, status="failed", error_code="model_policy_denied")
             return
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
             logger.warning("Agent run %s stopped after %s", parsed_id, type(exc).__name__)
         await _account_segment(session_factory, context, state=state, outcome=outcome)
 
@@ -529,7 +542,7 @@ async def reconcile_agent_dispatch(ctx: dict[str, object]) -> int:
     global _activity_reconcile_cursor
     session_factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     engine = cast(AsyncEngine, ctx["db_engine"])
-    redis = cast(Redis, ctx["redis"])
+    redis = cast(ArqRedis, ctx["redis"])
     async with session_factory() as availability_session:
         from modules.settings.public import read_module_availability
 
@@ -579,7 +592,7 @@ async def reconcile_agent_dispatch(ctx: dict[str, object]) -> int:
     for run_id, generation in queued:
         try:
             enqueued += int(await _enqueue_generation(redis, run_id, generation))
-        except Exception:
+        except Exception:  # noqa: BLE001, S112  # best-effort cleanup/optional step; failure intentionally ignored
             # PostgreSQL retains queued work; the next bounded reconciliation retries enqueue.
             continue
     return enqueued

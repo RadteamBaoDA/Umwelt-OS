@@ -1,7 +1,7 @@
 """Owner-authenticated management API for persisted MCP connection and grant records."""
 
 from functools import partial
-from typing import Annotated
+from typing import Annotated, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -12,9 +12,14 @@ from core.auth.models import AuthSession
 from core.auth.public import revalidate_owner_session
 from core.config import Settings
 from core.database import get_session
-from modules.tools import mcp_repository as repository
-from modules.tools.mcp_schemas import ConnectionDraft, ConnectionSave, GrantSelection, InboundClientCreate
 from modules.settings.public import module_dependency
+from modules.tools import mcp_repository as repository
+from modules.tools.mcp_schemas import (
+    ConnectionDraft,
+    ConnectionSave,
+    GrantSelection,
+    InboundClientCreate,
+)
 
 router = APIRouter(prefix="/api/v1/mcp", tags=["mcp-management"], dependencies=[Depends(module_dependency("tools"))])
 Session = Annotated[AsyncSession, Depends(get_session)]
@@ -35,7 +40,7 @@ async def _revalidate_management_owner(
     try:
         async with session_factory() as fresh_session:
             return await revalidate_owner_session(fresh_session, token_hash, owner_id)
-    except Exception:
+    except Exception:  # noqa: BLE001  # fail-closed boundary: any failure denies/degrades
         return False
 
 
@@ -82,7 +87,7 @@ async def create_connection_route(payload: ConnectionDraft, request: Request, se
     except ValueError as exc:
         await session.rollback()
         raise HTTPException(status_code=422, detail="MCP connection input is invalid") from exc
-    return item.model_dump(mode="json")
+    return cast("dict[str, object]", item.model_dump(mode="json"))
 
 
 async def get_connection_route(connection_id: UUID, session: Session, owner: OwnerRead) -> dict[str, object]:
@@ -125,7 +130,7 @@ async def update_connection_route(connection_id: UUID, payload: ConnectionSave, 
         raise HTTPException(status_code=409, detail="MCP connection changed; reload and retry") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="MCP connection input is invalid") from exc
-    return item.model_dump(mode="json")
+    return cast("dict[str, object]", item.model_dump(mode="json"))
 
 
 async def draft_check_route(connection_id: UUID, request: Request, session: Session, owner: OwnerWrite) -> dict[str, object]:
@@ -153,7 +158,7 @@ async def draft_check_route(connection_id: UUID, request: Request, session: Sess
         raise HTTPException(status_code=503, detail={"code": "mcp_transport_unavailable", "message": "MCP transport is unavailable"}) from exc
     except Exception as exc:
         raise HTTPException(status_code=503, detail={"code": "mcp_transport_unavailable", "message": "MCP draft check did not complete"}) from exc
-    return item.model_dump(mode="json")
+    return cast("dict[str, object]", item.model_dump(mode="json"))
 
 
 async def discover_route(connection_id: UUID, request: Request, session: Session, owner: OwnerWrite) -> dict[str, object]:
@@ -184,7 +189,7 @@ async def discover_route(connection_id: UUID, request: Request, session: Session
         await request.app.state.mcp_runtime.refresh_connection(owner_id, connection_id)
     except Exception as exc:
         raise HTTPException(status_code=503, detail={"code": "mcp_runtime_refresh_failed", "message": "Discovery was saved but runtime refresh is unavailable"}) from exc
-    return item.model_dump(mode="json")
+    return cast("dict[str, object]", item.model_dump(mode="json"))
 
 
 async def replace_grants_route(connection_id: UUID, payload: GrantSelection, request: Request, session: Session, owner: OwnerWrite) -> dict[str, object]:
@@ -235,7 +240,7 @@ async def enable_connection_route(connection_id: UUID, expected_revision: int, r
         raise HTTPException(status_code=409, detail="MCP connection changed; reload and retry") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="MCP connection cannot be enabled") from exc
-    return item.model_dump(mode="json")
+    return cast("dict[str, object]", item.model_dump(mode="json"))
 
 
 async def disable_connection_route(connection_id: UUID, expected_revision: int, request: Request, session: Session, owner: OwnerWrite) -> dict[str, object]:
@@ -251,7 +256,7 @@ async def disable_connection_route(connection_id: UUID, expected_revision: int, 
         raise HTTPException(status_code=404, detail="MCP connection not found") from exc
     except repository.McpConflict as exc:
         raise HTTPException(status_code=409, detail="MCP connection changed; reload and retry") from exc
-    return item.model_dump(mode="json")
+    return cast("dict[str, object]", item.model_dump(mode="json"))
 
 
 async def list_inbound_clients_route(session: Session, owner: OwnerRead) -> dict[str, object]:

@@ -8,13 +8,10 @@ calls a model, sends a webhook or creates a task: preview is pure evaluation.
 
 from __future__ import annotations
 
-from core.telemetry import RunMeta as _RunMeta
-from modules.automations.models import AutomationRun as _AutomationRun
-
 import hashlib
 import json
-from datetime import UTC, datetime
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -23,7 +20,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import Settings
-from modules.chat.public import Conversation
+from core.telemetry import RunMeta as _RunMeta
 from modules.automations.conditions import TRIGGER_FIELDS, evaluate, validate_sample
 from modules.automations.execution import (
     ACTION_MODULE,
@@ -41,6 +38,7 @@ from modules.automations.execution import (
     start_manual,
 )
 from modules.automations.models import Automation, AutomationRevision, AutomationRunAction
+from modules.automations.models import AutomationRun as _AutomationRun
 from modules.automations.schemas import (
     MAX_REVISION,
     AutomationCreate,
@@ -54,6 +52,7 @@ from modules.automations.schemas import (
     PreviewRequest,
     PreviewResult,
 )
+from modules.chat.public import Conversation
 from modules.dashboard import public as dashboard
 from modules.tools.public import webhook_aliases
 
@@ -188,9 +187,11 @@ def _read(head: Automation, rev: AutomationRevision) -> AutomationRead:
 
 async def _current_revision(session: AsyncSession, head: Automation) -> AutomationRevision:
     """Load the immutable snapshot matching the head's revision number."""
-    return await session.scalar(select(AutomationRevision).where(
+    snapshot = await session.scalar(select(AutomationRevision).where(
         AutomationRevision.automation_id == head.id, AutomationRevision.revision == head.revision,
     ))
+    assert snapshot is not None  # every head revision has its immutable snapshot
+    return snapshot
 
 
 def _append_revision(session: AsyncSession, head: Automation, trigger: dict[str, Any],
@@ -388,6 +389,7 @@ async def preview(session: AsyncSession, owner_id: int, request: PreviewRequest)
     if request.definition is not None:
         trigger, conditions, actions = _dump(request.definition)
     else:
+        assert request.automation_id is not None  # PreviewRequest validates exactly one of automation_id/definition
         read = await get_automation(session, owner_id, request.automation_id)
         trigger, conditions, actions = read.trigger, read.conditions, read.actions
         try:
@@ -403,12 +405,33 @@ async def preview(session: AsyncSession, owner_id: int, request: PreviewRequest)
 
 
 __all__ = [
-    "AutomationConflict", "AutomationInvalid", "PauseBeforeBriefEdit", "capabilities", "AutomationMissing", "RunConflict", "RunMissing",
-    "AutomationCleanupProgress", "scrub_document_runs", "scrub_document_triggers",
-    "create_automation", "decide_action", "delete_automation", "enqueue_trigger", "evaluate_conditions",
-    "get_automation", "get_automation_conversation_id", "get_revision", "list_automations", "list_runs", "origin_for_reference", "preview",
+    "AutomationCleanupProgress",
+    "AutomationConflict",
+    "AutomationInvalid",
+    "AutomationMissing",
+    "PauseBeforeBriefEdit",
+    "RunConflict",
+    "RunMissing",
+    "capabilities",
+    "create_automation",
+    "decide_action",
+    "delete_automation",
+    "enqueue_trigger",
+    "evaluate_conditions",
+    "get_automation",
+    "get_automation_conversation_id",
+    "get_revision",
+    "get_run_meta_by_id",
+    "list_automations",
+    "list_run_meta",
+    "list_runs",
+    "origin_for_reference",
+    "preview",
+    "scrub_document_runs",
+    "scrub_document_triggers",
     "start_manual",
-    "update_automation", "validate_definition", "list_run_meta", "get_run_meta_by_id",
+    "update_automation",
+    "validate_definition",
 ]
 
 

@@ -12,14 +12,14 @@ Local develop `00ddd32` includes P01–P11, Collector/MCP, R07, R12, R14 and R15
 | --- | --- | --- |
 | Production scope | Every original phase and R01–R16 task has an accepted code/build/review receipt and integrated revision | Incomplete |
 | Final composed build | Prescribed `./scripts/dev.ps1 build` or `make build`, exact source revision, output and exit code | Pending final composition |
-| Clean install | Disposable clean database migrations, owner bootstrap/login, approved seed, authenticated dashboard/chat/settings | Deferred test stage |
-| Upgrade | Preserved Phase0 deployment data and secrets, migration chain, upgrade and recovery evidence | Deferred test stage |
+| Clean install | Disposable clean database migrations, owner bootstrap/login, approved seed, authenticated dashboard/chat/settings | Automated pass on disposable stack (migrations ×2, setup/onboarding, demo seed ×2, E2E login/system); manual walkthrough pending |
+| Upgrade | Preserved Phase0 deployment data and secrets, migration chain, upgrade and recovery evidence | Migration downgrade/re-upgrade of all 10 P12 revisions passes with identical schema; Phase0 data upgrade not run (no preserved data) |
 | Realtime/proxy | Authenticated SSE replay/reset, long-lived proxy response and client status | Runtime pending |
-| Privacy/deletion | Consent, immediate access revocation, exact evidence cleanup and durable retry receipts | P12 implementation incomplete |
-| Backup/restore | Encrypted archive, protected keys, isolated restore, component readiness and explicit recovery | Source integrated; restore acceptance deferred |
-| Provider integration | Explicit live Google, connector, OmniRoute, graph/n8n/browser receipts for enabled capabilities | Pending |
+| Privacy/deletion | Consent, immediate access revocation, exact evidence cleanup and durable retry receipts | Integration tests pass: Source purge leaves no residue (bytea-aware scan), outbox replay never resurrects, success gated on historical + Memory coverage, deleted content hidden while purge pending; physical erasure unverified |
+| Backup/restore | Encrypted archive, protected keys, isolated restore, component readiness and explicit recovery | Database-level drill passes (real `modules/backup/host.py` pg_dump/pg_restore argv, row-level equality, truncated dump rejected); full encrypted `scripts/backup.py`/`restore.py` isolated restore not run |
+| Provider integration | Explicit live Google, connector, OmniRoute, graph/n8n/browser receipts for enabled capabilities | BLOCKED: no provider credentials in the validation environment |
 | Mobile/accessibility | Viewport, keyboard/focus, screen-reader labels, edit-grid and drawer/full-chat behavior | Deferred test stage |
-| Capacity | Measured 2-core/8GiB workload, configuration, concurrency, memory/CPU/latency and OOM/disk evidence | Target host unverified |
+| Capacity | Measured 2-core/8GiB workload, configuration, concurrency, memory/CPU/latency and OOM/disk evidence | BLOCKED: no target host; worker concurrency raised to 4 slots with heavy-work serialization |
 | OSS | Exact dependencies/copied source revisions, licenses, modifications and notices | Final inventory reconciliation pending |
 
 ## Operator preparation
@@ -49,13 +49,15 @@ Expected Alembic head: `p12_evidence_version_index`. P12 lineage: `p12_memory_do
 
 ```json
 {
-  "functional_acceptance": "pending",
-  "live_integrations": "pending",
-  "target_capacity": "pending",
+  "functional_acceptance": "partial",
+  "live_integrations": "blocked",
+  "target_capacity": "blocked",
   "restore_verified": false
 }
 ```
 
 Run tests only after all original and supplemental production code/build/review closes. Record actual command, source revision, environment, outcome and unresolved gate for each result. Historical Phase0 evidence does not certify current auth, UI, provider or recovery behavior. Release, push and deployment require their own authorized action.
+
+**Test-stage evidence (2026-10-07, local Windows Docker, disposable `bbd-os-test-*` projects, branch `codex/umwelt-p13-integration` at `ccac69e`, squash-merged to develop):** `./scripts/dev.ps1 test` exit 0 — migrations empty→head `p12_evidence_version_index` twice; unit 1103 passed; auth race 1 passed; integration 15 passed; Playwright E2E 2 passed; teardown verified. Static gates: `mypy core apps modules` 0 errors (302 files), ruff clean, web typecheck/lint 0 errors. `partial` because manual mobile/accessibility and full-UI walkthroughs were not run; `blocked` gates need provider credentials and the 2-core/8GiB target host; `restore_verified` stays `false` until an encrypted isolated restore with `scripts/restore.py` is recorded.
 
 

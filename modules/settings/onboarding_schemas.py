@@ -5,7 +5,6 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-
 OnboardingStep = Literal[
     "ai_privacy", "capability", "sources", "sample_or_import", "indexing", "complete",
 ]

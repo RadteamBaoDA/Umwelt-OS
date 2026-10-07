@@ -8,81 +8,84 @@ through the shared replay transaction.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import base64
 import binascii
+import hashlib
+import json
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
-from uuid import UUID, uuid5, NAMESPACE_URL
+from uuid import NAMESPACE_URL, UUID, uuid5
 
-from sqlalchemy import delete, func, select, text
-from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import HTTPException
+from sqlalchemy import ColumnElement, delete, func, select, text
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.expression import Exists
 
 from core.realtime import commit_with_replay, make_dashboard_change
-from modules.dashboard import briefs, context, gadgets, layouts
-from modules.dashboard.models import (
-    Dashboard,
-    DashboardGroup,
-    DashboardLayout,
-    DailyBrief,
-    BriefSchedule as BriefScheduleRow,
-    GadgetDefinition,
-    GadgetInstance,
-    GadgetPlacement,
-)
-from modules.dashboard.schemas import (
-    DashboardCreate,
-    DashboardExportFence,
-    DashboardExportPage,
-    DashboardExportValidation,
-    GadgetDefinitionExport,
-    GadgetDefinitionExportFence,
-    GadgetDefinitionExportPage,
-    GadgetDefinitionExportValidation,
-    DashboardPatch,
-    GadgetDefinitionCreate,
-    GadgetDefinitionPatch,
-    GadgetConfiguration,
-    GadgetFilters,
-    GadgetScope,
-    HighlightRule,
-    DashboardDetail,
-    DashboardGroupRead,
-    DashboardSummary,
-    GadgetDefinitionRead,
-    DashboardHighlightRead,
-    RendererRead,
-    DashboardPresetRead,
-    PresetPreviewRead,
-    GroupCreate,
-    GroupPatch,
-    InstanceCreate,
-    InstancePatch,
-    LayoutReplace,
-    PresetApplyRequest,
-    PresetPreviewRequest,
-    MAX_DASHBOARDS_PER_OWNER,
-    MAX_DEFINITIONS_PER_OWNER,
-    MAX_GROUPS_PER_DASHBOARD,
-    MAX_INSTANCES_PER_DASHBOARD,
-    MAX_RULES_PER_DEFINITION,
-)
-from modules.sources.schemas import GadgetSourceSelectionPage
-from modules.sources import public as sources
+from modules.dashboard import briefs, gadgets, layouts
 from modules.dashboard.daily_schemas import (
-    BriefSchedule,
     BriefExportFence,
     BriefExportPage,
     BriefExportValidation,
+    BriefSchedule,
     BriefScheduleExport,
     BriefScheduleExportFence,
     BriefScheduleExportPage,
     BriefScheduleExportValidation,
     DailyBriefExport,
 )
+from modules.dashboard.models import (
+    BriefSchedule as BriefScheduleRow,
+)
+from modules.dashboard.models import (
+    DailyBrief,
+    Dashboard,
+    DashboardGroup,
+    DashboardLayout,
+    GadgetDefinition,
+    GadgetInstance,
+    GadgetPlacement,
+)
+from modules.dashboard.schemas import (
+    MAX_DASHBOARDS_PER_OWNER,
+    MAX_DEFINITIONS_PER_OWNER,
+    MAX_GROUPS_PER_DASHBOARD,
+    MAX_INSTANCES_PER_DASHBOARD,
+    MAX_RULES_PER_DEFINITION,
+    DashboardCreate,
+    DashboardDetail,
+    DashboardExportFence,
+    DashboardExportPage,
+    DashboardExportValidation,
+    DashboardGroupRead,
+    DashboardHighlightRead,
+    DashboardPatch,
+    DashboardPresetRead,
+    DashboardSummary,
+    GadgetConfiguration,
+    GadgetDefinitionCreate,
+    GadgetDefinitionExport,
+    GadgetDefinitionExportFence,
+    GadgetDefinitionExportPage,
+    GadgetDefinitionExportValidation,
+    GadgetDefinitionPatch,
+    GadgetDefinitionRead,
+    GadgetFilters,
+    GadgetScope,
+    GroupCreate,
+    GroupPatch,
+    HighlightRule,
+    InstanceCreate,
+    InstancePatch,
+    LayoutReplace,
+    PresetApplyRequest,
+    PresetPreviewRead,
+    PresetPreviewRequest,
+    RendererRead,
+)
+from modules.sources import public as sources
+from modules.sources.schemas import GadgetSourceSelectionPage
 
 MAX_REVISION = 9_007_199_254_740_991
 DASHBOARD_QUOTA_LOCK_NAMESPACE = 4_603_202
@@ -107,8 +110,8 @@ async def evaluate_gadget_highlights(
     """
     from modules.dashboard.highlights import evaluate_highlights
     from modules.dashboard.models import GadgetHighlightProgress
-    from modules.knowledge.documents import public as documents
     from modules.dashboard.schemas import HighlightRule
+    from modules.knowledge.documents import public as documents
     from modules.notifications.public import NotificationEmit, NotificationEvidence, emit
 
     if emit_notifications:
@@ -195,19 +198,19 @@ async def evaluate_gadget_highlights(
         await session.commit()
         return matches[:100]
 
-    definition = await get_definition(session, owner_id, definition_id)
-    if definition is None:
+    definition_read = await get_definition(session, owner_id, definition_id)
+    if definition_read is None:
         raise DashboardMissing
-    if definition.renderer not in {"highlights", "watch_rules"}:
+    if definition_read.renderer not in {"highlights", "watch_rules"}:
         raise ValueError("Renderer does not support highlight evaluation")
-    source_ids = tuple(definition.source_ids[:32])
+    source_ids = tuple(definition_read.source_ids[:32])
     if not source_ids:
         return []
     projection_page = await documents.list_gadget_document_projections(
         session, owner_id=owner_id, source_ids=source_ids, limit=100,
     )
-    rules = [HighlightRule.model_validate(rule) for rule in definition.highlight_rules]
-    raw_item_scope = definition.scope.get("source_item_ids", [])
+    rules = [HighlightRule.model_validate(rule) for rule in definition_read.highlight_rules]
+    raw_item_scope = definition_read.scope.get("source_item_ids", [])
     item_scope = {str(value) for value in raw_item_scope} if isinstance(raw_item_scope, list) else set()
     matches = []
     for item in projection_page.items:
@@ -362,9 +365,7 @@ def _definition_warnings(
     for source_id in definition.source_ids:
         identifier = UUID(str(source_id))
         source = source_states.get(identifier)
-        if source is None:
-            warnings.append({"code": "source_unavailable", "source_id": str(identifier)})
-        elif source.status != "active":
+        if source is None or source.status != "active":
             warnings.append({"code": "source_unavailable", "source_id": str(identifier)})
     return warnings
 
@@ -476,7 +477,7 @@ def _decode_dashboard_export_cursor(cursor: str) -> tuple[datetime, datetime, UU
         raise HTTPException(status_code=422, detail="Dashboard export cursor is invalid") from exc
 
 
-def _dashboard_export_scope(owner_id: int, snapshot_at: datetime) -> tuple[object, ...]:
+def _dashboard_export_scope(owner_id: int, snapshot_at: datetime) -> tuple[ColumnElement[bool], ...]:
     """Select parent dashboard revisions that existed unchanged at the cutoff."""
     return Dashboard.owner_id == owner_id, Dashboard.created_at <= snapshot_at, Dashboard.updated_at <= snapshot_at
 
@@ -516,7 +517,7 @@ def _decode_owner_export_cursor(cursor: str, record_kind: str) -> tuple[datetime
         raise HTTPException(status_code=422, detail="Owner export cursor is invalid") from exc
 
 
-def _definition_export_scope(owner_id: int, snapshot_at: datetime) -> tuple[object, ...]:
+def _definition_export_scope(owner_id: int, snapshot_at: datetime) -> tuple[ColumnElement[bool], ...]:
     """Select the complete set of saved owner definitions created by the cutoff."""
     return (
         GadgetDefinition.owner_id == owner_id,
@@ -624,7 +625,7 @@ async def _definition_export_validation(
     return GadgetDefinitionExportValidation(valid=True, reason="valid", observed_snapshot_count=observed)
 
 
-def _newer_export_definition_exists(owner_id: int, snapshot_at: datetime):
+def _newer_export_definition_exists(owner_id: int, snapshot_at: datetime) -> Exists:
     """Find child definitions updated after the cutoff but used by a retained dashboard."""
     return select(GadgetInstance.id).join(
         GadgetDefinition, GadgetDefinition.id == GadgetInstance.definition_id,
@@ -960,7 +961,7 @@ async def get_dashboard(session: AsyncSession, owner_id: int, dashboard_id: UUID
 async def create_dashboard(session: AsyncSession, owner_id: int, payload: DashboardCreate) -> DashboardDetail:
     """Create a dashboard with empty desktop/mobile layouts and publish revision one atomically."""
     await _lock_owner_creation_quota(session, owner_id)
-    count = await session.scalar(select(func.count()).select_from(Dashboard).where(Dashboard.owner_id == owner_id))
+    count = await session.scalar(select(func.count()).select_from(Dashboard).where(Dashboard.owner_id == owner_id)) or 0
     if count >= MAX_DASHBOARDS_PER_OWNER:
         raise DashboardConflict("dashboard_limit", "Dashboard limit reached")
     dashboard = Dashboard(owner_id=owner_id, name=payload.name)
@@ -1007,7 +1008,7 @@ async def create_group(session: AsyncSession, owner_id: int, dashboard_id: UUID,
     """Add a group under dashboard revision lock and publish the resulting dashboard revision."""
     dashboard = await _lock_dashboard(session, owner_id, dashboard_id)
     _check_revision(dashboard, payload.expected_revision)
-    count = await session.scalar(select(func.count()).select_from(DashboardGroup).where(DashboardGroup.dashboard_id == dashboard_id))
+    count = await session.scalar(select(func.count()).select_from(DashboardGroup).where(DashboardGroup.dashboard_id == dashboard_id)) or 0
     if count >= MAX_GROUPS_PER_DASHBOARD:
         raise DashboardConflict("group_limit", "Group limit reached", dashboard.revision)
     group = DashboardGroup(dashboard_id=dashboard_id, name=payload.name, position=payload.position)
@@ -1092,7 +1093,7 @@ async def create_definition(session: AsyncSession, owner_id: int, payload: Gadge
         GadgetConfiguration(scope=payload.scope, filters=payload.filters, highlight_rules=payload.highlight_rules),
     )
     await _lock_selected_sources(session, payload.source_ids, require_active=True)
-    count = await session.scalar(select(func.count()).select_from(GadgetDefinition).where(GadgetDefinition.owner_id == owner_id))
+    count = await session.scalar(select(func.count()).select_from(GadgetDefinition).where(GadgetDefinition.owner_id == owner_id)) or 0
     if count >= MAX_DEFINITIONS_PER_OWNER:
         raise DashboardConflict("definition_limit", "Definition limit reached")
     row = GadgetDefinition(owner_id=owner_id, name=payload.name, renderer=descriptor.id,
@@ -1128,7 +1129,7 @@ async def patch_definition(session: AsyncSession, owner_id: int, definition_id: 
         await _lock_dashboard(session, owner_id, dashboard_id)
     if "renderer" in payload.model_fields_set and payload.renderer != row.renderer and references:
         raise DashboardConflict("renderer_in_use", "Renderer cannot change while referenced", row.revision)
-    candidate = {
+    candidate: dict[str, Any] = {
         "name": payload.name if payload.name is not None else row.name,
         "renderer": payload.renderer if payload.renderer is not None else row.renderer,
         "source_ids": payload.source_ids if payload.source_ids is not None else [UUID(str(item)) for item in row.source_ids],
@@ -1172,7 +1173,7 @@ async def create_instance(session: AsyncSession, owner_id: int, dashboard_id: UU
     group = await session.scalar(select(DashboardGroup).where(DashboardGroup.id == payload.group_id, DashboardGroup.dashboard_id == dashboard_id))
     if group is None:
         raise DashboardMissing
-    count = await session.scalar(select(func.count()).select_from(GadgetInstance).where(GadgetInstance.dashboard_id == dashboard_id))
+    count = await session.scalar(select(func.count()).select_from(GadgetInstance).where(GadgetInstance.dashboard_id == dashboard_id)) or 0
     if count >= MAX_INSTANCES_PER_DASHBOARD:
         raise DashboardConflict("instance_limit", "Instance limit reached", dashboard.revision)
     instance = GadgetInstance(dashboard_id=dashboard_id, group_id=payload.group_id, definition_id=definition.id, title=payload.title, position=payload.position)
@@ -1268,7 +1269,7 @@ async def replace_layout(session: AsyncSession, owner_id: int, dashboard_id: UUI
     """
     dashboard = await _lock_dashboard(session, owner_id, dashboard_id)
     _check_revision(dashboard, payload.expected_revision)
-    instances, minimums, _ = await _instance_minima(session, dashboard_id)
+    _instances, minimums, _ = await _instance_minima(session, dashboard_id)
     item_ids = {item.instance_id for item in payload.items}
     if item_ids != set(minimums):
         raise ValueError("Layout must include every dashboard instance exactly once")
@@ -1325,7 +1326,7 @@ async def preview_preset(session: AsyncSession, owner_id: int, preset_id: str, p
         if target is None:
             raise DashboardMissing
         target_revision = target.revision
-    slots = []
+    slots: list[dict[str, Any]] = []
     for slot in preset.slots:
         source_ids = list(payload.slot_sources.get(slot.slot_id, []))
         warnings = _renderer_warnings(slot.renderer)
@@ -1370,6 +1371,7 @@ async def apply_preset(session: AsyncSession, owner_id: int, preset_id: str, pay
     await _lock_selected_sources(session, [source_id for values in payload.slot_sources.values() for source_id in values], require_active=True)
     target_dashboard_id = payload.target_dashboard_id
     if payload.mode == "replace":
+        assert target_dashboard_id is not None and payload.expected_revision is not None  # replace mode requires both
         dashboard = await _lock_dashboard(session, owner_id, target_dashboard_id)
         _check_revision(dashboard, payload.expected_revision)
     else:
@@ -1380,7 +1382,7 @@ async def apply_preset(session: AsyncSession, owner_id: int, preset_id: str, pay
     if current["preview_fingerprint"] != payload.preview_fingerprint:
         raise DashboardConflict("preview_changed", "Preset preview changed; review it again", dashboard.revision if dashboard else None)
     if payload.mode == "create":
-        count = await session.scalar(select(func.count()).select_from(Dashboard).where(Dashboard.owner_id == owner_id))
+        count = await session.scalar(select(func.count()).select_from(Dashboard).where(Dashboard.owner_id == owner_id)) or 0
         if count >= MAX_DASHBOARDS_PER_OWNER:
             raise DashboardConflict("dashboard_limit", "Dashboard limit reached")
         dashboard = Dashboard(owner_id=owner_id, name=payload.name or current["name"])
@@ -1389,15 +1391,18 @@ async def apply_preset(session: AsyncSession, owner_id: int, preset_id: str, pay
         dashboard_revision = dashboard.revision
         session.add_all([DashboardLayout(dashboard_id=dashboard.id, breakpoint=bp, columns=20) for bp in ("desktop", "mobile")])
     else:
+        assert dashboard is not None
         dashboard_revision = _bump(dashboard)
         if payload.name is not None:
+            assert dashboard is not None
             dashboard.name = payload.name
         await session.execute(delete(DashboardGroup).where(DashboardGroup.dashboard_id == dashboard.id))
         await session.execute(delete(DashboardLayout).where(DashboardLayout.dashboard_id == dashboard.id))
         session.add_all([DashboardLayout(dashboard_id=dashboard.id, breakpoint=bp, columns=20) for bp in ("desktop", "mobile")])
-    definition_count = await session.scalar(select(func.count()).select_from(GadgetDefinition).where(GadgetDefinition.owner_id == owner_id))
+    definition_count = await session.scalar(select(func.count()).select_from(GadgetDefinition).where(GadgetDefinition.owner_id == owner_id)) or 0
     if definition_count + len(current["slots"]) > MAX_DEFINITIONS_PER_OWNER:
         raise DashboardConflict("definition_limit", "Definition limit reached", dashboard_revision)
+    assert dashboard is not None
     group = DashboardGroup(dashboard_id=dashboard.id, name=current["name"], position=0)
     session.add(group)
     await session.flush()
@@ -1408,6 +1413,7 @@ async def apply_preset(session: AsyncSession, owner_id: int, preset_id: str, pay
             source_ids=[str(item) for item in slot["source_ids"]], scope={}, filters={"keywords": [], "exclude_keywords": [], "limit": 25}, highlight_rules=[])
         session.add(definition)
         await session.flush()
+        assert dashboard is not None
         instance = GadgetInstance(dashboard_id=dashboard.id, group_id=group.id, definition_id=definition.id, title=None, position=index)
         session.add(instance)
         await session.flush()
@@ -1416,6 +1422,7 @@ async def apply_preset(session: AsyncSession, owner_id: int, preset_id: str, pay
     desktop = layouts.default_desktop_layout(minimums)
     mobile = layouts.default_mobile_layout(minimums)
     for breakpoint, items in (("desktop", desktop), ("mobile", mobile)):
+        assert dashboard is not None
         session.add_all([
             GadgetPlacement(dashboard_id=dashboard.id, breakpoint=breakpoint,
                             instance_id=item.instance_id, x=item.x, y=item.y, w=item.w, h=item.h)
@@ -1428,25 +1435,37 @@ async def apply_preset(session: AsyncSession, owner_id: int, preset_id: str, pay
 
 
 # Stable seams for P10 automation: daily context and briefs are consumed through this module only.
-from modules.dashboard.briefs import (  # noqa: E402
+from modules.dashboard.briefs import (
     BriefEmpty,
     BriefSlotOwned,
     BriefUnavailable,
     claim_brief_slot,
     clean_document_brief_evidence,
     generate_brief,
-    legacy_brief_coverage,
     latest_brief,
+    legacy_brief_coverage,
     list_briefs,
     read_schedule,
     read_slot_owner,
     release_brief_slot,
 )
-from modules.dashboard.context import build_daily_context  # noqa: E402
-from modules.dashboard.daily_schemas import BriefRead, DailyContext  # noqa: E402
+from modules.dashboard.context import build_daily_context
+from modules.dashboard.daily_schemas import BriefRead, DailyContext
 
 __all__ = [
-    "BriefEmpty", "BriefRead", "BriefUnavailable", "DailyContext", "build_daily_context",
-    "BriefSlotOwned", "claim_brief_slot", "generate_brief", "latest_brief", "list_briefs", "read_schedule",
-    "read_slot_owner", "release_brief_slot", "clean_document_brief_evidence", "legacy_brief_coverage",
+    "BriefEmpty",
+    "BriefRead",
+    "BriefSlotOwned",
+    "BriefUnavailable",
+    "DailyContext",
+    "build_daily_context",
+    "claim_brief_slot",
+    "clean_document_brief_evidence",
+    "generate_brief",
+    "latest_brief",
+    "legacy_brief_coverage",
+    "list_briefs",
+    "read_schedule",
+    "read_slot_owner",
+    "release_brief_slot",
 ]

@@ -1,6 +1,5 @@
 """Validated detached DTOs for event commands and timeline reads."""
 
-import json
 import math
 from datetime import UTC, date, datetime
 from typing import Any, Literal
@@ -168,7 +167,7 @@ class EventCreate(BaseModel):
         if value is None:
             return None
         if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise ValueError("score must be a JSON number")
+            raise ValueError("score must be a JSON number")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
         score = float(value)
         if not math.isfinite(score) or not 0 <= score <= 1:
             raise ValueError("score must be finite and between 0 and 1")
@@ -278,7 +277,7 @@ class EventPatch(BaseModel):
         if value is None:
             return None
         if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise ValueError("score must be a JSON number")
+            raise ValueError("score must be a JSON number")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
         score = float(value)
         if not math.isfinite(score) or not 0 <= score <= 1:
             raise ValueError("score must be finite and between 0 and 1")

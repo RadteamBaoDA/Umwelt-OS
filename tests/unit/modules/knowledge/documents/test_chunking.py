@@ -3,7 +3,6 @@
 from dataclasses import FrozenInstanceError
 
 import pytest
-import tiktoken
 
 from core.chunking import ENCODING, ChunkDraft, chunk_text
 

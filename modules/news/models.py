@@ -1,9 +1,20 @@
 """Private durable records for story groups and source-specific observations."""
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
@@ -77,8 +88,8 @@ class NewsObservation(Base):
     membership_entity_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default="[]")
     match_method: Mapped[str] = mapped_column(String(32), nullable=False)
     incomplete_reason: Mapped[str | None] = mapped_column(String(64))
-    match_evidence: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False, server_default="{}")
-    recorded_signals: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    match_evidence: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    recorded_signals: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
     algorithm_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 

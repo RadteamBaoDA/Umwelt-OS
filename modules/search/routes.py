@@ -19,8 +19,8 @@ from modules.search.schemas import (
     SearchRequest,
     SearchResponse,
 )
-from modules.tasks.schemas import TaskFilter
 from modules.settings.public import module_dependency
+from modules.tasks.schemas import TaskFilter
 
 router = APIRouter(prefix="/api/v1/search", tags=["search"], dependencies=[Depends(module_dependency("search"))])
 Session = Annotated[AsyncSession, Depends(get_session)]

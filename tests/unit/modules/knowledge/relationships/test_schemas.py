@@ -9,14 +9,13 @@ Covers:
 """
 
 from datetime import UTC, datetime
-from uuid import UUID, uuid4
+from uuid import uuid4
+
 import pytest
 from pydantic import ValidationError
 
 from modules.knowledge.entities.schemas import EvidenceRef
 from modules.knowledge.relationships.schemas import (
-    CorrectionRelationshipRef,
-    CorrectionSupportRef,
     EntityGraphRead,
     EvidenceRead,
     NeighborPage,
@@ -24,7 +23,6 @@ from modules.knowledge.relationships.schemas import (
     RelationshipCreate,
     RelationshipPage,
     RelationshipRead,
-    RelationshipSnapshot,
 )
 
 

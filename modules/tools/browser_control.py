@@ -1,14 +1,15 @@
 """Authenticated internal callbacks from the isolated browser service."""
 
+import hmac
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
-import hmac
 from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import Settings
 from core.remote_heavy import (
@@ -82,7 +83,9 @@ def _target_in_scope(value: str | None, origin: str, path_prefix: str) -> bool:
     )
 
 
-async def _current_authority(session, job: BrowserReadJob) -> tuple[bool, object | None]:
+async def _current_authority(
+    session: AsyncSession, job: BrowserReadJob
+) -> tuple[bool, connectors.AgentBrowserScope | None]:
     """Check original run/session/profile/Chat and source grant in this short callback transaction."""
     from core.auth.public import revalidate_owner_session
     from modules.sources import public as sources

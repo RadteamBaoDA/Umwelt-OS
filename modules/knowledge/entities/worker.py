@@ -3,8 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from difflib import SequenceMatcher
 from datetime import UTC, datetime
+from difflib import SequenceMatcher
 from typing import cast
 from uuid import UUID, uuid4
 
@@ -14,18 +14,32 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
 from core.heavy_work import bounded_heavy_work
-from core.model_gateway.client import CapabilityUnsupported, ModelGateway, ModelGatewayError, PrivacyPolicyDenied
 from core.model_gateway.cache import capability_key
-from core.model_gateway.schemas import CapabilityResult
+from core.model_gateway.client import (
+    CapabilityUnsupported,
+    ModelGateway,
+    ModelGatewayError,
+    PrivacyPolicyDenied,
+)
 from core.model_gateway.policy import may_send
-from core.model_gateway.schemas import RequestPolicy
+from core.model_gateway.schemas import (
+    AIExecutionConfig,
+    CapabilityResult,
+    ModelMapping,
+    RequestPolicy,
+)
+from core.realtime import commit_with_replay, make_graph_change
 from modules.ingestion.dispatcher import mark_event_delivered
 from modules.ingestion.models import EventOutbox
-from core.realtime import commit_with_replay, make_graph_change
 from modules.knowledge.documents import public as documents
 from modules.knowledge.entities import public as entities
 from modules.knowledge.entities.extraction import (
-    EXTRACTOR_VERSION, PROMPT_VERSION, extraction_messages, response_content, response_schema,
+    EXTRACTOR_VERSION,
+    PROMPT_VERSION,
+    ExtractedRelationship,
+    extraction_messages,
+    response_content,
+    response_schema,
 )
 from modules.knowledge.entities.resolution import candidate_match_fingerprint, resolve_candidate
 from modules.knowledge.entities.schemas import canonicalize_name
@@ -43,7 +57,7 @@ def _factory(ctx: dict[str, object]) -> async_sessionmaker[AsyncSession]:
     return cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
 
 
-async def _dependency_snapshot(config: object, redis: Redis) -> tuple[str, bool]:
+async def _dependency_snapshot(config: AIExecutionConfig, redis: Redis) -> tuple[str, bool]:
     """Fingerprint non-secret extraction policy and report current capability.
 
     Cached capability data is accepted only when model, gateway, revision, and
@@ -52,9 +66,9 @@ async def _dependency_snapshot(config: object, redis: Redis) -> tuple[str, bool]
     # AIExecutionConfig is returned by the settings owner. Hash only non-secret
     # policy/model/capability metadata; never persist endpoint or credential data.
     alias = EXTRACTION_ALIAS
-    aliases = getattr(config, "aliases")
+    aliases = config.aliases
     mapping = aliases.get(alias)
-    gateway_identity = getattr(config, "gateway_identity")
+    gateway_identity = config.gateway_identity
     capability_value: dict[str, object] | None = None
     key: str | None = None
     if mapping is not None:
@@ -84,16 +98,16 @@ async def _dependency_snapshot(config: object, redis: Redis) -> tuple[str, bool]
         and mapping is not None
         and capability_value.get("model") == mapping.model
         and capability_value.get("version") == mapping.version
-        and capability_value.get("configuration_revision") == getattr(config, "configuration_revision")
+        and capability_value.get("configuration_revision") == config.configuration_revision
         and capability_fresh
     )
-    privacy = getattr(config, "privacy")
+    privacy = config.privacy
     snapshot = {
-        "revision": getattr(config, "configuration_revision"),
+        "revision": config.configuration_revision,
         "gateway": gateway_identity,
-        "destination": getattr(config, "endpoint_destination_id"),
-        "endpoint_denied": getattr(config, "endpoint_policy_denied"),
-        "credential_configured": getattr(config, "omniroute_credential_configured"),
+        "destination": config.endpoint_destination_id,
+        "endpoint_denied": config.endpoint_policy_denied,
+        "credential_configured": config.omniroute_credential_configured,
         "mapping": (mapping.model, mapping.version) if mapping is not None else None,
         "capability_key": key,
         "remote_reasoning": privacy.allow_remote_reasoning,
@@ -104,21 +118,21 @@ async def _dependency_snapshot(config: object, redis: Redis) -> tuple[str, bool]
     return digest, supported
 
 
-def _policy_allows_extraction(config: object, mapping: object, destination: str | None, local_only: bool) -> bool:
+def _policy_allows_extraction(config: AIExecutionConfig, mapping: ModelMapping | None, destination: str | None, local_only: bool) -> bool:
     """Apply destination, local-only, consent, and capability policy to extraction."""
-    if mapping is None or not destination or getattr(config, "endpoint_policy_denied"):
+    if mapping is None or not destination or config.endpoint_policy_denied:
         return False
-    privacy = getattr(config, "privacy")
+    privacy = config.privacy
     policy = RequestPolicy(
         reasoning_allowed=privacy.allow_remote_reasoning,
         local_only=local_only,
         permitted_destinations=frozenset({destination}),
         reasoning_destinations=frozenset(privacy.reasoning_destinations),
-        configuration_revision=getattr(config, "configuration_revision"),
+        configuration_revision=config.configuration_revision,
     )
     return may_send(
         policy, EXTRACTION_ALIAS, mapping, destination,
-        getattr(config, "omniroute_credential_configured"), "structured",
+        config.omniroute_credential_configured, "structured",
     )
 
 
@@ -233,7 +247,7 @@ async def recover_entity_extraction_work(ctx: dict[str, object]) -> int:
             try:
                 async with session.begin_nested():
                     await connectors.map_github_version(session, current)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
                 logger.warning(
                     "github mapping recovery failed for version %s (%s)",
                     ref.document_version_id, type(exc).__name__,
@@ -252,7 +266,7 @@ async def recover_entity_extraction_work(ctx: dict[str, object]) -> int:
             source = await sources.lock_source(session, ready.source_id) if ready is not None else None
             current = await documents.get_ready_version_ref(session, version_id) if ready is not None else None
             if (
-                source is None or source.status != "active" or source.local_only
+                ready is None or source is None or source.status != "active" or source.local_only
                 or source.generation != captured_generation or current is None
                 or current.document_id != ready.document_id or current.source_id != source.id
                 or current.source_generation != captured_generation
@@ -400,7 +414,7 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
 
             gateway = ModelGateway(
                 redis=redis, base_url=config.omniroute_base_url, api_key=config.omniroute_api_key,
-                destination_id=destination, timeout_seconds=min(config.request_timeout_seconds, EXTRACTION_TIMEOUT_SECONDS),
+                destination_id=cast(str, destination), timeout_seconds=min(config.request_timeout_seconds, EXTRACTION_TIMEOUT_SECONDS),
                 gateway_identity=config.gateway_identity, before_send=before_send,
                 approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
             )
@@ -410,7 +424,7 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
                 response_schema(), probe=False,
             )
             if not isinstance(response, dict):
-                raise ValueError("invalid_model_response")
+                raise ValueError("invalid_model_response")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
             extracted, actual_model, usage = response_content(response)
             current_ready = await documents.get_ready_version_ref(session, version_id)
             if (
@@ -459,11 +473,11 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
             # Pre-resolve intra-response near-duplicates so resolve-then-lock
             # cannot create two new rows for the same/ambiguous model identity.
             for index, left in enumerate(extracted.entities):
-                left_resolution, left_id, left_possible, left_reason = resolution_plan[left.key]
+                left_resolution, left_id, _left_possible, _left_reason = resolution_plan[left.key]
                 for right in extracted.entities[index + 1:]:
                     if left.type != right.type:
                         continue
-                    right_resolution, right_id, right_possible, right_reason = resolution_plan[right.key]
+                    right_resolution, right_id, _right_possible, _right_reason = resolution_plan[right.key]
                     if left_resolution not in {"new", "matched"} or right_resolution not in {"new", "matched"}:
                         continue
                     similarity = SequenceMatcher(
@@ -536,7 +550,7 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
                 session, data.document_id, version_id, candidate_bindings, for_update=True
             )
             for candidate in extracted.entities:
-                old_resolution, old_id, old_possible, old_reason = resolution_plan[candidate.key]
+                old_resolution, old_id, _old_possible, old_reason = resolution_plan[candidate.key]
                 if old_reason == "resolution_context_bounded":
                     continue
                 known, overflow = refreshed[candidate.type]
@@ -642,7 +656,7 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
                                 field_name="description", value=candidate.description,
                             )
                 facts.append({"entity_id": str(entity_id), "candidate_key": candidate.key, "confidence": candidate.confidence})
-            def retain_relationship_review(relation, reason: str, possible: list[str]) -> None:
+            def retain_relationship_review(relation: ExtractedRelationship, reason: str, possible: list[str]) -> None:
                 """Snapshot unresolved relationship endpoints for later owner review."""
                 source_candidate = candidate_by_key[relation.source_key]
                 target_candidate = candidate_by_key[relation.target_key]
@@ -674,6 +688,7 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
                 )
                 if relationship_id is not None:
                     facts.append({"relationship_id": str(relationship_id), "relationship": relation.type, "source_entity_id": str(source_id), "target_entity_id": str(target_id), "chunk_id": str(relation.chunk_id), "confidence": relation.confidence})
+            assert mapping is not None
             if await entities.finish_extraction_work(
                 session, work_id, lease_owner, facts=facts, review=review,
                 model=actual_model or mapping.model, usage=usage,
@@ -702,7 +717,7 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
             )
             await session.commit()
         logger.warning("Entity extraction deferred work_id=%s error_code=%s", work_id, error_code)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
         blocked = str(exc) in {"Extraction input exceeds its chunk or byte limit"}
         error_code = "extraction_input_limit" if blocked else str(exc) if str(exc) in {
             "invalid_model_response", "unknown_evidence_chunk", "duplicate_candidate_key",

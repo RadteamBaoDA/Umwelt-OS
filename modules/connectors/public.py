@@ -1,28 +1,56 @@
-from datetime import UTC, datetime, timedelta
+import asyncio
 import base64
 import hashlib
-from hashlib import sha256
 import json
+import re
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from ipaddress import ip_address
 from socket import getaddrinfo
+from typing import TYPE_CHECKING, Literal, TypeGuard
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
-import asyncio
-from dataclasses import dataclass
-import re
-from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, StrictBool, StrictInt, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    StrictBool,
+    StrictInt,
+    field_validator,
+    model_validator,
+)
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from modules.sources.schemas import ConnectorSource, SourceFence
+
 from modules.connectors.models import (
-    AgentBrowserGrant, ConnectorProvisioning, GithubOAuthGrant, GithubWebhookCapacity,
-    GithubWebhookDelivery, GithubWebhookOutbox, GithubSourceHint, ConnectorWorldCredential,
-    ConnectorManagedCredential, GithubOAuthCoordinator, GithubOAuthOperation,
+    AgentBrowserGrant,
+    ConnectorManagedCredential,
+    ConnectorProvisioning,
+    ConnectorWorldCredential,
+    GithubOAuthCoordinator,
+    GithubOAuthGrant,
+    GithubOAuthOperation,
+    GithubSourceHint,
+    GithubWebhookCapacity,
+    GithubWebhookDelivery,
+    GithubWebhookOutbox,
 )
 from modules.connectors.providers.cii import CiiProjection
 from modules.ingestion.schemas import IngestionRecord, TelegramRawDelivery
+from modules.sources.schemas import ConnectorSource, SourceFence
+
+if TYPE_CHECKING:
+    from core.config import Settings
+    from modules.connectors.github.schemas import GitHubBindingFence, GitHubSegmentProof
+    from modules.connectors.github.sync import GitHubValidatedSegment
+    from modules.connectors.github.webhooks import (
+        GitHubTargetHint,
+        GitHubWebhookReceipt,
+        VerifiedGitHubDelivery,
+    )
 
 
 async def observability_queue_summary(session: AsyncSession) -> dict[str, dict[str, int]]:
@@ -146,7 +174,7 @@ class TelegramUpdatePage(BaseModel):
         return self
 
 
-def is_native_provider(provider: str | None) -> bool:
+def is_native_provider(provider: str | None) -> TypeGuard[str]:
     """Identify registered native providers that must bypass generic raw collection."""
     return provider in NATIVE_PROVIDERS
 
@@ -304,13 +332,13 @@ async def get_current_provider_scope(
         return None
     provider_id = source.provider or {"rss": "rss", "web": "web", "api": "rest"}.get(source.type)
     entry = get_catalog_entry(provider_id) if provider_id else None
-    if entry is None or entry.availability not in {"available", "implemented", "requires_credentials"}:
+    if provider_id is None or entry is None or entry.availability not in {"available", "implemented", "requires_credentials"}:
         return None
     try:
         from modules.connectors.registry import configuration as provider_configuration
 
         configuration = provider_configuration(source).model_dump(mode="json", exclude_none=True)
-    except Exception:
+    except Exception:  # noqa: BLE001  # fail-closed boundary: any failure denies/degrades
         return None
     if any(name not in configuration for name in entry.scope_fields):
         return None
@@ -347,13 +375,13 @@ async def export_provider_scope(
         return None
     provider_id = source.provider or {"rss": "rss", "web": "web", "api": "rest"}.get(source.type)
     entry = get_catalog_entry(provider_id) if provider_id else None
-    if entry is None or entry.availability not in {"available", "implemented", "requires_credentials"}:
+    if provider_id is None or entry is None or entry.availability not in {"available", "implemented", "requires_credentials"}:
         return None
     try:
         from modules.connectors.registry import configuration as provider_configuration
 
         configuration = provider_configuration(source).model_dump(mode="json", exclude_none=True)
-    except Exception:
+    except Exception:  # noqa: BLE001  # fail-closed boundary: any failure denies/degrades
         return None
     if any(name not in configuration for name in entry.scope_fields):
         return None
@@ -401,7 +429,7 @@ def _agent_browser_scope_url(value: object) -> tuple[str, str]:
     from urllib.parse import unquote, urlsplit
 
     if not isinstance(value, str):
-        raise ValueError("Web source URL is unavailable")
+        raise ValueError("Web source URL is unavailable")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
     parsed = urlsplit(value)
     path = parsed.path or "/"
     decoded_path = unquote(path)
@@ -511,10 +539,14 @@ async def resolve_agent_browser_scope(
         or row.path_prefix != path_prefix
     ):
         return None
+    # PRODUCTION FIX: ConnectorSource carries no local_only; read it from the source fence.
+    fence = await sources.get_source_fence(session, source_id)
+    if fence is None:
+        return None
     return AgentBrowserScope(
         source_id, source.generation, configuration.expected_revision,
         row.grant_revision, scope_hash, origin, path_prefix,
-        source.local_only, row.enabled and not source.local_only,
+        fence.local_only, row.enabled and not fence.local_only,
     )
 
 
@@ -590,8 +622,8 @@ async def get_connector_configuration(
     session: AsyncSession, source_id: UUID
 ) -> ConnectorConfigurationSnapshot | None:
     """Return a coherent owner-safe configuration view under source-first locks."""
-    from modules.sources import public as sources
     from modules.connectors import provisioning
+    from modules.sources import public as sources
 
     source_fence, row, credentials = await provisioning.lock_connector(
         session, source_id, ("provider",)
@@ -877,7 +909,6 @@ async def get_github_binding_fence(
     """
     from modules.connectors.github.schemas import GitHubBindingFence, project_github_source_config
     from modules.connectors.github.sync import github_scope_digest
-    from modules.connectors.models import GithubOAuthGrant
     from modules.sources import public as sources
 
     if lock and await sources.lock_source(session, source_id) is None:
@@ -904,10 +935,11 @@ async def get_github_binding_fence(
     ):
         return None
     config = project_github_source_config(source.configuration)
-    resources = tuple(name for name, enabled in (
+    flags: list[tuple[Literal["issue", "pull", "commit", "release"], bool]] = [
         ("issue", config.include_issues), ("pull", config.include_pulls),
         ("commit", config.include_commits), ("release", config.include_releases),
-    ) if enabled)
+    ]
+    resources = tuple(name for name, enabled in flags if enabled)
     scope = github_scope_digest(
         str(source.id), source_generation, connector_revision, grant.repository_id,
         grant.installation_id, grant.app_id, resources, config.github_history_days,
@@ -938,8 +970,9 @@ async def validate_github_collection_segment(
     remains responsible for atomically persisting the recomputed cursor with its accepted batch.
     """
     from fastapi import HTTPException
+
     from modules.connectors.github.schemas import GitHubSegmentProof, project_github_source_config
-    from modules.connectors.github.sync import GitHubValidatedSegment, validate_github_segment
+    from modules.connectors.github.sync import validate_github_segment
 
     if source.provider != "github":
         raise HTTPException(status_code=422, detail="GitHub segment is not valid for this provider")
@@ -978,9 +1011,11 @@ async def reset_github_collection_cursor(
     collection leases or nonterminal runs and publishes the cursor clear through its receipt owner.
     """
     import re
+
     from fastapi import HTTPException
-    from modules.ingestion import public as ingestion
+
     from modules.connectors.models import GithubSyncReset
+    from modules.ingestion import public as ingestion
     from modules.sources import public as sources
 
     if re.fullmatch(r"[0-9a-f]{64}", expected_scope_sha256) is None:
@@ -1177,6 +1212,7 @@ async def persist_verified_github_delivery(session: AsyncSession, delivery: "Ver
     original receipt; reusing an ID for different bytes conflicts.
     """
     from fastapi import HTTPException
+
     from modules.connectors.github.webhooks import GitHubWebhookReceipt, VerifiedGitHubDelivery
 
     try:
@@ -1250,8 +1286,6 @@ async def list_github_event_bindings(
     Opaque cursors bind their keyset position to the exact App, installation and optional
     repository query. Paused, expired and revoked grants stay visible for access-loss fencing.
     """
-    import base64
-    from modules.connectors.models import GithubOAuthGrant
     from modules.connectors.provisioning import activation_status
     from modules.sources import public as sources
 
@@ -1357,7 +1391,7 @@ def _store_github_fanout_admission(
 async def enqueue_github_hint(
     session: AsyncSession,
     *,
-    binding: GitHubEventBinding,
+    binding: GitHubEventBinding | _GitHubFanoutBinding,
     delivery_receipt_id: UUID,
     target: "GitHubTargetHint",
     expected_binding_cursor: str | None,
@@ -1370,8 +1404,8 @@ async def enqueue_github_hint(
     then capacity; a frozen detached binding page is bookkeeping, never provider authority.
     """
     from fastapi import HTTPException
+
     from modules.connectors.github.webhooks import GitHubTargetHint
-    from modules.connectors.models import GithubOAuthGrant
     from modules.sources import public as sources
 
     try:
@@ -1456,6 +1490,7 @@ async def enqueue_github_hint(
 
     from modules.connectors.github.schemas import project_github_source_config
     try:
+        assert source is not None
         config = project_github_source_config(source.configuration)
     except (TypeError, ValueError):
         result = persist_terminal_admission(GitHubHintEnqueueResult(disposition="stale_binding"))
@@ -1517,6 +1552,7 @@ async def enqueue_github_hint(
                     capacity.pending_count -= 1
                 visibility_hint.capacity_reserved = False
         result = persist_terminal_admission(GitHubHintEnqueueResult(disposition="ignored"))
+        assert source is not None
         if source.status == "active":
             await commit_with_replay(session, [make_source_change(paused.id, paused.generation, paused.status)])
         else:
@@ -1619,7 +1655,6 @@ async def claim_github_hint(
     collection lease first; receipt acceptance independently verifies that exact lease.
     Lock order is Source, provisioning, grant, then hint.
     """
-    from modules.connectors.models import GithubOAuthGrant
     from modules.sources import public as sources
 
     now = (now or datetime.now(UTC)).astimezone(UTC)
@@ -1706,7 +1741,6 @@ async def reconcile_github_source_hints_lifecycle(
     global capacity is full, the durable capacity_deferred state retains current fences for the
     bounded worker and owner-claim reservation retries.
     """
-    from modules.connectors.models import GithubOAuthGrant
     from modules.connectors.provisioning import activation_status
     if active:
         provisioned = await activation_status(session, source_id)
@@ -1873,6 +1907,7 @@ async def wake_packaged_collection(
     timeout is ambiguous and must keep the durable hint pending for idempotent retry.
     """
     import httpx
+
     from modules.connectors.n8n import workflow_webhook_path
     from modules.connectors.provisioning import activation_status
     from modules.sources import public as sources
@@ -2070,7 +2105,7 @@ def overlap_floor(cursor: str | None) -> datetime | None:
     if not cursor:
         return None
     try:
-        value = datetime.fromisoformat(cursor.replace("Z", "+00:00"))
+        value = datetime.fromisoformat(cursor.replace("Z", "+00:00"))  # noqa: FURB162  # keeps exact parsing of 'Z' suffix; fromisoformat(Z) is not strictly equivalent
     except ValueError:
         return None
     if value.tzinfo is None:

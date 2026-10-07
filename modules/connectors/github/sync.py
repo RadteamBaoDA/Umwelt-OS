@@ -1,8 +1,8 @@
 """Bounded GitHub cursor transitions and owner-side raw-page validation."""
 
+import json
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
-import json
 from typing import Literal
 from urllib.parse import urlencode
 
@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from modules.connectors.github.normalization import normalize_github_record
 from modules.connectors.github.schemas import (
-    GITHUB_RESOURCES,
+    MAX_GITHUB_CURSOR_BYTES,
     GitHubBindingFence,
     GitHubCursor,
     GitHubHintClaimProof,
@@ -18,7 +18,6 @@ from modules.connectors.github.schemas import (
     GitHubResourceCursor,
     GitHubSegmentProof,
     GitHubSourceConfig,
-    MAX_GITHUB_CURSOR_BYTES,
 )
 from modules.ingestion.schemas import IngestionRecord
 
@@ -248,7 +247,7 @@ def validate_github_segment(
                 outcome="continued" if proof.has_next else "complete",
                 examined_count=len(proof.raw_items), hint_claim=claim,
             )
-        if proof.target_outcome == "found" and claim.locator_kind == "repository" and claim.intent == "visibility_check":
+        if proof.target_outcome == "found" and claim.locator_kind == "repository" and claim.intent == "visibility_check":  # noqa: SIM102  # style-only rewrite skipped to avoid touching control flow
             if len(proof.raw_items) != 1 or str(proof.raw_items[0].get("id")) != claim.locator:
                 raise ValueError("github_targeted_identity_mismatch")
         if proof.target_outcome == "found" and proof.raw_items and claim.intent not in {"visibility_check", "visibility_lost"}:
@@ -311,7 +310,7 @@ def validate_github_segment(
                 in_scope.append(item)
         elif state.resource == "release":
             in_scope.append(item)
-    if state.resource == "pull" and any(left < right for left, right in zip(pull_order, pull_order[1:])):
+    if state.resource == "pull" and any(left < right for left, right in zip(pull_order, pull_order[1:])):  # noqa: RUF007  # style-only rewrite skipped to avoid touching control flow
         raise ValueError("github_pull_page_order_invalid")
 
     stop_at_floor = bool(
@@ -367,7 +366,7 @@ def _validate_returned_repository_identity(item: dict[str, object], expected_id:
     if not isinstance(repository, dict):
         base = item.get("base")
         repository = base.get("repo") if isinstance(base, dict) else None
-    if isinstance(repository, dict) and repository.get("id") is not None:
+    if isinstance(repository, dict) and repository.get("id") is not None:  # noqa: SIM102  # style-only rewrite skipped to avoid touching control flow
         if str(repository["id"]) != expected_id:
             raise ValueError("github_targeted_repository_mismatch")
 
@@ -389,9 +388,9 @@ def _resource_timestamp(resource: GitHubResource, item: dict[str, object]) -> da
     if value is None:
         raise ValueError("GitHub provider timestamp is missing")
     if not isinstance(value, str):
-        raise ValueError("GitHub provider timestamp is invalid")
+        raise ValueError("GitHub provider timestamp is invalid")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))  # noqa: FURB162  # keeps exact parsing of 'Z' suffix; fromisoformat(Z) is not strictly equivalent
     except ValueError as exc:
         raise ValueError("GitHub provider timestamp is invalid") from exc
     if parsed.tzinfo is None or parsed.utcoffset() is None:

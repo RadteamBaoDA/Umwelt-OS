@@ -1,22 +1,30 @@
-from typing import Annotated
 import hashlib
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.dependencies import require_owner, require_owner_write
 from core.auth.models import AuthSession
-from core.model_gateway.client import ModelGateway, ModelGatewayError, PrivacyPolicyDenied
-from core.config import Settings
 from core.database import get_session
-from core.model_gateway.schemas import AISettingsRead, AISettingsUpdate, ConnectionDraft, ModelMapping, ModelSettingsRead, PrivacySettings
-from modules.settings import models, public
-from modules.settings.schemas import (
-    ModuleLifecycleRead, ModuleLifecycleUpdate, OwnerPreferencesRead, OwnerPreferencesUpdate,
-    RetentionSettingsRead, RetentionSettingsUpdate,
+from core.model_gateway.client import ModelGateway, ModelGatewayError
+from core.model_gateway.schemas import (
+    AISettingsRead,
+    AISettingsUpdate,
+    ConnectionDraft,
+    ModelMapping,
+    ModelSettingsRead,
+    PrivacySettings,
 )
-from modules.settings import lifecycle
+from modules.settings import lifecycle, models, public
+from modules.settings.schemas import (
+    ModuleLifecycleRead,
+    ModuleLifecycleUpdate,
+    OwnerPreferencesRead,
+    OwnerPreferencesUpdate,
+    RetentionSettingsRead,
+    RetentionSettingsUpdate,
+)
 
 router = APIRouter(prefix="/api/v1/settings", tags=["settings"])
 Session = Annotated[AsyncSession, Depends(get_session)]

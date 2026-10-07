@@ -10,9 +10,7 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     """Join the entity branch with receipt normalization and realtime replay history; this merge revision has no schema operations."""
-    pass
 
 
 def downgrade() -> None:
     """Reverse the merge marker; this revision has no schema operations."""
-    pass

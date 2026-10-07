@@ -14,6 +14,26 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modules.news.correlation import build_correlations
+from modules.news.relevance import score_relevance
+from modules.news.schemas import (
+    BriefStorySupport,
+    CiiUnavailableRead,
+    CorrelationBucketRead,
+    CorrelationCoverageRead,
+    CorrelationQuery,
+    CorrelationResult,
+    RelevanceRead,
+    StoryDetail,
+    StoryFilter,
+    StoryPage,
+    StoryRead,
+    TrendFilter,
+    TrendPage,
+    TrendRead,
+)
+from modules.news.seed import ensure_demo_topics
+from modules.news.stories import cluster_observation, get_story, list_stories
 from modules.news.topics import (
     TopicConflict,
     TopicCreate,
@@ -30,31 +50,53 @@ from modules.news.topics import (
     export_page,
     get_topic,
     list_topics,
-    validate_export_fences,
     update_topic,
+    validate_export_fences,
 )
-from modules.news.seed import ensure_demo_topics
-from modules.news.relevance import score_relevance
-from modules.news.schemas import (
-    BriefStorySupport, CorrelationBucketRead, CorrelationCoverageRead, CorrelationQuery, CorrelationResult,
-    CiiUnavailableRead, RelevanceRead, StoryDetail, StoryFilter, StoryPage, StoryRead,
-    TrendFilter, TrendPage, TrendRead,
-)
-from modules.news.correlation import build_correlations
-from modules.news.stories import cluster_observation, get_story, list_stories
 from modules.news.trends import list_trends
 from modules.news.worker import process_news_document_ready, recover_news_work
 
 __all__ = [
-    "TopicConflict", "TopicCreate", "TopicExportFence", "TopicExportPage",
-    "TopicExportValidation", "TopicFilter", "TopicMissing", "TopicPage",
-    "TopicRead", "TopicUpdate", "create_topic", "delete_topic", "export_page", "get_topic",
-    "ensure_demo_topics", "list_topics", "update_topic", "validate_export_fences",
-    "RelevanceRead", "StoryDetail", "StoryFilter", "StoryPage", "StoryRead",
-    "TrendFilter", "TrendPage", "TrendRead", "cluster_observation", "get_story",
-    "list_stories", "list_trends", "process_news_document_ready", "recover_news_work",
-    "score_relevance", "CorrelationBucketRead", "CorrelationCoverageRead", "CorrelationQuery",
-    "CorrelationResult", "CiiUnavailableRead", "build_correlations", "brief_story_support",
+    "CiiUnavailableRead",
+    "CorrelationBucketRead",
+    "CorrelationCoverageRead",
+    "CorrelationQuery",
+    "CorrelationResult",
+    "RelevanceRead",
+    "StoryDetail",
+    "StoryFilter",
+    "StoryPage",
+    "StoryRead",
+    "TopicConflict",
+    "TopicCreate",
+    "TopicExportFence",
+    "TopicExportPage",
+    "TopicExportValidation",
+    "TopicFilter",
+    "TopicMissing",
+    "TopicPage",
+    "TopicRead",
+    "TopicUpdate",
+    "TrendFilter",
+    "TrendPage",
+    "TrendRead",
+    "brief_story_support",
+    "build_correlations",
+    "cluster_observation",
+    "create_topic",
+    "delete_topic",
+    "ensure_demo_topics",
+    "export_page",
+    "get_story",
+    "get_topic",
+    "list_stories",
+    "list_topics",
+    "list_trends",
+    "process_news_document_ready",
+    "recover_news_work",
+    "score_relevance",
+    "update_topic",
+    "validate_export_fences",
 ]
 
 
@@ -81,7 +123,7 @@ async def brief_story_support(
         )
     detail = await get_story(session, owner_id, story_id, source_ids, evidence_limit=100)
     story = detail.story if detail else None
-    if (story is None or detail.evidence_cursor is not None or story.incomplete_reasons
+    if (detail is None or story is None or detail.evidence_cursor is not None or story.incomplete_reasons
             or (expected_title is not None and story.title != expected_title)
             or story.evidence_count != len(story.evidence)
             or not story.evidence or len(story.evidence) > 100):

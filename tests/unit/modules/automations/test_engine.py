@@ -11,6 +11,7 @@ Covers:
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID, uuid4
+
 import pytest
 
 from modules.automations.execution import (
@@ -18,22 +19,17 @@ from modules.automations.execution import (
     MAX_DEPTH,
     MAX_RUN_ATTEMPTS,
     MAX_RUNS_PER_HOUR,
-    RunConflict,
-    RunMissing,
     _admission,
     decide_action,
     dispatch_runs,
     enqueue_trigger,
-    plan_run,
     process_run,
     run_exists,
 )
 from modules.automations.models import (
-    Automation,
     AutomationRevision,
     AutomationRun,
     AutomationRunAction,
-    AutomationTrigger,
 )
 from modules.automations.schemas import RunRead
 
@@ -67,7 +63,7 @@ class TestDeduplicationAndTriggerInbox:
     async def test_enqueue_trigger_webhook_requires_hook_name(self) -> None:
         """enqueue_trigger raises ValueError if webhook trigger lacks a hook identifier."""
         session = AsyncMock()
-        with patch("modules.automations.execution.validate_sample", return_value=None):
+        with patch("modules.automations.execution.validate_sample", return_value=None):  # noqa: SIM117  # style-only rewrite skipped to avoid touching control flow
             with pytest.raises(ValueError, match="webhook triggers need a hook name"):
                 await enqueue_trigger(
                     session, owner_id=1, trigger_type="webhook", event_key="hook-1",
@@ -129,7 +125,7 @@ class TestAdmissionAndCooldownWindows:
         now = datetime.now(UTC)
 
         with patch("modules.automations.execution.dependencies_missing", return_value=[]):
-            reason, run_at = await _admission(
+            reason, _run_at = await _admission(
                 session, rev, trigger_type="new_event", depth=1,
                 origin_automation_id=auto_id, now=now,
             )
@@ -146,7 +142,7 @@ class TestAdmissionAndCooldownWindows:
         session.scalar.return_value = MAX_RUNS_PER_HOUR
 
         with patch("modules.automations.execution.dependencies_missing", return_value=[]):
-            reason, run_at = await _admission(
+            reason, _run_at = await _admission(
                 session, rev, trigger_type="new_event", depth=1,
                 origin_automation_id=None, now=now,
             )
@@ -248,7 +244,7 @@ class TestActionDispatchingAndDecisions:
              patch("modules.automations.execution._fence_current", return_value=True), \
              patch("modules.automations.execution.dependencies_missing", return_value=[]), \
              patch("modules.automations.execution._reads", return_value=[MagicMock(spec=RunRead)]):
-            res = await decide_action(
+            await decide_action(
                 session, owner_id=1, session_hash="owner_sess", run_id=run_id,
                 ordinal=1, approve=True, settings=MagicMock(),
             )

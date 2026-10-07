@@ -1,20 +1,20 @@
 """Owner-only bounded operational summaries used by Settings screens."""
 
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from uuid import UUID
 
 from core.auth.dependencies import require_owner
 from core.auth.models import AuthSession
 from core.database import get_session
-from modules.observability.operations import quality_summary, queue_summary
 from modules.observability import public as observability
+from modules.observability.operations import quality_summary, queue_summary
 from modules.observability.schemas import RunKind, RunRead
+from modules.settings.public import module_dependency
 from modules.sources import public as sources
 from modules.sources.schemas import OperationRead
-from modules.settings.public import module_dependency
 
 router = APIRouter(prefix="/api/v1/system", tags=["system"], dependencies=[Depends(module_dependency("observability"))])
 

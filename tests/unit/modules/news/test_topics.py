@@ -9,9 +9,9 @@ Covers:
 - Observation clustering logic and fuzzy candidate matching rules (72h window, 0.92 similarity threshold)
 """
 
-import hashlib
-from datetime import UTC, datetime, timedelta
-from uuid import UUID, uuid4
+from datetime import timedelta
+from uuid import uuid4
+
 import pytest
 from pydantic import ValidationError
 
@@ -25,10 +25,8 @@ from modules.news.stories import (
     _tokens,
 )
 from modules.news.topics import (
-    MAX_ENTITIES,
     MAX_KEYWORD_LENGTH,
     MAX_KEYWORDS,
-    MAX_REVISION,
     TopicCreate,
     TopicUpdate,
     _normalize_entity_ids,

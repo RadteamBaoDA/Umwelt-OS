@@ -1,8 +1,8 @@
 """Unit tests for ingestion schemas, Telegram deliveries, cursors, and probe classification."""
 
+import json
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
-import json
 from uuid import uuid4
 
 import pytest
@@ -18,7 +18,6 @@ from modules.ingestion.schemas import (
     TelegramCursor,
     TelegramDeliveryProof,
     TelegramPageDelivery,
-    TelegramProbeClassification,
     TelegramRawDelivery,
     classify_telegram_probe,
 )
@@ -49,7 +48,7 @@ class TestIngestionRecord:
         assert rec.version == "v1.0"
 
     def test_observed_at_naive_rejected(self) -> None:
-        naive = datetime(2026, 1, 1, 12, 0, 0)
+        naive = datetime(2026, 1, 1, 12, 0, 0)  # noqa: DTZ001  # intentionally naive: wall-clock/DST math or naive-rejection test
         with pytest.raises(ValidationError, match="observed_at must include a timezone"):
             IngestionRecord(
                 provider_id="item-123",
@@ -59,7 +58,7 @@ class TestIngestionRecord:
 
     def test_collected_at_naive_rejected(self) -> None:
         now = datetime.now(UTC)
-        naive = datetime(2026, 1, 1, 12, 0, 0)
+        naive = datetime(2026, 1, 1, 12, 0, 0)  # noqa: DTZ001  # intentionally naive: wall-clock/DST math or naive-rejection test
         with pytest.raises(ValidationError, match="collected_at must include a timezone"):
             IngestionRecord(
                 provider_id="item-123",
@@ -367,7 +366,7 @@ class TestClassifyTelegramProbe:
 
     def test_in_order_new_updates_extend_ledger(self) -> None:
         now = datetime.now(UTC)
-        u1, d1 = _make_telegram_update(10, "msg1")
+        _u1, d1 = _make_telegram_update(10, "msg1")
         p1 = TelegramPageDelivery(update_id=10, raw_update_sha256=d1)
         cursor = TelegramCursor(
             kind="telegram_getupdates_v1",

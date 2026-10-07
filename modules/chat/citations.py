@@ -5,16 +5,65 @@ from typing import Any
 from uuid import UUID
 
 from modules.chat.schemas import (
+    MAX_QUOTE_LENGTH,
     Citation,
     CitationValidationResult,
     EvidenceItem,
-    MAX_QUOTE_LENGTH,
     ValidatedAnswer,
 )
 
 INSUFFICIENT_EVIDENCE_MESSAGE = (
     "I do not have sufficient evidence in the retrieved documents to answer this question."
 )
+
+
+_NUM = r"\d{1,4}(?:\s*,\s*\d{1,4})*"
+# A run of markers ([1], [1][3], [1, 3]); rejects identifier indexing, URL paths and markdown links.
+_MARKER_RE = re.compile(rf"( ?)(?<![\w\]/(])(\[{_NUM}\](?:\[{_NUM}\])*)(?![(\[])")
+_CODE_RE = re.compile(r"```.*?```|`[^`\n]+`", re.DOTALL)
+
+
+def _outside_code(text: str) -> list[tuple[str, bool]]:
+    """Split text into (segment, is_prose) pairs; fenced and inline code are not prose."""
+    return [(part, i % 2 == 0) for i, part in enumerate(re.split(f"({_CODE_RE.pattern})", text, flags=re.DOTALL))]
+
+
+def _run_numbers(run: str) -> list[int]:
+    return [int(n) for n in re.findall(r"\d+", run)]
+
+
+def parse_citation_markers(answer: str, evidence_count: int) -> list[int]:
+    """Return 1-based evidence numbers cited in the answer, first-cited order, deduplicated.
+
+    Recognises ``[n]``, ``[n][m]`` and ``[n, m]`` outside code; numbers outside 1..evidence_count are ignored.
+    """
+    seen: dict[int, None] = {}
+    for part, prose in _outside_code(answer):
+        if not prose:
+            continue
+        for match in _MARKER_RE.finditer(part):
+            for n in _run_numbers(match.group(2)):
+                if 1 <= n <= evidence_count:
+                    seen.setdefault(n, None)
+    return list(seen)
+
+
+def renumber_citation_markers(answer: str, mapping: dict[int, int], evidence_count: int) -> str:
+    """Rewrite citation marker runs through ``mapping`` (old number -> new number) as ``[k][j]``.
+
+    A run with at least one number in 1..evidence_count is a citation: numbers absent from the
+    mapping are removed and an emptied run is dropped with one leading space. Other bracketed
+    integers (``[2023]``) and code regions are left untouched.
+    """
+    def repl(match: re.Match[str]) -> str:
+        nums = _run_numbers(match.group(2))
+        if not any(1 <= n <= evidence_count for n in nums):
+            return match.group(0)
+        new = dict.fromkeys(mapping[n] for n in nums if n in mapping)
+        kept = "".join(f"[{k}]" for k in new)
+        return match.group(1) + kept if kept else ""
+
+    return "".join(_MARKER_RE.sub(repl, part) if prose else part for part, prose in _outside_code(answer))
 
 
 def _normalize_whitespace(text: str) -> str:

@@ -49,7 +49,7 @@ fi
 if [[ -z "$pytest_target" || -n "$e2e_target" ]]; then
   # Only this uniquely named disposable project and verified test identity may be reset.
   [[ "$project" =~ ^bbd-os-test-[0-9a-f]{10}$ ]]
-  "${compose[@]}" exec -T postgres psql -U bbd_test -d bbd_test -v ON_ERROR_STOP=1 -c "DO \$\$ DECLARE tables text; BEGIN IF current_database() <> 'bbd_test' OR current_user <> 'bbd_test' THEN RAISE EXCEPTION 'unsafe test database'; END IF; SELECT string_agg(format('%I.%I', schemaname, tablename), ',') INTO tables FROM pg_tables WHERE schemaname = 'public' AND tablename <> 'alembic_version'; IF tables IS NOT NULL THEN EXECUTE 'TRUNCATE TABLE ' || tables || ' CASCADE'; END IF; END \$\$;"
+  "${compose[@]}" exec -T postgres psql -U bbd_test -d bbd_test -v ON_ERROR_STOP=1 -c "$(tr -d '\r' < "$(dirname "${BASH_SOURCE[0]}")/sql/e2e-reset.sql" | tr '\n' ' ')"
   export E2E_SETUP_TOKEN=bbd-os-disposable-test-token
   export PLAYWRIGHT_BASE_URL="http://localhost:${WEB_PORT}"
   export PLAYWRIGHT_EXTERNAL_SERVER=1

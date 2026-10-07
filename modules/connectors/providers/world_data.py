@@ -1,21 +1,22 @@
 """Bounded Alpha Vantage daily and Open-Meteo weather collection adapters."""
 
 import asyncio
-from datetime import UTC, datetime, timedelta
 import json
 import math
 from collections.abc import Awaitable, Callable
-from zoneinfo import ZoneInfo
+from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import Settings
-from modules.connectors.public import ConnectorConfig, ProviderCollectionPage, ProviderRateLimited
-from modules.connectors.models import ConnectorProvisioning, ConnectorWorldCredential
 from modules.connectors.credentials import decrypt_credential_input, secret_fingerprint
+from modules.connectors.models import ConnectorProvisioning, ConnectorWorldCredential
 from modules.connectors.providers.feed_catalog import _retry_deadline
+from modules.connectors.public import ConnectorConfig, ProviderCollectionPage, ProviderRateLimited
 from modules.ingestion.schemas import IngestionRecord
 from modules.sources.schemas import ConnectorSource
 
@@ -56,7 +57,7 @@ async def get_alpha_vantage_key(session: AsyncSession, source: ConnectorSource, 
 
 
 async def reserve_alpha_vantage_daily_calls(
-    redis: object, *, key_reference: str, calls: int, now: datetime,
+    redis: Any, *, key_reference: str, calls: int, now: datetime,
 ) -> datetime | None:
     """Atomically reserve a bounded UTC-day call budget before any provider egress.
 
@@ -83,7 +84,7 @@ async def reserve_alpha_vantage_daily_calls(
 async def _json_get(
     url: str, *, params: dict[str, str],
     before_request: Callable[[], Awaitable[None]],
-) -> dict[str, object]:
+) -> dict[str, Any]:
     """Fetch one fixed-host HTTPS JSON response with a hard byte and time ceiling."""
     try:
         async with asyncio.timeout(30):
@@ -115,11 +116,11 @@ async def _json_get(
     except (httpx.HTTPError, TimeoutError, json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise ValueError("world_data_provider_unavailable") from exc
     if not isinstance(decoded, dict):
-        raise ValueError("world_data_response_invalid")
+        raise ValueError("world_data_response_invalid")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
     return decoded
 
 
-def _finite_number(raw: object) -> float:
+def _finite_number(raw: Any) -> float:
     """Parse a provider-declared finite numeric observation without coercing missing values."""
     try:
         value = float(raw)  # Alpha Vantage publishes numeric strings.
@@ -157,7 +158,7 @@ def _market_records(source: ConnectorSource, config: ConnectorConfig, payload: d
             if "premium" in normalized or "entitlement" in normalized:
                 raise ValueError("alpha_vantage_entitlement_unavailable")
             raise ValueError("alpha_vantage_access_unavailable")
-        raise ValueError("alpha_vantage_response_invalid")
+        raise ValueError("alpha_vantage_response_invalid")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
     provider_symbol = metadata.get("2. Symbol")
     if not isinstance(provider_symbol, str) or provider_symbol.upper() not in set(config.market_symbols or ()):
         raise ValueError("alpha_vantage_scope_mismatch")
@@ -169,7 +170,7 @@ def _market_records(source: ConnectorSource, config: ConnectorConfig, payload: d
     # existing 500-record ingress limit; historical points accumulate across schedules.
     for day, row in sorted(series.items(), reverse=True)[:1]:
         if not isinstance(day, str) or not isinstance(row, dict):
-            raise ValueError("alpha_vantage_response_invalid")
+            raise ValueError("alpha_vantage_response_invalid")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
         try:
             observed_at = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=zone).astimezone(UTC)
         except ValueError as exc:
@@ -220,7 +221,7 @@ def _weather_records(source: ConnectorSource, config: ConnectorConfig, payload: 
             raise ValueError("open_meteo_measurement_scope_invalid")
         for stamp, raw in zip(times, values, strict=True):
             if not isinstance(stamp, str):
-                raise ValueError("open_meteo_timestamp_invalid")
+                raise ValueError("open_meteo_timestamp_invalid")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
             try:
                 observed_at = datetime.fromisoformat(stamp).replace(tzinfo=zone).astimezone(UTC)
             except ValueError as exc:
@@ -263,13 +264,13 @@ async def collect_world_data(
             "hourly": ",".join(_WEATHER_VARIABLES[name] for name in metrics),
             "forecast_days": "3", "timezone": str(config.weather_timezone),
         }, before_request=lambda: before_request(None))
-        records = _weather_records(source, config, payload, collected_at)
+        weather_records = _weather_records(source, config, payload, collected_at)
         coverage = "truncated" if any(
             isinstance(payload.get("hourly"), dict)
             and isinstance(payload["hourly"].get(metric), list)
             and len(payload["hourly"][metric]) >= 72 for metric in metrics
         ) else "returned_snapshot"
-        return ProviderCollectionPage(records=tuple(records), coverage=coverage)
+        return ProviderCollectionPage(records=tuple(weather_records), coverage=coverage)
     if source.provider != "alpha_vantage":
         raise ValueError("provider_scope_invalid")
     credential = await get_alpha_vantage_key(session, source, settings)

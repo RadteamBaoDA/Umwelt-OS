@@ -10,11 +10,11 @@ Covers:
 """
 
 from datetime import UTC, datetime
-from uuid import UUID, uuid4
+from uuid import uuid4
+
 import pytest
 from pydantic import ValidationError
 
-from modules.chat.models import Conversation, Message, ResponseRun
 from modules.chat.schemas import (
     DEFAULT_CONTEXT_BUDGET_BYTES,
     MAX_CONTEXT_BUDGET_BYTES,
@@ -25,24 +25,18 @@ from modules.chat.schemas import (
     MAX_SELECTED_REFS,
     MAX_SOURCE_SCOPE,
     AgentActivityRead,
-    AnswerContext,
     AnswerContextRequest,
-    CancelResponse,
     Citation,
-    CitationValidationResult,
     ConversationCreate,
     ConversationDetailRead,
     ConversationPatch,
     ConversationRead,
-    EntityContextItem,
     EvidenceItem,
     MessageRead,
     ResponseRunRead,
     SelectedEvidenceRef,
     SendMessageRequest,
     SendMessageResponse,
-    TemporalContextItem,
-    ValidatedAnswer,
 )
 
 

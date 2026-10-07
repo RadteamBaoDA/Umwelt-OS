@@ -1,20 +1,27 @@
 from datetime import UTC, datetime, timedelta
-from typing import cast
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 import httpx
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
-from modules.connectors.provisioning import capture_connector_observation, commit_connector_observation
 from modules.connectors import provisioning
 from modules.connectors.credentials import N8nCredentials
 from modules.connectors.models import (
-    ConnectorManagedCredential, ConnectorProvisioning, GithubWebhookCapacity,
-    GithubWebhookDelivery, GithubWebhookOutbox, GithubSourceHint,
+    ConnectorManagedCredential,
+    ConnectorProvisioning,
+    GithubSourceHint,
+    GithubWebhookCapacity,
+    GithubWebhookDelivery,
+    GithubWebhookOutbox,
 )
 from modules.connectors.n8n import N8nApi, workflow_matches
+from modules.connectors.provisioning import (
+    capture_connector_observation,
+    commit_connector_observation,
+)
 
 
 async def expire_github_webhook_details(
@@ -25,8 +32,9 @@ async def expire_github_webhook_details(
     Do not scrub a delivery with unfinished binding fanout. The indexed retention deadline and
     batch cap bound cleanup; digest_count and the unique delivery namespace remain unchanged.
     """
-    from modules.connectors.models import GithubWebhookDelivery, GithubWebhookOutbox
     from sqlalchemy import or_
+
+    from modules.connectors.models import GithubWebhookDelivery, GithubWebhookOutbox
 
     async with factory() as session:
         rows = list((await session.scalars(
@@ -170,7 +178,7 @@ async def revoke_deleted_source_github_grants(
                     )
                     candidate = opened.get("access_token")
                     token = candidate if isinstance(candidate, str) else None
-                except Exception:
+                except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
                     token = None
                 if token is not None:
                     claim = uuid4()
@@ -181,7 +189,7 @@ async def revoke_deleted_source_github_grants(
             try:
                 await oauth.revoke_github_grant(settings, token)
                 outcome = "provider_revoked_source_deleted"
-            except Exception:
+            except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
                 outcome = "provider_revoke_failed_source_deleted"
         async with factory() as session:
             # Lock order matches the routes: grant first, coordinator last.
@@ -223,7 +231,7 @@ async def _delete_credential(
         return False
     try:
         await client.delete(target)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
         rejected = (
             isinstance(exc, httpx.HTTPStatusError)
             and 400 <= exc.response.status_code < 500
@@ -285,7 +293,6 @@ async def reconcile_connectors(ctx: dict[str, object]) -> int:
     api_key = settings.n8n_api_key.get_secret_value()
     if not api_key:
         return completed
-    encryption_key = settings.connector_credential_encryption_key.get_secret_value()
     credentials = N8nCredentials(str(settings.n8n_service_url), api_key)
     api = N8nApi(str(settings.n8n_service_url), api_key)
     async with factory() as session:
@@ -335,22 +342,22 @@ async def reconcile_connectors(ctx: dict[str, object]) -> int:
         workflow_pending = [
             (
                 row.source_id,
-                row.workflow_operation.get("id"),
-                row.workflow_operation.get("step", {}).get("id"),
-                row.workflow_operation.get("step", {}).get("kind"),
-                row.workflow_operation.get("workflow_name"),
-                row.workflow_operation.get("step", {}).get("request"),
+                _workflow_operation(row).get("id"),
+                _workflow_operation(row).get("step", {}).get("id"),
+                _workflow_operation(row).get("step", {}).get("kind"),
+                _workflow_operation(row).get("workflow_name"),
+                _workflow_operation(row).get("step", {}).get("request"),
             )
             for row in workflow_rows
-            if enabled or row.workflow_operation.get("step", {}).get("kind") == "delete"
+            if enabled or _workflow_operation(row).get("step", {}).get("kind") == "delete"
         ]
         unknown_create_pending = [
             (
                 row.source_id,
-                row.workflow_operation.get("id"),
-                row.workflow_operation.get("step", {}).get("id"),
-                row.workflow_operation.get("workflow_name"),
-                row.workflow_operation.get("step", {}).get("request"),
+                _workflow_operation(row).get("id"),
+                _workflow_operation(row).get("step", {}).get("id"),
+                _workflow_operation(row).get("workflow_name"),
+                _workflow_operation(row).get("step", {}).get("request"),
             )
             for row in unknown_create_rows
         ]
@@ -370,10 +377,10 @@ async def reconcile_connectors(ctx: dict[str, object]) -> int:
             completed += await provisioning.drive_workflow_operation(session, source_id, api)
 
     for source_id, operation_value, step_value, name, body in unknown_create_pending:
-        operation_id: UUID | None = None
+        created_operation_id: UUID | None = None
         workflow_id: str | None = None
         try:
-            operation_id = UUID(str(operation_value))
+            created_operation_id = UUID(str(operation_value))
             matches = await api.find_workflows(str(name))
             if (
                 len(matches) == 1
@@ -384,16 +391,16 @@ async def reconcile_connectors(ctx: dict[str, object]) -> int:
                 actual = await api.get_workflow(candidate_id)
                 if workflow_matches(body, actual):
                     workflow_id = candidate_id
-        except Exception:
+        except Exception:  # noqa: BLE001, S110  # best-effort cleanup/optional step; failure intentionally ignored
             pass
-        if workflow_id is not None and operation_id is not None:
+        if workflow_id is not None and created_operation_id is not None:
             async with factory() as session:
                 before = await capture_connector_observation(session, source_id)
                 resolved = await provisioning.resolve_unknown_workflow_create(
-                    session, source_id, operation_id, str(step_value), workflow_id
+                    session, source_id, created_operation_id, str(step_value), workflow_id
                 )
                 if resolved:
-                    await commit_connector_observation(session, before, operation_id=operation_id)
+                    await commit_connector_observation(session, before, operation_id=created_operation_id)
                     completed += 1
                     continue
                 await session.rollback()
@@ -414,9 +421,16 @@ async def reconcile_connectors(ctx: dict[str, object]) -> int:
     return completed
 
 
+def _workflow_operation(row: ConnectorProvisioning) -> dict[str, Any]:
+    """Return the provisioning workflow JSON; every caller selects rows whose workflow step state is set."""
+    operation = row.workflow_operation
+    assert operation is not None
+    return operation
+
+
 def _webhook_retry_delay(attempt: int) -> int:
     """Bound durable webhook dispatch retry spacing between 30 seconds and one hour."""
-    return min(30 * (2 ** max(0, attempt - 1)), 3600)
+    return int(min(30 * (2 ** max(0, attempt - 1)), 3600))
 
 
 async def dispatch_github_webhooks(ctx: dict[str, object]) -> int:
@@ -430,11 +444,14 @@ async def dispatch_github_webhooks(ctx: dict[str, object]) -> int:
     get a durable retry deadline and never reserve or wake.
     """
     from datetime import UTC, datetime, timedelta
+
     from modules.connectors import public as connectors
-    from modules.connectors.public import (
-        _GitHubFanoutBinding, _GitHubFanoutPage, _validated_github_fanout_page,
-    )
     from modules.connectors.github.webhooks import GitHubTargetHint
+    from modules.connectors.public import (
+        _GitHubFanoutBinding,
+        _GitHubFanoutPage,
+        _validated_github_fanout_page,
+    )
     from modules.sources import public as sources
 
     settings = cast(Settings, ctx["settings"])
@@ -458,7 +475,7 @@ async def dispatch_github_webhooks(ctx: dict[str, object]) -> int:
                 continue
             cursor = outbox.binding_cursor
             stored_page = outbox.fanout_page
-            delivery_snapshot = {
+            delivery_snapshot: dict[str, Any] = {
                 "id": delivery.id, "app_id": delivery.app_id,
                 "installation_id": delivery.installation_id,
                 "repository_id": delivery.repository_id,
@@ -512,7 +529,7 @@ async def dispatch_github_webhooks(ctx: dict[str, object]) -> int:
                         limit=50, cursor=cursor,
                     )
                     await session.rollback()
-            except Exception:
+            except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
                 failed = True
             if detached_bindings is not None:
                 try:
@@ -587,7 +604,7 @@ async def dispatch_github_webhooks(ctx: dict[str, object]) -> int:
                         if result.disposition in {"capacity_exhausted", "stale_progress"}:
                             failed = True
                             break
-                    except Exception:
+                    except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
                         failed = True
                         break
                 if failed:
@@ -668,8 +685,8 @@ async def dispatch_github_webhooks(ctx: dict[str, object]) -> int:
                 GithubSourceHint.capacity_reserved.is_(False),
                 GithubSourceHint.next_attempt_at <= retry_base,
             ).order_by(GithubSourceHint.next_attempt_at, GithubSourceHint.id).limit(100).with_for_update(skip_locked=True))).all())
-            for hint in remaining:
-                hint.next_attempt_at = max(hint.next_attempt_at, retry_at)
+            for deferred_hint in remaining:
+                deferred_hint.next_attempt_at = max(deferred_hint.next_attempt_at, retry_at)
             await session.commit()
 
         hint = await session.scalar(select(GithubSourceHint).where(

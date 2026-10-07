@@ -1,7 +1,9 @@
 from datetime import datetime
+from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -42,7 +44,7 @@ class Document(Base):
     raw_uri: Mapped[str | None] = mapped_column(Text)
     canonical_url: Mapped[str | None] = mapped_column(Text)
     author: Mapped[str | None] = mapped_column(String(500))
-    metadata_json: Mapped[dict[str, object]] = mapped_column(
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(
         "metadata", JSONB, nullable=False, server_default="{}"
     )
     current_version: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -135,7 +137,7 @@ class NormalizedVersionProvenance(Base):
     canonical_url: Mapped[str | None] = mapped_column(Text)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     content_type: Mapped[str | None] = mapped_column(String(64))
-    provenance_json: Mapped[dict[str, object]] = mapped_column("provenance", JSONB, nullable=False, server_default="{}")
+    provenance_json: Mapped[dict[str, Any]] = mapped_column("provenance", JSONB, nullable=False, server_default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
@@ -154,7 +156,7 @@ class DocumentChunk(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     token_count: Mapped[int] = mapped_column(Integer, nullable=False)
-    metadata_json: Mapped[dict[str, object]] = mapped_column(
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(
         "metadata", JSONB, nullable=False, server_default="{}"
     )
 
@@ -217,30 +219,30 @@ class DocumentCleanupOperation(Base):
     evidence_scope_status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="unavailable")
     # This aggregate stays running until every copied-evidence owner stage is integrated.
     copied_status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="queued")
-    copied_cursor: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    copied_cursor: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     copied_error_code: Mapped[str | None] = mapped_column(String(64))
     # Each copied owner keeps an independent bounded continuation state.
     chat_status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="queued")
     chat_error_code: Mapped[str | None] = mapped_column(String(64))
     memory_status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="queued")
     memory_error_code: Mapped[str | None] = mapped_column(String(64))
-    memory_cursor: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    memory_cursor: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     memory_unresolved_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     memory_cache_pending: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     agent_status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="queued")
     agent_error_code: Mapped[str | None] = mapped_column(String(64))
-    agent_cursor: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    agent_cursor: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     agent_unresolved_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     agent_waiting_for_lease: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     # Notifications/Automations copied-metadata stage; its cursor is private to that stage.
     materialization_status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="queued")
     materialization_error_code: Mapped[str | None] = mapped_column(String(64))
-    materialization_cursor: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    materialization_cursor: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     materialization_unresolved_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     # Dashboard saved-brief stage; unresolved counts legacy briefs whose prompt lineage is unknowable.
     brief_status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="queued")
     brief_error_code: Mapped[str | None] = mapped_column(String(64))
-    brief_cursor: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    brief_cursor: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     brief_unresolved_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     # DB-recorded earliest version time captured before canonical deletion; NULL = unknown (historical).
     earliest_version_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

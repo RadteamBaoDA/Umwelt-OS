@@ -7,10 +7,10 @@ Covers:
 - Status checks and access guards (collection_allowed, agent_browser_target_in_scope, validate_public_url)
 """
 
-from datetime import UTC, datetime, timedelta
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import UUID, uuid4
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, patch
+from uuid import uuid4
+
 import pytest
 from pydantic import ValidationError
 
@@ -20,11 +20,7 @@ from modules.connectors.catalog import (
     list_catalog,
 )
 from modules.connectors.models import ConnectorProvisioning
-from modules.sources.public import SourceFence
 from modules.connectors.public import (
-    DEFAULT_OVERLAP,
-    DEFAULT_TIMEZONE,
-    NATIVE_PROVIDERS,
     AgentBrowserScope,
     CollectionFence,
     ConnectorConfig,
@@ -46,7 +42,8 @@ from modules.connectors.registry import (
     sync,
     validate,
 )
-from modules.sources.schemas import ConnectorSource, SourceFence
+from modules.sources.public import SourceFence
+from modules.sources.schemas import ConnectorSource
 
 
 class TestConnectorRegistry:
@@ -560,11 +557,11 @@ class TestStatusChecksAndGuards:
             await validate_public_url("https://user:pass@example.com/feed")
 
         # Resolves to private IP
-        with patch("modules.connectors.public.getaddrinfo", return_value=[(None, None, None, None, ("127.0.0.1", 443))]):
+        with patch("modules.connectors.public.getaddrinfo", return_value=[(None, None, None, None, ("127.0.0.1", 443))]):  # noqa: SIM117  # style-only rewrite skipped to avoid touching control flow
             with pytest.raises(ValueError, match="URL resolves to a non-public address"):
                 await validate_public_url("https://localhost/feed")
 
-        with patch("modules.connectors.public.getaddrinfo", return_value=[(None, None, None, None, ("192.168.1.1", 443))]):
+        with patch("modules.connectors.public.getaddrinfo", return_value=[(None, None, None, None, ("192.168.1.1", 443))]):  # noqa: SIM117  # style-only rewrite skipped to avoid touching control flow
             with pytest.raises(ValueError, match="URL resolves to a non-public address"):
                 await validate_public_url("https://router.local/feed")
 

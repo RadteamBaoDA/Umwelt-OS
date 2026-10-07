@@ -1,63 +1,65 @@
-from collections.abc import AsyncIterator
 import asyncio
-from contextlib import AsyncExitStack, asynccontextmanager
 import secrets
+from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack, asynccontextmanager
 
 from fastapi import FastAPI
-from starlette.middleware.sessions import SessionMiddleware
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from starlette.middleware.sessions import SessionMiddleware
 
 from core.auth.routes import router as auth_router
 from core.config import Settings
 from core.errors import install_error_handling
-from core.telemetry import install_log_redaction
-from modules.observability.routes import router as observability_router
-from modules.observability.operations_routes import router as operations_router
 from core.modules import register_modules
+from core.realtime_routes import router as realtime_router
 from core.system.routes import router as system_router
-from modules.knowledge.documents.routes import router as documents_router
-from modules.knowledge.observations.routes import router as observations_router
-from modules.knowledge.entities.routes import router as entities_router
-from modules.knowledge.relationships.routes import router as relationships_router
+from core.telemetry import install_log_redaction
+from core.tools import ToolRegistry
+from modules.agents.handoff import register_handoff_tool
+from modules.agents.routes import router as agents_router
+from modules.automations.routes import router as automations_router
+from modules.automations.routes import webhook_router as automation_webhook_router
+from modules.automations.tools import register_automation_tools
+from modules.backup.middleware import BackupActivityMiddleware
+from modules.backup.routes import router as backup_router
+from modules.chat.routes import router as chat_router
+from modules.connectors.github.routes import router as github_oauth_router
+from modules.connectors.provisioning_routes import router as connector_provisioning_router
+from modules.connectors.routes import router as connectors_router
+from modules.dashboard.routes import router as dashboard_router
+from modules.export.routes import router as export_router
+from modules.goals.routes import router as goals_router
+from modules.goals.tools import register_goal_tools
 from modules.ingestion.routes import documents_router as document_upload_router
 from modules.ingestion.routes import router as ingestion_router
-from modules.sources.routes import router as sources_router
-from modules.connectors.routes import router as connectors_router
-from modules.tools.browser_control import router as browser_control_router
-from modules.connectors.provisioning_routes import router as connector_provisioning_router
-from modules.connectors.github.routes import router as github_oauth_router
-from modules.settings.routes import router as settings_router
-from modules.settings.onboarding_routes import router as onboarding_router
-from modules.model_gateway.routes import router as model_gateway_router
-from modules.search.routes import router as search_router
-from modules.dashboard.routes import router as dashboard_router
-from core.realtime_routes import router as realtime_router
-from modules.timeline.routes import router as timeline_router
+from modules.knowledge.documents.routes import router as documents_router
+from modules.knowledge.entities.routes import router as entities_router
+from modules.knowledge.observations.routes import router as observations_router
+from modules.knowledge.relationships.routes import router as relationships_router
 from modules.knowledge.temporal.routes import router as temporal_router
-from modules.tasks.routes import router as tasks_router
-from modules.goals.routes import router as goals_router
-from modules.news.topics import router as topics_router
-from modules.news.routes import router as news_router
-from modules.notifications.routes import router as notifications_router
-from modules.chat.routes import router as chat_router
 from modules.memory.routes import router as memory_router
-from modules.tools.routes import router as tools_router, browser_jobs_router
-from modules.tools.mcp_management_routes import router as mcp_management_router
-from core.tools import ToolRegistry
-from modules.tools.builtins import register_builtin_tools
-from modules.tools.webhook import register_webhook_tool
-from modules.tools.browser import register_browser_tool
-from modules.agents.handoff import register_handoff_tool
-from modules.goals.tools import register_goal_tools
-from modules.automations.tools import register_automation_tools
+from modules.model_gateway.routes import router as model_gateway_router
+from modules.news.routes import router as news_router
+from modules.news.topics import router as topics_router
+from modules.notifications.routes import router as notifications_router
+from modules.observability.operations_routes import router as operations_router
+from modules.observability.routes import router as observability_router
+from modules.search.routes import router as search_router
+from modules.settings.onboarding_routes import router as onboarding_router
+from modules.settings.routes import router as settings_router
+from modules.sources.routes import router as sources_router
+from modules.tasks.routes import router as tasks_router
 from modules.tasks.tools import register_task_tools
+from modules.timeline.routes import router as timeline_router
+from modules.tools.browser import register_browser_tool
+from modules.tools.browser_control import router as browser_control_router
+from modules.tools.builtins import register_builtin_tools
+from modules.tools.mcp_management_routes import router as mcp_management_router
 from modules.tools.public import McpAdmission, McpRuntime, create_inbound_mcp_bundle
-from modules.agents.routes import router as agents_router
-from modules.automations.routes import router as automations_router, webhook_router as automation_webhook_router
-from modules.backup.routes import router as backup_router
-from modules.backup.middleware import BackupActivityMiddleware
-from modules.export.routes import router as export_router
+from modules.tools.routes import browser_jobs_router
+from modules.tools.routes import router as tools_router
+from modules.tools.webhook import register_webhook_tool
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:

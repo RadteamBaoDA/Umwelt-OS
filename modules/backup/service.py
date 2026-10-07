@@ -12,7 +12,12 @@ from uuid import UUID
 
 from pydantic import ValidationError
 
-from modules.backup.manifest import BackupComponent, BackupFile, BackupManifest, ProtectedKeyReference
+from modules.backup.manifest import (
+    BackupComponent,
+    BackupFile,
+    BackupManifest,
+    ProtectedKeyReference,
+)
 
 CHUNK_SIZE = 1024 * 1024
 MAX_ARCHIVE_MEMBERS = 100_000

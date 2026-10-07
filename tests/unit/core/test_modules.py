@@ -7,6 +7,7 @@ enforcement, and default production descriptor composition.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+
 import pytest
 
 from core.modules import register_modules
@@ -107,3 +108,36 @@ class TestRegisterModules:
         ]
         registry = register_modules(descriptors)
         assert "mod_a" in registry and "mod_b" in registry
+
+
+def test_every_route_module_gate_id_is_registered() -> None:
+    """Each require_enabled_module closure on the app's routes names a registered module id."""
+    from apps.api.main import create_app
+    from core.config import Settings
+
+    registry = register_modules()
+    app = create_app(Settings(public_origin="http://localhost:3000", csrf_signing_secret="test-csrf-signing-secret"))
+    found: set[str] = set()
+
+    def record(call) -> None:
+        if getattr(call, "__name__", "") == "require_enabled_module":
+            cells = dict(zip(call.__code__.co_freevars, (c.cell_contents for c in call.__closure__)))
+            found.add(cells["module_id"])
+
+    def walk_dependant(dependant) -> None:
+        record(dependant.call)
+        for sub in dependant.dependencies:
+            walk_dependant(sub)
+
+    def walk_router(router) -> None:
+        for dep in router.dependencies:
+            record(dep.dependency)
+        for route in router.routes:
+            if hasattr(route, "original_router"):  # lazily included router
+                walk_router(route.original_router)
+            elif getattr(route, "dependant", None) is not None:
+                walk_dependant(route.dependant)
+
+    walk_router(app.router)
+    assert {"knowledge.timeline", "knowledge.entities", "knowledge.relationships"} <= found
+    assert found <= set(registry), found - set(registry)

@@ -7,9 +7,9 @@ import logging
 import random
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
-from typing import cast
+from typing import Any, cast
 from urllib.parse import urlsplit
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 from arq import Retry
@@ -18,10 +18,19 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from core.chunking import chunk_text
 from core.config import Settings
+from core.events import DomainEvent
 from core.heavy_work import bounded_heavy_work
-from core.realtime import ReplayDraft, commit_with_replay, make_ingestion_change, make_knowledge_change, make_source_change
+from core.realtime import (
+    ReplayDraft,
+    commit_with_replay,
+    make_ingestion_change,
+    make_knowledge_change,
+    make_source_change,
+)
 from core.storage import cleanup_orphaned_files, storage_path
+from core.telemetry import count, set_trace, timed
 from modules.connectors.public import CollectionFence, ConnectorRecord
 from modules.ingestion.dispatcher import mark_event_delivered
 from modules.ingestion.models import (
@@ -35,13 +44,10 @@ from modules.ingestion.models import (
     SourceObservation,
 )
 from modules.ingestion.parsers import parse_file_bounded
+from modules.ingestion.schemas import IngestionRecord
 from modules.knowledge.documents import public as documents
 from modules.knowledge.documents.schemas import NormalizedDocumentInput
-from modules.ingestion.schemas import IngestionRecord
 from modules.sources import public as sources
-from core.chunking import chunk_text
-
-from core.telemetry import count, set_trace, timed
 
 logger = logging.getLogger("bbd.worker")
 STAGE_TIMEOUT_SECONDS = 120
@@ -154,7 +160,7 @@ async def _collect_web_job(
         if connectors.is_native_provider(source_view.provider):
             raise ValueError("Native provider collection is required")
     settings = cast(Settings, ctx["settings"])
-    config = cast(dict[str, object], event.payload["configuration"])
+    config = cast(dict[str, Any], event.payload["configuration"])
     token = settings.browser_shared_token.get_secret_value()
     if not token:
         raise ValueError("Browser collector is not configured")
@@ -287,7 +293,7 @@ async def _collect_web_job(
         received_at = datetime.now(UTC)
         observations = []
         for data in canonical_records:
-            record_observed_at = datetime.fromisoformat(str(data["observed_at"]).replace("Z", "+00:00"))
+            record_observed_at = datetime.fromisoformat(str(data["observed_at"]).replace("Z", "+00:00"))  # noqa: FURB162  # keeps exact parsing of 'Z' suffix; fromisoformat(Z) is not strictly equivalent
             if record_observed_at.tzinfo is None:
                 raise ValueError("Browser collector returned a naive observation time")
             record_observed_at = record_observed_at.astimezone(UTC)
@@ -319,14 +325,15 @@ async def _collect_web_job(
         batch.payload_hash = payload_hash
         batch.source_generation = source.generation
         cursor_after = max(
-            (datetime.fromisoformat(str(data["observed_at"]).replace("Z", "+00:00")).astimezone(UTC).isoformat()
+            (datetime.fromisoformat(str(data["observed_at"]).replace("Z", "+00:00")).astimezone(UTC).isoformat()  # noqa: FURB162  # keeps exact parsing of 'Z' suffix; fromisoformat(Z) is not strictly equivalent
              for data in canonical_records),
             default=state.cursor,
         )
         if state.cursor:
             try:
-                prior_cursor = datetime.fromisoformat(state.cursor.replace("Z", "+00:00"))
-                latest = datetime.fromisoformat(cursor_after.replace("Z", "+00:00"))
+                prior_cursor = datetime.fromisoformat(state.cursor.replace("Z", "+00:00"))  # noqa: FURB162  # keeps exact parsing of 'Z' suffix; fromisoformat(Z) is not strictly equivalent
+                assert cursor_after is not None
+                latest = datetime.fromisoformat(cursor_after.replace("Z", "+00:00"))  # noqa: FURB162  # keeps exact parsing of 'Z' suffix; fromisoformat(Z) is not strictly equivalent
                 if prior_cursor.tzinfo is not None and prior_cursor > latest:
                     cursor_after = state.cursor
             except ValueError:
@@ -361,12 +368,9 @@ async def _fail_ingestion_stage(
                 await session.commit()
             return
         source = await sources.lock_source(session, run_hint.source_id)
-        source_projection = (
-            await sources.get_connector_source(session, run_hint.source_id) if source is not None else None
-        )
-        from modules.connectors import public as connectors
+        if source is not None:
+            await sources.get_connector_source(session, run_hint.source_id)
 
-        native_source = source_projection is not None and connectors.is_native_provider(source_projection.provider)
         run = await session.scalar(select(IngestionRun).where(IngestionRun.id == run_id).with_for_update())
         stage = await session.scalar(
             select(IngestionStage).where(IngestionStage.id == stage_id).with_for_update()
@@ -564,7 +568,7 @@ async def process_ingestion_event(ctx: dict[str, object], event_id: str) -> None
             )
             await _commit_ingestion_change(session, run, stage)
         raise Retry(defer=delay) from exc
-    except Exception:
+    except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
         await _fail_ingestion_stage(factory, identifier, run_id, stage_id, "stage_failed")
         return
 
@@ -786,7 +790,8 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
                     provider_raw = raw_metadata.get("provider_record")
                     if provider_raw is not None:
                         from modules.knowledge.documents.schemas import (
-                            ProviderRecordMetadata, TelegramDocumentOrder,
+                            ProviderRecordMetadata,
+                            TelegramDocumentOrder,
                         )
 
                         provider_record = ProviderRecordMetadata.model_validate(provider_raw)
@@ -813,7 +818,10 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
                         provider_record = ProviderRecordMetadata.model_validate(provider_record_data)
                         if provider_record.provider == "telegram":
                             detail = provider_record.telegram
-                            from modules.ingestion.schemas import TelegramDeliveryProof, TelegramRawDelivery
+                            from modules.ingestion.schemas import (
+                                TelegramDeliveryProof,
+                                TelegramRawDelivery,
+                            )
 
                             if not isinstance(native_telegram_envelope, dict) or detail is None:
                                 raise ValueError("Persisted Telegram raw delivery proof is missing")
@@ -836,7 +844,10 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
                         elif native_telegram_envelope is not None:
                             raise ValueError("Telegram delivery proof is not valid for this provider")
                     elif source_projection.provider in {"alpha_vantage", "open_meteo"}:
-                        from modules.knowledge.documents.schemas import ProviderRecordMetadata, WorldDataMeasurement
+                        from modules.knowledge.documents.schemas import (
+                            ProviderRecordMetadata,
+                            WorldDataMeasurement,
+                        )
 
                         measurement = WorldDataMeasurement.model_validate(raw_metadata.get("world_data"))
                         if measurement.provider != source_projection.provider:
@@ -861,7 +872,7 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
                     published_value = raw_metadata.get("published_at")
                     if isinstance(published_value, str) and published_value:
                         try:
-                            published_at = datetime.fromisoformat(published_value.replace("Z", "+00:00"))
+                            published_at = datetime.fromisoformat(published_value.replace("Z", "+00:00"))  # noqa: FURB162  # keeps exact parsing of 'Z' suffix; fromisoformat(Z) is not strictly equivalent
                             if published_at.tzinfo is None:
                                 published_at = published_at.replace(tzinfo=UTC)
                             published_at = published_at.astimezone(UTC)
@@ -1214,7 +1225,7 @@ async def process_uploaded_file(ctx: dict[str, object], event_id: str) -> None:
                 else:
                     await session.commit()
                 return
-            document_id = await documents.save_extraction(
+            saved_document_id = await documents.save_extraction(
                 session,
                 document_id,
                 source_id,
@@ -1229,7 +1240,7 @@ async def process_uploaded_file(ctx: dict[str, object], event_id: str) -> None:
                 "p02-t2-v1",
             )
             event = await session.get(EventOutbox, identifier, with_for_update=True)
-            if document_id is None or stage is None or run is None or event is None:
+            if saved_document_id is None or stage is None or run is None or event is None:
                 return
             stage.status = "succeeded"
             stage.result_count = len(drafts)
@@ -1239,7 +1250,7 @@ async def process_uploaded_file(ctx: dict[str, object], event_id: str) -> None:
             run.error_code = None
             event.status = "delivered"
             source_changed = await sources.record_processing_result(session, source_id, source.generation, datetime.now(UTC), None)
-            extras = [make_knowledge_change(source_id, document_id)]
+            extras: list[ReplayDraft] = [make_knowledge_change(source_id, saved_document_id)]
             if source_changed:
                 extras.append(make_source_change(source.id, source.generation, source.status))
             await _commit_ingestion_change(
@@ -1247,7 +1258,7 @@ async def process_uploaded_file(ctx: dict[str, object], event_id: str) -> None:
                 tuple(extras),
             )
             count("ingestion_documents_total", outcome="processed")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
         async with factory() as session:
             source = await sources.lock_source(session, source_id)
             run = await session.scalar(

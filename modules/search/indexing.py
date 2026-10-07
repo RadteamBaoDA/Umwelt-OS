@@ -1,19 +1,20 @@
 import json
 import math
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import cast
 from uuid import UUID
 
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
-from sqlalchemy import func, select, text
+from sqlalchemy import Select, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
 from core.heavy_work import bounded_heavy_work
 from core.model_gateway.client import ModelGateway, ModelGatewayError, PrivacyPolicyDenied
 from core.model_gateway.policy import may_send
-from core.model_gateway.schemas import ModelMapping, RequestPolicy
+from core.model_gateway.schemas import AIExecutionConfig, ModelMapping, RequestPolicy
 from core.realtime import commit_with_replay, make_index_change
 from modules.knowledge.documents.models import Document, DocumentChunk, DocumentVersion
 from modules.knowledge.documents.public import backfill_current_chunks
@@ -91,7 +92,7 @@ def embedding_values(response: object, expected_dimensions: int | None = None) -
         raise ValueError("Embedding response model identity is invalid")
     row = response["data"][0]
     if not isinstance(row, dict) or not isinstance(row.get("embedding"), list):
-        raise ValueError("Invalid embedding response")
+        raise ValueError("Invalid embedding response")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
     values = row["embedding"]
     if not 1 <= len(values) <= MAX_VECTOR_DIMENSIONS or expected_dimensions not in (None, len(values)):
         raise ValueError("Embedding dimensions do not match the index generation")
@@ -102,7 +103,7 @@ def embedding_values(response: object, expected_dimensions: int | None = None) -
     return [float(value) for value in values], returned_model
 
 
-def gateway(config, redis: Redis, before_send=None) -> ModelGateway:
+def gateway(config: AIExecutionConfig, redis: Redis, before_send: Callable[[], Awaitable[None]] | None = None) -> ModelGateway:
     """Construct the model gateway with configured timeout, identity, and endpoint limits."""
     return ModelGateway(redis, config.omniroute_base_url, config.omniroute_api_key,
         config.endpoint_destination_id or "omniroute", config.request_timeout_seconds,
@@ -110,7 +111,7 @@ def gateway(config, redis: Redis, before_send=None) -> ModelGateway:
         approved_endpoint_cidrs=config.endpoint_allowed_cidrs)
 
 
-async def configured_embedding(session: AsyncSession, settings: Settings, redis: Redis):
+async def configured_embedding(session: AsyncSession, settings: Settings, redis: Redis) -> tuple[AIExecutionConfig, ModelMapping | None, RequestPolicy]:
     """Return current gateway config, embedding alias, and privacy-constrained policy."""
     config = await ai_settings.get_ai_execution_config(session, settings, redis)
     destination = config.endpoint_destination_id
@@ -124,7 +125,7 @@ async def configured_embedding(session: AsyncSession, settings: Settings, redis:
     return config, config.aliases.get("embedding"), policy
 
 
-def eligible_chunks():
+def eligible_chunks() -> Select[UUID, str, UUID]:
     """Select active-source chunks from ready current versions, excluding local-only data."""
     return (
         select(DocumentChunk.id, DocumentChunk.content, Source.id)
@@ -186,7 +187,7 @@ async def index_pending_chunks(ctx: dict[str, object]) -> int:
             return 0
         if mapping is None or mapping.model != generation.model_id or mapping.version != generation.model_version or config.gateway_identity != generation.gateway_identity:
             raise ValueError("Embedding model or gateway identity changed")
-    except Exception:
+    except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
         async with factory() as session:
             generation = await session.get(IndexGeneration, generation_id, with_for_update=True)
             if generation is not None and generation.status != "active":
@@ -280,7 +281,7 @@ async def index_pending_chunks(ctx: dict[str, object]) -> int:
                 async def recheck_send() -> None:
                     """Re-read AI settings before the request and enforce the current send policy."""
                     latest, latest_mapping, latest_policy = await configured_embedding(session, settings, redis)
-                    if (latest.gateway_identity != config.gateway_identity or latest_mapping != mapping
+                    if (latest.gateway_identity != config.gateway_identity or latest_mapping != mapping  # noqa: B023  # closure is awaited within the same loop iteration
                             or not may_send(latest_policy, "embedding", latest_mapping,
                                             latest.endpoint_destination_id or "omniroute",
                                             bool(latest.omniroute_api_key), "embeddings")):

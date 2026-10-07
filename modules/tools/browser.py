@@ -1,10 +1,10 @@
 """Registered browser read contract with an explicit fail-closed capability gate."""
 
-from datetime import UTC, datetime, timedelta
 import hashlib
 import json
 import time
-from typing import Any
+from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 from uuid import UUID
 
 from core.tools import ToolDefinition, ToolRegistry, ToolResult, ToolRisk
@@ -71,7 +71,7 @@ async def _handle_browser_read(arguments: dict[str, Any], context: dict[str, Any
         return ToolResult(success=False, error="Browser run authority is invalid", error_code="forbidden")
     if not settings:
         return ToolResult(success=False, error="Browser service is unavailable", error_code="tool_unavailable")
-    remaining = min(45.0, float(remaining_active))
+    remaining = min(45.0, float(cast("float", remaining_active)))  # type(...) in {int, float} checked above
     if remaining <= 0:
         return ToolResult(success=False, error="Browser run budget is exhausted", error_code="tool_unavailable")
     try:
@@ -164,7 +164,7 @@ async def _handle_browser_read(arguments: dict[str, Any], context: dict[str, Any
         return ToolResult(success=False, error="Browser capacity is unavailable", error_code="tool_unavailable")
     except (PermissionError, LookupError, ValueError):
         return ToolResult(success=False, error="Browser authority is unavailable", error_code="forbidden")
-    except Exception:
+    except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
         return ToolResult(success=False, error="Browser operation did not complete", error_code="tool_unavailable")
 
 

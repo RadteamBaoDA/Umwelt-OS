@@ -1,10 +1,11 @@
+import json
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
-import json
 from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
 from modules.connectors.github.schemas import GitHubSegmentProof
 
 MAX_NATIVE_COLLECTION_BYTES = 10 * 1024 * 1024

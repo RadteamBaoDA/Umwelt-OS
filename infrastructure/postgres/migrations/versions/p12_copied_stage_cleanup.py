@@ -8,10 +8,9 @@ cleanup receipts start both new stages ``queued`` so owners re-evaluate them hon
 
 from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects import postgresql
-
 
 revision: str = "p12_copied_stage_cleanup"
 down_revision: str | Sequence[str] | None = "p12_agent_document_cleanup"

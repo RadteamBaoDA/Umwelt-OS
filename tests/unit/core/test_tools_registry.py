@@ -6,14 +6,14 @@ ToolPolicy evaluation, and bounded async ToolRegistry dispatch.
 
 from __future__ import annotations
 
-import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
+
 import pytest
 from pydantic import ValidationError
 
-from core.tools.policy import PolicyDecision, ToolPolicy
+from core.tools.policy import ToolPolicy
 from core.tools.registry import ToolRegistry
 from core.tools.schemas import (
     ToolApprovalGrant,
@@ -21,7 +21,6 @@ from core.tools.schemas import (
     ToolDestination,
     ToolExecutionPrincipal,
     ToolOutputFence,
-    ToolResult,
     ToolRisk,
     compute_argument_hash,
 )

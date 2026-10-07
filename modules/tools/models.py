@@ -1,9 +1,22 @@
 """Durable owner-managed MCP connections, immutable discoveries, grants, and inbound clients."""
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Index, Integer, LargeBinary, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    LargeBinary,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
@@ -134,7 +147,7 @@ class McpDiscovery(Base):
     connection_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     connection_revision: Mapped[int] = mapped_column(Integer, nullable=False)
     negotiated_protocol: Mapped[str] = mapped_column(String(40), nullable=False)
-    server_info: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    server_info: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
     schema_set_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     deployment_profile_hash: Mapped[str | None] = mapped_column(String(64))
     capability_count: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -155,7 +168,7 @@ class McpCapability(Base):
     discovery_id: Mapped[UUID] = mapped_column(ForeignKey("mcp_discoveries.id", ondelete="CASCADE"), nullable=False)
     kind: Mapped[str] = mapped_column(String(24), nullable=False)
     remote_key: Mapped[str] = mapped_column(String(2048), nullable=False)
-    descriptor: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    descriptor: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     descriptor_hash: Mapped[str] = mapped_column(String(64), nullable=False)
 
 
@@ -200,7 +213,7 @@ class McpInboundClient(Base):
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     token_prefix: Mapped[str] = mapped_column(String(20), nullable=False)
     audience: Mapped[str] = mapped_column(String(255), nullable=False)
-    bindings: Mapped[list[dict[str, object]]] = mapped_column(JSONB, nullable=False)
+    bindings: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
     source_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
     capabilities: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default="[]")
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

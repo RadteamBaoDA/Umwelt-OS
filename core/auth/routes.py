@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated, cast
 
 import httpx
-from authlib.common.errors import AuthlibBaseError
+from authlib.common.errors import AuthlibBaseError  # type: ignore[import-untyped]  # no stubs
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from joserfc.errors import JoseError
 from redis.asyncio import Redis
@@ -517,12 +517,12 @@ async def google_callback(
         except HTTPException:
             return response
     else:
-        owner_id = transaction.get("owner_id")
-        if not isinstance(owner_id, int) or owner_id != 1:
+        transaction_owner_id = transaction.get("owner_id")
+        if not isinstance(transaction_owner_id, int) or transaction_owner_id != 1:
             return response
         old_token = request.cookies.get(SESSION_COOKIE, "")
         try:
-            owner = await _lock_owner(session, owner_id)
+            owner = await _lock_owner(session, transaction_owner_id)
             if owner is None:
                 return response
             auth_session = await _lock_auth_session(session, _hash(old_token), owner.id)
@@ -626,8 +626,8 @@ async def auth_session(
         and hmac.compare_digest(row.csrf_hash, _hash(existing_token))
     )
     if not csrf_is_current:
-        from modules.settings.public import register_activity
         from modules.backup.public import BackupAdmissionDenied
+        from modules.settings.public import register_activity
 
         try:
             receipt = await register_activity(session, "auth_csrf_rotation", "auth/session")

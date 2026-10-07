@@ -1,16 +1,15 @@
 """Owner-scoped agent run creation, lookup, and cancellation contracts."""
 
-from core.telemetry import RunMeta as _RunMeta
-from collections.abc import Callable
 import asyncio
 import base64
 import binascii
 import hashlib
 import json
-from dataclasses import dataclass
-from contextlib import AbstractAsyncContextManager
-from datetime import UTC, datetime, timedelta
 import logging
+from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -18,18 +17,30 @@ from fastapi import HTTPException
 from sqlalchemy import and_, exists, func, or_, select, text, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from core.pagination import decode_cursor, encode_cursor
+from core.telemetry import RunMeta as _RunMeta
 from core.tools import ToolRegistry, ToolRisk
 from core.tools.schemas import ToolExecutionPrincipal, ToolOutputFence
-from modules.agents.models import (
-    AgentApproval, AgentEffect, AgentEvidenceCleanup, AgentProfile, AgentRun, AgentToolCall,
-)
-from modules.agents.schemas import ApprovalRead, AgentRunPage, AgentRunRead, AgentRunStart, ProfileRunStart
-from modules.agents.specialists import resolve_profile_snapshot
-from modules.agents.models import AgentProfileRevision
-from modules.knowledge.documents.public import DocumentCleanupEvidenceScope
-from core.pagination import decode_cursor, encode_cursor
-from modules.tools.public import purge_browser_results_in_uow, revalidate_native_output_fences
 from modules.agents.leases import try_agent_run_lease_in_uow
+from modules.agents.models import (
+    AgentApproval,
+    AgentEffect,
+    AgentEvidenceCleanup,
+    AgentProfile,
+    AgentProfileRevision,
+    AgentRun,
+    AgentToolCall,
+)
+from modules.agents.schemas import (
+    AgentRunPage,
+    AgentRunRead,
+    AgentRunStart,
+    ApprovalRead,
+    ProfileRunStart,
+)
+from modules.agents.specialists import resolve_profile_snapshot
+from modules.knowledge.documents.public import DocumentCleanupEvidenceScope
+from modules.tools.public import purge_browser_results_in_uow, revalidate_native_output_fences
 
 WORKFLOW_VERSION = "assistant-readonly-v1"
 APPROVAL_WORKFLOW_VERSION = "assistant-approved-v1"
@@ -270,7 +281,7 @@ async def publish_agent_activity_safely(
                 session_factory, run_id=run_id, owner_id=owner_id,
                 auth_session_hash=auth_session_hash, status=status, tool_name=tool_name,
             )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
         logger.warning("Agent activity delivery deferred for %s (%s)", run_id, type(exc).__name__)
 
 
@@ -292,6 +303,7 @@ def _read(row: AgentRun) -> AgentRunRead:
 
 def _result_principal(row: AgentRun) -> ToolExecutionPrincipal | None:
     """Rebuild output authorization from a profile's original exact source grant, failing closed on malformed snapshots."""
+    source_ids: frozenset[UUID]
     if row.profile_snapshot is None:
         source_ids, owner_all_sources = frozenset(), True
     else:
@@ -334,7 +346,7 @@ async def create_profile_run_in_uow(
     request_hash = hashlib.sha256(json.dumps(
         request_body, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
     ).encode("utf-8")).hexdigest()
-    lock_material = f"{owner_id}:{auth_session_hash}:{request.client_request_id}".encode("utf-8")
+    lock_material = f"{owner_id}:{auth_session_hash}:{request.client_request_id}".encode()
     lock_key = int.from_bytes(hashlib.sha256(lock_material).digest()[:8], "big", signed=True)
     # Serialize the absent-row case as well as ordinary reads so parallel retries cannot create duplicate work.
     await session.execute(text("SELECT pg_advisory_xact_lock(:lock_key)"), {"lock_key": lock_key})
@@ -442,6 +454,7 @@ async def list_runs(
                 break
         if has_more or len(batch) < min(25, 100 - (scanned - len(batch))):
             break
+    next_cursor: str | None
     if has_more:
         # Continue after the last returned row so the first overflow row remains on the next page.
         next_cursor = encode_cursor(page[limit - 1].created_at, page[limit - 1].id)
@@ -573,7 +586,7 @@ async def _read_current_result(
     return result
 
 
-def _restore_fences(value: dict[str, object]) -> dict[str, object]:
+def _restore_fences(value: dict[str, Any]) -> dict[str, Any]:
     """Rebuild strict UUID-keyed source evidence identities from JSONB before authorization checks."""
     generations = value.get("source_generations")
     records = value.get("records")
@@ -771,10 +784,11 @@ async def _agent_cleanup_candidate_ids(
         AgentEvidenceCleanup.run_id == AgentRun.id,
         AgentEvidenceCleanup.operation_id == scope.operation_id,
     ))
-    query = select(AgentRun.id).where(or_(*[
+    cleanup_clauses: list[Any] = [
         *run_clauses, related_call, related_approval, legacy_active,
         legacy_unreconciled_active, marker_exists,
-    ]))
+    ]
+    query = select(AgentRun.id).where(or_(*cleanup_clauses))
     if after is not None:
         query = query.where(AgentRun.id > after)
     return list((await session.scalars(query.order_by(AgentRun.id).limit(limit + 1))).all())
@@ -874,6 +888,7 @@ def _scrub_agent_scope_payloads(
             approval_fences = _strict_agent_fences(approval.source_fences) if approval is not None else None
             if approval_fences is not None:
                 classified = True
+                assert approval is not None
                 matched = _fences_match_agent_scope(approval.source_fences, records)
         if matched:
             # Input provenance justifies clearing derived arguments. Output references may identify
@@ -1019,6 +1034,7 @@ async def purge_document_copied_evidence_page(
                 unresolved = _scrub_agent_scope_payloads(
                     approvals, effects, calls, records, datetime.now(UTC),
                 )
+                assert marker is not None
                 marker.state = "unavailable" if unresolved else "finalized"
                 unavailable = unavailable or unresolved or marker.state == "unavailable"
             last_processed, processed = run_id, processed + 1
@@ -1047,6 +1063,7 @@ async def purge_document_copied_evidence_page(
                 last_processed, processed = run_id, processed + 1
                 unavailable = True
                 continue
+            assert marker is not None
             marker.matched_identity = matching
             marker.state = "pending"
             run.evidence_revoked = True
@@ -1221,8 +1238,8 @@ async def list_conversation_approvals(
     conversation_id: UUID, owner_id: int, auth_session_hash: str,
 ) -> list[ApprovalRead]:
     """List bounded actions only while the owner session, Chat link and current output fences remain valid."""
-    from modules.chat.public import list_agent_run_ids_for_owner
     from core.auth.public import revalidate_owner_session
+    from modules.chat.public import list_agent_run_ids_for_owner
 
     if not await revalidate_owner_session(session, auth_session_hash, owner_id):
         return []
@@ -1235,11 +1252,11 @@ async def list_conversation_approvals(
         AgentApproval.arguments.is_not(None),
         AgentApproval.status.in_({"pending", "approved", "denied", "expired", "cancelled", "requires_review"}),
     ).order_by(AgentApproval.created_at.desc()).limit(50))).all())
-    effects = dict((item[0], (item[1], item[2])) for item in (await session.execute(select(
+    effects = {item[0]: (item[1], item[2]) for item in (await session.execute(select(
         AgentEffect.action_id, AgentEffect.result_reference, AgentEffect.state,
     ).where(
         AgentEffect.action_id.in_([item.action_id for item in rows]),
-    ))).all()) if rows else {}
+    ))).all()} if rows else {}
     reads: list[ApprovalRead] = []
     for item in rows:
         run_revoked = await _approval_run_is_revoked(session_factory, item.run_id)
@@ -1281,8 +1298,8 @@ async def get_approval(
     approval_id: UUID, owner_id: int, auth_session_hash: str,
 ) -> ApprovalRead:
     """Return exact bounded action detail only while its original Chat link and owner session are live."""
-    from modules.chat.public import live_agent_conversation_id
     from core.auth.public import revalidate_owner_session
+    from modules.chat.public import live_agent_conversation_id
 
     if not await revalidate_owner_session(session, auth_session_hash, owner_id):
         raise HTTPException(status_code=404, detail="Approval not found")
@@ -1428,9 +1445,9 @@ async def purge_agent_runs(session: AsyncSession, run_ids: list[UUID], owner_id:
                 effect.state = "failed"
             effect.payload = None
         for approval in approvals:
-            effect = effects_by_id.get(approval.action_id)
+            approval_effect = effects_by_id.get(approval.action_id)
             if approval.status in {"pending", "approved"}:
-                approval.status = "requires_review" if effect and effect.state == "requires_review" else "cancelled"
+                approval.status = "requires_review" if approval_effect and approval_effect.state == "requires_review" else "cancelled"
                 approval.resolved_at = datetime.now(UTC)
             approval.arguments = None
             approval.source_fences = {}
@@ -1486,9 +1503,7 @@ async def request_cancel(
             effect = effects_by_id.get(approval.action_id)
             if effect is not None and effect.state == "in_flight":
                 approval.status = "requires_review"
-            elif effect is not None and effect.state == "reserved":
-                approval.status = "cancelled"
-            elif approval.status == "pending":
+            elif effect is not None and effect.state == "reserved" or approval.status == "pending":
                 approval.status = "cancelled"
             approval.resolved_at = datetime.now(UTC)
         for effect in effects:
@@ -1582,16 +1597,38 @@ async def current_profile_revision(
 
 
 __all__ = [
-    "current_profile_revision", "APPROVAL_PROMPT_VERSION", "APPROVAL_WORKFLOW_TOOLS", "APPROVAL_WORKFLOW_VERSION", "CHECKPOINT_SCHEMA_VERSION",
-    "PROMPT_VERSION", "WORKFLOW_TOOLS", "WORKFLOW_VERSION",
-    "SPECIALIST_CHECKPOINT_SCHEMA_VERSION", "SPECIALIST_PROMPT_VERSION", "SPECIALIST_WORKFLOW_VERSION",
-    "BrowserRunAuthorization", "reserve_browser_run_budget_in_uow", "revalidate_browser_run_authority",
-    "AgentCopiedEvidenceCleanupProgress", "AgentCleanupLeasePreflight",
-    "preflight_document_copied_evidence_lease", "purge_document_copied_evidence_page",
-    "create_profile_run_in_uow", "list_runs", "create_run", "get_run", "get_run_for_owner",
-    "get_approval", "list_conversation_approvals", "request_cancel", "request_cancel_for_owner",
+    "APPROVAL_PROMPT_VERSION",
+    "APPROVAL_WORKFLOW_TOOLS",
+    "APPROVAL_WORKFLOW_VERSION",
+    "CHECKPOINT_SCHEMA_VERSION",
+    "PROMPT_VERSION",
+    "SPECIALIST_CHECKPOINT_SCHEMA_VERSION",
+    "SPECIALIST_PROMPT_VERSION",
+    "SPECIALIST_WORKFLOW_VERSION",
+    "WORKFLOW_TOOLS",
+    "WORKFLOW_VERSION",
+    "AgentCleanupLeasePreflight",
+    "AgentCopiedEvidenceCleanupProgress",
+    "BrowserRunAuthorization",
+    "ProfileRunStart",
+    "create_profile_run_in_uow",
+    "create_run",
+    "current_profile_revision",
+    "get_approval",
+    "get_run",
+    "get_run_for_owner",
+    "get_run_meta_by_id",
+    "list_conversation_approvals",
+    "list_run_meta",
+    "list_runs",
+    "preflight_document_copied_evidence_lease",
+    "purge_agent_runs",
     "purge_conversation_actions",
-    "purge_agent_runs", "list_run_meta", "get_run_meta_by_id",
+    "purge_document_copied_evidence_page",
+    "request_cancel",
+    "request_cancel_for_owner",
+    "reserve_browser_run_budget_in_uow",
+    "revalidate_browser_run_authority",
 ]
 
 

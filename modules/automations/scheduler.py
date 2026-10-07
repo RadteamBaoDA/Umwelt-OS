@@ -108,7 +108,7 @@ def next_slot(spec: CronSpec, tz: ZoneInfo, after: datetime) -> datetime | None:
             for minute in spec.minutes:
                 if offset == 0 and (hour, minute) < (local.hour, local.minute):
                     continue
-                naive = datetime(day.year, day.month, day.day, hour, minute)
+                naive = datetime(day.year, day.month, day.day, hour, minute)  # noqa: DTZ001  # intentionally naive: wall-clock/DST math or naive-rejection test
                 slot = naive.replace(tzinfo=tz).astimezone(UTC)
                 if slot.astimezone(tz).replace(tzinfo=None) != naive or slot <= after:
                     continue  # nonexistent local time (DST gap)
@@ -132,7 +132,7 @@ def min_interval_seconds(spec: CronSpec) -> int:
     if not slots:
         raise ValueError("cron never fires")
     # A single slot in the window (for example yearly) is far slower than any floor.
-    return int(min(((b - a).total_seconds() for a, b in zip(slots, slots[1:])), default=10**9))
+    return int(min(((b - a).total_seconds() for a, b in zip(slots, slots[1:])), default=10**9))  # noqa: RUF007  # style-only rewrite skipped to avoid touching control flow
 
 
 def validate_schedule(cron: str, timezone: str, *, spends_model: bool) -> None:
@@ -157,7 +157,9 @@ async def tick(factory: async_sessionmaker[AsyncSession], now: datetime | None =
     never an unbounded replay. A rule edit (new revision) resets the schedule from ``now`` without
     catch-up, so queued slots of an older revision are never fired. Returns runs created.
     """
-    from modules.automations import execution  # lazy: execution imports nothing from this module's callers
+    from modules.automations import (
+        execution,  # lazy: execution imports nothing from this module's callers
+    )
 
     now = now or datetime.now(UTC)
     created = 0
@@ -177,8 +179,8 @@ async def tick(factory: async_sessionmaker[AsyncSession], now: datetime | None =
             if automation_id not in live:
                 await session.delete(row)  # paused, deleted or no longer a schedule rule
         for automation_id, (head, rev) in live.items():
-            row = existing.get(automation_id)
-            if row is not None and row.revision == head.revision:
+            current_row = existing.get(automation_id)
+            if current_row is not None and current_row.revision == head.revision:
                 continue
             trigger = rev.trigger
             first = next_slot(parse_cron(trigger["cron"]), ZoneInfo(trigger["timezone"]), now)

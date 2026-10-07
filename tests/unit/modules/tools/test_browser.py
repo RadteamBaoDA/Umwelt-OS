@@ -7,9 +7,8 @@ and session tracking in modules.tools.browser_public and modules.tools.browser_c
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
@@ -26,10 +25,9 @@ from modules.tools.browser_public import (
     browser_capability_verified,
     cancel_browser_job_in_uow,
     derive_browser_job_token,
-    read_browser_result,
     submit_browser_read_in_uow,
 )
-from modules.tools.models import BrowserPageEvidence, BrowserReadJob
+from modules.tools.models import BrowserReadJob
 
 
 class TestBrowserSchemas:
@@ -274,7 +272,7 @@ class TestBrowserJobSubmissionAndCancellation:
             max_bytes=100_000,
             max_active_seconds=30,
             service_token_hash="a" * 64,
-            expires_at=datetime.now(),  # naive!
+            expires_at=datetime.now(),  # naive!  # noqa: DTZ005  # intentionally naive: wall-clock/DST math or naive-rejection test
         )
         args = BrowserReadArgs(source_id=mock_browser_scope.source_id, max_pages=1)
 

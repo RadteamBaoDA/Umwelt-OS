@@ -13,16 +13,16 @@ from core.storage import storage_path
 from modules.knowledge.documents import public
 from modules.knowledge.documents.models import Document
 from modules.knowledge.documents.schemas import (
-    ContentUpdate,
     CitationTargetRead,
+    ContentUpdate,
     DocumentCreate,
     DocumentDeletionRead,
     DocumentList,
     DocumentPatch,
     DocumentRead,
-    GadgetDocumentProjectionList,
     GadgetDocumentInteractionPatch,
     GadgetDocumentInteractionRead,
+    GadgetDocumentProjectionList,
     ProviderDocumentSnapshotList,
     ProviderDocumentSnapshotRead,
     ProviderSnapshotRequest,

@@ -8,9 +8,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
-from modules.dashboard import briefs
+from modules.dashboard import briefs, public
 from modules.dashboard.models import GadgetDefinition
-from modules.dashboard import public
 
 OWNER_ID = 1  # single-owner deployment; matches settings.public.OWNER_ID
 HIGHLIGHT_CURSOR_KEY = "dashboard:highlights:definition-cursor"

@@ -3,14 +3,15 @@ import binascii
 import hashlib
 import json
 import math
-from dataclasses import dataclass
 from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
+from typing import Any
 from uuid import UUID
 
 from fastapi import HTTPException
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
-from sqlalchemy import and_, false, func, or_, select, text
+from sqlalchemy import Select, and_, false, func, or_, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -18,9 +19,9 @@ from sqlalchemy.orm import aliased
 from core.config import Settings
 from core.model_gateway.client import ModelGatewayError, PrivacyPolicyDenied
 from core.model_gateway.policy import may_send
-from modules.goals.schemas import GoalFilter, GoalPage
 from core.model_gateway.schemas import AIExecutionConfig, ModelMapping, RequestPolicy
 from core.tools.schemas import ToolDestination, ToolOutputFence
+from modules.goals.schemas import GoalFilter, GoalPage
 from modules.knowledge.documents.models import Document, DocumentChunk, DocumentVersion
 from modules.search.indexing import configured_embedding, embedding_values, gateway
 from modules.search.models import IndexGeneration, SearchIndexItem
@@ -116,7 +117,7 @@ async def compare_news_evidence_embeddings(
             left_source.local_only.is_(False), right_source.local_only.is_(False),
         )
     )
-    rows = list((await session.execute(stmt.limit(101))).all())
+    rows: list[Any] = list((await session.execute(stmt.limit(101))).all())
     if len(rows) > 100:
         return NewsSimilarityResult(items=(), capability="candidate_limit_exceeded")
     if not rows:
@@ -177,9 +178,9 @@ def _encode_cursor(
 
 
 def _filters(
-    statement, request: SearchRequest, destination: ToolDestination = ToolDestination.LOCAL,
+    statement: Select[Any], request: SearchRequest, destination: ToolDestination = ToolDestination.LOCAL,
     source_generation_fences: dict[UUID, int] | None = None,
-):
+) -> Select[Any]:
     """Apply privacy, source-generation, type and effective-date predicates before ranking."""
     filters = request.filters
     if destination != ToolDestination.LOCAL:
@@ -202,9 +203,9 @@ def _filters(
 
 
 def _visible_rows(
-    *columns, destination: ToolDestination = ToolDestination.LOCAL,
+    *columns: Any, destination: ToolDestination = ToolDestination.LOCAL,
     source_generation_fences: dict[UUID, int] | None = None,
-):
+) -> Select[Any]:
     """Build a fresh active/current query with destination and optional generation fences."""
     statement = (
         select(*columns)
@@ -378,7 +379,7 @@ async def search(
     ordered = sorted(ranked, key=lambda chunk_id: (-ranked[chunk_id], str(chunk_id)))
     selected = ordered[offset:offset + request.limit + 1]
     # Hydrate only current/active rows allowed by the original source generations and destination.
-    rows = (await session.execute(_filters(
+    rows: Sequence[Any] = (await session.execute(_filters(
         _visible_rows(
             DocumentChunk.id,
             DocumentChunk.content,

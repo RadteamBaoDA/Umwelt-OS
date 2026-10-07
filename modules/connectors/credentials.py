@@ -6,6 +6,7 @@ from uuid import UUID
 
 import httpx
 from cryptography.fernet import Fernet, InvalidToken
+
 from modules.connectors.public import NativeCredentialSnapshot
 
 

@@ -1,14 +1,25 @@
 from datetime import datetime
+from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, String, UniqueConstraint, func, text
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy.types import Uuid, UserDefinedType
+from sqlalchemy.types import UserDefinedType, Uuid
 
 from core.database import Base
 
 
-class Vector(UserDefinedType):
+class Vector(UserDefinedType[Any]):
     """Represent PostgreSQL's pgvector type in SQLAlchemy column metadata."""
     cache_ok = True
 

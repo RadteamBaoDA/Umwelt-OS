@@ -6,8 +6,11 @@ is validated by the same registered schemas as the REST API; starting it is a se
 
 from typing import Any
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from core.modules import register_modules
 from core.tools import ToolDefinition, ToolRegistry, ToolResult, ToolRisk
+from core.tools.registry import ToolHandler
 from modules.automations import public
 from modules.automations.schemas import AutomationCreate
 
@@ -77,7 +80,7 @@ async def _create(arguments: dict[str, Any], context: dict[str, Any]) -> ToolRes
     """Persist one owner-approved proposal as a disabled draft rule and return its reference."""
     from modules.agents.internal_writes import run_approved_write
 
-    async def perform(session, owner_id: int) -> str:
+    async def perform(session: AsyncSession, owner_id: int) -> str:
         """Validate the proposal and create it disabled; returns ``automation:<id>``."""
         payload = AutomationCreate.model_validate({**arguments, "enabled": False})
         created = await public.create_automation(session, owner_id, payload, register_modules(), context["settings"])
@@ -89,7 +92,8 @@ async def _create(arguments: dict[str, Any], context: dict[str, Any]) -> ToolRes
 
 def register_automation_tools(registry: ToolRegistry, allowed_names: frozenset[str]) -> None:
     """Register automation tools the Automations descriptor declares; the write always needs approval."""
-    def add(name: str, description: str, schema: dict[str, Any], handler, *, write: bool, output=None) -> None:
+    def add(name: str, description: str, schema: dict[str, Any], handler: ToolHandler, *, write: bool,
+        output: dict[str, Any] | None = None) -> None:
         """Register one definition when declared by an enabled descriptor."""
         if name not in allowed_names:
             return

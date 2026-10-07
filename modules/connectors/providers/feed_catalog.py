@@ -1,13 +1,14 @@
 """Fixed-scope YouTube and arXiv Atom feeds with bounded parsing and arXiv admission."""
 
 import asyncio
+import json
+import re
+import time
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from hashlib import sha256
 from html.parser import HTMLParser
-import json
-import re
-import time
 from urllib.parse import parse_qs, quote, urlsplit
 from xml.etree import ElementTree
 
@@ -16,8 +17,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from modules.connectors.public import ConnectorConfig, ProviderCollectionPage, ProviderRateLimited
-from modules.knowledge.documents.public import ProviderRecordMetadata
 from modules.ingestion.schemas import IngestionRecord
+from modules.knowledge.documents.public import ProviderRecordMetadata
 from modules.sources.schemas import ConnectorSource
 
 _MAX_PAGE_BYTES = 10 * 1024 * 1024
@@ -105,7 +106,7 @@ def _parse_time(value: str | None) -> datetime | None:
     if not value:
         return None
     try:
-        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))  # noqa: FURB162  # keeps exact parsing of 'Z' suffix; fromisoformat(Z) is not strictly equivalent
     except ValueError:
         try:
             parsed = parsedate_to_datetime(value)
@@ -120,7 +121,7 @@ async def _read_feed(url: str) -> bytes:
     """Fetch one fixed feed response with TLS, no redirects, and a 10 MiB cap."""
     try:
         async with asyncio.timeout(30):
-            async with httpx.AsyncClient(
+            async with httpx.AsyncClient(  # noqa: SIM117  # style-only rewrite skipped to avoid touching control flow
                 timeout=httpx.Timeout(30), trust_env=False, follow_redirects=False, verify=True
             ) as client:
                 async with client.stream("GET", url, headers={"Accept": "application/atom+xml, application/xml, text/xml"}) as response:
@@ -205,10 +206,10 @@ def _retry_deadline(headers: httpx.Headers, now: datetime) -> datetime:
     standard_reset = headers.get("ratelimit-reset")
     if standard_reset is not None:
         try:
-            seconds = float(standard_reset)
-            if seconds <= 0:
+            standard_seconds = float(standard_reset)
+            if standard_seconds <= 0:
                 raise ValueError
-            deadlines.append(now + timedelta(seconds=seconds))
+            deadlines.append(now + timedelta(seconds=standard_seconds))
         except (ValueError, OverflowError):
             raise ValueError("provider_rate_deadline_invalid") from None
     if deadlines:
@@ -218,7 +219,7 @@ def _retry_deadline(headers: httpx.Headers, now: datetime) -> datetime:
     return now + timedelta(minutes=1)
 
 
-def _selected_hash(values: dict[str, object]) -> str:
+def _selected_hash(values: Mapping[str, object]) -> str:
     """Hash selected provider metadata deterministically without treating hash as time."""
     raw = json.dumps(values, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return sha256(raw.encode("utf-8")).hexdigest()
@@ -306,8 +307,8 @@ def _records_from_feed(
             provider_id = identity
             canonical_url = _feed_canonical(entry, "youtube", identity)
         elif source.provider == "arxiv":
-            identity = entry.findtext(f"{{{_ATOM}}}id")
-            if not identity or len(identity) > 512:
+            arxiv_id = entry.findtext(f"{{{_ATOM}}}id")
+            if not arxiv_id or len(arxiv_id) > 512:
                 truncated = True
                 continue
             published_raw = entry.findtext(f"{{{_ATOM}}}published")
@@ -350,9 +351,9 @@ def _records_from_feed(
             basis = "provider_modified" if modified else "provider_published" if published else "collection"
             observed = modified or published or collected_at
             text_value = title + (f"\n\n{summary}" if summary else "")
-            provider_id = identity
+            provider_id = arxiv_id
             tags = categories
-            canonical_url = _feed_canonical(entry, "arxiv", identity)
+            canonical_url = _feed_canonical(entry, "arxiv", arxiv_id)
         else:
             raise ValueError("provider_scope_invalid")
         digest = _selected_hash(selected)
@@ -431,7 +432,7 @@ async def collect_provider_feed(
     if source.provider != "arxiv":
         raise ValueError("provider_scope_invalid")
     async with asyncio.timeout(60):
-        async with session_factory() as session:
+        async with session_factory() as session:  # noqa: SIM117  # style-only rewrite skipped to avoid touching control flow
             async with session.begin():
                 locked = await session.scalar(
                     text("SELECT pg_try_advisory_xact_lock(:provider_key)"),

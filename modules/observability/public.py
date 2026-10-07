@@ -4,17 +4,32 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.telemetry import BUCKETS_MS, RunMeta, TraceContext, Usage, flush_metrics, read_snapshots, usage_from_response
+from core.telemetry import (
+    BUCKETS_MS,
+    RunMeta,
+    TraceContext,
+    Usage,
+    flush_metrics,
+    read_snapshots,
+    usage_from_response,
+)
 from modules.agents import public as agents
 from modules.automations import public as automations
 from modules.chat import public as chat
 from modules.ingestion import public as ingestion
-from modules.observability.schemas import CounterRead, HistogramRead, MetricsRead, RunKind, RunRead, RunsRead
 from modules.observability.models import MaintenanceSummary
+from modules.observability.schemas import (
+    CounterRead,
+    HistogramRead,
+    MetricsRead,
+    RunKind,
+    RunRead,
+    RunsRead,
+)
 from modules.settings.schemas import MaintenanceSummaryRead
-from sqlalchemy import select
 
 
 def _quantile(buckets: list[int], q: float) -> float | None:
@@ -69,7 +84,7 @@ def _to_read(meta: RunMeta) -> RunRead:
     trace = TraceContext(
         ingestion_run_id=meta.id if meta.kind == "ingestion" else None,
         agent_run_id=meta.id if meta.kind == "agent" else meta.origin_run_id)
-    return RunRead(kind=meta.kind, id=meta.id, status=meta.status, error_code=meta.error_code,  # type: ignore[arg-type]
+    return RunRead(kind=meta.kind, id=meta.id, status=meta.status, error_code=meta.error_code,
                    created_at=meta.created_at, updated_at=meta.updated_at, finished_at=meta.finished_at,
                    duration_ms=duration, usage=usage, trace=trace)
 

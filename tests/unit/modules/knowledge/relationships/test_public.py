@@ -16,14 +16,13 @@ Tests cover:
 from __future__ import annotations
 
 import base64
-from datetime import UTC, datetime
 import json
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 
-from modules.knowledge.relationships.models import Relationship, RelationshipEvidence
 from modules.knowledge.relationships.public import (
     MAX_CLEANUP_SUPPORTS,
     _decode_neighbor_cursor,
@@ -39,10 +38,7 @@ from modules.knowledge.relationships.public import (
 from modules.knowledge.relationships.schemas import (
     CorrectionRelationshipRef,
     CorrectionSupportRef,
-    EntityGraphRead,
     EvidenceRef,
-    NeighborPage,
-    NeighborRead,
     RelationshipCreate,
     RelationshipPage,
     RelationshipRead,
@@ -67,7 +63,7 @@ class TestListRelationships:
     async def test_naive_datetime_rejected(self) -> None:
         """Verify naive valid_at or knowledge_as_of raises ValueError."""
         session = AsyncMock()
-        naive_dt = datetime(2026, 10, 5, 12, 0, 0)  # No tzinfo
+        naive_dt = datetime(2026, 10, 5, 12, 0, 0)  # No tzinfo  # noqa: DTZ001  # intentionally naive: wall-clock/DST math or naive-rejection test
 
         with pytest.raises(ValueError, match="Relationship time controls require aware instants"):
             await list_relationships(session, limit=10, cursor=None, valid_at=naive_dt)
@@ -221,7 +217,7 @@ class TestListRelationshipEvidence:
     async def test_naive_cutoff_rejected(self) -> None:
         """Verify naive knowledge_as_of raises ValueError."""
         session = AsyncMock()
-        naive_dt = datetime(2026, 10, 5, 12, 0, 0)
+        naive_dt = datetime(2026, 10, 5, 12, 0, 0)  # noqa: DTZ001  # intentionally naive: wall-clock/DST math or naive-rejection test
         with pytest.raises(ValueError, match="Evidence cutoff requires an aware instant"):
             await list_relationship_evidence(session, relationship_id=uuid4(), limit=10, cursor=None, knowledge_as_of=naive_dt)
 
@@ -304,7 +300,7 @@ class TestCreateRelationship:
             reason="Test",
         )
 
-        with (
+        with (  # noqa: SIM117  # style-only rewrite skipped to avoid touching control flow
             patch("modules.knowledge.documents.public.read_evidence_refs", AsyncMock(return_value=[])),
             patch("modules.knowledge.entities.public.get_entity_refs", AsyncMock(side_effect=LookupError("Entity missing"))),
         ):

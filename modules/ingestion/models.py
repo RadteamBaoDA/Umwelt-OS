@@ -1,7 +1,19 @@
 from datetime import datetime, timedelta
+from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
@@ -79,7 +91,7 @@ class SourceObservation(Base):
     batch_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("ingestion_batches.id", ondelete="CASCADE"), nullable=False)
     provider_id: Mapped[str] = mapped_column(String(512), nullable=False)
     record_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    payload: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     collected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -156,7 +168,7 @@ class EventOutbox(Base):
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     producer: Mapped[str] = mapped_column(String(128), nullable=False)
-    payload: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="pending")
     next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

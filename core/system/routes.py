@@ -12,9 +12,8 @@ from core.auth.models import AuthSession
 from core.auth.routes import get_auth_redis
 from core.database import get_session
 from core.system.health import PROBE_TIMEOUT_SECONDS, system_health
-from modules.sources.models import SourcePurgeOperation
+from modules.sources.public import read_source_purge_operation
 from modules.sources.schemas import OperationRead
-from sqlalchemy import select
 
 router = APIRouter(prefix="/api/v1/system", tags=["system"])
 
@@ -37,19 +36,11 @@ async def get_operation(
     _owner: Annotated[AuthSession, Depends(require_owner)],
 ) -> OperationRead:
     """Read one source purge operation and return its public status fields or 404."""
-    operation = await session.scalar(
-        select(SourcePurgeOperation).where(SourcePurgeOperation.id == operation_id)
-    )
+    # PRODUCTION FIX: the inline OperationRead(...) omitted required stage fields (ValidationError -> 500).
+    operation = await read_source_purge_operation(session, operation_id)
     if operation is None:
         raise HTTPException(status_code=404, detail="Operation not found")
-    return OperationRead(
-        operation_id=operation.id,
-        source_id=operation.source_id,
-        status=operation.status,
-        error_code=operation.error_code,
-        created_at=operation.created_at,
-        updated_at=operation.updated_at,
-    )
+    return operation
 
 
 @router.get("/ready", include_in_schema=False)

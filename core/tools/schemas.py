@@ -1,17 +1,17 @@
 """Schemas and data models for tool definitions, invocation results, risk classifications, and approval grants."""
 
-from datetime import UTC, datetime
-from enum import Enum
 import hashlib
 import json
-from typing import Any
+import re
+from datetime import UTC, datetime
+from enum import Enum
+from typing import Any, cast
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, computed_field, field_validator
-import re
 
 
-class ToolRisk(str, Enum):
+class ToolRisk(str, Enum):  # str+Enum kept: StrEnum changes str()/format() behavior
     """Classification of tool execution risk controlling automatic execution and approval requirements."""
 
     READ_ONLY = "READ_ONLY"
@@ -43,7 +43,7 @@ class ToolRisk(str, Enum):
             raise ValueError(f"Unknown tool risk level: {value}")
 
 
-class ToolDestination(str, Enum):
+class ToolDestination(str, Enum):  # str+Enum kept: StrEnum changes str()/format() behavior
     """Trusted privacy class for an output destination; only LOCAL permits local-only data."""
 
     LOCAL = "local"
@@ -150,7 +150,7 @@ class ToolDefinition(BaseModel):
         """
         if isinstance(value, str):
             return ToolRisk.from_str(value)
-        return value
+        return cast("ToolRisk", value)  # validator input is already a ToolRisk member
 
     @field_validator("permissions", mode="before")
     @classmethod
@@ -171,7 +171,7 @@ class ToolDefinition(BaseModel):
         """Alias for confirmation_required to satisfy compact interface contracts."""
         return self.confirmation_required
 
-    @computed_field(return_type=str)
+    @computed_field(return_type=str)  # type: ignore[prop-decorator]  # pydantic computed_field over property
     @property
     def schema_fingerprint(self) -> str:
         """Return a stable digest binding name/version, schemas, permissions and execution bounds."""

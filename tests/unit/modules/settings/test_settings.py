@@ -10,6 +10,7 @@ Covers:
 """
 
 from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError

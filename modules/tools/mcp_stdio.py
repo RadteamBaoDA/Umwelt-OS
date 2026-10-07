@@ -3,19 +3,19 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
-from contextlib import asynccontextmanager, suppress
-from dataclasses import dataclass
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import signal
 import stat
 import subprocess
 import time
-from typing import Literal
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from contextlib import asynccontextmanager, suppress
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Literal, cast
 
 import anyio
 from anyio.abc import (
@@ -33,7 +33,7 @@ from modules.tools.mcp_transport import McpTransportError
 if os.name == "posix":
     from mcp.os.posix.utilities import terminate_posix_process_tree
 else:
-    terminate_posix_process_tree = None
+    terminate_posix_process_tree = None  # type: ignore[assignment]  # POSIX-only helper absent elsewhere
 
 _OPERATION_SECONDS = 60.0
 _CLEANUP_RESERVE_SECONDS = 8.0
@@ -228,7 +228,7 @@ class _StdioProcess(asyncio.SubprocessProtocol, Process):
             self._aborted = True
             if self._pid is not None:
                 try:
-                    os.killpg(self._pid, signal.SIGKILL)
+                    os.killpg(self._pid, signal.SIGKILL)  # type: ignore[attr-defined,unused-ignore]  # POSIX-only
                 except ProcessLookupError:
                     pass
                 except OSError:
@@ -255,7 +255,7 @@ class _StdioProcess(asyncio.SubprocessProtocol, Process):
         self._aborted = True
         if self._pid is not None:
             try:
-                os.killpg(self._pid, signal.SIGKILL)
+                os.killpg(self._pid, signal.SIGKILL)  # type: ignore[attr-defined,unused-ignore]  # POSIX-only
             except ProcessLookupError:
                 pass
             except OSError:
@@ -285,7 +285,7 @@ class _StdioProcess(asyncio.SubprocessProtocol, Process):
 
     def kill(self) -> None:
         """Send SIGKILL through the public subprocess transport."""
-        self.send_signal(signal.SIGKILL)
+        self.send_signal(signal.SIGKILL)  # type: ignore[attr-defined,unused-ignore]  # POSIX-only
 
     def send_signal(self, signal_number: int) -> None:
         """Send a signal to the leader through asyncio's public transport API."""
@@ -344,7 +344,7 @@ async def stdio_client_transport(
         loop = asyncio.get_running_loop()
     except RuntimeError as exc:
         raise McpTransportError("MCP stdio requires the supported asyncio loop") from exc
-    if type(loop) is not asyncio.SelectorEventLoop or os.geteuid() == 0:
+    if type(loop) is not asyncio.SelectorEventLoop or os.geteuid() == 0:  # type: ignore[attr-defined,unused-ignore]  # POSIX-only
         raise McpTransportError("MCP stdio requires default selector loop and non-root service identity")
 
     try:
@@ -490,7 +490,7 @@ async def stdio_client_transport(
             raise McpTransportError("MCP stdio absolute argument is outside the reviewed manifest")
     if profile.runtime_kind != "native":
         try:
-            entry = Path(profile.entry_script).resolve(strict=True)
+            entry = Path(cast("str", profile.entry_script)).resolve(strict=True)  # non-native profiles always carry a script
             entry.relative_to(root)
         except (OSError, RuntimeError, ValueError) as exc:
             raise McpTransportError("MCP stdio entry script is unavailable") from exc
@@ -582,7 +582,7 @@ async def stdio_client_transport(
                             await writer_done.wait()
                         try:
                             await _finish_stdio_process(process, stdin, stdout, deadline=deadline)
-                        except Exception:
+                        except Exception:  # noqa: BLE001  # cleanup boundary: records uncertainty and keeps tearing down
                             uncertain = True
                         finally:
                             # A final synchronous owner close runs even if group
@@ -590,11 +590,11 @@ async def stdio_client_transport(
                             for pipe in (stdin, stdout):
                                 try:
                                     await pipe.aclose()
-                                except Exception:
+                                except Exception:  # noqa: BLE001  # cleanup boundary: records uncertainty and keeps tearing down
                                     uncertain = True
                             try:
                                 await process.aclose()
-                            except Exception:
+                            except Exception:  # noqa: BLE001  # cleanup boundary: records uncertainty and keeps tearing down
                                 uncertain = True
                     group.cancel_scope.cancel()
                     finished = True
@@ -612,13 +612,13 @@ async def stdio_client_transport(
                 with anyio.CancelScope(shield=True):
                     try:
                         await _finish_stdio_process(process, stdin, stdout, deadline=deadline)
-                    except Exception:
+                    except Exception:  # noqa: BLE001  # cleanup boundary: records uncertainty and keeps tearing down
                         uncertain = True
             else:
                 uncertain = True
                 try:
                     await process.aclose()
-                except Exception:
+                except Exception:  # noqa: BLE001  # cleanup boundary: records uncertainty and keeps tearing down
                     uncertain = True
             for fd in tuple(owned):
                 owned.remove(fd)
@@ -626,16 +626,16 @@ async def stdio_client_transport(
                     os.close(fd)
                 except OSError:
                     uncertain = True
-            for pipe in (stdin, stdout):
-                if pipe is not None:
+            for open_pipe in (stdin, stdout):
+                if open_pipe is not None:
                     try:
-                        await pipe.aclose()
-                    except Exception:
+                        await open_pipe.aclose()
+                    except Exception:  # noqa: BLE001  # cleanup boundary: records uncertainty and keeps tearing down
                         uncertain = True
             for stream in (wr, rs):
                 try:
                     await stream.aclose()
-                except Exception:
+                except Exception:  # noqa: BLE001  # error boundary: re-mapped to a sanitized error
                     uncertain = True
         if uncertain:
             raise McpTransportError("MCP stdio cleanup ownership is uncertain")
@@ -659,21 +659,21 @@ async def _finish_stdio_process(
     end = min(deadline, time.monotonic() + _CLEANUP_RESERVE_SECONDS)
     try:
         await stdin.aclose()
-    except Exception:
+    except Exception:  # noqa: BLE001  # cleanup boundary: records uncertainty and keeps tearing down
         uncertain = True
     grace = min(end - 1.0, time.monotonic() + 1.0)
     if process.returncode is None and grace > time.monotonic():
         with anyio.move_on_after(grace - time.monotonic(), shield=True):
             try:
                 await process.wait()
-            except Exception:
+            except Exception:  # noqa: BLE001  # cleanup boundary: records uncertainty and keeps tearing down
                 uncertain = True
     budget = min(1.5, max(0.0, end - time.monotonic() - 1.0))
     if process._pid is not None and terminate_posix_process_tree is not None and budget > 0:
         with anyio.move_on_after(budget, shield=True) as stage:
             try:
                 await terminate_posix_process_tree(process, timeout_seconds=1.0)
-            except Exception:
+            except Exception:  # noqa: BLE001  # cleanup boundary: records uncertainty and keeps tearing down
                 uncertain = True
         uncertain |= stage.cancelled_caught
     else:
@@ -684,7 +684,7 @@ async def _finish_stdio_process(
     gone = False
     while process._pid is not None and time.monotonic() < state_end:
         try:
-            os.killpg(process.pid, 0)
+            os.killpg(process.pid, 0)  # type: ignore[attr-defined,unused-ignore]  # POSIX-only
         except ProcessLookupError:
             gone = True
             break
@@ -696,13 +696,13 @@ async def _finish_stdio_process(
         with anyio.move_on_after(state_end - time.monotonic(), shield=True):
             try:
                 await process.wait()
-            except Exception:
+            except Exception:  # noqa: BLE001  # cleanup boundary: records uncertainty and keeps tearing down
                 uncertain = True
     if process.returncode is None:
         uncertain = True
     if not gone and process._pid is not None:
         try:
-            os.killpg(process.pid, 0)
+            os.killpg(process.pid, 0)  # type: ignore[attr-defined,unused-ignore]  # POSIX-only
         except ProcessLookupError:
             gone = True
         except OSError:
@@ -711,11 +711,11 @@ async def _finish_stdio_process(
         uncertain = True
     try:
         await stdout.aclose()
-    except Exception:
+    except Exception:  # noqa: BLE001  # cleanup boundary: records uncertainty and keeps tearing down
         uncertain = True
     try:
         await process.aclose()
-    except Exception:
+    except Exception:  # noqa: BLE001  # error boundary: re-mapped to a sanitized error
         uncertain = True
     if uncertain:
         raise McpTransportError("MCP stdio cleanup is uncertain")

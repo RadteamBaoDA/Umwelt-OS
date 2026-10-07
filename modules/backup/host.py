@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import BinaryIO, Any
+from typing import Any, BinaryIO, cast
 from urllib.parse import quote
 from uuid import UUID, uuid4
 
@@ -24,7 +24,12 @@ from sqlalchemy.engine import make_url
 from core.config import Settings
 from core.system.health import ARQ_WORKER_GENERATION_KEY, ARQ_WORKER_HEALTH_KEY
 from modules.backup.manifest import BackupManifest
-from modules.backup.service import _digest_file, build_manifest, extract_snapshot_tar, write_snapshot_tar
+from modules.backup.service import (
+    _digest_file,
+    build_manifest,
+    extract_snapshot_tar,
+    write_snapshot_tar,
+)
 
 
 class BackupHostError(RuntimeError):
@@ -331,7 +336,7 @@ class N8nScheduleGate:
             if not isinstance(executions, list):
                 raise BackupHostError("n8n execution projection is invalid")
             if not executions:
-                return self.workflows
+                return
             if time.monotonic() >= deadline:
                 raise BackupHostError("n8n executions did not drain before the deadline")
             time.sleep(2)
@@ -381,7 +386,7 @@ class N8nScheduleGate:
             stage = _workflow_schedule_stage(identifier, True)
             existing = receipts.get(stage)
             effect = existing.get("effect_status") if isinstance(existing, dict) else None
-            if effect == "succeeded":
+            if effect == "succeeded":  # noqa: SIM102  # style-only rewrite skipped to avoid touching control flow
                 if live_workflows[identifier]:
                     continue
             if effect in {"attempted", "uncertain"} and live_workflows[identifier]:
@@ -947,7 +952,7 @@ def _start_services(compose: Compose, stopped: list[str]) -> bool:
 
 
 def _encrypt_age(
-    age: str, recipient: str, destination: Path, stage: Path, manifest: object,
+    age: str, recipient: str, destination: Path, stage: Path, manifest: BackupManifest,
 ) -> None:
     """Stream the gzip tar directly through maintained age encryption to an atomic path."""
     temporary = destination.with_name(f".{destination.name}.{uuid4().hex}.partial")
@@ -961,7 +966,7 @@ def _encrypt_age(
                 process.kill()
                 raise BackupHostError("Age encryption pipe could not be opened")
             try:
-                write_snapshot_tar(stage, process.stdin, manifest=manifest)
+                write_snapshot_tar(stage, cast(BinaryIO, process.stdin), manifest=manifest)
                 process.stdin.close()
                 result = process.wait(timeout=3600)
             except BaseException:
@@ -998,7 +1003,7 @@ def _decrypt_snapshot(age: str, identity: Path, archive_path: Path, stage: Path)
         if process.stdout is None:
             process.kill()
             raise BackupHostError("Age decryption pipe could not be opened")
-        manifest = extract_snapshot_tar(process.stdout, stage)
+        manifest = extract_snapshot_tar(cast(BinaryIO, process.stdout), stage)
         result = process.wait(timeout=3600)
         if result != 0:
             raise BackupHostError("Age decryption failed")
@@ -1044,7 +1049,7 @@ def _verify_manifest_keys(manifest: BackupManifest, stage: Path,
         "GRAPH_PASSWORD": archived_env.get("GRAPH_PASSWORD"),
         "N8N_ENCRYPTION_KEY": archived_env.get("N8N_ENCRYPTION_KEY"),
     }
-    for purpose in expected_values:
+    for purpose in expected_values:  # noqa: PLC0206  # style-only rewrite skipped to avoid touching control flow
         expected = expected_values[purpose]
         if ((expected and purpose not in references)
                 or (purpose in references and (
@@ -1094,6 +1099,22 @@ def _wait_for_postgres(compose: Compose, timeout_seconds: int = 180) -> None:
         except BackupHostError:
             time.sleep(2)
     raise BackupHostError("Isolated PostgreSQL did not become ready")
+
+
+def pg_dump_command(username: str, database: str, *extra: str) -> tuple[str, ...]:
+    """Build the one pg_dump invocation backups use (``extra`` is for test-only flags such as --snapshot)."""
+    return (
+        "pg_dump", "--format=custom", "--no-owner", "--no-privileges", *extra,
+        "--username", username, "--dbname", database,
+    )
+
+
+def pg_restore_command(username: str, database: str) -> tuple[str, ...]:
+    """Build the one pg_restore invocation restores use."""
+    return (
+        "pg_restore", "--exit-on-error", "--clean", "--if-exists", "--no-owner", "--no-privileges",
+        "--username", username, "--dbname", database,
+    )
 
 
 def _known_migrations(compose: Compose) -> set[str]:
@@ -1278,9 +1299,7 @@ def restore_backup(
             compose.quiet("up", "-d", "postgres")
             _wait_for_postgres(compose)
             compose.feed_file(
-                postgres_dump, "exec", "-T", "postgres", "pg_restore",
-                "--exit-on-error", "--clean", "--if-exists", "--no-owner", "--no-privileges",
-                "--username", "bbd", "--dbname", "bbd",
+                postgres_dump, "exec", "-T", "postgres", *pg_restore_command("bbd", "bbd"),
             )
             if _database_migrations(compose) != versions:
                 raise BackupHostError("Restored database revision does not match the manifest")
@@ -1355,7 +1374,7 @@ def restore_backup(
             if not keep_isolated or not succeeded:
                 try:
                     compose.quiet("down", "--volumes", "--remove-orphans")
-                except BackupHostError:
+                except BackupHostError:  # noqa: TRY203  # explicit re-raise kept to preserve the exact error contract
                     raise
                 if retained_staging is not None and not succeeded:
                     _discard_retained_restore_directory(root, project_name)
@@ -1476,10 +1495,8 @@ def create_backup(output: Path, *, root: Path | None = None, drain_timeout: int 
             dump_path = stage / "postgres" / "database.dump"
             try:
                 compose.stream_to_file(
-                    dump_path, "exec", "-T", "postgres", "pg_dump",
-                    "--format=custom", "--no-owner", "--no-privileges",
-                    "--username", database_url.username or "bbd",
-                    "--dbname", database_url.database or "bbd",
+                    dump_path, "exec", "-T", "postgres",
+                    *pg_dump_command(database_url.username or "bbd", database_url.database or "bbd"),
                 )
             except BaseException:
                 _record_stage_failure(compose, operation_id, phase, "postgres_dump", "postgres_dump_failed")
@@ -1657,7 +1674,7 @@ def create_backup(output: Path, *, root: Path | None = None, drain_timeout: int 
                 if operation.get("status") in {"resuming", "failed_recovery_required"}:
                     compose.coordinator("recovery-required", "--operation-id", operation_id)
                 operation_finished = True
-            except BaseException:
+            except BaseException:  # noqa: BLE001, S110  # best-effort cleanup/optional step; failure intentionally ignored
                 # Admission may already be open. Keep the durable operation ID so
                 # a later operator can discover and reconcile it explicitly.
                 pass
@@ -1710,7 +1727,7 @@ def create_backup(output: Path, *, root: Path | None = None, drain_timeout: int 
                         "resume", "--operation-id", operation_id, "--outcome", "incomplete",
                     )
                     operation_finished = True
-            except BaseException:
+            except BaseException:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
                 services_recovered = False
         else:
             services_recovered = False
@@ -1724,7 +1741,7 @@ def create_backup(output: Path, *, root: Path | None = None, drain_timeout: int 
                     )
                 else:
                     _publish_phase(compose, operation_id, phase, "failed_recovery_required")
-            except BaseException:
+            except BaseException:  # noqa: BLE001  # error boundary: re-mapped to a sanitized error
                 services_recovered = False
         raise
     finally:

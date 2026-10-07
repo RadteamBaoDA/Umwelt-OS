@@ -15,6 +15,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 P = ParamSpec("P")
 R = TypeVar("R")
 MAX_OPERATION_SECONDS = 150
+HEAVY_RETRY_DEFER_SECONDS = 5
+# arq counts every Retry as a try and, once tries run out, stores the failure for the worker-level
+# keep_result_s (3600 s), which blocks re-enqueue of the same job id. A contended heavy job must
+# therefore outlast the longest slot hold: 60 tries x 5 s = 300 s > MAX_OPERATION_SECONDS (150 s).
+HEAVY_JOB_MAX_TRIES = 60
 HEAVY_LOCK_KEY = 732941801
 
 
@@ -94,7 +99,7 @@ async def heavy_job_slot(
                         await asyncio.sleep(10)
                         async with asyncio.timeout(5):
                             await session.execute(text("SELECT 1"))
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
                     renewal_error = exc
                     if owner is not None:
                         owner.cancel()
@@ -117,7 +122,7 @@ async def heavy_job_slot(
                     pass
 
 
-def bounded_heavy_work(function: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
+def bounded_heavy_work(function: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:  # noqa: UP047  # keep TypeVar/TypeAlias spelling; PEP 695 rewrite is style-only
     """Wrap an ARQ consumer, preserving domain transaction/authorization fences.
 
     Contention retries before claims; cancellation remains visible to durable
@@ -132,7 +137,7 @@ def bounded_heavy_work(function: Callable[P, Awaitable[R]]) -> Callable[P, Await
             async with heavy_job_slot(factory):
                 return await function(*args, **kwargs)
         except HeavyWorkBusy as exc:
-            raise Retry(defer=5) from exc
+            raise Retry(defer=HEAVY_RETRY_DEFER_SECONDS) from exc
         except RemoteHeavyWorkBlocked as exc:
             # Guards expire on their own; defer instead of failing the job permanently.
             raise Retry(defer=30) from exc

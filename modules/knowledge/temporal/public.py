@@ -4,21 +4,35 @@ import base64
 import hashlib
 import json
 from datetime import UTC, datetime
-from uuid import UUID, uuid4
+from typing import Any
+from uuid import UUID
 
-from sqlalchemy import and_, case, delete, func, literal, or_, select
+from sqlalchemy import ColumnElement, and_, case, func, literal, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.realtime import KnowledgeChanged, make_knowledge_change
 from modules.knowledge.documents import public as documents
 from modules.knowledge.entities import public as entities
-from modules.sources import public as sources
 from modules.knowledge.temporal.models import (
-    GraphAllocation, GraphChange, GraphDispatch, GraphMapping, GraphOperation, GraphPartition,
-    GraphReconcileMember, GraphReconcileRun, GraphSupport,
+    GraphAllocation,
+    GraphChange,
+    GraphDispatch,
+    GraphMapping,
+    GraphOperation,
+    GraphPartition,
+    GraphReconcileMember,
+    GraphReconcileRun,
+    GraphSupport,
 )
-from modules.knowledge.temporal.schemas import ChangePage, ChangeRead, GraphStatus, ReconcileRequest, ReconcileStatus
+from modules.knowledge.temporal.schemas import (
+    ChangePage,
+    ChangeRead,
+    GraphStatus,
+    ReconcileRequest,
+    ReconcileStatus,
+)
+from modules.sources import public as sources
 
 
 async def unresolved_backup_effects(session: AsyncSession) -> dict[str, int]:
@@ -94,6 +108,7 @@ async def schedule_version(session: AsyncSession, ready: documents.ReadyVersionR
     if partition is None or partition.reservations >= 100 or partition.evidence_reservations + chunk_count > 100:
         if partition is not None:
             partition.sealed = True
+        assert allocation is not None
         partition = GraphPartition(source_id=ready.source_id, generation=ready.source_generation,
                                    ordinal=allocation.next_bucket, reservations=0)
         allocation.next_bucket += 1
@@ -117,6 +132,7 @@ async def schedule_version(session: AsyncSession, ready: documents.ReadyVersionR
     if input_error is not None:
         mapping.status, mapping.error_code = "blocked", input_error
         operation = await session.get(GraphOperation, operation_id)
+        assert operation is not None
         operation.status, operation.error_code = "blocked", input_error
         # Version chunks are immutable; model/dependency retries cannot make
         # over-limit input valid. A new ready version gets its own mapping.
@@ -320,7 +336,7 @@ async def request_reconcile(session: AsyncSession, request: ReconcileRequest) ->
     return run.id
 
 
-async def _scope_condition(session: AsyncSession, scope: dict[str, object]):
+async def _scope_condition(session: AsyncSession, scope: dict[str, Any]) -> ColumnElement[bool]:
     """Resolve a run's selected canonical identity through current owner refs, preserving its saved filter."""
     if scope.get("source_id"):
         return GraphMapping.source_id == UUID(str(scope["source_id"]))

@@ -7,8 +7,8 @@ Create Date: 2026-10-03
 
 from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "p06_selective_memory"

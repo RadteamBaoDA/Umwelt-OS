@@ -1,7 +1,8 @@
 """Deterministic, evidence-only cross-domain temporal co-occurrence projection."""
 
 from collections import defaultdict
-from datetime import UTC, timedelta
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,7 +10,10 @@ from modules.connectors import public as connectors
 from modules.knowledge.observations import public as observations
 from modules.knowledge.observations.schemas import ObservationQuery
 from modules.news.schemas import (
-    CorrelationBucketRead, CorrelationCoverageRead, CorrelationQuery, CorrelationResult,
+    CorrelationBucketRead,
+    CorrelationCoverageRead,
+    CorrelationQuery,
+    CorrelationResult,
 )
 from modules.sources import public as sources
 from modules.timeline import public as timeline
@@ -28,7 +32,7 @@ async def build_correlations(session: AsyncSession, query: CorrelationQuery) -> 
     coverage_counts = {domain: 0 for domain in _DOMAINS}
     coverage_truncated = {domain: False for domain in _DOMAINS}
     coverage_omitted = {domain: 0 for domain in _DOMAINS}
-    signals: list[dict[str, object]] = []
+    signals: list[dict[str, Any]] = []
 
     for domain in _DOMAINS:
         if not query.source_ids:
@@ -103,14 +107,14 @@ async def build_correlations(session: AsyncSession, query: CorrelationQuery) -> 
         coverage_omitted["economic"] += len(alpha_sources)
 
     # Stable ID deduplication bounds counts even when the same source row arrives via overlapping scopes.
-    by_identity: dict[str, dict[str, object]] = {}
-    for item in signals:
-        by_identity.setdefault(str(item["identity"]), item)
-    groups: dict[tuple[str, object], list[dict[str, object]]] = defaultdict(list)
-    for item in by_identity.values():
-        instant = item["observed_at"]
+    by_identity: dict[str, dict[str, Any]] = {}
+    for signal_row in signals:
+        by_identity.setdefault(str(signal_row["identity"]), signal_row)
+    groups: dict[tuple[str, datetime], list[dict[str, Any]]] = defaultdict(list)
+    for signal_row in by_identity.values():
+        instant = signal_row["observed_at"]
         bucket = instant.astimezone(UTC).replace(minute=0, second=0, microsecond=0)
-        groups[(str(item["region"]), bucket)].append(item)
+        groups[(str(signal_row["region"]), bucket)].append(signal_row)
 
     buckets: list[CorrelationBucketRead] = []
     omitted_support = False

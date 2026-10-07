@@ -1,7 +1,20 @@
 from datetime import datetime
+from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Index, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
@@ -31,14 +44,14 @@ class ConnectorProvisioning(Base):
     source_generation: Mapped[int] = mapped_column(Integer, nullable=False)
     desired_revision: Mapped[int] = mapped_column(Integer, nullable=False)
     applied_revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
-    desired_configuration: Mapped[dict[str, object]] = mapped_column(
+    desired_configuration: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default="{}"
     )
     workflow_id: Mapped[str | None] = mapped_column(String(128))
     workflow_name: Mapped[str | None] = mapped_column(String(255))
     desired_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
-    workflow_operation: Mapped[dict[str, object] | None] = mapped_column(JSONB)
-    activation_intent: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    workflow_operation: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    activation_intent: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     state: Mapped[str] = mapped_column(String(32), nullable=False, server_default="queued")
     error_code: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(
@@ -71,8 +84,8 @@ class ConnectorManagedCredential(Base):
     credential_type: Mapped[str] = mapped_column(String(64), nullable=False)
     state: Mapped[str] = mapped_column(String(32), nullable=False, server_default="queued")
     error_code: Mapped[str | None] = mapped_column(String(64))
-    operation_envelope: Mapped[dict[str, object] | None] = mapped_column(JSONB)
-    resolved_binding: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    operation_envelope: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    resolved_binding: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -325,7 +338,7 @@ class GithubWebhookOutbox(Base):
     delivery_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False, unique=True)
     binding_cursor: Mapped[str | None] = mapped_column(String(512))
     # Nonsecret frozen bindings and source/target admissions survive retries until cursor CAS succeeds.
-    fanout_page: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    fanout_page: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     capacity_reserved: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     state: Mapped[str] = mapped_column(String(24), nullable=False, server_default="pending")
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
@@ -391,7 +404,7 @@ class GithubOAuthOperation(Base):
     source_generation: Mapped[int | None] = mapped_column(Integer)
     configuration_revision: Mapped[int | None] = mapped_column(Integer)
     token_revision: Mapped[int | None] = mapped_column(Integer)
-    peer_inventory: Mapped[list[dict[str, object]]] = mapped_column(JSONB, nullable=False, default=list)
+    peer_inventory: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list)
     state: Mapped[str] = mapped_column(String(32), nullable=False, server_default="in_progress")
     error_code: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

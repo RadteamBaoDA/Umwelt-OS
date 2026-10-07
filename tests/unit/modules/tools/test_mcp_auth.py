@@ -9,8 +9,6 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
-import json
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -21,7 +19,6 @@ from modules.tools.mcp_admission import McpAdmission, McpInboundLease
 from modules.tools.mcp_auth import (
     InboundMcpGuard,
     InboundReplayReceiver,
-    InboundRequestState,
     InboundResponseBuffer,
     InboundResponseFence,
 )

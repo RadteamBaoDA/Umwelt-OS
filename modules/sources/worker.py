@@ -1,7 +1,7 @@
 """Source-owned orchestration for generation-fenced source purge receipts and Source Memory coverage."""
 
-from datetime import UTC, datetime, timedelta
 import logging
+from datetime import UTC, datetime, timedelta
 from typing import cast
 from uuid import UUID, uuid5
 
@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.events import DomainEvent
-from core.realtime import commit_with_replay, make_knowledge_change, make_source_change
+from core.realtime import ReplayDraft, commit_with_replay, make_knowledge_change, make_source_change
 from modules.ingestion import public as ingestion
 from modules.knowledge.documents import public as documents
 from modules.memory.public import (
@@ -169,7 +169,7 @@ async def process_source_purge(ctx: dict[str, object], event_id: str) -> None:
                 operation.error_code = "source_generation_changed"
                 operation.pending_owner_codes = ["documents"]
             await ingestion.set_event_delivery(session, identifier, "delivered")
-            drafts = [make_source_change(
+            drafts: list[ReplayDraft] = [make_source_change(
                 source.id, source.generation, source.status, operation_id=operation_id,
             )] if source is not None else []
             await commit_with_replay(session, drafts)

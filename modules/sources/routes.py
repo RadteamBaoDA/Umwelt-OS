@@ -8,9 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.auth.dependencies import require_owner, require_owner_write
 from core.auth.models import AuthSession
 from core.database import get_session
+from modules.settings.public import module_dependency
 from modules.sources import public
 from modules.sources.schemas import OperationRead, SourceCreate, SourceList, SourcePatch, SourceRead
-from modules.settings.public import module_dependency
 
 router = APIRouter(
     prefix="/api/v1/sources",

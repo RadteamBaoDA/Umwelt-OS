@@ -8,15 +8,15 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
-from pathlib import Path
 import sys
-import time
+from pathlib import Path
 from typing import Any
+
 import pytest
 
 # Attempt standard import first; if not present, check out sibling P11 worktree
 try:
-    import core.telemetry as telemetry
+    from core import telemetry
 except ModuleNotFoundError:
     p11_path = Path("D:/Project/Umwelt-OS-p11/core/telemetry.py")
     if p11_path.exists():

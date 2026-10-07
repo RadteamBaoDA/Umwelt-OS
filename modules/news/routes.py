@@ -1,7 +1,7 @@
 """Owner-authenticated story and trend query routes with private cache policy."""
 
-from typing import Annotated
 from datetime import datetime
+from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -11,14 +11,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.auth.dependencies import require_owner
 from core.auth.models import AuthSession
 from core.database import get_session
+from modules.connectors import public as connector_public
 from modules.news.public import build_correlations
 from modules.news.schemas import (
-    CiiUnavailableRead, CorrelationQuery, CorrelationResult, StoryDetail, StoryFilter,
-    StoryPage, TrendFilter, TrendPage,
+    CiiUnavailableRead,
+    CorrelationQuery,
+    CorrelationResult,
+    StoryDetail,
+    StoryFilter,
+    StoryPage,
+    TrendFilter,
+    TrendPage,
 )
 from modules.news.stories import get_story, list_stories
 from modules.news.trends import list_trends
-from modules.connectors import public as connector_public
 from modules.settings.public import module_dependency
 
 router = APIRouter(prefix="/api/v1", tags=["news"], dependencies=[Depends(module_dependency("news"))])
@@ -34,7 +40,7 @@ def _no_store(response: Response) -> None:
 @router.get("/stories", response_model=StoryPage)
 async def list_stories_route(
     session: Session, owner: OwnerRead, response: Response,
-    source_ids: Annotated[list[UUID], Query(max_length=32)] = [],
+    source_ids: Annotated[list[UUID], Query(max_length=32)] = [],  # noqa: B006  # never mutated; FastAPI/DTO copies the default
     topic_id: UUID | None = None, entity_id: UUID | None = None,
     date_from: datetime | None = None, date_to: datetime | None = None,
     q: Annotated[str | None, Query(max_length=200)] = None,
@@ -56,7 +62,7 @@ async def list_stories_route(
 @router.get("/stories/{story_id}", response_model=StoryDetail)
 async def get_story_route(
     story_id: UUID, session: Session, owner: OwnerRead, response: Response,
-    source_ids: Annotated[list[UUID], Query(max_length=32)] = [],
+    source_ids: Annotated[list[UUID], Query(max_length=32)] = [],  # noqa: B006  # never mutated; FastAPI/DTO copies the default
     evidence_cursor: Annotated[str | None, Query(max_length=4096)] = None,
     evidence_limit: Annotated[int, Query(ge=1, le=100)] = 100,
 ) -> StoryDetail:
@@ -75,7 +81,7 @@ async def get_story_route(
 @router.get("/trends", response_model=TrendPage)
 async def list_trends_route(
     session: Session, owner: OwnerRead, response: Response,
-    source_ids: Annotated[list[UUID], Query(max_length=32)] = [],
+    source_ids: Annotated[list[UUID], Query(max_length=32)] = [],  # noqa: B006  # never mutated; FastAPI/DTO copies the default
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
 ) -> TrendPage:
     """Return current source-breadth trend candidates with explicit baseline flags."""
@@ -88,7 +94,7 @@ async def read_correlations(
     session: Session, _owner: OwnerRead, response: Response,
     regions: Annotated[list[str], Query(min_length=1, max_length=32)],
     from_at: datetime, to_at: datetime,
-    source_ids: Annotated[list[UUID], Query(max_length=32)] = [],
+    source_ids: Annotated[list[UUID], Query(max_length=32)] = [],  # noqa: B006  # never mutated; FastAPI/DTO copies the default
     limit_per_domain: Annotated[int, Query(ge=1, le=100)] = 100,
 ) -> CorrelationResult:
     """Return bounded evidence-only temporal co-occurrence for the authenticated owner."""
@@ -109,7 +115,7 @@ async def read_correlations(
 @router.get("/intelligence/cii", response_model=CiiUnavailableRead)
 async def read_cii_availability(
     _owner: OwnerRead, response: Response,
-    countries: Annotated[list[str], Query(max_length=31)] = [],
+    countries: Annotated[list[str], Query(max_length=31)] = [],  # noqa: B006  # never mutated; FastAPI/DTO copies the default
 ) -> CiiUnavailableRead:
     """Expose a consumed CII v8 unavailable state without fabricating scores or country coverage."""
     _no_store(response)
@@ -117,10 +123,4 @@ async def read_cii_availability(
         projection = connector_public.cii_v8_availability(countries)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="CII country scope is invalid") from exc
-    return CiiUnavailableRead(**{
-        "method_version": projection.method_version,
-        "requested_countries": list(projection.requested_countries),
-        "score": projection.score, "band": projection.band,
-        "movement_24h": projection.movement_24h, "as_of": projection.as_of,
-        "availability": projection.availability, "reason": projection.reason,
-    })
+    return CiiUnavailableRead(method_version=projection.method_version, requested_countries=list(projection.requested_countries), score=projection.score, band=projection.band, movement_24h=projection.movement_24h, as_of=projection.as_of, availability=projection.availability, reason=projection.reason)

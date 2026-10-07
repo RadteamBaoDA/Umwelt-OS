@@ -209,9 +209,7 @@ OMNIROUTE_MODELS={}
         }
         if (-not $PytestTarget -or $E2eTarget) {
           if ($project -notmatch '^bbd-os-test-[0-9a-f]{10}$') { throw 'Refusing browser reset outside unique disposable project' }
-          $reset = @'
-DO $$ DECLARE tables text; BEGIN IF current_database() <> 'bbd_test' OR current_user <> 'bbd_test' THEN RAISE EXCEPTION 'unsafe test database'; END IF; SELECT string_agg(format('%I.%I', schemaname, tablename), ',') INTO tables FROM pg_tables WHERE schemaname = 'public' AND tablename <> 'alembic_version'; IF tables IS NOT NULL THEN EXECUTE 'TRUNCATE TABLE ' || tables || ' CASCADE'; END IF; END $$;
-'@
+          $reset = (Get-Content -Raw (Join-Path $PSScriptRoot 'sql/e2e-reset.sql')) -replace '\r?\n', ' '
           Invoke-Checked 'docker' ($compose + @('exec', '-T', 'postgres', 'psql', '-U', 'bbd_test', '-d', 'bbd_test', '-v', 'ON_ERROR_STOP=1', '-c', $reset))
         $env:E2E_SETUP_TOKEN = 'bbd-os-disposable-test-token'
         $env:PLAYWRIGHT_BASE_URL = "http://localhost:$webPort"

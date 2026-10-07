@@ -1,5 +1,6 @@
 """Protected REST routes for owner goal management and plan proposal acceptance."""
 
+from collections.abc import Awaitable
 from typing import Annotated
 from uuid import UUID
 
@@ -34,7 +35,7 @@ def _no_store(response: Response) -> None:
     response.headers["Cache-Control"] = "private, no-store"
 
 
-async def _call(operation):
+async def _call[T](operation: Awaitable[T]) -> T:
     """Execute a goal operation and translate domain exceptions to HTTP statuses."""
     try:
         return await operation

@@ -1,17 +1,18 @@
 """Maintained MCP SDK client operations with owner callbacks and bounded transport composition."""
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from functools import partial
 import hashlib
 import json
 import time
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from functools import partial
 from typing import Any, Literal
 from uuid import UUID
 
 from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
+
 from modules.tools import mcp_repository
 from modules.tools.mcp_schemas import (
     CapabilityDescriptor,
@@ -21,12 +22,12 @@ from modules.tools.mcp_schemas import (
     ExecutionFence,
     McpTransport,
 )
+from modules.tools.mcp_stdio import StdioDeploymentProfile, stdio_client_transport
 from modules.tools.mcp_transport import (
     McpOperationNetworkBudget,
     McpTransportError,
     create_mcp_http_client,
 )
-from modules.tools.mcp_stdio import StdioDeploymentProfile, stdio_client_transport
 
 
 class McpSdkClient:
@@ -80,7 +81,7 @@ class McpSdkClient:
             return False
         try:
             return await management_revalidator() is True
-        except Exception:
+        except Exception:  # noqa: BLE001  # fail-closed boundary: any failure denies/degrades
             return False
 
     @asynccontextmanager
@@ -110,7 +111,7 @@ class McpSdkClient:
             terminate_on_close=True,
             max_sse_event_size=min(budget.max_response_bytes, 1_000_000),
         )
-        async with http_client:
+        async with http_client:  # noqa: SIM117  # style-only rewrite skipped to avoid touching control flow
             async with Client(
                 transport_context,
                 mode="auto",
@@ -265,7 +266,7 @@ class McpSdkClient:
                     if task is not None and task.cancelling():
                         raise asyncio.CancelledError from None
                     outcome = "unavailable"
-                except Exception:
+                except Exception:  # noqa: BLE001  # error boundary: re-mapped to a sanitized error
                     task = asyncio.current_task()
                     if task is not None and task.cancelling():
                         raise asyncio.CancelledError from None
@@ -383,6 +384,7 @@ class McpSdkClient:
         capability_count: int,
     ) -> tuple[list[CapabilityDescriptor], int, int]:
         """Read one capability kind with the discovery-wide ten-page and 200-item limits."""
+        list_page: Callable[..., Awaitable[Any]]
         if kind == "tool":
             list_page = client.list_tools
             field_name = "tools"
@@ -478,7 +480,7 @@ class McpSdkClient:
         argument_limit = min(fence.limits.get("argument_bytes", 64_000), 64_000)
         if len(encoded_arguments) > argument_limit:
             raise McpTransportError("MCP tool arguments exceed the reviewed size limit")
-        if not before_request:
+        if not callable(before_request):
             raise McpTransportError("MCP selected-tool fence callback is unavailable")
         deadline = time.monotonic() + min(60.0, float(fence.timeout_seconds))
         async with asyncio.timeout(max(0.001, deadline - time.monotonic())):
@@ -536,7 +538,7 @@ class McpSdkClient:
         """
         if capability_kind != "resource":
             raise mcp_repository.McpUnavailable("MCP resource-template reads require an owner-reviewed parameter binding")
-        if not before_request:
+        if not callable(before_request):
             raise McpTransportError("MCP selected-resource fence callback is unavailable")
         deadline = time.monotonic() + min(60.0, float(fence.timeout_seconds))
         async with asyncio.timeout(max(0.001, deadline - time.monotonic())):

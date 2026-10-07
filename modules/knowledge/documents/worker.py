@@ -1,24 +1,31 @@
 """Documents-owned bounded cleanup consumer for raw files and copied-evidence owner stages."""
 
-from datetime import UTC, datetime, timedelta
 import hashlib
 import json
 import logging
-from typing import cast
-from uuid import UUID
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, cast
+from uuid import UUID, uuid5
 
+from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from redis.asyncio import Redis
 
 from core.config import Settings
+from core.events import DomainEvent
 from core.storage import storage_path
 from modules.ingestion import public as ingestion
 from modules.knowledge.documents import public as documents
 from modules.knowledge.documents.models import DocumentCleanupOperation
-from modules.memory.public import invalidate_memory_cache, lock_export_privacy, purge_document_copied_evidence_page
-from core.events import DomainEvent
-from uuid import uuid5
+from modules.memory.public import (
+    invalidate_memory_cache,
+    lock_export_privacy,
+    purge_document_copied_evidence_page,
+)
+
+if TYPE_CHECKING:
+    from modules.automations.public import AutomationCleanupProgress
+    from modules.notifications.public import NotificationCleanupProgress
 
 logger = logging.getLogger(__name__)
 _RETRY_DELAY = timedelta(seconds=30)
@@ -218,7 +225,7 @@ def _optional_uuid(value: object, label: str) -> UUID | None:
     if value is None:
         return None
     if not isinstance(value, str):
-        raise ValueError(f"Stored {label} cursor is malformed")
+        raise ValueError(f"Stored {label} cursor is malformed")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
     parsed = UUID(value)
     if str(parsed) != value:
         raise ValueError(f"Stored {label} cursor is malformed")
@@ -259,6 +266,7 @@ async def _advance_materialization_cleanup(
         raise ValueError("Document cleanup evidence scope is unavailable")
     version_ids = tuple(dict.fromkeys(ref.document_version_id for ref in scope.references))
     final_page = scope.next_cursor is None
+    progress: NotificationCleanupProgress | AutomationCleanupProgress
     if phase == "notifications":
         from modules.notifications import public as notifications
 
@@ -993,7 +1001,7 @@ async def process_document_cleanup(ctx: dict[str, object], event_id: str) -> Non
                 )
             # Unknown snapshots, missing receipts and terminal stages do not own a delivery rewrite.
             await session.commit()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
         logger.warning("Document copied-evidence cleanup deferred (%s)", type(exc).__name__)
         async with factory() as session:
             event = await ingestion.get_event_delivery(session, identifier)

@@ -9,7 +9,8 @@ Covers:
 """
 
 from datetime import UTC, datetime
-from uuid import UUID, uuid4
+from uuid import uuid4
+
 import pytest
 from pydantic import ValidationError
 
@@ -17,7 +18,6 @@ from modules.agents.models import AgentApproval, AgentRun, AgentToolCall
 from modules.agents.schemas import (
     AgentActivity,
     AgentProfilePatch,
-    AgentProfileRead,
     AgentProfileTool,
     AgentRunPage,
     AgentRunRead,

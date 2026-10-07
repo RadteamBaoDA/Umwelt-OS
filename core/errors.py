@@ -1,4 +1,5 @@
 import logging
+import time
 from typing import Any
 from uuid import uuid4
 
@@ -8,7 +9,6 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from core.telemetry import bind_trace, count, observe_ms
-import time
 
 logger = logging.getLogger("bbd.api")
 
@@ -43,7 +43,7 @@ def install_error_handling(app: FastAPI) -> None:
     @app.exception_handler(StarletteHTTPException)
     async def http_error(request: Request, exc: StarletteHTTPException) -> JSONResponse:
         """Serialize framework HTTP errors using the stable API error envelope and preserve status and headers."""
-        structured = exc.detail if isinstance(exc.detail, dict) else {}
+        structured: dict[str, Any] = exc.detail if isinstance(exc.detail, dict) else {}
         return JSONResponse(
             status_code=exc.status_code,
             headers=exc.headers,

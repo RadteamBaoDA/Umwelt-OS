@@ -11,16 +11,23 @@ from core.auth.dependencies import require_owner, require_owner_write
 from core.auth.models import AuthSession
 from core.database import get_session
 from modules.agents import public
-from modules.agents.schemas import (
-    AgentProfilePatch, AgentProfileRead, AgentRunPage, ProfileRunStart,
-    ApprovalDecisionRead, ApprovalDecisionRequest, ApprovalRead, AgentRunRead, AgentRunStart,
-)
 from modules.agents.approvals import decision as resolve_decision
 from modules.agents.internal_writes import INTERNAL_DESTINATION, INTERNAL_WRITE_TOOLS
-from modules.tools.webhook import load_webhook_profiles
+from modules.agents.schemas import (
+    AgentProfilePatch,
+    AgentProfileRead,
+    AgentRunPage,
+    AgentRunRead,
+    AgentRunStart,
+    ApprovalDecisionRead,
+    ApprovalDecisionRequest,
+    ApprovalRead,
+    ProfileRunStart,
+)
 from modules.agents.specialists import get_profile, list_profiles, update_profile_in_uow
 from modules.settings import public as settings_public
 from modules.settings.public import module_dependency
+from modules.tools.webhook import load_webhook_profiles
 
 router = APIRouter(tags=["agents"], dependencies=[Depends(module_dependency("agents"))])
 logger = logging.getLogger(__name__)
@@ -59,7 +66,7 @@ async def start_run(
             "process_agent_run", str(result.id), 1,
             _job_id=f"agent-run:{result.id}:1",
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
         logger.warning("Agent run dispatch deferred for %s (%s)", result.id, type(exc).__name__)
     return result
 
@@ -151,8 +158,9 @@ async def _resolve_approval_request(
     payload: ApprovalDecisionRequest, *, approve: bool,
 ) -> ApprovalDecisionRead:
     """Apply one CSRF-protected immutable owner choice, then dispatch its durable generation."""
-    from modules.agents.models import AgentApproval
     from sqlalchemy import select
+
+    from modules.agents.models import AgentApproval
 
     candidate = await session.scalar(select(AgentApproval).where(
         AgentApproval.id == approval_id, AgentApproval.owner_id == owner.owner_id,

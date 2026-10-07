@@ -9,11 +9,11 @@ Covers:
 - Conservative fuzzy clustering thresholds (_fuzzy_candidate): 72-hour window limit, entity overlap requirement, local_only exclusion, and 0.92 cosine similarity threshold.
 """
 
-from datetime import UTC, datetime, timedelta
-import hashlib
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID, uuid4
+
 import pytest
 from fastapi import HTTPException
 
@@ -28,9 +28,6 @@ from modules.news.schemas import (
 )
 from modules.news.stories import (
     ALGORITHM_VERSION,
-    FUZZY_THRESHOLD,
-    FUZZY_WINDOW,
-    MAX_CANDIDATES,
     _canonical_url,
     _decode_cursor,
     _encode_cursor,

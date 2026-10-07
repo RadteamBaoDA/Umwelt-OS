@@ -5,8 +5,8 @@ against existing active memories. By default, automatic acceptance is off until 
 enabled by the owner.
 """
 
-from dataclasses import dataclass
 import re
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -23,34 +23,34 @@ class CandidateEvaluation:
 
 
 _TRANSIENT_PATTERNS = [
-    re.compile(r"^(hi|hello|hey|good\s+(morning|afternoon|evening)|bye|goodbye)\b", re.I),
-    re.compile(r"^(thanks|thank\s+you|ok|okay|yes|no|yep|nope|sure|got\s+it)\b", re.I),
-    re.compile(r"^(what|where|when|why|how|who|can\s+you|could\s+you)\b.*\?", re.I),
-    re.compile(r"^(test|testing|ping|foo|bar)\b", re.I),
+    re.compile(r"^(hi|hello|hey|good\s+(morning|afternoon|evening)|bye|goodbye)\b", re.IGNORECASE),
+    re.compile(r"^(thanks|thank\s+you|ok|okay|yes|no|yep|nope|sure|got\s+it)\b", re.IGNORECASE),
+    re.compile(r"^(what|where|when|why|how|who|can\s+you|could\s+you)\b.*\?", re.IGNORECASE),
+    re.compile(r"^(test|testing|ping|foo|bar)\b", re.IGNORECASE),
 ]
 
 _PREFERENCE_PATTERNS = [
-    re.compile(r"\b(i\s+prefer|i\s+like|i\s+dislike|i\s+hate|i\s+want|i\s+need|my\s+favorite)\b", re.I),
-    re.compile(r"\b(please\s+always|always\s+use|never\s+use|don't\s+use|do\s+not\s+use)\b", re.I),
-    re.compile(r"\b(prefer\s+to|rather\s+than)\b", re.I),
+    re.compile(r"\b(i\s+prefer|i\s+like|i\s+dislike|i\s+hate|i\s+want|i\s+need|my\s+favorite)\b", re.IGNORECASE),
+    re.compile(r"\b(please\s+always|always\s+use|never\s+use|don't\s+use|do\s+not\s+use)\b", re.IGNORECASE),
+    re.compile(r"\b(prefer\s+to|rather\s+than)\b", re.IGNORECASE),
 ]
 
 _INSTRUCTION_PATTERNS = [
-    re.compile(r"\b(always\s+(respond|format|include|write|answer))\b", re.I),
-    re.compile(r"\b(remember\s+to|make\s+sure\s+to|be\s+concise|keep\s+it\s+short)\b", re.I),
-    re.compile(r"\b(rule:|guideline:|instruction:)\b", re.I),
+    re.compile(r"\b(always\s+(respond|format|include|write|answer))\b", re.IGNORECASE),
+    re.compile(r"\b(remember\s+to|make\s+sure\s+to|be\s+concise|keep\s+it\s+short)\b", re.IGNORECASE),
+    re.compile(r"\b(rule:|guideline:|instruction:)\b", re.IGNORECASE),
 ]
 
 _FACT_PATTERNS = [
-    re.compile(r"\b(my\s+name\s+is|i\s+am|i\s+live\s+in|i\s+work\s+at|my\s+role\s+is)\b", re.I),
-    re.compile(r"\b(my\s+(wife|husband|partner|child|son|daughter|brother|sister|father|mother|dog|cat)\s+is)\b", re.I),
-    re.compile(r"\b(remember\s+that|note\s+that|for\s+the\s+record)\b", re.I),
-    re.compile(r"\b(we\s+decided\s+to|the\s+plan\s+is\s+to|our\s+project\s+is)\b", re.I),
+    re.compile(r"\b(my\s+name\s+is|i\s+am|i\s+live\s+in|i\s+work\s+at|my\s+role\s+is)\b", re.IGNORECASE),
+    re.compile(r"\b(my\s+(wife|husband|partner|child|son|daughter|brother|sister|father|mother|dog|cat)\s+is)\b", re.IGNORECASE),
+    re.compile(r"\b(remember\s+that|note\s+that|for\s+the\s+record)\b", re.IGNORECASE),
+    re.compile(r"\b(we\s+decided\s+to|the\s+plan\s+is\s+to|our\s+project\s+is)\b", re.IGNORECASE),
 ]
 
 _SPECULATIVE_PATTERNS = [
-    re.compile(r"\b(maybe|perhaps|i\s+think|possibly|probably|might|could\s+be)\b", re.I),
-    re.compile(r"\b(not\s+sure|guess|speculating)\b", re.I),
+    re.compile(r"\b(maybe|perhaps|i\s+think|possibly|probably|might|could\s+be)\b", re.IGNORECASE),
+    re.compile(r"\b(not\s+sure|guess|speculating)\b", re.IGNORECASE),
 ]
 
 
@@ -110,8 +110,7 @@ def evaluate_candidate(
     max_sim = 0.0
     for existing in existing_memories:
         sim = _jaccard_similarity(candidate_tokens, _tokenize(existing))
-        if sim > max_sim:
-            max_sim = sim
+        max_sim = max(max_sim, sim)
 
     if max_sim >= 0.80:
         novelty_score = round(max(0.0, 1.0 - max_sim), 2)

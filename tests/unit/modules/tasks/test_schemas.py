@@ -8,19 +8,17 @@ Covers:
 - TaskFilter parameter validation, view literals, and filter instant awareness
 """
 
-from datetime import UTC, date, datetime, timezone
-from uuid import UUID, uuid4
+from datetime import UTC, date, datetime
+from uuid import uuid4
+
 import pytest
 from pydantic import ValidationError
 
 from modules.tasks.schemas import (
     TaskCreate,
     TaskFilter,
-    TaskPage,
     TaskRead,
-    TaskStatus,
     TaskUpdate,
-    TaskView,
 )
 
 
@@ -52,7 +50,7 @@ class TestTaskCreateSchemas:
 
     def test_task_create_due_at_naive_rejected(self) -> None:
         """Naive datetime without timezone must be rejected."""
-        naive_dt = datetime(2026, 10, 15, 14, 30)
+        naive_dt = datetime(2026, 10, 15, 14, 30)  # noqa: DTZ001  # intentionally naive: wall-clock/DST math or naive-rejection test
         with pytest.raises(ValidationError, match="due_at must include a timezone offset"):
             TaskCreate(title="Test", due_at=naive_dt)
 
@@ -119,7 +117,7 @@ class TestTaskUpdateSchemas:
 
     def test_task_update_completed_at_aware(self) -> None:
         """completed_at must be timezone-aware."""
-        naive = datetime(2026, 10, 5, 12, 0)
+        naive = datetime(2026, 10, 5, 12, 0)  # noqa: DTZ001  # intentionally naive: wall-clock/DST math or naive-rejection test
         with pytest.raises(ValidationError, match="instant timestamps must include a timezone offset"):
             TaskUpdate(completed_at=naive, expected_revision=1)
 
@@ -165,6 +163,6 @@ class TestTaskReadAndFilter:
 
     def test_task_filter_instant_naive_rejected(self) -> None:
         """Filter instants (due_at_from / due_at_to) must be timezone-aware."""
-        naive = datetime(2026, 10, 1, 0, 0)
+        naive = datetime(2026, 10, 1, 0, 0)  # noqa: DTZ001  # intentionally naive: wall-clock/DST math or naive-rejection test
         with pytest.raises(ValidationError, match="instant filters must include a timezone offset"):
             TaskFilter(due_at_from=naive)

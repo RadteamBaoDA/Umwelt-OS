@@ -1,14 +1,17 @@
 """Server-owned GitHub App expiring user OAuth, encrypted grant, and fixed-host calls."""
 
-from datetime import UTC, datetime, timedelta
 import hashlib
 import json
 import secrets
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 from uuid import UUID
 
 import httpx
-from authlib.integrations.httpx_client import AsyncOAuth2Client
+
+# authlib ships no stubs or py.typed marker
+from authlib.integrations.httpx_client import AsyncOAuth2Client  # type: ignore[import-untyped]
 from cryptography.fernet import Fernet, InvalidToken
 
 from core.config import Settings
@@ -49,7 +52,7 @@ def _open_token_cipher(key: str, ciphertext: str, source_id: UUID, operation_id:
         raise CredentialEncryptionUnavailable("Stored GitHub grant is unavailable") from exc
     if (payload.get("source_id"), payload.get("operation_id"), payload.get("generation"), payload.get("revision")) != (str(source_id), str(operation_id), generation, revision) or not isinstance(payload.get("tokens"), dict):
         raise CredentialEncryptionUnavailable("Stored GitHub grant binding is invalid")
-    return payload["tokens"]
+    return cast("dict[str, Any]", payload["tokens"])  # isinstance(dict) checked above
 
 
 def authorization_url(settings: Settings, *, state: str, verifier: str) -> str:
@@ -64,7 +67,7 @@ def authorization_url(settings: Settings, *, state: str, verifier: str) -> str:
         code_challenge_method="S256",
         redirect_uri=settings.github_app_callback_url,
     )
-    return url
+    return str(url)
 
 
 async def exchange_code(settings: Settings, callback_url: str, *, state: str, verifier: str) -> dict[str, Any]:
@@ -121,8 +124,9 @@ def _validate_expiring_token(token: dict[str, Any]) -> dict[str, Any]:
 async def revoke_github_grant(settings: Settings, access_token: str) -> None:
     """Revoke GitHub's app/user grant; this revokes all tokens for that app and account."""
     async with httpx.AsyncClient(timeout=httpx.Timeout(10), follow_redirects=False, trust_env=False) as client:
-        response = await client.delete(
-            REVOKE_URL.format(client_id=settings.github_app_client_id),
+        # PRODUCTION FIX: AsyncClient.delete() takes no json=; a DELETE body requires request().
+        response = await client.request(
+            "DELETE", REVOKE_URL.format(client_id=settings.github_app_client_id),
             auth=(settings.github_app_client_id, settings.github_app_client_secret.get_secret_value()),
             json={"access_token": access_token},
             headers={"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"},
@@ -145,7 +149,7 @@ async def _get_json_payload(path: str, token: str) -> Any:
     """Fetch one bounded fixed GitHub API response without redirects or ambient proxies."""
     if not path.startswith(("/user", "/repositories/")) or ".." in path:
         raise ValueError("github_api_path_invalid")
-    async with httpx.AsyncClient(timeout=httpx.Timeout(10), follow_redirects=False, trust_env=False) as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(10), follow_redirects=False, trust_env=False) as client:  # noqa: SIM117  # style-only rewrite skipped to avoid touching control flow
         async with client.stream("GET", f"https://api.github.com{path}", headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}) as response:
             response.raise_for_status()
             body = bytearray()
@@ -153,7 +157,7 @@ async def _get_json_payload(path: str, token: str) -> Any:
                 body.extend(chunk)
                 if len(body) > 2 * 1024 * 1024:
                     raise ValueError("github_response_too_large")
-    value = httpx.Response(200, content=body).json()
+    value = httpx.Response(200, content=bytes(body)).json()
     return value
 
 
@@ -161,7 +165,7 @@ async def get_json(path: str, token: str) -> dict[str, Any]:
     """Fetch one fixed GitHub API object used for identity and installation verification."""
     value = await _get_json_payload(path, token)
     if not isinstance(value, dict):
-        raise ValueError("github_response_invalid")
+        raise ValueError("github_response_invalid")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
     return value
 
 

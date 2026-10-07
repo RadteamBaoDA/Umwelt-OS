@@ -11,25 +11,40 @@ from __future__ import annotations
 
 import base64
 import binascii
-from datetime import UTC, datetime, time, timedelta
 import hashlib
 import json
-from typing import Sequence
+from collections.abc import Sequence
+from datetime import UTC, date, datetime, time, timedelta
+from typing import cast as typing_cast
 from uuid import UUID, uuid4, uuid5
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import HTTPException
-from sqlalchemy import DateTime, cast, func, or_, select, tuple_
+from sqlalchemy import ColumnElement, DateTime, cast, func, or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.models import Owner
 from core.pagination import decode_cursor, encode_cursor
 from modules.tasks.models import Task
 from modules.tasks.schemas import (
-    TaskCreate, TaskExportFence, TaskExportPage, TaskExportValidation,
-    TaskFilter, TaskPage, TaskRead, TaskUpdate,
+    TaskCreate,
+    TaskExportFence,
+    TaskExportPage,
+    TaskExportValidation,
+    TaskFilter,
+    TaskPage,
+    TaskRead,
+    TaskUpdate,
 )
-from modules.tasks.seed import ensure_demo_tasks
+from modules.tasks.seed import (
+    ensure_demo_tasks,  # re-export: used by documents seed
+)
+
+# Explicit re-exports consumed by other modules (mypy strict forbids implicit re-export).
+__all__ = [
+    "TaskCreate",
+    "ensure_demo_tasks",
+]
 
 MAX_REVISION = 9_007_199_254_740_991
 
@@ -65,7 +80,7 @@ def _decode_task_export_cursor(cursor: str) -> tuple[datetime, datetime, UUID]:
         raise HTTPException(status_code=422, detail="Task export cursor is invalid") from exc
 
 
-def _task_export_scope(snapshot_at: datetime) -> tuple[object, ...]:
+def _task_export_scope(snapshot_at: datetime) -> tuple[ColumnElement[bool], ...]:
     """Select live owner tasks unchanged through the fixed snapshot cutoff."""
     return (Task.owner_id == 1, Task.deleted_at.is_(None),
             Task.created_at <= snapshot_at, Task.updated_at <= snapshot_at)
@@ -518,7 +533,7 @@ async def list_due_within(
     ).order_by(func.coalesce(Task.due_at, cast(Task.due_date, DateTime(timezone=True))), Task.id).limit(limit)
     result = []
     for task in (await session.scalars(stmt)).all():
-        due = task.due_at or datetime.combine(task.due_date, datetime.min.time(), tzinfo=UTC)
+        due = task.due_at or datetime.combine(typing_cast("date", task.due_date), datetime.min.time(), tzinfo=UTC)
         if not start <= due <= end:
             continue  # the date-only prefilter is coarse
         result.append((task.id, task.status, due.isoformat(), (due - now).total_seconds() / 3600, task.goal_id))

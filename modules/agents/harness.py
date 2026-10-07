@@ -1,11 +1,13 @@
 """Versioned bounded assistant and profile workflows over shared owner and tool boundaries."""
 
+import asyncio
 import json
 import math
 import time
-import asyncio
+from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime
-from typing import Any, Literal, NotRequired, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict, cast
 from uuid import UUID
 
 from redis.asyncio import Redis
@@ -21,16 +23,24 @@ from core.tools import ToolExecutionPrincipal, ToolRegistry, ToolRisk
 from core.tools.schemas import ToolOutputFence
 from core.tools.validator import validate_json_schema
 from modules.agents.handoff import (
-    HANDOFF_EXCLUDED_TOOLS, HANDOFF_TARGETS, HANDOFF_TOOL, MAX_HANDOFF_ANSWER_CHARS,
-    MAX_HANDOFF_CITATIONS, HandoffRefused,
+    HANDOFF_EXCLUDED_TOOLS,
+    HANDOFF_TARGETS,
+    HANDOFF_TOOL,
+    MAX_HANDOFF_ANSWER_CHARS,
+    MAX_HANDOFF_CITATIONS,
+    HandoffRefused,
 )
 from modules.agents.internal_writes import INTERNAL_DESTINATION, is_internal_write
-from modules.agents.models import AgentApproval, AgentEffect, AgentProfile, AgentRun, AgentToolCall
+from modules.agents.models import AgentProfile, AgentRun, AgentToolCall
 from modules.agents.public import (
-    APPROVAL_PROMPT_VERSION, APPROVAL_WORKFLOW_TOOLS, APPROVAL_WORKFLOW_VERSION,
-    CHECKPOINT_SCHEMA_VERSION, PROMPT_VERSION, WORKFLOW_TOOLS, WORKFLOW_VERSION,
-    SPECIALIST_CHECKPOINT_SCHEMA_VERSION, SPECIALIST_PROMPT_VERSION,
+    APPROVAL_PROMPT_VERSION,
+    APPROVAL_WORKFLOW_VERSION,
+    CHECKPOINT_SCHEMA_VERSION,
+    PROMPT_VERSION,
+    SPECIALIST_CHECKPOINT_SCHEMA_VERSION,
     SPECIALIST_WORKFLOW_VERSION,
+    WORKFLOW_TOOLS,
+    WORKFLOW_VERSION,
     publish_agent_activity_safely,
 )
 from modules.settings import public as settings_public
@@ -319,7 +329,7 @@ class HarnessContext:
                 if current is None or not self.supports_definition(current, expected):
                     return False
             return True
-        except Exception:
+        except Exception:  # noqa: BLE001  # fail-closed boundary: any failure denies/degrades
             return False
 
     def supports_definition(self, definition: Any, expected: dict[str, str]) -> bool:
@@ -361,7 +371,7 @@ class HarnessContext:
                 arguments=arguments, destination_id=destination_id,
                 destination_revision=profile.revision,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001  # fail-closed boundary: any failure denies/degrades
             return False
 
     async def authorize_internal_write(
@@ -385,7 +395,7 @@ class HarnessContext:
                 arguments=arguments, destination_id=destination_id,
                 destination_revision=destination_revision,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001  # fail-closed boundary: any failure denies/degrades
             return False
 
     async def read_gateway_config(self) -> AIExecutionConfig:
@@ -402,7 +412,7 @@ class HarnessContext:
     ) -> tuple[AIExecutionConfig, RequestPolicy, str, ModelMapping]:
         """Revalidate source-generation evidence, owner scope, cancellation, and remote consent."""
         self.assert_profile_checkpoint(state)
-        row = await self._run_snapshot()
+        await self._run_snapshot()
         if self.remaining_active() <= 0:
             raise RunLimitReached("Active execution budget exhausted")
         if state.get("source_fences"):
@@ -463,7 +473,7 @@ class HarnessContext:
         agent's tool/chat capability, and propagates cancellation so hybrid search cannot silently
         downgrade a cancelled run into a lexical answer.
         """
-        row = await self._run_snapshot()
+        await self._run_snapshot()
         if self.remaining_active() <= 0:
             raise RunLimitReached("Active execution budget exhausted")
         if (
@@ -607,9 +617,9 @@ async def _lock_native_output_fences_for_publication(
         return await revalidate_native_output_fences(
             session_factory, fences, principal, destination_kind="remote",
         )
+    from modules.knowledge.documents import public as documents
     from modules.memory.public import lock_export_privacy
     from modules.sources import public as sources
-    from modules.knowledge.documents import public as documents
 
     await lock_export_privacy(session)
     for source_id, generation in sorted(generations.items(), key=lambda item: str(item[0])):
@@ -654,7 +664,7 @@ async def _reserve_step(
             and row.tool_calls >= tool_ordinal
         )
         if tool_name is not None and tool_ordinal is not None:
-            if existing is not None and existing.input_provenance_version == 1:
+            if existing is not None and existing.input_provenance_version == 1:  # noqa: SIM102  # style-only rewrite skipped to avoid touching control flow
                 if input_source_fences is None or existing.input_source_fences != input_source_fences:
                     raise RunIncompatible("Tool slot model-input evidence changed")
             if (existing_call is None and not recover_legacy_reservation
@@ -821,7 +831,7 @@ async def run_specialist_handoff(
             child_state = {**child_state, "segment_steps": 0, "segment_done": False}
         if not completed:
             raise RuntimeError("Specialist handoff exceeded its segment bound")
-        await child.authorize_remote_send(child_state)
+        await child.authorize_remote_send(cast(HarnessState, child_state))
         fences = parent.decode_fences(child_state["source_fences"])
         records, generations = sink["records"], sink["source_generations"]
         if (len(records) + len(fences["records"]) > 100
@@ -929,10 +939,10 @@ def build_workflow(context: HarnessContext, checkpointer: Any) -> Any:
             used_ids: set[str] = set()
             for item in requested:
                 if not isinstance(item, dict):
-                    raise ValueError("Invalid tool-call item")
+                    raise ValueError("Invalid tool-call item")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
                 function = item.get("function", {})
                 if not isinstance(function, dict):
-                    raise ValueError("Invalid tool-call function")
+                    raise ValueError("Invalid tool-call function")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
                 name, arguments, call_id = function.get("name"), function.get("arguments"), item.get("id")
                 if (not isinstance(name, str) or not 1 <= len(name) <= 160 or name not in allowed_names
                         or not isinstance(arguments, str) or len(arguments.encode("utf-8")) > MAX_TOOL_ARGUMENT_BYTES):
@@ -953,7 +963,10 @@ def build_workflow(context: HarnessContext, checkpointer: Any) -> Any:
             usage = usage_info.get("total_tokens") if isinstance(usage_info, dict) else None
             usage_known = type(usage) is int and 0 <= usage < 2**31
             prior_tokens = state.get("token_usage")
-            next_tokens = prior_tokens + usage if usage_known and prior_tokens is not None else usage if usage_known else prior_tokens
+            next_tokens = (
+                prior_tokens + cast(int, usage) if usage_known and prior_tokens is not None  # usage_known => int
+                else usage if usage_known else prior_tokens
+            )
             if next_tokens is not None and next_tokens >= 2**31:
                 next_tokens, usage_known = None, False
             answer: str | None = state.get("answer")
@@ -1060,7 +1073,7 @@ def build_workflow(context: HarnessContext, checkpointer: Any) -> Any:
         else:
             if (len(slots) != len(state["pending_tool_calls"])
                     or any(type(slot) is not int or not 1 <= slot <= MAX_TOOL_CALLS for slot in slots)
-                    or any(left >= right for left, right in zip(slots, slots[1:]))):
+                    or any(left >= right for left, right in zip(slots, slots[1:]))):  # noqa: RUF007  # style-only rewrite skipped to avoid touching control flow
                 raise RunIncompatible("Checkpoint tool-slot identities are incompatible")
             ordinal = slots[index]
         row = await _reserve_step(
@@ -1106,7 +1119,9 @@ def build_workflow(context: HarnessContext, checkpointer: Any) -> Any:
             before_internal_write = None
             if definition.risk != ToolRisk.READ_ONLY or definition.confirmation_required:
                 from modules.agents.approvals import (
-                    action_identity, approval_for_slot, create_pending_approval,
+                    action_identity,
+                    approval_for_slot,
+                    create_pending_approval,
                     verify_approved_action,
                 )
                 from modules.tools.webhook import load_webhook_profiles

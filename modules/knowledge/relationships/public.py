@@ -1,37 +1,54 @@
 import base64
 import binascii
 import json
+from copy import deepcopy
 from datetime import UTC, datetime
 from hashlib import sha256
-from copy import deepcopy
+from typing import Any
 from uuid import UUID
 
-from sqlalchemy import delete, desc, exists, func, or_, select, tuple_, update
+from sqlalchemy import Select, delete, desc, exists, false, func, or_, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.pagination import decode_cursor, encode_cursor
 from core.auth.models import Owner
+from core.pagination import decode_cursor, encode_cursor
 from core.realtime import commit_with_replay, make_graph_change
 from modules.knowledge.documents import public as documents
 from modules.knowledge.entities import public as entities
-from modules.knowledge.relationships.models import Relationship, RelationshipEvidence, RelationshipSnapshotHistory
+from modules.knowledge.relationships.models import (
+    Relationship,
+    RelationshipEvidence,
+    RelationshipSnapshotHistory,
+)
 from modules.knowledge.relationships.schemas import (
-    EvidenceRead,
+    CorrectionRelationshipRef,
+    CorrectionSupportRef,
     EntityGraphRead,
+    EvidenceRead,
     NeighborPage,
     NeighborRead,
     RelationshipCreate,
+    RelationshipExportEvidence,
+    RelationshipExportFence,
+    RelationshipExportFenceValidation,
+    RelationshipExportPage,
+    RelationshipExportRead,
     RelationshipPage,
     RelationshipRead,
-    CorrectionRelationshipRef,
-    CorrectionSupportRef,
     RelationshipSnapshot,
-    RelationshipExportEvidence, RelationshipExportFence, RelationshipExportFenceValidation,
-    RelationshipExportPage, RelationshipExportRead, RelationshipSourceExportFence,
+    RelationshipSourceExportFence,
+)
+from modules.knowledge.relationships.seed import (
+    ensure_demo_relationships,  # re-export: used by documents seed
 )
 from modules.sources import public as sources
 from modules.sources.schemas import SourceExportFence
-from modules.knowledge.relationships.seed import ensure_demo_relationships
+
+# Explicit re-exports consumed by other modules (mypy strict forbids implicit re-export).
+__all__ = [
+    "RelationshipSnapshot",
+    "ensure_demo_relationships",
+]
 
 MAX_CLEANUP_SUPPORTS = 10_000
 
@@ -785,9 +802,9 @@ async def support_cleanup_ids(
     statement = select(RelationshipEvidence.relationship_id).where(
         or_(
             RelationshipEvidence.document_id == document_id if document_id else RelationshipEvidence.source_id == source_id,
-            tuple_(RelationshipEvidence.document_version_id, RelationshipEvidence.chunk_id).in_(refs) if refs else False,
-            RelationshipEvidence.source_membership_id.in_(membership_ids) if membership_ids else False,
-            RelationshipEvidence.target_membership_id.in_(membership_ids) if membership_ids else False,
+            tuple_(RelationshipEvidence.document_version_id, RelationshipEvidence.chunk_id).in_(refs) if refs else false(),
+            RelationshipEvidence.source_membership_id.in_(membership_ids) if membership_ids else false(),
+            RelationshipEvidence.target_membership_id.in_(membership_ids) if membership_ids else false(),
         )
     )
     relation_ids = sorted(set((await session.scalars(statement.limit(MAX_CLEANUP_SUPPORTS + 1))).all()), key=str)
@@ -1005,7 +1022,7 @@ async def apply_entity_merge(
     relation_ids = sorted(expected_relationship_ids, key=str)
     rows = list((await session.scalars(select(Relationship).where(Relationship.id.in_(relation_ids)).order_by(Relationship.id))).all()) if relation_ids else []
     source_merge_ids = {source_entity_id} | source_redirect_ids
-    key_groups: dict[tuple[object, ...], list[Relationship]] = {}
+    key_groups: dict[tuple[UUID, UUID, str, str, datetime | None, datetime | None], list[Relationship]] = {}
     for row in rows:
         next_source = target_entity_id if row.source_entity_id in ({source_entity_id} | source_redirect_ids) else row.source_entity_id
         next_target = target_entity_id if row.target_entity_id in ({source_entity_id} | source_redirect_ids) else row.target_entity_id
@@ -1024,13 +1041,13 @@ async def apply_entity_merge(
                 select(RelationshipEvidence).where(RelationshipEvidence.relationship_id == row.id).order_by(RelationshipEvidence.id)
             )).all()
             for support in support_rows:
-                key = (support.document_version_id, support.chunk_id, support.source_membership_id, support.target_membership_id)
-                if key in supports_by_key:
-                    keep = supports_by_key[key]
+                support_key = (support.document_version_id, support.chunk_id, support.source_membership_id, support.target_membership_id)
+                if support_key in supports_by_key:
+                    keep = supports_by_key[support_key]
                     keep.confidence = max(keep.confidence, support.confidence)
                     await session.delete(support)
                 else:
-                    supports_by_key[key] = support
+                    supports_by_key[support_key] = support
                     support.relationship_id = survivor.id
             if row.id != survivor.id:
                 replacements.append((row.id, survivor.id))
@@ -1154,9 +1171,9 @@ async def _remove_support(
     """Delete bounded matching evidence and remove unsupported derived relationships."""
     statement = select(RelationshipEvidence).where(or_(
         RelationshipEvidence.document_id == document_id if document_id else RelationshipEvidence.source_id == source_id,
-        tuple_(RelationshipEvidence.document_version_id, RelationshipEvidence.chunk_id).in_(refs) if refs else False,
-        RelationshipEvidence.source_membership_id.in_(membership_ids) if membership_ids else False,
-        RelationshipEvidence.target_membership_id.in_(membership_ids) if membership_ids else False,
+        tuple_(RelationshipEvidence.document_version_id, RelationshipEvidence.chunk_id).in_(refs) if refs else false(),
+        RelationshipEvidence.source_membership_id.in_(membership_ids) if membership_ids else false(),
+        RelationshipEvidence.target_membership_id.in_(membership_ids) if membership_ids else false(),
     )).limit(MAX_CLEANUP_SUPPORTS + 1)
     rows = list((await session.scalars(statement)).all())
     if len(rows) > MAX_CLEANUP_SUPPORTS:
@@ -1222,7 +1239,7 @@ def _relationship_export_bytes(items: list[RelationshipExportRead]) -> int:
                           separators=(",", ":")).encode("utf-8"))
 
 
-def _relationship_export_statement(snapshot_at: datetime):
+def _relationship_export_statement(snapshot_at: datetime) -> Select[Any]:
     """Select owner relationships plus derived rows with retained eligible citations."""
     eligible = sources.export_eligible_source_ids()
     retained_support = exists(select(RelationshipEvidence.id).where(
@@ -1246,7 +1263,7 @@ async def _relationship_source_generations(session: AsyncSession, source_ids: se
     if not source_ids:
         return {}
     projection = sources.ingestion_lifecycle_projection().subquery()
-    rows = (await session.execute(select(projection.c.id, projection.c.generation).where(
+    rows: Any = (await session.execute(select(projection.c.id, projection.c.generation).where(
         projection.c.id.in_(source_ids), projection.c.id.in_(sources.export_eligible_source_ids()),
     ))).all()
     result = {source_id: int(generation) for source_id, generation in rows}

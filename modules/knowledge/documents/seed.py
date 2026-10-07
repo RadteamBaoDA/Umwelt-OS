@@ -7,25 +7,28 @@ from uuid import NAMESPACE_URL, uuid5
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from core.auth.public import get_demo_owner_id
 from core.config import Settings
+from core.demo_seed import (
+    P08_DEMO_NAMESPACE,
+    P10_DEMO_NAMESPACE,
+    P12_DEMO_NAMESPACE,
+    claim_demo_seed,
+    record_demo_seed_receipt,
+)
 from core.modules import register_modules
 from modules.automations.seed import ensure_demo_automations
+from modules.chat.public import ensure_demo_conversation
+from modules.goals.public import ensure_demo_goals
+from modules.knowledge.documents import public as documents
 from modules.knowledge.documents.models import Document, DocumentVersion
 from modules.knowledge.documents.public import content_hash
-from modules.sources import public as sources
-from core.auth.public import get_demo_owner_id
-from core.demo_seed import (
-    P08_DEMO_NAMESPACE, P10_DEMO_NAMESPACE, P12_DEMO_NAMESPACE,
-    claim_demo_seed, record_demo_seed_receipt,
-)
-from modules.goals.public import ensure_demo_goals
-from modules.news.public import ensure_demo_topics
-from modules.tasks.public import ensure_demo_tasks
-from modules.chat.public import ensure_demo_conversation
 from modules.knowledge.entities.public import ensure_demo_entities
 from modules.knowledge.relationships.public import ensure_demo_relationships
+from modules.news.public import ensure_demo_topics
+from modules.sources import public as sources
+from modules.tasks.public import ensure_demo_tasks
 from modules.timeline.public import ensure_demo_events
-from modules.knowledge.documents import public as documents
 
 DEMO_NAMESPACE = "bbd-os.demo.phase-1"
 SOURCE_ID = uuid5(NAMESPACE_URL, f"{DEMO_NAMESPACE}/source")

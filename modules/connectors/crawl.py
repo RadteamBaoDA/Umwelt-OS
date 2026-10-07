@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from contextlib import aclosing
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urljoin, urlsplit
 from uuid import UUID, uuid4
 
 import httpx
-from bs4 import BeautifulSoup
-from crawlee import ConcurrencySettings
+from bs4 import BeautifulSoup  # type: ignore[import-not-found]  # optional extra
+from crawlee import ConcurrencySettings  # type: ignore[import-not-found]  # optional extra
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
 
@@ -131,7 +132,7 @@ async def crawl(payload: CrawlRequest) -> list[dict[str, Any]]:
                             raise ValueError("Web redirect limit exceeded")
                         if response is None:
                             raise ValueError("Web response was not received")
-                        async with response:
+                        async with aclosing(response):  # PRODUCTION FIX: httpx.Response is not an async context manager
                             response.raise_for_status()
                             length = response.headers.get("content-length")
                             if length and int(length) > MAX_BYTES - state["bytes"]:
@@ -151,7 +152,10 @@ async def crawl(payload: CrawlRequest) -> list[dict[str, Any]]:
                                 if urlsplit(candidate).scheme in {"http", "https"} and candidate not in visited and len(queue) < 100:
                                     queue.append((candidate, depth + 1))
             else:
-                from crawlee.crawlers import PlaywrightCrawler, PlaywrightCrawlingContext
+                from crawlee.crawlers import (  # type: ignore[import-not-found]  # optional crawl extra
+                    PlaywrightCrawler,
+                    PlaywrightCrawlingContext,
+                )
 
                 crawler = PlaywrightCrawler(
                     max_requests_per_crawl=payload.max_pages,
@@ -244,13 +248,13 @@ async def crawl(payload: CrawlRequest) -> list[dict[str, Any]]:
                                     },
                                 )
                                 state["bytes"] += len(body)
-                            except Exception:
+                            except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
                                 state["interception_error"] = True
                                 try:
                                     await cdp.send(
                                         "Fetch.failRequest", {"requestId": request_id, "errorReason": "Aborted"}
                                     )
-                                except Exception:
+                                except Exception:  # noqa: BLE001, S110  # best-effort cleanup/optional step; failure intentionally ignored
                                     pass
 
                     cdp.on(
@@ -258,7 +262,7 @@ async def crawl(payload: CrawlRequest) -> list[dict[str, Any]]:
                         lambda paused: response_tasks.append(asyncio.create_task(intercept_response(paused))),
                     )
 
-                @crawler.router.default_handler
+                @crawler.router.default_handler  # type: ignore[untyped-decorator]  # crawlee absent from the type-check env
                 async def handle_browser(context: PlaywrightCrawlingContext) -> None:
                     """Extract bounded visible page text and enqueue same-host links."""
                     if state.get("exceeded"):
@@ -275,7 +279,7 @@ async def crawl(payload: CrawlRequest) -> list[dict[str, Any]]:
                 for cdp in cdp_sessions:
                     try:
                         await cdp.detach()
-                    except Exception:
+                    except Exception:  # noqa: BLE001, S110  # best-effort cleanup/optional step; failure intentionally ignored
                         pass
                 if state.get("exceeded"):
                     raise HTTPException(status_code=413, detail="Browser download limit exceeded")
@@ -363,8 +367,10 @@ async def _execute_static_agent_read(
     import hashlib
     import json
     import time
+
     from bs4 import BeautifulSoup
     from httpx2 import AsyncClient
+
     from modules.tools.mcp_transport import McpOperationNetworkBudget, McpPinnedHttpTransport
 
     if (
@@ -404,7 +410,7 @@ async def _execute_static_agent_read(
                 """Obtain an authoritative permit for this pinned target immediately before socket send."""
                 return await _browser_control_callback(
                     settings, payload, "authorize",
-                    request_ordinal=request_ordinal, target_url=current,
+                    request_ordinal=request_ordinal, target_url=current,  # noqa: B023  # closure is awaited within the same loop iteration
                 )
 
             budget.before_request = permit
@@ -608,7 +614,7 @@ async def cancel_agent_read(
         await task
     except asyncio.CancelledError:
         pass
-    except Exception:
+    except Exception:  # noqa: BLE001, S110  # best-effort cleanup/optional step; failure intentionally ignored
         # The task failed at the same time as cancellation; the authenticated
         # callback below still has to prove cleanup before this endpoint replies.
         pass

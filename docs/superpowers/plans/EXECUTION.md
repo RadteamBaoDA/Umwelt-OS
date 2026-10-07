@@ -1,5 +1,5 @@
 <!-- current-implementation-snapshot:start -->
-## Current implementation snapshot — 2026-10-06 21:55 — P12 CODE + P13 UI COMPLETE (test stage in progress)
+## Current implementation snapshot — 2026-10-07 10:50 — P12 CODE + P13 UI + TEST STAGE COMPLETE (live/capacity gates blocked)
 
 Controller Claude Opus 5.5; implementers Sonnet 5.5; reviewers Opus 5.5. SDD ledger: `.superpowers/sdd/2026-09-25-umwelt-os-phase-12-hardening-release-acceptance/progress.md`. Alembic head `p12_evidence_version_index`.
 
@@ -10,8 +10,9 @@ Controller Claude Opus 5.5; implementers Sonnet 5.5; reviewers Opus 5.5. SDD led
 | P13 UI (Claude Design `28946`) | 24 artboards implemented on `codex/umwelt-p13-ui` (W0 shell/brand/settings nav, W1–W5 surfaces, split i18n `core/messages/*`, MCP + permissions settings routes, `safeHttpUrl` for untrusted hrefs); every wave Opus-reviewed; final UI review → one fix wave → security residual fixed `4b5841c`; squash-merged to develop (this commit); typecheck/lint (0 errors)/build + prescribed build exit 0. Backend-missing follow-ups (34) in `.superpowers/sdd/ui-design-28946/gap-analysis.md` |
 | Review/build evidence | Every task Opus-reviewed to ACCEPT (fix rounds recorded in ledger); final whole-change review FIX FIRST → one fix wave → ACCEPT; prescribed build exit 0 / four images on every accepted head (process-only placeholder env) |
 | GitNexus risk | detect_changes CRITICAL on b4c52b1 (28 files/58 flows) and 00ddd32 (14 files/61 flows): expected cross-module scope; behavior unverified until test stage |
-| Test stage (in progress) | `codex/umwelt-p13-tests`: B1a runtime NameError/import/route fixes + 24 tests, B1b ruff clean; B1c mypy and B2a full harness running; B2b acceptance integration tests pending |
-| Deferred acceptance | Test stage remainder (author/run behavioral, integration, UI, recovery, security tests); live providers; restore into separate instance; 2-core/8GiB capacity; physical erasure; release acceptance `{"functional_acceptance":"pending","live_integrations":"pending","target_capacity":"pending","restore_verified":false}` |
+| Test stage (complete, this commit) | Squash of `codex/umwelt-p13-integration` (3b24759..ccac69e): B1 ruff clean + mypy 0 (302 files; 9 type-revealed production fixes with regression tests); B2a harness green after 4 startup fixes (alembic_version VARCHAR(255) online+offline, duplicate dataclass, N8nCredentials import, arq run_at_startup) and test-compose isolation from `.env`; B2b 11 acceptance integration tests (purge no-resurrection, coverage gate, migration roundtrip of all P12 revisions, DB-level backup/restore drill, demo seed idempotency, setup/onboarding) + graph worker crash fix; worker liveness (max_jobs 4, heavy jobs max_tries 60, cleanup lock_timeout 5 s, pool max_jobs+1); answer-grounded chat citations (owner decision); remote reranking kept opt-in (owner ruling). Final harness: unit 1103, auth race 1, integration 15, E2E 2, migrations ×2 — exit 0 |
+| Acceptance record | `{"functional_acceptance":"partial","live_integrations":"blocked","target_capacity":"blocked","restore_verified":false}` — manual mobile/a11y pending; no provider credentials; no 2-core/8GiB host; full encrypted restore not run (see docs/release-checklist.md) |
+| Next | Performance/concurrency audit (event-loop blocking, pools, local load test) — owner request |
 | Deferred minors | Listed in SDD ledger (`minor (deferred)` lines) and final-review triage; none block merge per final review |
 <!-- current-implementation-snapshot:end -->
 ## Retained Timeline/Observations export integration — 2026-10-06

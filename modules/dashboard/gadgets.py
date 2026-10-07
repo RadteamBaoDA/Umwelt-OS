@@ -1,7 +1,7 @@
 """Static savable renderer metadata and source-free dashboard preset templates."""
 
-from dataclasses import dataclass
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Literal
 from uuid import UUID
 
@@ -132,12 +132,12 @@ def validate_renderer_configuration(
         raise ValueError("Finance chart metric is outside the provider-declared daily OHLCV set")
     if renderer_id == "weather" and set(configuration.scope.metrics) - {"temperature_2m", "relative_humidity_2m", "precipitation", "wind_speed_10m"}:
         raise ValueError("Weather metric is outside the Open-Meteo allowlist")
-    if renderer_id == "map":
+    if renderer_id == "map":  # noqa: SIM102  # style-only rewrite skipped to avoid touching control flow
         if set(configuration.scope.map_layer_ids) - {
             "world_observations", "military", "economic", "disaster", "escalation",
         }:
             raise ValueError("Map layer is not in the bounded catalog")
-    if renderer_id == "intelligence_panel":
+    if renderer_id == "intelligence_panel":  # noqa: SIM102  # style-only rewrite skipped to avoid touching control flow
         if configuration.scope.map_layer_ids or configuration.scope.metrics or configuration.scope.symbols:
             raise ValueError("Map and measurement selectors are not valid for the intelligence panel")
     if renderer_id != "map" and (

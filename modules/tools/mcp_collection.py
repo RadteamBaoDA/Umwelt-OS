@@ -6,8 +6,8 @@ never registers a native tool: collection arguments come from owner-saved source
 never from model or UI free text, and stdio launch material stays in the admin profile catalog.
 """
 
-from dataclasses import dataclass
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
@@ -102,7 +102,7 @@ async def read_collection_capability(
                     == fence.deployment_profile_hash
                 ))
             )
-        except Exception:
+        except Exception:  # noqa: BLE001  # fail-closed boundary: any failure denies/degrades
             return False
 
     if capability.kind == "tool":

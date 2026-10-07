@@ -2,10 +2,9 @@
 
 from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects import postgresql
-
 
 revision: str = "p12_agent_document_cleanup"
 down_revision: str | Sequence[str] | None = "p12_memory_document_cleanup"

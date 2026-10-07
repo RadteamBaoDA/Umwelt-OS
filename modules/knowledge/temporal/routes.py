@@ -1,7 +1,7 @@
 """Owner-authenticated temporal status/history and durable scoped reconciliation endpoints."""
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -14,7 +14,12 @@ from core.database import get_session
 from modules.knowledge.entities.schemas import EntityHistoryPage
 from modules.knowledge.service import KnowledgeService
 from modules.knowledge.temporal import public
-from modules.knowledge.temporal.schemas import ChangePage, GraphStatus, ReconcileRequest, ReconcileStatus
+from modules.knowledge.temporal.schemas import (
+    ChangePage,
+    GraphStatus,
+    ReconcileRequest,
+    ReconcileStatus,
+)
 from modules.timeline.schemas import TimelineQuery
 
 router = APIRouter(tags=["temporal-knowledge"])
@@ -77,7 +82,7 @@ async def entity_timeline(entity_id: UUID, session: Session, _owner: OwnerRead, 
                            timezone: str = "Asia/Ho_Chi_Minh",
                            type_filter: Annotated[str | None, Query(alias="type", max_length=64)] = None,
                            limit: Annotated[int, Query(ge=1, le=100)] = 50,
-                           cursor: Annotated[str | None, Query(max_length=1024)] = None):
+                           cursor: Annotated[str | None, Query(max_length=1024)] = None) -> Any:
     """Return canonical event occurrence/citations and graph status under the configured runtime enablement."""
     response.headers["Cache-Control"] = "no-store"
     try:

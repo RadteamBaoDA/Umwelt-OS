@@ -1,7 +1,8 @@
 """Protected dashboard configuration REST routes with explicit owner and write dependencies."""
 
+from collections.abc import Awaitable
 from datetime import date
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -12,19 +13,36 @@ from core.auth.models import AuthSession
 from core.database import get_session
 from modules.dashboard import briefs, context, public
 from modules.dashboard.daily_schemas import (
-    BriefGenerateRequest, BriefRead, BriefSchedule, DailyContext, validate_timezone,
+    BriefGenerateRequest,
+    BriefRead,
+    BriefSchedule,
+    DailyContext,
+    validate_timezone,
 )
 from modules.dashboard.public import DashboardConflict, DashboardMissing
 from modules.dashboard.schemas import (
-    DashboardCreate, DashboardPatch, GadgetDefinitionCreate, GadgetDefinitionPatch,
-    GroupCreate, GroupPatch, InstanceCreate, InstancePatch, LayoutReplace,
-    PresetApplyRequest, PresetPreviewRequest, DashboardSummary, DashboardDetail,
-    DashboardGroupRead, GadgetDefinitionRead, RendererRead, DashboardPresetRead,
-    PresetPreviewRead,
+    DashboardCreate,
+    DashboardDetail,
+    DashboardGroupRead,
     DashboardHighlightRead,
+    DashboardPatch,
+    DashboardPresetRead,
+    DashboardSummary,
+    GadgetDefinitionCreate,
+    GadgetDefinitionPatch,
+    GadgetDefinitionRead,
+    GroupCreate,
+    GroupPatch,
+    InstanceCreate,
+    InstancePatch,
+    LayoutReplace,
+    PresetApplyRequest,
+    PresetPreviewRead,
+    PresetPreviewRequest,
+    RendererRead,
 )
-from modules.sources.schemas import GadgetSourceSelectionPage
 from modules.settings.public import module_dependency
+from modules.sources.schemas import GadgetSourceSelectionPage
 
 router = APIRouter(prefix="/api/v1", tags=["dashboard"], dependencies=[Depends(module_dependency("dashboard"))])
 Session = Annotated[AsyncSession, Depends(get_session)]
@@ -37,7 +55,7 @@ def _no_store(response: Response) -> None:
     response.headers["Cache-Control"] = "private, no-store"
 
 
-async def _call(operation):
+async def _call[T](operation: Awaitable[T]) -> T:
     """Map public-owner errors to stable HTTP status and machine codes without exposing ORM details."""
     try:
         return await operation
@@ -206,7 +224,7 @@ async def list_renderers(owner: OwnerRead, response: Response) -> list[RendererR
 
 
 @router.get("/gadget-sources", response_model=GadgetSourceSelectionPage)
-async def list_gadget_sources(session: Session, owner: OwnerRead, response: Response, limit: Annotated[int, Query(ge=1, le=100)] = 50, cursor: str | None = Query(default=None, max_length=512)) -> GadgetSourceSelectionPage:
+async def list_gadget_sources(session: Session, owner: OwnerRead, response: Response, limit: Annotated[int, Query(ge=1, le=100)] = 50, cursor: str | None = Query(default=None, max_length=512)) -> dict[str, Any]:
     """Return owner source selection metadata without exposing connector configuration or content."""
     _no_store(response)
     page = await public.list_gadget_sources(session, limit, cursor)

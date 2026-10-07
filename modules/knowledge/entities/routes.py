@@ -11,18 +11,29 @@ from core.database import get_session
 from modules.knowledge.entities import corrections, public
 from modules.knowledge.entities.corrections import CorrectionConflictError
 from modules.knowledge.entities.schemas import (
-    AliasCreate, EntityCorrectionPreview, EntityCorrectionResult, EntityCreate,
-    EntityEvidencePage, EntityExtractionStatus, EntityMergeRequest,
-    EntityPage, EntityPatch, EntityRead, EntitySplitRequest, EntitySuppressionRequest,
+    AliasCreate,
+    EntityCorrectionPreview,
+    EntityCorrectionResult,
+    EntityCreate,
+    EntityEvidencePage,
+    EntityExtractionStatus,
+    EntityMergeRequest,
+    EntityPage,
+    EntityPatch,
+    EntityRead,
+    EntityRelationshipReviewRequest,
+    EntityRelationshipReviewResult,
+    EntityReviewAssignmentRequest,
+    EntityReviewAssignmentResult,
     EntityReviewPage,
-    EntityReviewAssignmentRequest, EntityReviewAssignmentResult,
-    EntityRelationshipReviewRequest, EntityRelationshipReviewResult,
+    EntitySplitRequest,
+    EntitySuppressionRequest,
 )
 from modules.knowledge.public import KnowledgeService
 from modules.knowledge.relationships.schemas import NeighborPage
 from modules.settings.public import module_dependency
 
-router = APIRouter(tags=["knowledge"], dependencies=[Depends(module_dependency("entities"))])
+router = APIRouter(tags=["knowledge"], dependencies=[Depends(module_dependency("knowledge.entities"))])
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[AuthSession, Depends(require_owner)]
 OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]

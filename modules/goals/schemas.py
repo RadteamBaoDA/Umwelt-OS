@@ -49,7 +49,7 @@ class GoalCreate(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def references_fit_goal_bound(self) -> GoalCreate:
+    def references_fit_goal_bound(self) -> "GoalCreate":
         """Keep goal-owned milestones and entity references within the public round-trip bound."""
         if len(self.milestones) + len(self.entity_ids) > 100:
             raise ValueError("A goal may contain at most 100 milestone and entity references")
@@ -75,7 +75,7 @@ class GoalUpdate(BaseModel):
     expected_revision: int = Field(ge=1, le=9_007_199_254_740_991)
 
     @model_validator(mode="after")
-    def patch_has_mutation(self) -> GoalUpdate:
+    def patch_has_mutation(self) -> "GoalUpdate":
         """Reject revision-only no-ops and null values for non-nullable fields."""
         fields = self.model_fields_set
         if fields <= {"expected_revision"}:
@@ -125,7 +125,7 @@ class GoalRead(BaseModel):
     updated_at: datetime
 
     @model_validator(mode="after")
-    def references_fit_goal_bound(self) -> GoalRead:
+    def references_fit_goal_bound(self) -> "GoalRead":
         """Enforce the persisted aggregate bound on public goal read projections."""
         linked_task_ids = {item.task_id for item in self.milestones if item.task_id is not None}
         if len(self.milestones) + len(linked_task_ids) + len(self.entity_ids) > 100:
@@ -193,7 +193,7 @@ class PlanProposal(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def references_fit_proposal_bound(self) -> PlanProposal:
+    def references_fit_proposal_bound(self) -> "PlanProposal":
         """Bound proposal milestones/tasks and its distinct entity union independently."""
         if len(self.milestones) + len(self.tasks) > 100:
             raise ValueError("A proposal may contain at most 100 milestone and task references")

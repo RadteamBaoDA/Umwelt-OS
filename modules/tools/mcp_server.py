@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 from mcp.server import MCPServer, ServerRequestContext
 from mcp.server.context import CallNext, HandlerResult
@@ -30,7 +31,7 @@ from modules.tools.mcp_schemas import InboundBinding, InboundPrincipal
 class McpServerBundle:
     """Return the constructed SDK server and its independently guarded ASGI child."""
 
-    server: "ScopedMcpServer"
+    server: ScopedMcpServer
     guarded_asgi_app: ASGIApp
 
 
@@ -236,7 +237,7 @@ class ScopedMcpServer(MCPServer):
                 version=binding.version,
                 context=native_context,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
             return CallToolResult(content=[TextContent(text='{"error":"execution_failed"}')], is_error=True)
         if not result.success:
             code = result.error_code if result.error_code in {
@@ -253,7 +254,7 @@ class ScopedMcpServer(MCPServer):
             current = await self.revalidate_inbound_output(
                 state.identity, state.expected, binding=binding, sink=sink,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001  # fail-closed boundary: any failure denies/degrades
             current = False
         if not current:
             return CallToolResult(
