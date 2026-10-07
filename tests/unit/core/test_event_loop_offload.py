@@ -291,11 +291,9 @@ async def test_to_thread_joined_returns_and_raises() -> None:
         await to_thread_joined(boom)
 
 
-def test_parsed_text_cap_at_and_over_limit() -> None:
-    worker._check_parsed_text("a" * 10, 10)
-    with pytest.raises(worker.ParsedTextTooLarge) as info:
-        worker._check_parsed_text("a" * 11, 10)
-    assert worker._failure_code(info.value) == "parsed_text_too_large"
+def test_parsed_text_cap_truncates_over_limit() -> None:
+    assert worker._cap_parsed_text("a" * 10, 10) == "a" * 10
+    assert worker._cap_parsed_text("a" * 11, 10) == "a" * 10
     assert worker._failure_code(TimeoutError()) == "parser_timeout"
     assert worker._failure_code(RuntimeError()) == "parse_failed"
     assert Settings().parsed_text_max_chars == 10 * 1024 * 1024

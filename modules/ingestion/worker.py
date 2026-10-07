@@ -1198,8 +1198,8 @@ async def process_uploaded_file(ctx: dict[str, object], event_id: str) -> None:
             settings.docx_expanded_max_bytes,
             settings.pdf_page_max,
         )
-        _check_parsed_text(parsed.text, settings.parsed_text_max_chars)
-        drafts = await to_thread_joined(chunk_text, parsed.text)
+        parsed_text = _cap_parsed_text(parsed.text, settings.parsed_text_max_chars)
+        drafts = await to_thread_joined(chunk_text, parsed_text)
         extraction_status = "needs_ocr" if parsed.warnings and not parsed.text else "succeeded"
         async with factory() as session:
             source = await sources.lock_source(session, source_id)
@@ -1230,7 +1230,7 @@ async def process_uploaded_file(ctx: dict[str, object], event_id: str) -> None:
                 session,
                 document_id,
                 source_id,
-                parsed.text,
+                parsed_text,
                 [
                     {"content": draft.content, "token_count": draft.token_count, "metadata": draft.metadata}
                     for draft in drafts
@@ -1303,19 +1303,18 @@ async def process_uploaded_file(ctx: dict[str, object], event_id: str) -> None:
                 await session.commit()
 
 
-class ParsedTextTooLarge(ValueError):
-    """Parsed text exceeds the chunking cap; the document must be split."""
-
-
-def _check_parsed_text(text: str, limit: int) -> None:
-    if len(text) > limit:
-        raise ParsedTextTooLarge("parsed_text_too_large")
+def _cap_parsed_text(text: str, limit: int) -> str:
+    """Bound chunking input: keep the first `limit` chars and log the truncation instead of failing the upload."""
+    if len(text) <= limit:
+        return text
+    logger.warning("Parsed text truncated to %s of %s chars", limit, len(text))
+    return text[:limit]
 
 
 def _failure_code(exc: Exception) -> str:
     if isinstance(exc, TimeoutError):
         return "parser_timeout"
-    return "parsed_text_too_large" if isinstance(exc, ParsedTextTooLarge) else "parse_failed"
+    return "parse_failed"
 
 
 async def cleanup_storage_orphans(ctx: dict[str, object]) -> int:
