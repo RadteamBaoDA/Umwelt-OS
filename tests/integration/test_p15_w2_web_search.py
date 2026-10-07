@@ -26,6 +26,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from core.config import Settings
+from core.model_gateway.schemas import AISettingsUpdate, PrivacySettings
 from core.model_gateway.transport import ApprovedEndpointTransport, approved_web_search_transport
 from modules.chat import worker
 from modules.chat.models import Conversation, Message, ResponseRun, StreamEvent
@@ -204,6 +205,64 @@ async def test_consent_revoked_while_fence_waits_sends_nothing(
         assert outcome == {"status": "skipped", "reason": "not_configured", "result_count": 0}
         assert fake_model.SEARCH_LOG == []
     finally:
+        await _cleanup(factory, conversation_id)
+
+
+async def test_save_after_fence_read_blocks_until_body_is_sent(
+    factory: async_sessionmaker[AsyncSession], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review P1-1/P2-1, the decisive direction: a real ``save_ai_settings`` revoking consent, issued after the
+    fence has read consent, must not commit while the request body is unsent, and commits once it is handed over."""
+    conversation_id, run_id, fence = await _run(factory, "blocked save")
+    async with factory() as claim:
+        await claim.execute(text("UPDATE chat_response_runs SET status = 'streaming' WHERE id = :i"), {"i": run_id})
+        await claim.commit()
+    parked, go = asyncio.Event(), asyncio.Event()
+
+    class _Parked(httpx.ASGITransport):
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            parked.set()  # consent was read; the body has not been iterated yet
+            await asyncio.wait_for(go.wait(), 3)  # shorter than the 4 s fence deadline
+            return await super().handle_async_request(request)
+
+    def parked_provider(endpoint: str, hosts: Any, cidrs: Any) -> ApprovedEndpointTransport:
+        approved_web_search_transport(endpoint, hosts, cidrs)
+        return ApprovedEndpointTransport(
+            httpx.URL(endpoint), tuple(cidrs), _Parked(app=fake_model.app), allow_global=True,
+        )
+
+    async def save_revocation() -> None:
+        async with factory() as session:  # another session, exactly what PUT /ai does
+            revision = await session.scalar(text("SELECT configuration_revision FROM ai_settings WHERE owner_id = 1"))
+            await settings_public.save_ai_settings(session, AISettingsUpdate(
+                web_search_provider="tavily", web_search_endpoint=ENDPOINT,  # type: ignore[arg-type]
+                privacy=PrivacySettings(allow_remote_web_search=False), expected_revision=revision,
+            ), _settings())
+            await session.commit()
+
+    monkeypatch.setattr(worker, "approved_web_search_transport", parked_provider)
+    search = save = None
+    try:
+        with patch.object(asyncio.get_running_loop(), "getaddrinfo", AsyncMock(return_value=[_answer("93.184.216.34")])):
+            search = asyncio.create_task(worker._search_for_run(
+                "blocked save", [], run_id, conversation_id, fence, factory, _settings(), _Redis(),  # type: ignore[arg-type]
+            ))
+            await asyncio.wait_for(parked.wait(), 3)
+            save = asyncio.create_task(save_revocation())
+            done, _ = await asyncio.wait({save}, timeout=1.0)
+            assert not done, "save_ai_settings committed while the request body was still unsent"
+            go.set()  # the delegate now iterates the body; the fence is released from there
+            await asyncio.wait_for(save, 3)
+            outcome = (await asyncio.wait_for(search, 3)).outcome
+        assert outcome == {"status": "used", "reason": None, "result_count": 2}
+        async with factory() as session:
+            consent = await session.scalar(text("SELECT privacy->>'allow_remote_web_search' FROM ai_settings WHERE owner_id = 1"))
+            assert consent == "false"
+    finally:
+        go.set()
+        for task in (search, save):
+            if task is not None and not task.done():
+                task.cancel()
         await _cleanup(factory, conversation_id)
 
 

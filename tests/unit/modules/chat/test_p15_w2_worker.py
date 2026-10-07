@@ -18,6 +18,7 @@ from core.model_gateway.transport import (
     ApprovedEndpointTransport,
     EndpointNetworkPolicyError,
     approved_transport,
+    body_sent,
 )
 from modules.chat import worker
 from modules.chat.citations import INSUFFICIENT_EVIDENCE_MESSAGE
@@ -63,8 +64,9 @@ class _Search:
             self.steps.append("live_lock")
             return True, SimpleNamespace(status="streaming")
 
-        async def lock_settings(*_a: Any) -> None:
+        async def lock_settings(*_a: Any) -> bool:
             self.steps.append("ai_settings_share")
+            return True
 
         async def config_read(*_a: Any) -> Any:
             self.steps.append("config")
@@ -173,6 +175,42 @@ async def test_used_and_no_results(monkeypatch: pytest.MonkeyPatch) -> None:
     assert run.results == (R1, R2) and run.provider == "tavily"
     s.results = []
     assert (await s.run()).outcome == {"status": "used", "reason": "no_results", "result_count": 0}
+
+
+async def test_missing_ai_settings_row_is_not_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    s = _Search(monkeypatch)
+    monkeypatch.setattr(worker.settings_public, "lock_ai_settings_for_share", AsyncMock(return_value=False))
+    assert (await s.run()).outcome == {"status": "skipped", "reason": "not_configured", "result_count": 0}
+    s.search.assert_not_awaited()
+    s.quota.assert_not_awaited()
+
+
+async def test_host_denied_does_not_spend_daily_quota(monkeypatch: pytest.MonkeyPatch) -> None:
+    s = _Search(monkeypatch)
+    monkeypatch.setattr(worker, "approved_web_search_transport", MagicMock(side_effect=EndpointNetworkPolicyError("host")))
+    assert (await s.run()).outcome == {"status": "unavailable", "reason": "network_denied", "result_count": 0}
+    s.quota.assert_not_awaited()
+
+
+async def test_timeout_is_cancelled_before_rollback_once_body_is_sent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """P3-1: the deadline is disarmed before the fence rollback, so a slow rollback is not cancelled."""
+    s = _Search(monkeypatch)
+    monkeypatch.setattr(worker, "WEB_SEARCH_FENCE_SECONDS", 0.05)
+
+    async def slow_rollback() -> None:
+        await asyncio.sleep(0.15)  # longer than the fence deadline
+        s.steps.append("rollback_done")
+
+    s.session.rollback.side_effect = slow_rollback
+
+    async def sent_then_results(*_a: Any, **_k: Any) -> list[WebSearchResult]:
+        await body_sent.get()()  # the transport hook: body handed over
+        return [R1]
+
+    s.search.side_effect = sent_then_results
+    run = await s.run()
+    assert run.outcome["status"] == "used"  # not misreported as a timeout
+    assert "rollback_done" in s.steps
 
 
 async def test_fence_wait_timeout_is_unavailable_and_released(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -353,6 +391,19 @@ async def test_citation_numbering_and_uncited_results_dropped(monkeypatch: pytes
     assert all(c.get("url") != R1.url for c in citations)  # uncited result never persisted
     done = gen.events("message.done")[0]
     assert done.data["citations"] == citations
+
+
+async def test_web_only_year_in_text_is_not_a_bad_citation(monkeypatch: pytest.MonkeyPatch) -> None:
+    gen = _WebGen(monkeypatch, ["In [2023] the web says [3]"], worker._web_search_run(None, [R1, R2], "brave"))
+    await gen.run()
+    assert gen.message.content == "In [2023] the web says [1]"
+    assert [c["url"] for c in gen.message.citations] == [R2.url]
+
+
+async def test_no_results_adds_explicit_prompt_line(monkeypatch: pytest.MonkeyPatch) -> None:
+    gen = _WebGen(monkeypatch, ["Hi"], worker._web_search_run(None, [], "tavily"))
+    await gen.run()
+    assert worker.WEB_SEARCH_NO_RESULTS_PROMPT in gen.prompts[0][0]["content"]
 
 
 async def test_web_only_answer_is_kept(monkeypatch: pytest.MonkeyPatch) -> None:

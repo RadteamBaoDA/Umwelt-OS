@@ -66,8 +66,10 @@ RECOVER_PENDING_AFTER = timedelta(seconds=15)
 RECOVER_STREAMING_AFTER = timedelta(seconds=660)  # arq job_timeout 600 s plus margin
 EPHEMERAL_TTL = timedelta(hours=24)
 SHUTDOWN_RELEASE_TIMEOUT = 5.0  # docker stop grace is 10 s; arq awaits the job task before closing
+WEB_SEARCH_STOP_SECONDS = 3.0  # search cleanup is a rollback; keeps stop + shutdown release (3 + 5) inside 10 s
 # Web search egress fence: lock wait + DNS + connect + request body, while the privacy key is held (review P2-1).
 WEB_SEARCH_FENCE_SECONDS = 4.0
+WEB_SEARCH_NO_RESULTS_PROMPT = "Web search returned no results; do not cite the web."
 WEB_SEARCH_UNAVAILABLE_PROMPT = (
     "Web search was requested but is unavailable for this answer; do not claim to have searched the web."
 )
@@ -288,7 +290,8 @@ async def _search_for_run(
                     return _web_search_run("run_inactive")  # the next main-path fence cancels/redacts as today
                 if await is_run_cancelled(response_id, redis):
                     return _web_search_run("run_inactive")
-                await settings_public.lock_ai_settings_for_share(fence)
+                if not await settings_public.lock_ai_settings_for_share(fence):
+                    return _web_search_run("not_configured")  # no row: nothing to lock, so no consent either
                 config = await settings_public.get_ai_execution_config(fence, settings, redis)
                 endpoint = config.web_search_endpoint
                 if not web.web_search_permitted(config) or not endpoint:
@@ -297,17 +300,18 @@ async def _search_for_run(
                     source = await sources_public.get_source_fence(fence, source_id)
                     if source is not None and source.local_only:
                         return _web_search_run("local_only_context")
-                # ponytail: a P14 shutdown re-pend re-runs the search on re-claim, so the cap counts it twice.
-                if not await web.consume_daily_quota(redis, settings_public.OWNER_ID, settings.web_search_daily_limit):
-                    return _web_search_run("daily_limit")
                 provider = config.web_search_provider
-                transport = approved_web_search_transport(  # one per search: search() closes it
+                transport = approved_web_search_transport(  # one per search: search() closes it; host check first
                     endpoint, settings.ai_allowed_endpoint_hosts, settings.web_search_allowed_cidrs,
                 )
+                # ponytail: a P14 shutdown re-pend re-runs the search on re-claim, so the cap counts it twice.
+                # Also: the re-claim reuses event seqs, so a live client may keep the first outcome until reload.
+                if not await web.consume_daily_quota(redis, settings_public.OWNER_ID, settings.web_search_daily_limit):
+                    return _web_search_run("daily_limit")
 
                 async def body_written() -> None:
-                    await release()
-                    deadline.reschedule(None)  # the body is out; search()'s own total timeout bounds the rest
+                    deadline.reschedule(None)  # first: the body is out, so the rollback must not be cancelled
+                    await release()  # search()'s own total timeout bounds the rest
 
                 token = body_sent.set(body_written)
                 try:
@@ -333,7 +337,7 @@ async def _search_for_run(
 async def _stop_search(task: "asyncio.Task[_WebSearchRun]") -> None:
     """Cancel a pending search and wait for its fence cleanup (bounded like the shutdown release)."""
     task.cancel()
-    await asyncio.wait({task}, timeout=SHUTDOWN_RELEASE_TIMEOUT)
+    await asyncio.wait({task}, timeout=WEB_SEARCH_STOP_SECONDS)
 
 
 async def _publish_web_search(
@@ -793,8 +797,11 @@ async def run_response_generation(
                     "bracketed number from <web_results> in the same way.\n\n"
                     + web.format_web_results(web_results, evidence_count + 1)
                 )
-            elif web_run is not None and web_run.outcome["status"] != "used":
-                system_text += "\n\n" + WEB_SEARCH_UNAVAILABLE_PROMPT
+            elif web_run is not None:
+                system_text += "\n\n" + (
+                    WEB_SEARCH_NO_RESULTS_PROMPT if web_run.outcome["status"] == "used"
+                    else WEB_SEARCH_UNAVAILABLE_PROMPT
+                )
             messages_payload: list[dict[str, str]] = [
                 {"role": "system", "content": system_text},
                 *prior_messages,
@@ -929,7 +936,7 @@ async def run_response_generation(
             web_only = (
                 not validated.citations
                 and all(n in number_map for n in doc_numbers)
-                and all(n <= total_count for n in parse_citation_markers(accumulated_text, 10_000))
+                and all(n <= total_count for n in parse_citation_markers(accumulated_text, total_count + 20))  # "[2023]" is text
             )
             if validated.citations or web_only:
                 answer_text = accumulated_text if web_only else answer_text
