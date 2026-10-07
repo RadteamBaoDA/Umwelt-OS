@@ -25,7 +25,7 @@ ORIGIN = os.getenv("TEST_PUBLIC_ORIGIN", "http://localhost:3300")
 async def test_api_runs_two_uvicorn_workers() -> None:
     container = _service_container("api")
     # `docker top` lists the uvicorn supervisor plus one multiprocessing child per worker.
-    children = [line for line in _docker("top", container, "-eo", "args").splitlines() if "multiprocessing.spawn" in line]
+    children = [line for line in _docker("top", container, "-o", "pid,args").splitlines() if "multiprocessing.spawn" in line]
     assert len(children) == 2, children
 
 

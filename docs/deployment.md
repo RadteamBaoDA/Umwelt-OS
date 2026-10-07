@@ -37,12 +37,12 @@ Redis clients use `socket_timeout=5`, `socket_connect_timeout=2`, `health_check_
 
 ## Client IP and `X-Forwarded-For`
 
-The per-IP authentication limit (5 attempts/min per action, plus a global 20/min) keys on the TCP peer by default. Behind Next the peer is always the web container, so all clients share one bucket; this cannot be spoofed. Next forwards a client-supplied `X-Forwarded-For` unchanged (it only fills it when absent), so the header is trustworthy only if the front reverse proxy **overwrites** it (never appends) with the real client address:
+The per-IP authentication limit (5 attempts/min per action, plus a global 20/min) keys on the TCP peer by default. Behind Next the peer is always the web container, so all clients share one bucket; this cannot be spoofed. Next's `/api` rewrite forwards a client-supplied `X-Forwarded-For` unchanged and never adds a hop, so the header is trustworthy only if the front reverse proxy **overwrites** it (never appends) with the real client address:
 
 - nginx: `proxy_set_header X-Forwarded-For $remote_addr;` (not `$proxy_add_x_forwarded_for`).
 - Caddy: `reverse_proxy 127.0.0.1:3000 { header_up X-Forwarded-For {remote_host} }`.
 
-Only then set `AUTH_TRUST_FORWARDED_FOR=true` to get a separate bucket per client (the limiter uses the rightmost entry). If the web port is reachable directly (not loopback-only) or the proxy does not overwrite the header, leave it `false`. Redis memory is reported as `components.redis.memory` (`used_bytes`, `max_bytes`) in the owner-authenticated `/api/v1/system/health`; alert when used approaches the 256 MB `noeviction` cap.
+Only then set `AUTH_TRUST_FORWARDED_FOR=true` to get a separate bucket per client (the limiter uses the rightmost entry). If the web port is reachable directly (not loopback-only), the proxy does not overwrite the header, or other containers that reach `api:8000` directly (the optional n8n connector and browser services) can be driven by untrusted input, leave it `false`. Redis memory is reported as `components.redis.memory` (`used_bytes`, `max_bytes`) in the owner-authenticated `/api/v1/system/health`; alert when used approaches the 256 MB `noeviction` cap.
 
 ## Deploys and in-flight chats
 
@@ -79,7 +79,7 @@ The design target is a 2-core, 8 GiB host with remote AI inference. Capacity on 
 
 ## Optional Langfuse telemetry
 
-The base Compose deployment does not include or contact Langfuse: `api` and `worker` force `BBD_LANGFUSE_ENABLED=false`, even when `.env` retains opt-in values. For the opt-in HTTPS remote profile, follow [Observability and Langfuse](observability.md), configure the explicit owner egress approval and backend-only project credentials in `.env`, and include `infrastructure/observability/compose.yml` in the Compose command; its environment mapping overrides the base setting. Disable export by running `docker compose down` and restarting with `docker compose -f docker-compose.yml up -d`. Only metadata-only model-call spans are sent; content capture is unavailable. Remote availability does not affect API/worker health or core writes. No performance comparison has been measured yet; target-host measurements remain deferred.
+The base Compose deployment does not include or contact Langfuse: `api`, `worker` and `chat-worker` force `BBD_LANGFUSE_ENABLED=false`, even when `.env` retains opt-in values. For the opt-in HTTPS remote profile, follow [Observability and Langfuse](observability.md), configure the explicit owner egress approval and backend-only project credentials in `.env`, and include `infrastructure/observability/compose.yml` in the Compose command; its environment mapping overrides the base setting. Disable export by running `docker compose down` and restarting with `docker compose -f docker-compose.yml up -d`. Only metadata-only model-call spans are sent; content capture is unavailable. Remote availability does not affect API/worker health or core writes. No performance comparison has been measured yet; target-host measurements remain deferred.
 
 ## Agent Chat lifecycle migration
 
