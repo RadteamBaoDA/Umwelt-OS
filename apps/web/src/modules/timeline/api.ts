@@ -82,3 +82,8 @@ export function searchEvents(q: string) {
   const params = new URLSearchParams({ limit: '8', q: q.trim().slice(0, 200) });
   return apiRequest<TimelinePageResult>(`/api/v1/events?${params}`);
 }
+
+/** Fetches one event by id (id-only navigation keeps titles out of URLs and access logs). */
+export function getEvent(id: string) {
+  return apiRequest<TimelineEvent>(`/api/v1/events/${encodeURIComponent(id)}`);
+}

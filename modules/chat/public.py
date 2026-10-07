@@ -803,7 +803,10 @@ async def search_conversations(
     expired or automation threads. Deleted rows are gone, so they never match.
     """
     # Lock-free consent read (the export path's); is_history_storage_enabled would hold Memory's advisory lock.
-    if not (await _chat_export_privacy(session))[0]:
+    try:
+        if not (await _chat_export_privacy(session))[0]:
+            return []
+    except ValueError:  # inconsistent privacy marker: fail closed rather than 500
         return []
     escaped = q.strip().replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
     # ponytail: ILIKE scan over the owner's own titles; add a pg_trgm index if title volume grows.
@@ -811,7 +814,7 @@ async def search_conversations(
         _select(Conversation)
         .where(Conversation.archived == archived, Conversation.title.ilike(f"%{escaped}%", escape="\\"))
         .where(*_chat_export_scope_retained(_datetime.now(_UTC)))
-        .order_by(Conversation.updated_at.desc(), Conversation.id.desc())
+        .order_by(Conversation.pinned.desc(), Conversation.updated_at.desc(), Conversation.id.desc())
         .offset(offset).limit(limit)
     )
     return list((await session.scalars(statement)).all())

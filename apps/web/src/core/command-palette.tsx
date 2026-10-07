@@ -127,7 +127,7 @@ export function CommandPalette() {
     }
     if (wantsDocs) for (const hit of docs.data?.items ?? []) list.push({ id: `doc-${hit.chunk_id}`, group: 'documents', label: hit.title, meta: `${hit.source.name} · v${hit.version_number}`, icon: FileTextIcon, run: () => go(`/knowledge/documents/${hit.document_id}?versionId=${hit.document_version_id}&chunkId=${hit.chunk_id}#cited-chunk`) });
     if (wantsEntities) for (const hit of entities.data?.items ?? []) list.push({ id: `ent-${hit.id}`, group: 'entities', label: hit.name ?? hit.id, meta: hit.type, icon: ShapesIcon, run: () => go(`/knowledge/entities/${hit.id}`) });
-    if (wantsEvents) for (const hit of events.data?.items ?? []) list.push({ id: `evt-${hit.id}`, group: 'events', label: hit.title, meta: hit.type, icon: CalendarIcon, run: () => go(`/timeline?q=${encodeURIComponent(hit.title.slice(0, 200))}`) });
+    if (wantsEvents) for (const hit of events.data?.items ?? []) list.push({ id: `evt-${hit.id}`, group: 'events', label: hit.title, meta: hit.type, icon: CalendarIcon, run: () => go(`/timeline?event_id=${encodeURIComponent(hit.id)}`) });
     if (wantsConversations) {
       for (const conv of conversations.data ?? []) {
         list.push({ id: `conv-${conv.id}`, group: 'conversations', label: conv.title || tc('untitledConversation'), icon: MessageSquareIcon, run: () => { selectConversation(conv.id); go('/chat'); } });

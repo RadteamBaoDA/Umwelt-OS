@@ -39,7 +39,7 @@ async def test_query_excludes_ephemeral_expired_automation_and_is_bounded() -> N
     assert "chat_conversations.expires_at IS NULL OR chat_conversations.expires_at >" in sql
     assert "context_kind != " in sql
     assert "LIMIT" in sql and "OFFSET" in sql
-    assert "ORDER BY chat_conversations.updated_at DESC" in sql
+    assert "ORDER BY chat_conversations.pinned DESC, chat_conversations.updated_at DESC" in sql
 
 
 @pytest.mark.asyncio
