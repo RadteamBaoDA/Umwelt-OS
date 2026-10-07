@@ -193,6 +193,7 @@ export function ChatSession({
   }, [conversationId, chatCtrl.activeConversationGeneration]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
+  const streamRunRef = React.useRef<((id: string, conversationId: string, isCurrentView: () => boolean) => Promise<void>) | null>(null);
   /**
    * Streams a durable response into the currently selected view and refreshes its transcript on exit.
    *
@@ -253,10 +254,18 @@ export function ChatSession({
           setActiveResponseId(null);
           setError(t('sessionExpired'));
           // Password rotation also ends the stream's old session; apiRequest dispatches bbd:unauthorized only on a real 401.
-          void apiRequest('/api/v1/auth/session').then(
-            () => { if (isCurrentView()) setError(t('errorSending')); },
-            () => undefined,
-          );
+          // A 200 probe means the session was only rotated: the durable run continues, so reattach (never resend the prompt).
+          void apiRequest('/api/v1/auth/session').then(async () => {
+            await streamPromise.catch(() => undefined);
+            if (attachedResponseStreamRef.current === streamAttachment) attachedResponseStreamRef.current = null;
+            if (!isCurrentView() || attachedResponseStreamRef.current) return;
+            setError(null);
+            setStreamingText('');
+            setStreamingCitations([]);
+            setActiveResponseId(responseId);
+            setIsStreaming(true);
+            await streamRunRef.current?.(responseId, responseConversationId, isCurrentView);
+          }).catch(() => undefined);
         }
       },
       onError: (streamError) => {
@@ -293,6 +302,7 @@ export function ChatSession({
       }
     }
   }, [queryClient, t]);
+  React.useEffect(() => { streamRunRef.current = streamResponseRun; }, [streamResponseRun]);
 
   /** Reattaches to the owner-reported durable run when this conversation surface mounts or returns. */
   React.useEffect(() => {

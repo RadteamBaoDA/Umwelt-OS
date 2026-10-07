@@ -218,6 +218,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     let eventSource: EventSource | null = null;
     let authCheckController: AbortController | null = null;
     let retryDelay = 1000;
+    let lastAuthExpiredAt = 0;
     setBarrierGeneration(null);
     setStatus('connecting');
     /** Checks whether asynchronous stream work still belongs to the active auth generation. */
@@ -534,7 +535,11 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       stream.addEventListener('auth_expired', () => {
         if (!ownControlEvent()) return;
         // Password rotation also ends this stream's old session; the snapshot probe dispatches bbd:unauthorized only on a real 401.
-        resync(true);
+        // Repeated auth_expired within 5s is delayed so a misbehaving server cannot drive a tight resync loop.
+        const wait = Date.now() - lastAuthExpiredAt < 5000 ? 5000 : 0;
+        lastAuthExpiredAt = Date.now();
+        if (wait) window.setTimeout(() => { if (ownControlEvent()) resync(true); }, wait);
+        else resync(true);
       });
       stream.addEventListener('connection_unavailable', () => {
         if (!ownControlEvent()) return;
