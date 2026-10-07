@@ -452,3 +452,37 @@ class TestCitationSynthesisAndValidation:
         assert res.has_sufficient_evidence is True
         assert len(res.citations) == 1
         assert res.answer == "Deployment succeeded on Tuesday."
+
+
+class TestDayScopedTemporalContext:
+    """A day-scoped chat must build a valid half-open TimelineQuery and return temporal context."""
+
+    @pytest.mark.asyncio
+    async def test_day_scope_returns_temporal_context(self) -> None:
+        from datetime import date, timedelta
+        from types import SimpleNamespace
+
+        from modules.chat import retrieval
+        from modules.chat.schemas import AnswerContextRequest
+
+        seen = []
+
+        async def fake_list_timeline(_session, query, limit):
+            seen.append(query)
+            event = SimpleNamespace(
+                id=uuid4(), title="Meeting", type="note", started_at=datetime(2026, 10, 7, tzinfo=UTC),
+                summary="s", evidence=[],
+            )
+            return SimpleNamespace(items=[event])
+
+        day = date(2026, 10, 7)
+        request = AnswerContextRequest(query="what happened", date_context=day)
+        with (
+            patch.object(retrieval.search_public, "search", AsyncMock(side_effect=RuntimeError("skip"))),
+            patch.object(retrieval.timeline_public, "list_timeline", fake_list_timeline),
+            patch.object(retrieval.documents_public, "read_chat_evidence_chunks", AsyncMock(return_value=[])),
+            patch.object(retrieval, "_apply_configured_reranking", AsyncMock(return_value=([], "skipped", []))),
+        ):
+            ctx = await retrieval.build_context(MagicMock(), MagicMock(), MagicMock(), MagicMock(), request)
+        assert (seen[0].date_from, seen[0].date_to) == (day, day + timedelta(days=1))
+        assert len(ctx.temporal_summaries) == 1

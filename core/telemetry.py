@@ -128,6 +128,26 @@ def redact_mapping(value: Any, _depth: int = 0) -> Any:
     return value
 
 
+def _stable_record(record: logging.LogRecord, redacted: str) -> tuple[str, Any]:
+    """Return (msg, args) whose rendering holds no secret yet keeps the positional shape formatters unpack.
+
+    uvicorn's AccessFormatter needs the 5-tuple, so mask one str arg at a time until the rendered line is
+    redaction-stable; fall back to the fully collapsed string with no args.
+    """
+    args = record.args
+    if isinstance(record.msg, str) and isinstance(args, tuple):
+        for i, item in enumerate(args):
+            if isinstance(item, str):
+                trial = (*args[:i], _MASK, *args[i + 1:])
+                try:
+                    text = record.msg % trial
+                except (TypeError, ValueError):
+                    continue
+                if redact_text(text) == text:
+                    return record.msg, trial
+    return redacted, None
+
+
 def install_log_redaction() -> None:
     """Scrub messages, extra fields, exception text and trace IDs before handlers see records."""
     if getattr(logging.Logger.makeRecord, "_bbd_redacting", False):
@@ -145,13 +165,18 @@ def install_log_redaction() -> None:
             if isinstance(record.args, Mapping):
                 record.args = redact_mapping(record.args)
             elif isinstance(record.args, tuple):
-                record.args = tuple(redact_mapping(item) for item in record.args)
+                # Redact by value: freeze non-primitives to their redacted str so a later __str__/__repr__
+                # call by a handler can never emit text that was not checked here.
+                record.args = tuple(
+                    item if isinstance(item, (int, float, bool, type(None)))
+                    else redact_text(item) if isinstance(item, str)
+                    else redact_text(str(redact_mapping(item)))
+                    for item in record.args
+                )
             message = record.getMessage()
             redacted = redact_text(message)
-            # Args were redacted individually above; keep the template and args when the formatted
-            # text is unchanged so formatters that unpack record.args (uvicorn access log) still work.
             if redacted != message or not isinstance(record.msg, str):
-                record.msg, record.args = redacted, None
+                record.msg, record.args = _stable_record(record, redacted)
         except Exception:  # noqa: BLE001 - formatting faults must not fail the caller
             record.msg, record.args = "[unformattable log message]", None
         # Keep each field name attached so secret/content key rules apply at the record boundary.

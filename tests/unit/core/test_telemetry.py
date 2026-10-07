@@ -272,3 +272,40 @@ class TestRedactedRecordsStayFormattable:
         record = self._record("hello %s", ("world",))
         assert record.args == ("world",)
         assert logging.Formatter("%(message)s").format(record) == "hello world"
+
+
+class TestRedactionStableRecords:
+    """Collapse-triggering paths must stay formattable by uvicorn's real config; args are frozen by value."""
+
+    def _record(self, msg: str, args: tuple[Any, ...]) -> logging.LogRecord:
+        telemetry.install_log_redaction()
+        return logging.getLogger("uvicorn.access").makeRecord(
+            "uvicorn.access", logging.INFO, __file__, 1, msg, args, None
+        )
+
+    def test_cookie_path_formats_with_real_uvicorn_config(self) -> None:
+        from uvicorn.config import LOGGING_CONFIG
+        from uvicorn.logging import AccessFormatter
+
+        record = self._record(
+            '%s - "%s %s HTTP/%s" %d',
+            ("127.0.0.1:1", "GET", "/?cookie=SECRET&authorization=Bearer x", "1.1", 200),
+        )
+        cfg = LOGGING_CONFIG["formatters"]["access"]
+        out = AccessFormatter(cfg["fmt"], use_colors=False).format(record)
+        assert "GET" in out and "200" in out
+        assert "SECRET" not in out and "Bearer x" not in out
+        assert "SECRET" not in record.getMessage()
+
+    def test_non_str_args_are_frozen_by_value(self) -> None:
+        class Odd:
+            def __str__(self) -> str:
+                return "fine"
+
+            def __repr__(self) -> str:
+                return "token=SECRETVALUE123456"
+
+        record = self._record("obj %s", (Odd(),))
+        rendered = logging.Formatter("%(message)s").format(record)
+        assert "SECRETVALUE123456" not in rendered
+        assert "SECRETVALUE123456" not in repr(record.args)
