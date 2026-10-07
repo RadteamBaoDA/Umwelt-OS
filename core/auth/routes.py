@@ -378,29 +378,42 @@ async def reauthenticate(
     await session.commit()
 
 
-@router.post("/password", status_code=204)
+@router.post("/password", response_model=AuthState)
 async def change_password(
     request: Request,
+    response: Response,
     body: ChangePasswordRequest,
     auth_session: Annotated[AuthSession, Depends(require_owner_write)],
     session: Annotated[AsyncSession, Depends(get_session)],
     redis: Annotated[Redis, Depends(get_auth_redis)],
     csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
-) -> None:
-    """Verify the current password, store the new hash, and revoke every other owner session."""
-    await _allow_attempt(request, redis, "password")
+) -> AuthState:
+    """Verify the current password, store the new hash, revoke every owner session, and issue a fresh one."""
+    settings: Settings = request.app.state.settings
+    # Same bucket as reauthenticate: both are password-guess oracles for a stolen session.
+    await _allow_attempt(request, redis, "reauthenticate")
     owner, auth_session = await _lock_owner_session(request, session, auth_session, csrf_token)
     if not await asyncio.to_thread(verify_password, owner.password_hash, body.currentPassword):
         raise HTTPException(status_code=403, detail="Password is incorrect")
+    if await asyncio.to_thread(verify_password, owner.password_hash, body.newPassword):
+        raise HTTPException(status_code=422, detail="New password must differ from the current password")
     owner.password_hash = await asyncio.to_thread(hash_password, body.newPassword)
-    auth_session.reauthenticated_at = datetime.now(UTC)
-    revoked = await session.execute(
-        delete(AuthSession).where(
-            AuthSession.owner_id == owner.id, AuthSession.token_hash != auth_session.token_hash
+    revoked = await session.execute(delete(AuthSession).where(AuthSession.owner_id == owner.id))
+    session_token = secrets.token_urlsafe(32)
+    next_csrf, csrf_cookie = _new_csrf(settings)
+    session.add(
+        AuthSession(
+            token_hash=_hash(session_token),
+            owner_id=owner.id,
+            csrf_hash=_hash(next_csrf),
+            reauthenticated_at=datetime.now(UTC),
+            expires_at=datetime.now(UTC) + timedelta(hours=settings.session_lifetime_hours),
         )
     )
     await session.commit()
-    logger.info("owner password changed; other sessions revoked: %s", getattr(revoked, "rowcount", 0))
+    _issue_auth_session(settings, response, request, session_token, csrf_cookie)
+    logger.info("owner password changed; sessions rotated, revoked: %s", getattr(revoked, "rowcount", 0))
+    return AuthState(csrfToken=next_csrf)
 
 
 @router.post("/google/start", response_model=GoogleStartResponse)
