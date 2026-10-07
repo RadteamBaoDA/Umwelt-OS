@@ -50,28 +50,33 @@ async def test_password_change_revokes_other_session_and_old_password() -> None:
             "/api/v1/auth/login", headers={"Origin": origin, "X-CSRF-Token": csrf}, json={"password": password}
         )
 
+    async def restore(client: AsyncClient) -> None:
+        # Best effort: put the shared fixture password back if the rotated one is live.
+        relogin = await login(client, new)
+        if relogin.status_code == 200:
+            await client.post(
+                "/api/v1/auth/password",
+                headers={"Origin": origin, "X-CSRF-Token": relogin.json()["csrfToken"]},
+                json={"currentPassword": new, "newPassword": old},
+            )
+
     async with AsyncClient(base_url=base_url) as first, AsyncClient(base_url=base_url) as second:
-        csrf = (await login(first, old)).json()["csrfToken"]
-        assert (await login(second, old)).status_code == 200
-        changed = await first.post(
-            "/api/v1/auth/password",
-            headers={"Origin": origin, "X-CSRF-Token": csrf},
-            json={"currentPassword": old, "newPassword": new},
-        )
-        assert changed.status_code == 204
-        assert (await first.get("/api/v1/auth/session")).status_code == 200
-        assert changed.json()["csrfToken"] != csrf
-        assert (await second.get("/api/v1/auth/session")).status_code == 401
-        assert (await login(second, old)).status_code == 401
-        relogin = await login(second, new)
-        assert relogin.status_code == 200
-        # Restore the shared fixture password for later tests.
-        restored = await second.post(
-            "/api/v1/auth/password",
-            headers={"Origin": origin, "X-CSRF-Token": relogin.json()["csrfToken"]},
-            json={"currentPassword": new, "newPassword": old},
-        )
-        assert restored.status_code == 204
+        try:
+            csrf = (await login(first, old)).json()["csrfToken"]
+            assert (await login(second, old)).status_code == 200
+            changed = await first.post(
+                "/api/v1/auth/password",
+                headers={"Origin": origin, "X-CSRF-Token": csrf},
+                json={"currentPassword": old, "newPassword": new},
+            )
+            assert changed.status_code == 200
+            assert (await first.get("/api/v1/auth/session")).status_code == 200
+            assert changed.json()["csrfToken"] != csrf
+            assert (await second.get("/api/v1/auth/session")).status_code == 401
+            assert (await login(second, old)).status_code == 401
+            assert (await login(second, new)).status_code == 200
+        finally:
+            await restore(second)
 
 
 @pytest.mark.asyncio
@@ -86,30 +91,36 @@ async def test_password_change_concurrent_with_login_leaves_consistent_state() -
             "/api/v1/auth/login", headers={"Origin": origin, "X-CSRF-Token": csrf}, json={"password": password}
         )
 
-    async with AsyncClient(base_url=base_url) as owner, AsyncClient(base_url=base_url) as racer:
-        csrf = (await login(owner, old)).json()["csrfToken"]
-        change, raced = await asyncio.gather(
-            owner.post(
-                "/api/v1/auth/password",
-                headers={"Origin": origin, "X-CSRF-Token": csrf},
-                json={"currentPassword": old, "newPassword": new},
-            ),
-            login(racer, old),
-        )
-        assert change.status_code in (200, 409)
-        assert raced.status_code in (200, 401, 409)
-        if change.status_code == 200:
-            # Committed change: the old password never works again and any raced session is revoked.
-            assert (await racer.get("/api/v1/auth/session")).status_code == 401
-            assert (await login(racer, old)).status_code == 401
-            relogin = await login(racer, new)
-            assert relogin.status_code == 200
-            restored = await racer.post(
+    async def restore(client: AsyncClient) -> None:
+        relogin = await login(client, new)
+        if relogin.status_code == 200:
+            await client.post(
                 "/api/v1/auth/password",
                 headers={"Origin": origin, "X-CSRF-Token": relogin.json()["csrfToken"]},
                 json={"currentPassword": new, "newPassword": old},
             )
-            assert restored.status_code == 200
-        else:
-            # Lock contention rejected the change: the old password must still be intact.
-            assert (await login(racer, old)).status_code == 200
+
+    async with AsyncClient(base_url=base_url) as owner, AsyncClient(base_url=base_url) as racer:
+        try:
+            csrf = (await login(owner, old)).json()["csrfToken"]
+            change, raced = await asyncio.gather(
+                owner.post(
+                    "/api/v1/auth/password",
+                    headers={"Origin": origin, "X-CSRF-Token": csrf},
+                    json={"currentPassword": old, "newPassword": new},
+                ),
+                login(racer, old),
+            )
+            assert change.status_code in (200, 409)
+            assert raced.status_code in (200, 401, 409)
+            if change.status_code == 200:
+                # Committed change: the rotated cookie works, the old password never does, raced sessions are revoked.
+                assert (await owner.get("/api/v1/auth/session")).status_code == 200
+                assert (await racer.get("/api/v1/auth/session")).status_code == 401
+                assert (await login(racer, old)).status_code == 401
+                assert (await login(racer, new)).status_code == 200
+            else:
+                # Lock contention rejected the change: the old password must still be intact.
+                assert (await login(racer, old)).status_code == 200
+        finally:
+            await restore(racer)

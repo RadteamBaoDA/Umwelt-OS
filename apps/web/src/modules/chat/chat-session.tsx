@@ -26,6 +26,7 @@ import {
   type PendingSpecialistRun,
 } from '@/core/app-shell/chat-controller';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
+import { apiRequest } from '@/core/api';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { cancelAgentRun, getAgentProfiles, getAgentRun, listAgentRuns, startAgentRun } from '@/modules/agents/api';
@@ -251,6 +252,11 @@ export function ChatSession({
           setIsStreaming(false);
           setActiveResponseId(null);
           setError(t('sessionExpired'));
+          // Password rotation also ends the stream's old session; apiRequest dispatches bbd:unauthorized only on a real 401.
+          void apiRequest('/api/v1/auth/session').then(
+            () => { if (isCurrentView()) setError(t('errorSending')); },
+            () => undefined,
+          );
         }
       },
       onError: (streamError) => {

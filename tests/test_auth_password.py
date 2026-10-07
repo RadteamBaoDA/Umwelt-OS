@@ -1,8 +1,11 @@
+import time
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+import core.auth.routes as auth_routes
 from apps.api.main import create_app
 from core.auth.models import AuthSession
 from core.auth.routes import _hash, get_auth_redis
@@ -96,15 +99,20 @@ async def test_change_password_rotates_session_and_swaps_credentials() -> None:
 
 @pytest.mark.asyncio
 async def test_change_password_rejects_unchanged_password() -> None:
-    client, csrf = await _login(MemoryAuthStore())
+    store = MemoryAuthStore()
+    client, csrf = await _login(store)
     response = await client.post(
         "/api/v1/auth/password", headers={"Origin": ORIGIN, "X-CSRF-Token": csrf}, json=_body(new=OLD)
     )
     assert response.status_code == 422
+    assert "New password must differ from the current password" in response.text
+    assert verify_password(store.owner.password_hash, OLD)
 
 
 @pytest.mark.asyncio
-async def test_change_password_is_rate_limited() -> None:
+async def test_change_password_is_rate_limited(monkeypatch: pytest.MonkeyPatch) -> None:
+    frozen = time.time()
+    monkeypatch.setattr(auth_routes, "time", SimpleNamespace(time=lambda: frozen))
     client, csrf = await _login(MemoryAuthStore())
     headers = {"Origin": ORIGIN, "X-CSRF-Token": csrf}
     codes = [

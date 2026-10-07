@@ -533,8 +533,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       stream.addEventListener('resync_required', () => { if (ownControlEvent()) resync(true); });
       stream.addEventListener('auth_expired', () => {
         if (!ownControlEvent()) return;
-        closeStream();
-        window.dispatchEvent(new Event('bbd:unauthorized'));
+        // Password rotation also ends this stream's old session; the snapshot probe dispatches bbd:unauthorized only on a real 401.
+        resync(true);
       });
       stream.addEventListener('connection_unavailable', () => {
         if (!ownControlEvent()) return;
