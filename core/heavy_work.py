@@ -23,6 +23,16 @@ HEAVY_JOB_MAX_TRIES = 60
 HEAVY_LOCK_KEY = 732941801
 
 
+async def to_thread_joined[T](fn: Callable[..., T], /, *args: object) -> T:
+    """Run fn in a thread; on cancellation wait for the thread to finish before re-raising, so a heavy slot is never released under live host work."""
+    task = asyncio.ensure_future(asyncio.to_thread(fn, *args))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        await asyncio.wait({task})
+        raise
+
+
 class HeavyWorkBusy(TimeoutError):
     """Indicate cross-process contention before domain work is claimed."""
 
