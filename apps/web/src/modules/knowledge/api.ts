@@ -43,7 +43,7 @@ export type GadgetDocumentProjection = {
   document_id: string; document_version_id: string; version_number: number; source_id: string;
   title: string; canonical_url: string | null; published_at: string | null; observed_at: string;
   excerpt: string; metadata_is_version_snapshot: boolean;
-  read_at: string | null; bookmarked_at: string | null;
+  read_at: string | null; bookmarked_at: string | null; dismissed_at: string | null;
   provider_metadata: {
     provider: string;
     source_fields: Record<string, unknown>;
@@ -87,10 +87,10 @@ export function listGadgetDocumentProjections(sourceIds: string[], channelIds: s
 export function setGadgetDocumentInteraction(
   documentId: string,
   versionNumber: number,
-  payload: { read?: boolean; bookmarked?: boolean },
+  payload: { read?: boolean; bookmarked?: boolean; dismissed?: boolean },
   csrfToken: string,
 ) {
-  return apiRequest<{ document_version_id: string; read_at: string | null; bookmarked_at: string | null }>(
+  return apiRequest<{ document_version_id: string; read_at: string | null; bookmarked_at: string | null; dismissed_at: string | null }>(
     `/api/v1/documents/${documentId}/versions/${versionNumber}/interaction`,
     { method: 'PUT', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify(payload) },
   );

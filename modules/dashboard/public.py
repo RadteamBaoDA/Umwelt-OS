@@ -206,6 +206,8 @@ async def evaluate_gadget_highlights(
     source_ids = tuple(definition_read.source_ids[:32])
     if not source_ids:
         return []
+    # "Not relevant" scope: hides versions from dashboard feed gadgets and this highlights view only
+    # (include_dismissed stays False). Notifications, brief, search and chat are unchanged.
     projection_page = await documents.list_gadget_document_projections(
         session, owner_id=owner_id, source_ids=source_ids, limit=100,
     )

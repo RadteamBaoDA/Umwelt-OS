@@ -89,7 +89,10 @@ class DocumentInteraction(Base):
     """Persist owner read and bookmark state against one immutable document version."""
     __tablename__ = "document_interactions"
     __table_args__ = (
-        CheckConstraint("read_at IS NOT NULL OR bookmarked_at IS NOT NULL", name="ck_document_interactions_nonempty"),
+        CheckConstraint(
+            "read_at IS NOT NULL OR bookmarked_at IS NOT NULL OR dismissed_at IS NOT NULL",
+            name="ck_document_interactions_nonempty",
+        ),
         Index("ix_document_interactions_owner_read", "owner_id", "read_at"),
     )
 
@@ -99,6 +102,7 @@ class DocumentInteraction(Base):
     )
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     bookmarked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    dismissed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
 

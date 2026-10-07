@@ -431,10 +431,19 @@ async def export_page(
                 NormalizedVersionProvenance.canonical_url.label("provenance_canonical_url"),
                 NormalizedVersionProvenance.published_at.label("provenance_published_at"),
                 NormalizedVersionProvenance.content_type.label("provenance_content_type"),
+                # Interaction state is read live (best-effort), not covered by snapshot_at/fences: a
+                # read/save/hide between export pages can yield a mixed view. Accepted by design.
+                DocumentInteraction.read_at.label("interaction_read_at"),
+                DocumentInteraction.bookmarked_at.label("interaction_bookmarked_at"),
+                DocumentInteraction.dismissed_at.label("interaction_dismissed_at"),
             )
             .join(Source, Source.id == Document.source_id)
             .join(DocumentVersion, DocumentVersion.document_id == Document.id)
             .outerjoin(NormalizedVersionProvenance, NormalizedVersionProvenance.document_version_id == DocumentVersion.id)
+            .outerjoin(DocumentInteraction, and_(
+                DocumentInteraction.document_version_id == DocumentVersion.id,
+                DocumentInteraction.owner_id == owner_id,
+            ))
             .where(
                 *_document_export_scope(snapshot_at), DocumentVersion.created_at <= snapshot_at,
                 Document.source_id.in_(sources.export_eligible_source_ids()),
@@ -468,6 +477,9 @@ async def export_page(
                     is_current_version=version_row["version_number"] == version_row["document_current_version"],
                     content=version_row["version_content"], observed_at=version_row["version_observed_at"],
                     created_at=version_row["version_created_at"], provenance=safe_provenance,
+                    read_at=version_row["interaction_read_at"],
+                    bookmarked_at=version_row["interaction_bookmarked_at"],
+                    dismissed_at=version_row["interaction_dismissed_at"],
                 )
                 item_bytes = _export_item_bytes(version_item)
                 proposed_bytes = payload_bytes + item_bytes + (1 if items else 0)
@@ -1422,7 +1434,7 @@ FEED_MAX_WINDOW = timedelta(days=366)
 async def list_gadget_document_projections(
     session: AsyncSession, *, owner_id: int, source_ids: tuple[UUID, ...], limit: int = 50,
     cursor: str | None = None, channel_ids: tuple[str, ...] | None = None,
-    language: str | None = None, since: datetime | None = None,
+    language: str | None = None, since: datetime | None = None, include_dismissed: bool = False,
 ) -> GadgetDocumentProjectionList:
     """Return active, current, ready source records as a small dashboard projection page.
 
@@ -1445,11 +1457,12 @@ async def list_gadget_document_projections(
         )
     )).all() if version_ids else []
     interactions = {row.document_version_id: row for row in interaction_rows}
+    # Hide-only: filtered after the privacy-fenced projection page, so a page may be short (the cursor still advances).
     items = [
-        _as_gadget_document_projection(
-            item, interactions.get(item.document_version_id),
-        )
+        _as_gadget_document_projection(item, interactions.get(item.document_version_id))
         for item in projections
+        if include_dismissed
+        or not (interactions.get(item.document_version_id) and interactions[item.document_version_id].dismissed_at)
     ]
     return GadgetDocumentProjectionList(items=items, next_cursor=next_cursor)
 
@@ -1497,6 +1510,7 @@ def _as_gadget_document_projection(
         metadata_is_version_snapshot=item.metadata_is_version_snapshot,
         read_at=interaction.read_at if interaction else None,
         bookmarked_at=interaction.bookmarked_at if interaction else None,
+        dismissed_at=interaction.dismissed_at if interaction else None,
     )
 
 
@@ -1586,23 +1600,25 @@ async def set_gadget_document_interaction(
     now = datetime.now(UTC)
     read_at = (now if payload.read else None) if payload.read is not None else (row.read_at if row else None)
     bookmarked_at = (now if payload.bookmarked else None) if payload.bookmarked is not None else (row.bookmarked_at if row else None)
-    if read_at is None and bookmarked_at is None:
+    dismissed_at = (now if payload.dismissed else None) if payload.dismissed is not None else (row.dismissed_at if row else None)
+    if read_at is None and bookmarked_at is None and dismissed_at is None:
         if row is not None:
             await session.delete(row)
     elif row is None:
         row = DocumentInteraction(
             owner_id=owner_id, document_version_id=projection.document_version_id,
-            read_at=read_at, bookmarked_at=bookmarked_at,
+            read_at=read_at, bookmarked_at=bookmarked_at, dismissed_at=dismissed_at,
         )
         session.add(row)
     else:
         row.read_at = read_at
         row.bookmarked_at = bookmarked_at
+        row.dismissed_at = dismissed_at
         row.updated_at = now
     await session.commit()
     return GadgetDocumentInteractionRead(
         document_version_id=projection.document_version_id,
-        read_at=read_at, bookmarked_at=bookmarked_at,
+        read_at=read_at, bookmarked_at=bookmarked_at, dismissed_at=dismissed_at,
     )
 
 
