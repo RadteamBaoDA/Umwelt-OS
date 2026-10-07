@@ -308,6 +308,69 @@ class TestRedactionStableRecords:
         assert "SECRETVALUE" not in out
         assert "SECRETVALUE" not in record.getMessage()
 
+    def test_decimal_args_stay_formattable(self) -> None:
+        from decimal import Decimal
+
+        record = self._record("amount %.2f count %d", (Decimal("12.345"), Decimal(3)))
+        assert record.getMessage() == "amount 12.35 count 3"
+
+    def test_fraction_arg_is_frozen(self) -> None:
+        from fractions import Fraction
+
+        record = self._record("ratio %s", (Fraction(1, 3),))
+        assert isinstance(record.args, tuple) and isinstance(record.args[0], str)
+        assert record.getMessage() == "ratio 1/3"
+
+    def test_int_and_float_subclass_own_str_never_runs(self) -> None:
+        class Evil(int):
+            calls = 0
+
+            def __str__(self) -> str:
+                Evil.calls += 1
+                return "ok" if Evil.calls == 1 else "api_key=sk-abcdefghijklmnop1234"
+
+            __repr__ = __str__
+
+        class EvilF(float):
+            def __str__(self) -> str:
+                return "api_key=sk-abcdefghijklmnop1234"
+
+        record = self._record("a %s b %d c %.1f d %s", (Evil(1), Evil(2), EvilF(1.5), EvilF(2.5)))
+        out = logging.Formatter("%(message)s").format(record)
+        assert "sk-abcdefghijklmnop1234" not in out
+        assert logging.Formatter("%(message)s").format(record) == out
+        assert out == "a 1 b 2 c 1.5 d 2.5"
+
+    def test_mapping_args_are_frozen_by_value(self) -> None:
+        class Evil(int):
+            calls = 0
+
+            def __str__(self) -> str:
+                Evil.calls += 1
+                return "ok" if Evil.calls == 1 else "api_key=sk-abcdefghijklmnop1234"
+
+            __repr__ = __str__
+
+        record = self._record("%(a)s %(a)d", ({"a": Evil(1)},))
+        out = logging.Formatter("%(message)s").format(record)
+        assert "sk-abcdefghijklmnop1234" not in out
+        assert logging.Formatter("%(message)s").format(record) == out
+        assert out == "1 1"
+
+    def test_mapping_float_arg_still_formats(self) -> None:
+        record = self._record("%(b).1f %(n)s", ({"b": 1.25, "n": {"x": 1}},))
+        assert record.getMessage() == "1.2 {'x': 1}"
+
+    def test_decimal_subclass_with_custom_str_is_still_frozen(self) -> None:
+        from decimal import Decimal
+
+        class Sneaky(Decimal):
+            def __str__(self) -> str:
+                return "api_key=sk-abcdefghijklmnop1234"
+
+        record = self._record("v %s", (Sneaky("1"),))
+        assert "sk-abcdefghijklmnop1234" not in logging.Formatter("%(message)s").format(record)
+
     def test_non_str_args_are_frozen_by_value(self) -> None:
         class Odd:
             def __str__(self) -> str:
