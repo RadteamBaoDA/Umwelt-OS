@@ -14,9 +14,10 @@ import binascii
 import hashlib
 import json
 from collections.abc import Collection, Mapping, Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import HTTPException
 from sqlalchemy import ColumnElement, delete, func, select, text
@@ -89,6 +90,7 @@ from modules.dashboard.schemas import (
     PresetPreviewRequest,
     RendererRead,
 )
+from modules.settings import public as settings_public
 from modules.sources import public as sources
 from modules.sources.schemas import GadgetSourceSelectionPage
 
@@ -106,6 +108,13 @@ PREVIEW_MAX_PAGES = 2  # 200 current versions at most
 PREVIEW_MAX_MATCHES = 100
 
 
+def _owner_tzinfo(name: str) -> tzinfo:
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        return UTC
+
+
 async def evaluate_gadget_highlights(
     session: AsyncSession, owner_id: int, definition_id: UUID, *, emit_notifications: bool = False,
 ) -> list[DashboardHighlightRead]:
@@ -116,7 +125,7 @@ async def evaluate_gadget_highlights(
     Highlight notification titles carry exact private Document/version provenance; Notifications
     rechecks the selected current version and keeps that provenance out of its public DTO.
     """
-    from modules.dashboard.highlights import compile_rules, match_compiled
+    from modules.dashboard.highlights import compile_rules, match_compiled, notification_allowed
     from modules.dashboard.models import GadgetHighlightProgress
     from modules.dashboard.schemas import HighlightRule
     from modules.knowledge.documents import public as documents
@@ -149,7 +158,7 @@ async def evaluate_gadget_highlights(
         if progress is None:
             progress = GadgetHighlightProgress(
                 definition_id=definition.id, definition_revision=definition.revision,
-                rules_fingerprint=rules_fingerprint,
+                rules_fingerprint=rules_fingerprint, rule_last_notified={},
             )
             session.add(progress)
             await session.flush()
@@ -161,6 +170,7 @@ async def evaluate_gadget_highlights(
             progress.rules_fingerprint = rules_fingerprint
             progress.cursor_created_at = None
             progress.cursor_version_id = None
+            progress.rule_last_notified = {}
         compiled = compile_rules(rules, await _rule_topic_terms(session, owner_id, rules))
         page = await documents.list_gadget_highlight_projection_page(
             session, source_ids=source_ids, limit=HIGHLIGHT_SCAN_PAGE_LIMIT,
@@ -177,18 +187,33 @@ async def evaluate_gadget_highlights(
         progress.cursor_created_at = page.cursor_created_at if page.has_more else None
         progress.cursor_version_id = page.cursor_version_id if page.has_more else None
 
+        # Delivery policy (T6b): reads only the already-locked progress row plus an unlocked
+        # preferences SELECT, so the definition -> progress lock order is unchanged.
+        now = datetime.now(UTC)
+        rules_by_id = {rule.id: rule for rule in rules}
+        last_notified = {
+            key: datetime.fromisoformat(value) for key, value in progress.rule_last_notified.items()
+            if UUID(key) in rules_by_id
+        }
+        tz: tzinfo = UTC
+        if any(rule.quiet_start for rule in rules):
+            tz = _owner_tzinfo((await settings_public.read_owner_preferences(session)).timezone)
         matches: list[DashboardHighlightRead] = []
         for item in page.items:
             if item_scope and str(item.document_id) not in item_scope:
                 continue
             for match in match_compiled(item.excerpt, compiled, source_id=item.source_id):
+                deliver = match.notify and notification_allowed(
+                    rules_by_id[match.rule_id], now, tz, last_notified.get(str(match.rule_id)),
+                )
                 matches.append(DashboardHighlightRead(
                     document_id=item.document_id, document_version_id=item.document_version_id,
                     source_id=item.source_id, title=item.title, observed_at=item.observed_at,
                     rule_id=match.rule_id, matched_keywords=list(match.matched_keywords),
                     severity=match.severity, notify=match.notify, reason=match.reason,
                 ))
-                if match.notify:
+                if deliver:
+                    last_notified[str(match.rule_id)] = now
                     await emit(session, owner_id, NotificationEmit(
                         dedupe_key=(
                             f"highlight:{definition.id}:{definition.revision}:"
@@ -202,6 +227,7 @@ async def evaluate_gadget_highlights(
                     ), evidence=NotificationEvidence(
                         document_id=item.document_id, document_version_id=item.document_version_id,
                     ))
+        progress.rule_last_notified = {key: value.isoformat() for key, value in last_notified.items()}
         # Progress and notifications form one transaction: a retry can neither skip an alert nor
         # advance beyond a page whose notifications were not committed.
         await session.commit()

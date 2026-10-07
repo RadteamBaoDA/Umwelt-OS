@@ -29,3 +29,20 @@ def test_dismissed_migration_downgrade_sql_drops_dismissed_only_rows() -> None:
     delete = out.index("DELETE FROM document_interactions WHERE read_at IS NULL AND bookmarked_at IS NULL")
     assert delete < out.index("DROP COLUMN dismissed_at")
     assert "read_at IS NOT NULL OR bookmarked_at IS NOT NULL)" in out
+
+
+def test_rule_delivery_migration_adds_and_drops_rule_last_notified() -> None:
+    up = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade",
+         "r15_document_dismissed:r15_highlight_rule_delivery", "--sql"],
+        check=False, capture_output=True, text=True,
+    )
+    assert up.returncode == 0, up.stderr
+    assert "ALTER TABLE gadget_highlight_progress ADD COLUMN rule_last_notified JSONB DEFAULT '{}' NOT NULL" in up.stdout
+    down = subprocess.run(
+        [sys.executable, "-m", "alembic", "downgrade",
+         "r15_highlight_rule_delivery:r15_document_dismissed", "--sql"],
+        check=False, capture_output=True, text=True,
+    )
+    assert down.returncode == 0, down.stderr
+    assert "DROP COLUMN rule_last_notified" in down.stdout

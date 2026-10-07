@@ -60,3 +60,27 @@ async def test_preview_matches_seeded_item_without_notifying_and_reports_dead_to
 async def test_usage_unknown_definition_is_404(owner_client: AsyncClient) -> None:
     response = await owner_client.get(f"/api/v1/gadget-definitions/{uuid4()}/usage")
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_rule_delivery_bounds_are_enforced_by_the_api(
+    ready_owner_client: AsyncClient,
+) -> None:
+    client = ready_owner_client
+    source = await client.post("/api/v1/sources", json={"type": "manual", "name": f"delivery {uuid4().hex[:8]}"})
+    source.raise_for_status()
+    rule = {"id": str(uuid4()), "keywords": ["rates"], "severity": "warning", "notify": True}
+    base = {"name": "delivery", "renderer": "highlights", "source_ids": [source.json()["id"]]}
+    too_long = await client.post("/api/v1/gadget-definitions", json={
+        **base, "highlight_rules": [{**rule, "cooldown_minutes": 10081}],
+    })
+    assert too_long.status_code == 422
+    ok = await client.post("/api/v1/gadget-definitions", json={
+        **base, "highlight_rules": [{
+            **rule, "cooldown_minutes": 60, "expires_at": "2099-01-01T00:00:00Z",
+            "quiet_start": "22:00", "quiet_end": "07:00",
+        }],
+    })
+    assert ok.status_code in (200, 201)
+    stored = ok.json()["highlight_rules"][0]
+    assert stored["cooldown_minutes"] == 60 and stored["quiet_start"] == "22:00"

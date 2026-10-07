@@ -120,6 +120,10 @@ class GadgetHighlightProgress(Base):
     rules_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
     cursor_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     cursor_version_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    # rule_id -> ISO instant of the last notification; reset when the rules fingerprint changes.
+    rule_last_notified: Mapped[dict[str, str]] = mapped_column(
+        JSONB, nullable=False, server_default="{}"
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
