@@ -1,5 +1,7 @@
 """P14-T1 acceptance: API-engine DB timeouts and oversized-upload rejection (needs the disposable Compose harness)."""
 
+import asyncio
+import json
 import os
 import tempfile
 from collections.abc import AsyncIterator
@@ -49,11 +51,29 @@ async def test_api_engine_sessions_carry_configured_timeouts(committed_engine: A
 
 @pytest.mark.asyncio
 async def test_running_api_rejects_30_mib_upload_with_413_before_auth(anonymous_client: AsyncClient) -> None:
-    response = await anonymous_client.post(
-        UPLOAD, files={"file": ("big.txt", b"x" * THIRTY_MIB, "text/plain")}, timeout=60
-    )
-    assert response.status_code == 413  # not 401: the cap runs before authentication
-    assert response.json() == {"detail": "Request body too large"}
+    # The server answers 413 and closes as soon as it sees the declared size, so a client still
+    # streaming 30 MiB gets a connection reset. Declare the size, send only a prefix, then read.
+    url = anonymous_client.base_url
+    reader, writer = await asyncio.open_connection(url.host, url.port or 80)
+    try:
+        crlf = "\r\n"
+        writer.write(
+            (
+                f"POST {UPLOAD} HTTP/1.1{crlf}Host: {url.host}{crlf}"
+                f"Content-Type: multipart/form-data; boundary=b{crlf}Content-Length: {THIRTY_MIB}{crlf}{crlf}"
+            ).encode()
+            + b"x" * (64 * 1024)
+        )
+        await writer.drain()
+        raw_head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 30)
+        status_line, _, headers = raw_head.partition(b"\r\n")
+        assert status_line.split()[1] == b"413", status_line  # not 401: the cap runs before authentication
+        length = int(next(
+            line.split(b":", 1)[1] for line in headers.split(b"\r\n") if line.lower().startswith(b"content-length:")
+        ))
+        assert json.loads(await reader.readexactly(length)) == {"detail": "Request body too large"}
+    finally:
+        writer.close()
 
 
 @pytest.mark.asyncio
