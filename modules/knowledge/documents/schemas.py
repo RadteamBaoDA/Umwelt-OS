@@ -466,6 +466,7 @@ class GadgetDocumentProjectionRead(BaseModel):
     metadata_is_version_snapshot: bool
     read_at: datetime | None
     bookmarked_at: datetime | None
+    dismissed_at: datetime | None = None
 
 
 class GadgetDocumentSelectionFence(BaseModel):
@@ -496,11 +497,12 @@ class GadgetDocumentInteractionPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
     read: StrictBool | None = None
     bookmarked: StrictBool | None = None
+    dismissed: StrictBool | None = None
 
     @model_validator(mode="after")
     def require_interaction_change(self) -> "GadgetDocumentInteractionPatch":
         """Require at least one state field to avoid ambiguous empty writes."""
-        if self.read is None and self.bookmarked is None:
+        if self.read is None and self.bookmarked is None and self.dismissed is None:
             raise ValueError("At least one interaction state is required")
         return self
 
@@ -511,6 +513,7 @@ class GadgetDocumentInteractionRead(BaseModel):
     document_version_id: UUID
     read_at: datetime | None
     bookmarked_at: datetime | None
+    dismissed_at: datetime | None = None
 
 
 class GadgetDocumentProjectionList(BaseModel):
@@ -657,6 +660,10 @@ class DocumentVersionExportRead(BaseModel):
     observed_at: datetime
     created_at: datetime
     provenance: DocumentExportProvenance | None = None
+    # Owner interaction state (read/saved/hidden) for this exact version.
+    read_at: datetime | None = None
+    bookmarked_at: datetime | None = None
+    dismissed_at: datetime | None = None
 
     @field_validator("content")
     @classmethod

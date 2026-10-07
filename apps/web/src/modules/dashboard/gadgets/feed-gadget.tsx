@@ -171,6 +171,9 @@ function FeedStream({
   const [sourceFilter, setSourceFilter] = useState('all');
   const [language, setLanguage] = useState('any');
   const [timeWindow, setTimeWindow] = useState('any');
+  // Optimistic "Not relevant": ids hidden locally until the server filter catches up; lastHidden powers Undo.
+  const [hiddenIds, setHiddenIds] = useState<ReadonlySet<string>>(new Set());
+  const [lastHidden, setLastHidden] = useState<SelectedTelegramIdentity[]>([]);
   const [selectedTelegram, setSelectedTelegram] = useState<Record<string, SelectedTelegramIdentity>>({});
 
   // Query documents as live feed items
@@ -195,12 +198,24 @@ function FeedStream({
     enabled: sourceIds.length > 1,
   });
   const interactionMutation = useMutation({
-    mutationFn: (change: { id: string; versionNumber: number; read?: boolean; bookmarked?: boolean }) =>
+    mutationFn: (change: { id: string; versionNumber: number; read?: boolean; bookmarked?: boolean; dismissed?: boolean }) =>
       setGadgetDocumentInteraction(change.id, change.versionNumber, {
-        read: change.read, bookmarked: change.bookmarked,
+        read: change.read, bookmarked: change.bookmarked, dismissed: change.dismissed,
       }, session.csrfToken),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: documentKeys.all }),
+    onError: (_error, change) => {
+      if (change.dismissed) setHiddenIds((current) => { const next = new Set(current); next.delete(change.id); return next; });
+    },
   });
+  const setHidden = (items: SelectedTelegramIdentity[], hidden: boolean) => {
+    setHiddenIds((current) => {
+      const next = new Set(current);
+      items.forEach((item) => (hidden ? next.add(item.documentId) : next.delete(item.documentId)));
+      return next;
+    });
+    setLastHidden(hidden ? items : []);
+    items.forEach((item) => interactionMutation.mutate({ id: item.documentId, versionNumber: item.versionNumber, dismissed: hidden }));
+  };
 
   // Transform raw documents or initial items into standard FeedStreamItem objects
   const feedItems: FeedStreamItem[] = useMemo(() => {
@@ -243,7 +258,8 @@ function FeedStream({
   );
   const needle = searchText.trim().toLowerCase();
   const displayedItems = feedItems.filter((i) =>
-    (!onlyUnread || !i.read)
+    !hiddenIds.has(i.id)
+    && (!onlyUnread || !i.read)
     && (sourceFilter === 'all' || i.sourceId === sourceFilter)
     && (!needle || `${i.title} ${i.excerpt ?? ''}`.toLowerCase().includes(needle)),
   );
@@ -367,7 +383,21 @@ function FeedStream({
             disabled={interactionMutation.isPending}
             onClick={() => selectedTelegramItems.forEach((item) => interactionMutation.mutate({ id: item.documentId, versionNumber: item.versionNumber, bookmarked: true }))}
           >{t('feedSave')}</Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="min-h-11"
+            onClick={() => { setHidden(selectedTelegramItems, true); setSelectedTelegram({}); }}
+          >{t('feedNotRelevant')}</Button>
           <Button type="button" size="sm" variant="ghost" className="min-h-11" onClick={() => setSelectedTelegram({})}>{t('feedClear')}</Button>
+        </div>
+      )}
+
+      {lastHidden.length > 0 && (
+        <div role="status" className="flex items-center gap-2 rounded-md border border-border bg-background p-2 text-xs">
+          <span>{t('feedHiddenCount', { count: lastHidden.length })}</span>
+          <Button type="button" size="sm" variant="ghost" className="min-h-11" onClick={() => setHidden(lastHidden, false)}>{t('feedUndo')}</Button>
         </div>
       )}
 

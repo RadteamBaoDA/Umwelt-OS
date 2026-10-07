@@ -119,13 +119,14 @@ async def list_dashboard_projections(
     cursor: Annotated[str | None, Query(max_length=1024)] = None,
     language: Annotated[str | None, Query(pattern=r"^[a-z]{2}$")] = None,
     since: datetime | None = None,
+    include_dismissed: bool = False,
 ) -> GadgetDocumentProjectionList:
     """Return current source-scoped records through the Documents owner projection."""
     try:
         return await public.list_gadget_document_projections(
             session, owner_id=owner.owner_id, source_ids=tuple(source_ids), limit=limit, cursor=cursor,
             channel_ids=tuple(channel_ids) if channel_ids is not None else None,
-            language=language, since=since,
+            language=language, since=since, include_dismissed=include_dismissed,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="Dashboard projection scope is invalid") from exc
