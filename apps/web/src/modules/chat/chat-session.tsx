@@ -667,7 +667,7 @@ export function ChatSession({
         </details>
       ) : null}
 
-      <ChatContextBar context={chatCtrl.context} onRemove={() => chatCtrl.setContext(null)} showAddNote={mode === 'full'} />
+      <ChatContextBar context={chatCtrl.context} onRemove={() => chatCtrl.setContext(null)} onChange={mode === 'full' ? chatCtrl.setContext : undefined} />
 
       {mode === 'full' && pendingMessageMutation && (
         <div role="status" className="flex items-center justify-between gap-3 border-b border-border bg-secondary px-4 py-2 text-xs">
