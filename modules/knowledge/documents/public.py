@@ -1367,9 +1367,8 @@ async def list_news_document_projections(
         if language not in FEED_LANGUAGES:
             raise ValueError("Language filter must be an allowlisted code")
         # Unknown (NULL) language never matches a concrete language; only "Any" (None) returns it.
-        statement = statement.where(or_(
-            func.lower(Document.language) == language, func.lower(Document.language).like(f"{language}-%"),
-        ))
+        # Stored normalized (primary subtag, lowercase) so this equality can use ix_documents_language_created_at_id.
+        statement = statement.where(Document.language == language)
     if channel_ids is not None:
         statement = statement.where(
             Source.provider == "telegram",
@@ -1401,7 +1400,22 @@ async def list_news_document_projections(
     return projections, next_cursor
 
 
+# Keep in sync with the language options in apps/web feed-gadget.tsx.
 FEED_LANGUAGES = frozenset({"en", "vi", "fr", "de", "es", "pt", "it", "ru", "ja", "ko", "zh", "id", "th"})
+
+
+def normalize_document_language(raw: object) -> str | None:
+    """Return the allowlisted primary language subtag ("en-US" -> "en") or None when unknown/invalid."""
+    if not isinstance(raw, str):
+        return None
+    primary = raw.strip().lower().replace("_", "-").split("-", 1)[0]
+    return primary if primary in FEED_LANGUAGES else None
+
+
+def _provenance_language(provenance: object) -> str | None:
+    """Extract the normalized language from ingestion provenance ``metadata.language``."""
+    metadata = provenance.get("metadata") if isinstance(provenance, dict) else None
+    return normalize_document_language(metadata.get("language") if isinstance(metadata, dict) else None)
 FEED_MAX_WINDOW = timedelta(days=366)
 
 
@@ -2262,6 +2276,7 @@ async def upsert_normalized_document(
             canonical_url=payload.canonical_url, published_at=payload.published_at,
             observed_at=payload.observed_at, current_version=0,
             content_hash=content_hash(payload.content), extraction_status="ready",
+            language=_provenance_language(payload.provenance),
         )
         session.add(document)
         await session.flush()
@@ -2367,6 +2382,7 @@ async def upsert_normalized_document(
         document.published_at = payload.published_at
         document.content_type = payload.content_type
         document.observed_at = payload.observed_at
+        document.language = _provenance_language(payload.provenance)
         document.extraction_status = "ready"
     await session.flush()
     return NormalizedDocumentResult(
@@ -2430,6 +2446,7 @@ async def select_current_world_document_version(
     document.published_at = provenance.published_at
     document.content_type = provenance.content_type
     document.observed_at = provenance.observed_at
+    document.language = _provenance_language(provenance.provenance_json)
     document.extraction_status = "ready"
     await session.flush()
     return True

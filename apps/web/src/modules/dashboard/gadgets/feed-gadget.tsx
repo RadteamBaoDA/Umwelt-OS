@@ -4,7 +4,6 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import {
   Bookmark,
   ExternalLink,
-  Eye,
   FileText,
   Newspaper,
   RotateCw,
@@ -12,10 +11,11 @@ import {
   Send,
 } from 'lucide-react';
 import Link from 'next/link';
-import { useTranslations } from 'next-intl';
+import { useLocale, useTranslations } from 'next-intl';
 import React, { useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { formatDateTime } from '@/core/i18n';
 import { safeHttpUrl } from '@/core/safe-url';
@@ -112,29 +112,32 @@ export function FeedGadget(props: FeedGadgetProps) {
   // Story clusters come from the news module; Telegram records have no story clusters.
   if (props.instance.definition.renderer === 'telegram_feed') return <FeedStream {...props} />;
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div role="tablist" aria-label={t('feedTabs')} className="flex gap-1 border-b border-border px-3 pt-2">
-        {(['items', 'stories'] as const).map((id) => (
-          <button
-            key={id}
-            type="button"
-            role="tab"
-            aria-selected={tab === id}
-            onClick={() => setTab(id)}
-            className={`min-h-11 rounded-t px-3 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-              tab === id ? 'border-b-2 border-primary text-foreground' : 'text-muted-foreground hover:text-foreground'
-            }`}
-          >{t(id === 'items' ? 'feedTabItems' : 'feedTabStories')}</button>
-        ))}
-      </div>
-      <div role="tabpanel" className="min-h-0 flex-1 overflow-hidden">
-        {tab === 'stories' ? <NewsFeed instance={props.instance} /> : <FeedStream {...props} />}
-      </div>
-    </div>
+    <Tabs value={tab} onValueChange={(value) => setTab(value as 'items' | 'stories')} className="flex h-full min-h-0 flex-col">
+      <TabsList aria-label={t('feedTabs')} className="h-auto justify-start gap-1 rounded-none bg-transparent p-0 px-3 pt-2">
+        <TabsTrigger value="items" className="min-h-11 rounded-none text-xs data-[state=active]:bg-transparent data-[state=active]:shadow-none">
+          {t('feedTabItems')}
+        </TabsTrigger>
+        <TabsTrigger value="stories" className="min-h-11 rounded-none text-xs data-[state=active]:bg-transparent data-[state=active]:shadow-none">
+          {t('feedTabStories')}
+        </TabsTrigger>
+      </TabsList>
+      <TabsContent value="items" className="mt-0 min-h-0 flex-1 overflow-hidden"><FeedStream {...props} /></TabsContent>
+      <TabsContent value="stories" className="mt-0 min-h-0 flex-1 overflow-hidden"><NewsFeed instance={props.instance} /></TabsContent>
+    </Tabs>
   );
 }
 
+/** Localized language name for an allowlisted code; falls back to the uppercase code. */
+function languageLabel(locale: string, code: string): string {
+  try {
+    return new Intl.DisplayNames([locale], { type: 'language' }).of(code) ?? code.toUpperCase();
+  } catch {
+    return code.toUpperCase();
+  }
+}
+
 const WINDOW_HOURS: Record<string, number> = { '24h': 24, '7d': 168, '30d': 720 };
+// Keep in sync with FEED_LANGUAGES in modules/knowledge/documents/public.py.
 const FEED_LANGUAGES = ['en', 'vi', 'fr', 'de', 'es', 'pt', 'it', 'ru', 'ja', 'ko', 'zh', 'id', 'th'];
 
 function FeedStream({
@@ -143,6 +146,7 @@ function FeedStream({
   onUnreadCountChange,
 }: FeedGadgetProps) {
   const t = useTranslations('dashboard');
+  const locale = useLocale();
   const display = useDisplayPreferences();
   const session = useWorkspaceSession();
   const { openDrawer } = useChatController();
@@ -315,7 +319,7 @@ function FeedStream({
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="any" className="text-xs">{t('feedLanguageAny')}</SelectItem>
-            {FEED_LANGUAGES.map((code) => <SelectItem key={code} value={code} className="text-xs">{code.toUpperCase()}</SelectItem>)}
+            {FEED_LANGUAGES.map((code) => <SelectItem key={code} value={code} className="text-xs">{languageLabel(locale, code)}</SelectItem>)}
           </SelectContent>
         </Select>
         <Select value={timeWindow} onValueChange={setTimeWindow}>
@@ -390,8 +394,10 @@ function FeedStream({
           <Newspaper className="w-8 h-8 mb-2 opacity-50" />
             <p className="text-xs font-semibold text-foreground mb-1">{t('feedEmptyTitle')}</p>
           <p className="text-[11px] max-w-xs text-muted-foreground">
-            {needle || sourceFilter !== 'all' || serverFiltered
+            {needle || sourceFilter !== 'all'
               ? t('feedNoMatch')
+              : serverFiltered
+              ? t('feedNoServerMatch')
               : onlyUnread
               ? t('feedCaughtUp')
               : t('feedEmptyDetail')}
