@@ -296,7 +296,7 @@ class ChatWorkerSettings:
     cron_jobs: ClassVar[list[object]] = [cron(recover_chat_runs, second={0, 15, 30, 45})]
     redis_settings = RedisSettings.from_dsn(Settings().redis_url)
     queue_name = CHAT_QUEUE
-    max_jobs = 10
+    max_jobs = 20  # bounded by the shared 10+10 DB pool; 10 queued 20 simultaneous sends ~2.7 s (T8 TTFD)
     job_timeout = CHAT_JOB_TIMEOUT
     max_tries = 1
     health_check_key = "arq:chat:health-check"
