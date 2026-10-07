@@ -16,3 +16,16 @@ def test_empty_database_migration_emits_single_owner_and_session_schema() -> Non
     assert "ix_auth_session_expires_at" in result.stdout
     assert "version_num VARCHAR(255)" in result.stdout
     assert "VARCHAR(32)" not in result.stdout.split("CREATE TABLE owner")[0]
+
+
+def test_dismissed_migration_downgrade_sql_drops_dismissed_only_rows() -> None:
+    result = subprocess.run(
+        [sys.executable, "-m", "alembic", "downgrade",
+         "r15_document_dismissed:r15_document_language_backfill", "--sql"],
+        check=False, capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    out = result.stdout
+    delete = out.index("DELETE FROM document_interactions WHERE read_at IS NULL AND bookmarked_at IS NULL")
+    assert delete < out.index("DROP COLUMN dismissed_at")
+    assert "read_at IS NOT NULL OR bookmarked_at IS NOT NULL)" in out

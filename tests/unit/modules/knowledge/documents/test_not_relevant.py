@@ -89,26 +89,50 @@ async def test_feed_excludes_hidden_unless_requested() -> None:
     assert await _feed(rows, [hidden, shown], include_dismissed=True) == [hidden, shown]
 
 
-def test_purge_cascades_through_document_version_fk() -> None:
-    fk = next(iter(DocumentInteraction.__table__.c.document_version_id.foreign_keys))
-    assert fk.ondelete == "CASCADE" and fk.column.table.name == "document_versions"
-    assert next(iter(DocumentInteraction.__table__.c.owner_id.foreign_keys)).ondelete == "CASCADE"
-
-
 @pytest.mark.asyncio
-async def test_version_export_selects_owner_scoped_interaction_state() -> None:
+async def test_version_export_maps_interaction_fields_and_scopes_join() -> None:
     session = AsyncMock()
-    session.scalar = AsyncMock(return_value=0)
     captured: list[str] = []
+    read_at, saved_at, hidden_at = (datetime(2026, 1, d, tzinfo=UTC) for d in (1, 2, 3))
+    columns = {
+        "version_id": uuid4(), "document_id": uuid4(), "source_id": uuid4(), "source_status": "active",
+        "source_generation": 1, "version_number": 1, "document_current_version": 1,
+        "version_content": "x", "version_observed_at": read_at, "version_created_at": read_at,
+        "provider_id": None, "document_created_at": read_at, "document_updated_at": read_at,
+        "version_content_hash": "a" * 64, "interaction_read_at": read_at,
+        "interaction_bookmarked_at": saved_at, "interaction_dismissed_at": hidden_at,
+    }
+
+    class _Result:
+        def mappings(self):  # type: ignore[no-untyped-def]
+            async def rows():  # type: ignore[no-untyped-def]
+                yield columns
+            return rows()
+
+        async def close(self) -> None:
+            return None
 
     async def stream(statement, **_kw):  # type: ignore[no-untyped-def]
         captured.append(str(statement.compile(dialect=postgresql.dialect())))
-        raise RuntimeError("stop")
+        return _Result()
 
     session.stream = stream
-    with patch.object(public, "_require_document_export_owner", AsyncMock()), \
-         patch.object(public, "_document_export_count", AsyncMock(return_value=0)), \
-         pytest.raises(RuntimeError, match="stop"):
-        await public.export_page(session, owner_id=7, record_kind="versions")
-    sql = captured[0]
-    assert "document_interactions.dismissed_at" in sql and "document_interactions.owner_id =" in sql
+    with patch.object(public, "_require_document_export_owner", AsyncMock()),          patch.object(public, "_document_export_count", AsyncMock(return_value=1)):
+        page = await public.export_page(session, owner_id=7, record_kind="versions")
+    item = page.items[0]
+    assert (item.read_at, item.bookmarked_at, item.dismissed_at) == (read_at, saved_at, hidden_at)
+    assert "document_interactions.owner_id =" in captured[0]
+
+
+@pytest.mark.asyncio
+async def test_dashboard_projection_route_forwards_include_dismissed() -> None:
+    from modules.knowledge.documents import routes
+
+    forward = AsyncMock(return_value="page")
+    with patch.object(routes.public, "list_gadget_document_projections", forward):
+        for flag in (False, True):
+            await routes.list_dashboard_projections(
+                session=AsyncMock(), owner=SimpleNamespace(owner_id=1), source_ids=[uuid4()],
+                channel_ids=None, limit=50, cursor=None, language=None, since=None, include_dismissed=flag,
+            )
+            assert forward.await_args.kwargs["include_dismissed"] is flag

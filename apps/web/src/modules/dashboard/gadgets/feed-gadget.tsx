@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { useLocale, useTranslations } from 'next-intl';
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -76,6 +76,9 @@ export function getFeedSourceIcon(type: FeedStreamItem['sourceType']): React.Rea
       return <FileText className="w-3.5 h-3.5" />;
   }
 }
+
+/** ISO start of a trailing window; evaluated at fetch time, not render time. */
+const windowStart = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString();
 
 type SelectedTelegramIdentity = {
   sourceId: string;
@@ -171,9 +174,15 @@ function FeedStream({
   const [sourceFilter, setSourceFilter] = useState('all');
   const [language, setLanguage] = useState('any');
   const [timeWindow, setTimeWindow] = useState('any');
-  // Optimistic "Not relevant": ids hidden locally until the server filter catches up; lastHidden powers Undo.
+  // Optimistic "Not relevant": version ids hidden locally until the server filter catches up (a new
+  // version of the same document is not hidden); lastHidden powers Undo. Scope: dashboard feeds and highlights only.
   const [hiddenIds, setHiddenIds] = useState<ReadonlySet<string>>(new Set());
   const [lastHidden, setLastHidden] = useState<SelectedTelegramIdentity[]>([]);
+  const [undoFailed, setUndoFailed] = useState(false);
+  const focusTarget = useRef<'undo' | 'root' | null>(null);
+  const autoFetches = useRef({ scope: '', count: 0 });
+  const undoRef = useRef<HTMLButtonElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
   const [selectedTelegram, setSelectedTelegram] = useState<Record<string, SelectedTelegramIdentity>>({});
 
   // Query documents as live feed items
@@ -185,7 +194,7 @@ function FeedStream({
       const hours = WINDOW_HOURS[timeWindow];
       return listGadgetDocumentProjections(sourceIds, channelIds, pageParam, {
         language: language === 'any' ? undefined : language,
-        since: hours ? new Date(Date.now() - hours * 3_600_000).toISOString() : undefined,
+        since: hours ? windowStart(hours) : undefined,
       });
     },
     getNextPageParam: (last) => last.next_cursor ?? undefined,
@@ -198,24 +207,44 @@ function FeedStream({
     enabled: sourceIds.length > 1,
   });
   const interactionMutation = useMutation({
-    mutationFn: (change: { id: string; versionNumber: number; read?: boolean; bookmarked?: boolean; dismissed?: boolean }) =>
+    // Serialize hide/undo/read/save so an Undo can never overtake the Hide it reverses.
+    scope: { id: `feed-interaction:${instance.id}` },
+    mutationFn: (change: { id: string; versionNumber: number; item?: SelectedTelegramIdentity; read?: boolean; bookmarked?: boolean; dismissed?: boolean }) =>
       setGadgetDocumentInteraction(change.id, change.versionNumber, {
         read: change.read, bookmarked: change.bookmarked, dismissed: change.dismissed,
       }, session.csrfToken),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: documentKeys.all }),
     onError: (_error, change) => {
-      if (change.dismissed) setHiddenIds((current) => { const next = new Set(current); next.delete(change.id); return next; });
+      if (change.dismissed === undefined || !change.item) return;
+      const { item } = change;
+      if (change.dismissed) {
+        setHiddenIds((current) => { const next = new Set(current); next.delete(item.documentVersionId); return next; });
+      } else {
+        // Undo failed: the server still has it hidden, so restore the hidden state and offer a retry.
+        setHiddenIds((current) => new Set(current).add(item.documentVersionId));
+        setLastHidden((current) => (current.some((c) => c.documentVersionId === item.documentVersionId) ? current : [...current, item]));
+        setUndoFailed(true);
+        focusTarget.current = 'undo';
+      }
     },
   });
   const setHidden = (items: SelectedTelegramIdentity[], hidden: boolean) => {
     setHiddenIds((current) => {
       const next = new Set(current);
-      items.forEach((item) => (hidden ? next.add(item.documentId) : next.delete(item.documentId)));
+      items.forEach((item) => (hidden ? next.add(item.documentVersionId) : next.delete(item.documentVersionId)));
       return next;
     });
     setLastHidden(hidden ? items : []);
-    items.forEach((item) => interactionMutation.mutate({ id: item.documentId, versionNumber: item.versionNumber, dismissed: hidden }));
+    setUndoFailed(false);
+    focusTarget.current = hidden ? 'undo' : 'root';
+    items.forEach((item) => interactionMutation.mutate({ id: item.documentId, versionNumber: item.versionNumber, item, dismissed: hidden }));
   };
+  useEffect(() => {
+    const target = focusTarget.current;
+    if (!target || (target === 'undo' && !undoRef.current)) return;
+    (target === 'undo' ? undoRef.current : rootRef.current)?.focus();
+    focusTarget.current = null;
+  }, [lastHidden, undoFailed]);
 
   // Transform raw documents or initial items into standard FeedStreamItem objects
   const feedItems: FeedStreamItem[] = useMemo(() => {
@@ -258,7 +287,7 @@ function FeedStream({
   );
   const needle = searchText.trim().toLowerCase();
   const displayedItems = feedItems.filter((i) =>
-    !hiddenIds.has(i.id)
+    !(i.documentVersionId && hiddenIds.has(i.documentVersionId))
     && (!onlyUnread || !i.read)
     && (sourceFilter === 'all' || i.sourceId === sourceFilter)
     && (!needle || `${i.title} ${i.excerpt ?? ''}`.toLowerCase().includes(needle)),
@@ -267,8 +296,19 @@ function FeedStream({
   const serverFiltered = language !== 'any' || timeWindow !== 'any';
   React.useEffect(() => onUnreadCountChange?.(unreadCount), [onUnreadCountChange, unreadCount]);
 
+  // Server pages can be short or fully hidden: while nothing is visible and a cursor exists, pull
+  // the next page (at most 3 times) instead of claiming the feed is empty.
+  const serverScope = `${sourceIds.join()}|${channelIds.join()}|${language}|${timeWindow}`;
+  useEffect(() => {
+    const budget = autoFetches.current;
+    if (budget.scope !== serverScope || displayedItems.length > 0) { budget.scope = serverScope; budget.count = 0; }
+    if (displayedItems.length > 0 || initialItems?.length || !docsQuery.hasNextPage || docsQuery.isFetchingNextPage || docsQuery.isError || budget.count >= 3) return;
+    budget.count += 1;
+    void docsQuery.fetchNextPage();
+  }, [displayedItems.length, initialItems, docsQuery, serverScope]);
+
   return (
-    <div className="flex flex-col h-full bg-card text-card-foreground p-3 space-y-3 overflow-y-auto overflow-x-hidden">
+    <div ref={rootRef} tabIndex={-1} className="flex flex-col h-full bg-card text-card-foreground p-3 space-y-3 overflow-y-auto overflow-x-hidden focus:outline-none">
       {/* Top action bar */}
       <div className="flex items-center justify-between border-b border-border pb-2 text-xs">
         <div className="flex items-center gap-2">
@@ -394,12 +434,22 @@ function FeedStream({
         </div>
       )}
 
-      {lastHidden.length > 0 && (
-        <div role="status" className="flex items-center gap-2 rounded-md border border-border bg-background p-2 text-xs">
-          <span>{t('feedHiddenCount', { count: lastHidden.length })}</span>
-          <Button type="button" size="sm" variant="ghost" className="min-h-11" onClick={() => setHidden(lastHidden, false)}>{t('feedUndo')}</Button>
-        </div>
-      )}
+      {/* The live region stays mounted so screen readers announce the text when it changes. */}
+      <div className={lastHidden.length > 0 ? 'flex items-center gap-2 rounded-md border border-border bg-background p-2 text-xs' : 'sr-only'}>
+        <span role="status" aria-live="polite">{lastHidden.length > 0 ? t('feedHiddenCount', { count: lastHidden.length }) : ''}</span>
+        {lastHidden.length > 0 && (
+          <Button
+            ref={undoRef}
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="min-h-11"
+            disabled={interactionMutation.isPending}
+            onClick={() => setHidden(lastHidden, false)}
+          >{undoFailed ? t('feedUndoRetry') : t('feedUndo')}</Button>
+        )}
+      </div>
+      {undoFailed && <p role="alert" className="text-xs text-destructive">{t('feedUndoError')}</p>}
 
       {staleTelegramSelections.length > 0 && (
         <p role="status" className="text-xs text-muted-foreground">{t('selectionChanged', { count: staleTelegramSelections.length })}</p>
@@ -419,7 +469,7 @@ function FeedStream({
       )}
 
       {/* Empty State */}
-      {!docsQuery.isLoading && !docsQuery.isError && displayedItems.length === 0 && (
+      {!docsQuery.isLoading && !docsQuery.isError && !docsQuery.hasNextPage && displayedItems.length === 0 && (
         <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-muted-foreground">
           <Newspaper className="w-8 h-8 mb-2 opacity-50" />
             <p className="text-xs font-semibold text-foreground mb-1">{t('feedEmptyTitle')}</p>

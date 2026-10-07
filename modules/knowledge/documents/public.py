@@ -431,6 +431,8 @@ async def export_page(
                 NormalizedVersionProvenance.canonical_url.label("provenance_canonical_url"),
                 NormalizedVersionProvenance.published_at.label("provenance_published_at"),
                 NormalizedVersionProvenance.content_type.label("provenance_content_type"),
+                # Interaction state is read live (best-effort), not covered by snapshot_at/fences: a
+                # read/save/hide between export pages can yield a mixed view. Accepted by design.
                 DocumentInteraction.read_at.label("interaction_read_at"),
                 DocumentInteraction.bookmarked_at.label("interaction_bookmarked_at"),
                 DocumentInteraction.dismissed_at.label("interaction_dismissed_at"),
