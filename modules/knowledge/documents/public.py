@@ -2202,6 +2202,13 @@ async def has_document_identity(session: AsyncSession, source_id: UUID, external
     )
 
 
+async def find_document_identity(session: AsyncSession, source_id: UUID, external_id: str) -> UUID | None:
+    """Return the document ID a source owns for an external identity, if any."""
+    return await session.scalar(
+        select(Document.id).where(Document.source_id == source_id, Document.external_id == external_id)
+    )
+
+
 async def upsert_normalized_document(
     session: AsyncSession, payload: NormalizedDocumentInput
 ) -> NormalizedDocumentResult:

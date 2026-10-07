@@ -325,6 +325,35 @@ async def resolve_gadget_context(session: AsyncSession, context: dict[str, _Any]
     }
 
 
+MAX_CHAT_ATTACHMENTS_PER_MESSAGE = 5
+
+
+async def reject_unsendable_selection(session: AsyncSession, resolved: dict[str, _Any]) -> None:
+    """Refuse, before any run exists, a resolved selection that chat could never answer from.
+
+    Chat always streams through the remote model gateway, and the worker privacy-cancels any run
+    whose evidence is ``local_only`` before a request opens. Refusing here makes that outcome
+    visible (409) instead of a silently cancelled answer. Chat attachments are also capped per
+    message at the boundary (422).
+    """
+    from fastapi import HTTPException
+
+    from modules.sources import public as sources_public
+
+    fences = resolved.get("selection_fences") or []
+    attachments = 0
+    for fence in fences:
+        if await sources_public.is_chat_attachments_source(session, UUID(str(fence["source_id"]))):
+            attachments += 1
+    if attachments > MAX_CHAT_ATTACHMENTS_PER_MESSAGE:
+        raise HTTPException(status_code=422, detail="Selection exceeds the per-message attachment limit")
+    if any(fence.get("local_only") for fence in fences):
+        raise HTTPException(
+            status_code=409,
+            detail="Selection includes local-only documents, which are never sent to the cloud chat model",
+        )
+
+
 async def link_agent_run(
     session: AsyncSession,
     conversation_id: UUID,

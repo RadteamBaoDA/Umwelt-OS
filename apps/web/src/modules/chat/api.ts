@@ -521,3 +521,33 @@ export async function streamResponseEvents(
     reader.releaseLock();
   }
 }
+
+/** File extensions accepted by the shared upload allowlist (`modules/ingestion/files.py`). */
+export const ATTACHMENT_ACCEPT = '.txt,.md,.markdown,.json,.csv,.pdf,.docx';
+/** Server-enforced per-message cap on Chat attachments. */
+export const MAX_ATTACHMENTS = 5;
+/** Default server upload size cap (UPLOAD_MAX_BYTES); the server stays authoritative. */
+export const ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
+
+/** One chat attachment Document and whether it can be referenced as chat context. */
+export interface ChatAttachment {
+  document_id: string;
+  source_id: string;
+  title: string;
+  status: 'pending' | 'ready' | 'too_large' | 'failed';
+  document_version_id: string | null;
+  local_only: boolean;
+  run_id?: string | null;
+}
+
+/** Uploads one file into the owner's local-only "Chat attachments" source through the shared ingestion pipeline. */
+export async function uploadChatAttachment(file: File, csrfToken: string): Promise<ChatAttachment> {
+  const form = new FormData();
+  form.set('file', file);
+  return apiRequest<ChatAttachment>('/api/v1/documents/chat-attachments', { method: 'POST', headers: csrfHeaders(csrfToken), body: form });
+}
+
+/** Reads a chat attachment's ingest status and current document version. */
+export async function getChatAttachment(documentId: string): Promise<ChatAttachment> {
+  return apiRequest<ChatAttachment>(`/api/v1/documents/chat-attachments/${encodeURIComponent(documentId)}`);
+}

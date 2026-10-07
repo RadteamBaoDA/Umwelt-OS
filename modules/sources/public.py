@@ -10,7 +10,19 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
-from sqlalchemy import ColumnElement, Integer, Select, and_, case, cast, desc, func, select, tuple_
+from sqlalchemy import (
+    ColumnElement,
+    Integer,
+    Select,
+    and_,
+    case,
+    cast,
+    desc,
+    func,
+    select,
+    text,
+    tuple_,
+)
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
@@ -273,6 +285,47 @@ async def ensure_demo_source(session: AsyncSession, source_id: UUID, namespace: 
     if source is None or source.configuration.get("demo_namespace") != namespace:
         raise RuntimeError("Demo source identity is occupied by another source")
     return False
+
+
+CHAT_ATTACHMENTS_MARKER = "chat_attachments"
+CHAT_ATTACHMENTS_NAME = "Chat attachments"
+
+
+async def get_or_create_chat_attachments_source(session: AsyncSession) -> Source:
+    """Return the owner's single non-archived "Chat attachments" manual source, creating it once.
+
+    A transaction-scoped advisory lock serializes concurrent first uploads, so two requests can
+    never create two sources. An archived/purged attachments source is retired history and a
+    fresh one is created; a paused one is returned so intake reports it as inactive (409).
+    The source is ``local_only`` like every manual source. Commits before returning.
+    """
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"), {"key": "umwelt.sources.chat_attachments"},
+    )
+    source = await session.scalar(
+        select(Source).where(
+            Source.configuration[CHAT_ATTACHMENTS_MARKER].as_boolean().is_(True),
+            Source.status != "archived",
+        ).order_by(Source.created_at.desc()).limit(1)
+    )
+    if source is not None:
+        await session.commit()
+        return source
+    source = Source(
+        type="manual", name=CHAT_ATTACHMENTS_NAME, local_only=True,
+        configuration={CHAT_ATTACHMENTS_MARKER: True},
+    )
+    session.add(source)
+    await session.flush()
+    await commit_with_replay(session, [make_source_change(source.id, source.generation, source.status)])
+    await session.refresh(source)
+    return source
+
+
+async def is_chat_attachments_source(session: AsyncSession, source_id: UUID) -> bool:
+    """Report whether a source carries the server-set Chat attachments marker."""
+    source = await session.get(Source, source_id)
+    return source is not None and source.configuration.get(CHAT_ATTACHMENTS_MARKER) is True
 
 
 async def get_source(session: AsyncSession, source_id: UUID) -> Source | None:
