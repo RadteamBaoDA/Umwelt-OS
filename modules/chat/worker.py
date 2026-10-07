@@ -3,13 +3,14 @@
 import asyncio
 import json
 import logging
+import time
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from redis.asyncio import Redis
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
@@ -44,9 +45,12 @@ CANCEL_KEY_PREFIX = "chat:cancel:"
 STREAM_FLUSH_SECONDS = 0.1
 STREAM_FLUSH_CHARS = 256
 CHAT_QUEUE = "arq:chat"
+CHAT_JOB_TIMEOUT = 600  # arq job_timeout for ChatWorkerSettings (single source)
+SHUTDOWN_TIMEOUT_MARGIN = 30.0
 RECOVER_PENDING_AFTER = timedelta(seconds=15)
 RECOVER_STREAMING_AFTER = timedelta(seconds=660)  # arq job_timeout 600 s plus margin
 EPHEMERAL_TTL = timedelta(hours=24)
+SHUTDOWN_RELEASE_TIMEOUT = 5.0  # docker stop grace is 10 s; arq awaits the job task before closing
 
 
 class PrivacyFenceChanged(RuntimeError):
@@ -404,6 +408,7 @@ async def run_response_generation(
             )
         )
         await session.commit()
+    claimed_at = time.monotonic()
 
     # 2. Retrieve user message and grounding context
     accumulated_text = ""
@@ -805,9 +810,61 @@ async def run_response_generation(
         await _mark_privacy_cancelled(response_id, session_factory, seq)
     except ResponseNoLongerActive:
         return
+    except asyncio.CancelledError:
+        # arq cancels in-flight jobs on SIGTERM/deploy. Make the run recoverable now instead of after
+        # RECOVER_STREAMING_AFTER; bounded, never raises, and the cancellation still propagates.
+        # arq's job_timeout cancels the same way; near the timeout it is not a shutdown, so fail (no retry loop).
+        timed_out = time.monotonic() - claimed_at >= CHAT_JOB_TIMEOUT - SHUTDOWN_TIMEOUT_MARGIN
+        try:
+            await asyncio.wait_for(
+                _release_on_shutdown(response_id, session_factory, privacy_fence, timed_out),
+                SHUTDOWN_RELEASE_TIMEOUT,
+            )
+        except Exception as exc:  # noqa: BLE001  # boundary: recovery's abandonment threshold is the safety net
+            logger.warning("Chat run shutdown release failed for %s (%s)", response_id, type(exc).__name__)
+        raise
     except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
         logger.error("Response generation failed for run %s: %s", response_id, type(exc).__name__)
         await _mark_failed(response_id, session_factory, seq, privacy_fence, exc)
+
+
+async def _release_on_shutdown(
+    response_id: UUID, session_factory: async_sessionmaker[AsyncSession], expected_fence: object, timed_out: bool = False,
+) -> None:
+    """Worker is stopping: hand a streaming run back as pending, or fail it truthfully if content was published.
+
+    Same privacy -> conversation -> run lock order as `_mark_failed`. With no delta/citation published the
+    client saw nothing but the `streaming` status, so the run returns to `pending` (its events are dropped so
+    the re-claim can reuse seq 1) and `recover_chat_runs` re-enqueues it; otherwise it fails like an
+    abandoned run.
+    """
+    async with session_factory() as session:
+        await lock_export_privacy(session)
+        run_hint = await session.scalar(select(ResponseRun).where(ResponseRun.id == response_id))
+        if run_hint is None:
+            return
+        await session.scalar(select(Conversation).where(
+            Conversation.id == run_hint.conversation_id,
+        ).with_for_update().execution_options(populate_existing=True))
+        run = await session.scalar(select(ResponseRun).where(
+            ResponseRun.id == response_id,
+        ).with_for_update().execution_options(populate_existing=True))
+        if run is None or run.status != "streaming":
+            return
+        published = await session.scalar(select(StreamEvent.id).where(
+            StreamEvent.response_id == response_id,
+            StreamEvent.event_type.in_(("message.delta", "message.citations")),
+        ).limit(1))
+        if published is None and not timed_out:
+            await session.execute(delete(StreamEvent).where(StreamEvent.response_id == response_id))
+            run.status = "pending"
+            await session.commit()
+            return
+        seq = await session.scalar(select(func.coalesce(func.max(StreamEvent.seq), 0)).where(
+            StreamEvent.response_id == response_id,
+        )) or 0
+        await session.rollback()
+    await _mark_failed(response_id, session_factory, seq, expected_fence, TimeoutError("generation timed out" if timed_out else "chat worker shutting down"))
 
 
 async def _privacy_cancel_locked(session: AsyncSession, run: ResponseRun, current_seq: int = 0) -> int:

@@ -119,8 +119,9 @@ class _Gen:
         yield "data: [DONE]"
 
     async def run(self) -> None:
+        self.factory = _factory(self.session)
         await worker.run_response_generation(
-            uuid4(), _factory(self.session), SimpleNamespace(ai_allowed_endpoint_cidrs=()),  # type: ignore[arg-type]
+            uuid4(), self.factory, SimpleNamespace(ai_allowed_endpoint_cidrs=()),  # type: ignore[arg-type]
             MagicMock(),
         )
 
@@ -203,6 +204,130 @@ async def test_recover_requeues_pending_and_fails_abandoned_streaming(monkeypatc
     assert isinstance(event, StreamEvent) and event.response_id == stale_id and event.seq == 8
     assert event.event_type == "status" and event.data["status"] == "failed"
     session.commit.assert_awaited_once()
+
+
+def _release_session(run: Any, published: Any, order: list[str], seq: int = 4) -> MagicMock:
+    session = MagicMock()
+    session.scalar = AsyncMock(side_effect=[run, object(), run, published, seq])
+    session.execute = AsyncMock(side_effect=lambda *a, **k: order.append("delete"))
+    session.commit = AsyncMock()
+    session.rollback = AsyncMock()
+    return session
+
+
+async def test_shutdown_before_any_delta_returns_run_to_pending(monkeypatch: pytest.MonkeyPatch) -> None:
+    order: list[str] = []
+    run = SimpleNamespace(status="streaming", conversation_id=uuid4())
+    session = _release_session(run, None, order)
+    monkeypatch.setattr(worker, "lock_export_privacy", AsyncMock(side_effect=lambda *_: order.append("privacy")))
+    failed = AsyncMock()
+    monkeypatch.setattr(worker, "_mark_failed", failed)
+    await worker._release_on_shutdown(uuid4(), _factory(session), None)
+    assert run.status == "pending" and order == ["privacy", "delete"]
+    sql = [str(c.args[0]) for c in session.scalar.await_args_list[:3]]
+    assert "FOR UPDATE" not in sql[0]
+    assert "chat_conversations" in sql[1] and "FOR UPDATE" in sql[1]
+    assert "chat_response_runs" in sql[2] and "FOR UPDATE" in sql[2]
+    session.commit.assert_awaited_once()
+    failed.assert_not_awaited()
+
+
+async def test_cancel_near_job_timeout_fails_instead_of_pending(monkeypatch: pytest.MonkeyPatch) -> None:
+    run = SimpleNamespace(status="streaming", conversation_id=uuid4())
+    session = _release_session(run, None, [])
+    monkeypatch.setattr(worker, "lock_export_privacy", AsyncMock())
+    failed = AsyncMock()
+    monkeypatch.setattr(worker, "_mark_failed", failed)
+    await worker._release_on_shutdown(uuid4(), _factory(session), None, True)
+    assert run.status == "streaming"
+    failed.assert_awaited_once()
+    session.commit.assert_not_awaited()
+
+
+async def test_handler_cancel_at_job_timeout_requests_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    gen = _Gen(monkeypatch, ["a"])
+
+    async def cancelled(**_k: Any) -> AsyncIterator[str]:
+        raise asyncio.CancelledError
+        yield ""  # pragma: no cover
+
+    monkeypatch.setattr(worker, "ModelGateway", lambda **kw: SimpleNamespace(stream=cancelled))
+    monkeypatch.setattr(worker, "CHAT_JOB_TIMEOUT", 0)  # elapsed since claim >= timeout - margin
+    release = AsyncMock()
+    monkeypatch.setattr(worker, "_release_on_shutdown", release)
+    with pytest.raises(asyncio.CancelledError):
+        await gen.run()
+    assert release.await_args.args[3] is True
+
+
+async def test_external_cancel_inside_session_call_still_releases_on_fresh_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gen = _Gen(monkeypatch, ["a"])
+    blocked = asyncio.Event()
+
+    async def hang(*_a: Any, **_k: Any) -> Any:
+        blocked.set()
+        await asyncio.sleep(3600)
+
+    gen.session.scalar = AsyncMock(side_effect=hang)
+    release = AsyncMock()
+    monkeypatch.setattr(worker, "_release_on_shutdown", release)
+    task = asyncio.create_task(gen.run())
+    await asyncio.wait_for(blocked.wait(), 2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    release.assert_awaited_once()
+    assert release.await_args.args[1] is gen.factory
+    gen.failed.assert_not_awaited()
+
+
+async def test_shutdown_after_partial_deltas_fails_truthfully(monkeypatch: pytest.MonkeyPatch) -> None:
+    run = SimpleNamespace(status="streaming", conversation_id=uuid4())
+    session = _release_session(run, uuid4(), [])
+    monkeypatch.setattr(worker, "lock_export_privacy", AsyncMock())
+    failed = AsyncMock()
+    monkeypatch.setattr(worker, "_mark_failed", failed)
+    rid = uuid4()
+    await worker._release_on_shutdown(rid, _factory(session), {"rev": 1})
+    assert run.status == "streaming"
+    failed.assert_awaited_once()
+    assert failed.await_args.args[0] == rid and failed.await_args.args[2] == 4
+    assert failed.await_args.args[3] == {"rev": 1} and isinstance(failed.await_args.args[4], TimeoutError)
+
+
+async def test_cancelled_generation_releases_run_bounded_and_reraises(monkeypatch: pytest.MonkeyPatch) -> None:
+    gen = _Gen(monkeypatch, ["a"])
+
+    async def cancelled(**_k: Any) -> AsyncIterator[str]:
+        raise asyncio.CancelledError
+        yield ""  # pragma: no cover
+
+    monkeypatch.setattr(worker, "ModelGateway", lambda **kw: SimpleNamespace(stream=cancelled))
+    release = AsyncMock()
+    monkeypatch.setattr(worker, "_release_on_shutdown", release)
+    with pytest.raises(asyncio.CancelledError):
+        await gen.run()
+    release.assert_awaited_once()
+    gen.failed.assert_not_awaited()
+
+
+async def test_shutdown_release_never_raises_and_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    gen = _Gen(monkeypatch, ["a"])
+
+    async def cancelled(**_k: Any) -> AsyncIterator[str]:
+        raise asyncio.CancelledError
+        yield ""  # pragma: no cover
+
+    async def hang(*_a: Any) -> None:
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(worker, "ModelGateway", lambda **kw: SimpleNamespace(stream=cancelled))
+    monkeypatch.setattr(worker, "_release_on_shutdown", hang)
+    monkeypatch.setattr(worker, "SHUTDOWN_RELEASE_TIMEOUT", 0.05)
+    with pytest.raises(asyncio.CancelledError):  # the timeout is swallowed; cancellation still propagates
+        await gen.run()
 
 
 def test_chat_worker_settings_isolated_queue() -> None:
