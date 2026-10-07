@@ -196,7 +196,7 @@ class ModelGateway:
                             elif path == "embeddings":
                                 response = await client.embeddings.create(**body)
                             elif path == "rerank":
-                                response = await client.post("/rerank", cast_to=dict, body=body)
+                                response = await client.post("/rerank", cast_to=dict[str, Any], body=body)
                             else:
                                 raise ModelGatewayError("Unsupported model gateway operation")
                         finally:

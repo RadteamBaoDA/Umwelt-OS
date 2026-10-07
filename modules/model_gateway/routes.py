@@ -133,7 +133,7 @@ async def probe_draft(
         raise HTTPException(status_code=403, detail="Probe denied by privacy policy") from exc
     except CapabilityUnsupported:
         result = "unsupported"
-    except ModelGatewayError:
+    except (ModelGatewayError, ValueError):  # unparseable gateway reply: truthful failure, not a 500
         result = "failed"
     return {"alias": alias, "model": mapping.model, "version": mapping.version,
             "gateway_identity": identity, "configuration_revision": 0,
@@ -224,7 +224,7 @@ async def probe_model(
         raise HTTPException(status_code=403, detail="Probe denied by privacy policy") from exc
     except CapabilityUnsupported:
         result = settings_models.new_capability_result(alias, mapping, body.capability, config.gateway_identity, "unsupported", config.configuration_revision)
-    except ModelGatewayError:
+    except (ModelGatewayError, ValueError):  # unparseable gateway reply: failed, not a 500
         result = settings_models.new_capability_result(alias, mapping, body.capability, config.gateway_identity, "failed", config.configuration_revision)
     except RedisError as exc:
         raise HTTPException(status_code=503, detail="Model capability storage is unavailable") from exc

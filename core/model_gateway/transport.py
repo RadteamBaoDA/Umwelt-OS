@@ -66,7 +66,8 @@ class _NotifyOnEnd(httpx.AsyncByteStream):
                 await callback()
             except Exception as exc:  # noqa: BLE001  # P2-2: must never raise into httpcore
                 # Never raise into httpcore: the SDK would map it to APIConnectionError and retry,
-                # re-sending the body. The caller's ``finally: after_send()`` retries the release.
+                # re-sending the body. The caller's idempotent ``after_send`` fallback runs again; lock release
+                # relies on the session's close/connection invalidation, not on that retry.
                 # Type only: messages can carry SQL parameters or prompt text.
                 logger.warning("Model request body-sent callback failed (%s)", type(exc).__name__)
 

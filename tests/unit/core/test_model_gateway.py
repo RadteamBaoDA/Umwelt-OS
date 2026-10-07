@@ -620,7 +620,7 @@ class _SlowModelServer:
         if status != 200:
             return b'{"error": {"message": "busy"}}'
         if b"/rerank" in request_line:
-            return b'{"results": [{"index": 0}]}'
+            return b'{"results": [{"index": 0, "relevance_score": 1.0}]}'
         if body.get("stream"):
             chunk = {"id": "c", "object": "chat.completion.chunk", "created": 0, "model": "m",
                      "choices": [{"index": 0, "delta": {"content": "hi"}, "finish_reason": None}]}
@@ -648,11 +648,7 @@ async def _call(gw: ModelGateway, op: str, after_send: Any) -> object:
     if op == "chat":
         return await gw.chat("fast", _MAPPING, _POLICY, [{"role": "user", "content": _BIG}], after_send=after_send)
     if op == "rerank":
-        # Pre-existing, out of scope: rerank's `cast_to=dict` cannot be parsed by openai 2.x
-        # (construct_type needs dict[K, V]), so a real response raises ValueError after the hook ran.
-        with pytest.raises(ValueError):
-            await gw.rerank("reranker", _MAPPING, _POLICY, "q", [_BIG], after_send=after_send)
-        return "rerank-sent"
+        return await gw.rerank("reranker", _MAPPING, _POLICY, "q", [_BIG], after_send=after_send)
     return [x async for x in gw.stream("fast", _MAPPING, _POLICY, [{"role": "user", "content": _BIG}],
                                        after_send=after_send)]
 
@@ -688,14 +684,6 @@ def _fake_openai_with(create: Any) -> Any:
 class TestBodySentHook:
     """P14-T1: after_send fires when the request body is handed to transport.write (real httpcore)."""
 
-    @pytest.fixture(autouse=True)
-    def _real_httpx_response(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # test_github_adapter.py replaces httpx.Response with a function at import time, which breaks
-        # openai's issubclass(origin, httpx.Response) on real responses; restore the class here.
-        from httpx._models import Response
-
-        monkeypatch.setattr(httpx, "Response", Response)
-
     @pytest.mark.asyncio
     @pytest.mark.parametrize("op", ["chat", "rerank", "stream"])
     async def test_after_send_fires_after_body_written_before_headers(self, op: str, written: list[int]) -> None:
@@ -716,6 +704,13 @@ class TestBodySentHook:
         assert written_then == written[0] and written_then > len(server.bodies[0]) > len(_BIG)
         assert len(calls) == 2  # hook once + the idempotent finally fallback
         assert server.request_lines[0].endswith(b"HTTP/1.1")
+
+    @pytest.mark.asyncio
+    async def test_real_rerank_response_parses(self) -> None:
+        # Regression: cast_to=dict made openai 2.x raise ValueError on every real /rerank reply.
+        async with _SlowModelServer(delay=0.0) as server:
+            result = await _call(_loopback_gateway(server.base_url), "rerank", None)
+        assert result == {"results": [{"index": 0, "relevance_score": 1.0}]}
 
     @pytest.mark.asyncio
     async def test_retry_fires_hook_per_attempt_and_refences(self) -> None:
