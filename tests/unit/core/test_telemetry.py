@@ -293,9 +293,20 @@ class TestRedactionStableRecords:
         )
         cfg = LOGGING_CONFIG["formatters"]["access"]
         out = AccessFormatter(cfg["fmt"], use_colors=False).format(record)
-        assert "GET" in out and "200" in out
+        assert "200" in out  # still formattable; every str field of a secret-bearing line is masked
         assert "SECRET" not in out and "Bearer x" not in out
         assert "SECRET" not in record.getMessage()
+
+    def test_secret_split_across_args_is_not_leaked(self) -> None:
+        # Each arg is clean alone; only the joined line reveals the secret. Masking one arg at a time
+        # would hide "cookie=" and let SECRETVALUE through.
+        from uvicorn.config import LOGGING_CONFIG
+        from uvicorn.logging import AccessFormatter
+
+        record = self._record('%s - "%s %s HTTP/%s" %d', ("127.0.0.1:1", "cookie=", "SECRETVALUE", "1.1", 200))
+        out = AccessFormatter(LOGGING_CONFIG["formatters"]["access"]["fmt"], use_colors=False).format(record)
+        assert "SECRETVALUE" not in out
+        assert "SECRETVALUE" not in record.getMessage()
 
     def test_non_str_args_are_frozen_by_value(self) -> None:
         class Odd:

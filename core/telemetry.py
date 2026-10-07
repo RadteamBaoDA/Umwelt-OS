@@ -131,20 +131,19 @@ def redact_mapping(value: Any, _depth: int = 0) -> Any:
 def _stable_record(record: logging.LogRecord, redacted: str) -> tuple[str, Any]:
     """Return (msg, args) whose rendering holds no secret yet keeps the positional shape formatters unpack.
 
-    uvicorn's AccessFormatter needs the 5-tuple, so mask one str arg at a time until the rendered line is
-    redaction-stable; fall back to the fully collapsed string with no args.
+    uvicorn's AccessFormatter needs the 5-tuple, so mask every str arg at once: masking one at a time can
+    hide the context (e.g. ``cookie=``) that makes a neighbouring arg a secret. Fall back to the fully
+    collapsed string with no args only when even that rendering is not redaction-stable.
     """
     args = record.args
     if isinstance(record.msg, str) and isinstance(args, tuple):
-        for i, item in enumerate(args):
-            if isinstance(item, str):
-                trial = (*args[:i], _MASK, *args[i + 1:])
-                try:
-                    text = record.msg % trial
-                except (TypeError, ValueError):
-                    continue
-                if redact_text(text) == text:
-                    return record.msg, trial
+        trial = tuple(_MASK if isinstance(item, str) else item for item in args)
+        try:
+            text = record.msg % trial
+        except (TypeError, ValueError):
+            return redacted, None
+        if redact_text(text) == text:
+            return record.msg, trial
     return redacted, None
 
 
