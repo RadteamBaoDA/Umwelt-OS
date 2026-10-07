@@ -7,6 +7,8 @@ import * as React from 'react';
 import { useTranslations } from 'next-intl';
 import { SendIcon, SquareIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Label } from '@/components/ui/label';
 
 export interface ChatComposerProps {
   /** Current in-memory draft string. */
@@ -29,6 +31,8 @@ export interface ChatComposerProps {
   sourcesCount?: number;
   /** Full page shows the truthful web search and attachment availability note. */
   showCapabilityNote?: boolean;
+  /** Per-message web search opt-in; passed only by the full Chat page. */
+  webSearch?: { available: boolean; enabled: boolean; onChange: (enabled: boolean) => void };
 }
 
 /**
@@ -49,6 +53,7 @@ export function ChatComposer({
   modelLabel = null,
   sourcesCount = 0,
   showCapabilityNote = false,
+  webSearch,
 }: ChatComposerProps) {
   const t = useTranslations('chat');
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
@@ -141,6 +146,23 @@ export function ChatComposer({
         <span>{modelLabel ? t('modelLine', { model: modelLabel }) : t('modelNotReported')}{sourcesCount > 0 ? ` · ${t('sourcesCount', { count: sourcesCount })}` : ''}</span>
         <span className="hidden sm:inline">Enter ↵ · Shift+Enter</span>
       </div>
+      {webSearch && (
+        <div className="flex flex-col gap-0.5 px-1">
+          <div className="flex items-center gap-2">
+            <Checkbox
+              id="chat-web-search"
+              checked={webSearch.available && webSearch.enabled}
+              disabled={!webSearch.available || isStreaming}
+              onCheckedChange={(checked) => webSearch.onChange(checked === true)}
+              aria-describedby="chat-web-search-help"
+            />
+            <Label htmlFor="chat-web-search" className="text-xs text-foreground">{t('webSearchToggle')}</Label>
+          </div>
+          <p id="chat-web-search-help" className="text-[11px] text-muted-foreground">
+            {!webSearch.available ? t('webSearchDisabledHelp') : webSearch.enabled ? t('webSearchEnabledHelp') : t('webSearchIdleHelp')}
+          </p>
+        </div>
+      )}
       {showCapabilityNote && <p className="px-1 text-[11px] text-muted-foreground">{t('composerNote')}</p>}
     </div>
   );

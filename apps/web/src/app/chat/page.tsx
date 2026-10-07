@@ -43,7 +43,7 @@ function ChatPageContent() {
     const seen = new Set<string>();
     const unique: Citation[] = [];
     for (const message of detail?.messages ?? []) for (const citation of message.citations ?? []) {
-      const key = `${citation.documentVersionId}:${citation.chunkId}`;
+      const key = citation.sourceType === 'web' ? citation.url : `${citation.documentVersionId}:${citation.chunkId}`;
       if (!seen.has(key)) { seen.add(key); unique.push(citation); }
     }
     return unique;

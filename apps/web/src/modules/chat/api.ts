@@ -3,7 +3,7 @@ import { apiRequest, csrfHeaders } from '@/core/api';
 /**
  * Citation evidence reference pointing to an exact grounded revision chunk.
  */
-export interface Citation {
+export interface DocumentCitation {
   sourceType: 'document';
   sourceId: string;
   documentId: string;
@@ -13,6 +13,34 @@ export interface Citation {
   url: string | null;
   observedAt: string | null;
   quote: string;
+}
+
+/**
+ * Public-web citation built by the server from a cited search result (P15 contract).
+ * Title and quote are untrusted third-party text: render as plain text only.
+ */
+export interface WebCitation {
+  sourceType: 'web';
+  url: string;
+  title: string;
+  quote: string;
+  provider?: string;
+  retrievedAt?: string;
+}
+
+/** Citation shown with an answer; discriminated by `sourceType`. */
+export type Citation = DocumentCitation | WebCitation;
+
+/** Reason codes the backend may report for a skipped or unavailable web search. */
+export type WebSearchReason =
+  | 'not_configured' | 'query_too_long' | 'local_only_context' | 'daily_limit'
+  | 'timeout' | 'provider_error' | 'network_denied' | 'run_inactive';
+
+/** Outcome of a requested web search; absent when the message did not opt in. */
+export interface WebSearchOutcome {
+  status: 'used' | 'unavailable' | 'skipped';
+  reason?: WebSearchReason | string | null;
+  result_count?: number;
 }
 
 /**
@@ -58,6 +86,8 @@ export interface ChatMessage {
   client_request_id: string | null;
   model_identity: string | null;
   citations: Citation[];
+  /** Web search outcome for this answer; sent by the backend only for opted-in runs. */
+  web_search?: WebSearchOutcome | null;
   response_id: string | null;
   /** Message whose prompt or assistant response this append-only revision follows. */
   revision_of_message_id: string | null;
@@ -100,6 +130,8 @@ export interface SendMessagePayload {
   content: string;
   client_request_id?: string;
   context?: ChatContext | Record<string, unknown>;
+  /** Per-message opt-in; omit (never send false-by-default state) unless the user ticked it. */
+  web_search?: boolean;
 }
 
 /**
@@ -117,6 +149,8 @@ export interface MessageMutationPayload {
   base_content_hash: string;
   client_request_id: string;
   content?: string;
+  /** Per-mutation opt-in; not inherited from the original message. */
+  web_search?: boolean;
 }
 
 /**
@@ -135,6 +169,7 @@ export interface StreamEventsOptions {
   signal?: AbortSignal;
   onDelta?: (text: string) => void;
   onCitations?: (citations: Citation[]) => void;
+  onWebSearch?: (outcome: WebSearchOutcome) => void;
   onStatus?: (status: string, payload?: unknown) => void;
   onDone?: (result: { text: string; citations: Citation[]; model?: string; status: string }) => void;
   onError?: (error: Error) => void;
@@ -447,6 +482,13 @@ export async function streamResponseEvents(
               citations: [],
               status: 'completed',
             });
+          }
+        } else if (eventType === 'web_search') {
+          try {
+            const parsed = JSON.parse(eventData);
+            if (parsed && typeof parsed.status === 'string') options.onWebSearch?.(parsed as WebSearchOutcome);
+          } catch (err) {
+            console.warn('Failed to parse web_search SSE payload', err);
           }
         } else if (eventType === 'status') {
           try {
