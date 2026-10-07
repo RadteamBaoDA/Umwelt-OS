@@ -114,10 +114,10 @@ export function FeedGadget(props: FeedGadgetProps) {
   return (
     <Tabs value={tab} onValueChange={(value) => setTab(value as 'items' | 'stories')} className="flex h-full min-h-0 flex-col">
       <TabsList aria-label={t('feedTabs')} className="h-auto justify-start gap-1 rounded-none bg-transparent p-0 px-3 pt-2">
-        <TabsTrigger value="items" className="min-h-11 rounded-none text-xs data-[state=active]:bg-transparent data-[state=active]:shadow-none">
+        <TabsTrigger value="items" className="min-h-11 rounded-none border-b-2 border-transparent text-xs text-muted-foreground data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none">
           {t('feedTabItems')}
         </TabsTrigger>
-        <TabsTrigger value="stories" className="min-h-11 rounded-none text-xs data-[state=active]:bg-transparent data-[state=active]:shadow-none">
+        <TabsTrigger value="stories" className="min-h-11 rounded-none border-b-2 border-transparent text-xs text-muted-foreground data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none">
           {t('feedTabStories')}
         </TabsTrigger>
       </TabsList>

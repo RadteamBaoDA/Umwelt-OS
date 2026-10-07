@@ -24,7 +24,7 @@ _UPDATE = sa.text(
     UPDATE documents d SET language = sub.lang
     FROM (
         SELECT d2.id,
-               lower(split_part(replace(btrim(p.provenance_json -> 'metadata' ->> 'language'), '_', '-'), '-', 1)) AS lang
+               lower(split_part(replace(btrim(p.provenance -> 'metadata' ->> 'language'), '_', '-'), '-', 1)) AS lang
         FROM documents d2
         JOIN document_versions v ON v.document_id = d2.id AND v.version_number = d2.current_version
         JOIN normalized_version_provenance p ON p.document_version_id = v.id
@@ -52,9 +52,14 @@ def upgrade() -> None:
             bind.execute(_UPDATE, {"ids": ids, "languages": list(LANGUAGES)})
             last = str(ids[-1])
         # (language, created_at, id): equality on language plus the feed's created_at/id ORDER BY.
+        # A cancelled CONCURRENTLY build leaves an INVALID index that IF NOT EXISTS would keep; drop first.
+        op.drop_index(
+            "ix_documents_language_created_at_id", table_name="documents",
+            postgresql_concurrently=True, if_exists=True,
+        )
         op.create_index(
             "ix_documents_language_created_at_id", "documents", ["language", "created_at", "id"],
-            postgresql_concurrently=True, if_not_exists=True,
+            postgresql_concurrently=True,
         )
 
 
