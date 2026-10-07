@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import binascii
 import hashlib
@@ -1682,7 +1683,7 @@ async def list_evidence_ref_keys(
 async def add_content_chunks(session: AsyncSession, version: DocumentVersion) -> int:
     """Chunk a version's content, add its searchable rows, and return their count."""
     await session.flush()
-    drafts = chunk_text(version.content)
+    drafts = await asyncio.to_thread(chunk_text, version.content)
     for index, draft in enumerate(drafts):
         session.add(DocumentChunk(
             document_version_id=version.id, chunk_index=index, content=draft.content,

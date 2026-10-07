@@ -1198,7 +1198,7 @@ async def process_uploaded_file(ctx: dict[str, object], event_id: str) -> None:
             settings.docx_expanded_max_bytes,
             settings.pdf_page_max,
         )
-        drafts = chunk_text(parsed.text)
+        drafts = await asyncio.to_thread(chunk_text, parsed.text)
         extraction_status = "needs_ocr" if parsed.warnings and not parsed.text else "succeeded"
         async with factory() as session:
             source = await sources.lock_source(session, source_id)
@@ -1308,4 +1308,4 @@ async def cleanup_storage_orphans(ctx: dict[str, object]) -> int:
     settings = cast(Settings, ctx["settings"])
     async with factory() as session:
         referenced = await documents.raw_uris(session)
-    return cleanup_orphaned_files(settings.data_dir, referenced, settings.storage_orphan_grace_seconds)
+    return await asyncio.to_thread(cleanup_orphaned_files, settings.data_dir, referenced, settings.storage_orphan_grace_seconds)

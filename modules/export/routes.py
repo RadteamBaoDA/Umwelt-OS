@@ -1,5 +1,6 @@
 """Owner-authenticated portable export aggregation and download routes."""
 
+import asyncio
 import csv
 import io
 import json
@@ -240,7 +241,7 @@ async def _build_export_response(
         ExportFormat.csv: ("text/csv; charset=utf-8", _render_csv),
     }
     media_type, render = content_types[output_format]
-    content = render(payload)
+    content = await asyncio.to_thread(render, payload)
     if len(content) > MAX_EXPORT_BYTES:
         raise HTTPException(status_code=413, detail="Rendered export exceeds the 32 MiB download bound")
     response.headers["Cache-Control"] = "private, no-store, max-age=0"

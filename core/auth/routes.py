@@ -142,7 +142,7 @@ async def create_owner(
     if not _valid_csrf(request.cookies.get(CSRF_COOKIE), csrf_token, settings):
         raise HTTPException(status_code=403, detail="CSRF token is invalid")
 
-    owner = Owner(id=1, password_hash=hash_password(body.password))
+    owner = Owner(id=1, password_hash=await asyncio.to_thread(hash_password, body.password))
     session.add(owner)
     try:
         await session.commit()
@@ -181,7 +181,7 @@ async def login(
     if not _valid_csrf(request.cookies.get(CSRF_COOKIE), csrf_token, settings):
         raise HTTPException(status_code=403, detail="CSRF token is invalid")
     owner = await _lock_owner(session, 1)
-    if owner is None or not verify_password(owner.password_hash, body.password):
+    if owner is None or not await asyncio.to_thread(verify_password, owner.password_hash, body.password):
         raise HTTPException(status_code=401, detail="Email or password is incorrect")
 
     session_token = secrets.token_urlsafe(32)
@@ -348,7 +348,7 @@ async def reauthenticate(
     owner, auth_session = await _lock_owner_session(
         request, session, auth_session, csrf_token
     )
-    if owner is None or not verify_password(owner.password_hash, body.password):
+    if owner is None or not await asyncio.to_thread(verify_password, owner.password_hash, body.password):
         raise HTTPException(status_code=403, detail="Password is incorrect")
     auth_session.reauthenticated_at = datetime.now(UTC)
     await session.commit()
