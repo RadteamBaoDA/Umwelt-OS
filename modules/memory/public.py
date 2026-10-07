@@ -1055,6 +1055,14 @@ def _to_candidate_read(
     )
 
 
+def _list_filters(status: str, query: str | None) -> list[ColumnElement[bool]]:
+    """Visibility filters shared by the Memory list page and its per-kind counts (type excluded)."""
+    filters: list[ColumnElement[bool]] = [Memory.status == status]
+    if query:
+        filters.append(Memory.content.ilike(f"%{query.strip()}%"))
+    return filters
+
+
 class MemoryService:
     """Service managing memory lifecycle, candidates, evaluation, and privacy settings."""
 
@@ -1097,21 +1105,27 @@ class MemoryService:
             query: Substring search filter against content.
 
         Returns:
-            MemoryPage with items list and next_cursor.
+            MemoryPage with items, next_cursor and (first page only) per-kind counts.
         """
         clamped_limit = max(1, min(limit, 100))
-        stmt = select(Memory).where(Memory.status == status)
+        filters = _list_filters(status, query)
+        stmt = select(Memory).where(*filters)
 
         if memory_type:
             stmt = stmt.where(Memory.memory_type == memory_type)
-        if query:
-            stmt = stmt.where(Memory.content.ilike(f"%{query.strip()}%"))
 
         if cursor:
             created_at, identifier = decode_cursor(cursor)
             stmt = stmt.where(tuple_(Memory.created_at, Memory.id) < (created_at, identifier))
 
         await lock_export_privacy(self.session)
+        kind_counts: dict[str, int] | None = None
+        if cursor is None:  # one aggregate over the same filters; later pages keep the first page's counts
+            kind_counts = {
+                kind: count for kind, count in (await self.session.execute(
+                    select(Memory.memory_type, func.count()).where(*filters).group_by(Memory.memory_type)
+                )).tuples().all()
+            }
         rows = list((await self.session.scalars(
             stmt.order_by(desc(Memory.created_at), desc(Memory.id)).limit(101)
         )).all())
@@ -1133,6 +1147,11 @@ class MemoryService:
         return MemoryPage(
             items=items,
             next_cursor=next_cursor,
+            kind_counts=kind_counts,
+            total_count=(
+                None if kind_counts is None
+                else kind_counts.get(memory_type, 0) if memory_type else sum(kind_counts.values())
+            ),
         )
 
     async def get_memory(self, memory_id: UUID) -> MemoryRead | None:

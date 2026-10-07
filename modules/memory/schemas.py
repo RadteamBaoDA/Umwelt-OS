@@ -108,6 +108,7 @@ class MemoryPage(BaseModel):
     items: list[MemoryRead]
     next_cursor: str | None = None
     total_count: int | None = None
+    kind_counts: dict[str, int] | None = None
 
 
 class MemoryCandidateCreate(BaseModel):

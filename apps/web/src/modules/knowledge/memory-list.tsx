@@ -245,10 +245,11 @@ export function MemoryList() {
 
   const items = memoriesQuery.data?.items ?? [];
   const candidates = candidatesQuery.data?.items ?? [];
-  // Only the active tab shows a count: the server returns no per-kind aggregates, so the count is for the
-  // list currently loaded ("N+" when more pages exist) rather than invented for the other kinds.
-  const page = memoriesQuery.data;
-  const countSuffix = page ? ` ${page.total_count ?? items.length}${page.total_count == null && page.next_cursor ? '+' : ''}` : '';
+  // Per-kind counts come from the server's single aggregate (same status/search filters, forgotten and invalidated
+  // rows excluded). They are absent while loading or on error, so no chip shows an invented number.
+  const kindCounts = memoriesQuery.data?.kind_counts ?? null;
+  const countFor = (key: MemoryFilterType) =>
+    kindCounts ? (key === 'all' ? Object.values(kindCounts).reduce((a, b) => a + b, 0) : (kindCounts[key] ?? 0)) : null;
 
   return (
     <section className="content-panel space-y-6" aria-labelledby="memory-title">
@@ -279,7 +280,10 @@ export function MemoryList() {
                   : 'text-muted-foreground hover:text-foreground'
               }`}
             >
-              {typeKey === 'all' ? t('filterAll') : t(typeKey)}{filterType === typeKey ? countSuffix : ''}
+              {typeKey === 'all' ? t('filterAll') : t(typeKey)}
+              {countFor(typeKey) !== null && (
+                <span className="ml-1.5 tabular-nums opacity-80" aria-label={t('kindCount', { count: countFor(typeKey) ?? 0 })}>{countFor(typeKey)}</span>
+              )}
             </button>
           ))}
         </div>
