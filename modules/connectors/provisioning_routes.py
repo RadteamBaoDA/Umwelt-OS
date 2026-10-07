@@ -847,21 +847,28 @@ async def remove_provider_credential(
         or row.error_code == "deactivation_pending"
     ):
         raise HTTPException(status_code=409, detail="Pause the source before removing its provider credential")
-    revocation_snapshot = None
-    if source.provider == "telegram":
-        revocation_snapshot = await provisioning.get_native_credential_revocation_snapshot(
-            session, source_id, source_generation=source.generation,
-            connector_revision=row.desired_revision, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-        )
-        revocation_access_fence = revocation_snapshot.access_fence if revocation_snapshot is not None else access_fence
-        if revocation_access_fence != access_fence:
-            raise HTTPException(status_code=409, detail="Original credential revocation access changed")
-        await session.rollback()
-        await _owner_access(session, request, scope, expected=revocation_access_fence)
+    # Detach everything needed before any rollback so no expired ORM row is read afterwards.
     desired = dict(row.desired_configuration)
     desired["auth_method"] = "none"
     desired.pop("auth_header_name", None)
+    revocation_snapshot = None
+    if source.provider == "telegram":
+        try:
+            revocation_snapshot = await provisioning.get_native_credential_revocation_snapshot(
+                session, source_id, source_generation=source.generation,
+                connector_revision=row.desired_revision, scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+            )
+        except ValueError as exc:
+            await session.rollback()
+            raise HTTPException(status_code=409, detail="Telegram credential revision changed") from exc
+        if revocation_snapshot.access_fence != access_fence:
+            await session.rollback()
+            raise HTTPException(status_code=409, detail="Original credential revocation access changed")
+        await session.rollback()
+        # Restart from the unchanged original browser/session/access; the save CAS below
+        # rechecks the captured Source G/R. No replacement capture is ever taken.
+        await _owner_access(session, request, scope, expected=revocation_snapshot.access_fence)
     saved = await connector_owner.save_connector_configuration(
         session,
         source,
@@ -875,13 +882,13 @@ async def remove_provider_credential(
         raise HTTPException(status_code=409, detail="Connector configuration revision changed")
     saved_source, updated = saved
     updated.state = "disabled"
-    if source.provider == "telegram":
+    if revocation_snapshot is not None:
         try:
             await provisioning.revoke_native_credential_in_uow(
                 session, source_id, source_generation=saved_source.generation,
                 connector_revision=updated.desired_revision, release_bot_reservation=True,
-                access_fence=revocation_access_fence,
-                expected_native_operation_id=revocation_snapshot.operation_id if revocation_snapshot is not None else None,
+                access_fence=revocation_snapshot.access_fence,
+                expected_native_operation_id=revocation_snapshot.operation_id,
                 multi_workspace_enabled=multi_workspace_enabled, scope=scope,
             )
         except ValueError as exc:
