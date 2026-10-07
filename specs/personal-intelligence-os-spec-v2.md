@@ -1181,6 +1181,21 @@ Citation:
 }
 ```
 
+Web citation (chat answers with an explicit per-message web search opt-in only). The server builds it from a sanitized provider result; the model supplies only the number. Only cited results are stored. Web citations are numbered after the document citations.
+
+```json
+{
+  "sourceType": "web",
+  "url": "https://...",
+  "title": "...",
+  "quote": "<snippet, at most 500 characters>",
+  "provider": "tavily",
+  "retrievedAt": "..."
+}
+```
+
+An answer grounded only in web citations is shown (with Web badges) only when at least one web citation exists and no document citation marker was dropped as invalid or out of range; otherwise the insufficient-evidence answer applies.
+
 ---
 
 # 36. MEMORY ARCHITECTURE

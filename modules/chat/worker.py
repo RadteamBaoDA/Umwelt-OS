@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import time
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
@@ -16,6 +17,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from core.config import Settings
 from core.model_gateway.client import ModelGateway
 from core.model_gateway.schemas import RequestPolicy
+from core.model_gateway.transport import (
+    EndpointNetworkPolicyError,
+    approved_web_search_transport,
+    body_sent,
+)
+from modules.chat import web_search as web
 from modules.chat.citations import (
     parse_citation_markers,
     renumber_citation_markers,
@@ -34,10 +41,18 @@ from modules.chat.retrieval import (
     format_grounded_context,
     revalidate_context_fence,
 )
-from modules.chat.schemas import AnswerContextRequest, Citation
+from modules.chat.schemas import (
+    WEB_SEARCH_KEY,
+    WEB_SEARCH_OUTCOME_KEY,
+    AnswerContextRequest,
+    Citation,
+    WebCitation,
+    WebSearchOutcomeRead,
+)
 from modules.chat.stream import make_event_id
 from modules.memory.public import lock_export_privacy, read_export_privacy
 from modules.settings import public as settings_public
+from modules.sources import public as sources_public
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +66,12 @@ RECOVER_PENDING_AFTER = timedelta(seconds=15)
 RECOVER_STREAMING_AFTER = timedelta(seconds=660)  # arq job_timeout 600 s plus margin
 EPHEMERAL_TTL = timedelta(hours=24)
 SHUTDOWN_RELEASE_TIMEOUT = 5.0  # docker stop grace is 10 s; arq awaits the job task before closing
+# Web search egress fence: lock wait + DNS + connect + request body, while the privacy key is held (review P2-1).
+WEB_SEARCH_FENCE_SECONDS = 4.0
+WEB_SEARCH_UNAVAILABLE_PROMPT = (
+    "Web search was requested but is unavailable for this answer; do not claim to have searched the web."
+)
+_WEB_UNAVAILABLE_CODES = frozenset({"timeout", "provider_error", "network_denied"})
 
 
 class PrivacyFenceChanged(RuntimeError):
@@ -195,6 +216,148 @@ async def _next_event_seq(session: AsyncSession, response_id: UUID, current_seq:
         StreamEvent.response_id == response_id,
     ))
     return max(current_seq, latest or 0) + 1
+
+
+@dataclass(frozen=True)
+class _WebSearchRun:
+    """One run's search outcome. ``results`` live only in worker memory; only cited ones are persisted."""
+
+    outcome: dict[str, Any]
+    results: tuple[web.WebSearchResult, ...] = ()
+    provider: str = ""
+    retrieved_at: datetime | None = None
+
+
+def _web_search_run(
+    reason: str | None, results: list[web.WebSearchResult] | None = None, provider: str = "",
+) -> _WebSearchRun:
+    """Map a code to the persisted outcome: None -> used (no_results when empty), transport codes -> unavailable, else skipped."""
+    found = tuple(results or ())
+    if reason is None:
+        status, reason = "used", (None if found else "no_results")
+    else:
+        status = "unavailable" if reason in _WEB_UNAVAILABLE_CODES else "skipped"
+    outcome = WebSearchOutcomeRead.model_validate(
+        {"status": status, "reason": reason, "result_count": len(found)},
+    ).model_dump()
+    return _WebSearchRun(outcome, found, provider, datetime.now(UTC) if found else None)
+
+
+async def _search_for_run(
+    message: str,
+    scoped_source_ids: list[UUID],
+    response_id: UUID,
+    conversation_id: UUID,
+    expected_fence: object,
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    redis: Redis,
+) -> _WebSearchRun:
+    """Run the opted-in web search for the literal user message. Never raises except CancelledError.
+
+    Uses only its own ``session_factory()`` session (never the retrieval session). The decision is made
+    inside the egress fence (review P1-1): privacy -> Conversation -> Run (``_lock_live_response``), then
+    ``ai_settings`` FOR SHARE as a leaf, then consent/provider/endpoint/key and scoped ``local_only`` are
+    re-read in that transaction. The fence is released when the request body has been handed to
+    ``transport.write`` (``body_sent``, the same hook as the model send fence), or in ``finally`` on any
+    earlier exit, so no DB connection or lock is held while waiting for the provider (review P2-1).
+    """
+    try:
+        web.normalize_query(message)
+    except web.WebSearchError as exc:
+        return _web_search_run(exc.code)
+    async with session_factory() as fence:
+        released = False
+
+        async def release() -> None:
+            """Roll back the fence transaction once (returns its connection); never raises."""
+            nonlocal released
+            if released:
+                return
+            released = True
+            try:
+                await fence.rollback()
+            except Exception as exc:  # noqa: BLE001  # must not raise into httpcore; close() still runs on exit
+                logger.warning("Web search fence release failed (%s)", type(exc).__name__)
+
+        try:
+            async with asyncio.timeout(WEB_SEARCH_FENCE_SECONDS) as deadline:
+                try:
+                    await _lock_live_response(fence, response_id, conversation_id, expected_fence)
+                except (PrivacyFenceChanged, ResponseNoLongerActive):
+                    return _web_search_run("run_inactive")  # the next main-path fence cancels/redacts as today
+                if await is_run_cancelled(response_id, redis):
+                    return _web_search_run("run_inactive")
+                await settings_public.lock_ai_settings_for_share(fence)
+                config = await settings_public.get_ai_execution_config(fence, settings, redis)
+                endpoint = config.web_search_endpoint
+                if not web.web_search_permitted(config) or not endpoint:
+                    return _web_search_run("not_configured")
+                for source_id in scoped_source_ids:
+                    source = await sources_public.get_source_fence(fence, source_id)
+                    if source is not None and source.local_only:
+                        return _web_search_run("local_only_context")
+                # ponytail: a P14 shutdown re-pend re-runs the search on re-claim, so the cap counts it twice.
+                if not await web.consume_daily_quota(redis, settings_public.OWNER_ID, settings.web_search_daily_limit):
+                    return _web_search_run("daily_limit")
+                provider = config.web_search_provider
+                transport = approved_web_search_transport(  # one per search: search() closes it
+                    endpoint, settings.ai_allowed_endpoint_hosts, settings.web_search_allowed_cidrs,
+                )
+
+                async def body_written() -> None:
+                    await release()
+                    deadline.reschedule(None)  # the body is out; search()'s own total timeout bounds the rest
+
+                token = body_sent.set(body_written)
+                try:
+                    results = await web.search(
+                        provider, endpoint, config.web_search_api_key, message, transport=transport,
+                    )
+                finally:
+                    body_sent.reset(token)
+            return _web_search_run(None, results, provider)
+        except web.WebSearchError as exc:
+            return _web_search_run(exc.code)
+        except EndpointNetworkPolicyError:
+            return _web_search_run("network_denied")
+        except TimeoutError:
+            return _web_search_run("timeout")
+        except Exception as exc:  # noqa: BLE001  # boundary: a search failure must never fail the answer
+            logger.warning("Web search failed for run %s (%s)", response_id, type(exc).__name__)
+            return _web_search_run("provider_error")
+        finally:
+            await release()
+
+
+async def _stop_search(task: "asyncio.Task[_WebSearchRun]") -> None:
+    """Cancel a pending search and wait for its fence cleanup (bounded like the shutdown release)."""
+    task.cancel()
+    await asyncio.wait({task}, timeout=SHUTDOWN_RELEASE_TIMEOUT)
+
+
+async def _publish_web_search(
+    session_factory: async_sessionmaker[AsyncSession],
+    response_id: UUID,
+    conversation_id: UUID,
+    expected_fence: object,
+    current_seq: int,
+    outcome: dict[str, Any],
+) -> int:
+    """Persist ``_web_search_outcome`` and publish the URL-free ``web_search`` event in one locked transaction."""
+    async with session_factory() as session:
+        _, live_run = await _lock_live_response(session, response_id, conversation_id, expected_fence)
+        live_run.retrieval_context = {**dict(live_run.retrieval_context or {}), WEB_SEARCH_OUTCOME_KEY: outcome}
+        seq = await _next_event_seq(session, response_id, current_seq)
+        session.add(StreamEvent(
+            response_id=response_id,
+            seq=seq,
+            event_type="web_search",
+            event_id=make_event_id(response_id, seq),
+            data=dict(outcome),
+        ))
+        await session.commit()
+    return seq
 
 
 async def purge_expired_chat_runs(ctx: dict[str, object]) -> int:
@@ -501,10 +664,27 @@ async def run_response_generation(
             # retrieval may be slow, so publication and request opening reacquire it separately.
             await session.commit()
 
-            # Grounded retrieval
-            answer_context = await build_context(
-                session, session_factory, redis, settings, answer_request,
-            )
+            # Grounded retrieval, with the opted-in web search running concurrently in its own task and
+            # sessions (create_task, not TaskGroup: exceptions keep their type; review P2-3).
+            web_opt_in = req_params.get(WEB_SEARCH_KEY)
+            search_task = asyncio.create_task(_search_for_run(
+                user_prompt,
+                [*answer_request.source_scope, *(f.source_id for f in answer_request.selection_fences)],
+                response_id, conversation_id, privacy_fence, session_factory, settings, redis,
+            )) if isinstance(web_opt_in, dict) and web_opt_in.get("requested") is True else None
+            try:
+                answer_context = await build_context(
+                    session, session_factory, redis, settings, answer_request,
+                )
+                web_run = await search_task if search_task is not None else None
+            except BaseException:
+                if search_task is not None:
+                    await _stop_search(search_task)
+                raise
+            if web_run is not None:
+                seq = await _publish_web_search(
+                    session_factory, response_id, conversation_id, privacy_fence, seq, web_run.outcome,
+                )
 
             # Recheck cancellation before model egress
             if await is_run_cancelled(response_id, redis):
@@ -605,6 +785,16 @@ async def run_response_generation(
                 )
                 + format_grounded_context(answer_context)
             )
+            evidence_count = len(answer_context.evidence)
+            web_results = list(web_run.results) if web_run is not None else []
+            if web_results:
+                system_text += (
+                    "\n\nWeb results are numbered after the evidence; cite a web result you use with its "
+                    "bracketed number from <web_results> in the same way.\n\n"
+                    + web.format_web_results(web_results, evidence_count + 1)
+                )
+            elif web_run is not None and web_run.outcome["status"] != "used":
+                system_text += "\n\n" + WEB_SEARCH_UNAVAILABLE_PROMPT
             messages_payload: list[dict[str, str]] = [
                 {"role": "system", "content": system_text},
                 *prior_messages,
@@ -701,14 +891,19 @@ async def run_response_generation(
         # always raised AttributeError and failed every response. Validate the retrieved evidence
         # as candidate citations through validate_answer_citations(), which returns a ValidatedAnswer.
         # Only evidence the answer actually cites becomes a citation, in first-cited order.
-        cited_numbers = parse_citation_markers(accumulated_text, len(answer_context.evidence))
+        # Combined numbering: evidence 1..k, web k+1..k+m. Documents are validated as before; a cited web
+        # number becomes a server-built WebCitation numbered after the kept documents. Uncited results drop.
+        total_count = evidence_count + len(web_results)
+        cited_numbers = parse_citation_markers(accumulated_text, total_count)
+        doc_numbers = [n for n in cited_numbers if n <= evidence_count]
+        web_numbers = [n for n in cited_numbers if n > evidence_count]
 
         def _evidence_key(n: int) -> tuple[UUID, UUID]:
             item = answer_context.evidence[n - 1]
             return item.document_version_id, item.chunk_id
 
         first_by_key: dict[tuple[UUID, UUID], int] = {}
-        for n in cited_numbers:
+        for n in doc_numbers:
             first_by_key.setdefault(_evidence_key(n), n)
         unique_numbers = list(first_by_key.values())
         candidate_citations: list[Citation | dict[str, Any]] = [
@@ -723,11 +918,30 @@ async def run_response_generation(
         validated = validate_answer_citations(accumulated_text, candidate_citations, answer_context.evidence)
         kept = {(c.documentVersionId, c.chunkId): i for i, c in enumerate(validated.citations, 1)}
         number_map = {
-            n: kept[key] for n in cited_numbers
+            n: kept[key] for n in doc_numbers
             if (key := _evidence_key(n)) in kept
         }
-        final_answer = renumber_citation_markers(validated.answer, number_map, len(answer_context.evidence))
-        valid_citations = [c.model_dump(by_alias=True) for c in validated.citations]
+        answer_text = validated.answer
+        web_citations: list[dict[str, Any]] = []
+        if web_numbers and web_run is not None:
+            # Owner ruling (review P2-5): a web-only answer is kept only when no document marker was dropped
+            # as invalid and no marker is out of range; otherwise the insufficient-evidence answer stands.
+            web_only = (
+                not validated.citations
+                and all(n in number_map for n in doc_numbers)
+                and all(n <= total_count for n in parse_citation_markers(accumulated_text, 10_000))
+            )
+            if validated.citations or web_only:
+                answer_text = accumulated_text if web_only else answer_text
+                for n in web_numbers:
+                    hit = web_run.results[n - evidence_count - 1]
+                    number_map[n] = len(validated.citations) + len(web_citations) + 1
+                    web_citations.append(WebCitation(
+                        url=hit.url, title=hit.title, quote=hit.snippet,
+                        provider=web_run.provider, retrievedAt=web_run.retrieved_at or datetime.now(UTC),
+                    ).model_dump(mode="json"))
+        final_answer = renumber_citation_markers(answer_text, number_map, total_count)
+        valid_citations = [c.model_dump(by_alias=True) for c in validated.citations] + web_citations
 
         async with session_factory() as session:
             _, live_run = await _lock_live_response(session, response_id, conversation_id, privacy_fence)
