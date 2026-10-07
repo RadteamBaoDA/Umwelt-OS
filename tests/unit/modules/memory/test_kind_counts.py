@@ -56,9 +56,20 @@ async def test_counts_never_exceed_visible_list() -> None:
     assert page.total_count == 4 and page.kind_counts == {"fact": 3, "preference": 1}
 
 
-async def test_type_filter_total_uses_that_kind() -> None:
-    page = await _page(_rows(["fact", "preference", "fact"]), memory_type="preference")
-    assert page.total_count == 1 and page.kind_counts == {"fact": 2, "preference": 1}
+async def test_type_filter_skips_counts() -> None:
+    page = await _page(_rows(["fact", "preference", "fact"]), memory_type="preference", hidden={0, 1, 2})
+    assert page.kind_counts is None and page.total_count is None and page.counts_capped is False
+
+
+async def test_scan_cap_looks_identical_to_verified_cap() -> None:
+    """Many hidden rows and 1 visible: capped with no numbers, same shape as the >200 visible case."""
+    n = public.COUNT_SCAN_CAP + public._COUNT_BATCH
+    page = await _page(_rows(["fact"] * n), hidden=set(range(1, n)))
+    over = await _page(_rows(["fact"] * (public.COUNT_VERIFIED_CAP + 1)))
+    assert (page.counts_capped, page.kind_counts, page.total_count) == (True, None, None)
+    assert (page.counts_capped, page.kind_counts, page.total_count) == (
+        over.counts_capped, over.kind_counts, over.total_count,
+    )
 
 
 async def test_capped_returns_flag_and_no_numbers() -> None:

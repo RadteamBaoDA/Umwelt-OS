@@ -1064,7 +1064,7 @@ def _list_filters(status: str, query: str | None) -> list[ColumnElement[bool]]:
 
 
 COUNT_VERIFIED_CAP = 200
-COUNT_SCAN_CAP = 2000
+COUNT_SCAN_CAP = 400  # 2x verified cap bounds the hold time on the global privacy key
 _COUNT_BATCH = 100
 
 
@@ -1144,7 +1144,7 @@ class MemoryService:
             query: Substring search filter against content.
 
         Returns:
-            MemoryPage with items, next_cursor and (first page only) per-kind counts.
+            MemoryPage with items, next_cursor and (unfiltered first page only) per-kind counts.
         """
         clamped_limit = max(1, min(limit, 100))
         filters = _list_filters(status, query)
@@ -1160,7 +1160,7 @@ class MemoryService:
         await lock_export_privacy(self.session)
         kind_counts: dict[str, int] | None = None
         counts_capped = False
-        if cursor is None:  # later pages keep the first page's counts
+        if cursor is None and memory_type is None:  # counts are per kind: only unfiltered first pages carry them
             kind_counts = await _visible_kind_counts(self.session, filters)
             counts_capped = kind_counts is None
         rows = list((await self.session.scalars(
@@ -1186,10 +1186,7 @@ class MemoryService:
             next_cursor=next_cursor,
             kind_counts=kind_counts,
             counts_capped=counts_capped,
-            total_count=(
-                None if kind_counts is None
-                else kind_counts.get(memory_type, 0) if memory_type else sum(kind_counts.values())
-            ),
+            total_count=None if kind_counts is None else sum(kind_counts.values()),
         )
 
     async def get_memory(self, memory_id: UUID) -> MemoryRead | None:

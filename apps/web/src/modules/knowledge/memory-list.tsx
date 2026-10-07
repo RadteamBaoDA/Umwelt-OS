@@ -3,7 +3,7 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeftIcon } from 'lucide-react';
 import Link from 'next/link';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import {
@@ -39,8 +39,6 @@ import {
   type MemoryCandidate,
   type MemoryItem,
 } from './api';
-
-const COUNT_CAP = 200; // mirrors COUNT_VERIFIED_CAP in modules/memory/public.py
 
 type MemoryFilterType = 'all' | 'fact' | 'preference' | 'instruction';
 
@@ -212,11 +210,25 @@ export function MemoryList() {
   const [editItem, setEditItem] = useState<MemoryItem | null>(null);
   const [forgetItem, setForgetItem] = useState<MemoryItem | null>(null);
 
+  const [debouncedQuery, setDebouncedQuery] = useState('');
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedQuery(searchQuery), 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
   const queryType = filterType === 'all' ? undefined : filterType;
+  const q = debouncedQuery || undefined;
   const memoriesQuery = useQuery({
-    queryKey: memoryKeys.list('active', queryType, searchQuery || undefined),
-    queryFn: () => listMemories(undefined, queryType, 'active', searchQuery || undefined),
-    placeholderData: keepPreviousData, // chip counts do not flicker while the type filter switches
+    queryKey: memoryKeys.list('active', queryType, q),
+    queryFn: () => listMemories(undefined, queryType, 'active', q),
+    placeholderData: keepPreviousData,
+  });
+  // Counts are per kind and the server only computes them for unfiltered pages: this query is shared with the list
+  // when the All chip is active, so switching type chips never triggers a recount.
+  const countsQuery = useQuery({
+    queryKey: memoryKeys.list('active', undefined, q),
+    queryFn: () => listMemories(undefined, undefined, 'active', q),
+    placeholderData: keepPreviousData,
   });
 
   const candidatesQuery = useQuery({
@@ -249,9 +261,8 @@ export function MemoryList() {
   const items = memoriesQuery.data?.items ?? [];
   const candidates = candidatesQuery.data?.items ?? [];
   // Counts cover only rows the list itself would show (server verifies each row). Past the cap the server sends no
-  // numbers, so only the All chip shows "200+"; "All" also includes decision/procedural kinds that have no chip.
-  const kindCounts = memoriesQuery.data?.kind_counts ?? null;
-  const capped = memoriesQuery.data?.counts_capped === true;
+  // numbers (no cap marker either, so a capped result never hints at hidden rows); "All" also includes decision/procedural kinds that have no chip.
+  const kindCounts = countsQuery.data?.kind_counts ?? null;
   const countFor = (key: MemoryFilterType) =>
     kindCounts ? (key === 'all' ? Object.values(kindCounts).reduce((a, b) => a + b, 0) : (kindCounts[key] ?? 0)) : null;
 
@@ -274,7 +285,6 @@ export function MemoryList() {
         <div role="group" aria-label={t('filterByType')} className="flex rounded-md border border-input bg-background p-0.5">
           {(['all', 'fact', 'preference', 'instruction'] as const).map((typeKey) => {
             const n = countFor(typeKey);
-            const showCap = capped && typeKey === 'all';
             return (
             <button
               key={typeKey}
@@ -292,12 +302,6 @@ export function MemoryList() {
                 <>
                   <span className="ml-1.5 tabular-nums" aria-hidden="true">{n}</span>
                   <span className="sr-only">{t('kindCount', { count: n })}</span>
-                </>
-              )}
-              {showCap && (
-                <>
-                  <span className="ml-1.5 tabular-nums" aria-hidden="true">{COUNT_CAP}+</span>
-                  <span className="sr-only">{t('kindCountCapped', { count: COUNT_CAP })}</span>
                 </>
               )}
             </button>
