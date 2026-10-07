@@ -5,9 +5,11 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -23,11 +25,23 @@ from core.database import Base
 
 
 class AgentRun(Base):
-    """Own run identity, budgets, and the durable marker for an originally linked Chat lifetime."""
+    """Own run identity, budgets, and the durable marker for an originally linked Chat lifetime.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    Original membership/workspace-configuration epochs are a nullable positive pair with
+    no defaults; NULL preserves unproven legacy authority. Execution, publication and
+    reads must be quarantined by converted consumers until an original pair is proven.
+    Scalar epochs survive payload redaction; admitted destructive cleanup remains possible.
+    """
 
     __tablename__ = "agent_runs"
     __table_args__ = (
-        CheckConstraint("owner_id = 1", name="ck_agent_runs_single_owner"),
+        CheckConstraint(
+            "(membership_revision IS NULL AND configuration_revision IS NULL) OR "
+            "(membership_revision IS NOT NULL AND configuration_revision IS NOT NULL "
+            "AND membership_revision > 0 AND configuration_revision > 0)",
+            name="ck_w2_agent_runs_original_epoch",
+        ),
         CheckConstraint(
             "status IN ('queued','running','waiting_approval','succeeded','failed','cancelled')",
             name="ck_agent_runs_status",
@@ -43,12 +57,22 @@ class AgentRun(Base):
         Index("ix_agent_runs_owner_created", "owner_id", "created_at", "id"),
         Index("ix_agent_runs_trace_retention", "trace_redacted_at", "status", "completed_at", "id"),
         Index("ix_agent_runs_source_fences_gin", "source_fences", postgresql_using="gin"),
-        UniqueConstraint("owner_id", "auth_session_hash", "client_request_id", name="uq_agent_runs_session_request"),
+        UniqueConstraint("workspace_id", "owner_id", "auth_session_hash", "client_request_id", name="uq_agent_runs_session_request"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_agent_runs_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "owner_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_agent_runs_principal", ondelete="RESTRICT"),
+        UniqueConstraint("workspace_id", "id", name="uq_w2_agent_runs_id"),
+        Index("ix_w2_agent_runs_scope", 'workspace_id', 'id'),
+        Index("ix_w2_agent_runs_work", 'workspace_id', 'created_at', 'id'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    membership_revision: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    configuration_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     owner_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("owner.id", ondelete="CASCADE"), nullable=False, default=1
+        Integer, ForeignKey("owner.id", ondelete="CASCADE"), nullable=False
     )
     auth_session_hash: Mapped[str] = mapped_column(
         String(64), nullable=False
@@ -96,6 +120,7 @@ class AgentRun(Base):
     trace_redacted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+
 class AgentToolCall(Base):
     """Keep bounded tool identity, immutable arguments, and exact model-input evidence provenance."""
 
@@ -139,23 +164,33 @@ class AgentToolCall(Base):
 
 
 class AgentApproval(Base):
-    """Persist an immutable owner decision request tied to one run tool ordinal and exact action."""
+    """Persist an immutable owner decision request tied to one run tool ordinal and exact action.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
 
     __tablename__ = "agent_approvals"
     __table_args__ = (
         UniqueConstraint("run_id", "ordinal", name="uq_agent_approvals_run_ordinal"),
         CheckConstraint("ordinal BETWEEN 1 AND 10", name="ck_agent_approvals_ordinal"),
-        CheckConstraint("owner_id = 1", name="ck_agent_approvals_single_owner"),
         CheckConstraint("status IN ('pending','approved','denied','expired','cancelled','requires_review')", name="ck_agent_approvals_status"),
         CheckConstraint("octet_length(arguments::text) <= 64000", name="ck_agent_approvals_argument_bytes"),
         Index("ix_agent_approvals_owner_state_expiry", "owner_id", "status", "expires_at"),
         Index("ix_agent_approvals_retention", "run_id", "status"),
         Index("ix_agent_approvals_source_fences_gin", "source_fences", postgresql_using="gin"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_agent_approvals_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "owner_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_agent_approvals_principal", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "run_id"], ["agent_runs.workspace_id", "agent_runs.id"], name="fk_w2_agent_approvals_run_id", ondelete="CASCADE"),
+        Index("ix_w2_agent_approvals_scope", 'workspace_id', 'id'),
+        Index("ix_w2_agent_approvals_work", 'workspace_id', 'created_at', 'id'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     action_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False, unique=True)
-    run_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False)
+    run_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     owner_id: Mapped[int] = mapped_column(Integer, nullable=False)
     auth_session_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -174,8 +209,12 @@ class AgentApproval(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
 
+
 class AgentEvidenceCleanup(Base):
-    """Retain an operation-scoped revocation and lease-finalization receipt for one run."""
+    """Retain an operation-scoped revocation and lease-finalization receipt for one run.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
 
     __tablename__ = "agent_evidence_cleanups"
     __table_args__ = (
@@ -183,12 +222,19 @@ class AgentEvidenceCleanup(Base):
         CheckConstraint("state IN ('pending','finalized','unavailable')", name="ck_agent_evidence_cleanups_state"),
         CheckConstraint("matched_identity IS NULL OR octet_length(matched_identity::text) <= 2048", name="ck_agent_evidence_cleanups_identity_bytes"),
         Index("ix_agent_evidence_cleanups_operation_state_run", "operation_id", "state", "run_id"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_agent_evidence_cleanups_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "run_id"], ["agent_runs.workspace_id", "agent_runs.id"], name="fk_w2_agent_evidence_cleanups_run_id", ondelete="CASCADE"),
+        Index("ix_w2_agent_evidence_cleanups_scope", 'workspace_id', 'id'),
+        Index("ix_w2_agent_evidence_cleanups_work", 'workspace_id', 'created_at', 'id'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     operation_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     run_id: Mapped[UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False,
+        Uuid(as_uuid=True), nullable=False,
     )
     source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     document_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
@@ -201,8 +247,12 @@ class AgentEvidenceCleanup(Base):
     finalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+
 class AgentEffect(Base):
-    """Keep a no-replay action tombstone independently of its purgeable provider payload."""
+    """Keep a no-replay action tombstone independently of its purgeable provider payload.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
 
     __tablename__ = "agent_effects"
     __table_args__ = (
@@ -210,7 +260,15 @@ class AgentEffect(Base):
         CheckConstraint("payload IS NULL OR octet_length(payload::text) <= 64000", name="ck_agent_effects_payload_bytes"),
         Index("ix_agent_effects_run_created", "run_id", "created_at"),
         Index("ix_agent_effects_retention", "run_id", "state"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_agent_effects_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "actor_user_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_agent_effects_principal", ondelete="RESTRICT"),
+        Index("ix_w2_agent_effects_scope", 'workspace_id', 'action_id'),
+        Index("ix_w2_agent_effects_work", 'workspace_id', 'created_at', 'action_id'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    actor_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+
 
     action_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
     run_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
@@ -226,21 +284,30 @@ class AgentEffect(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
 
+
 class AgentProfile(Base):
-    """Own the current editable specialist profile while preserving each immutable revision."""
+    """Own the current editable specialist profile while preserving each immutable revision.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
 
     __tablename__ = "agent_profiles"
     __table_args__ = (
-        CheckConstraint("owner_id = 1", name="ck_agent_profiles_single_owner"),
         CheckConstraint("profile_id IN ('supervisor','knowledge','research','personal','project','news','planning','automation')", name="ck_agent_profiles_id"),
         CheckConstraint("revision >= 1", name="ck_agent_profiles_revision"),
         CheckConstraint("octet_length(prompt) <= 32000", name="ck_agent_profiles_prompt_bytes"),
         CheckConstraint("jsonb_array_length(allowed_tools) <= 32", name="ck_agent_profiles_tools_count"),
         CheckConstraint("jsonb_array_length(source_ids) <= 32", name="ck_agent_profiles_sources_count"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_agent_profiles_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "owner_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_agent_profiles_principal", ondelete="RESTRICT"),
+        Index("ix_w2_agent_profiles_work", 'workspace_id', 'updated_at', 'profile_id'),
     )
 
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+
+
     profile_id: Mapped[str] = mapped_column(String(24), primary_key=True)
-    owner_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    owner_id: Mapped[int] = mapped_column(Integer, nullable=False)
     enabled: Mapped[bool] = mapped_column(nullable=False, default=True)
     model_alias: Mapped[str] = mapped_column(String(64), nullable=False)
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
@@ -250,20 +317,31 @@ class AgentProfile(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
 
+
 class AgentProfileRevision(Base):
-    """Retain a content-addressed profile snapshot referenced by durable runs."""
+    """Retain a content-addressed profile snapshot referenced by durable runs.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
 
     __tablename__ = "agent_profile_revisions"
     __table_args__ = (
-        CheckConstraint("owner_id = 1", name="ck_agent_profile_revisions_single_owner"),
         CheckConstraint("revision >= 1", name="ck_agent_profile_revisions_revision"),
-        UniqueConstraint("profile_id", "revision", name="uq_agent_profile_revisions_version"),
+        UniqueConstraint("workspace_id", "profile_id", "revision", name="uq_agent_profile_revisions_version"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_agent_profile_revisions_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "owner_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_agent_profile_revisions_principal", ondelete="RESTRICT"),
+        Index("ix_w2_agent_profile_revisions_scope", 'workspace_id', 'id'),
+        Index("ix_w2_agent_profile_revisions_work", 'workspace_id', 'created_at', 'id'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     profile_id: Mapped[str] = mapped_column(String(24), nullable=False)
-    owner_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    owner_id: Mapped[int] = mapped_column(Integer, nullable=False)
     revision: Mapped[int] = mapped_column(Integer, nullable=False)
     snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     snapshot_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+

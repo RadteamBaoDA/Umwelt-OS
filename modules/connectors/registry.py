@@ -1,16 +1,16 @@
 from typing import Any
 from urllib.parse import urlsplit
 
-from modules.connectors.public import (
-    DEFAULT_TIMEZONE,
+from modules.connectors.backends import (
+    GENERIC_SOURCE_TYPES,
     NATIVE_PROVIDERS,
     PROVIDER_SOURCE_TYPES,
-    ConnectorConfig,
     is_native_provider,
 )
+from modules.connectors.public import DEFAULT_TIMEZONE, ConnectorConfig
 from modules.sources.schemas import ConnectorSource
 
-SUPPORTED_TYPES = {"rss", "web", "api"}
+SUPPORTED_TYPES = GENERIC_SOURCE_TYPES - {"mcp"}
 
 
 def configuration(source: ConnectorSource) -> ConnectorConfig:

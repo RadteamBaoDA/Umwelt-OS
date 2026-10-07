@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     setup_token: SecretStr = SecretStr("")
     csrf_signing_secret: SecretStr = SecretStr("")
     session_lifetime_hours: int = Field(default=24, gt=0, le=720)
+    # Enable only after W4 scope review and V1 security validation; legacy/operator access stays bootstrap-only.
+    multi_workspace_enabled: bool = Field(default=False, validation_alias="BBD_MULTI_WORKSPACE_ENABLED")
     google_client_id: str = ""
     google_client_secret: SecretStr = SecretStr("")
     github_app_client_id: str = ""

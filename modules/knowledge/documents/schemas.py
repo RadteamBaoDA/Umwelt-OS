@@ -330,6 +330,53 @@ class NormalizedDocumentInput(BaseModel):
         return self
 
 
+class NormalizedDocumentKeyState(BaseModel):
+    """Detached exact-key comparison state, including identity absence and tombstones.
+
+    No field proves a retained lock or grants permission. UUIDs and key spelling are
+    strict; an absent identity cannot carry a pointer or deletion timestamp.
+    """
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    external_id: str = Field(min_length=1, max_length=512)
+    document_id: UUID | None
+    normalized_identity_id: UUID | None
+    identity_document_id: UUID | None
+    tombstoned_at: datetime | None
+
+    @model_validator(mode="after")
+    def validate_identity_shape(self) -> "NormalizedDocumentKeyState":
+        """Reject fabricated absent-identity pointers and naive deletion timestamps."""
+        if self.normalized_identity_id is None and (
+            self.identity_document_id is not None or self.tombstoned_at is not None
+        ):
+            raise ValueError("Absent normalized identity cannot carry retained fields")
+        if self.tombstoned_at is not None and (
+            self.tombstoned_at.tzinfo is None or self.tombstoned_at.utcoffset() is None
+        ):
+            raise ValueError("Normalized tombstone must be timezone aware")
+        return self
+
+
+class NormalizedDocumentPreparation(BaseModel):
+    """Immutable bounded comparisons for one transaction's prepared Source keys.
+
+    Only Documents produces successor identity state after its exact local writes;
+    callers discard it on commit/rollback and retain actual ordered locks separately.
+    """
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    workspace_id: UUID
+    source_id: UUID
+    source_generation: int = Field(ge=1)
+    keys: tuple[NormalizedDocumentKeyState, ...] = Field(max_length=32)
+
+    @model_validator(mode="after")
+    def validate_unique_keys(self) -> "NormalizedDocumentPreparation":
+        """Require one comparison per exact external key; empty preparation grants no writes."""
+        if len({key.external_id for key in self.keys}) != len(self.keys):
+            raise ValueError("Normalized preparation keys must be unique")
+        return self
+
+
 class NormalizedDocumentResult(BaseModel):
     """Report normalization disposition, selected revision, and generated chunks."""
     disposition: Literal["normalized", "duplicate", "tombstoned"]

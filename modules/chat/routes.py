@@ -188,15 +188,17 @@ def _token_hash(request: Request) -> str | None:
 
 
 async def _session_is_current(request: Request) -> bool | None:
-    """Verify session validity against the database within a bounded timeout.
+    """Admit only complete active bootstrap sessions to this unconverted legacy stream.
 
     Args:
         request: FastAPI HTTP request containing app state session factory.
 
     Returns:
-        True if the session exists and has not expired; False if invalid or expired;
-        None if database read timed out.
+        True for a live bootstrap session and complete active account; False otherwise,
+        including nonbootstrap sessions even with the rollout flag on; None on timeout.
     """
+    from core.auth.public import revalidate_owner_session
+
     th = _token_hash(request)
     if th is None or not _TOKEN_RE.fullmatch(th):
         return False
@@ -204,13 +206,7 @@ async def _session_is_current(request: Request) -> bool | None:
     try:
         async with asyncio.timeout(DB_READ_TIMEOUT):
             async with factory() as session:
-                found = await session.scalar(
-                    select(AuthSession.token_hash).where(
-                        AuthSession.token_hash == th,
-                        AuthSession.expires_at > datetime.now(UTC),
-                    ).limit(1)
-                )
-                return found is not None
+                return await revalidate_owner_session(session, th, 1)
     except TimeoutError:
         return None
 

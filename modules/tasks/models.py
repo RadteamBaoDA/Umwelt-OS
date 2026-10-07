@@ -9,6 +9,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     String,
     Text,
@@ -27,6 +28,8 @@ class Task(Base):
     Tracks execution lifecycle across inbox, todo, in_progress, blocked, done, and cancelled,
     supporting date-only or instant deadlines, optimistic revisions, and a deletion tombstone so
     accepted proposal identities remain replayable after a task leaves normal views.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
     """
 
     __tablename__ = "tasks"
@@ -52,11 +55,20 @@ class Task(Base):
         Index("ix_tasks_goal_id", "goal_id"),
         Index("ix_tasks_created_at", "created_at"),
         Index("ix_tasks_owner_deleted_at", "owner_id", "deleted_at"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_tasks_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "owner_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_tasks_principal", ondelete="RESTRICT"),
+        # Scalar SET NULL clears only the parent ID; this deferred FK retains workspace.
+        ForeignKeyConstraint(["workspace_id", "goal_id"], ["goals.workspace_id", "goals.id"], name="fk_w2_tasks_goal_id", ondelete="NO ACTION", deferrable=True, initially="DEFERRED"),
+        Index("ix_w2_tasks_scope", 'workspace_id', 'id'),
+        Index("ix_w2_tasks_work", 'workspace_id', 'created_at', 'id'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     owner_id: Mapped[int] = mapped_column(
-        ForeignKey("owner.id", ondelete="CASCADE"), nullable=False, default=1
+        ForeignKey("owner.id", ondelete="CASCADE"), nullable=False
     )
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -78,3 +90,4 @@ class Task(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
+

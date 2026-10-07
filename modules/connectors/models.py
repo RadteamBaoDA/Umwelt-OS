@@ -95,11 +95,13 @@ class ConnectorManagedCredential(Base):
 
 
 class AgentBrowserGrant(Base):
-    """Persist explicit owner opt-in for static reads from one credential-free web source."""
+    """Persist explicit owner opt-in for static reads from one credential-free web source.
+
+    Account or Source lineage replaces the legacy bootstrap-only owner restriction.
+    """
 
     __tablename__ = "agent_browser_grants"
     __table_args__ = (
-        CheckConstraint("owner_id = 1", name="ck_agent_browser_grants_single_owner"),
         CheckConstraint("source_generation > 0 AND connector_revision > 0", name="ck_agent_browser_grants_fences"),
         CheckConstraint("grant_revision > 0", name="ck_agent_browser_grants_revision"),
         Index("ix_agent_browser_grants_owner_enabled", "owner_id", "enabled"),
@@ -108,7 +110,7 @@ class AgentBrowserGrant(Base):
     source_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("sources.id", ondelete="CASCADE"), primary_key=True
     )
-    owner_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    owner_id: Mapped[int] = mapped_column(Integer, nullable=False)
     source_generation: Mapped[int] = mapped_column(Integer, nullable=False)
     connector_revision: Mapped[int] = mapped_column(Integer, nullable=False)
     grant_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
@@ -120,6 +122,7 @@ class AgentBrowserGrant(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
+
 
 
 class ConnectorNativeCredential(Base):
@@ -383,7 +386,10 @@ class GithubSourceHint(Base):
 
 
 class GithubOAuthOperation(Base):
-    """Retain owner-visible OAuth uncertainty after its source or grant rows are deleted."""
+    """Retain owner-visible OAuth uncertainty after its source or grant rows are deleted.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
     __tablename__ = "github_oauth_operations"
     __table_args__ = (
         CheckConstraint("operation_kind IN ('authorization', 'refresh', 'revoke')", name="ck_github_oauth_operation_kind"),
@@ -393,7 +399,14 @@ class GithubOAuthOperation(Base):
         CheckConstraint("token_revision IS NULL OR token_revision >= 0", name="ck_github_oauth_operation_token_revision"),
         CheckConstraint("jsonb_array_length(peer_inventory) <= 100", name="ck_github_oauth_operation_peer_bound"),
         Index("ix_github_oauth_operation_owner_state", "owner_id", "state", "created_at"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_github_oauth_operations_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "owner_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_github_oauth_operations_principal", ondelete="RESTRICT"),
+        Index("ix_w2_github_oauth_operations_scope", 'workspace_id', 'operation_id'),
+        Index("ix_w2_github_oauth_operations_work", 'workspace_id', 'created_at', 'operation_id'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
 
     # The source and owner IDs intentionally have no cascading foreign keys: this row is the
     # durable uncertainty marker when lifecycle cleanup deletes its source or grant.
@@ -410,3 +423,4 @@ class GithubOAuthOperation(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+

@@ -10,9 +10,12 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
+    Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
     text,
 )
@@ -28,6 +31,8 @@ class Memory(Base):
 
     Differentiates manual owner-created facts from model-derived candidates. Supports
     active, invalidated, superseded, and forgotten lifecycle states.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
     """
 
     __tablename__ = "memories"
@@ -51,7 +56,19 @@ class Memory(Base):
             "confidence >= 0.0 AND confidence <= 1.0",
             name="ck_memories_confidence_range",
         ),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_memories_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "actor_user_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_memories_principal", ondelete="RESTRICT"),
+        UniqueConstraint("workspace_id", "id", name="uq_w2_memories_id"),
+        # Scalar SET NULL clears only the parent ID; this deferred FK retains workspace.
+        ForeignKeyConstraint(["workspace_id", "superseded_by_id"], ["memories.workspace_id", "memories.id"], name="fk_w2_memories_superseded_by_id", ondelete="NO ACTION", deferrable=True, initially="DEFERRED"),
+        ForeignKeyConstraint(["workspace_id", "candidate_id"], ["memory_candidates.workspace_id", "memory_candidates.id"], name="fk_w2_memories_candidate_id", ondelete="NO ACTION", deferrable=True, initially="DEFERRED"),
+        Index("ix_w2_memories_scope", 'workspace_id', 'id'),
+        Index("ix_w2_memories_work", 'workspace_id', 'created_at', 'id'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    actor_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     content: Mapped[str] = mapped_column(Text, nullable=False)
@@ -92,8 +109,12 @@ class Memory(Base):
     )
 
 
+
 class MemoryCandidate(Base):
-    """Store evaluated memory candidates extracted from conversations or sources prior to acceptance."""
+    """Store evaluated memory candidates extracted from conversations or sources prior to acceptance.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
 
     __tablename__ = "memory_candidates"
     __table_args__ = (
@@ -120,7 +141,16 @@ class MemoryCandidate(Base):
             "usefulness_score >= 0.0 AND usefulness_score <= 1.0",
             name="ck_memory_candidates_usefulness_range",
         ),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_memory_candidates_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "actor_user_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_memory_candidates_principal", ondelete="RESTRICT"),
+        UniqueConstraint("workspace_id", "id", name="uq_w2_memory_candidates_id"),
+        Index("ix_w2_memory_candidates_scope", 'workspace_id', 'id'),
+        Index("ix_w2_memory_candidates_work", 'workspace_id', 'created_at', 'id'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    actor_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     content: Mapped[str] = mapped_column(Text, nullable=False)
@@ -152,20 +182,24 @@ class MemoryCandidate(Base):
     )
 
 
-class MemoryPrivacyRecord(Base):
-    """Persist owner-scoped memory and conversation privacy controls.
 
-    Enforces the single-user boundary via owner_id check constraint. Controls
+class MemoryPrivacyRecord(Base):
+    """Persist owner-scoped memory and conversation privacy controls. Controls
     conversation history persistence, agent memory persistence, and auto-acceptance.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
     """
 
     __tablename__ = "memory_privacy_settings"
     __table_args__ = (
-        CheckConstraint(
-            "owner_id = 1",
-            name="ck_memory_privacy_settings_single_owner",
-        ),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_memory_privacy_settings_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "owner_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_memory_privacy_settings_principal", ondelete="RESTRICT"),
+        Index("ix_w2_memory_privacy_settings_scope", 'workspace_id', 'owner_id'),
+        Index("ix_w2_memory_privacy_settings_work", 'workspace_id', 'created_at', 'owner_id'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
 
     owner_id: Mapped[int] = mapped_column(
         ForeignKey("owner.id", ondelete="CASCADE"), primary_key=True
@@ -188,3 +222,4 @@ class MemoryPrivacyRecord(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+

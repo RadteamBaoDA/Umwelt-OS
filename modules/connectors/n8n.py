@@ -10,6 +10,7 @@ from xml.etree import ElementTree
 
 import httpx
 
+from modules.connectors.backends import PROVIDER_SOURCE_TYPES, is_native_provider
 from modules.connectors.public import (
     default_schedule_interval_minutes,
     overlap_floor,
@@ -48,9 +49,14 @@ def build_workflow(
     manual_credential_id: str,
     provider_credential_id: str | None,
 ) -> dict[str, Any]:
-    """Bind packaged workflow settings and credentials to one source fence, selecting native dispatch by immutable provider."""
-    native = source.provider in {"youtube", "arxiv", "huggingface", "github_releases", "github", "telegram"}
-    if native and source.type != {"youtube": "rss", "arxiv": "rss"}.get(source.provider or "", "api"):
+    """Bind source-fenced credentials and select a workflow by trusted stored provider.
+
+    Generic backend capability does not authorize the provider-fetch envelope.
+    GitHub and MCP retain their specialized workflows; registered world providers
+    use provider-fetch with the same revision and credential binding as feeds.
+    """
+    native = is_native_provider(source.provider)
+    if native and source.type != PROVIDER_SOURCE_TYPES[source.provider]:
         raise ValueError("Source type does not match the registered provider")
     filename = (
         "mcp.json" if source.type == "mcp" else

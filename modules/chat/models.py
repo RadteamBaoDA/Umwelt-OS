@@ -9,6 +9,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -24,14 +25,26 @@ from core.database import Base
 
 
 class Conversation(Base):
-    """Store persistent chat conversations, optional context linkage, and owner lifecycle state."""
+    """Store persistent chat conversations, optional context linkage, and owner lifecycle state.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
 
     __tablename__ = "chat_conversations"
     __table_args__ = (
         Index("ix_chat_conversations_created_at", "created_at"),
         Index("ix_chat_conversations_updated_at", "updated_at"),
         Index("ix_chat_conversations_archived", "archived"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_chat_conversations_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "actor_user_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_chat_conversations_principal", ondelete="RESTRICT"),
+        UniqueConstraint("workspace_id", "id", name="uq_w2_chat_conversations_id"),
+        Index("ix_w2_chat_conversations_scope", 'workspace_id', 'id'),
+        Index("ix_w2_chat_conversations_work", 'workspace_id', 'created_at', 'id'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    actor_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     title: Mapped[str] = mapped_column(String(255), nullable=False, default="New conversation")
@@ -51,6 +64,7 @@ class Conversation(Base):
     response_runs: Mapped[list["ResponseRun"]] = relationship(
         "ResponseRun", back_populates="conversation", cascade="all, delete-orphan"
     )
+
 
 
 class Message(Base):
@@ -87,7 +101,10 @@ class Message(Base):
 
 
 class ResponseRun(Base):
-    """Store generation runs, model metadata, execution status, and grounding context."""
+    """Store generation runs, model metadata, execution status, and grounding context.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
 
     __tablename__ = "chat_response_runs"
     __table_args__ = (
@@ -99,11 +116,20 @@ class ResponseRun(Base):
             "status IN ('pending', 'streaming', 'completed', 'cancelled', 'failed')",
             name="ck_chat_response_runs_status",
         ),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_chat_response_runs_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "actor_user_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_chat_response_runs_principal", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "conversation_id"], ["chat_conversations.workspace_id", "chat_conversations.id"], name="fk_w2_chat_response_runs_conversation_id", ondelete="CASCADE"),
+        Index("ix_w2_chat_response_runs_scope", 'workspace_id', 'id'),
+        Index("ix_w2_chat_response_runs_work", 'workspace_id', 'created_at', 'id'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    actor_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     conversation_id: Mapped[UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("chat_conversations.id", ondelete="CASCADE"), nullable=False
+        Uuid(as_uuid=True), nullable=False
     )
     user_message_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("chat_messages.id", ondelete="CASCADE"), nullable=False
@@ -131,6 +157,7 @@ class ResponseRun(Base):
     stream_events: Mapped[list["StreamEvent"]] = relationship(
         "StreamEvent", back_populates="response_run", cascade="all, delete-orphan", order_by="StreamEvent.seq"
     )
+
 
 
 class MessageMutationReceipt(Base):
@@ -189,19 +216,30 @@ class StreamEvent(Base):
 
 
 class AgentActivityLink(Base):
-    """Store bounded agent activity owned by a chat conversation and its privacy retention."""
+    """Store bounded agent activity owned by a chat conversation and its privacy retention.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
 
     __tablename__ = "chat_agent_activity_links"
     __table_args__ = (
         UniqueConstraint("agent_run_id", name="uq_chat_agent_activity_run"),
         Index("ix_chat_agent_activity_conversation", "conversation_id", "updated_at"),
-        CheckConstraint("owner_id = 1 AND length(auth_session_hash) = 64", name="ck_chat_agent_activity_owner_auth"),
+        CheckConstraint("length(auth_session_hash) = 64", name="ck_chat_agent_activity_owner_auth"),
         CheckConstraint("jsonb_array_length(activities) <= 64", name="ck_chat_agent_activity_bound"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_chat_agent_activity_links_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "owner_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_chat_agent_activity_links_principal", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "conversation_id"], ["chat_conversations.workspace_id", "chat_conversations.id"], name="fk_w2_chat_agent_activity_links_conversation_id", ondelete="CASCADE"),
+        Index("ix_w2_chat_agent_activity_links_scope", 'workspace_id', 'id'),
+        Index("ix_w2_chat_agent_activity_links_work", 'workspace_id', 'created_at', 'id'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     conversation_id: Mapped[UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("chat_conversations.id", ondelete="CASCADE"), nullable=False
+        Uuid(as_uuid=True), nullable=False
     )
     agent_run_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     owner_id: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -211,3 +249,4 @@ class AgentActivityLink(Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+

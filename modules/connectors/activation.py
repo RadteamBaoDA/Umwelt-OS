@@ -1,8 +1,10 @@
+import copy
 from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.workspaces.schemas import AccessFence, Scope
 from modules.connectors import provisioning
 from modules.connectors.credentials import (
     CredentialEncryptionUnavailable,
@@ -104,8 +106,17 @@ async def drive_activation(
     api: N8nApi,
     credentials: N8nCredentials,
     encryption_key: str,
+    *, scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
 ) -> bool:
-    """Shared HTTP/worker progression for a fully persisted activation intent."""
+    """Progress a persisted activation under its captured principal/configuration fence.
+
+    HTTP/worker callers supply the original Scope and AccessFence, never a current
+    fallback. Up to eight local transitions precede the bounded owner driver. Earlier
+    Source/provisioning/slot locks are reused through held APIs; immutable workflow
+    envelopes are copied before release and kept through every claim/send/settlement.
+    Revoked dispatched results follow the owner's journal-only exception and raise;
+    journaling grants no provider send, activation or publication authority.
+    """
     if not encryption_key:
         await session.rollback()
         return False
@@ -116,11 +127,12 @@ async def drive_activation(
         return False
 
     for _ in range(8):
-        observed = await provisioning.activation_status(session, source_id)
+        observed = await provisioning.activation_status(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
         intent = observed.activation_intent if observed is not None else None
         required = intent.get("required_credentials", {}) if isinstance(intent, dict) else {}
         source_fence, row, slots = await provisioning.lock_connector(
-            session, source_id, provisioning._ALL_CREDENTIAL_SLOTS
+            session, source_id, provisioning._ALL_CREDENTIAL_SLOTS, expected_access_fence=access_fence,
+            multi_workspace_enabled=multi_workspace_enabled, scope=scope,
         )
         if source_fence is None or row is None or not isinstance(row.activation_intent, dict):
             await session.rollback()
@@ -129,6 +141,11 @@ async def drive_activation(
         required = intent.get("required_credentials")
         current = bool(
             isinstance(required, dict)
+            and await provisioning._operation_matches(session, intent, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+            and intent.get("workspace_id") == str(access_fence.workspace_id)
+            and intent.get("actor_user_id") == access_fence.user_id
+            and intent.get("membership_revision") == access_fence.membership_revision
+            and intent.get("workspace_configuration_revision") == access_fence.configuration_revision
             and row.desired_enabled
             and row.state == "provisioning"
             and source_fence.status == "active"
@@ -140,7 +157,7 @@ async def drive_activation(
         if not current:
             await session.rollback()
             return False
-        before = provisioning._connector_observation(source_fence, row, slots)
+        before = provisioning._connector_observation(source_fence, row, slots, access_fence)
 
         pending: tuple[str, UUID] | None = None
         ready_ids: dict[str, str] = {}
@@ -148,7 +165,7 @@ async def drive_activation(
             if not isinstance(value, dict):
                 row.state = "reconciliation_required"
                 row.error_code = "activation_credential_intent_invalid"
-                await provisioning.commit_connector_observation(session, before)
+                await provisioning.commit_connector_observation(session, before, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
                 return False
             credential = slots.get(slot)
             operation_id = value.get("operation_id")
@@ -158,7 +175,7 @@ async def drive_activation(
                 except ValueError:
                     row.state = "reconciliation_required"
                     row.error_code = "activation_credential_intent_invalid"
-                    await provisioning.commit_connector_observation(session, before)
+                    await provisioning.commit_connector_observation(session, before, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
                     return False
                 envelope = credential.operation_envelope if credential is not None else None
                 if (
@@ -190,7 +207,7 @@ async def drive_activation(
             ):
                 row.state = "reconciliation_required"
                 row.error_code = "activation_credential_binding_unresolved"
-                await provisioning.commit_connector_observation(session, before)
+                await provisioning.commit_connector_observation(session, before, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
                 return False
             if operation_id is not None:
                 envelope = credential.operation_envelope
@@ -202,24 +219,29 @@ async def drive_activation(
                 ):
                     row.state = "reconciliation_required"
                     row.error_code = "activation_credential_binding_unresolved"
-                    await provisioning.commit_connector_observation(session, before)
+                    await provisioning.commit_connector_observation(session, before, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
                     return False
             ready_ids[slot] = credential.credential_id
 
         if pending is not None:
             await session.rollback()
             progressed = await provisioning.drive_credential_operation(
-                session, source_id, pending[0], credentials, encryption_key
+                session, source_id, pending[0], credentials, encryption_key,
+                multi_workspace_enabled=multi_workspace_enabled, scope=scope,
             )
             if progressed:
                 continue
             return False
 
         if row.workflow_operation is not None:
+            original_operation = copy.deepcopy(row.workflow_operation)
             await session.rollback()
-            return await provisioning.drive_workflow_operation(session, source_id, api)
+            return await provisioning.drive_workflow_operation(
+                session, source_id, api, original_operation=original_operation, access_fence=access_fence,
+                multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+            )
 
-        source = await sources.get_connector_source(session, source_id)
+        source = await sources.get_connector_source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
         if source is None:
             await session.rollback()
             return False
@@ -237,7 +259,7 @@ async def drive_activation(
             manual_credential_id=ready_ids["manual_trigger"],
             provider_credential_id=ready_ids.get("provider"),
         )
-        prepared = await provisioning.begin_enable(
+        prepared = await provisioning.begin_enable_in_uow(
             session,
             source_id,
             int(intent["source_generation"]),
@@ -248,9 +270,22 @@ async def drive_activation(
             operation_id,
             required_credentials=required,
             activation_id=UUID(str(intent["id"])),
+            access_fence=access_fence, multi_workspace_enabled=multi_workspace_enabled, scope=scope,
         )
         if prepared is None:
             await session.rollback()
             return False
-        await provisioning.commit_connector_observation(session, before, operation_id=operation_id)
-    return await provisioning.drive_workflow_operation(session, source_id, api)
+        await provisioning.commit_connector_observation(session, before, operation_id=operation_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    # No mutable envelope is reconstructed after transport: this is still pre-dispatch.
+    source_fence, row, slots = await provisioning.lock_connector(
+        session, source_id, provisioning._ALL_CREDENTIAL_SLOTS, expected_access_fence=access_fence,
+        multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+    )
+    original_operation = copy.deepcopy(row.workflow_operation) if row is not None else None
+    await session.rollback()
+    if not isinstance(original_operation, dict):
+        return False
+    return await provisioning.drive_workflow_operation(
+        session, source_id, api, original_operation=original_operation, access_fence=access_fence,
+        multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+    )

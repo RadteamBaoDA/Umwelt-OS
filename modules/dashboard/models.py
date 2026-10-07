@@ -27,12 +27,22 @@ from core.database import Base
 
 
 class Dashboard(Base):
-    """Own a named dashboard and one safe-integer revision for all structural edits."""
+    """Own a named dashboard and one safe-integer revision for all structural edits.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
 
     __tablename__ = "dashboards"
     __table_args__ = (
         CheckConstraint("revision BETWEEN 1 AND 9007199254740991", name="ck_dashboards_revision"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_dashboards_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "owner_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_dashboards_principal", ondelete="RESTRICT"),
+        Index("ix_w2_dashboards_scope", 'workspace_id', 'id'),
+        Index("ix_w2_dashboards_work", 'workspace_id', 'created_at', 'id'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     owner_id: Mapped[int] = mapped_column(
@@ -46,6 +56,7 @@ class Dashboard(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
+
 
 
 class DashboardGroup(Base):
@@ -66,13 +77,23 @@ class DashboardGroup(Base):
 
 
 class GadgetDefinition(Base):
-    """Persist reusable bounded selectors and renderer configuration without source content."""
+    """Persist reusable bounded selectors and renderer configuration without source content.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
 
     __tablename__ = "gadget_definitions"
     __table_args__ = (
         CheckConstraint("revision BETWEEN 1 AND 9007199254740991", name="ck_gadget_definitions_revision"),
         CheckConstraint("jsonb_typeof(source_ids) = 'array'", name="ck_gadget_definitions_source_ids_array"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_gadget_definitions_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "owner_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_gadget_definitions_principal", ondelete="RESTRICT"),
+        Index("ix_w2_gadget_definitions_scope", 'workspace_id', 'id'),
+        Index("ix_w2_gadget_definitions_work", 'workspace_id', 'created_at', 'id'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     owner_id: Mapped[int] = mapped_column(
@@ -99,6 +120,7 @@ class GadgetDefinition(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
+
 
 
 class GadgetHighlightProgress(Base):
@@ -209,6 +231,8 @@ class DailyBrief(Base):
     ``status`` flips to ``stale`` when captured document evidence disappears. The evidence
     cleanup physically scrubs aggregate prose and citation labels when any captured dependency
     is deleted, because those fields cannot be safely decomposed by support.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
     """
 
     __tablename__ = "daily_briefs"
@@ -222,8 +246,14 @@ class DailyBrief(Base):
             "AND evidence_fact_count BETWEEN 1 AND 40)",
             name="ck_daily_briefs_evidence_capture",
         ),
-        UniqueConstraint("owner_id", "brief_date", "timezone", "revision", name="uq_daily_briefs_revision"),
+        UniqueConstraint("workspace_id", "owner_id", "brief_date", "timezone", "revision", name="uq_daily_briefs_revision"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_daily_briefs_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "owner_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_daily_briefs_principal", ondelete="RESTRICT"),
+        Index("ix_w2_daily_briefs_scope", 'workspace_id', 'id'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     owner_id: Mapped[int] = mapped_column(ForeignKey("owner.id", ondelete="CASCADE"), nullable=False)
@@ -239,6 +269,7 @@ class DailyBrief(Base):
     evidence_capture_version: Mapped[int | None] = mapped_column(Integer)
     evidence_capture_status: Mapped[str | None] = mapped_column(String(16))
     evidence_fact_count: Mapped[int | None] = mapped_column(Integer)
+
 
 
 class DailyBriefEvidence(Base):
@@ -279,7 +310,10 @@ class DailyBriefEvidence(Base):
 
 
 class BriefSchedule(Base):
-    """Owner-editable daily brief schedule (default 07:00 Asia/Ho_Chi_Minh) read by the ARQ cron."""
+    """Owner-editable daily brief schedule (default 07:00 Asia/Ho_Chi_Minh) read by the ARQ cron.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
 
     __tablename__ = "brief_schedules"
     __table_args__ = (
@@ -289,7 +323,14 @@ class BriefSchedule(Base):
             "((schedule_owner = 'automation') = (automation_id IS NOT NULL))",
             name="ck_brief_schedules_owner",
         ),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_brief_schedules_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "owner_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_brief_schedules_principal", ondelete="RESTRICT"),
+        Index("ix_w2_brief_schedules_scope", 'workspace_id', 'owner_id'),
+        Index("ix_w2_brief_schedules_work", 'workspace_id', 'updated_at', 'owner_id'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
 
     owner_id: Mapped[int] = mapped_column(ForeignKey("owner.id", ondelete="CASCADE"), primary_key=True)
     # P10 single-owner invariant for logical job "daily_brief": exactly one of the internal cron
@@ -303,3 +344,4 @@ class BriefSchedule(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
+

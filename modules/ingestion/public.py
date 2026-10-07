@@ -1,13 +1,20 @@
+"""Workspace-bound ingestion contracts; caller-held helpers never reacquire admission locks.
+
+Standalone collection wrappers own their existing commits. Retained jobs derive their
+principal from durable owner rows, and every publication carries the original epoch.
+"""
+
+import base64
 import hashlib
 import json
 import secrets
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
 from typing import cast as typing_cast
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
 from fastapi import HTTPException
 from sqlalchemy import String, and_, case, cast, delete, func, not_, or_, select, tuple_, update
@@ -25,6 +32,8 @@ from core.realtime import (
     make_source_change,
 )
 from core.telemetry import RunMeta as _RunMeta
+from core.workspaces import public as workspaces
+from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
 from modules.ingestion.models import (
     COLLECTION_LEASE,
     CollectorCredential,
@@ -56,15 +65,266 @@ from modules.ingestion.schemas import (
 )
 from modules.knowledge.documents import public as documents
 from modules.sources import public as sources
-from modules.sources.schemas import ConnectorSource
+from modules.sources.schemas import ConnectorSource, SourceFence
 
 _RUN_RETRY_ORDER = {"receive": 0, "collect_web": 1, "normalize": 2, "parse_file": 3}
+_SOURCE_PURGE_PRODUCERS = {
+    "source.purge.requested": "modules.sources",
+    "source.purge.coverage": "modules.sources",
+    "source.purge.progressed": "modules.knowledge.documents",
+}
+_READY_EVENT_PRODUCERS = {
+    "document.version.ready": {"modules.ingestion", "modules.knowledge.documents"},
+    "news.document.ready": {"modules.knowledge.documents"},
+}
+
+
+def _actor_id(scope: Scope) -> int:
+    """Extract the validated principal identity without granting resource authority."""
+    return scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
+
+
+async def _admit_ingestion_scope(
+    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
+) -> AccessFence:
+    """Read current owner admission without locks; safe under caller-held earlier locks.
+
+    Members cannot inspect ingestion metadata. Publication/mutation callers must already
+    hold ordered admission/Source locks or use a locking entrypoint before domain locks.
+    """
+    if not isinstance(scope, (WorkspaceContext, InternalJobScope)):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if type(multi_workspace_enabled) is not bool:
+        raise TypeError("The configured multi-workspace feature flag must be a boolean")
+    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
+    return await workspaces.read_access_fence(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+
+
+def _run_scope(scope: Scope) -> tuple[Any, ...]:
+    """Constrain retained runs to the exact workspace/actor/epoch and optional Source pair."""
+    predicates = [IngestionRun.workspace_id == scope.workspace_id,
+                  IngestionRun.actor_user_id == _actor_id(scope),
+                  IngestionRun.membership_revision == scope.membership_revision]
+    if isinstance(scope, InternalJobScope) and scope.source_id is not None:
+        predicates.extend((IngestionRun.source_id == scope.source_id,
+                           select(IngestionBatch.id).where(
+                               IngestionBatch.id == IngestionRun.batch_id,
+                               IngestionBatch.source_id == scope.source_id,
+                               IngestionBatch.source_generation == scope.source_generation,
+                           ).correlate(IngestionRun).exists()))
+    return tuple(predicates)
+
+
+def _event_scope(scope: Scope) -> tuple[Any, ...]:
+    """Filter outbox roots before count/LIMIT; a source-bound job cannot read sibling events."""
+    predicates = [EventOutbox.workspace_id == scope.workspace_id,
+                  EventOutbox.actor_user_id == _actor_id(scope),
+                  EventOutbox.membership_revision == scope.membership_revision]
+    if isinstance(scope, InternalJobScope) and scope.source_id is not None:
+        predicates.extend((EventOutbox.payload["source_id"].astext == str(scope.source_id),
+                           EventOutbox.payload["source_generation"].astext == str(scope.source_generation)))
+    return tuple(predicates)
+
+
+def _materialization_scope(scope: Scope) -> tuple[Any, ...]:
+    """Join materializations to their exact retained run and optional Source generation."""
+    return (ObservationNormalization.workspace_id == scope.workspace_id,
+            select(IngestionRun.id).where(
+                IngestionRun.id == ObservationNormalization.run_id,
+                IngestionRun.source_id == ObservationNormalization.source_id,
+                *_run_scope(scope),
+            ).exists(),
+            select(IngestionStage.id).where(
+                IngestionStage.id == ObservationNormalization.stage_id,
+                IngestionStage.run_id == ObservationNormalization.run_id,
+            ).exists(),
+            select(IngestionBatch.id).join(IngestionRun, IngestionRun.batch_id == IngestionBatch.id).where(
+                IngestionRun.id == ObservationNormalization.run_id,
+                IngestionBatch.source_id == ObservationNormalization.source_id,
+                IngestionBatch.source_generation == ObservationNormalization.source_generation,
+            ).exists())
+
+
+async def _source_in_scope(
+    session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+) -> ConnectorSource | None:
+    """Read a current Source-owner DTO without introducing any earlier locks."""
+    await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    return await sources.get_connector_source(
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+
+
+def _lease_scope(lease: ConnectorCollectionLease, scope: Scope) -> None:
+    """Reject detached reservation identities that differ from the admitted original epoch."""
+    if (lease.workspace_id != scope.workspace_id or lease.actor_user_id != _actor_id(scope)
+            or lease.membership_revision != scope.membership_revision
+            or isinstance(scope, InternalJobScope) and scope.source_id is not None
+            and (lease.source_id != scope.source_id or lease.source_generation != scope.source_generation)):
+        raise HTTPException(status_code=404, detail="Collection reservation not found")
+
+
+def _retained_scope(
+    workspace_id: UUID, actor_user_id: int, membership_revision: int,
+    source_id: UUID | None = None, source_generation: int | None = None,
+) -> InternalJobScope:
+    """Build a strict retained owner subject; missing/corrupt durable identity never rebases."""
+    return InternalJobScope(workspace_id=workspace_id, actor_user_id=actor_user_id,
+                            membership_revision=membership_revision, source_id=source_id,
+                            source_generation=source_generation)
+
+
+def _lease_access_fence(lease: ConnectorCollectionLease) -> AccessFence:
+    """Reconstruct the original owner-issued lease fence without current-state rebasing.
+
+    Accept only the detached owner DTO. This snapshot is still subject to ordered current
+    admission and exact scope/payload/reservation comparison; it creates no authority.
+    """
+    if not isinstance(lease, ConnectorCollectionLease):
+        raise HTTPException(status_code=409, detail="Original collection lease required")
+    return AccessFence(lease.workspace_id, lease.actor_user_id,
+                       lease.membership_revision, lease.configuration_revision)
+
+
+def _source_purge_event_subject(
+    event_type: str, version: int, producer: str, payload: object, *, scope: Scope,
+) -> tuple[UUID, InternalJobScope] | None:
+    """Parse only the three finite purge envelopes and compare exact original principal.
+
+    All version1 payloads have canonical six-field UUID/principal/Source identity. Invalid
+    types, fields or caller restrictions return None, never malformed content. The caller
+    still compares this detached subject with the Source owner's retained operation.
+    """
+    fields = {"operation_id", "workspace_id", "actor_user_id", "membership_revision",
+              "source_id", "source_generation"}
+    if (event_type not in _SOURCE_PURGE_PRODUCERS or type(version) is not int or version != 1
+            or producer != _SOURCE_PURGE_PRODUCERS[event_type]
+            or not isinstance(payload, dict) or set(payload) != fields):
+        return None
+    try:
+        if any(not isinstance(payload[key], str) or str(UUID(payload[key])) != payload[key]
+               for key in ("operation_id", "workspace_id", "source_id")):
+            return None
+        retained = _retained_scope(UUID(payload["workspace_id"]), payload["actor_user_id"],
+                                   payload["membership_revision"], UUID(payload["source_id"]),
+                                   payload["source_generation"])
+    except (TypeError, ValueError):
+        return None
+    if (retained.workspace_id != scope.workspace_id or retained.actor_user_id != _actor_id(scope)
+            or retained.membership_revision != scope.membership_revision
+            or isinstance(scope, InternalJobScope) and scope.source_id is not None
+            and (retained.source_id != scope.source_id
+                 or retained.source_generation != scope.source_generation)):
+        return None
+    return UUID(payload["operation_id"]), retained
+
+
+async def resolve_collector_job_scope(
+    session: AsyncSession, token: str, *, source_id: UUID, credential_scope: str = "ingestion:write",
+    multi_workspace_enabled: bool,
+) -> InternalJobScope | None:
+    """Resolve a hashed capability/path Source to real owner identity before ordered admission.
+
+    The Source owner resolves its durable workspace/generation and active default owner.
+    Recheck this credential after its ordered admission; intake must lock/recheck again.
+    This does not authorize a managed request UUID, which C2 binds separately.
+    """
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    statement = select(CollectorCredential.token_hash).where(
+        CollectorCredential.token_hash == token_hash, CollectorCredential.source_id == source_id,
+        CollectorCredential.scope == credential_scope, CollectorCredential.revoked_at.is_(None),
+    )
+    if await session.scalar(statement) is None:
+        return None
+    scope = await sources.resolve_source_job_scope(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if scope is None or await session.scalar(statement.execution_options(populate_existing=True)) is None:
+        return None
+    return scope
+
+
+async def resolve_ingestion_event_scope(
+    session: AsyncSession, event_id: UUID, *, multi_workspace_enabled: bool,
+) -> InternalJobScope | None:
+    """Resolve a retained outbox principal before domain locks, then compare its exact reread.
+
+    Corrupt/missing scope is unresolved, never an owner/default upgrade. The caller owns
+    quarantine and transaction release; Source/claim/lease checks remain owner-specific.
+    """
+    # Identity discovery never loads the event body/config/raw URI before admission.
+    # Bound textual scalar fields so corrupt JSON cannot turn discovery into a content read.
+    row = (await session.execute(select(
+        EventOutbox.workspace_id, EventOutbox.actor_user_id, EventOutbox.membership_revision,
+        func.left(EventOutbox.payload["workspace_id"].astext, 37).label("payload_workspace"),
+        func.left(EventOutbox.payload["actor_user_id"].astext, 21).label("payload_actor"),
+        func.left(EventOutbox.payload["membership_revision"].astext, 21).label("payload_membership"),
+        func.left(EventOutbox.payload["source_id"].astext, 37).label("payload_source"),
+        func.left(EventOutbox.payload["source_generation"].astext, 21).label("payload_generation"),
+        func.jsonb_typeof(EventOutbox.payload["actor_user_id"]).label("actor_type"),
+        func.jsonb_typeof(EventOutbox.payload["membership_revision"]).label("membership_type"),
+        func.jsonb_typeof(EventOutbox.payload["source_id"]).label("source_type"),
+        func.jsonb_typeof(EventOutbox.payload["source_generation"]).label("generation_type"),
+    ).where(EventOutbox.id == event_id))).one_or_none()
+    if row is None:
+        return None
+    try:
+        if (row.payload_workspace != str(row.workspace_id)
+                or row.actor_type != "number" or row.payload_actor != str(row.actor_user_id)
+                or row.membership_type != "number"
+                or row.payload_membership != str(row.membership_revision)):
+            return None
+        if row.source_type is None and row.generation_type is None:
+            source_id, generation = None, None
+        elif row.source_type == "string" and row.generation_type == "number":
+            source_id, generation = UUID(row.payload_source), int(row.payload_generation)
+        else:
+            return None
+        scope = _retained_scope(row.workspace_id, row.actor_user_id, row.membership_revision,
+                                source_id, generation)
+    except (KeyError, TypeError, ValueError):
+        return None
+    await workspaces.authorize_internal_job(session, scope=scope,
+                                           multi_workspace_enabled=multi_workspace_enabled)
+    current = await session.scalar(select(EventOutbox.id).where(EventOutbox.id == event_id,
+                                                            *_event_scope(scope))
+                                   .execution_options(populate_existing=True))
+    return scope if current is not None else None
+
+
+async def resolve_ingestion_run_scope(
+    session: AsyncSession, run_id: UUID, *, multi_workspace_enabled: bool,
+) -> InternalJobScope | None:
+    """Discover the retained run/batch principal, admit it, and compare exact lineage again."""
+    row = (await session.execute(select(IngestionRun.workspace_id, IngestionRun.actor_user_id,
+                                       IngestionRun.membership_revision, IngestionRun.source_id,
+                                       IngestionBatch.source_generation)
+                                 .join(IngestionBatch, and_(IngestionBatch.id == IngestionRun.batch_id,
+                                                            IngestionBatch.source_id == IngestionRun.source_id))
+                                 .where(IngestionRun.id == run_id))).one_or_none()
+    if row is None:
+        return None
+    try:
+        scope = _retained_scope(*row)
+    except (TypeError, ValueError):
+        return None
+    await workspaces.authorize_internal_job(session, scope=scope,
+                                           multi_workspace_enabled=multi_workspace_enabled)
+    current = await session.scalar(select(IngestionRun.id).where(IngestionRun.id == run_id,
+                                                                *_run_scope(scope)))
+    return scope if current is not None else None
 
 
 @dataclass(frozen=True)
 class NewsDocumentReadyEvent:
     """Detached fixed-shape News readiness event owned by Ingestion."""
     id: UUID
+    workspace_id: UUID
+    actor_user_id: int
+    membership_revision: int
     version: int
     status: str
     payload: dict[str, Any]
@@ -76,6 +336,9 @@ class ReadyDocumentProvenance:
     """Detached proof joining one retained ready event to its exact Document version."""
 
     event_id: UUID
+    workspace_id: UUID
+    actor_user_id: int
+    membership_revision: int
     source_id: UUID
     document_id: UUID
     document_version_id: UUID
@@ -84,7 +347,7 @@ class ReadyDocumentProvenance:
 
 
 async def lock_news_document_ready_event(
-    session: AsyncSession, event_id: UUID,
+    session: AsyncSession, event_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
 ) -> NewsDocumentReadyEvent | None:
     """Lock one News readiness outbox row and return only its bounded event payload.
 
@@ -92,32 +355,29 @@ async def lock_news_document_ready_event(
     return a detached DTO with valid_payload false so the consumer can terminally
     fail the receipt without parsing arbitrary or unbounded JSON fields.
     """
+    await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     event = await session.scalar(select(EventOutbox).where(
-        EventOutbox.id == event_id, EventOutbox.type == "news.document.ready",
+        EventOutbox.id == event_id, EventOutbox.type == "news.document.ready", *_event_scope(scope),
     ).with_for_update())
     if event is None:
         return None
     payload = event.payload
-    required = {"source_id", "source_generation", "document_id", "document_version_id", "version_number"}
-    valid = isinstance(payload, Mapping) and set(payload) == required and len(payload) == len(required)
-    if valid:
-        strings = (payload.get("source_id"), payload.get("document_id"), payload.get("document_version_id"))
-        valid = all(isinstance(value, str) and len(value) <= 36 for value in strings)
-        generation = payload.get("source_generation")
-        version_number = payload.get("version_number")
-        valid = valid and type(generation) is int and 0 <= generation <= 2**31 - 1
-        valid = valid and type(version_number) is int and 1 <= version_number <= 2**31 - 1
-    detached = dict(payload) if valid else {}
+    validated = _ready_document_payload(event)
+    valid = validated is not None
+    detached = validated if validated is not None else {}
     return NewsDocumentReadyEvent(
+        workspace_id=event.workspace_id, actor_user_id=event.actor_user_id, membership_revision=event.membership_revision,
         id=event.id, version=event.version, status=event.status,
         payload=detached, valid_payload=bool(valid),
     )
 
 
-async def mark_news_document_ready_event_delivered(session: AsyncSession, event_id: UUID) -> bool:
+async def mark_news_document_ready_event_delivered(session: AsyncSession, event_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+) -> bool:
     """Flush News event acknowledgement without committing the caller's transaction."""
+    await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     event = await session.scalar(select(EventOutbox).where(
-        EventOutbox.id == event_id, EventOutbox.type == "news.document.ready",
+        EventOutbox.id == event_id, EventOutbox.type == "news.document.ready", *_event_scope(scope),
     ).with_for_update())
     if event is None:
         return False
@@ -126,10 +386,12 @@ async def mark_news_document_ready_event_delivered(session: AsyncSession, event_
     return True
 
 
-async def fail_news_document_ready_event(session: AsyncSession, event_id: UUID) -> bool:
+async def fail_news_document_ready_event(session: AsyncSession, event_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+) -> bool:
     """Flush a terminal invalid News receipt state while leaving commit to the caller."""
+    await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     event = await session.scalar(select(EventOutbox).where(
-        EventOutbox.id == event_id, EventOutbox.type == "news.document.ready",
+        EventOutbox.id == event_id, EventOutbox.type == "news.document.ready", *_event_scope(scope),
     ).with_for_update())
     if event is None:
         return False
@@ -144,16 +406,65 @@ def _digest(value: object) -> str:
 
 
 async def create_collector_credential(
-    session: AsyncSession, source_id: UUID, *, scope: str = "ingestion:write",
+    session: AsyncSession, source_id: UUID, *,
+    credential_scope: Literal["ingestion:write", "mcp:collect"] = "ingestion:write",
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> str:
-    """Rotate the source's ingestion credential and return its one-time token.
+    """Acquire real admission/Source then rotate one literal collector capability, flush only.
 
-    Locks the source before revoking active credentials; only the token hash is
-    persisted, and the caller controls transaction completion.
+    Enter without domain locks. Missing/archived Sources retain LookupError compatibility;
+    active/paused nonlocal issuance is eligible. Local-only/stale issuance fails409 and an
+    invalid capability raises ValueError.
+    Genuine locked access/Source fences are passed to the held writer, never fabricated.
+    Return the bearer once; only its hash persists. Caller owns commit/rollback, no I/O.
     """
-    source = await sources.lock_source(session, source_id)
+    if credential_scope not in ("ingestion:write", "mcp:collect"):
+        raise ValueError("Unsupported collector credential capability")
+    source = await sources.lock_source(
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     if source is None or source.status == "archived":
         raise LookupError("Source not found")
+    access_fence = await _admit_ingestion_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    return await create_collector_credential_in_uow(
+        session, source_id, credential_scope=credential_scope, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence, source_fence=source,
+    )
+
+
+async def create_collector_credential_in_uow(
+    session: AsyncSession, source_id: UUID, *,
+    credential_scope: Literal["ingestion:write", "mcp:collect"] = "ingestion:write",
+    scope: Scope, multi_workspace_enabled: bool,
+    access_fence: AccessFence, source_fence: SourceFence,
+) -> str:
+    """Rotate an exact active/paused nonlocal Source capability under held earlier parents.
+
+    Caller retains original admission/Source and applicable provisioning/slots/native/world;
+    enter before Tools/GitHub/state. Complete access/Source proof is freshly compared without
+    parent locks. Missing Source fails404, stale/archived/local-only fails409, invalid literal
+    raises ValueError. Lock only active exact-capability rows by token hash, revoke with one
+    timestamp, insert one new hash/literal and return plaintext once after flush. Sibling
+    capabilities survive. No readiness, activation, commit/replay or network authority is
+    granted; failures after mutation require the caller to roll back the whole transaction.
+    """
+    if credential_scope not in ("ingestion:write", "mcp:collect"):
+        raise ValueError("Unsupported collector credential capability")
+    current_access = await _admit_ingestion_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    current_source = await sources.get_source_fence(
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if current_source is None:
+        raise HTTPException(status_code=404, detail="Source not found")
+    if (current_access != access_fence or current_source != source_fence
+            or source_fence.id != source_id or source_fence.workspace_id != scope.workspace_id
+            or current_source.status not in {"active", "paused"} or current_source.local_only):
+        raise HTTPException(status_code=409, detail="Collector credential issuance fence is stale")
     now = datetime.now(UTC)
     credentials = list(
         (
@@ -161,10 +472,11 @@ async def create_collector_credential(
                 select(CollectorCredential)
                 .where(
                     CollectorCredential.source_id == source_id,
-                    CollectorCredential.scope == scope,
+                    CollectorCredential.scope == credential_scope,
                     CollectorCredential.revoked_at.is_(None),
                 )
-                .with_for_update()
+                .order_by(CollectorCredential.token_hash).with_for_update()
+                .execution_options(populate_existing=True)
             )
         ).all()
     )
@@ -172,20 +484,28 @@ async def create_collector_credential(
         credential.revoked_at = now
     token = secrets.token_urlsafe(32)
     session.add(CollectorCredential(
-        token_hash=hashlib.sha256(token.encode()).hexdigest(), source_id=source_id, scope=scope,
+        token_hash=hashlib.sha256(token.encode()).hexdigest(), source_id=source_id, scope=credential_scope,
     ))
     await session.flush()
     return token
 
 
-async def revoke_collector_credential(session: AsyncSession, token: str) -> None:
-    """Revoke a matching collector token after acquiring its source lock."""
+async def revoke_collector_credential(session: AsyncSession, token: str, *, scope: Scope, multi_workspace_enabled: bool,
+) -> None:
+    """Discover a token Source, acquire ordered admission/Source, then revoke its exact row.
+
+    Entry holds no prior domain locks. A foreign Source fails scoped admission; no raw
+    token persists and this helper leaves commit to its caller.
+    """
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     source_id = await session.scalar(
         select(CollectorCredential.source_id).where(CollectorCredential.token_hash == token_hash)
     )
-    if source_id is None or await sources.lock_source(session, source_id) is None:
+    if source_id is None:
         return
+    await sources.lock_source_set(
+        session, (source_id,), scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     row = await session.scalar(
         select(CollectorCredential)
         .where(CollectorCredential.token_hash == token_hash, CollectorCredential.source_id == source_id)
@@ -196,9 +516,45 @@ async def revoke_collector_credential(session: AsyncSession, token: str) -> None
         row.revoked_at = datetime.now(UTC)
 
 
-async def revoke_source_credentials(session: AsyncSession, source_id: UUID) -> None:
-    """Revoke every active collector token for an existing locked source."""
-    if await sources.lock_source(session, source_id) is None:
+async def lock_source_credentials_in_uow(
+    session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+    access_fence: AccessFence, source_fence: SourceFence,
+) -> None:
+    """Prepare exact Source token rows, sorted by hash, without revoking or committing.
+
+    Source lifecycle preparation holds admission/Source and optional provisioning plus
+    Connector cleanup rows before this call. Fresh nonlocking owner proof for active,
+    paused or archived G must match both complete captured fences; stale/unavailable
+    proof raises409. Archived eligibility is destructive cleanup only, not issuance or
+    collection authority. Visibility active G->paused G+1 and identical paused G preparation
+    remain supported without changing Source or tokens.
+    Only credential rows are locked, before Tools and GitHub state/hints/capacity; no earlier
+    parent lock or authority token is acquired.
+    """
+    current_access = await _admit_ingestion_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    current_source = await sources.get_source_fence(
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if (current_access != access_fence or current_source is None
+            or current_source != source_fence or current_source.status not in {"active", "paused", "archived"}):
+        raise HTTPException(status_code=409, detail="Source credential preparation is stale")
+    (await session.scalars(select(CollectorCredential).where(
+        CollectorCredential.source_id == source_id,
+    ).order_by(CollectorCredential.token_hash).with_for_update()
+                          .execution_options(populate_existing=True))).all()
+
+
+async def revoke_source_credentials(session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+) -> None:
+    """Revoke tokens under caller-held admission/Source locks; no earlier lock acquisition.
+
+    Source lifecycle callers own ordered locks and commit. Nonlocking owner DTO proof
+    checks exact scope/generation; this helper never recursively locks Source or auth.
+    """
+    if await _source_in_scope(session, source_id, scope=scope,
+                              multi_workspace_enabled=multi_workspace_enabled) is None:
         return
     await session.execute(
         update(CollectorCredential)
@@ -207,17 +563,117 @@ async def revoke_source_credentials(session: AsyncSession, source_id: UUID) -> N
     )
 
 
-async def publish_event(session: AsyncSession, event: DomainEvent) -> None:
-    """Add a durable pending event to the caller's transaction outbox."""
-    session.add(EventOutbox(
+async def publish_event(session: AsyncSession, event: DomainEvent, *, scope: Scope, multi_workspace_enabled: bool,
+) -> None:
+    """Add scoped durable identity to the caller's already-admitted transaction outbox.
+
+    Caller holds admission and all required domain locks; only nonlocking owner reads
+    occur here. Exact retained purge identity survives canonical deletion. Existing
+    claimed scope fields must match, never be silently overwritten. No commit/I/O.
+    Purge event types have exact Source/Documents producer contracts; normalized Ingestion
+    version-ready publication additionally proves its scoped journal/run/batch lineage.
+    """
+    await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    payload = deepcopy(event.payload)
+    identity = {"workspace_id": str(scope.workspace_id), "actor_user_id": _actor_id(scope),
+                "membership_revision": scope.membership_revision}
+    for key, value in identity.items():
+        if key in payload and (type(payload[key]) is not type(value) or payload[key] != value):
+            raise HTTPException(status_code=404, detail="Event identity not found")
+    if event.type in _SOURCE_PURGE_PRODUCERS:
+        subject = _source_purge_event_subject(
+            event.type, event.version, event.producer, payload, scope=scope,
+        )
+        if subject is None:
+            raise ValueError("Source purge event requires exact retained producer identity")
+        operation_id, retained = subject
+        receipt_scope = await sources.read_source_purge_job_identity(
+            session, operation_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
+        if receipt_scope != retained:
+            raise HTTPException(status_code=404, detail="Source purge receipt not found")
+    else:
+        if "run_id" in payload:
+            try:
+                run_id = UUID(payload["run_id"])
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Event run identity is invalid") from exc
+            run = await session.scalar(select(IngestionRun).where(IngestionRun.id == run_id,
+                                                                  *_run_scope(scope)))
+            if run is None:
+                raise HTTPException(status_code=404, detail="Event run not found")
+            batch = await session.scalar(select(IngestionBatch).where(
+                IngestionBatch.id == run.batch_id, IngestionBatch.source_id == run.source_id,
+            ))
+            if batch is None or batch.source_generation != payload.get("source_generation"):
+                raise HTTPException(status_code=404, detail="Event batch lineage not found")
+            if "source_id" in payload and payload["source_id"] != str(run.source_id):
+                raise HTTPException(status_code=404, detail="Event source not found")
+            payload["source_id"] = str(run.source_id)
+            if "stage_id" in payload:
+                try:
+                    stage_id = UUID(payload["stage_id"])
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("Event stage identity is invalid") from exc
+                if await session.scalar(select(IngestionStage.id).where(
+                    IngestionStage.id == stage_id, IngestionStage.run_id == run.id,
+                )) is None:
+                    raise HTTPException(status_code=404, detail="Event stage not found")
+        if isinstance(scope, InternalJobScope) and scope.source_id is not None and (
+            payload.get("source_id") != str(scope.source_id)
+            or payload.get("source_generation") != scope.source_generation
+        ):
+            raise HTTPException(status_code=404, detail="Event Source identity not found")
+        payload.update(identity)
+    outbox = EventOutbox(
+        workspace_id=scope.workspace_id, actor_user_id=_actor_id(scope),
+        membership_revision=scope.membership_revision,
         id=event.id,
         type=event.type,
         version=event.version,
         occurred_at=event.occurred_at,
         producer=event.producer,
-        payload=event.payload,
+        payload=payload,
         status="pending",
-    ))
+    )
+    if event.type in {"document.version.ready", "news.document.ready"}:
+        if _ready_document_payload(outbox) is None:
+            raise ValueError("Ready event requires exact scoped producer payload")
+        locator = await documents.review_version_locator(
+            session, UUID(payload["document_version_id"]), scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+        if locator != (UUID(payload["document_id"]), UUID(payload["source_id"])):
+            raise HTTPException(status_code=404, detail="Ready document lineage not found")
+        if event.producer == "modules.ingestion":
+            # Normalization owns this producer. Its already-written journal must link
+            # the exact created version through the admitted run/stage/batch/observation.
+            normalized = await session.scalar(select(ObservationNormalization.id).where(
+                *_materialization_scope(scope),
+                ObservationNormalization.source_id == UUID(payload["source_id"]),
+                ObservationNormalization.source_generation == payload["source_generation"],
+                ObservationNormalization.document_id == UUID(payload["document_id"]),
+                ObservationNormalization.document_version_id == UUID(payload["document_version_id"]),
+                ObservationNormalization.normalization_version == NORMALIZATION_VERSION,
+                ObservationNormalization.disposition == "normalized",
+                ObservationNormalization.chunk_count > 0,
+                select(IngestionStage.id).where(
+                    IngestionStage.id == ObservationNormalization.stage_id,
+                    IngestionStage.run_id == ObservationNormalization.run_id,
+                    IngestionStage.stage_key == "normalize",
+                ).correlate(ObservationNormalization).exists(),
+                select(SourceObservation.id).join(IngestionRun, and_(
+                    IngestionRun.batch_id == SourceObservation.batch_id,
+                    IngestionRun.source_id == SourceObservation.source_id,
+                )).where(
+                    SourceObservation.id == ObservationNormalization.observation_id,
+                    SourceObservation.source_id == ObservationNormalization.source_id,
+                    IngestionRun.id == ObservationNormalization.run_id,
+                ).correlate(ObservationNormalization).exists(),
+            ).limit(1))
+            if normalized is None:
+                raise HTTPException(status_code=404, detail="Ready normalization lineage not found")
+    session.add(outbox)
 
 
 NORMALIZATION_VERSION = 1
@@ -225,14 +681,29 @@ NORMALIZATION_VERSION = 1
 
 async def schedule_normalization(
     session: AsyncSession, run: IngestionRun, batch: IngestionBatch, source_generation: int,
-    received_at: datetime,
+    received_at: datetime, *, scope: Scope, multi_workspace_enabled: bool,
 ) -> IngestionStage | None:
     """Create or reuse normalization work and idempotent observation progress.
 
-    Empty batches produce no stage; a new stage emits one durable request event.
+    Compare supplied run/batch/source/generation against scoped owner rows before any
+    observation query. Empty batches produce no stage; a new stage emits one durable
+    request event. Caller holds earlier admission/Source/run locks and owns commit.
     """
+    await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    authorized_run = await session.scalar(select(IngestionRun).where(
+        IngestionRun.id == run.id, IngestionRun.batch_id == batch.id,
+        IngestionRun.source_id == batch.source_id, *_run_scope(scope),
+    ))
+    authorized_batch = await session.scalar(select(IngestionBatch.id).where(
+        IngestionBatch.id == batch.id, IngestionBatch.source_id == run.source_id,
+        IngestionBatch.source_generation == source_generation,
+    ))
+    if authorized_run is None or authorized_batch is None:
+        raise HTTPException(status_code=404, detail="Normalization lineage not found")
     observations = list((await session.scalars(
-        select(SourceObservation).where(SourceObservation.batch_id == batch.id).order_by(SourceObservation.id)
+        select(SourceObservation).where(SourceObservation.batch_id == batch.id,
+                                        SourceObservation.source_id == run.source_id)
+        .order_by(SourceObservation.id)
     )).all())
     if not observations:
         return None
@@ -251,17 +722,18 @@ async def schedule_normalization(
                 "source_generation": source_generation, "normalization_version": NORMALIZATION_VERSION,
             },
         )
-        await publish_event(session, event)
+        await publish_event(session, event, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     existing_ids = set((await session.scalars(
         select(ObservationNormalization.observation_id).where(
             ObservationNormalization.stage_id == stage.id,
+            *_materialization_scope(scope),
             ObservationNormalization.normalization_version == NORMALIZATION_VERSION,
         )
     )).all())
     for observation in observations:
         if observation.id not in existing_ids:
             session.add(ObservationNormalization(
-                observation_id=observation.id, source_id=observation.source_id,
+                workspace_id=scope.workspace_id, observation_id=observation.id, source_id=observation.source_id,
                 run_id=run.id, stage_id=stage.id, source_generation=source_generation,
                 normalization_version=NORMALIZATION_VERSION,
             ))
@@ -271,21 +743,121 @@ async def schedule_normalization(
     return stage
 
 
-async def tombstone_document_materializations(session: AsyncSession, document_id: UUID) -> None:
-    """Make already accepted work terminal when its normalized document is deleted."""
+async def tombstone_document_materializations(session: AsyncSession, document_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+) -> None:
+    """Tombstone materializations through exact retained run/stage/batch/workspace lineage.
+
+    The Document owner holds earlier admission/Source/deletion locks. No earlier lock
+    acquisition or commit occurs; nullable document/version IDs retain owner scope.
+    """
+    await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     await session.execute(
         update(ObservationNormalization)
-        .where(ObservationNormalization.document_id == document_id)
+        .where(ObservationNormalization.document_id == document_id, *_materialization_scope(scope))
         .values(disposition="skipped", error_code="document_deleted", document_id=None, document_version_id=None)
     )
 
 
-async def get_event_delivery(session: AsyncSession, event_id: UUID) -> EventDelivery | None:
-    """Read an event delivery status with a defensive copy of its payload."""
-    event = await session.get(EventOutbox, event_id)
+async def get_event_delivery(session: AsyncSession, event_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+) -> EventDelivery | None:
+    """Read scoped outbox identity with a defensive payload copy and no row locks.
+
+    Current owner admission and retained actor/membership must match; foreign IDs
+    return None. Event type/version/producer and nullable dispatch timestamp are captured,
+    but this DTO does not prove held locks, a current dispatch claim or a still-live Source.
+    """
+    await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    event = await session.scalar(select(EventOutbox).where(EventOutbox.id == event_id, *_event_scope(scope)))
     if event is None:
         return None
-    return EventDelivery(id=event.id, status=event.status, payload=deepcopy(event.payload))
+    return EventDelivery(id=event.id, workspace_id=event.workspace_id, actor_user_id=event.actor_user_id,
+                         membership_revision=event.membership_revision, type=event.type,
+                         version=event.version, producer=event.producer, dispatched_at=event.dispatched_at,
+                         status=event.status, payload=deepcopy(event.payload))
+
+
+async def lock_source_purge_event_in_uow(
+    session: AsyncSession, event_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+    event_types: tuple[str, ...],
+) -> EventDelivery | None:
+    """Lock the complete existing purge/run/coverage event union in one ascending UUID order.
+
+    Caller holds admission, optional Memory privacy, Source and exact retained operation;
+    canonical cancellation also holds its seven prepared Ingestion row sets. Validate the
+    requested six-field subject nonlocking before acquiring any outbox lock. Historical run
+    events include all epochs/generations but only this workspace/actor and Source lineage;
+    their bodies are never loaded into Python. Include an existing deterministic coverage
+    row so later arming acquires no omitted lower UUID. Fresh requested/coverage validation
+    rejects collisions or a changed subject. Caller still compares original queued status/
+    dispatched_at before effects. No early locks, mutation, commit or I/O; total SQL work
+    grows with Source history while Python discovery stays bounded.
+    """
+    if (not isinstance(event_types, tuple) or not event_types
+            or any(not isinstance(event_type, str) or event_type not in _SOURCE_PURGE_PRODUCERS
+                   for event_type in event_types)):
+        raise ValueError("Only explicit Source purge event types are allowed")
+    await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    event = await session.scalar(select(EventOutbox).where(
+        EventOutbox.id == event_id, EventOutbox.type.in_(event_types), *_event_scope(scope),
+    ).execution_options(populate_existing=True))
+    if event is None:
+        return None
+    subject = _source_purge_event_subject(
+        event.type, event.version, event.producer, event.payload, scope=scope,
+    )
+    if subject is None:
+        return None
+    operation_id, retained = subject
+    actual = await sources.read_source_purge_job_identity(
+        session, operation_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if actual != retained:
+        return None
+    captured_envelope = (event.type, event.version, event.producer)
+    coverage_id = uuid5(operation_id, "source-memory-coverage")
+    coverage_exists = await session.scalar(select(EventOutbox.id).where(EventOutbox.id == coverage_id)) is not None
+    if coverage_exists:
+        coverage = await session.scalar(select(EventOutbox).where(
+            EventOutbox.id == coverage_id, *_event_scope(retained),
+        ).execution_options(populate_existing=True))
+        if (coverage is None or coverage.type != "source.purge.coverage"
+                or _source_purge_event_subject(coverage.type, coverage.version, coverage.producer,
+                                               coverage.payload, scope=retained) != subject):
+            raise HTTPException(status_code=409, detail="Source coverage event identity changed")
+    run_ids = select(cast(IngestionRun.id, String)).where(
+        IngestionRun.source_id == retained.source_id, IngestionRun.workspace_id == retained.workspace_id,
+    )
+    # Sort and lock actual rows inside PostgreSQL; COUNT consumes the complete lock CTE.
+    # Do not lock the requested row first, or materialize historical event bodies/IDs in Python.
+    locked_events = select(EventOutbox.id).where(
+        EventOutbox.workspace_id == retained.workspace_id,
+        EventOutbox.actor_user_id == retained.actor_user_id,
+        or_(EventOutbox.id == event_id, EventOutbox.id == coverage_id,
+            EventOutbox.payload["run_id"].astext.in_(run_ids)),
+    ).order_by(EventOutbox.id).with_for_update().cte("source_purge_event_locks").prefix_with("MATERIALIZED")
+    await session.scalar(select(func.count()).select_from(locked_events))
+    event = await session.scalar(select(EventOutbox).where(
+        EventOutbox.id == event_id, EventOutbox.type.in_(event_types), *_event_scope(scope),
+    ).execution_options(populate_existing=True))
+    if event is None or (event.type, event.version, event.producer) != captured_envelope:
+        return None
+    fresh_subject = _source_purge_event_subject(event.type, event.version, event.producer, event.payload, scope=scope)
+    if fresh_subject != subject or await sources.read_source_purge_job_identity(
+        session, operation_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    ) != retained:
+        return None
+    if coverage_exists:
+        coverage = await session.scalar(select(EventOutbox).where(
+            EventOutbox.id == coverage_id, *_event_scope(retained),
+        ).execution_options(populate_existing=True))
+        if (coverage is None or coverage.type != "source.purge.coverage"
+                or _source_purge_event_subject(coverage.type, coverage.version, coverage.producer,
+                                               coverage.payload, scope=retained) != subject):
+            raise HTTPException(status_code=409, detail="Source coverage event identity changed")
+    return EventDelivery(id=event.id, workspace_id=event.workspace_id, actor_user_id=event.actor_user_id,
+                         membership_revision=event.membership_revision, type=event.type,
+                         version=event.version, producer=event.producer, dispatched_at=event.dispatched_at,
+                         status=event.status, payload=deepcopy(event.payload))
 
 
 async def set_event_delivery(
@@ -293,46 +865,73 @@ async def set_event_delivery(
     event_id: UUID,
     status: Literal["failed", "pending", "delivered"],
     *,
-    next_attempt_at: datetime | None = None,
+    next_attempt_at: datetime | None = None, scope: Scope, multi_workspace_enabled: bool,
 ) -> bool:
-    """Update an outbox event status and optional retry time; report if found."""
+    """Update exact scoped outbox status/retry time without earlier locks or commit.
+
+    Caller holds ordered admission/domain locks; nonlocking revision revalidation
+    cannot rebase a retained epoch. Foreign rows return False.
+    """
+    await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     values: dict[str, object] = {"status": status}
     if next_attempt_at is not None:
         values["next_attempt_at"] = next_attempt_at
     result = await session.execute(
         update(EventOutbox)
-        .where(EventOutbox.id == event_id)
+        .where(EventOutbox.id == event_id, *_event_scope(scope))
         .values(**values)
         .returning(EventOutbox.id)
     )
     return result.scalar_one_or_none() is not None
 
 
-async def get_source_cursor(session: AsyncSession, source_id: UUID) -> str | None:
+async def mark_event_delivered(
+    session: AsyncSession, event_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+) -> bool:
+    """Acknowledge the scoped outbox row without committing or acquiring earlier locks.
+
+    Callers hold ordered admission/Source/domain locks and own replay/final commit;
+    this is the Ingestion owner seam for atomic worker settlement, not Redis proof.
+    """
+    return await set_event_delivery(session, event_id, "delivered", scope=scope,
+                                    multi_workspace_enabled=multi_workspace_enabled)
+
+
+async def get_source_cursor(session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+) -> str | None:
     """Return the persisted collection cursor, or None before first ingestion."""
+    await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if await _source_in_scope(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled) is None:
+        return None
     state = await session.get(SourceIngestionState, source_id)
     return state.cursor if state is not None else None
 
 
-async def reset_native_collection_cursor(session: AsyncSession, source_id: UUID) -> None:
+async def reset_native_collection_cursor(session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
+) -> None:
     """Clear one native provider cursor only after its exact collection and run leases are inactive.
 
-    The caller holds source, connector, and provider identity locks before this state lock. The
+    The caller holds ordered admission, Source, connector/provider identity locks and
+    supplies its captured AccessFence before this state lock. Nonlocking equality
+    revalidation rejects stale configuration/epoch without earlier lock acquisition. The
     owner commits the reset with replay publication; a live collector or nonterminal run rejects it.
     """
-    source = await sources.get_connector_source(session, source_id)
+    current_access = await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if current_access != access_fence:
+        raise HTTPException(status_code=409, detail="Collection access fence is stale")
+    source = await _source_in_scope(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if source is None:
         raise HTTPException(status_code=404, detail="Source not found")
     state = await session.get(SourceIngestionState, source_id, with_for_update=True)
     if state is None:
-        await commit_with_replay(session, [make_source_change(source.id, source.generation, source.status)])
+        await commit_with_replay(session, [make_source_change(source.id, source.generation, source.status, scope=scope)], scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
         return
     now = datetime.now(UTC)
     if state.collection_lease_token is not None and state.lease_expires_at is not None and state.lease_expires_at > now:
         raise HTTPException(status_code=409, detail="A collection is still active")
     active_run = await session.scalar(
         select(IngestionRun.id).where(
-            IngestionRun.source_id == source_id,
+            *_run_scope(scope), IngestionRun.source_id == source_id,
             IngestionRun.status.not_in(("succeeded", "failed")),
         ).limit(1).with_for_update()
     )
@@ -342,24 +941,190 @@ async def reset_native_collection_cursor(session: AsyncSession, source_id: UUID)
     state.lease_run_id = None
     state.lease_expires_at = None
     state.cursor = None
-    await commit_with_replay(session, [make_source_change(source.id, source.generation, source.status)])
+    await commit_with_replay(session, [make_source_change(source.id, source.generation, source.status, scope=scope)], scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
 
 
-async def cancel_and_purge_source_ingestion(session: AsyncSession, source_id: UUID) -> None:
-    """Fail queued events and delete ingestion data while clearing leases.
+async def _validate_source_ingestion_purge_in_uow(
+    session: AsyncSession, source_id: UUID, *, scope: InternalJobScope,
+    multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+) -> None:
+    """Compare exact internal Source subject and both actual current fences without locks.
 
-    The caller must hold the source lock first to serialize this purge with
-    collection and credential changes.
+    Caller already holds real account/workspace/membership and Source locks throughout its
+    purge transaction. DTO construction is not lock proof. Archived matching Sources are
+    permitted; active-only credential/retained-evidence acquiring wrappers are inappropriate.
+    Missing/malformed proof or any changed status/local_only/generation/access field fails
+    before effects, without upgrading epoch/generation, acquiring early locks or committing.
     """
-    run_ids = select(cast(IngestionRun.id, String)).where(IngestionRun.source_id == source_id)
+    if (not isinstance(scope, InternalJobScope) or not isinstance(access_fence, AccessFence)
+            or not isinstance(source_fence, SourceFence) or not isinstance(source_id, UUID)
+            or scope.source_id != source_id or scope.source_generation is None
+            or source_fence.id != source_id or source_fence.workspace_id != scope.workspace_id
+            or source_fence.generation != scope.source_generation):
+        raise HTTPException(status_code=409, detail="Source ingestion purge proof is invalid")
+    current_access = await _admit_ingestion_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    current_source = await sources.get_source_fence(
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if current_access != access_fence or current_source is None or current_source != source_fence:
+        raise HTTPException(status_code=409, detail="Source ingestion purge proof is stale")
+
+
+async def _source_ingestion_purge_lineage(
+    session: AsyncSession, source_id: UUID, *, scope: InternalJobScope,
+) -> None:
+    """Abort contradictory own-table FK lineage before a complete Source purge can widen.
+
+    Read only scalar EXISTS under already-held admission/Source serialization; no foreign
+    ORM, payload, locks, mutation or history list. Check both direct Source rows and children
+    reached through actual batch/run/stage/observation cascades, including foreign state lease
+    references to selected runs. All historical epochs/generations remain eligible. Document/
+    version SET NULL may clear journal references after preparation and is not a mismatch.
+    """
+    batch_ids = select(IngestionBatch.id).where(IngestionBatch.source_id == source_id)
+    run_ids = select(IngestionRun.id).where(
+        IngestionRun.source_id == source_id, IngestionRun.workspace_id == scope.workspace_id,
+    )
+    observation_ids = select(SourceObservation.id).where(SourceObservation.source_id == source_id)
+    stage_ids = select(IngestionStage.id).where(IngestionStage.run_id.in_(run_ids))
+    invalid_run = select(IngestionRun.id).where(
+        or_(IngestionRun.source_id == source_id, IngestionRun.batch_id.in_(batch_ids)),
+        or_(IngestionRun.source_id != source_id, IngestionRun.workspace_id != scope.workspace_id,
+            IngestionRun.actor_user_id != scope.actor_user_id, IngestionRun.batch_id.not_in(batch_ids)),
+    ).exists()
+    invalid_observation = select(SourceObservation.id).where(
+        or_(SourceObservation.source_id == source_id, SourceObservation.batch_id.in_(batch_ids)),
+        or_(SourceObservation.source_id != source_id, SourceObservation.batch_id.not_in(batch_ids)),
+    ).exists()
+    matching_journal_parents = select(SourceObservation.id).join(
+        IngestionRun, IngestionRun.batch_id == SourceObservation.batch_id,
+    ).join(IngestionStage, IngestionStage.run_id == IngestionRun.id).join(
+        IngestionBatch, IngestionBatch.id == IngestionRun.batch_id,
+    ).where(
+        SourceObservation.id == ObservationNormalization.observation_id,
+        IngestionRun.id == ObservationNormalization.run_id,
+        IngestionStage.id == ObservationNormalization.stage_id,
+        SourceObservation.source_id == source_id, IngestionBatch.source_id == source_id,
+        IngestionRun.source_id == source_id, IngestionRun.workspace_id == scope.workspace_id,
+        IngestionRun.actor_user_id == scope.actor_user_id,
+        IngestionBatch.source_generation == ObservationNormalization.source_generation,
+    ).correlate(ObservationNormalization).exists()
+    invalid_journal = select(ObservationNormalization.id).where(
+        or_(ObservationNormalization.source_id == source_id,
+            ObservationNormalization.observation_id.in_(observation_ids),
+            ObservationNormalization.run_id.in_(run_ids), ObservationNormalization.stage_id.in_(stage_ids)),
+        or_(ObservationNormalization.source_id != source_id,
+            ObservationNormalization.workspace_id != scope.workspace_id, ~matching_journal_parents),
+    ).exists()
+    invalid_state = select(SourceIngestionState.source_id).where(or_(
+        and_(SourceIngestionState.source_id != source_id, SourceIngestionState.lease_run_id.in_(run_ids)),
+        and_(SourceIngestionState.source_id == source_id, SourceIngestionState.lease_run_id.is_not(None),
+             SourceIngestionState.lease_run_id.not_in(run_ids)),
+    )).exists()
+    if await session.scalar(select(or_(invalid_run, invalid_observation, invalid_journal, invalid_state))):
+        raise HTTPException(status_code=409, detail="Source ingestion purge lineage is inconsistent")
+
+
+async def _lock_ingestion_purge_identities(
+    session: AsyncSession, source_id: UUID, *, scope: InternalJobScope,
+) -> None:
+    """Lock the seven complete own row sets in their fixed local order, returning no data.
+
+    Caller has freshly validated exact Source/access proof and own cascade lineage. Each
+    MATERIALIZED identity-only ordered FOR UPDATE CTE is exhausted by a scalar COUNT in
+    PostgreSQL, so Python memory stays constant and no payload/config/secret is collected.
+    No cap/SKIP LOCKED/partial commit omits history; all locks remain held through one apply.
+    Credentials include revoked rows; state absence stays absent; historical run epochs and
+    batch generations are not restricted to the purge's newly archived generation/revision.
+    """
+    batch_ids = select(IngestionBatch.id).where(IngestionBatch.source_id == source_id)
+    run_ids = select(IngestionRun.id).where(
+        IngestionRun.source_id == source_id, IngestionRun.workspace_id == scope.workspace_id,
+        IngestionRun.batch_id.in_(batch_ids),
+    )
+    observation_ids = select(SourceObservation.id).where(
+        SourceObservation.source_id == source_id, SourceObservation.batch_id.in_(batch_ids),
+    )
+    stage_ids = select(IngestionStage.id).where(IngestionStage.run_id.in_(run_ids))
+    queries = (
+        select(CollectorCredential.token_hash).where(CollectorCredential.source_id == source_id)
+        .order_by(CollectorCredential.token_hash),
+        select(SourceIngestionState.source_id).where(SourceIngestionState.source_id == source_id)
+        .order_by(SourceIngestionState.source_id),
+        select(IngestionBatch.id).where(IngestionBatch.source_id == source_id).order_by(IngestionBatch.id),
+        select(IngestionRun.id).where(IngestionRun.id.in_(run_ids)).order_by(IngestionRun.id),
+        select(IngestionStage.id).where(IngestionStage.run_id.in_(run_ids))
+        .order_by(IngestionStage.run_id, IngestionStage.stage_key, IngestionStage.id),
+        select(SourceObservation.id).where(SourceObservation.id.in_(observation_ids)).order_by(SourceObservation.id),
+        select(ObservationNormalization.id).where(
+            ObservationNormalization.workspace_id == scope.workspace_id,
+            ObservationNormalization.source_id == source_id,
+            ObservationNormalization.observation_id.in_(observation_ids),
+            ObservationNormalization.run_id.in_(run_ids), ObservationNormalization.stage_id.in_(stage_ids),
+        ).order_by(ObservationNormalization.id),
+    )
+    for query in queries:
+        locked = query.with_for_update().cte("source_ingestion_purge_locks").prefix_with("MATERIALIZED")
+        await session.scalar(select(func.count()).select_from(locked))
+
+
+async def prepare_source_ingestion_purge_in_uow(
+    session: AsyncSession, source_id: UUID, *, scope: InternalJobScope,
+    multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+) -> None:
+    """Prepare complete Ingestion roots/children after Source+Documents/URI, before operation/outbox.
+
+    Caller retains real account/workspace/Source locks and the same transaction through D
+    cleanup and cancellation. Fresh nonlocking fences and own FK lineage must match; then
+    lock credentials -> state -> batches -> runs -> stages -> observations -> journals,
+    each in stable identity order. No outbox lock, mutation, token, commit or external I/O.
+    Memory use is bounded; complete atomic SQL/transaction work grows with Source history.
+    """
+    await _validate_source_ingestion_purge_in_uow(session, source_id, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence)
+    await _source_ingestion_purge_lineage(session, source_id, scope=scope)
+    await _lock_ingestion_purge_identities(session, source_id, scope=scope)
+    await _source_ingestion_purge_lineage(session, source_id, scope=scope)
+
+
+async def cancel_and_purge_source_ingestion(
+    session: AsyncSession, source_id: UUID, *, scope: InternalJobScope,
+    multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+) -> None:
+    """Apply complete prepared Source cancellation after claimed D canonical cleanup, without early locks.
+
+    Caller holds real access/Source, prepared Documents/URI and seven Ingestion row sets,
+    exact purge operation and complete sorted existing event union; original queued dispatch
+    CAS succeeded before D apply. Revalidate fences/own lineage nonlocking, then fail all
+    matching historical run events (all statuses/epochs/generations), delete observations and
+    batches with existing cascades, clear only existing state leases and revoke all credentials.
+    Keep cursor, retained outbox payload/principal/dispatch/schedule and purge receipts intact.
+    No missing state insertion, preparation/acquiring call, commit or external effect. D has
+    already removed derived structured observations before ingestion-observation FK cascades.
+    """
+    await _validate_source_ingestion_purge_in_uow(session, source_id, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence)
+    await _source_ingestion_purge_lineage(session, source_id, scope=scope)
+    # A lifecycle purge cancels all historical generations/epochs of this verified
+    # Source, rather than only the newly archived generation of its operation.
+    run_ids = select(cast(IngestionRun.id, String)).where(
+        IngestionRun.source_id == source_id, IngestionRun.workspace_id == scope.workspace_id,
+    )
     await session.execute(
         update(EventOutbox)
-        .where(EventOutbox.payload["run_id"].astext.in_(run_ids))
+        .where(EventOutbox.workspace_id == scope.workspace_id,
+               EventOutbox.actor_user_id == _actor_id(scope),
+               EventOutbox.payload["run_id"].astext.in_(run_ids))
         .values(status="failed")
     )
     await session.execute(delete(SourceObservation).where(SourceObservation.source_id == source_id))
     await session.execute(delete(IngestionBatch).where(IngestionBatch.source_id == source_id))
-    state = await session.get(SourceIngestionState, source_id, with_for_update=True)
+    # Preparation holds the existing state; reread without reacquiring roots after outboxes.
+    state = await session.scalar(select(SourceIngestionState).where(
+        SourceIngestionState.source_id == source_id,
+    ).execution_options(populate_existing=True))
     if state is not None:
         state.lease_run_id = None
         state.collection_lease_token = None
@@ -369,19 +1134,24 @@ async def cancel_and_purge_source_ingestion(session: AsyncSession, source_id: UU
 
 
 async def collector_can_ingest(
-    session: AsyncSession, source_id: UUID, token: str, *, scope: str = "ingestion:write",
+    session: AsyncSession, source_id: UUID, token: str, *, credential_scope: str = "ingestion:write", scope: Scope, multi_workspace_enabled: bool,
 ) -> bool:
-    """Check token scope, revocation state, and active connector status."""
+    """Check literal credential capability and active Source under actual scoped owner admission.
+
+    This nonlocking read is not intake admission. Collection wrappers acquire ordered
+    access/Source locks and recheck token revocation before effects.
+    """
+    await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     credential_valid = bool(await session.scalar(
         select(CollectorCredential.token_hash).where(
             CollectorCredential.token_hash == token_hash,
             CollectorCredential.source_id == source_id,
-            CollectorCredential.scope == scope,
+            CollectorCredential.scope == credential_scope,
             CollectorCredential.revoked_at.is_(None),
         )
     ))
-    source = await sources.get_connector_source(session, source_id) if credential_valid else None
+    source = await _source_in_scope(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled) if credential_valid else None
     return source is not None and source.status == "active"
 
 
@@ -400,21 +1170,94 @@ def _decode_telegram_cursor(value: str | None) -> TelegramCursor | None:
         raise HTTPException(status_code=409, detail="Telegram collection cursor is invalid") from exc
 
 
-async def _lock_source_projection(session: AsyncSession, source_id: UUID) -> ConnectorSource | None:
+async def _lock_source_projection(session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool, expected_access_fence: AccessFence | None = None,
+) -> tuple[ConnectorSource | None, SourceFence | None, AccessFence]:
     """Hold the narrow source fence while reading the detached connector projection.
 
-    SourceFence owns lifecycle locking; provider, type, and configuration are
-    read through the source owner's ConnectorSource contract under that lock.
+    Entry holds no domain locks. Source set admission captures AccessFence before the
+    Source lifecycle lock; its detached configuration is compared under that lock.
+    Caller owns release/commit, and no network work occurs under these locks.
     """
-    fence = await sources.lock_source(session, source_id)
-    if fence is None:
-        return None
-    projection = await sources.get_connector_source(session, source_id)
+    locked = await sources.lock_source_set(
+        session, (source_id,), scope=scope, multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=expected_access_fence,
+    )
+    fence = locked.fences[0]
+    projection = await sources.get_connector_source(
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     if projection is None or (
-        projection.status != fence.status or projection.generation != fence.generation
+        projection.workspace_id != fence.workspace_id
+        or projection.status != fence.status or projection.generation != fence.generation
     ):
         raise HTTPException(status_code=409, detail="Source projection changed under lifecycle lock")
-    return projection
+    return projection, fence, locked.access_fence
+
+
+
+async def validate_connector_collection_in_uow(
+    session: AsyncSession, lease: ConnectorCollectionLease, *, collector_token: str,
+    scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
+    source_fence: SourceFence,
+) -> bool:
+    """Validate original lease/bearer under prepared parents; lock only Ingestion state.
+
+    Caller holds original account/session admission where applicable, Source/provisioning,
+    required slots/native/world and all Source collector credentials; for GitHub those
+    credentials precede its already-held grant, which precedes this state lock. Fresh full
+    original lease/access/Source and nonlocking active applied Connector proof are mandatory.
+    Read the exact prepared ingestion:write hash freshly, never reacquire earlier rows.
+    Unavailable Source fails404, stale fences/provisioning409, ineligible bearer401; malformed
+    lease/scope/admission and storage errors retain typed failures. False means only changed,
+    missing or expired reservation (exact token, no run, cursor, expiry and future UTC time).
+    No rotation/renewal/cursor/health/replay mutation, commit, rollback or I/O. Caller releases
+    SQL before each physical send. This is not the original provider-credential comparison
+    or acceptance's atomic proof, and carries no retained-effect journal authority.
+    """
+    original_access = _lease_access_fence(lease)
+    _lease_scope(lease, scope)
+    if access_fence != original_access:
+        raise HTTPException(status_code=409, detail="Collection access capture differs from original lease")
+    current_access = await _admit_ingestion_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    current_source_fence = await sources.get_source_fence(
+        session, lease.source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    source = await sources.get_connector_source(
+        session, lease.source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if current_source_fence is None or source is None:
+        raise HTTPException(status_code=404, detail="Source not found")
+    if (current_access != original_access or current_source_fence != source_fence
+            or source_fence.id != lease.source_id or source_fence.workspace_id != lease.workspace_id
+            or source_fence.generation != lease.source_generation
+            or source.status != "active" or source.local_only):
+        raise HTTPException(status_code=409, detail="Original collection Source/access fence changed")
+    from modules.connectors import public as connectors
+
+    if not connectors.is_native_provider(source.provider):
+        raise HTTPException(status_code=409, detail="Native provider is not configured")
+    if not await connectors.require_collection_fence(
+        session, source,
+        connectors.CollectionFence(source_generation=lease.source_generation, connector_revision=lease.connector_revision),
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    ):
+        raise HTTPException(status_code=409, detail="Connector collection fence is stale")
+    token_hash = hashlib.sha256(collector_token.encode()).hexdigest()
+    eligible = await session.scalar(select(CollectorCredential.token_hash).where(
+        CollectorCredential.token_hash == token_hash, CollectorCredential.source_id == lease.source_id,
+        CollectorCredential.scope == "ingestion:write", CollectorCredential.revoked_at.is_(None),
+    ))
+    if eligible is None:
+        raise HTTPException(status_code=401, detail="Collector authentication required")
+    state = await session.scalar(select(SourceIngestionState).where(
+        SourceIngestionState.source_id == lease.source_id,
+    ).with_for_update().execution_options(populate_existing=True))
+    return bool(
+        state is not None and state.collection_lease_token == lease.token and state.lease_run_id is None
+        and state.cursor == lease.cursor_before and state.lease_expires_at is not None
+        and state.lease_expires_at == lease.expires_at and state.lease_expires_at > datetime.now(UTC)
+    )
 
 
 async def acquire_connector_collection(
@@ -423,19 +1266,47 @@ async def acquire_connector_collection(
     source_id: UUID,
     source_generation: int,
     connector_revision: int,
-    collector_token: str,
+    collector_token: str, scope: Scope, multi_workspace_enabled: bool,
 ) -> ConnectorCollectionLease:
     """Reserve one native fetch under source, provisioning, credential, then state locks.
 
     The lease token is distinct from a processing run lease. It is committed with
     the source collection-start event before the provider performs network I/O;
     only an expired owner can be replaced and every later write rechecks its token.
+    Detached lease captures workspace/actor/membership/configuration epoch; entry holds
+    no domain locks. All Source collector rows are actually prepared after any native
+    credential and before state; the exact ingestion:write hash is read under those locks.
+    Provider sends occur only after this wrapper commits.
     """
-    source = await _lock_source_projection(session, source_id)
+    source, source_fence, access_fence = await _lock_source_projection(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if source is None:
         raise HTTPException(status_code=404, detail="Source not found")
     if source.status != "active" or source.generation != source_generation:
         raise HTTPException(status_code=409, detail="Source generation is not active")
+    from modules.connectors import public as connectors
+
+    if not connectors.is_native_provider(source.provider):
+        raise HTTPException(status_code=409, detail="Native provider is not configured")
+    if not await connectors.require_collection_fence(
+        session, source,
+        connectors.CollectionFence(source_generation=source_generation, connector_revision=connector_revision),
+        lock=True, scope=scope, multi_workspace_enabled=multi_workspace_enabled):
+        raise HTTPException(status_code=409, detail="Connector collection fence is stale")
+    if source.provider == "telegram":
+        credential = await connectors.get_native_credential_snapshot(
+            session, source_id, source_generation=source_generation,
+            connector_revision=connector_revision, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        if (
+            credential is None or credential.source_generation != source_generation
+            or credential.configuration_revision != connector_revision
+            or credential.state != "ready" or not credential.verified_bot_id
+            or not credential.encrypted_token or credential.validated_at is None
+        ):
+            raise HTTPException(status_code=409, detail="Native Telegram credential is not ready")
+    await lock_source_credentials_in_uow(
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence, source_fence=source_fence,
+    )
     token_hash = hashlib.sha256(collector_token.encode()).hexdigest()
     grant_valid = bool(await session.scalar(select(CollectorCredential.token_hash).where(
         CollectorCredential.token_hash == token_hash,
@@ -445,29 +1316,9 @@ async def acquire_connector_collection(
     )))
     if not grant_valid:
         raise HTTPException(status_code=401, detail="Collector authentication required")
-    from modules.connectors import public as connectors
-
-    if not connectors.is_native_provider(source.provider):
-        raise HTTPException(status_code=409, detail="Native provider is not configured")
-    if not await connectors.require_collection_fence(
-        session, source,
-        connectors.CollectionFence(source_generation=source_generation, connector_revision=connector_revision),
-        lock=True,
-    ):
-        raise HTTPException(status_code=409, detail="Connector collection fence is stale")
-    if source.provider == "telegram":
-        credential = await connectors.get_native_credential_snapshot(
-            session, source_id, source_generation=source_generation,
-            connector_revision=connector_revision,
-        )
-        if (
-            credential is None or credential.source_generation != source_generation
-            or credential.configuration_revision != connector_revision
-            or credential.state != "ready" or not credential.verified_bot_id
-            or not credential.encrypted_token or credential.validated_at is None
-        ):
-            raise HTTPException(status_code=409, detail="Native Telegram credential is not ready")
-    state = await session.get(SourceIngestionState, source_id, with_for_update=True)
+    state = await session.scalar(select(SourceIngestionState).where(
+        SourceIngestionState.source_id == source_id,
+    ).with_for_update().execution_options(populate_existing=True))
     if state is None:
         state = SourceIngestionState(source_id=source_id, cursor=None)
         session.add(state)
@@ -485,25 +1336,28 @@ async def acquire_connector_collection(
     state.lease_run_id = None
     state.collection_lease_token = token
     state.lease_expires_at = expires_at
-    if not await sources.record_collection_started(session, source_id, source_generation, now):
+    if not await sources.record_collection_started_in_uow(session, source_id, source_generation, now, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence):
         raise HTTPException(status_code=409, detail="Source is not active")
-    await commit_with_replay(session, [make_source_change(source.id, source.generation, source.status)])
+    await commit_with_replay(session, [make_source_change(source.id, source.generation, source.status, scope=scope)], scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
     return ConnectorCollectionLease(
+        workspace_id=scope.workspace_id, actor_user_id=_actor_id(scope), membership_revision=scope.membership_revision,
         source_id=source_id, source_generation=source_generation,
         connector_revision=connector_revision, token=token,
-        cursor_before=state.cursor, expires_at=expires_at,
+        cursor_before=state.cursor, expires_at=expires_at, configuration_revision=access_fence.configuration_revision,
     )
 
 
 async def read_telegram_collection_state(
-    session: AsyncSession, lease: ConnectorCollectionLease
+    session: AsyncSession, lease: ConnectorCollectionLease, *, scope: Scope, multi_workspace_enabled: bool,
 ) -> TelegramCursor | None:
     """Read a reserved Telegram cursor after rechecking source, revision, and bot fences.
 
-    This short transaction verifies the current native binding and releases every
+    Entry holds no domain locks and rechecks original principal/configuration before
+    Source. This short transaction verifies the current native binding and releases every
     row lock before the connector performs network I/O.
     """
-    source = await _lock_source_projection(session, lease.source_id)
+    _lease_scope(lease, scope)
+    source, source_fence, access_fence = await _lock_source_projection(session, lease.source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=AccessFence(lease.workspace_id, lease.actor_user_id, lease.membership_revision, lease.configuration_revision))
     from modules.connectors import public as connectors
 
     if (
@@ -518,15 +1372,13 @@ async def read_telegram_collection_state(
             source_generation=lease.source_generation,
             connector_revision=lease.connector_revision,
         ),
-        lock=True,
-    ):
+        lock=True, scope=scope, multi_workspace_enabled=multi_workspace_enabled):
         await session.rollback()
         raise HTTPException(status_code=409, detail="Telegram connector revision changed")
     credential = await connectors.get_native_credential_snapshot(
         session, lease.source_id,
         source_generation=lease.source_generation,
-        connector_revision=lease.connector_revision,
-    )
+        connector_revision=lease.connector_revision, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if credential is None or credential.state != "ready" or not credential.verified_bot_id:
         await session.rollback()
         raise HTTPException(status_code=409, detail="Native Telegram credential is not ready")
@@ -558,15 +1410,18 @@ async def release_connector_collection(
     session: AsyncSession,
     lease: ConnectorCollectionLease,
     *,
-    error_code: str | None,
+    error_code: str | None, scope: Scope, multi_workspace_enabled: bool,
 ) -> bool:
     """Release the matching reservation; stale revisions never publish old health errors.
 
     An exact token from the same source generation is cleared even after a desired
     revision changes so it cannot block the replacement. Health updates are only
     written while the original connector revision is still active.
+    Entry holds no domain locks; original lease principal/configuration is mandatory.
+    Success preserves the wrapper commit using its captured scoped replay fence.
     """
-    source = await _lock_source_projection(session, lease.source_id)
+    _lease_scope(lease, scope)
+    source, source_fence, access_fence = await _lock_source_projection(session, lease.source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=AccessFence(lease.workspace_id, lease.actor_user_id, lease.membership_revision, lease.configuration_revision))
     from modules.connectors import public as connectors
 
     fence_current = False
@@ -577,8 +1432,7 @@ async def release_connector_collection(
                 source_generation=lease.source_generation,
                 connector_revision=lease.connector_revision,
             ),
-            lock=True,
-        )
+            lock=True, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     state = await session.get(SourceIngestionState, lease.source_id, with_for_update=True)
     if (
         source is None or source.generation != lease.source_generation or state is None
@@ -592,8 +1446,8 @@ async def release_connector_collection(
     state.lease_expires_at = None
     now = datetime.now(UTC)
     if error_code is not None and fence_current:
-        await sources.record_collection_result(session, source.id, source.generation, now, error_code)
-    await commit_with_replay(session, [make_source_change(source.id, source.generation, source.status)])
+        await sources.record_collection_result_in_uow(session, source.id, source.generation, now, error_code, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence)
+    await commit_with_replay(session, [make_source_change(source.id, source.generation, source.status, scope=scope)], scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
     return True
 
 
@@ -678,7 +1532,9 @@ async def accept_native_collection(
     session: AsyncSession,
     payload: NativeCollectionBatch,
     *,
-    collector_token: str,
+    collector_token: str, lease: ConnectorCollectionLease, scope: Scope, multi_workspace_enabled: bool,
+    expected_native_operation_id: UUID | None,
+    expected_world_credential_operation_id: UUID | None,
 ) -> NativeCollectionReceipt:
     """Authenticate, reclassify, and atomically persist one reserved native page.
 
@@ -691,45 +1547,72 @@ async def accept_native_collection(
     same batch/source visibility transaction. Ambiguous missing current GitHub
     targets acknowledge uncertainty before pausing the source, fencing current
     evidence while preserving owner history. Replay head publication is last.
+    Scope/configured flag precede Source/Connector grant locks. Run/outbox retain actor
+    and original membership. Post-state GitHub proof validation consumes the captured
+    binding and never reacquires earlier admission/Source/grant locks.
+    Possible visibility pause prepares cleanup before grant/state and the complete hint
+    set before capacity. The validated empty receipt retains G; late apply returns G+1
+    solely for replay, skips inactive health, and commits with the original access fence.
+    The actual owner-issued lease is required across provider I/O: exact principal and
+    payload Source/generation/token/connector/cursor must match, and its original workspace
+    configuration fence is compared during admission before acquiring the Source lock.
+    Required internal provider captures precede replay lookup: Telegram's original native
+    UUID/access and Alpha's original world UUID must still match under their early locks;
+    inapplicable/missing capture shapes fail422, rotated credentials409. Credential operation
+    IDs never enter the stable content hash. All collector rows are prepared after provider
+    credentials (or inside early visibility preparation before Tools), then exact bearer
+    eligibility precedes GitHub grant/state. Replay preserves historical receipt semantics;
+    only new work requires no run, exact token/cursor/expiry equal to the actual lease and
+    future expiry. No state revision field or journal-only acceptance authority is invented.
     """
-    source = await _lock_source_projection(session, payload.source_id)
+    expected_access_fence = _lease_access_fence(lease)
+    _lease_scope(lease, scope)
+    if (lease.source_id != payload.source_id or lease.source_generation != payload.source_generation
+            or lease.token != payload.lease_token or lease.connector_revision != payload.connector_revision
+            or lease.cursor_before != payload.cursor_before):
+        raise HTTPException(status_code=409, detail="Native collection payload differs from original lease")
+    source, source_fence, access_fence = await _lock_source_projection(
+        session, payload.source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        expected_access_fence=expected_access_fence,
+    )
     if source is None:
         raise HTTPException(status_code=404, detail="Source not found")
-    if source.status != "active" or source.generation != payload.source_generation:
+    if source.status != "active" or source.local_only or source.generation != payload.source_generation:
         raise HTTPException(status_code=409, detail="Source generation changed during collection")
-    token_hash = hashlib.sha256(collector_token.encode()).hexdigest()
-    grant_valid = bool(await session.scalar(select(CollectorCredential.token_hash).where(
-        CollectorCredential.token_hash == token_hash,
-        CollectorCredential.source_id == source.id,
-        CollectorCredential.scope == "ingestion:write",
-        CollectorCredential.revoked_at.is_(None),
-    )))
-    if not grant_valid:
-        raise HTTPException(status_code=401, detail="Collector authentication required")
     from modules.connectors import public as connectors
 
     if not connectors.is_native_provider(source.provider):
         raise HTTPException(status_code=409, detail="Native provider is not configured")
+    if source.provider == "telegram":
+        if not isinstance(expected_native_operation_id, UUID) or expected_world_credential_operation_id is not None:
+            raise HTTPException(status_code=422, detail="Original Telegram credential operation is required")
+    elif source.provider == "alpha_vantage":
+        if not isinstance(expected_world_credential_operation_id, UUID) or expected_native_operation_id is not None:
+            raise HTTPException(status_code=422, detail="Original Alpha credential operation is required")
+    elif expected_native_operation_id is not None or expected_world_credential_operation_id is not None:
+        raise HTTPException(status_code=422, detail="Credential operation capture is not valid for this provider")
     if not await connectors.require_collection_fence(
         session, source,
         connectors.CollectionFence(
             source_generation=payload.source_generation,
             connector_revision=payload.connector_revision,
         ),
-        lock=True,
-    ):
+        lock=True, scope=scope, multi_workspace_enabled=multi_workspace_enabled):
         raise HTTPException(status_code=409, detail="Connector collection fence is stale")
     bot_id: str | None = None
     github_proof = None
     github_fence = None
+    needs_visibility_fence = False
     if source.provider == "telegram":
         credential = await connectors.get_native_credential_snapshot(
             session, source.id, source_generation=payload.source_generation,
-            connector_revision=payload.connector_revision,
-        )
+            connector_revision=payload.connector_revision, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         if (
             credential is None or credential.source_generation != payload.source_generation
             or credential.configuration_revision != payload.connector_revision
+            or credential.operation_id != expected_native_operation_id
+            or credential.access_fence != expected_access_fence
+            or credential.workspace_id != lease.workspace_id or credential.source_id != lease.source_id
             or credential.state != "ready" or not credential.verified_bot_id
             or credential.encrypted_token is None or credential.validated_at is None
         ):
@@ -739,6 +1622,16 @@ async def accept_native_collection(
             raise HTTPException(status_code=422, detail="Telegram update identity is invalid")
     elif payload.telegram_raw_deliveries or payload.telegram_deliveries:
         raise HTTPException(status_code=422, detail="Telegram proof is not valid for this provider")
+    if source.provider == "alpha_vantage":
+        assert isinstance(expected_world_credential_operation_id, UUID)
+        if not await connectors.validate_world_credential_operation_in_uow(
+            session, source.id, source_generation=payload.source_generation,
+            connector_revision=payload.connector_revision,
+            expected_operation_id=expected_world_credential_operation_id,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence, source_fence=source_fence,
+        ):
+            raise HTTPException(status_code=409, detail="Original Alpha credential operation changed")
     if source.provider == "github":
         from modules.connectors.github.schemas import GitHubSegmentProof
 
@@ -750,14 +1643,52 @@ async def accept_native_collection(
             raise HTTPException(status_code=422, detail="GitHub segment proof is malformed") from exc
         if github_proof.fence.connector_revision != payload.connector_revision:
             raise HTTPException(status_code=409, detail="GitHub collection revision is stale")
-        github_fence = await connectors.get_github_binding_fence(
-            session, source.id, source_generation=payload.source_generation,
-            connector_revision=payload.connector_revision, lock=True,
-        )
-        if github_fence is None or github_proof.fence != github_fence:
-            raise HTTPException(status_code=409, detail="GitHub grant is unavailable or requires reconnection")
+        if github_proof.hint_claim is not None:
+            # Typed proof chooses lock intent only; live reservation/segment validation
+            # must still succeed before any acknowledgement or lifecycle mutation.
+            needs_visibility_fence = (
+                github_proof.target_outcome == "forbidden"
+                or github_proof.hint_claim.intent == "reconcile"
+                and github_proof.hint_claim.locator_kind == "repository"
+                and github_proof.target_outcome == "not_found"
+                or github_proof.hint_claim.intent in {"refresh", "delete_candidate"}
+                and github_proof.hint_claim.locator_kind in {"number", "release_id", "sha"}
+                and github_proof.target_outcome in {"not_found", "forbidden", "partial"}
+                or github_proof.hint_claim.intent == "visibility_check"
+                and github_proof.target_outcome == "not_found"
+                and github_proof.hint_claim.locator_kind in {"repository", "installation"}
+            )
+        if needs_visibility_fence:
+            await sources.prepare_source_pause_for_connector_in_uow(
+                session, source.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                access_fence=access_fence, source_fence=source_fence,
+            )
     elif payload.github_segment is not None:
         raise HTTPException(status_code=422, detail="GitHub proof is not valid for this provider")
+
+    # Visibility preparation already holds tokens before Tools: never reenter that set.
+    if not needs_visibility_fence:
+        await lock_source_credentials_in_uow(
+            session, source.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence, source_fence=source_fence,
+        )
+    token_hash = hashlib.sha256(collector_token.encode()).hexdigest()
+    grant_valid = bool(await session.scalar(select(CollectorCredential.token_hash).where(
+        CollectorCredential.token_hash == token_hash,
+        CollectorCredential.source_id == source.id,
+        CollectorCredential.scope == "ingestion:write",
+        CollectorCredential.revoked_at.is_(None),
+    )))
+    if not grant_valid:
+        raise HTTPException(status_code=401, detail="Collector authentication required")
+    if github_proof is not None:
+        github_fence = await connectors.lock_github_binding_fence_in_uow(
+            session, source.id, source_generation=payload.source_generation,
+            connector_revision=payload.connector_revision, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence, source_fence=source_fence)
+        if github_fence is None or github_proof.fence != github_fence:
+            raise HTTPException(status_code=409, detail="GitHub grant is unavailable or requires reconnection")
 
     stable_records = [record.model_dump(mode="json", exclude={"collected_at"}) for record in payload.records]
     stable = {
@@ -773,8 +1704,10 @@ async def accept_native_collection(
     batch_key = f"native:{source.provider}:{payload_hash}"
     if len(batch_key) > 255:
         raise HTTPException(status_code=422, detail="Native batch key exceeds its bound")
-    # Lock state before receipt lookup to preserve the source -> connector -> state -> batch order.
-    state = await session.get(SourceIngestionState, source.id, with_for_update=True)
+    # Provider credential -> collector -> optional GitHub grant -> state -> receipt order.
+    state = await session.scalar(select(SourceIngestionState).where(
+        SourceIngestionState.source_id == source.id,
+    ).with_for_update().execution_options(populate_existing=True))
     existing = await session.scalar(select(IngestionBatch).where(
         IngestionBatch.source_id == source.id,
         IngestionBatch.batch_key == batch_key,
@@ -782,26 +1715,28 @@ async def accept_native_collection(
     if existing is not None:
         if existing.payload_hash != payload_hash:
             raise HTTPException(status_code=409, detail="Native receipt conflicts with an existing batch")
-        run = await session.scalar(select(IngestionRun).where(IngestionRun.batch_id == existing.id))
+        run = await session.scalar(select(IngestionRun).where(IngestionRun.batch_id == existing.id, IngestionRun.source_id == source.id, *_run_scope(scope)))
         if run is None:
             raise RuntimeError("Native ingestion batch has no run")
         if state is not None and state.collection_lease_token == payload.lease_token:
             # A replay may have acquired a fresh reservation; release only that exact token.
             state.collection_lease_token = None
             state.lease_expires_at = None
-            await commit_with_replay(session, [make_source_change(source.id, source.generation, source.status)])
+            await commit_with_replay(session, [make_source_change(source.id, source.generation, source.status, scope=scope)], scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
         count = len(payload.records)
         return NativeCollectionReceipt(
+            workspace_id=scope.workspace_id, actor_user_id=_actor_id(scope), membership_revision=scope.membership_revision,
             batch_id=existing.id, run_id=run.id,
             status="queued" if count else ("succeeded" if payload.telegram_raw_deliveries else "no_changes"),
             received_update_count=len(payload.telegram_raw_deliveries), record_count=count,
             coverage=payload.coverage, cursor_after=payload.cursor_after,
         )
 
-    if state is None or state.collection_lease_token != payload.lease_token:
+    if state is None or state.collection_lease_token != payload.lease_token or state.lease_run_id is not None:
         raise HTTPException(status_code=409, detail="Native collection reservation is stale")
     now = datetime.now(UTC)
-    if state.lease_expires_at is None or state.lease_expires_at <= now:
+    if (state.lease_expires_at is None or state.lease_expires_at != lease.expires_at
+            or state.lease_expires_at <= now):
         raise HTTPException(status_code=409, detail="Native collection reservation expired")
     if state.cursor != payload.cursor_before:
         raise HTTPException(status_code=409, detail="Native collection cursor is stale")
@@ -810,10 +1745,10 @@ async def accept_native_collection(
     accepted_proofs: dict[int, TelegramDeliveryProof] = {}
     cursor_after = payload.cursor_after
     if github_proof is not None:
-        github_segment = await connectors.validate_github_collection_segment(
+        github_segment = await connectors.validate_github_collection_segment_in_uow(
             session, source=source, reserved_cursor_before=state.cursor,
-            proof=github_proof,
-        )
+            proof=github_proof, binding_fence=github_fence, access_fence=access_fence,
+            source_fence=source_fence, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         supplied_records = [record.model_dump(mode="json", exclude={"collected_at"}) for record in payload.records]
         validated_records = [record.model_dump(mode="json", exclude={"collected_at"}) for record in github_segment.records]
         if (
@@ -822,6 +1757,11 @@ async def accept_native_collection(
             or payload.coverage != github_segment.coverage
         ):
             raise HTTPException(status_code=409, detail="GitHub collection transition is invalid")
+        if needs_visibility_fence and (
+            github_segment.records or github_segment.cursor_after != state.cursor
+        ):
+            # A paused G receipt cannot queue records retired by this same transaction.
+            raise HTTPException(status_code=409, detail="GitHub visibility pause requires an empty unchanged segment")
         cursor_after = github_segment.cursor_after
     if source.provider == "telegram":
         current_cursor = _decode_telegram_cursor(state.cursor)
@@ -906,7 +1846,7 @@ async def accept_native_collection(
     session.add(batch)
     await session.flush()
     run_status = "queued" if provider_records else "succeeded"
-    run = IngestionRun(batch_id=batch.id, source_id=source.id, status=run_status)
+    run = IngestionRun(workspace_id=scope.workspace_id, actor_user_id=_actor_id(scope), membership_revision=scope.membership_revision, batch_id=batch.id, source_id=source.id, status=run_status)
     session.add(run)
     await session.flush()
     receive_stage = IngestionStage(
@@ -937,7 +1877,7 @@ async def accept_native_collection(
             payload=observation_payload, observed_at=record.observed_at,
             received_at=received_at, collected_at=payload.collected_at,
         ))
-    changes: list[ReplayDraft] = [make_source_change(source.id, source.generation, source.status)]
+    changes: list[ReplayDraft] = [make_source_change(source.id, source.generation, source.status, scope=scope)]
     if provider_records:
         event = DomainEvent(
             id=uuid4(), type="ingestion.stage.requested", version=1,
@@ -948,29 +1888,26 @@ async def accept_native_collection(
                 "connector_revision": payload.connector_revision,
             },
         )
-        await publish_event(session, event)
+        await publish_event(session, event, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         await session.flush()
         normalize_stage = await schedule_normalization(
-            session, run, batch, source.generation, now
-        )
+            session, run, batch, source.generation, now, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         if normalize_stage is not None:
             changes.append(make_ingestion_change(
-                source.id, run.id, run.status, normalize_stage.stage_key, normalize_stage.status
-            ))
+                source.id, run.id, run.status, normalize_stage.stage_key, normalize_stage.status, scope=scope))
         state.lease_run_id = run.id
         state.collection_lease_token = None
         state.lease_expires_at = now + COLLECTION_LEASE
         changes.append(make_ingestion_change(
-            source.id, run.id, run.status, receive_stage.stage_key, receive_stage.status
-        ))
+            source.id, run.id, run.status, receive_stage.stage_key, receive_stage.status, scope=scope))
     else:
         state.lease_run_id = None
         state.collection_lease_token = None
         state.lease_expires_at = None
         changes.append(make_ingestion_change(
-            source.id, run.id, run.status, receive_stage.stage_key, receive_stage.status
-        ))
+            source.id, run.id, run.status, receive_stage.stage_key, receive_stage.status, scope=scope))
     state.cursor = cursor_after
+    source_paused = False
     if github_proof is not None and github_proof.hint_claim is not None:
         from modules.connectors.public import GitHubHintClaim
 
@@ -978,18 +1915,6 @@ async def accept_native_collection(
             hint_claim = GitHubHintClaim.model_validate(github_proof.hint_claim.model_dump(mode="python"))
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=409, detail="GitHub hint claim is stale") from exc
-        needs_visibility_fence = (
-            github_proof.target_outcome == "forbidden"
-            or github_proof.hint_claim.intent == "reconcile"
-            and github_proof.hint_claim.locator_kind == "repository"
-            and github_proof.target_outcome == "not_found"
-            or github_proof.hint_claim.intent in {"refresh", "delete_candidate"}
-            and github_proof.hint_claim.locator_kind in {"number", "release_id", "sha"}
-            and github_proof.target_outcome in {"not_found", "forbidden", "partial"}
-            or github_proof.hint_claim.intent == "visibility_check"
-            and github_proof.target_outcome == "not_found"
-            and github_proof.hint_claim.locator_kind in {"repository", "installation"}
-        )
         deletion_unverified = (
             github_proof.hint_claim.intent == "delete_candidate"
             and github_proof.target_outcome != "found"
@@ -1003,26 +1928,46 @@ async def accept_native_collection(
             if deletion_unverified or visibility_unverified
             else "accepted_ingestion" if provider_records else "completed"
         )
-        if not await connectors.acknowledge_github_hint(
-            session, claim=hint_claim, batch_id=batch.id, disposition=disposition,
-            reconcile_next_page=(
-                github_proof.next_page
-                if hint_claim.intent == "reconcile" and github_proof.has_next else None
-            ),
-        ):
+        reconcile_next_page = (
+            github_proof.next_page
+            if hint_claim.intent == "reconcile" and github_proof.has_next else None
+        )
+        if needs_visibility_fence:
+            # Lock the claim plus every pause-eligible hint before capacity; apply/ack
+            # may only freshly read these prepared rows and mutate, never reacquire.
+            await connectors.lock_github_hints_for_visibility_pause_in_uow(
+                session, claim=hint_claim, binding_fence=github_fence,
+                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                access_fence=access_fence, source_fence=source_fence,
+            )
+            acknowledged = await connectors.acknowledge_github_hint_in_uow(
+                session, claim=hint_claim, batch_id=batch.id, disposition=disposition,
+                reconcile_next_page=reconcile_next_page,
+                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                access_fence=access_fence, source_fence=source_fence,
+            )
+        else:
+            acknowledged = await connectors.acknowledge_github_hint(
+                session, claim=hint_claim, batch_id=batch.id, disposition=disposition,
+                reconcile_next_page=reconcile_next_page,
+                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
+        if not acknowledged:
             raise HTTPException(status_code=409, detail="GitHub hint claim changed during acceptance")
         # A current target 404 may mean deletion or lost private-repository access; pausing fences
         # all current evidence while retained owner history remains available for review.
         if needs_visibility_fence:
-            paused = await sources.pause_source_for_connector(session, source.id)
+            paused = await sources.pause_source_for_connector_in_uow(session, source.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence)
             if paused is None:
                 raise HTTPException(status_code=409, detail="GitHub source changed during visibility confirmation")
-            changes[0] = make_source_change(paused.id, paused.generation, paused.status)
-    await sources.record_collection_result(
-        session, source.id, source.generation, now, None, no_changes=not provider_records
-    )
-    await commit_with_replay(session, changes)
+            source_paused = True
+            changes[0] = make_source_change(paused.id, paused.generation, paused.status, scope=scope)
+    if not source_paused:
+        await sources.record_collection_result_in_uow(
+            session, source.id, source.generation, now, None, no_changes=not provider_records, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence)
+    await commit_with_replay(session, changes, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
     return NativeCollectionReceipt(
+            workspace_id=scope.workspace_id, actor_user_id=_actor_id(scope), membership_revision=scope.membership_revision,
         batch_id=batch.id, run_id=run.id,
         status="queued" if provider_records else ("succeeded" if payload.telegram_raw_deliveries else "no_changes"),
         received_update_count=len(payload.telegram_raw_deliveries),
@@ -1034,7 +1979,7 @@ async def accept_native_collection(
 async def receive_batch(
     session: AsyncSession,
     payload: ReceiveBatch,
-    collector_token: str,
+    collector_token: str, *, scope: Scope, multi_workspace_enabled: bool,
 ) -> tuple[IngestionBatch, IngestionRun]:
     """Authenticate and idempotently accept a fenced collection batch.
 
@@ -1046,7 +1991,7 @@ async def receive_batch(
     provider/hash/observation-time records, advances the cursor and lease, writes
     stage/outbox state, and commits with realtime changes before returning.
     """
-    source = await _lock_source_projection(session, payload.source_id)
+    source, source_fence, access_fence = await _lock_source_projection(session, payload.source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if source is None:
         raise HTTPException(status_code=404, detail="Source not found")
     if source.status != "active":
@@ -1073,8 +2018,7 @@ async def receive_batch(
         session,
         source,
         payload.source_generation,
-        payload.connector_revision,
-    ):
+        payload.connector_revision, scope=scope, multi_workspace_enabled=multi_workspace_enabled):
         raise HTTPException(status_code=409, detail="Connector collection fence is stale or required")
 
     payload_hash = _digest(payload.model_dump(mode="json"))
@@ -1087,7 +2031,7 @@ async def receive_batch(
     if existing is not None:
         if existing.payload_hash != payload_hash:
             raise HTTPException(status_code=409, detail="Batch key was already used with different content")
-        run = await session.scalar(select(IngestionRun).where(IngestionRun.batch_id == existing.id))
+        run = await session.scalar(select(IngestionRun).where(IngestionRun.batch_id == existing.id, IngestionRun.source_id == source.id, *_run_scope(scope)))
         if run is None:
             raise RuntimeError("Ingestion batch has no run")
         return existing, run
@@ -1107,7 +2051,7 @@ async def receive_batch(
         raise HTTPException(status_code=409, detail="Source already has an active collection run")
     if state.cursor != payload.cursor_before:
         raise HTTPException(status_code=409, detail="Collection cursor is stale")
-    if not await sources.record_collection_started(session, payload.source_id, source.generation, now):
+    if not await sources.record_collection_started_in_uow(session, payload.source_id, source.generation, now, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence):
         raise HTTPException(status_code=409, detail="Source is not active")
 
     batch = IngestionBatch(
@@ -1116,7 +2060,7 @@ async def receive_batch(
     )
     session.add(batch)
     await session.flush()
-    run = IngestionRun(batch_id=batch.id, source_id=payload.source_id, status="queued")
+    run = IngestionRun(workspace_id=scope.workspace_id, actor_user_id=_actor_id(scope), membership_revision=scope.membership_revision, batch_id=batch.id, source_id=payload.source_id, status="queued")
     session.add(run)
     await session.flush()
     stage = IngestionStage(run_id=run.id, stage_key="receive", status="pending")
@@ -1135,7 +2079,7 @@ async def receive_batch(
             **({"connector_revision": payload.connector_revision} if payload.connector_revision is not None else {}),
         },
     )
-    await publish_event(session, event)
+    await publish_event(session, event, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     # Keep every distinct provider/content observation in the accepted batch.
     seen: set[tuple[str, str, datetime]] = set()
     for record in payload.records:
@@ -1158,7 +2102,7 @@ async def receive_batch(
             )
         )
     await session.flush()
-    normalize_stage = await schedule_normalization(session, run, batch, source.generation, now)
+    normalize_stage = await schedule_normalization(session, run, batch, source.generation, now, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     result = await session.execute(
         update(SourceIngestionState)
         .where(
@@ -1173,23 +2117,23 @@ async def receive_batch(
     if typing_cast("CursorResult[Any]", result).rowcount != 1:
         raise HTTPException(status_code=409, detail="Collection cursor changed")
     changes: list[ReplayDraft] = [
-        make_source_change(source.id, source.generation, source.status),
-        make_ingestion_change(source.id, run.id, run.status, stage.stage_key, stage.status),
+        make_source_change(source.id, source.generation, source.status, scope=scope),
+        make_ingestion_change(source.id, run.id, run.status, stage.stage_key, stage.status, scope=scope),
     ]
     if normalize_stage is not None:
-        changes.append(make_ingestion_change(source.id, run.id, run.status, normalize_stage.stage_key, normalize_stage.status))
-    await commit_with_replay(session, changes)
+        changes.append(make_ingestion_change(source.id, run.id, run.status, normalize_stage.stage_key, normalize_stage.status, scope=scope))
+    await commit_with_replay(session, changes, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
     await session.refresh(batch)
     await session.refresh(run)
     return batch, run
 
 
 async def receive_connector_batch(
-    session: AsyncSession, payload: ReceiveBatch, collector_token: str
+    session: AsyncSession, payload: ReceiveBatch, collector_token: str, *, scope: Scope, multi_workspace_enabled: bool,
 ) -> Receipt:
     """Accept a connector batch and return its public run receipt."""
-    batch, run = await receive_batch(session, payload, collector_token)
-    return Receipt(batch_id=batch.id, run_id=run.id, status=run.status)
+    batch, run = await receive_batch(session, payload, collector_token, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    return Receipt(workspace_id=scope.workspace_id, batch_id=batch.id, run_id=run.id, status=run.status)
 
 
 async def queue_connector_crawl(
@@ -1198,7 +2142,7 @@ async def queue_connector_crawl(
     source_generation: int,
     connector_revision: int,
     cursor_before: str | None,
-    configuration: dict[str, object],
+    configuration: dict[str, object], *, scope: Scope, multi_workspace_enabled: bool,
 ) -> CrawlReceipt:
     """Idempotently queue a generic crawl keyed by source, cursor, config, and minute.
 
@@ -1207,7 +2151,7 @@ async def queue_connector_crawl(
     function's commit; stale source, connector revision, cursor, or active-lease
     checks raise HTTP 404/409; native sources must use their provider adapter.
     """
-    source = await _lock_source_projection(session, source_id)
+    source, source_fence, access_fence = await _lock_source_projection(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if source is None:
         raise HTTPException(status_code=404, detail="Source not found")
     if source.status != "active":
@@ -1225,8 +2169,7 @@ async def queue_connector_crawl(
             source_generation=source_generation,
             connector_revision=connector_revision,
         ),
-        lock=True,
-    ):
+        lock=True, scope=scope, multi_workspace_enabled=multi_workspace_enabled):
         raise HTTPException(status_code=409, detail="Connector collection fence is stale")
     state = await session.get(SourceIngestionState, source_id, with_for_update=True)
     if state is None:
@@ -1240,10 +2183,10 @@ async def queue_connector_crawl(
         select(IngestionBatch).where(IngestionBatch.source_id == source_id, IngestionBatch.batch_key == key)
     )
     if existing is not None:
-        run = await session.scalar(select(IngestionRun).where(IngestionRun.batch_id == existing.id))
+        run = await session.scalar(select(IngestionRun).where(IngestionRun.batch_id == existing.id, IngestionRun.source_id == source.id, *_run_scope(scope)))
         if run is None:
             raise RuntimeError("Crawl batch has no run")
-        return CrawlReceipt(run_id=run.id)
+        return CrawlReceipt(workspace_id=scope.workspace_id, run_id=run.id)
     if (
         (state.lease_run_id is not None and state.lease_expires_at is None)
         or (state.collection_lease_token is not None and state.lease_expires_at is None)
@@ -1253,7 +2196,7 @@ async def queue_connector_crawl(
         raise HTTPException(status_code=409, detail="Source already has an active collection run")
     if state.cursor != cursor_before:
         raise HTTPException(status_code=409, detail="Collection cursor is stale")
-    if not await sources.record_collection_started(session, source_id, source.generation, now):
+    if not await sources.record_collection_started_in_uow(session, source_id, source.generation, now, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence):
         raise HTTPException(status_code=409, detail="Source is not active")
 
     batch = IngestionBatch(
@@ -1262,7 +2205,7 @@ async def queue_connector_crawl(
     )
     session.add(batch)
     await session.flush()
-    run = IngestionRun(batch_id=batch.id, source_id=source_id, status="queued")
+    run = IngestionRun(workspace_id=scope.workspace_id, actor_user_id=_actor_id(scope), membership_revision=scope.membership_revision, batch_id=batch.id, source_id=source_id, status="queued")
     session.add(run)
     await session.flush()
     stage = IngestionStage(run_id=run.id, stage_key="collect_web", status="pending")
@@ -1284,16 +2227,16 @@ async def queue_connector_crawl(
             "configuration": configuration,
         },
     )
-    await publish_event(session, event)
+    await publish_event(session, event, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     state.lease_run_id = run.id
     state.collection_lease_token = None
     state.lease_expires_at = now + COLLECTION_LEASE
     await commit_with_replay(session, [
-        make_source_change(source.id, source.generation, source.status),
-        make_ingestion_change(source.id, run.id, run.status, stage.stage_key, stage.status),
-    ])
+        make_source_change(source.id, source.generation, source.status, scope=scope),
+        make_ingestion_change(source.id, run.id, run.status, stage.stage_key, stage.status, scope=scope),
+    ], scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
     await session.refresh(run)
-    return CrawlReceipt(run_id=run.id)
+    return CrawlReceipt(workspace_id=scope.workspace_id, run_id=run.id)
 
 
 async def receive_file(
@@ -1304,18 +2247,40 @@ async def receive_file(
     mime_type: str,
     raw_uri: str,
     size: int,
-    digest: str,
+    digest: str, *, scope: Scope, multi_workspace_enabled: bool,
+    expected_access_fence: AccessFence, expected_source_fence: SourceFence,
 ) -> tuple[IngestionRun, bool]:
-    """Accept an uploaded file and return its run plus whether it was created.
+    """Publish an upload only under its original principal/access/Source capture; return run/created.
 
-    The owner-write route performs caller authorization and owns cleanup of staged
-    raw bytes. This function locks and checks the active source, commits either
-    the existing idempotent run (False) or a new document, batch, stage, and
-    durable event (True), and rejects reuse whose document identity was deleted
-    with HTTP 409.
+    Owner-write route captures both required fences before upload I/O, releases SQL locks
+    for staging, and owns discarded raw-byte cleanup/exact-session admission. Validate the
+    original actor/workspace/epoch and Source identity before the first SourceSet acquisition,
+    forward the original AccessFence to its admission CAS, and compare the full locked
+    SourceFence before reads/effects. No current-fence fallback upgrades the capture. Commit
+    the existing idempotent run (False) or new document/batch/stage/event (True); stale proof,
+    inactive Source or reuse after canonical deletion fails409 before publication.
+    Only a proven new-batch branch prepares Document/URI/normalized identities under these
+    held fences before collection-start and Ingestion DML. Late Document initialization
+    consumes the exact original tuple without earlier reentry; retries retain the unchanged
+    canonical identity/run False path and acquire no new raw-URI preparation.
     """
-    await sources.lock_source_for_document(session, source_id)
-    source = await sources.lock_source(session, source_id)
+    if (not isinstance(scope, (WorkspaceContext, InternalJobScope))
+            or not isinstance(expected_access_fence, AccessFence)
+            or not isinstance(expected_source_fence, SourceFence)
+            or expected_access_fence.workspace_id != scope.workspace_id
+            or expected_access_fence.user_id != _actor_id(scope)
+            or expected_access_fence.membership_revision != scope.membership_revision
+            or expected_source_fence.id != source_id
+            or expected_source_fence.workspace_id != scope.workspace_id
+            or isinstance(scope, InternalJobScope) and scope.source_id is not None
+            and (scope.source_id != source_id or scope.source_generation != expected_source_fence.generation)):
+        raise HTTPException(status_code=409, detail="Upload capture proof is invalid")
+    locked = await sources.lock_source_set(session, (source_id,), scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=expected_access_fence)
+    source = locked.fences[0]
+    source_fence, access_fence = source, locked.access_fence
+    if source_fence != expected_source_fence or access_fence != expected_access_fence:
+        raise HTTPException(status_code=409, detail="Upload capture proof is stale")
     if source is None or source.status != "active":
         raise HTTPException(status_code=409, detail="Source is not active")
     batch_key = f"file:{digest}"
@@ -1325,16 +2290,21 @@ async def receive_file(
     if existing is not None:
         if existing.payload_hash != digest:
             raise HTTPException(status_code=409, detail="Upload identity conflicts with stored content")
-        if not await documents.has_document_identity(session, source_id, f"file:{digest}"):
+        if not await documents.has_document_identity(session, source_id, f"file:{digest}", scope=scope, multi_workspace_enabled=multi_workspace_enabled):
             raise HTTPException(status_code=409, detail="This file was previously ingested and its document was deleted")
-        run = await session.scalar(select(IngestionRun).where(IngestionRun.batch_id == existing.id))
+        run = await session.scalar(select(IngestionRun).where(IngestionRun.batch_id == existing.id, IngestionRun.source_id == source.id, *_run_scope(scope)))
         if run is None:
             raise RuntimeError("Ingestion batch has no run")
         await session.commit()
         return run, False
 
+    await documents.prepare_uploaded_document_in_uow(
+        session, source_id=source_id, document_id=document_id, external_id=f"file:{digest}",
+        raw_uri=raw_uri, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence, source_fence=source_fence,
+    )
     now = datetime.now(UTC)
-    if not await sources.record_collection_started(session, source_id, source.generation, now):
+    if not await sources.record_collection_started_in_uow(session, source_id, source.generation, now, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence):
         raise HTTPException(status_code=409, detail="Source is not active")
     batch = IngestionBatch(
         source_id=source_id, batch_key=batch_key, payload_hash=digest,
@@ -1342,7 +2312,7 @@ async def receive_file(
     )
     session.add(batch)
     await session.flush()
-    run = IngestionRun(batch_id=batch.id, source_id=source_id, status="queued")
+    run = IngestionRun(workspace_id=scope.workspace_id, actor_user_id=_actor_id(scope), membership_revision=scope.membership_revision, batch_id=batch.id, source_id=source_id, status="queued")
     session.add(run)
     await session.flush()
     stage = IngestionStage(run_id=run.id, stage_key="parse_file", status="pending")
@@ -1350,7 +2320,9 @@ async def receive_file(
     await session.flush()
     metadata = {"filename": filename, "raw_sha256": digest, "raw_size": size, "format": mime_type}
     stored_document_id = await documents.add_uploaded_document(
-        session, source_id, filename[:500] or "Uploaded file", mime_type, raw_uri, metadata, f"file:{digest}", document_id
+        session, source_id, filename[:500] or "Uploaded file", mime_type, raw_uri, metadata, f"file:{digest}", document_id,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence, source_fence=source_fence,
     )
     event = DomainEvent(
         id=uuid4(),
@@ -1360,20 +2332,33 @@ async def receive_file(
         producer="modules.ingestion",
         payload={"run_id": str(run.id), "stage_id": str(stage.id), "document_id": str(stored_document_id), "raw_uri": raw_uri, "mime_type": mime_type, "source_generation": source.generation},
     )
-    await publish_event(session, event)
+    await publish_event(session, event, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     await commit_with_replay(session, [
-        make_source_change(source.id, source.generation, source.status),
-        make_ingestion_change(source.id, run.id, run.status, stage.stage_key, stage.status),
-        make_knowledge_change(source_id, stored_document_id, 1),
-    ])
+        make_source_change(source.id, source.generation, source.status, scope=scope),
+        make_ingestion_change(source.id, run.id, run.status, stage.stage_key, stage.status, scope=scope),
+        make_knowledge_change(source_id, stored_document_id, 1, scope=scope),
+    ], scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
     await session.refresh(run)
     return run, True
 
 
-async def _read_stages(session: AsyncSession, stages: list[IngestionStage]) -> list[StageRead]:
-    """Project persisted stage state into ordered API read models."""
+async def _read_stages(session: AsyncSession, stages: list[IngestionStage], *, scope: Scope, multi_workspace_enabled: bool,
+) -> list[StageRead]:
+    """Authorize every persisted stage through its scoped run before owner count projection.
+
+    Foreign stages fail the entire set before aggregation; materialization counts also
+    compare their exact run/stage/batch/source-generation lineage. No commit occurs.
+    """
+    await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if not stages:
         return []
+    stage_ids = {stage.id for stage in stages}
+    authorized_ids = set((await session.scalars(
+        select(IngestionStage.id).join(IngestionRun, IngestionRun.id == IngestionStage.run_id)
+        .where(IngestionStage.id.in_(stage_ids), *_run_scope(scope))
+    )).all())
+    if authorized_ids != stage_ids:
+        raise HTTPException(status_code=404, detail="Ingestion stage not found")
     counts = await session.execute(
         select(
             ObservationNormalization.stage_id,
@@ -1384,7 +2369,7 @@ async def _read_stages(session: AsyncSession, stages: list[IngestionStage]) -> l
             func.sum(case((ObservationNormalization.disposition == "failed", 1), else_=0)),
             func.sum(case((ObservationNormalization.disposition == "pending", 1), else_=0)),
         )
-        .where(ObservationNormalization.stage_id.in_([stage.id for stage in stages]))
+        .where(ObservationNormalization.stage_id.in_([stage.id for stage in stages]), *_materialization_scope(scope))
         .group_by(ObservationNormalization.stage_id)
     )
     by_stage = {
@@ -1395,8 +2380,8 @@ async def _read_stages(session: AsyncSession, stages: list[IngestionStage]) -> l
         StageRead(
             stage_key=stage.stage_key, status=stage.status, attempts=stage.attempts,
             error_code=stage.error_code, result_count=stage.result_count, updated_at=stage.updated_at,
-            normalized_count=by_stage.get(stage.id, (0, 0, 0, 0, 0))[0],
-            duplicate_count=by_stage.get(stage.id, (0, 0, 0, 0, 0))[1],
+            normalized_count=by_stage.get(stage.id, (0, 0, 0, 0, 0, 0))[0],
+            duplicate_count=by_stage.get(stage.id, (0, 0, 0, 0, 0, 0))[1],
             selected_current_count=by_stage.get(stage.id, (0, 0, 0, 0, 0, 0))[2],
             skipped_count=by_stage.get(stage.id, (0, 0, 0, 0, 0, 0))[3],
             failed_count=by_stage.get(stage.id, (0, 0, 0, 0, 0, 0))[4],
@@ -1406,9 +2391,11 @@ async def _read_stages(session: AsyncSession, stages: list[IngestionStage]) -> l
     ]
 
 
-async def get_run(session: AsyncSession, run_id: UUID) -> tuple[IngestionRun, list[StageRead]] | None:
+async def get_run(session: AsyncSession, run_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+) -> tuple[IngestionRun, list[StageRead]] | None:
     """Return a run and its stage projection, or None when the run is absent."""
-    run = await session.get(IngestionRun, run_id)
+    await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    run = await session.scalar(select(IngestionRun).where(IngestionRun.id == run_id, *_run_scope(scope)))
     if run is None:
         return None
     stages = list(
@@ -1418,7 +2405,59 @@ async def get_run(session: AsyncSession, run_id: UUID) -> tuple[IngestionRun, li
             )
         ).all()
     )
-    return run, await _read_stages(session, stages)
+    return run, await _read_stages(session, stages, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+
+
+def _cursor_binding(scope: Scope, access_fence: AccessFence, kind: str, limit: int) -> str:
+    """Bind a cursor to principal/configuration epoch, page kind/bounds and source restriction."""
+    if (access_fence.workspace_id != scope.workspace_id or access_fence.user_id != _actor_id(scope)
+            or access_fence.membership_revision != scope.membership_revision):
+        raise ValueError("Cursor fence does not match its principal")
+    return _digest({"workspace_id": str(scope.workspace_id), "actor_user_id": _actor_id(scope),
+                    "membership_revision": scope.membership_revision,
+                    "configuration_revision": access_fence.configuration_revision,
+                    "source_id": str(scope.source_id) if isinstance(scope, InternalJobScope) else None,
+                    "source_generation": scope.source_generation if isinstance(scope, InternalJobScope) else None,
+                    "kind": kind, "limit": limit, "order": "timestamp,id"})
+
+
+def _encode_history_cursor(position: tuple[datetime, UUID], binding: str) -> str:
+    """Encode a scoped v2 cursor around the existing timestamp/UUID pagination primitive."""
+    raw = json.dumps({"v": 2, "binding": binding, "position": encode_cursor(*position)},
+                     separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _decode_history_cursor(cursor: str, binding: str) -> tuple[datetime, UUID]:
+    """Reject unbound/foreign/stale/noncanonical cursors before applying any query offset."""
+    try:
+        if not isinstance(cursor, str) or not 1 <= len(cursor) <= 4096 or "=" in cursor:
+            raise ValueError("Invalid cursor encoding")
+        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
+        if base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=") != cursor:
+            raise ValueError("Noncanonical cursor")
+        envelope = json.loads(raw)
+        if (not isinstance(envelope, dict) or set(envelope) != {"v", "binding", "position"}
+                or type(envelope["v"]) is not int or envelope["v"] != 2
+                or envelope["binding"] != binding or not isinstance(envelope["position"], str)):
+            raise ValueError("Cursor binding does not match")
+        return decode_cursor(envelope["position"])
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise HTTPException(status_code=422, detail="Invalid or stale ingestion cursor") from exc
+
+
+def encode_ingestion_cursor(
+    position: tuple[datetime, UUID], *, scope: Scope, access_fence: AccessFence,
+    kind: Literal["ready", "terminal"], limit: int = 100,
+) -> str:
+    """Build a pure principal-bound sweep cursor from a previously admitted page's last row.
+
+    Automation `_Reader` and `_CURSORS` callers retain per-principal state and the same
+    page kind/limit. This builder grants no admission; readers recheck current fences.
+    """
+    if kind not in {"ready", "terminal"} or not 1 <= limit <= 100:
+        raise ValueError("Invalid ingestion sweep cursor contract")
+    return _encode_history_cursor(position, _cursor_binding(scope, access_fence, kind, limit))
 
 
 async def list_source_runs(
@@ -1426,17 +2465,21 @@ async def list_source_runs(
     source_id: UUID,
     *,
     limit: int = 20,
-    cursor: str | None = None,
+    cursor: str | None = None, scope: Scope, multi_workspace_enabled: bool,
 ) -> SourceIngestionRead | None:
     """Return detached current and bounded recent runs after source-owner existence check."""
+    access_fence = await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     from modules.ingestion.schemas import SourceIngestionRead
 
-    source = await sources.get_connector_source(session, source_id)
+    source = await _source_in_scope(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if source is None:
         return None
-    statement = select(IngestionRun).where(IngestionRun.source_id == source_id)
+    if not 1 <= limit <= 100:
+        raise ValueError("Ingestion history page size must be between 1 and 100")
+    binding = _cursor_binding(scope, access_fence, f"history:{source.id}:{source.generation}", limit)
+    statement = select(IngestionRun).where(IngestionRun.source_id == source_id, *_run_scope(scope))
     if cursor:
-        created_at, identifier = decode_cursor(cursor)
+        created_at, identifier = _decode_history_cursor(cursor, binding)
         statement = statement.where(
             tuple_(IngestionRun.created_at, IngestionRun.id) < (created_at, identifier)
         )
@@ -1445,13 +2488,13 @@ async def list_source_runs(
     )).all())
     page_rows = rows[:limit]
     next_cursor = (
-        encode_cursor(page_rows[-1].created_at, page_rows[-1].id)
+        _encode_history_cursor((page_rows[-1].created_at, page_rows[-1].id), binding)
         if len(rows) > limit and page_rows
         else None
     )
     current = await session.scalar(
         select(IngestionRun)
-        .where(IngestionRun.source_id == source_id, IngestionRun.status.in_(("queued", "running")))
+        .where(*_run_scope(scope), IngestionRun.source_id == source_id, IngestionRun.status.in_(("queued", "running")))
         .order_by(IngestionRun.created_at.desc(), IngestionRun.id.desc())
         .limit(1)
     )
@@ -1465,13 +2508,14 @@ async def list_source_runs(
     for stage in stage_rows:
         stages_by_run[stage.run_id].append(stage)
     stage_reads = {
-        run_id: await _read_stages(session, stages)
+        run_id: await _read_stages(session, stages, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         for run_id, stages in stages_by_run.items()
     }
 
     def detach(run: IngestionRun) -> RunRead:
         """Project an ORM run and its stages into a detached response."""
         return RunRead(
+            workspace_id=run.workspace_id,
             run_id=run.id,
             source_id=run.source_id,
             status=run.status,
@@ -1482,6 +2526,7 @@ async def list_source_runs(
         )
 
     return SourceIngestionRead(
+        workspace_id=scope.workspace_id,
         current_run=detach(current) if current is not None else None,
         items=[detach(run) for run in page_rows],
         next_cursor=next_cursor,
@@ -1489,7 +2534,7 @@ async def list_source_runs(
 
 
 async def retry_run(
-    session: AsyncSession, run_id: UUID, requested_stage_key: str | None = None
+    session: AsyncSession, run_id: UUID, requested_stage_key: str | None = None, *, scope: Scope, multi_workspace_enabled: bool,
 ) -> IngestionRun | None:
     """Requeue an eligible failed stage after validating source generation.
 
@@ -1500,11 +2545,14 @@ async def retry_run(
     needed, and commit. Failed normalization progress requiring correction and
     stale source generations are rejected with HTTP 409.
     """
-    run_hint = await session.get(IngestionRun, run_id)
+    await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    run_hint = await session.scalar(select(IngestionRun).where(IngestionRun.id == run_id, *_run_scope(scope)))
     if run_hint is None:
         return None
     # Source lock serializes retry against reservation acquisition and source purge.
-    source = await sources.lock_source(session, run_hint.source_id)
+    locked = await sources.lock_source_set(session, (run_hint.source_id,), scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    source = locked.fences[0]
+    source_fence, access_fence = source, locked.access_fence
     if source is None or source.status != "active":
         raise HTTPException(status_code=409, detail="Source is not active")
     state = await session.get(SourceIngestionState, run_hint.source_id, with_for_update=True)
@@ -1515,7 +2563,7 @@ async def retry_run(
         state.collection_lease_token = None
         state.lease_expires_at = None
     run = await session.scalar(
-        select(IngestionRun).where(IngestionRun.id == run_id, IngestionRun.source_id == source.id).with_for_update()
+        select(IngestionRun).where(IngestionRun.id == run_id, IngestionRun.source_id == source.id, *_run_scope(scope)).with_for_update()
     )
     if run is None:
         return None
@@ -1542,7 +2590,7 @@ async def retry_run(
         raise HTTPException(status_code=409, detail="Requested stage is not retryable")
     prior_event = await session.scalar(
         select(EventOutbox)
-        .where(EventOutbox.payload["stage_id"].astext == str(stage.id))
+        .where(EventOutbox.payload["stage_id"].astext == str(stage.id), EventOutbox.payload["run_id"].astext == str(run.id), *_event_scope(scope))
         .order_by(EventOutbox.created_at.desc())
         .limit(1)
         .with_for_update()
@@ -1555,7 +2603,7 @@ async def retry_run(
     if stage.stage_key == "normalize":
         failed_progress = await session.scalar(
             select(ObservationNormalization.id).where(
-                ObservationNormalization.stage_id == stage.id,
+                *_materialization_scope(scope), ObservationNormalization.stage_id == stage.id,
                 ObservationNormalization.disposition == "failed",
             ).limit(1)
         )
@@ -1578,16 +2626,7 @@ async def retry_run(
             **prior_event.payload,
         },
     )
-    session.add(
-        EventOutbox(
-            id=event.id,
-            type=event.type,
-            version=1,
-            occurred_at=event.occurred_at,
-            producer=event.producer,
-            payload=event.payload,
-        )
-    )
+    await publish_event(session, event, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if stage.stage_key in {"receive", "collect_web"} and state is not None:
         now = datetime.now(UTC)
         if state.lease_run_id is not None and state.lease_expires_at is None:
@@ -1603,92 +2642,87 @@ async def retry_run(
     run.error_code = None
     await commit_with_replay(
         session,
-        [make_ingestion_change(source.id, run.id, run.status, stage.stage_key, stage.status)],
-    )
+        [make_ingestion_change(source.id, run.id, run.status, stage.stage_key, stage.status, scope=scope)], scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
     await session.refresh(run)
     return run
 
 
 async def list_ready_events_after(
-    session: AsyncSession, position: tuple[datetime, UUID] | None, limit: int = 100,
+    session: AsyncSession, position: str | None, limit: int = 100, *, scope: Scope, multi_workspace_enabled: bool,
 ) -> list[tuple[datetime, UUID, str, dict[str, Any] | None]]:
     """Read-only cursor page of ``document.version.ready`` outbox rows for the automations sweep.
 
-    Ordered by ``(created_at, id)`` strictly after ``position``; returns a validated private metadata
+    Ordered by ``(created_at, id)`` strictly after a principal-bound v2 ``position``; returns validated private metadata
     projection including the immutable version identity, never content. It never changes delivery
     status, so the single outbox consumer is unaffected.
     """
+    access_fence = await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if not 1 <= limit <= 100:
         raise ValueError("Ready-event page size must be between 1 and 100")
-    stmt = select(EventOutbox).where(EventOutbox.type == "document.version.ready")
+    stmt = select(EventOutbox).where(EventOutbox.type == "document.version.ready", *_event_scope(scope))
     if position is not None:
-        stmt = stmt.where(tuple_(EventOutbox.created_at, EventOutbox.id) > tuple_(*position))
+        offset = _decode_history_cursor(position, _cursor_binding(scope, access_fence, "ready", limit))
+        stmt = stmt.where(tuple_(EventOutbox.created_at, EventOutbox.id) > tuple_(*offset))
     rows = (await session.scalars(stmt.order_by(EventOutbox.created_at, EventOutbox.id).limit(limit))).all()
     # A malformed row keeps its slot with a None payload so the sweep cursor still advances past it.
     return [(row.created_at, row.id, str(row.id), _ready_document_payload(row)) for row in rows]
 
 
 def _ready_document_payload(event: EventOutbox) -> dict[str, Any] | None:
-    """Validate the exact bounded producer payload used by document-ready events."""
+    """Validate finite event-type producers, canonical IDs and original epoch against the root.
+
+    Scoped ready producers add exactly three principal fields to the prior five fields;
+    missing/extra/mismatched identity is invalid. The finite 1024-byte UTF-8 bound covers
+    the explicit new fields without admitting arbitrary metadata or content.
+    Ingestion version-ready journals are proved at publication; News remains Documents-only.
+    """
     payload: Any = event.payload
-    fields = {"source_id", "document_id", "document_version_id", "source_generation", "version_number"}
-    if (
-        event.type != "document.version.ready" or event.version != 1
-        or event.producer != "modules.knowledge.documents"
-        or not isinstance(payload, dict) or set(payload) != fields
-    ):
+    fields = {"source_id", "document_id", "document_version_id", "source_generation", "version_number",
+              "workspace_id", "actor_user_id", "membership_revision"}
+    if (event.type not in _READY_EVENT_PRODUCERS or event.version != 1
+            or event.producer not in _READY_EVENT_PRODUCERS[event.type]
+            or not isinstance(payload, dict) or set(payload) != fields):
         return None
-    if (
-        any(not isinstance(payload[name], str) or len(payload[name]) != 36 for name in (
-            "source_id", "document_id", "document_version_id",
-        ))
-        or type(payload["source_generation"]) is not int
-        or not 1 <= payload["source_generation"] <= 2_147_483_647
-        or type(payload["version_number"]) is not int
-        or not 1 <= payload["version_number"] <= 2_147_483_647
-    ):
+    uuid_fields = ("source_id", "document_id", "document_version_id", "workspace_id")
+    if any(not isinstance(payload[name], str) or len(payload[name]) != 36 for name in uuid_fields):
+        return None
+    if any(type(payload[name]) is not int or not 1 <= payload[name] <= 2_147_483_647
+           for name in ("source_generation", "version_number")):
+        return None
+    if any(type(payload[name]) is not int or payload[name] <= 0
+           for name in ("actor_user_id", "membership_revision")):
         return None
     try:
-        if len(json.dumps(payload, separators=(",", ":"), ensure_ascii=False)) > 512:
+        if len(json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")) > 1024:
+            return None
+        if any(str(UUID(payload[name])) != payload[name] for name in uuid_fields):
             return None
     except (TypeError, ValueError):
         return None
-    try:
-        source_id, document_id, version_id = (UUID(payload[name]) for name in (
-            "source_id", "document_id", "document_version_id",
-        ))
-    except (ValueError, TypeError):
+    if (payload["workspace_id"] != str(event.workspace_id)
+            or payload["actor_user_id"] != event.actor_user_id
+            or payload["membership_revision"] != event.membership_revision):
         return None
-    generation, version_number = payload["source_generation"], payload["version_number"]
-    if (
-        str(source_id) != payload["source_id"] or str(document_id) != payload["document_id"]
-        or str(version_id) != payload["document_version_id"]
-        or type(generation) is not int or generation < 1
-        or type(version_number) is not int or version_number < 1
-    ):
-        return None
-    return {
-        "source_id": str(source_id), "document_id": str(document_id),
-        "document_version_id": str(version_id), "source_generation": generation,
-        "version_number": version_number,
-    }
+    return deepcopy(payload)
+
 
 
 async def resolve_ready_event_provenance(
     session: AsyncSession, event_id: UUID, *, document_id: UUID | None = None,
     source_id: UUID | None = None, accepted_version_ids: tuple[UUID, ...] = (),
-    allow_retained_receipt: bool = False,
+    allow_retained_receipt: bool = False, scope: Scope, multi_workspace_enabled: bool,
 ) -> ReadyDocumentProvenance | None:
     """Resolve one strict historical event against a live Documents locator or detached cleanup receipt.
 
     Detached version IDs are accepted only when the caller supplies both receipt-owned document and
     source IDs. The bounded receipt path remains usable after canonical rows have cascaded away.
     """
+    await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if len(accepted_version_ids) > 100:
         raise ValueError("Ready-event receipt membership exceeds its bound")
     if (document_id is None) != (source_id is None):
         raise ValueError("Ready-event receipt matching requires both document and source IDs")
-    event = await session.get(EventOutbox, event_id)
+    event = await session.scalar(select(EventOutbox).where(EventOutbox.id == event_id, *_event_scope(scope)))
     if event is None:
         return None
     payload = _ready_document_payload(event)
@@ -1703,18 +2737,22 @@ async def resolve_ready_event_provenance(
             or version_id not in accepted_version_ids
         ):
             return None
-    else:
-        from modules.knowledge.documents import public as documents
-
-        locator = await documents.review_version_locator(session, version_id)
-        if locator is None and allow_retained_receipt:
-            # Opt-in for foreign-ownership classification: a deleted Document's version resolves from its
-            # retained cleanup receipt (lock-free); the payload is trusted only if the receipt names the same Document.
-            if await documents.cleanup_evidence_version_document(session, version_id) != event_document:
-                return None
-        elif locator is None or locator[0] != event_document or locator[1] != event_source:
+    locator = await documents.review_version_locator(
+        session, version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if locator is None and (allow_retained_receipt or document_id is not None):
+        # Retained cleanup lookup filters receipt workspace and exact source/version before LIMIT;
+        # supplied version membership alone cannot authorize a foreign receipt.
+        retained_document = await documents.cleanup_evidence_version_document(
+            session, version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            source_id=event_source,
+        )
+        if retained_document != event_document:
             return None
+    elif locator is None or locator != (event_document, event_source):
+        return None
     return ReadyDocumentProvenance(
+        workspace_id=event.workspace_id, actor_user_id=event.actor_user_id, membership_revision=event.membership_revision,
         event_id=event.id, source_id=event_source, document_id=event_document,
         document_version_id=version_id, source_generation=payload["source_generation"],
         version_number=payload["version_number"],
@@ -1722,29 +2760,55 @@ async def resolve_ready_event_provenance(
 
 
 async def list_terminal_runs_after(
-    session: AsyncSession, position: tuple[datetime, UUID] | None, limit: int = 100,
+    session: AsyncSession, position: str | None, limit: int = 100, *, scope: Scope, multi_workspace_enabled: bool,
 ) -> list[tuple[datetime, UUID, str, dict[str, str | int]]]:
     """Read-only cursor page of ingestion runs in a terminal state for connector sync results.
 
-    Ordered by ``(updated_at, id)``; the key combines run id and status so a later status change
-    is a new event. Payload carries source id, status and the collected-observation count only.
+    Ordered by ``(updated_at, id)`` after a principal-bound v2 position; the key combines run id and status so a later status change
+    is a new event. Payload carries original principal/source identity, status and the observation count.
     """
-    stmt = select(IngestionRun).where(IngestionRun.status.in_(("succeeded", "failed", "needs_ocr")))
+    access_fence = await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if not 1 <= limit <= 100:
+        raise ValueError("Terminal-run page size must be between 1 and 100")
+    stmt = select(IngestionRun).join(IngestionBatch, and_(
+        IngestionBatch.id == IngestionRun.batch_id, IngestionBatch.source_id == IngestionRun.source_id,
+    )).where(IngestionRun.status.in_(("succeeded", "failed", "needs_ocr")),
+             IngestionBatch.source_generation >= 1, *_run_scope(scope))
     if position is not None:
-        stmt = stmt.where(tuple_(IngestionRun.updated_at, IngestionRun.id) > tuple_(*position))
+        offset = _decode_history_cursor(position, _cursor_binding(scope, access_fence, "terminal", limit))
+        stmt = stmt.where(tuple_(IngestionRun.updated_at, IngestionRun.id) > tuple_(*offset))
     rows = (await session.scalars(stmt.order_by(IngestionRun.updated_at, IngestionRun.id).limit(limit))).all()
     # new_items = observations collected in the run's batch (one grouped count for the page).
     counts = dict((await session.execute(
-        select(SourceObservation.batch_id, func.count()).where(
-            SourceObservation.batch_id.in_([r.batch_id for r in rows])).group_by(SourceObservation.batch_id)
+        select(SourceObservation.batch_id, func.count()).join(IngestionRun, and_(
+            IngestionRun.batch_id == SourceObservation.batch_id,
+            IngestionRun.source_id == SourceObservation.source_id,
+        )).where(SourceObservation.batch_id.in_([r.batch_id for r in rows]), *_run_scope(scope))
+        .group_by(SourceObservation.batch_id)
+    )).all()) if rows else {}
+    generations = dict((await session.execute(
+        select(IngestionBatch.id, IngestionBatch.source_generation).join(IngestionRun, and_(
+            IngestionRun.batch_id == IngestionBatch.id, IngestionRun.source_id == IngestionBatch.source_id,
+        )).where(IngestionRun.id.in_([r.id for r in rows]), *_run_scope(scope))
     )).all()) if rows else {}
     return [(r.updated_at, r.id, f"{r.id}:{r.status}",
-             {"source_id": str(r.source_id), "status": r.status, "new_items": int(counts.get(r.batch_id, 0))})
+             {"source_id": str(r.source_id), "source_generation": generations[r.batch_id],
+              "workspace_id": str(r.workspace_id), "actor_user_id": r.actor_user_id,
+              "membership_revision": r.membership_revision,
+              "status": r.status, "new_items": int(counts.get(r.batch_id, 0))})
             for r in rows]
 
 
-async def list_run_meta(session: AsyncSession, limit: int) -> list[_RunMeta]:
-    """Return at most ``limit`` (<=100) newest ingestion runs as metadata only: ID, status, error code, timestamps."""
+async def list_run_meta(session: AsyncSession, limit: int, *, instance_operator: bool) -> list[_RunMeta]:
+    """Return <=100 newest run metadata under real internal instance-operator admission.
+
+    True comes from bootstrap/operator authorization, never client input or workspace
+    owner role. This deliberate instance aggregate carries no content.
+    """
+    if instance_operator is not True:
+        raise HTTPException(status_code=403, detail="Instance operator required")
+    if limit < 1:
+        raise ValueError("Run metadata page size must be positive")
     rows = await session.scalars(select(IngestionRun).order_by(IngestionRun.created_at.desc()).limit(min(limit, 100)))
     return [_RunMeta(kind="ingestion", id=str(r.id), status=r.status, error_code=r.error_code,
                      created_at=r.created_at, updated_at=r.updated_at,
@@ -1752,8 +2816,10 @@ async def list_run_meta(session: AsyncSession, limit: int) -> list[_RunMeta]:
             for r in rows]
 
 
-async def observability_quality_summary(session: AsyncSession) -> dict[str, int | float]:
-    """Return ingestion-owned duplicate and failed-run aggregates without exposing payloads."""
+async def observability_quality_summary(session: AsyncSession, *, instance_operator: bool) -> dict[str, int | float]:
+    """Return content-free instance aggregates under real operator admission, never workspace-owner authority."""
+    if instance_operator is not True:
+        raise HTTPException(status_code=403, detail="Instance operator required")
     normalized, duplicates = (await session.execute(select(
         func.count().filter(ObservationNormalization.disposition.in_(("normalized", "duplicate"))),
         func.count().filter(ObservationNormalization.disposition == "duplicate"),
@@ -1764,10 +2830,16 @@ async def observability_quality_summary(session: AsyncSession) -> dict[str, int 
     return {"duplicate_rate": float(duplicates or 0) / int(normalized or 1), "failed_ingestion": failed_runs}
 
 
-async def observability_queue_summary(session: AsyncSession, *, now: datetime | None = None) -> dict[str, object]:
-    """Return durable ingestion counts and retries eligible under the retry owner's latest-event rules."""
+async def observability_queue_summary(session: AsyncSession, *, instance_operator: bool, now: datetime | None = None) -> dict[str, object]:
+    """Return instance queue aggregates under real operator admission and current lifecycle metadata.
+
+    Source supplies a narrow operator-only lifecycle projection. Instance True comes
+    from operator admission; no credentials/config/content cross this boundary.
+    """
+    if instance_operator is not True:
+        raise HTTPException(status_code=403, detail="Instance operator required")
     now = now or datetime.now(UTC)
-    source_lifecycle = sources.ingestion_lifecycle_projection().subquery("source_lifecycle")
+    source_lifecycle = sources.ingestion_instance_lifecycle_projection(instance_operator=instance_operator).subquery("source_lifecycle")
     stage_counts = dict((await session.execute(
         select(IngestionStage.status, func.count()).group_by(IngestionStage.status)
     )).all())
@@ -1829,8 +2901,10 @@ async def observability_queue_summary(session: AsyncSession, *, now: datetime | 
             "event_delivery": event_delivery}
 
 
-async def get_run_meta_by_id(session: AsyncSession, run_id: UUID) -> _RunMeta | None:
-    """Return one metadata-only ingestion-run projection by its indexed primary key."""
+async def get_run_meta_by_id(session: AsyncSession, run_id: UUID, *, instance_operator: bool) -> _RunMeta | None:
+    """Return one instance run metadata under explicit real operator admission; no content or scope borrowing."""
+    if instance_operator is not True:
+        raise HTTPException(status_code=403, detail="Instance operator required")
     row = await session.get(IngestionRun, run_id)
     if row is None:
         return None

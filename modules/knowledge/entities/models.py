@@ -6,6 +6,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -21,7 +22,10 @@ from core.database import Base
 
 
 class Entity(Base):
-    """Persist canonical entity fields, provenance origins, and owner revision."""
+    """Persist canonical entity fields, provenance origins, and owner revision.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
     __tablename__ = "entities"
     __table_args__ = (
         CheckConstraint(
@@ -31,7 +35,14 @@ class Entity(Base):
         CheckConstraint("revision >= 1", name="ck_entities_revision"),
         Index("ix_entities_type_canonical_name", "type", "canonical_name"),
         Index("ix_entities_created_at_id", "created_at", "id"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_entities_workspace", ondelete="RESTRICT"),
+        UniqueConstraint("workspace_id", "id", name="uq_w2_entities_id"),
+        Index("ix_w2_entities_scope", 'workspace_id', 'id'),
+        Index("ix_w2_entities_work", 'workspace_id', 'created_at', 'id'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     type: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -46,6 +57,7 @@ class Entity(Base):
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
 
 
 class EntityAlias(Base):
@@ -68,7 +80,10 @@ class EntityAlias(Base):
 
 
 class EntityEvidenceMembership(Base):
-    """Link an entity to exact document-version evidence with retry identity."""
+    """Link an entity to exact document-version evidence with retry identity.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
     __tablename__ = "entity_evidence_memberships"
     __table_args__ = (
         CheckConstraint("confidence >= 0 AND confidence <= 1", name="ck_entity_evidence_confidence"),
@@ -79,12 +94,21 @@ class EntityEvidenceMembership(Base):
         Index("ix_entity_evidence_document", "document_id"),
         Index("ix_entity_evidence_source", "source_id"),
         Index("ix_entity_evidence_match_fingerprint", "match_fingerprint"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_entity_evidence_memberships_workspace", ondelete="RESTRICT"),
+        UniqueConstraint("workspace_id", "id", name="uq_w2_entity_evidence_memberships_id"),
+        ForeignKeyConstraint(["workspace_id", "entity_id"], ["entities.workspace_id", "entities.id"], name="fk_w2_entity_evidence_memberships_entity_id", ondelete="CASCADE"),
+        ForeignKeyConstraint(["workspace_id", "document_id"], ["documents.workspace_id", "documents.id"], name="fk_w2_entity_evidence_memberships_document_id", ondelete="CASCADE"),
+        ForeignKeyConstraint(["workspace_id", "source_id"], ["sources.workspace_id", "sources.id"], name="fk_w2_entity_evidence_memberships_source_id", ondelete="CASCADE"),
+        Index("ix_w2_entity_evidence_memberships_scope", 'workspace_id', 'id'),
     )
 
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
+
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
-    entity_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("entities.id", ondelete="CASCADE"), nullable=False)
-    document_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
-    source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("sources.id", ondelete="CASCADE"), nullable=False)
+    entity_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    document_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     document_version_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("document_versions.id", ondelete="CASCADE"), nullable=False)
     chunk_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("document_chunks.id", ondelete="CASCADE"), nullable=False)
     extraction_identity: Mapped[str | None] = mapped_column(String(256))
@@ -93,6 +117,7 @@ class EntityEvidenceMembership(Base):
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     confidence: Mapped[float] = mapped_column(nullable=False)
+
 
 
 class EntityAliasEvidence(Base):
@@ -134,9 +159,21 @@ class EntityFieldEvidence(Base):
 
 
 class EntityOwnerAction(Base):
-    """Record an owner correction and affected IDs and revisions for audit."""
+    """Record an owner correction and affected IDs and revisions for audit.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
     __tablename__ = "entity_owner_actions"
-    __table_args__ = (Index("ix_entity_owner_actions_created", "created_at", "id"),)
+    __table_args__ = (
+        Index("ix_entity_owner_actions_created", "created_at", "id"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_entity_owner_actions_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "actor_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_entity_owner_actions_principal", ondelete="RESTRICT"),
+        Index("ix_w2_entity_owner_actions_scope", 'workspace_id', 'id'),
+        Index("ix_w2_entity_owner_actions_work", 'workspace_id', 'created_at', 'id'),
+    )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     actor_id: Mapped[int] = mapped_column(ForeignKey("owner.id", ondelete="CASCADE"), nullable=False)
@@ -147,41 +184,75 @@ class EntityOwnerAction(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
-class EntityRedirect(Base):
-    """Retain the owner-authored redirect from a merged entity to its target."""
-    __tablename__ = "entity_redirects"
-    __table_args__ = (Index("ix_entity_redirect_target", "target_entity_id"),)
 
-    old_entity_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("entities.id", ondelete="CASCADE"), primary_key=True)
-    target_entity_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("entities.id", ondelete="SET NULL"))
+class EntityRedirect(Base):
+    """Retain the owner-authored redirect from a merged entity to its target.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
+    __tablename__ = "entity_redirects"
+    __table_args__ = (
+        Index("ix_entity_redirect_target", "target_entity_id"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_entity_redirects_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "actor_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_entity_redirects_principal", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "old_entity_id"], ["entities.workspace_id", "entities.id"], name="fk_w2_entity_redirects_old_entity_id", ondelete="CASCADE"),
+        # Scalar SET NULL clears only the parent ID; this deferred FK retains workspace.
+        ForeignKeyConstraint(["workspace_id", "target_entity_id"], ["entities.workspace_id", "entities.id"], name="fk_w2_entity_redirects_target_entity_id", ondelete="NO ACTION", deferrable=True, initially="DEFERRED"),
+        Index("ix_w2_entity_redirects_scope", 'workspace_id', 'old_entity_id'),
+        Index("ix_w2_entity_redirects_work", 'workspace_id', 'created_at', 'old_entity_id'),
+    )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
+
+    old_entity_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    target_entity_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), )
     actor_id: Mapped[int] = mapped_column(ForeignKey("owner.id", ondelete="CASCADE"), nullable=False)
     reason: Mapped[str] = mapped_column(String(300), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
+
 class EntityCorrectionDecision(Base):
-    """Persist an owner assignment or suppression at evidence or document scope."""
+    """Persist an owner assignment or suppression at evidence or document scope.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
     __tablename__ = "entity_correction_decisions"
     __table_args__ = (
         CheckConstraint("decision IN ('assign', 'suppress')", name="ck_entity_correction_decision_kind"),
         CheckConstraint("scope = 'evidence' OR (scope = 'document' AND document_id IS NOT NULL)", name="ck_entity_correction_decision_scope"),
         Index("ix_entity_correction_decision_match", "document_id", "match_fingerprint", "created_at"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_entity_correction_decisions_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "actor_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_entity_correction_decisions_principal", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "entity_id"], ["entities.workspace_id", "entities.id"], name="fk_w2_entity_correction_decisions_entity_id", ondelete="CASCADE"),
+        ForeignKeyConstraint(["workspace_id", "document_id"], ["documents.workspace_id", "documents.id"], name="fk_w2_entity_correction_decisions_document_id", ondelete="CASCADE"),
+        ForeignKeyConstraint(["workspace_id", "membership_id"], ["entity_evidence_memberships.workspace_id", "entity_evidence_memberships.id"], name="fk_w2_entity_correction_decisions_membership_id", ondelete="CASCADE"),
+        Index("ix_w2_entity_correction_decisions_scope", 'workspace_id', 'id'),
+        Index("ix_w2_entity_correction_decisions_work", 'workspace_id', 'created_at', 'id'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     decision: Mapped[str] = mapped_column(String(16), nullable=False)
     scope: Mapped[str] = mapped_column(String(16), nullable=False)
-    entity_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("entities.id", ondelete="CASCADE"))
-    document_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"))
-    membership_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("entity_evidence_memberships.id", ondelete="CASCADE"))
+    entity_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), )
+    document_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), )
+    membership_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), )
     match_fingerprint: Mapped[str | None] = mapped_column(String(64))
     actor_id: Mapped[int] = mapped_column(ForeignKey("owner.id", ondelete="CASCADE"), nullable=False)
     reason: Mapped[str] = mapped_column(String(300), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
+
 class EntityExtractionWork(Base):
-    """Track versioned extraction attempts, leases, retry timing, and dependencies."""
+    """Track versioned extraction attempts, leases, retry timing, and dependencies.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
     __tablename__ = "entity_extraction_work"
     __table_args__ = (
         CheckConstraint("status IN ('pending', 'running', 'succeeded', 'blocked', 'failed')", name="ck_entity_extraction_work_status"),
@@ -189,7 +260,13 @@ class EntityExtractionWork(Base):
         CheckConstraint("source_generation >= 1", name="ck_entity_extraction_work_generation"),
         UniqueConstraint("document_version_id", "extractor_version", "prompt_version", name="uq_entity_extraction_work_identity"),
         Index("ix_entity_extraction_work_recovery", "status", "next_attempt_at", "lease_expires_at"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_entity_extraction_work_workspace", ondelete="RESTRICT"),
+        Index("ix_w2_entity_extraction_work_scope", 'workspace_id', 'id'),
+        Index("ix_w2_entity_extraction_work_work", 'workspace_id', 'status', 'next_attempt_at', 'id'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     document_version_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("document_versions.id", ondelete="CASCADE"), nullable=False)
@@ -205,6 +282,7 @@ class EntityExtractionWork(Base):
     dependency_fingerprint: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
 
 
 class EntityExtractionResult(Base):

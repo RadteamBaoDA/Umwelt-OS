@@ -1,3 +1,12 @@
+## 2026-10-07 — Approved free-data pilot execution
+
+- Plan: `2026-10-07-production-readiness-master.md`; isolated checkout `D:/Project/Umwelt-OS-free-data-pilot`, branch `codex/free-data-pilot`, base `512a3fe68895a54f418a85a0ad5e4df3ccad8144`.
+- Owner authorized maximum safe parallel agents: Sol 6.1 implements/researches; Astra reviews/reasons. W1a/W1b identity lifecycle and C1 collector correction passed independent Astra spec/quality review and source snapshot builds. W2 nonidentity schema and context/admission helpers active. Complete ownership inventory, collection transaction protocol and provider-policy research are available in docs/workspace-access-matrix.md, docs/workspace-scope-contracts.md, docs/collection-protocol.md and docs/free-data-provider-policy.md.
+- SDD checkpoint: `.superpowers/sdd/2026-10-07-production-readiness-master/progress.md`. Existing main checkout edits and other worktrees are preserved; this new plan does not change old P12/P13 acceptance history below.
+- Baseline build: `npm ci --ignore-scripts` exit0 (7 high npm advisories recorded for V5); `npm run build` exit0; direct API Dockerfile build exit0. No tests/lint/standalone typecheck/runtime migrations or deployments. Clean checkout has no runtime `.env`; prescribed Compose build unavailable without operator configuration, so direct build evidence is named precisely.
+- Changed-code evidence: npm run build exit0; direct API Dockerfile build exit0, image umwelt-free-data-pilot-api:w1a-c1, manifest53c1bfe8325c086abda043e17c2667b2a46a4d9f0cb1cf9bf87d01f1c23f5bbb. Source/build completion is limited to W1a/C1a; full workspace/collector integration and runtime acceptance remain pending. Multiuser access remains disabled until W4 review and V1 security validation. Live provider, full encrypted restore and target capacity remain separate acceptance gates.
+- W1b evidence: direct API image build exit0 on Git baseline plus raw-hash-verified C1/W1a/W1b overlays, image umwelt-free-data-pilot-api:w1b; thirteen-file Astra review approved. Existing Web result applies to unchanged frontend. Snapshot context excludes concurrent schema edits. API image packaging does not import Python or validate database mappings; runtime remains V stage. W1 production scope complete; W2 and later scopes pending.
+
 <!-- current-implementation-snapshot:start -->
 ## Current implementation snapshot — 2026-10-07 10:50 — P12 CODE + P13 UI + TEST STAGE COMPLETE (live/capacity gates blocked)
 
@@ -2667,3 +2676,89 @@ Agent R1 `5c2e184` exact prescribed build is verified PASS (four images, clean u
 ## Owner-requested stopped checkpoint — 2026-10-06
 
 All three remaining agents completed and execution stopped. Final materialization owner R1 HEAD `73b7b7fa796479fa86ec46ada816b1ca621fb8d4` and clean tracked tree independently confirmed; its repairs have not been independently reviewed or built. Agent R1 `5c2e184` build passed, re-review pending. Saved-brief R0 retains four P2 findings. Develop remains `84c25df`; no unmerged task is accepted. Preserve the document-cleanup, backup/materialization and owner-contracts worktrees for a future explicit resume. No tests/runtime/migrations executed, no merge/push/deploy, and no report-only commit.
+
+## Free-data pilot isolated execution — schema/context accepted, domain conversion active — 2026-10-07
+
+Working checkout D:/Project/Umwelt-OS-free-data-pilot, branch codex/free-data-pilot, unchanged base 512a3fe68895a54f418a85a0ad5e4df3ccad8144. C1a/W1a/W1b and W2 context/schema (including duplicate-unique r1 and durable ingestion identity A2) have scoped source review and packaging builds. W2 Source r1 repairs one demo-generation P2 and supplies bounded transaction-local APIs; Ingestion public and Settings/Gateway conversions remain active. Full task ledger: .superpowers/sdd/2026-10-07-production-readiness-master/progress.md. No full W2/production acceptance; integration callers, W3-W5, C2-C5, providers/translation, Q1-Q3 and validation remain. Multiworkspace remains disabled. No commit/merge/push/deploy, application import, test/lint/typecheck or migration execution in this code/build stage; historical checkpoint entries above are preserved.
+
+## Free-data pilot — Settings accepted, Source/Ingestion review, Connector conversion — 2026-10-07
+
+O1 Settings/Model Gateway source slice accepted after Astra found and Sol repaired two P2s (web-search consent destination; misleading workspace toggle for instance observability). Scoped re-review Spec/Quality PASS and immutable API build PASS. Source r1 and Ingestion S2a now frozen with final reports; composite API packaging build PASS, independent Astra source reviews ongoing. Adopted GitHub pause protocol preserves generation-G receipt and atomic generation-G+1 Source pause under ordered preparation/mutation; Connector/Tools hooks and shared replay implementation still pending. Sol now converts Connector public/provisioning; no mapped schema changes by domain writers. Execution ledger/rulings remain .superpowers/sdd/2026-10-07-production-readiness-master/. No imports/runtime/test/lint/typecheck/migration execution, commit/merge/push/deploy. Multiworkspace remains false; no full W2 or production-ready claim.
+
+## User-authorized develop integration; model calls currently failing — 2026-10-07
+
+User explicitly requests continuing until completion and merge into develop; necessary implementation commits and final develop merge are now authorized after plan gates, preserving unrelated changes. No push/deploy/main merge. Work remains at codex/free-data-pilot base512a3fe in D:/Project/Umwelt-OS-free-data-pilot.
+
+Accepted source/build slices: C1a,W1a,W1b,W2schema/context/A2,O1+r1,SourceS1a+r1. Later SourceS1a-r2 and IngestionS2a-r1/r2 plus SourceS1b frozen for amended reviews; S2r1 packaging passed. Full Source/Ingestion-r2+S1b immutable API build currently running (SDDlog build-w2-source-ingestion-r2-api.log, processsession95049). Ingestion originalreview1P1/1P2 repaired in source but amendedreview pending; SourceS1b review pending. ConnectorS3a has unfinished/unreviewed2file edits and unresolvedGitHubpeer authority decision; recovery snapshot W2-S3a-interrupted captures them without acceptance.
+
+SolS3 and Astra peer calls returned usage-limit errors; accountstatus reports ordinaryquota available, so requestedmodel availability is inconsistent rather than verified totalquotaexhaustion. One same-model Astra retry issued, reviewS2pending. No automatic model/account substitution. Do not merge partial W2. FullremainingW2 domains,I-runtime,W3-W5,C2-C5,P1-P4,T1-T4,Q1-Q3,V1-V5 and finalreview remain. Exact liveagent/evidence state in .superpowers/sdd/2026-10-07-production-readiness-master/progress.md; preserve all snapshots/reports and resumefirstunfinishedwork.
+
+## Execution resumed after model retry; Source/Ingestion amended gates passed — 2026-10-07
+
+Same-model Astra retry succeeded; work continues under user's completion+develop-merge authorization. W2 SourceS1a-r2 and IngestionS2a-r1/r2 independently reviewed Spec/Quality PASS; original Ingestion P1/P2 closed. Composite immutable API packaging build including SourceS1b completedexit0. SourceS1b routes/worker independently reviewing; ConnectorS3a remains incomplete pending exact account-wide GitHub peer guard, read-only Astra decision active. No runtime/import/test/migration verification or developmerge yet; later plan remains required. Earlier transient usage-limit checkpoint is superseded by this resumption, not evidence of totalquotaexhaustion.
+
+## Free-data pilot resume — accepted purge/upload repair, Connector findings — 2026-10-07
+
+Latest owner authorization remains complete approved plan and merge into develop; no push/deploy. Current worktree D:/Project/Umwelt-OS-free-data-pilot, branch codex/free-data-pilot, HEAD512a3fe unchanged, production changes uncommitted. Develop currently sameHEAD; unrelated worktrees preserved.
+
+Source S1a-r3 finite retirement projection independently Astra Spec/QualityPASS and priorimmutableAPIbuildPASS. Sourceworker W2-S1b-r1 + Ingestionpublic W2-S2a-r3 independently Astra Spec/QualityPASS, cancellationP2closed and mandatoryuploadoriginalfences accepted, no new scopedfindings; immutableAPIpackaging session42578 exit0(build-w2-s1b-r1-api.log). Source routes unchanged. These are source/build results, not applicationimport, migrations or runtimeacceptance.
+
+Ingestion routes/dispatcher/worker W2-S2b frozen3files, C1trustedmetadatablock preserved; fullAstrareview active and immutablepackagingbuild session95975 running atcheckpoint. ConnectorS3a review requestsF1P1 retainedremoteeffect cleanup afterchangedfences and F2P2 crossworkspacelockaccumulation; originalboundedrepair active viaSol6.1. Astra finiteauthorityruling active fordurablejournaldisposition whenoriginalepochrevoked; noadmissionbypassauthorized. F3ordinarySourcecleanuporder is explicitrequiredintegrationrepair involvingSource/Connector/Tools/Ingestion. Multiworkspaceflagstillfalse. AlllaterW2owners,W3-W5,C2-C5,P/T,Q/Vgates remainrequired; no prematuredevelopmerge.
+
+Recovery .superpowers/sdd/2026-10-07-production-readiness-master/progress.md+rulings.md and taskreports own exactsnapshots. Next completeS3repair/ruling/review,S2breview,then disjointI-runtime/D/Tools andremainingownercallers.
+
+## Source lifecycle and ingestion preparation checkpoint — 2026-10-07
+
+The accepted scope remains the approved production-readiness/free-data/translation plan, followed by a merge into develop. No push, deployment, live migration, or unrelated worktree cleanup is authorized. Implementation continues in D:/Project/Umwelt-OS-free-data-pilot; branch codex/free-data-pilot remains based on 512a3fe. Changes are still uncommitted while the staged interface cutover is incomplete.
+
+Accepted source/build milestones now include Connector S3a-r1 and Source S1a-r4: independent Astra Spec PASS / Quality PASS closed the stale remote-effect and cross-workspace discovery findings. Immutable API packaging build passed (session96624); three frozen Python files also passed source-only AST parsing. This is not application import, migration, provider disposal or runtime evidence. Source S1b-r1 and Ingestion public S2a-r3 purge/upload repairs remain accepted.
+
+Ordinary Source lifecycle F3 and Tools T0-S are now frozen for combined review. Packages W2-F3 (three Source/Connector files), W2-S2a-r4 (only the archived token-preparation guard), and W2-T0-S (Tools public only) preserve prior snapshots. Astra reviews the actual preparation/application order and separate owner contracts. Composite API packaging build session73872 is running at this checkpoint; log build-w2-f3-t0-api.log. Browser writer, Agent/Chat cleanup, legacy epoch and actual send-time gates remain required.
+
+Ingestion S2b full review found three P2 issues: ORM IDs after rollback; denied jobs starving bounded dispatch; Documents acquired after Ingestion/outbox. The original Sol author has partial repairs in worker.py, dispatcher.py and the finite apps/worker/main.py startup initializer. Shared scheduling state plus an asyncio.Lock reserves bounded pages before per-job work, because ARQ copies invocation context and cron runs can overlap. Routes and the C1 trusted metadata block remain unchanged. This is IN PROGRESS, not frozen or accepted: finite retry settlement before Document preparation still needs the active Astra ruling. ARQ max_tries alone is insufficient because a new dispatch job ID resets it.
+
+The adopted D/O preparation ruling preserves ordinary public returns while new held APIs return an ordinary result plus a bounded immutable successor snapshot. It keeps repeated external keys in processing order and requires whole-attempt rollback on preparation/consistency conflicts. A Sol agent now owns Documents public.py/schemas.py and Observations public.py for W2-D0, including the finite parser fences. No schema or unrelated Documents routes/cleanup were transferred.
+
+Recovery records are .superpowers/sdd/2026-10-07-production-readiness-master/progress.md and rulings.md, with exact task reports and frozen manifests. Next: complete F3/T0 review, adopt the finite retry ruling and resume S2b, finish/review D0, then continue the remaining W2 owners, W3–W5, C2–C5, provider/translation/Chat work and validation gates. The multiworkspace flag remains false; no incomplete cutover will be merged.
+
+### F3/T0 acceptance update — 2026-10-07
+
+Astra completed W2-F3-T0-review.md: separate Spec/Quality PASS for ordinary Source lifecycle F3 (including the finite archived token-preparation amendment) and Tools T0-S. All five frozen hashes match. Composite API packaging session73872 passed, as did source-only AST parsing; no runtime or migration validation has run. The original F3 ordering finding is closed for these callers.
+
+S2b retry architecture is now adopted and its original author resumed. D0 Documents/Observations implementation continues. A separate Sol owner has started four core runtime files for per-principal replay and scoped upload storage; apps/worker/main.py remains reserved to S2b. No merge or feature enablement yet.
+
+### D0/S2b composition and replay retention — 2026-10-07
+
+D0 Documents/Observations and amended S2b worker/dispatcher/startup are frozen and packaged. Composite API image build passed (session28858, build-w2-s2b-d0-api.log), with the partial core runtime excluded. Six frozen files passed source-only AST parsing and raw hash checks. Independent Astra reviews the combined exact caller/owner preparation and durable retry contract; source acceptance remains pending. Broader Documents writers/cleanup and downstream consumers remain required.
+
+The replay architecture ruling now uses a 100,000-event shared retention cap with bounded oldest-prefix eviction from largest windows, a 10,000-event per-stream ceiling, and no account/head cap. The 25-account workload is not a product limit. Actual realtime ASGI send admission and cleanup are included in the finite core slice; member replay awaits explicit W3 sharing. A Sol schema owner implements original nullable Agent/browser revision pairs and the exact Dashboard replay CHECK amendment; core runtime remains paused during that shared-file transfer. A separate Sol implements Connector routes/activation. No runtime tests, migrations, feature enablement or merge yet; authorized completion/develop merge remains the objective.
+
+### Finite review result and repair — 2026-10-07
+
+W2-S2b-D0-review.md independently accepts D0 Spec/Quality within its finite owner contract. Original three S2b findings are repaired in source; one P2 caller regression remains: pre-mutation invalid-record rejection is charged as whole-stage retry. Original Sol now owns an explicit two-file repair (worker plus narrow Documents validation exception), preserving all post-mutation rollback and original-claim rules. No dispatcher/startup rewrite.
+
+A3 AgentRun/BrowserReadJob nullable original-epoch pairs and Dashboard replay CHECK amendment are frozen. Their isolated composite API packaging build passed (session42207) and four snapshots passed AST/hash inspection; independent schema review remains pending. Original core runtime author resumed after the exact mixed-file CHECK transfer; no duplicate writer. S3b route/activation work continues with named Ingestion/Connector public seam and provider every-send/MCP dependencies still required. Neither source-only PASS nor fail-closed pending paths constitute full integration or runtime acceptance.
+
+### Accepted repairs and realtime review — 2026-10-07
+
+S2b-r2 and supporting D0-r1 each passed scoped Astra Spec/Quality review; the invalid-record P2 is closed at source level. A3 schema independently passed Spec/Quality. Their immutable build/static checks are recorded in the task ledger; runtime validation is still deferred.
+
+I-runtime frozen implementation passed packaging build9617 and static/hash checks, but independent review found two blockers: existing request-ID BaseHTTP middleware relays outside the protected send, and the wrapper can hide cleanup/invalidation failures after a captured denial. The corrected ruling transfers only core/errors.py and realtime_routes.py to the original Sol for one repair wave. Member sharing, downstream scoped callers and runtime race/connection cleanup remain unfinished. No merge or feature enablement.
+
+Read-only GitNexus MCP detect_changes was recovered without registry/index changes. Using process-local Git worktree variables and the indexed baseline, current scan reports CRITICAL:71 tracked changed files,1063 mapped symbols,168 affected processes. This is limited baseline/per-file-capped evidence, excludes untracked symbols, and must be rerun before final commit with source inventory. Earlier unavailable-tool reports remain historical. Exact utility/evidence live in the scratch ledger directory.
+
+### Realtime repair accepted at source/build level — 2026-10-07
+
+W2-I-runtime-a-r1-review.md gives independent Spec/Quality PASS and closes both the middleware relay P1 and masked cleanup error P2. Immutable API packaging build97226 passed; exact two-file snapshots passed static/hash checks. Full registered middleware stack is now directly forwarding at source level. Actual send/revoke/backpressure/cancellation and database pool behavior remain validation gates; downstream caller conversion, W3 member replay and other W4 publication remain unfinished.
+
+Original Sol agents continue D1 Documents ordinary writers/owner reads/upload and S3 held credential/atomic acceptance contracts. Astra now decides the finite D2 retained cleanup authority/schema and complete early preparation contracts. No merge yet; continue approved plan through validation and final review before develop integration.
+
+## Resume directive — single-owner continuation and integration target
+
+Latest user instruction authorizes implementation of the approved production-readiness/free-data/native-collector/translation plan and final merge into `develop` after required acceptance. Preserve this checkout's existing dirty work; do not merge into `main`, push, deploy, run real migrations, or reset/clean worktrees. Live target baseline at resume: `D:/Project/Umwelt-OS-free-data-pilot`, `codex/free-data-pilot`, HEAD `512a3fe68895a54f418a85a0ad5e4df3ccad8144`; `develop` currently same SHA, `main` currently `3979ab2ee44e9053c8b045c99b33ddbf459047a7`. Recheck both tips and merge-base before integration.
+
+Primary implementation owner is GPT-6 Luna. Existing unfinished D1 source remains unaccepted in `W2-D1-report.md`; next active caller slice is W2-S3b-r1 limited to `modules/connectors/routes.py`, `modules/connectors/provisioning_routes.py`, and `modules/connectors/activation.py`. D2 architecture ruling is pending; continue independent finite production tasks until it lands. Every implementation/build/review acceptance remains separately recorded. No test stage until all production code is complete.
+
+## User-requested stop and partial integration — 2026-10-07
+
+User directed stopping implementation, merging the code already present into `develop`, and reporting remaining work. All implementation agents are stopped. The primary Luna agent was interrupted before the proposed D2 schema/migration transfer; no mapper production files were created because current trusted provider schemas reject the P3 provider identifiers/fields. Sol's read-only D2 architecture ruling and P3 blocker report are retained in the local SDD scratch ledger. Current source tree contains the existing W1/W2/Connector/Realtime changes, approved plan/spec docs, and checkpoint changes; this is an intentionally partial checkpoint, not completion of the master plan or production readiness. D1 and S3b caller integration remain unaccepted, D2 source implementation is absent, the P3 adapters/provider catalog and C2-C5/T1-T4/UI tasks remain, and V1-V5 validation has not run. No app/runtime/migration/test/security acceptance is claimed. Current feature branch was `codex/free-data-pilot` at `512a3fe`; `develop` was also at `512a3fe` before this integration. The main checkout has unrelated dirty AGENTS/CLAUDE/UX-doc edits; preserve them while integrating. No push/deployment/live migration.

@@ -9,8 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.settings.models import OnboardingStateRecord
 from modules.settings.onboarding_schemas import OnboardingStateRead, OnboardingStateUpdate
-
-OWNER_ID = 1
+from modules.settings.public import require_preferences_account
+from core.auth.schemas import AccountSessionRef
 
 
 def _read(row: OnboardingStateRecord | None) -> OnboardingStateRead:
@@ -23,11 +23,12 @@ def _read(row: OnboardingStateRecord | None) -> OnboardingStateRead:
     )
 
 
-async def read_onboarding_state(session: AsyncSession) -> OnboardingStateRead:
-    """Read server-owned progress; an absent row means onboarding has not started."""
+async def read_onboarding_state(session: AsyncSession, *, actor_user_id: int, multi_workspace_enabled: bool) -> OnboardingStateRead:
+    """Read only active actor progress without selected workspace; absent row means not started."""
+    await require_preferences_account(session, actor_user_id=actor_user_id, multi_workspace_enabled=multi_workspace_enabled)
     row = await session.scalar(
         select(OnboardingStateRecord)
-        .where(OnboardingStateRecord.owner_id == OWNER_ID)
+        .where(OnboardingStateRecord.owner_id == actor_user_id)
         .execution_options(populate_existing=True)
     )
     return _read(row)
@@ -35,17 +36,24 @@ async def read_onboarding_state(session: AsyncSession) -> OnboardingStateRead:
 
 async def save_onboarding_state(
     session: AsyncSession, update: OnboardingStateUpdate,
+    *, actor_user_id: int, multi_workspace_enabled: bool, auth_sessions: tuple[AccountSessionRef, ...] = (),
 ) -> OnboardingStateRead:
-    """Persist one step with a row lock and revision check; caller commits or rolls back."""
+    """Persist actor progress after auth locks with CAS; caller completes transaction.
+
+    Account preferences never borrow bootstrap onboarding, selected workspace or translation
+    settings. Existing ordered steps/data-choice/completion invariants remain unchanged.
+    """
+    await require_preferences_account(session, actor_user_id=actor_user_id, multi_workspace_enabled=multi_workspace_enabled,
+                                      locked=True, auth_sessions=auth_sessions)
     await session.execute(
         insert(OnboardingStateRecord)
-        .values(owner_id=OWNER_ID)
+        .values(owner_id=actor_user_id)
         .on_conflict_do_nothing(index_elements=["owner_id"])
     )
     row = await session.scalar(
         select(OnboardingStateRecord)
-        .where(OnboardingStateRecord.owner_id == OWNER_ID)
-        .with_for_update()
+        .where(OnboardingStateRecord.owner_id == actor_user_id)
+        .with_for_update().execution_options(populate_existing=True)
     )
     if row is None:
         raise RuntimeError("Onboarding state singleton could not be initialized")

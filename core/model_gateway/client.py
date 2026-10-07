@@ -5,6 +5,8 @@ import secrets
 import time
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import aclosing, asynccontextmanager
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any, cast
 
 import httpx
@@ -14,7 +16,8 @@ from redis.exceptions import RedisError
 
 from core.model_gateway.cache import capability_key
 from core.model_gateway.policy import may_send
-from core.model_gateway.schemas import ModelMapping, RequestPolicy
+from core.model_gateway.schemas import CapabilityResult, ModelMapping, RequestPolicy
+from core.workspaces.schemas import InternalJobScope, Scope, WorkspaceContext
 from core.model_gateway.transport import EndpointNetworkPolicyError, approved_http_client
 from core.telemetry import record_model_call
 
@@ -34,31 +37,67 @@ class CapabilityUnsupported(ModelGatewayError):
     """Raised when the gateway rejects a requested model capability."""
 
 
+@dataclass(frozen=True, slots=True)
 class ModelGateway:
     """OpenAI-compatible client enforcing privacy policy, capability verification, bounded concurrency, and approved endpoint networking."""
-    def __init__(
-        self,
-        redis: Redis,
-        base_url: str | None,
-        api_key: str,
-        destination_id: str,
-        timeout_seconds: float = 20.0,
-        gateway_identity: str = "legacy",
-        before_send: Callable[[], Awaitable[None]] | None = None,
-        approved_endpoint_cidrs: tuple[str, ...] = (),
-    ) -> None:
+    redis: Redis = field(repr=False)
+    base_url: str | None = field(repr=False)
+    api_key: str = field(repr=False)
+    destination_id: str
+    timeout_seconds: float = 20.0
+    scope: Scope = field(kw_only=True)
+    gateway_identity: str = field(kw_only=True)
+    configuration_revision: int = field(kw_only=True)
+    before_send: Callable[[], Awaitable[None]] = field(kw_only=True, repr=False)
+    approved_endpoint_cidrs: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Freeze resolved identity/credentials for one request; reject missing scope or fence.
+
+        before_send must freshly check actual flag, exact HTTP session where applicable,
+        access/privacy/config/resource fences and release SQL transaction before returning.
+        App composition cannot reuse or mutate this client for another caller's settings.
+        """
         # The SDK DEBUG request log contains JSON request bodies. Keep prompts
         # and indexed source text out of logs even when OPENAI_LOG=debug is set.
-        """Initialize gateway credentials, identity, timeouts, pre-send hook, and approved destination networks."""
         logging.getLogger("openai").setLevel(logging.WARNING)
-        self.redis = redis
-        self.base_url = base_url.rstrip("/") if base_url else None
-        self.api_key = api_key
-        self.destination_id = destination_id
-        self.timeout_seconds = timeout_seconds
-        self.gateway_identity = gateway_identity
-        self.before_send = before_send
-        self.approved_endpoint_cidrs = approved_endpoint_cidrs
+        if not isinstance(self.scope, (WorkspaceContext, InternalJobScope)) or not callable(self.before_send):
+            raise ValueError("Explicit scope and fresh before_send callback are required")
+        if isinstance(self.scope, WorkspaceContext) and self.scope.role != "owner":
+            raise PrivacyPolicyDenied("Workspace owner required for model execution")
+        if len(self.gateway_identity) != 64 or any(char not in "0123456789abcdef" for char in self.gateway_identity):
+            raise ValueError("Gateway identity must be a nonsecret SHA256 digest")
+        if type(self.configuration_revision) is not int or self.configuration_revision < 0:
+            raise ValueError("Explicit configuration revision is required")
+        object.__setattr__(self, "base_url", self.base_url.rstrip("/") if self.base_url else None)
+
+    def _policy_matches(self, policy: RequestPolicy) -> bool:
+        """Compare typed principal/config identity before capability/cache/transport access."""
+        actor = self.scope.actor_user_id if isinstance(self.scope, InternalJobScope) else self.scope.user_id
+        return (policy.workspace_id == self.scope.workspace_id and policy.actor_user_id == actor
+                and policy.membership_revision == self.scope.membership_revision
+                and policy.gateway_identity == self.gateway_identity
+                and policy.configuration_revision == self.configuration_revision)
+
+    def _capability_key(self, alias: str, mapping: ModelMapping, capability: str) -> str:
+        """Resolve only this immutable client's capability namespace, never a global alias."""
+        actor = self.scope.actor_user_id if isinstance(self.scope, InternalJobScope) else self.scope.user_id
+        return capability_key(alias, mapping.model, mapping.version, capability, self.gateway_identity,
+                              workspace_id=self.scope.workspace_id, actor_user_id=actor)
+
+    async def _capability_supported(self, alias: str, mapping: ModelMapping, policy: RequestPolicy, capability: str) -> bool:
+        """Read exact principal/config cache evidence; malformed, expired or mismatched values deny."""
+        try:
+            result = CapabilityResult.model_validate_json(await self.redis.get(self._capability_key(alias, mapping, capability)))
+            expiry = datetime.fromisoformat(result.expires_at)
+        except (ValueError, TypeError):
+            return False
+        return (result.result == "supported" and expiry.tzinfo is not None and expiry > datetime.now(UTC)
+                and result.workspace_id == self.scope.workspace_id and result.actor_user_id == policy.actor_user_id
+                and result.membership_revision == self.scope.membership_revision
+                and result.configuration_revision == self.configuration_revision
+                and result.gateway_identity == self.gateway_identity and result.alias == alias
+                and result.capability == capability and result.model == mapping.model and result.version == mapping.version)
 
     def _http_client(self, base_url: str) -> httpx.AsyncClient:
         """Create a redirect-disabled HTTP client pinned to an endpoint approved by network policy."""
@@ -110,22 +149,12 @@ class ModelGateway:
         after_send: Callable[[], Awaitable[None]] | None = None,
     ) -> Any:
         """Check policy and cached capability before sending a bounded, retried gateway request; map transport and provider errors."""
-        if not may_send(policy, alias, mapping, self.destination_id, bool(self.api_key), capability):
+        if not self._policy_matches(policy) or not may_send(policy, alias, mapping, self.destination_id, bool(self.api_key), capability):
             raise PrivacyPolicyDenied("Model request denied by privacy policy")
         if self.base_url is None or mapping is None:
             raise ModelGatewayError("Model gateway is not configured")
-        if not probe:
-            key = capability_key(alias, mapping.model, mapping.version, capability, self.gateway_identity)
-            stored = await self.redis.get(key)
-            try:
-                capability_result = json.loads(stored) if stored else {}
-            except (TypeError, json.JSONDecodeError):
-                capability_result = {}
-            if (capability_result.get("result") != "supported"
-                    or capability_result.get("gateway_identity") != self.gateway_identity
-                    or capability_result.get("model") != mapping.model
-                    or capability_result.get("version") != mapping.version):
-                raise ModelGatewayError("Model capability is not supported")
+        if not probe and not await self._capability_supported(alias, mapping, policy, capability):
+            raise ModelGatewayError("Model capability is not supported")
         body = {**payload, "model": mapping.model}
         base_url = self.base_url if self.base_url.endswith("/v1") else f"{self.base_url}/v1"
 
@@ -142,10 +171,11 @@ class ModelGateway:
                     try:
                         # Keep the gateway-owned settings check even when a scoped
                         # operation adds its own source/evidence freshness fence.
-                        if self.before_send is not None:
-                            await self.before_send()
+                        await self.before_send()
                         if before_send is not None and before_send is not self.before_send:
                             await before_send()
+                        if not self._policy_matches(policy) or not may_send(policy, alias, mapping, self.destination_id, bool(self.api_key), capability):
+                            raise PrivacyPolicyDenied("Model request denied by privacy policy")
                         try:
                             if path == "chat/completions":
                                 response = await client.chat.completions.create(**body)
@@ -197,8 +227,7 @@ class ModelGateway:
 
         async def send() -> list[str]:
             """Call the configured model-list endpoint and return valid model IDs; map SDK and network failures to the gateway error."""
-            if self.before_send is not None:
-                await self.before_send()
+            await self.before_send()
             async with AsyncOpenAI(base_url=base_url, api_key=self.api_key,
                                    timeout=self.timeout_seconds, max_retries=0,
                                    http_client=self._http_client(base_url)) as client:
@@ -237,11 +266,12 @@ class ModelGateway:
         self, alias: str, mapping: ModelMapping | None, policy: RequestPolicy,
         messages: list[dict[str, Any]], probe: bool = False, *,
         after_send: Callable[[], Awaitable[None]] | None = None,
+        before_send: Callable[[], Awaitable[None]] | None = None,
     ) -> AsyncIterator[str]:
-        """Stream with telemetry and a per-attempt lock release after request opening.
+        """Stream with telemetry and fresh authorization before each request opening.
 
-        ``self.before_send`` runs immediately before every request attempt. ``after_send`` runs as
-        soon as request creation succeeds or fails so callers can release short-lived send locks.
+        Every before_send closes its short SQL transaction before provider I/O. after_send
+        performs optional operation cleanup, never a network-spanning SQL-lock release.
         Telemetry is observational; errors and cancellation propagate, and missing usage stays null.
         """
         started = time.perf_counter()
@@ -250,7 +280,7 @@ class ModelGateway:
         ok = False
         try:
             async with aclosing(self._stream_inner(
-                alias, mapping, policy, messages, probe, after_send=after_send,
+                alias, mapping, policy, messages, probe, after_send=after_send, before_send=before_send,
             )) as inner:
                 async for line in inner:
                     if first_ms is None:
@@ -270,21 +300,13 @@ class ModelGateway:
         self, alias: str, mapping: ModelMapping | None, policy: RequestPolicy,
         messages: list[dict[str, Any]], probe: bool = False, *,
         after_send: Callable[[], Awaitable[None]] | None = None,
+        before_send: Callable[[], Awaitable[None]] | None = None,
     ) -> AsyncGenerator[str, None]:
         """Open each fenced request attempt, then stream without retrying emitted chunks."""
-        if not may_send(policy, alias, mapping, self.destination_id, bool(self.api_key), "streaming") or self.base_url is None or mapping is None:
+        if not self._policy_matches(policy) or not may_send(policy, alias, mapping, self.destination_id, bool(self.api_key), "streaming") or self.base_url is None or mapping is None:
             raise PrivacyPolicyDenied("Model request denied by privacy policy")
-        if not probe:
-            stored = await self.redis.get(capability_key(alias, mapping.model, mapping.version, "streaming", self.gateway_identity))
-            try:
-                capability_result = json.loads(stored) if stored else {}
-            except (TypeError, json.JSONDecodeError):
-                capability_result = {}
-            if (capability_result.get("result") != "supported"
-                    or capability_result.get("gateway_identity") != self.gateway_identity
-                    or capability_result.get("model") != mapping.model
-                    or capability_result.get("version") != mapping.version):
-                raise ModelGatewayError("Streaming capability has not been verified")
+        if not probe and not await self._capability_supported(alias, mapping, policy, "streaming"):
+            raise ModelGatewayError("Streaming capability has not been verified")
         async with self._slot():
             base_url = self.base_url if self.base_url.endswith("/v1") else f"{self.base_url}/v1"
             async with AsyncOpenAI(
@@ -297,8 +319,11 @@ class ModelGateway:
                 emitted = False
                 for attempt in range(2):
                     try:
-                        if self.before_send is not None:
-                            await self.before_send()
+                        await self.before_send()
+                        if before_send is not None and before_send is not self.before_send:
+                            await before_send()
+                        if not self._policy_matches(policy) or not may_send(policy, alias, mapping, self.destination_id, bool(self.api_key), "streaming"):
+                            raise PrivacyPolicyDenied("Model request denied by privacy policy")
                         try:
                             stream = await client.chat.completions.create(
                                 model=mapping.model,

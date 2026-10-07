@@ -7,8 +7,9 @@ from redis.asyncio import Redis
 from redis.exceptions import RedisError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.auth.dependencies import require_owner_write
-from core.auth.models import AuthSession
+from core.auth.public import authenticated_session_ref
+from core.workspaces.dependencies import require_workspace_write
+from core.workspaces.schemas import WorkspaceContext
 from core.config import Settings
 from core.database import get_session
 from core.model_gateway.client import (
@@ -19,11 +20,10 @@ from core.model_gateway.client import (
 )
 from core.model_gateway.policy import may_send
 from core.model_gateway.schemas import DraftProbeRequest, ModelMapping, ProbeRequest, RequestPolicy
-from modules.settings import models as settings_models
 from modules.settings import public as ai_settings
 
 router = APIRouter(prefix="/api/v1/settings/models", tags=["models"])
-OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]
+OwnerWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 Session = Annotated[AsyncSession, Depends(get_session)]
 
 
@@ -73,7 +73,13 @@ async def probe_draft(
     if not credential:
         raise HTTPException(status_code=409, detail="Enter the draft gateway credential to probe")
     destination = f"omniroute:{hashlib.sha256(endpoint.encode()).hexdigest()[:32]}"
+    config = await ai_settings.get_ai_execution_config(session, settings, redis, scope=_owner)
+    session_ref = authenticated_session_ref(request)
+    identity = hashlib.sha256(json.dumps((config.gateway_identity, endpoint, hashlib.sha256(credential.encode()).hexdigest())).encode()).hexdigest()
+    await session.rollback()
     policy = RequestPolicy(
+        workspace_id=_owner.workspace_id, actor_user_id=_owner.user_id, membership_revision=_owner.membership_revision,
+        gateway_identity=identity,
         # A user-initiated synthetic draft probe is the explicit, transient
         # authorization; it cannot create production capability evidence.
         reasoning_allowed=True,
@@ -87,14 +93,18 @@ async def probe_draft(
         raise HTTPException(status_code=403, detail="Probe denied by privacy policy")
     if body.capability not in {"embeddings", "reranking"} and not policy.reasoning_allowed:
         raise HTTPException(status_code=403, detail="Probe denied by privacy policy")
-    identity = hashlib.sha256(json.dumps((endpoint, hashlib.sha256(credential.encode()).hexdigest())).encode()).hexdigest()
 
     async def recheck_send() -> None:
-        """Revalidate the draft endpoint immediately before the provider request."""
-        ai_settings.validate_endpoint(endpoint, settings)
+        """Fresh exact-session/access/config and draft endpoint check, rollback before provider I/O."""
+        try:
+            await ai_settings.check_ai_execution_config(session, settings, redis, scope=_owner,
+                                                        expected=config, auth_sessions=(session_ref,))
+            ai_settings.validate_endpoint(endpoint, settings)
+        finally:
+            await session.rollback()
 
     client = ModelGateway(redis, endpoint, credential, destination or "omniroute",
-        timeout_seconds=15, gateway_identity=identity, before_send=recheck_send,
+        timeout_seconds=15, scope=_owner, configuration_revision=0, gateway_identity=identity, before_send=recheck_send,
         approved_endpoint_cidrs=tuple(settings.ai_allowed_endpoint_cidrs))
     message = [{"role": "user", "content": "Reply with the word ready."}]
     try:
@@ -135,6 +145,7 @@ async def probe_draft(
         result = "unsupported"
     except ModelGatewayError:
         result = "failed"
+    await recheck_send()
     return {"alias": alias, "model": mapping.model, "version": mapping.version,
             "gateway_identity": identity, "configuration_revision": 0,
             "capability": body.capability, "result": result}
@@ -149,12 +160,14 @@ async def probe_model(
     """Probe a configured alias under current privacy policy and persist its capability result."""
     settings: Settings = request.app.state.settings
     redis: Redis = request.app.state.redis
-    config = await ai_settings.get_ai_execution_config(session, settings, redis)
+    config = await ai_settings.get_ai_execution_config(session, settings, redis, scope=_owner)
     mapping = config.aliases.get(alias)
     if mapping is None:
         raise HTTPException(status_code=409, detail="Configure this model alias first")
     destination = config.endpoint_destination_id
     policy = RequestPolicy(
+        workspace_id=config.workspace_id, actor_user_id=config.actor_user_id, membership_revision=config.membership_revision,
+        gateway_identity=config.gateway_identity,
         reasoning_allowed=config.privacy.allow_remote_reasoning,
         embeddings_allowed=config.privacy.allow_remote_embeddings,
         permitted_destinations=frozenset({destination} if destination else set()),
@@ -167,25 +180,24 @@ async def probe_model(
     if body.capability not in {"embeddings", "reranking"} and not policy.reasoning_allowed:
         raise HTTPException(status_code=403, detail="Probe denied by privacy policy")
     async def recheck_send() -> None:
-        """Reload alias, gateway, and privacy settings before every provider send."""
-        latest = await ai_settings.get_ai_execution_config(session, settings, redis)
-        latest_mapping = latest.aliases.get(alias)
-        latest_policy = RequestPolicy(
-            reasoning_allowed=latest.privacy.allow_remote_reasoning,
-            embeddings_allowed=latest.privacy.allow_remote_embeddings,
-            permitted_destinations=frozenset({latest.endpoint_destination_id} if latest.endpoint_destination_id else set()),
-            reasoning_destinations=frozenset(latest.privacy.reasoning_destinations),
-            embedding_destinations=frozenset(latest.privacy.embedding_destinations),
-            configuration_revision=latest.configuration_revision,
-        )
-        if (latest.gateway_identity != config.gateway_identity or latest_mapping != mapping
-                or not may_send(latest_policy, alias, latest_mapping,
-                                latest.endpoint_destination_id or "omniroute",
-                                bool(latest.omniroute_api_key), body.capability)):
-            raise PrivacyPolicyDenied("Probe denied by current settings")
+        """Recheck exact session, workspace and complete privacy/config identity each attempt.
 
+        Any revision/configuration change rejects this probe; every path rolls back before
+        provider network. No lock is released by after_send or retained across HTTP.
+        """
+        try:
+            await ai_settings.check_ai_execution_config(session, settings, redis, scope=_owner,
+                                                        expected=config, auth_sessions=(session_ref,))
+            if not may_send(policy, alias, mapping, destination or "omniroute", bool(config.omniroute_api_key), body.capability):
+                raise PrivacyPolicyDenied("Probe denied by current settings")
+        finally:
+            await session.rollback()
+
+    session_ref = authenticated_session_ref(request)
+    await session.rollback()
     client = ModelGateway(redis, config.omniroute_base_url, config.omniroute_api_key,
-        destination or "omniroute", timeout_seconds=15, gateway_identity=config.gateway_identity,
+        destination or "omniroute", timeout_seconds=15, scope=_owner,
+        configuration_revision=config.configuration_revision, gateway_identity=config.gateway_identity,
         before_send=recheck_send, approved_endpoint_cidrs=config.endpoint_allowed_cidrs)
     message = [{"role": "user", "content": "Reply with the word ready."}]
     try:
@@ -219,14 +231,21 @@ async def probe_model(
             response = await client.tools(alias, mapping, policy, [{"role": "user", "content": "Call the probe tool now."}], [{"type": "function", "function": {"name": "probe", "description": "Return a synthetic readiness signal.", "parameters": {"type": "object", "properties": {}}}}], probe=True)
         else:
             response = await client.chat(alias, mapping, policy, message, probe=True)
-        result = settings_models.new_capability_result(alias, mapping, body.capability, config.gateway_identity, "supported" if _capability_proved(body.capability, response) else "unsupported", config.configuration_revision)
+        result = ai_settings.new_capability_result(alias, mapping, body.capability, "supported" if _capability_proved(body.capability, response) else "unsupported", config=config, scope=_owner, multi_workspace_enabled=settings.multi_workspace_enabled)
     except PrivacyPolicyDenied as exc:
         raise HTTPException(status_code=403, detail="Probe denied by privacy policy") from exc
     except CapabilityUnsupported:
-        result = settings_models.new_capability_result(alias, mapping, body.capability, config.gateway_identity, "unsupported", config.configuration_revision)
+        result = ai_settings.new_capability_result(alias, mapping, body.capability, "unsupported", config=config, scope=_owner, multi_workspace_enabled=settings.multi_workspace_enabled)
     except ModelGatewayError:
-        result = settings_models.new_capability_result(alias, mapping, body.capability, config.gateway_identity, "failed", config.configuration_revision)
+        result = ai_settings.new_capability_result(alias, mapping, body.capability, "failed", config=config, scope=_owner, multi_workspace_enabled=settings.multi_workspace_enabled)
     except RedisError as exc:
         raise HTTPException(status_code=503, detail="Model capability storage is unavailable") from exc
-    await settings_models.save_capability(redis, result)
+    try:
+        await ai_settings.check_ai_execution_config(session, settings, redis, scope=_owner,
+                                                    expected=config, auth_sessions=(session_ref,))
+        await ai_settings.save_capability(redis, result, config=config, scope=_owner, multi_workspace_enabled=settings.multi_workspace_enabled)
+    except RedisError as exc:
+        raise HTTPException(status_code=503, detail="Model capability storage is unavailable") from exc
+    finally:
+        await session.rollback()
     return result.model_dump(mode="json")

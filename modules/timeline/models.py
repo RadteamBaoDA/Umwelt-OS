@@ -9,6 +9,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -24,7 +25,10 @@ from core.database import Base
 
 
 class Event(Base):
-    """Store one canonical manual or evidence-derived event and its revision."""
+    """Store one canonical manual or evidence-derived event and its revision.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
     __tablename__ = "timeline_events"
     __table_args__ = (
         CheckConstraint("revision >= 1", name="ck_timeline_events_revision"),
@@ -42,7 +46,16 @@ class Event(Base):
         Index("ix_timeline_events_unknown", "created_at", "id"),
         Index("ix_timeline_events_source", "source_id", "created_at"),
         Index("ix_timeline_events_type", "type", "subtype"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_timeline_events_workspace", ondelete="RESTRICT"),
+        UniqueConstraint("workspace_id", "id", name="uq_w2_timeline_events_id"),
+        # Scalar SET NULL clears only the parent ID; this deferred FK retains workspace.
+        ForeignKeyConstraint(["workspace_id", "source_id"], ["sources.workspace_id", "sources.id"], name="fk_w2_timeline_events_source_id", ondelete="NO ACTION", deferrable=True, initially="DEFERRED"),
+        Index("ix_w2_timeline_events_scope", 'workspace_id', 'id'),
+        Index("ix_w2_timeline_events_work", 'workspace_id', 'created_at', 'id'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     source_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("sources.id", ondelete="SET NULL"))
@@ -72,6 +85,7 @@ class Event(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
 
+
 class EventParticipant(Base):
     """Link a canonical entity to an event with exact evidence-backed roles."""
     __tablename__ = "timeline_event_participants"
@@ -89,15 +103,27 @@ class EventParticipant(Base):
 
 
 class EventEvidence(Base):
-    """Retain exact document-version chunk provenance supporting an event."""
+    """Retain exact document-version chunk provenance supporting an event.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
     __tablename__ = "timeline_event_evidence"
     __table_args__ = (
         UniqueConstraint("event_id", "document_version_id", "chunk_id", name="uq_timeline_event_evidence"),
         Index("ix_timeline_event_evidence_source", "source_id", "document_id"),
         Index("ix_timeline_event_evidence_version", "document_version_id", "chunk_id"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_timeline_event_evidence_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "event_id"], ["timeline_events.workspace_id", "timeline_events.id"], name="fk_w2_timeline_event_evidence_event_id", ondelete="CASCADE"),
+        # Scalar SET NULL clears only the parent ID; this deferred FK retains workspace.
+        ForeignKeyConstraint(["workspace_id", "source_id"], ["sources.workspace_id", "sources.id"], name="fk_w2_timeline_event_evidence_source_id", ondelete="NO ACTION", deferrable=True, initially="DEFERRED"),
+        ForeignKeyConstraint(["workspace_id", "document_id"], ["documents.workspace_id", "documents.id"], name="fk_w2_timeline_event_evidence_document_id", ondelete="NO ACTION", deferrable=True, initially="DEFERRED"),
+        Index("ix_w2_timeline_event_evidence_scope", 'workspace_id', 'id'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
-    event_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("timeline_events.id", ondelete="CASCADE"), nullable=False)
+    event_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     source_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("sources.id", ondelete="SET NULL"))
     document_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL"))
     document_version_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("document_versions.id", ondelete="SET NULL"))
@@ -116,6 +142,7 @@ class EventEvidence(Base):
     metadata_is_version_snapshot: Mapped[bool] = mapped_column(nullable=False, server_default="false")
 
 
+
 class ParticipantEvidence(Base):
     """Bind a derived participant role to its exact event evidence chunk."""
     __tablename__ = "timeline_participant_evidence"
@@ -126,11 +153,24 @@ class ParticipantEvidence(Base):
 
 
 class EventAudit(Base):
-    """Record one owner revision with the exact changed values and reason."""
+    """Record one owner revision with the exact changed values and reason.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
     __tablename__ = "timeline_event_audits"
-    __table_args__ = (Index("ix_timeline_event_audits_event", "event_id", "created_at"),)
+    __table_args__ = (
+        Index("ix_timeline_event_audits_event", "event_id", "created_at"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_timeline_event_audits_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "actor_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_timeline_event_audits_principal", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "event_id"], ["timeline_events.workspace_id", "timeline_events.id"], name="fk_w2_timeline_event_audits_event_id", ondelete="CASCADE"),
+        Index("ix_w2_timeline_event_audits_scope", 'workspace_id', 'id'),
+        Index("ix_w2_timeline_event_audits_work", 'workspace_id', 'created_at', 'id'),
+    )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
-    event_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("timeline_events.id", ondelete="CASCADE"), nullable=False)
+    event_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     actor_id: Mapped[int] = mapped_column(ForeignKey("owner.id", ondelete="CASCADE"), nullable=False)
     reason: Mapped[str] = mapped_column(String(300), nullable=False)
     prior_revision: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -139,10 +179,22 @@ class EventAudit(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
+
 class EventSuppression(Base):
-    """Prevent an owner-deleted derived proposal from returning on identical retry."""
+    """Prevent an owner-deleted derived proposal from returning on identical retry.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
     __tablename__ = "timeline_event_suppressions"
-    __table_args__ = (UniqueConstraint("document_version_id", "candidate_hash", name="uq_timeline_event_suppression_identity"),)
+    __table_args__ = (
+        UniqueConstraint("document_version_id", "candidate_hash", name="uq_timeline_event_suppression_identity"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_timeline_event_suppressions_workspace", ondelete="RESTRICT"),
+        Index("ix_w2_timeline_event_suppressions_scope", 'workspace_id', 'id'),
+        Index("ix_w2_timeline_event_suppressions_work", 'workspace_id', 'created_at', 'id'),
+    )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     document_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     document_version_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
@@ -152,19 +204,31 @@ class EventSuppression(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
+
 class TimelineExtractionWork(Base):
-    """Persist event extraction lease, retries, and source-version fence."""
+    """Persist event extraction lease, retries, and source-version fence.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
     __tablename__ = "timeline_extraction_work"
     __table_args__ = (
         UniqueConstraint("document_version_id", "source_generation", "extractor_version", "prompt_version", name="uq_timeline_extraction_work_identity"),
         CheckConstraint("status IN ('pending', 'running', 'succeeded', 'blocked', 'failed')", name="ck_timeline_extraction_work_status"),
         CheckConstraint("source_generation >= 1 AND attempt >= 0", name="ck_timeline_extraction_work_bounds"),
         Index("ix_timeline_extraction_recovery", "status", "next_attempt_at", "lease_expires_at"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_timeline_extraction_work_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "document_id"], ["documents.workspace_id", "documents.id"], name="fk_w2_timeline_extraction_work_document_id", ondelete="CASCADE"),
+        ForeignKeyConstraint(["workspace_id", "source_id"], ["sources.workspace_id", "sources.id"], name="fk_w2_timeline_extraction_work_source_id", ondelete="CASCADE"),
+        Index("ix_w2_timeline_extraction_work_scope", 'workspace_id', 'id'),
+        Index("ix_w2_timeline_extraction_work_work", 'workspace_id', 'status', 'next_attempt_at', 'id'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
-    document_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+    document_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     document_version_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("document_versions.id", ondelete="CASCADE"), nullable=False)
-    source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("sources.id", ondelete="CASCADE"), nullable=False)
+    source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     source_generation: Mapped[int] = mapped_column(Integer, nullable=False)
     extractor_version: Mapped[str] = mapped_column(String(64), nullable=False)
     prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -177,6 +241,7 @@ class TimelineExtractionWork(Base):
     dependency_fingerprint: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
 
 
 class TimelineExtractionResult(Base):

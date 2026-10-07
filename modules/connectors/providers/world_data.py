@@ -5,7 +5,7 @@ import json
 import math
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -132,7 +132,14 @@ def _finite_number(raw: Any) -> float:
 
 
 def _market_records(source: ConnectorSource, config: ConnectorConfig, payload: dict[str, object], collected_at: datetime) -> list[IngestionRecord]:
-    """Map raw daily OHLCV rows while retaining configured currency and exchange-timezone claims."""
+    """Validate daily OHLCV rows into typed provider envelopes before ingestion.
+
+    Retain configured currency/timezone and bounded original row evidence. The
+    measurement date is not a provider modification clock; version stays absent
+    and timestamp provenance conservatively uses collection time.
+    """
+    from modules.knowledge.documents.schemas import ProviderRecordMetadata, WorldDataMeasurement
+
     metadata = payload.get("Meta Data")
     series = payload.get("Time Series (Daily)")
     if not isinstance(metadata, dict) or not isinstance(series, dict):
@@ -182,28 +189,48 @@ def _market_records(source: ConnectorSource, config: ConnectorConfig, payload: d
         }
         for metric, raw in raw_measurements.items():
             unit = config.market_currency if metric != "volume" else "shares"
+            identity = f"alpha_vantage:{provider_symbol}:{day}:{metric}"
+            measurement = WorldDataMeasurement(
+                provider="alpha_vantage", metric=metric,
+                value=_finite_number(raw), unit=unit,
+                currency=config.market_currency if metric != "volume" else None,
+                timezone=config.market_exchange_timezone,
+                symbol=provider_symbol, region=None, latitude=None,
+                longitude=None, published_at=None, quality="provider_reported",
+                provider_fields={"date": day, "symbol": provider_symbol, **raw_measurements},
+            )
+            provider_record = ProviderRecordMetadata(
+                provider="alpha_vantage", identity=identity, provider_version=None,
+                timestamp_basis="collection", coverage="returned_snapshot",
+                content_truncated=False, world_data=measurement,
+            )
             records.append(IngestionRecord(
-                provider_id=f"alpha_vantage:{provider_symbol}:{day}:{metric}",
+                provider_id=identity,
                 content=f"{provider_symbol} {day} {metric} {raw} {unit}",
                 observed_at=observed_at, collected_at=collected_at,
                 version=None,
-                metadata={"title": f"{provider_symbol} {metric}", "world_data": {
-                    "provider": "alpha_vantage", "metric": metric,
-                    "value": _finite_number(raw), "unit": unit,
-                    "currency": config.market_currency if metric != "volume" else None,
-                    "timezone": config.market_exchange_timezone,
-                    "symbol": provider_symbol, "region": None, "latitude": None,
-                    "longitude": None, "published_at": None, "quality": "provider_reported",
-                    "provider_fields": {"date": day, "symbol": provider_symbol, **raw_measurements},
-                }},
+                metadata={
+                    "title": f"{provider_symbol} {metric}",
+                    "provider_record": provider_record.model_dump(mode="json"),
+                },
             ))
     if len(records) > 5_000:
         raise ValueError("alpha_vantage_result_exceeds_point_limit")
     return records
 
 
-def _weather_records(source: ConnectorSource, config: ConnectorConfig, payload: dict[str, object], collected_at: datetime) -> list[IngestionRecord]:
-    """Map bounded current/hourly values using the returned Open-Meteo units and source timezone."""
+def _weather_records(
+    source: ConnectorSource, config: ConnectorConfig, payload: dict[str, object],
+    collected_at: datetime, *, coverage: Literal["returned_snapshot", "truncated"],
+) -> list[IngestionRecord]:
+    """Validate hourly forecast/missing values with the final page coverage.
+
+    Use returned units, configured location/timezone and bounded row evidence.
+    Typed identity/version match the record and no measurement time is claimed
+    as a provider modification time. Missing numbers retain an explicit reason.
+    """
+    from modules.knowledge.documents.schemas import ProviderRecordMetadata, WorldDataMeasurement
+
     hourly = payload.get("hourly")
     units = payload.get("hourly_units")
     returned_timezone = payload.get("timezone")
@@ -226,25 +253,34 @@ def _weather_records(source: ConnectorSource, config: ConnectorConfig, payload: 
                 observed_at = datetime.fromisoformat(stamp).replace(tzinfo=zone).astimezone(UTC)
             except ValueError as exc:
                 raise ValueError("open_meteo_timestamp_invalid") from exc
+            identity = f"open_meteo:{source.id}:{metric}:{observed_at.isoformat()}"
+            measurement = WorldDataMeasurement(
+                provider="open_meteo", metric=metric,
+                value=_finite_number(raw) if raw is not None else None, unit=unit, currency=None,
+                timezone=returned_timezone, symbol=None, region=None,
+                latitude=config.weather_latitude, longitude=config.weather_longitude,
+                published_at=None, quality="forecast" if raw is not None else "missing",
+                missing_reason=None if raw is not None else "provider_value_missing",
+                provider_fields={
+                    "time": stamp, "timezone": returned_timezone,
+                    "utc_offset_seconds": payload.get("utc_offset_seconds"),
+                    "latitude": payload.get("latitude"), "longitude": payload.get("longitude"),
+                },
+            )
+            provider_record = ProviderRecordMetadata(
+                provider="open_meteo", identity=identity, provider_version=None,
+                timestamp_basis="collection", coverage=coverage,
+                content_truncated=False, world_data=measurement,
+            )
             records.append(IngestionRecord(
-                provider_id=f"open_meteo:{source.id}:{metric}:{observed_at.isoformat()}",
+                provider_id=identity,
                 content=f"{metric} {raw} {unit} at {stamp} {returned_timezone}",
                 observed_at=observed_at, collected_at=collected_at,
                 version=None,
-                metadata={"title": f"Weather {metric}", "world_data": {
-                    "provider": "open_meteo", "metric": metric,
-                    "value": _finite_number(raw) if raw is not None else None, "unit": unit, "currency": None,
-                    "timezone": returned_timezone,
-                    "symbol": None, "region": None,
-                    "latitude": config.weather_latitude, "longitude": config.weather_longitude,
-                    "published_at": None, "quality": "forecast" if raw is not None else "missing",
-                    "missing_reason": None if raw is not None else "provider_value_missing",
-                    "provider_fields": {
-                        "time": stamp, "timezone": returned_timezone,
-                        "utc_offset_seconds": payload.get("utc_offset_seconds"),
-                        "latitude": payload.get("latitude"), "longitude": payload.get("longitude"),
-                    },
-                }},
+                metadata={
+                    "title": f"Weather {metric}",
+                    "provider_record": provider_record.model_dump(mode="json"),
+                },
             ))
     return records
 
@@ -253,7 +289,11 @@ async def collect_world_data(
     source: ConnectorSource, *, collected_at: datetime, settings: Settings, session: AsyncSession,
     redis: object, before_request: Callable[[UUID | None], Awaitable[None]],
 ) -> ProviderCollectionPage:
-    """Fetch one configured provider scope through the existing leased collector path."""
+    """Fetch one leased provider scope and stamp matching typed record/page coverage.
+
+    Preserve the fixed-host request fences and conservative Alpha credential
+    budget. Returned measurements use provider semantics without invented clocks.
+    """
     if collected_at.tzinfo is None or collected_at.utcoffset() is None:
         raise ValueError("collected_at must be timezone-aware")
     config = ConnectorConfig.model_validate(source.configuration)
@@ -264,12 +304,14 @@ async def collect_world_data(
             "hourly": ",".join(_WEATHER_VARIABLES[name] for name in metrics),
             "forecast_days": "3", "timezone": str(config.weather_timezone),
         }, before_request=lambda: before_request(None))
-        weather_records = _weather_records(source, config, payload, collected_at)
-        coverage = "truncated" if any(
+        coverage: Literal["returned_snapshot", "truncated"] = "truncated" if any(
             isinstance(payload.get("hourly"), dict)
             and isinstance(payload["hourly"].get(metric), list)
             and len(payload["hourly"][metric]) >= 72 for metric in metrics
         ) else "returned_snapshot"
+        # Ingress requires exact record/page coverage equality, including the
+        # bounded forecast horizon; determine it before validating envelopes.
+        weather_records = _weather_records(source, config, payload, collected_at, coverage=coverage)
         return ProviderCollectionPage(records=tuple(weather_records), coverage=coverage)
     if source.provider != "alpha_vantage":
         raise ValueError("provider_scope_invalid")

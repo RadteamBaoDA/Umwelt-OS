@@ -37,6 +37,8 @@ from core.events import DomainEvent
 from core.pagination import decode_cursor, encode_cursor
 from core.realtime import ReplayDraft, commit_with_replay, make_knowledge_change
 from core.tools.schemas import ToolDestination, ToolOutputFence
+from core.workspaces.public import read_access_fence
+from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
 from modules.knowledge.documents.models import (
     Document,
     DocumentChunk,
@@ -68,6 +70,8 @@ from modules.knowledge.documents.schemas import (
     GadgetTelegramMediaRead,
     GadgetTelegramRecordRead,
     NormalizedDocumentInput,
+    NormalizedDocumentKeyState,
+    NormalizedDocumentPreparation,
     NormalizedDocumentResult,
     ObservationExportEvidenceCandidate,
     ObservationExportEvidenceRead,
@@ -79,7 +83,7 @@ from modules.knowledge.documents.schemas import (
 )
 from modules.sources import public as sources
 from modules.sources.models import Source
-from modules.sources.schemas import SourceExportFence
+from modules.sources.schemas import SourceExportFence, SourceFence
 
 if TYPE_CHECKING:
     from modules.connectors.public import ProviderScopeSnapshot
@@ -95,6 +99,9 @@ async def observability_quality_summary(session: AsyncSession) -> dict[str, int]
 
 # Explicit re-exports consumed by other modules (mypy strict forbids implicit re-export).
 __all__ = [
+    "NormalizedDocumentValidationRejected",
+    "NormalizedDocumentKeyState",
+    "NormalizedDocumentPreparation",
     "EvidenceReferenceRead",
     "ObservationExportEvidenceCandidate",
     "ProviderRecordMetadata",
@@ -1621,12 +1628,15 @@ def content_hash(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
-async def ensure_demo_article(session: AsyncSession) -> tuple[int, int, int]:
+async def ensure_demo_article(
+    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
+) -> tuple[int, int, int]:
     """Normalize one fictional article through Documents and preserve provenance and chunks.
 
     Returns (created, existing, skipped). The stable source/provider identity and accepted content
     hash make retries idempotent; a tombstoned normalized identity stays deleted. The caller owns
     the transaction and receipt, while Documents owns source fencing, normalization, and chunking.
+    The finite caller supplies real scope/configured flag; no demo owner/default epoch is inferred.
     """
     from core.demo_seed import P12_DEMO_NAMESPACE, p12_demo_seed_id
 
@@ -1636,8 +1646,10 @@ async def ensure_demo_article(session: AsyncSession) -> tuple[int, int, int]:
         "Fictional field note: Mira records that the north orchard lantern inscriptions should be "
         "photographed in soft morning light before the catalogue is assembled."
     )
-    await sources.ensure_demo_source(session, source_id, P12_DEMO_NAMESPACE)
-    source = await sources.lock_source(session, source_id)
+    await sources.ensure_demo_source(session, source_id, P12_DEMO_NAMESPACE,
+                                    scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    source = await sources.get_source_fence(session, source_id, scope=scope,
+                                          multi_workspace_enabled=multi_workspace_enabled)
     if source is None:
         raise RuntimeError("P12 demo article source is unavailable")
     title = "Field note: caring for orchard lantern inscriptions"
@@ -1654,7 +1666,7 @@ async def ensure_demo_article(session: AsyncSession) -> tuple[int, int, int]:
         content_type="article",
         content=content,
         provenance={"title": title, "content_type": "article"},
-    ))
+    ), scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if result.disposition == "tombstoned":
         return 0, 0, 1
     return (1, 0, 0) if result.created_version else (0, 1, 0)
@@ -1979,11 +1991,103 @@ async def publish_source_cleanup_wakeup(
             ))
 
 
-async def create_document(session: AsyncSession, payload: DocumentCreate) -> Document:
-    """Create a source-locked document and initial version, then publish its change."""
-    await sources.lock_source_for_document(session, payload.source_id)
+def _require_document_owner(scope: Scope) -> None:
+    """Require an explicit owner/internal subject; membership never grants shared content.
+
+    Construction is not admission. Public callers must additionally revalidate the actual
+    actor, membership and feature gate through the workspace owner before any query.
+    """
+    if not isinstance(scope, (WorkspaceContext, InternalJobScope)):
+        raise TypeError("An explicit Document scope is required")
+    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
+
+
+def _document_scope(scope: Scope) -> tuple[ColumnElement[bool], ...]:
+    """Constrain roots before paging to admitted workspace and Source-owned retained lineage.
+
+    Paused and connector-only archived Sources remain readable. Queued/running/failed
+    data purges hide their content; the Source projection grants no membership/resource
+    authority and callers must first perform real owner admission. No Source ORM is read.
+    """
+    _require_document_owner(scope)
+    return (
+        Document.workspace_id == scope.workspace_id,
+        Document.source_id.in_(sources.export_eligible_source_ids(scope=scope)),
+    )
+
+
+async def _admit_document_scope(
+    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
+) -> AccessFence:
+    """Revalidate actual owner/default membership with the explicit rollout gate, without locks.
+
+    Members are denied before root IDs, counts or content. This snapshot is not HTTP-session
+    or final-send proof; writers acquire their early Source/access set and routes retain
+    exact authenticated-session locks through commit. No commit or external I/O occurs.
+    """
+    _require_document_owner(scope)
+    return await read_access_fence(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+
+
+async def _read_document_source_id(
+    session: AsyncSession, document_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+) -> UUID | None:
+    """Locate one visible root's Source before acquiring any domain lock, without metadata.
+
+    Scope/Source lineage precedes the exact ID query. Missing, foreign and data-purged
+    documents return None alike; writers then lock Source and freshly reload their own root.
+    """
+    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    return await session.scalar(select(Document.source_id).where(Document.id == document_id, *_document_scope(scope)))
+
+
+async def _assert_new_document_key(
+    session: AsyncSession, source_id: UUID, external_id: str | None, *, scope: Scope,
+) -> None:
+    """Reject an occupied/tombstoned exact external key under the caller-held Source lock.
+
+    Lock an existing canonical root before its normalized identity, retaining absence under
+    Source serialization. Nullable manual keys have no shared namespace. No winner adoption,
+    tombstone resurrection, placeholder, mutation, commit or foreign ORM occurs.
+    """
+    if external_id is None:
+        return
+    document = await session.scalar(select(Document).where(
+        Document.source_id == source_id, Document.external_id == external_id,
+    ).order_by(Document.id).with_for_update().execution_options(populate_existing=True))
+    identity = await session.scalar(select(NormalizedDocumentIdentity).where(
+        NormalizedDocumentIdentity.source_id == source_id, NormalizedDocumentIdentity.external_id == external_id,
+    ).order_by(NormalizedDocumentIdentity.id).with_for_update().execution_options(populate_existing=True))
+    if any(row is not None and row.workspace_id != scope.workspace_id for row in (document, identity)):
+        raise RuntimeError("document_key_namespace_changed")
+    if identity is not None and identity.tombstoned_at is not None:
+        raise ValueError("Document identifier was previously deleted")
+    if document is not None or identity is not None:
+        raise ValueError("Document identifier already exists")
+
+
+async def create_document(
+    session: AsyncSession, payload: DocumentCreate, *, scope: WorkspaceContext, multi_workspace_enabled: bool,
+) -> Document:
+    """Create an owner workspace root/version under early Source/key locks and scoped replay.
+
+    Active Source and real owner admission precede all writes. Reject occupied/tombstoned
+    external keys; initial chunks and two ready events commit atomically with the root/replay.
+    Return own ORM for this module's route only. No external I/O or cleanup authority change.
+    """
+    if not isinstance(scope, WorkspaceContext):
+        raise TypeError("Manual document creation requires a workspace owner")
+    _require_document_owner(scope)
+    locked = await sources.lock_source_set(session, (payload.source_id,), scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled)
+    source_fence, access_fence = locked.fences[0], locked.access_fence
+    if source_fence.status != "active":
+        raise ValueError("Cannot add documents to an inactive source")
+    await _assert_new_document_key(session, payload.source_id, payload.external_id, scope=scope)
     digest = content_hash(payload.content)
     document = Document(
+        workspace_id=scope.workspace_id,
         source_id=payload.source_id,
         external_id=payload.external_id,
         title=payload.title,
@@ -2002,15 +2106,19 @@ async def create_document(session: AsyncSession, payload: DocumentCreate) -> Doc
         )
         session.add(version)
         if await add_content_chunks(session, version):
-            await _publish_document_ready(session, document, version)
+            await _publish_document_ready(session, document, version, scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence)
+        # Load generated metadata under the original locks, before the final commit releases them.
+        await session.flush()
+        await session.refresh(document)
         await commit_with_replay(
             session,
-            [make_knowledge_change(payload.source_id, document.id, 1)],
+            [make_knowledge_change(payload.source_id, document.id, 1, scope=scope)],
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
         )
     except IntegrityError:
         await session.rollback()
         raise
-    await session.refresh(document)
     return document
 
 
@@ -2025,9 +2133,19 @@ async def document_metadata(session: AsyncSession, document_ids: list[UUID]) -> 
     return {row[0]: (row[1], row[2]) for row in rows.all()}
 
 
-async def get_document(session: AsyncSession, document_id: UUID) -> Document | None:
-    """Fetch a document by primary key without applying additional visibility filters."""
-    return await session.get(Document, document_id)
+async def get_document(
+    session: AsyncSession, document_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+) -> Document | None:
+    """Read one owned retained root after real admission, without granting member visibility.
+
+    Workspace and Source-owned deletion lineage precede the ID query. Inactive retained
+    metadata remains eligible except unfinished/failed data purges. Own ORM serves only
+    Documents routes; external callers must migrate to detached owner projections.
+    """
+    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    return await session.scalar(select(Document).where(
+        Document.id == document_id, *_document_scope(scope),
+    ).execution_options(populate_existing=True))
 
 
 async def get_tool_document(
@@ -2162,104 +2280,292 @@ async def list_tool_documents(
     return ToolDocumentPage(tuple(ToolDocumentRead(*row) for row in page), next_cursor)
 
 
-async def has_document_identity(session: AsyncSession, source_id: UUID, external_id: str) -> bool:
-    """Check whether a source already owns the given external document ID."""
+async def has_document_identity(
+    session: AsyncSession, source_id: UUID, external_id: str, *, scope: Scope, multi_workspace_enabled: bool,
+) -> bool:
+    """Check one exact visible canonical key for upload dedup, exposing no metadata.
+
+    Actual owner/internal admission and Source lineage precede the query. A deleted,
+    foreign or data-purged key is False, never an adopted tombstone or authority upgrade.
+    Upload caller retains the Source lock; this method acquires no lock or commit.
+    """
+    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     return bool(
         await session.scalar(
-            select(Document.id).where(Document.source_id == source_id, Document.external_id == external_id)
+            select(Document.id).where(Document.source_id == source_id, Document.external_id == external_id,
+                *_document_scope(scope)).limit(1)
         )
     )
+
+
+async def _normalized_source_proof(
+    session: AsyncSession, source_id: UUID, source_generation: int, *,
+    scope: Scope, multi_workspace_enabled: bool,
+    access_fence: AccessFence, source_fence: SourceFence,
+) -> sources.ConnectorSource:
+    """Freshly compare complete original access/Source fences without taking locks.
+
+    Owner public reads enforce real owner/default-workspace admission and a bound
+    internal Source generation. Callers retain earlier admission/Source locks;
+    any stale, inactive or foreign fence aborts the whole transaction, with no
+    membership/epoch rebasing, mutation, commit or remote I/O.
+    """
+    if not isinstance(access_fence, AccessFence) or not isinstance(source_fence, SourceFence):
+        raise RuntimeError("normalized_preparation_fence_required")
+    current_access = await read_access_fence(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    current_source = await sources.get_source_fence(
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if (current_access != access_fence or current_source != source_fence
+            or source_fence.id != source_id or source_fence.workspace_id != scope.workspace_id
+            or access_fence.workspace_id != scope.workspace_id
+            or source_fence.status != "active" or source_fence.generation != source_generation):
+        raise RuntimeError("normalized_preparation_fence_changed")
+    projection = await sources.get_connector_source(
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if (projection is None or projection.workspace_id != scope.workspace_id
+            or projection.id != source_id or projection.status != "active"
+            or projection.generation != source_generation):
+        raise RuntimeError("normalized_preparation_source_changed")
+    return projection
+
+
+async def _normalized_key_states(
+    session: AsyncSession, source_id: UUID, external_ids: tuple[str, ...], workspace_id: UUID,
+) -> tuple[tuple[NormalizedDocumentKeyState, ...], dict[str, Document], dict[str, NormalizedDocumentIdentity]]:
+    """Read at most32 exact namespaces freshly, without following foreign pointers.
+
+    The Source is already admitted/held. Namespace corruption and a live identity
+    whose canonical Document vanished are transaction conflicts. A normal
+    non-normalized key collision is retained as comparison data for early input
+    rejection. No locks or writes occur and no ORM leaves the Documents owner.
+    """
+    documents = {cast(str, row.external_id): row for row in (await session.scalars(select(Document).where(
+        Document.source_id == source_id, Document.external_id.in_(external_ids),
+    ).execution_options(populate_existing=True))).all()}
+    identities = {row.external_id: row for row in (await session.scalars(select(NormalizedDocumentIdentity).where(
+        NormalizedDocumentIdentity.source_id == source_id,
+        NormalizedDocumentIdentity.external_id.in_(external_ids),
+    ).execution_options(populate_existing=True))).all()}
+    states = []
+    for external_id in external_ids:
+        document, identity = documents.get(external_id), identities.get(external_id)
+        if any(row is not None and (row.workspace_id != workspace_id or row.source_id != source_id
+                                    or row.external_id != external_id) for row in (document, identity)):
+            raise RuntimeError("normalized_preparation_namespace_changed")
+        if identity is not None:
+            if identity.document_id is not None and (document is None or identity.document_id != document.id):
+                raise RuntimeError("normalized_preparation_foreign_pointer")
+            if identity.tombstoned_at is None and document is None:
+                raise RuntimeError("normalized_preparation_canonical_missing")
+        try:
+            states.append(NormalizedDocumentKeyState(
+                external_id=external_id, document_id=document.id if document is not None else None,
+                normalized_identity_id=identity.id if identity is not None else None,
+                identity_document_id=identity.document_id if identity is not None else None,
+                tombstoned_at=identity.tombstoned_at if identity is not None else None,
+            ))
+        except (ValueError, TypeError) as exc:
+            raise RuntimeError("normalized_preparation_stored_shape_changed") from exc
+    return tuple(states), documents, identities
+
+
+async def prepare_normalized_document_keys(
+    session: AsyncSession, source_id: UUID, external_ids: tuple[str, ...], *,
+    scope: Scope, multi_workspace_enabled: bool,
+    access_fence: AccessFence, source_fence: SourceFence,
+) -> NormalizedDocumentPreparation:
+    """Prepare <=32 keys after Source and before Ingestion/Observation/outbox roots.
+
+    Reject oversized input before querying, preserve spelling and deduplicate
+    discovery keys only. Lock all discovered Documents by UUID, then all identity
+    rows by UUID; compare freshly loaded mappings/absence/tombstones against
+    discovery. A changed set aborts rather than acquiring another earlier root.
+    Empty input is valid. No placeholders, mutation, commit or lock token exists.
+    """
+    if (not isinstance(source_id, UUID) or not isinstance(external_ids, tuple)
+            or len(external_ids) > 32 or any(type(key) is not str or not 1 <= len(key) <= 512 for key in external_ids)):
+        raise ValueError("Normalized preparation requires at most32 exact external keys")
+    external_ids = tuple(dict.fromkeys(external_ids))
+    if not isinstance(source_fence, SourceFence):
+        raise RuntimeError("normalized_preparation_fence_required")
+    await _normalized_source_proof(
+        session, source_id, source_fence.generation, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence,
+    )
+    before, documents, identities = await _normalized_key_states(session, source_id, external_ids, scope.workspace_id)
+    if documents:
+        await session.scalars(select(Document).where(Document.id.in_([row.id for row in documents.values()]))
+                              .order_by(Document.id).with_for_update().execution_options(populate_existing=True))
+    if identities:
+        await session.scalars(select(NormalizedDocumentIdentity).where(
+            NormalizedDocumentIdentity.id.in_([row.id for row in identities.values()]),
+        ).order_by(NormalizedDocumentIdentity.id).with_for_update().execution_options(populate_existing=True))
+    after, _, _ = await _normalized_key_states(session, source_id, external_ids, scope.workspace_id)
+    if before != after:
+        raise RuntimeError("normalized_preparation_identity_changed")
+    return NormalizedDocumentPreparation(workspace_id=scope.workspace_id, source_id=source_id,
+                                         source_generation=source_fence.generation, keys=after)
+
+
+async def _normalized_target(
+    session: AsyncSession, external_id: str, preparation: NormalizedDocumentPreparation,
+) -> tuple[NormalizedDocumentKeyState, Document | None, NormalizedDocumentIdentity | None]:
+    """Compare exactly one prepared key freshly; never adopt an unexpected incumbent."""
+    expected = next((key for key in preparation.keys if key.external_id == external_id), None)
+    if expected is None:
+        raise RuntimeError("normalized_preparation_key_missing")
+    fresh, documents, identities = await _normalized_key_states(
+        session, preparation.source_id, (external_id,), preparation.workspace_id,
+    )
+    if fresh != (expected,):
+        raise RuntimeError("normalized_preparation_identity_changed")
+    return expected, documents.get(external_id), identities.get(external_id)
+
+
+class NormalizedDocumentValidationRejected(ValueError):
+    """Reject one normalized record before any of that record's owner effects.
+
+    Only explicit input/provider/order/collision validation emits this exception.
+    Held identity/fence/SQL conflicts and all post-mutation failures remain transaction
+    failures. ValueError compatibility preserves the ordinary acquiring API contract.
+    """
 
 
 async def upsert_normalized_document(
-    session: AsyncSession, payload: NormalizedDocumentInput
+    session: AsyncSession, payload: NormalizedDocumentInput, *, scope: Scope, multi_workspace_enabled: bool,
 ) -> NormalizedDocumentResult:
-    """Persist one source-owned immutable normalized revision without committing.
+    """Acquire Source then sorted Document/identity, retaining the ordinary result.
 
-    The source generation and provider provenance are checked before identity
-    allocation; source, normalized identity, and document rows serialize writers.
-    Generic providers select current content by observed time and accepted hash.
-    Telegram requires owner-validated order, rejects a conflicting equal rank,
-    and selects by observed time, epoch, then update ID. Structured world data
-    leaves current-version selection to the observations owner, which orders the
-    accepted ingestion identity and calls the exact-version selection contract
-    below in this transaction. Version numbering remains independently monotonic;
-    transaction commit and derived cleanup belong to the ingestion boundary.
+    Entry has no later domain/outbox locks. The owner captures current fences for
+    this immediate operation and shares the held mutation body; caller commits.
+    Deferred ingestion uses its original fences and explicit preparation instead.
     """
-    source = await sources.lock_source(session, payload.source_id)
-    if source is None or source.status != "active" or source.generation != payload.expected_source_generation:
+    source_fence = await sources.lock_source(
+        session, payload.source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if (source_fence is None or source_fence.status != "active"
+            or source_fence.generation != payload.expected_source_generation):
         raise ValueError("Normalized source generation is no longer active")
-    source_projection = await sources.get_connector_source(session, payload.source_id)
-    if (
-        source_projection is None
-        or source_projection.id != source.id
-        or source_projection.status != source.status
-        or source_projection.generation != source.generation
-    ):
-        # Provider/type/configuration belong to this detached owner projection;
-        # reject a stale or missing view while the source fence remains locked.
-        raise ValueError("Normalized source projection no longer matches its lifecycle fence")
+    access_fence = await read_access_fence(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    preparation = await prepare_normalized_document_keys(
+        session, payload.source_id, (payload.provider_id,), scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence,
+    )
+    result, _ = await upsert_normalized_document_in_uow(
+        session, payload, preparation=preparation, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence,
+    )
+    return result
+
+
+async def upsert_normalized_document_in_uow(
+    session: AsyncSession, payload: NormalizedDocumentInput, *, preparation: NormalizedDocumentPreparation,
+    scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+) -> tuple[NormalizedDocumentResult, NormalizedDocumentPreparation]:
+    """Apply one prepared held key and return only its owner-produced successor.
+
+    Actual admission/Source/Documents/identity locks remain held in this same
+    transaction. Compare original full fences and exact current identity before
+    writes; no FOR UPDATE, acquiring wrapper or ON CONFLICT winner adoption.
+    Local inserted IDs are verified after flush and replace only this key. Unique
+    failures and consistency conflicts abort the complete attempt; never commit.
+    Explicit NormalizedDocumentValidationRejected guarantees this record has made no
+    owner writes or successor changes. Other exceptions offer no such guarantee.
+    """
+    from modules.connectors import public as connectors
+
+    try:
+        payload = NormalizedDocumentInput.model_validate(payload.model_dump(mode="python"))
+    except (ValueError, TypeError) as exc:
+        raise NormalizedDocumentValidationRejected("Normalized input validation rejected") from exc
+    if (not isinstance(preparation, NormalizedDocumentPreparation)
+            or preparation.workspace_id != scope.workspace_id or preparation.source_id != payload.source_id
+            or preparation.source_generation != payload.expected_source_generation):
+        raise RuntimeError("normalized_preparation_header_changed")
+    source_projection = await _normalized_source_proof(
+        session, payload.source_id, payload.expected_source_generation, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence,
+    )
+    discriminator = payload.provenance.get("provider_scope_discriminator")
+    if discriminator is not None or source_projection.provider in {"alpha_vantage", "open_meteo"}:
+        provider_scope = await connectors.get_current_provider_scope(
+            session, payload.source_id, payload.expected_source_generation, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+        if (provider_scope is None or provider_scope.workspace_id != scope.workspace_id
+                or provider_scope.source_id != payload.source_id
+                or provider_scope.source_generation != payload.expected_source_generation
+                or provider_scope.provider_id != source_projection.provider
+                or provider_scope.discriminator != discriminator):
+            raise RuntimeError("normalized_preparation_provider_changed")
+    expected, document, identity = await _normalized_target(session, payload.provider_id, preparation)
+    result, document, identity = await _apply_normalized_document(
+        session, payload, source_projection, document, identity, preparation.workspace_id,
+    )
+    state = NormalizedDocumentKeyState(
+        external_id=expected.external_id, document_id=document.id if document is not None else None,
+        normalized_identity_id=identity.id if identity is not None else None,
+        identity_document_id=identity.document_id if identity is not None else None,
+        tombstoned_at=identity.tombstoned_at if identity is not None else None,
+    )
+    fresh, _, _ = await _normalized_key_states(session, payload.source_id, (payload.provider_id,), scope.workspace_id)
+    if fresh != (state,):
+        raise RuntimeError("normalized_preparation_local_write_changed")
+    successor = NormalizedDocumentPreparation(
+        workspace_id=preparation.workspace_id, source_id=preparation.source_id,
+        source_generation=preparation.source_generation,
+        keys=tuple(state if key.external_id == state.external_id else key for key in preparation.keys),
+    )
+    return result, successor
+
+
+async def _apply_normalized_document(
+    session: AsyncSession, payload: NormalizedDocumentInput, source_projection: sources.ConnectorSource,
+    document: Document | None, identity: NormalizedDocumentIdentity | None, workspace_id: UUID,
+) -> tuple[NormalizedDocumentResult, Document | None, NormalizedDocumentIdentity | None]:
+    """Share validation-first immutable revisions and provider ranking under held roots.
+
+    Preserve tombstones, accepted-hash/version duplicates, generic and exact
+    Telegram ordering, monotonic versions and World current selection ownership.
+    Known malformed/colliding input emits NormalizedDocumentValidationRejected only
+    before this record's first owner mutation. Unknown validation, consistency and
+    all later database errors abort the transaction. Insert only proven absences.
+    """
     provider_record = payload.provenance.get("provider_record")
     if provider_record is not None:
-        typed_provider = ProviderRecordMetadata.model_validate(provider_record)
+        try:
+            typed_provider = ProviderRecordMetadata.model_validate(provider_record)
+        except (ValueError, TypeError) as exc:
+            raise NormalizedDocumentValidationRejected("Incoming provider provenance rejected") from exc
         if source_projection.provider != typed_provider.provider:
-            raise ValueError("Provider provenance does not match the immutable source provider")
+            raise NormalizedDocumentValidationRejected("Provider provenance does not match the immutable source provider")
     elif source_projection.provider == "telegram":
-        raise ValueError("Telegram normalization requires immutable delivery provenance")
+        raise NormalizedDocumentValidationRejected("Telegram normalization requires immutable delivery provenance")
 
-    identity = await session.scalar(
-        select(NormalizedDocumentIdentity)
-        .where(
-            NormalizedDocumentIdentity.source_id == payload.source_id,
-            NormalizedDocumentIdentity.external_id == payload.provider_id,
-        )
-        .with_for_update()
-    )
-    created_identity = identity is None
-    if identity is None:
-        identity = NormalizedDocumentIdentity(source_id=payload.source_id, external_id=payload.provider_id)
-        session.add(identity)
-        await session.flush()
-    if identity.tombstoned_at is not None:
+    if identity is not None and identity.tombstoned_at is not None:
         return NormalizedDocumentResult(
             disposition="tombstoned", document_id=None, document_version_id=None,
             version_number=None, created_version=False, selected_current=False, chunk_count=0,
-        )
-
-    document = await session.scalar(
-        select(Document)
-        .where(Document.source_id == payload.source_id, Document.external_id == payload.provider_id)
-        .with_for_update()
-    )
-    if document is not None and identity.document_id not in (None, document.id):
-        raise ValueError("Normalized identity points to a different document")
-    if document is not None and identity.document_id is None:
-        if created_identity:
-            await session.delete(identity)
-            await session.flush()
-        raise ValueError("Provider identity conflicts with an existing non-normalized document")
-    if document is None:
-        document = Document(
-            source_id=payload.source_id, external_id=payload.provider_id,
-            title=payload.title, content_type=payload.content_type,
-            canonical_url=payload.canonical_url, published_at=payload.published_at,
-            observed_at=payload.observed_at, current_version=0,
-            content_hash=content_hash(payload.content), extraction_status="ready",
-        )
-        session.add(document)
-        await session.flush()
-        identity.document_id = document.id
-
+        ), document, identity
+    if document is not None and (identity is None or identity.document_id is None):
+        raise NormalizedDocumentValidationRejected("Provider identity conflicts with an existing non-normalized document")
     prior = await session.scalar(
         select(NormalizedVersionProvenance).where(
             NormalizedVersionProvenance.document_id == document.id,
             NormalizedVersionProvenance.accepted_record_hash == payload.accepted_record_hash,
             NormalizedVersionProvenance.normalization_version == payload.normalization_version,
         )
-    )
+    ) if document is not None else None
     if prior is not None:
-        version = await session.get(DocumentVersion, prior.document_version_id)
-        if version is None:
+        version = await session.scalar(select(DocumentVersion).where(
+            DocumentVersion.id == prior.document_version_id,
+            DocumentVersion.document_id == document.id,
+        ).execution_options(populate_existing=True))
+        if version is None or prior.provider_id != payload.provider_id:
             raise RuntimeError("Normalized provenance references a missing revision")
         count = await session.scalar(
             select(func.count()).select_from(DocumentChunk)
@@ -2270,10 +2576,10 @@ async def upsert_normalized_document(
             version_number=version.version_number, created_version=False,
             selected_current=document.current_version == version.version_number,
             chunk_count=int(count or 0),
-        )
+        ), document, identity
 
     current_provenance = None
-    if document.current_version:
+    if document is not None and document.current_version:
         current_provenance = await session.scalar(
             select(NormalizedVersionProvenance)
             .join(DocumentVersion, DocumentVersion.id == NormalizedVersionProvenance.document_version_id)
@@ -2283,16 +2589,19 @@ async def upsert_normalized_document(
             )
         )
         if current_provenance is None:
-            raise ValueError("Provider identity conflicts with an owner-authored current revision")
+            raise NormalizedDocumentValidationRejected("Provider identity conflicts with an owner-authored current revision")
     if source_projection.provider in {"alpha_vantage", "open_meteo"}:
         # Observation acceptance time and ingestion identity, not provider event
         # time or worker arrival order, own structured-series current selection.
         selected = False
     elif source_projection.provider == "telegram":
-        incoming_metadata = ProviderRecordMetadata.model_validate(provider_record)
+        try:
+            incoming_metadata = ProviderRecordMetadata.model_validate(provider_record)
+        except (ValueError, TypeError) as exc:
+            raise NormalizedDocumentValidationRejected("Incoming Telegram provenance rejected") from exc
         incoming_telegram = incoming_metadata.telegram
         if incoming_telegram is None or payload.telegram_order is None:
-            raise ValueError("Telegram version ordering proof is missing")
+            raise NormalizedDocumentValidationRejected("Telegram version ordering proof is missing")
         incoming_rank = (payload.observed_at, payload.telegram_order.epoch, payload.telegram_order.update_id)
         current_rank = None
         if current_provenance is not None:
@@ -2301,7 +2610,7 @@ async def upsert_normalized_document(
             )
             current_telegram = current_metadata.telegram
             if current_telegram is None or current_telegram.bot_id != incoming_telegram.bot_id:
-                raise ValueError("Telegram current version has an incompatible bot binding")
+                raise NormalizedDocumentValidationRejected("Telegram current version has an incompatible bot binding")
             current_rank = (
                 current_provenance.selection_observed_at,
                 current_telegram.epoch,
@@ -2309,8 +2618,8 @@ async def upsert_normalized_document(
             )
         if current_rank == incoming_rank and current_provenance is not None:
             if current_provenance.accepted_record_hash != payload.accepted_record_hash:
-                raise ValueError("Telegram delivery order has conflicting immutable content")
-            raise ValueError("Telegram delivery proof already exists with a different normalization version")
+                raise NormalizedDocumentValidationRejected("Telegram delivery order has conflicting immutable content")
+            raise NormalizedDocumentValidationRejected("Telegram delivery proof already exists with a different normalization version")
         selected = current_rank is None or incoming_rank > current_rank
     else:
         current_hash_rank = (
@@ -2318,6 +2627,25 @@ async def upsert_normalized_document(
             if current_provenance is not None else None
         )
         selected = current_hash_rank is None or (payload.observed_at, payload.accepted_record_hash) > current_hash_rank
+    # All provider/content errors above precede the first owner mutation.
+    created_identity_id, created_document_id = None, None
+    if identity is None:
+        created_identity_id = uuid4()
+        identity = NormalizedDocumentIdentity(id=created_identity_id, workspace_id=workspace_id,
+                                              source_id=payload.source_id, external_id=payload.provider_id)
+        session.add(identity)
+    if document is None:
+        created_document_id = uuid4()
+        document = Document(
+            id=created_document_id, workspace_id=workspace_id, source_id=payload.source_id, external_id=payload.provider_id,
+            title=payload.title, content_type=payload.content_type,
+            canonical_url=payload.canonical_url, published_at=payload.published_at,
+            observed_at=payload.observed_at, current_version=0,
+            content_hash=content_hash(payload.content), extraction_status="ready",
+        )
+        session.add(document)
+        identity.document_id = document.id
+        await session.flush()
     max_number = await session.scalar(
         select(func.coalesce(func.max(DocumentVersion.version_number), 0))
         .where(DocumentVersion.document_id == document.id)
@@ -2341,7 +2669,10 @@ async def upsert_normalized_document(
         published_at=payload.published_at, content_type=payload.content_type,
         provenance_json=payload.provenance,
     ))
-    chunk_count = await add_content_chunks(session, version)
+    try:
+        chunk_count = await add_content_chunks(session, version)
+    except (ValueError, TypeError) as exc:
+        raise RuntimeError("normalized_preparation_chunk_write_conflict") from exc
     if selected:
         document.current_version = version.version_number
         document.content_hash = version.content_hash
@@ -2352,54 +2683,180 @@ async def upsert_normalized_document(
         document.observed_at = payload.observed_at
         document.extraction_status = "ready"
     await session.flush()
+    if (document.workspace_id != workspace_id or identity.workspace_id != workspace_id
+            or document.source_id != payload.source_id or identity.source_id != payload.source_id
+            or document.external_id != payload.provider_id or identity.external_id != payload.provider_id
+            or identity.document_id != document.id or identity.tombstoned_at is not None
+            or (created_document_id is not None and document.id != created_document_id)
+            or (created_identity_id is not None and identity.id != created_identity_id)):
+        raise RuntimeError("normalized_preparation_insert_changed")
     return NormalizedDocumentResult(
         disposition="normalized", document_id=document.id,
         document_version_id=version.id, version_number=version.version_number,
         created_version=True, selected_current=selected, chunk_count=chunk_count,
-    )
+    ), document, identity
 
 
 async def select_current_world_document_version(
     session: AsyncSession, *, document_id: UUID, document_version_id: UUID,
     expected_source_generation: int, provider_scope_discriminator: str,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> bool:
-    """Select one immutable world-data revision after Observations accepts it as current.
+    """Acquire Source/Document/identity in order and preserve ordinary bool selection.
 
-    The caller must make this call in the same ingestion transaction as the
-    observation write. Documents owns current-version and metadata projection;
-    accepted_at plus ingestion identity remain owned by Observations. The source
-    generation, provider scope, document identity, and retained version provenance
-    are rechecked before changing the pointer, so retries and delayed workers can
-    only restore a version that the current acceptance decision already selected.
+    Entry precedes later domain locks. Only an admitted exact workspace document
+    can supply the Source/key. The held selector shares pointer mutation while
+    deferred callers supply their own original fences and latest preparation.
+    Missing source, document or exact selectable version returns False; no commit.
     """
-    source_id = await session.scalar(select(Document.source_id).where(Document.id == document_id))
-    if source_id is None:
+    await read_access_fence(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    locator = (await session.execute(select(Document.source_id, Document.external_id).where(
+        Document.id == document_id, Document.workspace_id == scope.workspace_id,
+    ))).one_or_none()
+    if locator is None or locator.external_id is None:
         return False
-    source = await sources.lock_source(session, source_id)
-    if source is None or source.status != "active" or source.generation != expected_source_generation:
+    source_fence = await sources.lock_source(
+        session, locator.source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if (source_fence is None or source_fence.status != "active"
+            or source_fence.generation != expected_source_generation):
         return False
-    source_projection = await sources.get_connector_source(session, source_id)
-    if (
-        source_projection is None or source_projection.status != "active"
-        or source_projection.generation != expected_source_generation
-        or source_projection.provider not in {"alpha_vantage", "open_meteo"}
+    access_fence = await read_access_fence(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    preparation = await prepare_normalized_document_keys(
+        session, locator.source_id, (locator.external_id,), scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence,
+    )
+    return await select_current_world_document_version_in_uow(
+        session, document_id=document_id, document_version_id=document_version_id,
+        expected_source_generation=expected_source_generation,
+        provider_scope_discriminator=provider_scope_discriminator, preparation=preparation,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence, source_fence=source_fence,
+    )
+
+
+async def normalized_observation_version_matches_in_uow(
+    session: AsyncSession, *, source_id: UUID, source_generation: int,
+    document_id: UUID, document_version_id: UUID, external_id: str,
+    provider: str, provider_scope_discriminator: str,
+    scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+) -> bool:
+    """Prove one exact held normalized World version through a nonlocking owner read.
+
+    Original admission/Source and Document/identity parents remain held; this bool
+    grants no write authority and exposes no ORM/content. Require same workspace,
+    Source/key, live canonical identity, generation, typed provider and current
+    non-secret provider scope. No current-version condition is imposed because O
+    chooses current only after this proof. Accepted journal/SourceObservation
+    lineage and FK parent preparation remain Ingestion's mandatory responsibility.
+    Missing/deleted/mismatching evidence returns False, stale fences abort; no I/O.
+    """
+    from modules.connectors import public as connectors
+
+    if (not isinstance(external_id, str) or not 1 <= len(external_id) <= 512
+            or provider not in {"alpha_vantage", "open_meteo"}):
+        return False
+    projection = await _normalized_source_proof(
+        session, source_id, source_generation, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence, source_fence=source_fence,
+    )
+    current_scope = await connectors.get_current_provider_scope(
+        session, source_id, source_generation, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if (projection.provider != provider or current_scope is None
+            or current_scope.workspace_id != scope.workspace_id or current_scope.source_id != source_id
+            or current_scope.source_generation != source_generation or current_scope.provider_id != provider
+            or current_scope.discriminator != provider_scope_discriminator):
+        return False
+    rows = (await session.execute(select(NormalizedVersionProvenance.provenance_json).select_from(Document)
+        .join(DocumentVersion, DocumentVersion.document_id == Document.id)
+        .join(NormalizedDocumentIdentity, and_(
+            NormalizedDocumentIdentity.document_id == Document.id,
+            NormalizedDocumentIdentity.source_id == Document.source_id,
+            NormalizedDocumentIdentity.external_id == Document.external_id,
+            NormalizedDocumentIdentity.workspace_id == Document.workspace_id,
+        ))
+        .join(NormalizedVersionProvenance, and_(
+            NormalizedVersionProvenance.document_version_id == DocumentVersion.id,
+            NormalizedVersionProvenance.document_id == Document.id,
+        )).where(
+            Document.id == document_id, Document.workspace_id == scope.workspace_id,
+            Document.source_id == source_id, Document.external_id == external_id,
+            DocumentVersion.id == document_version_id,
+            NormalizedDocumentIdentity.tombstoned_at.is_(None),
+            NormalizedVersionProvenance.provider_id == external_id,
+            NormalizedVersionProvenance.source_generation == source_generation,
+        ).limit(2))).all()
+    if len(rows) != 1:
+        return False
+    provenance = rows[0][0]
+    if not isinstance(provenance, dict) or provenance.get("provider_scope_discriminator") != provider_scope_discriminator:
+        return False
+    record = provenance.get("provider_record")
+    if not isinstance(record, dict):
+        return False
+    try:
+        metadata = ProviderRecordMetadata.model_validate(record)
+    except (ValueError, TypeError):
+        return False
+    return metadata.provider == provider and metadata.world_data is not None
+
+
+async def select_current_world_document_version_in_uow(
+    session: AsyncSession, *, document_id: UUID, document_version_id: UUID,
+    expected_source_generation: int, provider_scope_discriminator: str,
+    preparation: NormalizedDocumentPreparation,
+    scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+) -> bool:
+    """Select the O-approved exact World revision on an already-held prepared Document.
+
+    Caller just selected this version through trusted O in this transaction.
+    Compare original fences and latest key mapping; no Source/Document/version
+    lock or acquiring helper is entered after outbox. Identity snapshot fields
+    stay unchanged. Missing provenance returns False before mutation; no commit.
+    """
+    if (not isinstance(preparation, NormalizedDocumentPreparation) or preparation.workspace_id != scope.workspace_id
+            or preparation.source_generation != expected_source_generation):
+        raise RuntimeError("normalized_preparation_header_changed")
+    projection = await _normalized_source_proof(
+        session, preparation.source_id, expected_source_generation, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence,
+    )
+    matching = [key for key in preparation.keys if key.document_id == document_id and key.tombstoned_at is None]
+    if len(matching) != 1:
+        raise RuntimeError("normalized_preparation_document_missing")
+    _, document, _ = await _normalized_target(session, matching[0].external_id, preparation)
+    if document is None or not await normalized_observation_version_matches_in_uow(
+        session, source_id=preparation.source_id, source_generation=expected_source_generation,
+        document_id=document_id, document_version_id=document_version_id,
+        external_id=matching[0].external_id, provider=projection.provider or "",
+        provider_scope_discriminator=provider_scope_discriminator, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence,
     ):
         return False
-    document = await session.scalar(
-        select(Document).where(Document.id == document_id, Document.source_id == source_id).with_for_update()
-    )
-    if document is None:
-        return False
+    return await _select_world_document_version(session, document, document_version_id,
+                                                expected_source_generation, provider_scope_discriminator)
+
+
+async def _select_world_document_version(
+    session: AsyncSession, document: Document, document_version_id: UUID,
+    expected_source_generation: int, provider_scope_discriminator: str,
+) -> bool:
+    """Mutate only an already-held Document's current/metadata projection, never lock.
+
+    Exact version/provenance/source-key/generation/scope must match. The caller has
+    freshly validated live identity/provider admission; missing evidence returns
+    False before mutation. Projection flush is part of the caller's transaction.
+    """
     selected = (await session.execute(
         select(DocumentVersion, NormalizedVersionProvenance)
         .join(NormalizedVersionProvenance, NormalizedVersionProvenance.document_version_id == DocumentVersion.id)
         .where(
-            DocumentVersion.id == document_version_id,
-            DocumentVersion.document_id == document.id,
+            DocumentVersion.id == document_version_id, DocumentVersion.document_id == document.id,
             NormalizedVersionProvenance.document_id == document.id,
             NormalizedVersionProvenance.provider_id == document.external_id,
             NormalizedVersionProvenance.source_generation == expected_source_generation,
-        )
+        ).execution_options(populate_existing=True)
     )).one_or_none()
     if selected is None:
         return False
@@ -2417,6 +2874,88 @@ async def select_current_world_document_version(
     await session.flush()
     return True
 
+async def _upload_document_state(
+    session: AsyncSession, *, source_id: UUID, document_id: UUID, external_id: str,
+    raw_uri: str, scope: Scope,
+) -> tuple[tuple[UUID, ...], tuple[tuple[UUID, datetime | None], ...]]:
+    """Read bounded UUID/key collision and identity state without acquiring earlier locks.
+
+    Caller already proved and holds original Source/access. At most two canonical rows
+    and one source-key identity can exist; foreign UUID collisions disclose no metadata
+    outside this owner and are rejected. Source serialization protects absent key rows.
+    """
+    if (not isinstance(source_id, UUID) or not isinstance(document_id, UUID)
+            or type(external_id) is not str or not 1 <= len(external_id) <= 512
+            or type(raw_uri) is not str or not raw_uri):
+        raise ValueError("Upload requires an exact Source, document, external key and raw URI")
+    documents = tuple((await session.scalars(select(Document.id).where(or_(
+        Document.id == document_id,
+        and_(Document.source_id == source_id, Document.external_id == external_id),
+    )).order_by(Document.id).limit(3))).all())
+    identity_rows = (await session.execute(select(
+        NormalizedDocumentIdentity.id, NormalizedDocumentIdentity.workspace_id, NormalizedDocumentIdentity.tombstoned_at,
+    ).where(
+        NormalizedDocumentIdentity.source_id == source_id,
+        NormalizedDocumentIdentity.external_id == external_id,
+    ).order_by(NormalizedDocumentIdentity.id).limit(2))).all()
+    if len(documents) > 2 or len(identity_rows) > 1:
+        raise RuntimeError("upload_document_identity_cardinality_changed")
+    if any(row.workspace_id != scope.workspace_id for row in identity_rows):
+        raise RuntimeError("upload_document_identity_namespace_changed")
+    identities = tuple((row.id, row.tombstoned_at) for row in identity_rows)
+    return documents, identities
+
+
+async def _assert_upload_absence(
+    session: AsyncSession, documents: tuple[UUID, ...], identities: tuple[tuple[UUID, datetime | None], ...], raw_uri: str,
+) -> None:
+    """Reject canonical/normalized reuse and globally captured raw identities without locks.
+
+    Early preparation or late held insertion owns Source and exact URI lifecycle locks.
+    The global receipt query is a conservative bool only: foreign IDs/content never leave
+    Documents. Captured raw bytes cannot be republished, even after physical unlink.
+    """
+    if any(tombstoned_at is not None for _identity_id, tombstoned_at in identities):
+        raise ValueError("Document identifier was previously deleted")
+    if documents or identities:
+        raise ValueError("Document identifier already exists")
+    if await session.scalar(select(literal(True)).select_from(DocumentCleanupOperation).where(
+        DocumentCleanupOperation.raw_uri == raw_uri,
+    ).limit(1)):
+        raise ValueError("This raw file identity was already deleted")
+
+
+async def prepare_uploaded_document_in_uow(
+    session: AsyncSession, *, source_id: UUID, document_id: UUID, external_id: str, raw_uri: str,
+    scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+) -> None:
+    """Prepare a new upload after original Source/access, before any Ingestion root writes.
+
+    Compare full original fences nonlockingly; lock discovered Documents in UUID order,
+    then exact raw URI, then existing normalized identity. Reject any UUID/key collision,
+    tombstone or prior raw cleanup capture before effects. Source/URI-held absence protects
+    the later initializer; no token, registry, placeholder, mutation, event or commit exists.
+    """
+    if not isinstance(source_fence, SourceFence):
+        raise RuntimeError("upload_original_fence_required")
+    await _normalized_source_proof(session, source_id, source_fence.generation, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence)
+    documents, identities = await _upload_document_state(session, source_id=source_id,
+        document_id=document_id, external_id=external_id, raw_uri=raw_uri, scope=scope)
+    before = (documents, identities)
+    if documents:
+        await session.scalars(select(Document.id).where(Document.id.in_(documents)).order_by(Document.id).with_for_update())
+    await lock_raw_uri_identity(session, raw_uri)
+    if identities:
+        await session.scalars(select(NormalizedDocumentIdentity.id).where(
+            NormalizedDocumentIdentity.id.in_([identity_id for identity_id, _tombstoned_at in identities]),
+        ).order_by(NormalizedDocumentIdentity.id).with_for_update())
+    documents, identities = await _upload_document_state(session, source_id=source_id,
+        document_id=document_id, external_id=external_id, raw_uri=raw_uri, scope=scope)
+    if before != (documents, identities):
+        raise RuntimeError("upload_document_preparation_changed")
+    await _assert_upload_absence(session, documents, identities, raw_uri)
+
 
 async def add_uploaded_document(
     session: AsyncSession,
@@ -2427,18 +2966,25 @@ async def add_uploaded_document(
     metadata: dict[str, object],
     external_id: str,
     document_id: UUID,
+    *, scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
 ) -> UUID:
-    """Publish one uploaded raw URI after the deletion fence and create its empty version.
+    """Insert one held new upload root and empty queued version under exact original proof.
 
-    The caller has already staged the file and owns rollback cleanup. The raw-URI
-    transaction lock serializes this publication with deletion; a URI already captured
-    by a durable cleanup receipt raises ValueError so it cannot be referenced again.
+    Caller prepared exact Source/UUID/key/URI before Ingestion roots and retains those
+    locks. Fresh nonlocking proof and no-republication checks do not acquire earlier
+    Source/Document/URI/identity locks after I/outbox. Root inherits actual workspace;
+    return UUID without commit/event/I/O. Caller owns atomic publication and raw rollback.
     """
-    await lock_raw_uri_identity(session, raw_uri)
-    if await session.scalar(select(DocumentCleanupOperation.id).where(DocumentCleanupOperation.raw_uri == raw_uri)):
-        raise ValueError("This raw file identity was already deleted")
+    if not isinstance(source_fence, SourceFence):
+        raise RuntimeError("upload_original_fence_required")
+    await _normalized_source_proof(session, source_id, source_fence.generation, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence)
+    documents, identities = await _upload_document_state(session, source_id=source_id,
+        document_id=document_id, external_id=external_id, raw_uri=raw_uri, scope=scope)
+    await _assert_upload_absence(session, documents, identities, raw_uri)
     document = Document(
         id=document_id,
+        workspace_id=scope.workspace_id,
         source_id=source_id,
         external_id=external_id,
         title=title,
@@ -2457,29 +3003,93 @@ async def add_uploaded_document(
     return document.id
 
 
+async def _extraction_document(
+    session: AsyncSession, document_id: UUID, source_id: UUID, *,
+    scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+    expected_raw_uri: str, expected_mime_type: str,
+) -> Document | None:
+    """Read one exact parser parent, comparing original URI/MIME and full fences.
+
+    Early preparation uses this read before its singleton lock; late writes
+    retain that Document/URI lock before Ingestion roots/outbox. No lock or authority fallback;
+    missing/moved/deleted/raw-input mismatch returns None before mutation.
+    """
+    if not isinstance(source_fence, SourceFence):
+        raise RuntimeError("extraction_original_fence_required")
+    await _normalized_source_proof(
+        session, source_id, source_fence.generation, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence, source_fence=source_fence,
+    )
+    if (type(expected_raw_uri) is not str or not expected_raw_uri
+            or type(expected_mime_type) is not str or not 1 <= len(expected_mime_type) <= 255):
+        raise RuntimeError("extraction_original_input_required")
+    document = await session.scalar(select(Document).where(
+        Document.id == document_id, Document.source_id == source_id, Document.workspace_id == scope.workspace_id,
+        Document.raw_uri == expected_raw_uri, Document.mime_type == expected_mime_type,
+    ).execution_options(populate_existing=True))
+    if document is None or await session.scalar(select(DocumentCleanupOperation.id).where(
+        DocumentCleanupOperation.raw_uri == expected_raw_uri,
+    ).limit(1)) is not None:
+        return None
+    return document
+
+
 async def lock_document_for_extraction(
-    session: AsyncSession, document_id: UUID, source_id: UUID
+    session: AsyncSession, document_id: UUID, source_id: UUID, *,
+    scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+    expected_raw_uri: str, expected_mime_type: str,
 ) -> bool:
-    """Lock and confirm a document belongs to the supplied source."""
-    return await session.scalar(
-        select(Document.id)
-        .where(Document.id == document_id, Document.source_id == source_id)
-        .with_for_update()
+    """Prepare singleton parser Document then URI lifecycle before any Ingestion roots.
+
+    Caller retains original admitted workspace/Source locks. Freshly compare
+    original complete fences, exact workspace/Source/Document/raw URI/MIME, lock
+    the Document and then existing raw-URI lifecycle identity in deletion order.
+    Missing/mismatching/deleted input returns False. No mutation, commit or I/O;
+    Entities/Timeline/News callers require their own scoped owner conversion.
+    """
+    if await _extraction_document(
+        session, document_id, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence, source_fence=source_fence,
+        expected_raw_uri=expected_raw_uri, expected_mime_type=expected_mime_type,
+    ) is None:
+        return False
+    document = await session.scalar(select(Document).where(
+        Document.id == document_id, Document.source_id == source_id, Document.workspace_id == scope.workspace_id,
+        Document.raw_uri == expected_raw_uri, Document.mime_type == expected_mime_type,
+    ).with_for_update().execution_options(populate_existing=True))
+    if document is None:
+        return False
+    await lock_raw_uri_identity(session, expected_raw_uri)
+    return await _extraction_document(
+        session, document_id, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence, source_fence=source_fence,
+        expected_raw_uri=expected_raw_uri, expected_mime_type=expected_mime_type,
     ) is not None
 
 
 async def set_extraction_status(
-    session: AsyncSession, document_id: UUID, source_id: UUID, status: str
+    session: AsyncSession, document_id: UUID, source_id: UUID, status: str, *,
+    scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+    expected_raw_uri: str, expected_mime_type: str,
 ) -> bool:
-    """Set extraction state only for a document owned by the supplied source."""
-    result = await session.execute(
-        update(Document)
-        .where(Document.id == document_id, Document.source_id == source_id)
-        .values(extraction_status=status)
-        .returning(Document.id)
-    )
-    return result.scalar_one_or_none() is not None
+    """Flush parser status only on its already-held exact parent and original input.
 
+    Retained early Document/URI locks and original admission/Source are mandatory;
+    no earlier acquisition follows outbox. Invalid status is rejected before any
+    mutation. Missing/deleted/mismatching input returns False, stale fences abort.
+    """
+    if status not in {"queued", "processing", "succeeded", "failed", "ready", "needs_ocr"}:
+        raise ValueError("Invalid extraction status")
+    document = await _extraction_document(
+        session, document_id, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence, source_fence=source_fence,
+        expected_raw_uri=expected_raw_uri, expected_mime_type=expected_mime_type,
+    )
+    if document is None:
+        return False
+    document.extraction_status = status
+    await session.flush()
+    return True
 
 async def save_extraction(
     session: AsyncSession,
@@ -2491,16 +3101,35 @@ async def save_extraction(
     extraction_metadata: dict[str, object],
     warnings: list[str],
     parser: str,
+    *, scope: Scope, multi_workspace_enabled: bool,
+    access_fence: AccessFence, source_fence: SourceFence,
+    expected_raw_uri: str, expected_mime_type: str,
 ) -> UUID | None:
-    """Save parser output under a locked active source, adding chunks only once."""
-    source = await sources.lock_source(session, source_id)
-    if source is None or source.status != "active":
-        return None
-    document = await session.scalar(
-        select(Document).where(Document.id == document_id, Document.source_id == source_id).with_for_update()
+    """Save parser output on its held parent, preserving original raw URI/MIME/fences.
+
+    Prevalidate chunk conversion and metadata before mutation. Caller retains
+    early admission/Source/Document/URI lifecycle locks; no earlier acquisition
+    occurs after outbox. Immutable versions advance monotonically and chunks are
+    added once; scoped ready events are new-row writes in the same transaction.
+    Missing/mismatching input returns None before writes. Any later conversion,
+    publication or consistency error aborts the complete attempt; no commit/I/O.
+    """
+    if type(text) is not str or extraction_status not in {"queued", "processing", "succeeded", "failed", "ready", "needs_ocr"}:
+        raise ValueError("Invalid parser text or extraction status")
+    prepared_chunks = [(str(chunk["content"]), int(cast("int", chunk["token_count"])),
+                        dict(cast("dict[str, object]", chunk.get("metadata", {})))) for chunk in chunks]
+    prepared_metadata, prepared_warnings = dict(extraction_metadata), list(warnings)
+    document = await _extraction_document(
+        session, document_id, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence, source_fence=source_fence,
+        expected_raw_uri=expected_raw_uri, expected_mime_type=expected_mime_type,
     )
     if document is None:
         return None
+    prepared_document_metadata = {
+        **dict(document.metadata_json or {}), "extraction": prepared_metadata,
+        "warnings": prepared_warnings, "parser": parser,
+    }
     current = await session.scalar(
         select(DocumentVersion).where(
             DocumentVersion.document_id == document_id,
@@ -2526,58 +3155,159 @@ async def save_extraction(
         document.content_hash = digest
         await session.flush()
     document.extraction_status = extraction_status
-    document.metadata_json = {
-        **document.metadata_json,
-        "extraction": dict(extraction_metadata),
-        "warnings": list(warnings),
-        "parser": parser,
-    }
+    document.metadata_json = prepared_document_metadata
     existing = await session.scalar(
         select(DocumentChunk.id).where(DocumentChunk.document_version_id == current.id).limit(1)
     )
     if existing is None:
-        for index, chunk in enumerate(chunks):
-            content = str(chunk["content"])
+        for index, (content, token_count, metadata) in enumerate(prepared_chunks):
             session.add(
                 DocumentChunk(
                     document_version_id=current.id,
                     chunk_index=index,
                     content=content,
                     content_hash=content_hash(content),
-                    token_count=int(cast("int", chunk["token_count"])),
-                    metadata_json=dict(cast("dict[str, object]", chunk.get("metadata", {}))),
+                    token_count=token_count,
+                    metadata_json=metadata,
                 )
             )
     if extraction_status == "succeeded" and chunks:
-        await _publish_document_ready(session, document, current)
+        try:
+            await _publish_extraction_ready(session, document, current, scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence)
+        except (ValueError, TypeError) as exc:
+            raise RuntimeError("extraction_ready_publication_conflict") from exc
     await session.flush()
     return document.id
 
 
+async def _publish_extraction_ready(
+    session: AsyncSession, document: Document, version: DocumentVersion, *,
+    scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+) -> None:
+    """Publish the two Documents-owned parser ready events under original held proof.
+
+    Use only exact local Document/version writes and captured Source generation.
+    Ingestion public revalidates scope nonlockingly and inserts new outbox rows;
+    no old claim is acquired, no Source ORM escapes and no commit or I/O occurs.
+    """
+    from modules.ingestion import public as ingestion
+
+    await _normalized_source_proof(
+        session, document.source_id, source_fence.generation, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence,
+    )
+    payload = {"source_id": str(document.source_id), "document_id": str(document.id),
+               "document_version_id": str(version.id), "source_generation": source_fence.generation,
+               "version_number": version.version_number}
+    for event_type in ("document.version.ready", "news.document.ready"):
+        await ingestion.publish_event(session, DomainEvent(
+            id=uuid4(), type=event_type, version=1, occurred_at=datetime.now(UTC),
+            producer="modules.knowledge.documents", payload=payload,
+        ), scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+
+
+def _encode_document_owner_cursor(
+    position: str, *, kind: str, fence: AccessFence, resource_id: UUID | None,
+) -> str:
+    """Wrap an existing keyset position in actor/workspace/epoch and exact selector context.
+
+    This public wire value is neither a grant nor a signed snapshot. Source/root predicates
+    remain mandatory on every page. No secret/key infrastructure or legacy fallback exists.
+    """
+    payload = [kind, str(fence.workspace_id), fence.user_id, fence.membership_revision,
+               fence.configuration_revision, str(resource_id) if resource_id is not None else None, position]
+    return base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode().rstrip("=")
+
+
+def _decode_document_owner_cursor(
+    cursor: str, *, kind: str, fence: AccessFence, resource_id: UUID | None,
+) -> str:
+    """Validate canonical bounded cursor context before returning the existing keyset position.
+
+    Legacy/unscoped, malformed and other actor/workspace/filter/document cursors are 422;
+    same-context stale membership/configuration is 409. Cursor edits confer no authority:
+    real admission and Source/root predicates still precede each page query.
+    """
+    try:
+        if type(cursor) is not str or not 1 <= len(cursor) <= 2048 or "=" in cursor:
+            raise ValueError("Invalid cursor encoding")
+        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
+        if base64.urlsafe_b64encode(raw).decode().rstrip("=") != cursor:
+            raise ValueError("Invalid cursor encoding")
+        payload = json.loads(raw)
+        if (not isinstance(payload, list) or len(payload) != 7 or type(payload[2]) is not int
+                or type(payload[3]) is not int or payload[3] <= 0
+                or type(payload[4]) is not int or payload[4] <= 0
+                or type(payload[6]) is not str or not payload[6]):
+            raise ValueError("Invalid cursor shape")
+        if [payload[0], payload[1], payload[2], payload[5]] != [
+            kind, str(fence.workspace_id), fence.user_id, str(resource_id) if resource_id is not None else None,
+        ]:
+            raise ValueError("Invalid cursor context")
+    except (ValueError, TypeError, UnicodeError, binascii.Error) as exc:
+        raise HTTPException(status_code=422, detail="Invalid document cursor") from exc
+    if payload[3:5] != [fence.membership_revision, fence.configuration_revision]:
+        raise HTTPException(status_code=409, detail="Document page context changed")
+    return cast(str, payload[6])
+
+
 async def list_documents(
-    session: AsyncSession, limit: int, cursor: str | None, source_id: UUID | None
+    session: AsyncSession, limit: int, cursor: str | None, source_id: UUID | None, *,
+    scope: WorkspaceContext, multi_workspace_enabled: bool,
 ) -> tuple[list[Document], str | None]:
-    """Return a created-time-descending document page with an optional cursor."""
-    statement = select(Document)
+    """Page <=100 retained owner roots, constraining workspace/Source before limit and cursor.
+
+    Preserve created-time/UUID descending keyset semantics; optional foreign Source yields
+    an empty page. Members cannot enumerate IDs/counts. Data-purged Sources are excluded,
+    while paused/connector-only archived metadata remains readable. No locks or commit.
+    """
+    if not isinstance(scope, WorkspaceContext):
+        raise TypeError("Document list requires a workspace owner")
+    fence = await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if not 1 <= limit <= 100:
+        raise ValueError("Document page size must be between 1 and 100")
+    statement = select(Document).where(*_document_scope(scope))
     if source_id is not None:
         statement = statement.where(Document.source_id == source_id)
     statement = statement.order_by(desc(Document.created_at), desc(Document.id))
     if cursor is not None:
-        timestamp, identifier = decode_cursor(cursor)
+        timestamp, identifier = decode_cursor(_decode_document_owner_cursor(
+            cursor, kind="documents", fence=fence, resource_id=source_id))
         statement = statement.where(
             tuple_(Document.created_at, Document.id) < (timestamp, identifier)
         )
     rows = list((await session.scalars(statement.limit(limit + 1))).all())
     has_more = len(rows) > limit
     rows = rows[:limit]
-    next_cursor = encode_cursor(rows[-1].created_at, rows[-1].id) if has_more and rows else None
+    next_cursor = _encode_document_owner_cursor(encode_cursor(rows[-1].created_at, rows[-1].id),
+        kind="documents", fence=fence, resource_id=source_id) if has_more and rows else None
     return rows, next_cursor
 
 
 async def update_document(
-    session: AsyncSession, document: Document, payload: DocumentPatch
-) -> Document:
-    """Update supplied metadata fields, publish only actual changes, and refresh the row."""
+    session: AsyncSession, document_id: UUID, payload: DocumentPatch, *,
+    scope: WorkspaceContext, multi_workspace_enabled: bool,
+) -> Document | None:
+    """Patch an exact owner root freshly under Source→Document locks, then scoped replay.
+
+    Never trust a previously read ORM. Retained inactive metadata is eligible except data
+    purges. Missing/foreign root returns None; only actual title/metadata changes publish.
+    Refresh generated fields before the commit releases original admission/domain locks.
+    """
+    if not isinstance(scope, WorkspaceContext):
+        raise TypeError("Document metadata writes require a workspace owner")
+    source_id = await _read_document_source_id(session, document_id, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled)
+    if source_id is None:
+        return None
+    locked = await sources.lock_source_set(session, (source_id,), scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled)
+    document = await session.scalar(select(Document).where(
+        Document.id == document_id, Document.source_id == source_id, *_document_scope(scope),
+    ).with_for_update().execution_options(populate_existing=True))
+    if document is None:
+        return None
     changed = False
     if "title" in payload.model_fields_set:
         value = payload.title or ""
@@ -2587,9 +3317,11 @@ async def update_document(
         metadata_value = payload.metadata or {}
         changed = changed or document.metadata_json != metadata_value
         document.metadata_json = metadata_value
-    drafts = [make_knowledge_change(document.source_id, document.id, document.current_version)] if changed else []
-    await commit_with_replay(session, drafts)
+    drafts = [make_knowledge_change(document.source_id, document.id, document.current_version, scope=scope)] if changed else []
+    await session.flush()
     await session.refresh(document)
+    await commit_with_replay(session, drafts, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=locked.access_fence)
     return document
 
 
@@ -2865,24 +3597,30 @@ async def _remove_graph_support(
 
 
 async def append_content(
-    session: AsyncSession, document_id: UUID, expected_version: int, content: str
+    session: AsyncSession, document_id: UUID, expected_version: int, content: str, *,
+    scope: WorkspaceContext, multi_workspace_enabled: bool,
 ) -> Document | None:
-    """Append a version when the active source and expected revision permit it.
+    """Append one owner revision under early active Source→Document locks and scoped replay.
 
-    Returns None for a missing document/source or inactive source. Identical
-    content returns the current document before checking ``expected_version``,
-    making a same-content retry a no-op even when its revision hint is stale;
-    changed content with a stale revision raises ValueError. New versions commit
-    through the realtime replay helper.
+    Missing/foreign/data-purged document or inactive Source returns None. Identical content
+    is a no-op before expected-version CAS; changed stale content raises ValueError. Allocate
+    max historical revision+1 while Source/key absence remains serialized, select it before
+    scoped ready events, refresh under held locks and commit once. No external I/O.
     """
-    source_id = await session.scalar(select(Document.source_id).where(Document.id == document_id))
+    if not isinstance(scope, WorkspaceContext):
+        raise TypeError("Document content writes require a workspace owner")
+    source_id = await _read_document_source_id(session, document_id, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled)
     if source_id is None:
         return None
-    source = await sources.lock_source(session, source_id)
-    if source is None or source.status != "active":
+    locked = await sources.lock_source_set(session, (source_id,), scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled)
+    source_fence, access_fence = locked.fences[0], locked.access_fence
+    if source_fence.status != "active":
         return None
     document = await session.scalar(
-        select(Document).where(Document.id == document_id).with_for_update()
+        select(Document).where(Document.id == document_id, Document.source_id == source_id, *_document_scope(scope))
+        .with_for_update().execution_options(populate_existing=True)
     )
     if document is None:
         return None
@@ -2910,17 +3648,20 @@ async def append_content(
             version_number=next_version,
             content=content,
             content_hash=digest,
-        )
+    )
     session.add(version)
-    if await add_content_chunks(session, version):
-        await _publish_document_ready(session, document, version)
     document.current_version = next_version
     document.content_hash = digest
+    if await add_content_chunks(session, version):
+        await _publish_document_ready(session, document, version, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence)
+    await session.flush()
+    await session.refresh(document)
     await commit_with_replay(
         session,
-        [make_knowledge_change(document.source_id, document.id, next_version)],
+        [make_knowledge_change(document.source_id, document.id, next_version, scope=scope)],
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
     )
-    await session.refresh(document)
     return document
 
 
@@ -3088,30 +3829,19 @@ async def get_ready_version_ref(session: AsyncSession, version_id: UUID) -> Read
     )
 
 
-async def _publish_document_ready(session: AsyncSession, document: Document, version: DocumentVersion) -> None:
-    """Queue independent entity and News events in the document transaction.
+async def _publish_document_ready(
+    session: AsyncSession, document: Document, version: DocumentVersion, *,
+    scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+) -> None:
+    """Publish separate Documents ready events through the accepted held D0 publisher.
 
-    The existing entity consumer commits its own single outbox record, so News
-    receives a separate durable receipt instead of depending on that ACK order.
-    Both payloads identify one immutable revision and source generation.
+    Manual writers hold exact Source/Document and original access proof; current pointer
+    already selects this immutable version. Ingestion owns the scoped eight-field event
+    enrichment. No foreign Source ORM, parent lock reacquisition, commit or external I/O.
+    Legacy backfill caller remains staged until it prepares the same mandatory proof.
     """
-    from core.events import DomainEvent
-    from modules.ingestion import public as ingestion
-
-    source = await session.get(Source, document.source_id)
-    if source is None:
-        return
-    payload = {
-        "source_id": str(source.id), "document_id": str(document.id),
-        "document_version_id": str(version.id), "source_generation": source.generation,
-        "version_number": version.version_number,
-    }
-    for event_type in ("document.version.ready", "news.document.ready"):
-        await ingestion.publish_event(session, DomainEvent(
-            id=uuid4(), type=event_type, version=1,
-            occurred_at=datetime.now(UTC), producer="modules.knowledge.documents",
-            payload=payload,
-        ))
+    await _publish_extraction_ready(session, document, version, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence)
 
 
 def encode_version_cursor(version_number: int) -> str:
@@ -3138,13 +3868,27 @@ def decode_version_cursor(cursor: str) -> int:
 
 
 async def list_versions(
-    session: AsyncSession, document_id: UUID, limit: int, cursor: str | None
+    session: AsyncSession, document_id: UUID, limit: int, cursor: str | None, *,
+    scope: WorkspaceContext, multi_workspace_enabled: bool,
 ) -> tuple[list[DocumentVersion] | None, str | None]:
-    """List immutable revisions in ascending order; None indicates missing document."""
-    after_version = decode_version_cursor(cursor) if cursor is not None else None
-    if await session.get(Document, document_id) is None:
+    """Page <=100 ascending immutable revisions through an admitted retained owner root.
+
+    Workspace/Source deletion lineage is applied to parent and version query before LIMIT.
+    Historical revisions remain exact, including inactive retained metadata; missing/foreign
+    parent returns None. Members cannot enumerate versions. No lock, mutation or commit.
+    """
+    if not isinstance(scope, WorkspaceContext):
+        raise TypeError("Document history requires a workspace owner")
+    fence = await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if not 1 <= limit <= 100:
+        raise ValueError("Version page size must be between 1 and 100")
+    after_version = decode_version_cursor(_decode_document_owner_cursor(
+        cursor, kind="versions", fence=fence, resource_id=document_id)) if cursor is not None else None
+    if await session.scalar(select(Document.id).where(Document.id == document_id, *_document_scope(scope))) is None:
         return None, None
-    statement = select(DocumentVersion).where(DocumentVersion.document_id == document_id)
+    statement = select(DocumentVersion).join(Document, Document.id == DocumentVersion.document_id).where(
+        Document.id == document_id, *_document_scope(scope),
+    )
     if after_version is not None:
         statement = statement.where(DocumentVersion.version_number > after_version)
     result = await session.scalars(
@@ -3153,18 +3897,28 @@ async def list_versions(
     rows = list(result.all())
     has_more = len(rows) > limit
     rows = rows[:limit]
-    next_cursor = encode_version_cursor(rows[-1].version_number) if has_more and rows else None
+    next_cursor = _encode_document_owner_cursor(encode_version_cursor(rows[-1].version_number),
+        kind="versions", fence=fence, resource_id=document_id) if has_more and rows else None
     return rows, next_cursor
 
 
 async def get_version(
-    session: AsyncSession, document_id: UUID, number: int
+    session: AsyncSession, document_id: UUID, number: int, *, scope: WorkspaceContext, multi_workspace_enabled: bool,
 ) -> DocumentVersion | None:
-    """Fetch one immutable revision by document ID and version number."""
+    """Read one exact historical owner revision through its retained scoped parent.
+
+    Real owner admission precedes root/version predicates; inactive retained Source history
+    remains visible except unfinished/failed data purges. No current-version substitution,
+    member visibility, parent lock, mutation or commit; missing/foreign versions return None.
+    """
+    if not isinstance(scope, WorkspaceContext):
+        raise TypeError("Document history requires a workspace owner")
+    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     return await session.scalar(
-        select(DocumentVersion).where(
+        select(DocumentVersion).join(Document, Document.id == DocumentVersion.document_id).where(
             DocumentVersion.document_id == document_id,
             DocumentVersion.version_number == number,
+            *_document_scope(scope),
         )
     )
 
@@ -3195,14 +3949,29 @@ async def read_evidence_refs(
     return result
 
 
-async def review_version_locator(session: AsyncSession, version_id: UUID) -> tuple[UUID, UUID] | None:
-    """Return the owning document/source IDs for a retained review version."""
+async def review_version_locator(
+    session: AsyncSession, version_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+) -> tuple[UUID, UUID] | None:
+    """Locate a retained version inside admitted exact workspace/Source scope only.
+
+    Return detached (Document UUID, Source UUID), with no content or ORM. Owner
+    public nonlocking admission checks current owner/default-workspace and any
+    strict bound Source generation. Filter version/Document by workspace before
+    Source projection; missing/foreign/deleted or missing Source returns None.
+    Existing held callers acquire no earlier locks and supply the actual flag;
+    this locator is read-only, never proof of write authority or retention locks.
+    """
+    await read_access_fence(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     row = (await session.execute(
         select(Document.id, Document.source_id)
         .join(DocumentVersion, DocumentVersion.document_id == Document.id)
-        .where(DocumentVersion.id == version_id)
+        .where(DocumentVersion.id == version_id, Document.workspace_id == scope.workspace_id)
     )).one_or_none()
-    return (row[0], row[1]) if row else None
+    if row is None:
+        return None
+    source = await sources.get_source_fence(session, row[1], scope=scope,
+                                          multi_workspace_enabled=multi_workspace_enabled)
+    return (row[0], row[1]) if source is not None else None
 
 
 async def cleanup_evidence_version_document(session: AsyncSession, version_id: UUID) -> UUID | None:

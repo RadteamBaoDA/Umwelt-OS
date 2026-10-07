@@ -8,6 +8,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -23,15 +24,25 @@ from core.database import Base
 
 
 class NewsStory(Base):
-    """Store a deterministic news identity and versioned derivation metadata."""
+    """Store a deterministic news identity and versioned derivation metadata.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
 
     __tablename__ = "news_stories"
     __table_args__ = (
-        UniqueConstraint("identity_key", "algorithm_version", name="uq_news_stories_identity_algorithm"),
+        UniqueConstraint("workspace_id", "identity_key", "algorithm_version", name="uq_news_stories_identity_algorithm"),
         CheckConstraint("identity_kind IN ('url', 'hash')", name="ck_news_stories_identity_kind"),
         CheckConstraint("algorithm_version >= 1", name="ck_news_stories_algorithm_version"),
         Index("ix_news_stories_created", "created_at", "id"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_news_stories_workspace", ondelete="RESTRICT"),
+        UniqueConstraint("workspace_id", "id", name="uq_w2_news_stories_id"),
+        Index("ix_w2_news_stories_scope", 'workspace_id', 'id'),
+        Index("ix_w2_news_stories_work", 'workspace_id', 'created_at', 'id'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     identity_key: Mapped[str] = mapped_column(String(512), nullable=False)
@@ -40,25 +51,39 @@ class NewsStory(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
+
 class NewsStoryIdentity(Base):
-    """Map every exact URL/hash identity to its deterministic story group."""
+    """Map every exact URL/hash identity to its deterministic story group.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
 
     __tablename__ = "news_story_identities"
     __table_args__ = (
-        UniqueConstraint("identity_key", "algorithm_version", name="uq_news_story_identities_key_algorithm"),
+        UniqueConstraint("workspace_id", "identity_key", "algorithm_version", name="uq_news_story_identities_key_algorithm"),
         CheckConstraint("identity_kind IN ('url', 'hash')", name="ck_news_story_identities_identity_kind"),
         Index("ix_news_story_identities_story", "story_id"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_news_story_identities_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "story_id"], ["news_stories.workspace_id", "news_stories.id"], name="fk_w2_news_story_identities_story_id", ondelete="CASCADE"),
+        Index("ix_w2_news_story_identities_scope", 'workspace_id', 'id'),
     )
 
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
+
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
-    story_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("news_stories.id", ondelete="CASCADE"), nullable=False)
+    story_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     identity_key: Mapped[str] = mapped_column(String(512), nullable=False)
     identity_kind: Mapped[str] = mapped_column(String(16), nullable=False)
     algorithm_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
 
 
+
 class NewsObservation(Base):
-    """Retain one independently sourced item/version supporting a story."""
+    """Retain one independently sourced item/version supporting a story.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
 
     __tablename__ = "news_observations"
     __table_args__ = (
@@ -67,14 +92,23 @@ class NewsObservation(Base):
         Index("ix_news_observations_source_time", "source_id", "observed_at"),
         CheckConstraint("source_generation >= 0 AND version_number >= 1", name="ck_news_observations_generation_version"),
         CheckConstraint("match_method IN ('url', 'hash', 'embedding_entity_time')", name="ck_news_observations_match_method"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_news_observations_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "story_id"], ["news_stories.workspace_id", "news_stories.id"], name="fk_w2_news_observations_story_id", ondelete="CASCADE"),
+        ForeignKeyConstraint(["workspace_id", "document_id"], ["documents.workspace_id", "documents.id"], name="fk_w2_news_observations_document_id", ondelete="CASCADE"),
+        ForeignKeyConstraint(["workspace_id", "source_id"], ["sources.workspace_id", "sources.id"], name="fk_w2_news_observations_source_id", ondelete="CASCADE"),
+        Index("ix_w2_news_observations_scope", 'workspace_id', 'id'),
+        Index("ix_w2_news_observations_work", 'workspace_id', 'created_at', 'id'),
     )
 
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
+
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
-    story_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("news_stories.id", ondelete="CASCADE"), nullable=False)
-    document_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+    story_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    document_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     document_version_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("document_versions.id", ondelete="CASCADE"), nullable=False)
     chunk_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("document_chunks.id", ondelete="CASCADE"), nullable=False)
-    source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("sources.id", ondelete="CASCADE"), nullable=False)
+    source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     source_generation: Mapped[int] = mapped_column(Integer, nullable=False)
     version_number: Mapped[int] = mapped_column(Integer, nullable=False)
     canonical_url: Mapped[str | None] = mapped_column(Text)
@@ -94,13 +128,23 @@ class NewsObservation(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
+
 class NewsRecoveryCheckpoint(Base):
-    """Persist source/document keyset progress for finite legacy News catch-up."""
+    """Persist source/document keyset progress for finite legacy News catch-up.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
 
     __tablename__ = "news_recovery_checkpoints"
-    __table_args__ = (CheckConstraint("id = 1", name="ck_news_recovery_checkpoint_singleton"),)
+    __table_args__ = (
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_news_recovery_checkpoints_workspace", ondelete="RESTRICT"),
+        Index("ix_w2_news_recovery_checkpoints_work", "workspace_id", "updated_at"),
+    )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+
+
     source_cursor: Mapped[str | None] = mapped_column(String(512))
     document_cursor: Mapped[str | None] = mapped_column(String(512))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+

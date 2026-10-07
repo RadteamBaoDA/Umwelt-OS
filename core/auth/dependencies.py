@@ -9,6 +9,7 @@ from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.models import AuthSession
+from core.auth.public import get_active_account
 from core.config import Settings
 from core.database import get_session
 
@@ -58,12 +59,34 @@ async def _current_session(
     session: AsyncSession,
     token: str | None,
 ) -> AuthSession:
-    """Resolve a nonexpired hashed session token, attach it to request state, or reject unauthenticated access."""
+    """Resolve only a complete active bootstrap session for unconverted legacy auth paths.
+
+    Nonbootstrap identities always fail here, including when the rollout flag is enabled.
+    Account-scoped endpoints must deliberately select require_account instead.
+    """
+    row = await _account_session(request, session, token)
+    if row.owner_id != 1:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return row
+
+
+async def _account_session(request: Request, session: AsyncSession, token: str | None) -> AuthSession:
+    """Authenticate a live token and complete active account, subject to the rollout gate.
+
+    Attach a detached account identity for scoped dependencies; no membership or data access
+    follows from this authentication. Missing, disabled or incomplete identities return 401.
+    """
     if not token:
         raise HTTPException(status_code=401, detail="Authentication required")
     row = await session.get(AuthSession, _hash(token))
     if row is None or row.expires_at <= datetime.now(UTC):
         raise HTTPException(status_code=401, detail="Authentication required")
+    account = await get_active_account(
+        session, row.owner_id, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+    )
+    if account is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    request.state.account = account
     request.state.auth_session = row
     return row
 
@@ -72,8 +95,50 @@ async def require_owner(
     request: Request,
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> AuthSession:
-    """FastAPI dependency requiring a valid owner session cookie."""
+    """Require the active bootstrap operator, permanently excluding other workspace owners."""
     return await _current_session(request, session, request.cookies.get(SESSION_COOKIE))
+
+
+async def require_account(
+    request: Request, session: Annotated[AsyncSession, Depends(get_session)],
+) -> AuthSession:
+    """Require an active rollout-admitted account without granting legacy/operator authority."""
+    return await _account_session(request, session, request.cookies.get(SESSION_COOKIE))
+
+
+async def require_account_write(
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    origin: Annotated[str | None, Header()] = None,
+    csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
+) -> AuthSession:
+    """Require account-bound CSRF and durable backup admission before scoped write locks.
+
+    This carries no instance privilege. Preserve the existing owner admission/finalizer
+    protocol and commit admission before endpoint work. Anonymous invitation redemption
+    needs a separately bounded origin/token/admission path in W1b.
+    """
+    settings: Settings = request.app.state.settings
+    if not _origin_allowed(origin, settings):
+        raise HTTPException(status_code=403, detail="Origin is not allowed")
+    auth_session = await require_account(request, session)
+    if not _valid_csrf(request.cookies.get(CSRF_COOKIE), csrf_token, settings) or not compare_digest(
+        auth_session.csrf_hash, _hash(csrf_token or "")
+    ):
+        raise HTTPException(status_code=403, detail="CSRF token is invalid", headers={"X-CSRF-Error": "invalid"})
+    if getattr(request.state, "backup_activity", None) is None:
+        from modules.backup.public import BackupAdmissionDenied
+        from modules.settings.public import register_activity
+
+        try:
+            receipt = await register_activity(session, "api_account_write", request.url.path)
+        except BackupAdmissionDenied as exc:
+            raise HTTPException(
+                status_code=503, detail="Writes are paused for a consistent backup", headers={"Retry-After": "30"},
+            ) from exc
+        request.state.backup_activity = receipt
+        await session.commit()
+    return auth_session
 
 
 async def require_owner_write(
@@ -136,3 +201,24 @@ async def _authorize_owner_write(
             headers={"X-CSRF-Error": "invalid"},
         )
     return auth_session
+
+
+async def admit_identity_write(request: Request, session: AsyncSession, kind: str) -> None:
+    """Register durable backup admission for anonymous/auth lifecycle writes before row locks.
+
+    This never grants account, workspace or operator permission. Receipt finalization uses
+    the existing response middleware; admission commits before identity transaction starts.
+    Backup denial is a redacted retryable 503. Call only after origin/CSRF/bearer checks.
+    """
+    if getattr(request.state, "backup_activity", None) is not None:
+        return
+    from modules.backup.public import BackupAdmissionDenied
+    from modules.settings.public import register_activity
+
+    try:
+        receipt = await register_activity(session, kind, request.url.path)
+    except BackupAdmissionDenied:
+        raise HTTPException(status_code=503, detail="Authentication writes are paused for a consistent backup",
+                            headers={"Retry-After": "30"}) from None
+    request.state.backup_activity = receipt
+    await session.commit()

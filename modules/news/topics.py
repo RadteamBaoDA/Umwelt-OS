@@ -20,6 +20,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     String,
     func,
@@ -42,7 +43,10 @@ MAX_ENTITIES = 100
 
 
 class Topic(Base):
-    """Private persistence model for an owner's current and tombstoned topic."""
+    """Private persistence model for an owner's current and tombstoned topic.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
 
     __tablename__ = "news_topics"
     __table_args__ = (
@@ -52,7 +56,14 @@ class Topic(Base):
         CheckConstraint(f"revision >= 1 AND revision <= {MAX_REVISION}", name="ck_news_topics_revision_range"),
         Index("ix_news_topics_owner_id", "owner_id"),
         Index("ix_news_topics_owner_deleted", "owner_id", "deleted_at"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_news_topics_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "owner_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_news_topics_principal", ondelete="RESTRICT"),
+        Index("ix_w2_news_topics_scope", 'workspace_id', 'id'),
+        Index("ix_w2_news_topics_work", 'workspace_id', 'created_at', 'id'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     owner_id: Mapped[int] = mapped_column(ForeignKey("owner.id", ondelete="CASCADE"), nullable=False)
@@ -66,6 +77,7 @@ class Topic(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
 
 
 def _normalize_name(value: str) -> str:

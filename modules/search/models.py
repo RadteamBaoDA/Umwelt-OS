@@ -6,6 +6,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -29,12 +30,21 @@ class Vector(UserDefinedType[Any]):
 
 
 class IndexGeneration(Base):
-    """Persist one embedding configuration and its index-generation lifecycle."""
+    """Persist one embedding configuration and its index-generation lifecycle.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
     __tablename__ = "search_index_generations"
     __table_args__ = (
         CheckConstraint("status IN ('queued', 'running', 'active', 'failed', 'retired')", name="ck_search_index_generations_status"),
-        Index("uq_search_index_generations_active", "status", unique=True, postgresql_where=text("status = 'active'")),
+        Index("uq_search_index_generations_active", "workspace_id", unique=True, postgresql_where=text("status = 'active'")),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_search_index_generations_workspace", ondelete="RESTRICT"),
+        Index("ix_w2_search_index_generations_scope", 'workspace_id', 'id'),
+        Index("ix_w2_search_index_generations_work", 'workspace_id', 'created_at', 'id'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     model_id: Mapped[str] = mapped_column(String(200), nullable=False)
@@ -46,6 +56,7 @@ class IndexGeneration(Base):
     error_code: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
 
 
 class SearchIndexItem(Base):

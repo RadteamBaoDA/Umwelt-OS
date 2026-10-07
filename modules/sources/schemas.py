@@ -4,6 +4,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from core.workspaces.schemas import AccessFence
+
 SourceType = Literal[
     "rss", "web", "file", "github", "calendar", "email", "api", "mcp", "manual", "other"
 ]
@@ -71,31 +73,47 @@ class SourceRead(BaseModel):
 
 
 class SourceFence(BaseModel):
-    """Detached source eligibility snapshot; caller holds the DB row lock."""
+    """Workspace-bound lifecycle snapshot; only locking readers hold the Source row lock."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     id: UUID
+    workspace_id: UUID
     status: str
     generation: int
     local_only: bool
 
 
 class SourceExportFence(BaseModel):
-    """Capture only the source identity and generation needed by bounded exports."""
+    """Bind an export's source identity and generation to the admitted workspace."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     source_id: UUID
+    workspace_id: UUID
     generation: int = Field(ge=0)
 
 
+class SourceFenceSet(BaseModel):
+    """Complete ordered Source set plus caller-held access fence, never a portable lock token.
+
+    Every Source is admitted before construction. The owning transaction must keep its locks
+    until publication/commit and release them before external I/O.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    fences: tuple[SourceFence, ...] = Field(max_length=500)
+    access_fence: AccessFence
+
+
 class SourceMetadataExportFence(BaseModel):
-    """Bind one exported source metadata record to its row revision and digest."""
+    """Bind exported metadata to its workspace, Source row revision and digest."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     source_id: UUID
+    workspace_id: UUID
     created_at: datetime
     updated_at: datetime
     generation: int = Field(ge=1)
@@ -103,11 +121,12 @@ class SourceMetadataExportFence(BaseModel):
 
 
 class SourceMetadataExportPage(BaseModel):
-    """Return one bounded credential-free source metadata page and source eligibility fences."""
+    """Return credential-free metadata for one actual principal and admitted workspace."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     owner_id: int = Field(ge=1)
+    workspace_id: UUID
     record_kind: Literal["sources"]
     snapshot_at: datetime
     snapshot_count: int = Field(ge=0)
@@ -157,11 +176,12 @@ class GadgetSourceSelectionPage(BaseModel):
 
 
 class ConnectorSource(BaseModel):
-    """Detached configuration snapshot for connector validation and dispatch."""
+    """Workspace-bound defensive configuration snapshot, never standalone authorization."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     id: UUID
+    workspace_id: UUID
     type: str
     status: str
     generation: int
@@ -176,8 +196,9 @@ class SourceList(BaseModel):
 
 
 class OperationRead(BaseModel):
-    """Expose source purge status and the last bounded Documents aggregate receipt."""
+    """Expose scope-bound purge progress after admission, even without a canonical Source."""
     operation_id: UUID
+    workspace_id: UUID
     source_id: UUID
     status: Literal["queued", "running", "succeeded", "failed"]
     error_code: str | None

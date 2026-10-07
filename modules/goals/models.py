@@ -12,9 +12,11 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -30,6 +32,8 @@ class Goal(Base):
     Tracks high-level objectives with milestones, related entity references, desired outcomes,
     deadline dates, and milestone-driven or manual progress tracking. Accepted proposal records
     retain the immutable content hash, task/milestone IDs, and first-acceptance revision for replay.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
     """
 
     __tablename__ = "goals"
@@ -61,11 +65,19 @@ class Goal(Base):
         Index("ix_goals_owner_status", "owner_id", "status"),
         Index("ix_goals_deadline", "deadline"),
         Index("ix_goals_created_at", "created_at"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_goals_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "owner_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_goals_principal", ondelete="RESTRICT"),
+        UniqueConstraint("workspace_id", "id", name="uq_w2_goals_id"),
+        Index("ix_w2_goals_scope", 'workspace_id', 'id'),
+        Index("ix_w2_goals_work", 'workspace_id', 'created_at', 'id'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     owner_id: Mapped[int] = mapped_column(
-        ForeignKey("owner.id", ondelete="CASCADE"), nullable=False, default=1
+        ForeignKey("owner.id", ondelete="CASCADE"), nullable=False
     )
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -90,3 +102,4 @@ class Goal(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
+

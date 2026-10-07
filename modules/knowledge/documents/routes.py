@@ -8,8 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.dependencies import require_owner, require_owner_write
 from core.auth.models import AuthSession
+from core.auth.public import authenticated_session_ref
 from core.database import get_session
 from core.storage import storage_path
+from core.workspaces.dependencies import require_workspace_read, require_workspace_write
+from core.workspaces.public import lock_access_fence
+from core.workspaces.schemas import WorkspaceContext
 from modules.knowledge.documents import public
 from modules.knowledge.documents.models import Document
 from modules.knowledge.documents.schemas import (
@@ -39,6 +43,27 @@ router = APIRouter(
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[AuthSession, Depends(require_owner)]
 OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]
+WorkspaceRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
+WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
+
+
+def _require_document_route_owner(scope: WorkspaceContext) -> None:
+    """Deny members before owner Document IDs/content; W3 grants remain separately owned."""
+    if scope.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
+
+
+async def _lock_document_write_request(request: Request, session: AsyncSession, scope: WorkspaceContext) -> None:
+    """Admit the exact request session before public Source/Document locks through commit.
+
+    Workspace-write dependency retains CSRF/backup/module admission. Auth owns session
+    persistence and share locks against logout/disable; no bearer or foreign ORM is read
+    here. No external I/O/commit occurs; W4 separately fences the final response send.
+    """
+    _require_document_route_owner(scope)
+    await lock_access_fence(session, scope=scope,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        auth_sessions=(authenticated_session_ref(request),))
 
 
 @router.post("/provider-snapshots", response_model=list[ProviderDocumentSnapshotRead])
@@ -98,13 +123,20 @@ def as_document_read(document: Document) -> DocumentRead:
 @router.get("", response_model=DocumentList)
 async def list_documents(
     session: Session,
-    _owner: OwnerRead,
+    request: Request,
+    scope: WorkspaceRead,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     cursor: str | None = None,
     source_id: UUID | None = None,
 ) -> DocumentList:
-    """Return a bounded owner-only document page and continuation cursor."""
-    items, next_cursor = await public.list_documents(session, limit, cursor, source_id)
+    """Page owned retained roots after real workspace admission; members remain denied.
+
+    Public query applies Source deletion scope before paging. Response send fencing is W4;
+    selected identity never enables pending provider/gadget/deletion/citation handlers.
+    """
+    _require_document_route_owner(scope)
+    items, next_cursor = await public.list_documents(session, limit, cursor, source_id,
+        scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
     return DocumentList(items=[as_document_read(item) for item in items], next_cursor=next_cursor)
 
 
@@ -147,11 +179,17 @@ async def set_dashboard_document_interaction(
 
 @router.post("", response_model=DocumentRead, status_code=201)
 async def create_document(
-    payload: DocumentCreate, session: Session, _owner: OwnerWrite
+    payload: DocumentCreate, session: Session, request: Request, scope: WorkspaceWrite,
 ) -> DocumentRead:
-    """Create a source-backed document under owner write authorization."""
+    """Create an owner root/version with exact request-session locks before Source/key writes.
+
+    Retain CSRF/backup/module admission and conflict mapping; no external I/O. Public writer
+    commits scoped ready/replay atomically. W4 separately owns final response-send admission.
+    """
+    await _lock_document_write_request(request, session, scope)
     try:
-        document = await public.create_document(session, payload)
+        document = await public.create_document(session, payload, scope=scope,
+            multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -163,10 +201,16 @@ async def create_document(
 
 @router.get("/{document_id}/raw")
 async def get_raw_document(
-    document_id: UUID, request: Request, session: Session, _owner: OwnerRead
+    document_id: UUID, request: Request, session: Session, _owner: OwnerRead, scope: WorkspaceRead,
 ) -> FileResponse:
-    """Stream an owner-authorized raw file with private/no-store and nosniff headers."""
-    document = await public.get_document(session, document_id)
+    """Keep bootstrap-only file admission while using the scoped owner root locator.
+
+    Retain private/no-store/nosniff headers and exact storage path behavior. The root query
+    denies foreign/data-purged content, but it is not W4 actual FileResponse-send proof.
+    """
+    _require_document_route_owner(scope)
+    document = await public.get_document(session, document_id, scope=scope,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
     if document is None or document.raw_uri is None:
         raise HTTPException(status_code=404, detail="Raw document not found")
     try:
@@ -184,10 +228,16 @@ async def get_raw_document(
 
 @router.get("/{document_id}", response_model=DocumentRead)
 async def get_document(
-    document_id: UUID, session: Session, _owner: OwnerRead
+    document_id: UUID, session: Session, request: Request, scope: WorkspaceRead,
 ) -> DocumentRead:
-    """Return one owner-only document or 404 when absent."""
-    document = await public.get_document(session, document_id)
+    """Read one retained owned root; foreign/deleted IDs are 404 and members are denied.
+
+    Scope query admission preserves inactive retained metadata and Source purge privacy;
+    it does not replace the separately owned exact-session final response-send fence.
+    """
+    _require_document_route_owner(scope)
+    document = await public.get_document(session, document_id, scope=scope,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
     return as_document_read(document)
@@ -198,17 +248,23 @@ async def update_document(
     document_id: UUID,
     payload: DocumentPatch,
     session: Session,
-    _owner: OwnerWrite,
+    request: Request,
+    scope: WorkspaceWrite,
 ) -> DocumentRead:
-    """Apply non-null owner metadata fields through the document public contract."""
-    document = await public.get_document(session, document_id)
-    if document is None:
-        raise HTTPException(status_code=404, detail="Document not found")
+    """Patch by exact ID under request-session→Source→fresh Document locks, without ORM trust.
+
+    Require non-null metadata fields, retain scoped replay and 404 for unavailable roots.
+    CSRF/backup/module admission precedes writes; W4 final response-send remains separate.
+    """
+    await _lock_document_write_request(request, session, scope)
     if not payload.model_fields_set or any(
         getattr(payload, key) is None for key in payload.model_fields_set
     ):
         raise HTTPException(status_code=422, detail="At least one non-null field is required")
-    document = await public.update_document(session, document, payload)
+    document = await public.update_document(session, document_id, payload, scope=scope,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
     return as_document_read(document)
 
 
@@ -293,12 +349,19 @@ async def update_content(
     document_id: UUID,
     payload: ContentUpdate,
     session: Session,
-    _owner: OwnerWrite,
+    request: Request,
+    scope: WorkspaceWrite,
 ) -> DocumentRead:
-    """Append an immutable content revision using the caller's expected version."""
+    """Append under exact request-session admission before Source/Document locks and commit.
+
+    Preserve same-content retry no-op before stale-version CAS, 409 conflict and unavailable
+    404. CSRF/backup/module checks remain; W4 final response-send proof is separately owned.
+    """
+    await _lock_document_write_request(request, session, scope)
     try:
         document = await public.append_content(
-            session, document_id, payload.expected_version, payload.content
+            session, document_id, payload.expected_version, payload.content,
+            scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -311,12 +374,19 @@ async def update_content(
 async def list_versions(
     document_id: UUID,
     session: Session,
-    _owner: OwnerRead,
+    request: Request,
+    scope: WorkspaceRead,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     cursor: str | None = None,
 ) -> VersionList:
-    """Return ascending immutable versions in a bounded owner-only page."""
-    versions, next_cursor = await public.list_versions(session, document_id, limit, cursor)
+    """Page exact historical owner revisions through retained root/Source privacy predicates.
+
+    Deny members before enrichment, preserve ascending ordering/404 and defer actual-send
+    admission to W4. Workspace context alone does not enable shared-document history.
+    """
+    _require_document_route_owner(scope)
+    versions, next_cursor = await public.list_versions(session, document_id, limit, cursor,
+        scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
     if versions is None:
         raise HTTPException(status_code=404, detail="Document not found")
     return VersionList(
@@ -330,10 +400,17 @@ async def get_version(
     document_id: UUID,
     number: Annotated[int, Path(ge=1, le=2147483647)],
     session: Session,
-    _owner: OwnerRead,
+    request: Request,
+    scope: WorkspaceRead,
 ) -> VersionRead:
-    """Return one owner-only immutable revision constrained to a valid version number."""
-    version = await public.get_version(session, document_id, number)
+    """Read an exact historical owner revision without current-version substitution or grants.
+
+    Deny members before root/version query; scoped unavailable versions are 404. Source purge
+    privacy and retained inactive eligibility stay in owner query, with W4 send work separate.
+    """
+    _require_document_route_owner(scope)
+    version = await public.get_version(session, document_id, number, scope=scope,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
     if version is None:
         raise HTTPException(status_code=404, detail="Document version not found")
     return VersionRead.model_validate(version, from_attributes=True)

@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from starlette.middleware.sessions import SessionMiddleware
 
 from core.auth.routes import router as auth_router
+from core.workspaces.routes import router as workspaces_router
 from core.config import Settings
 from core.errors import install_error_handling
 from core.modules import register_modules
@@ -63,7 +64,7 @@ from modules.tools.webhook import register_webhook_tool
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
-    """Compose the API, owner security middleware, domain services and canonical tool registry.
+    """Compose account/workspace identity routes, owner security and domain/tool services.
 
     Args:
         settings: Optional settings override; absent uses validated process configuration.
@@ -124,6 +125,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     install_error_handling(app)
     app.add_middleware(BackupActivityMiddleware)
     app.include_router(auth_router)
+    app.include_router(workspaces_router)
     app.include_router(backup_router)
     app.include_router(export_router)
     app.include_router(system_router)

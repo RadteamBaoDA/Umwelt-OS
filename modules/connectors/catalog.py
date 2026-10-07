@@ -1,10 +1,16 @@
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
+
+from modules.connectors.backends import GENERIC_CATALOG_SOURCE_TYPES, is_native_provider
 
 
 class CatalogEntry(BaseModel):
-    """Describe a provider's supported configuration, scope, and operations."""
+    """Describe connector code and conservative evidence separately from availability.
+
+    Legacy availability still governs existing source selection. Code presence
+    grants neither runtime acceptance nor contextual provider eligibility.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -25,6 +31,18 @@ class CatalogEntry(BaseModel):
     availability_reason: str | None = None
     license_status: str | None = None
     evidence_status: str | None = None
+    runtime_verified: bool = False
+    eligibility: Literal["unknown"] = "unknown"
+
+    @computed_field(return_type=bool)  # type: ignore[prop-decorator]  # pydantic computed_field over property
+    @property
+    def code_available(self) -> bool:
+        """Report registered collection code without inferring deployment readiness.
+
+        Generic REST includes its packaged n8n path; this field does not claim
+        that its future native scheduler/service has been implemented.
+        """
+        return is_native_provider(self.provider_id) or self.provider_id in GENERIC_CATALOG_SOURCE_TYPES
 
 
 _ENTRIES = (
@@ -222,7 +240,6 @@ _ENTRIES = (
             ("notion", "Notion", ("oauth2",), "planned", "OAuth and collection capability remain open.", "unverified"),
             ("slack", "Slack", ("oauth2",), "planned", "OAuth and collection capability remain open.", "unverified"),
             ("home_assistant", "Home Assistant", ("http_header",), "planned", "Local trust boundary and supported scope remain open.", "unverified"),
-            ("mcp", "MCP", ("none",), "unsupported_operation", "MCP client/server capabilities are owned by the tools module.", "unverified"),
         )
     ),
 )

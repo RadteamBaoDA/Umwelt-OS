@@ -77,7 +77,8 @@ class ReceiveBatch(BaseModel):
 
 
 class Receipt(BaseModel):
-    """Report durable batch and run identities with the run's current status."""
+    """Report workspace-bound durable batch/run identity; the DTO itself grants no authority."""
+    workspace_id: UUID
     batch_id: UUID
     run_id: UUID
     status: Literal["queued", "running", "succeeded", "needs_ocr", "failed"]
@@ -90,19 +91,32 @@ class RetryRunRequest(BaseModel):
 
 
 class CrawlReceipt(BaseModel):
-    """Return the durable ingestion run created for a crawl request."""
+    """Return the workspace and durable crawl run identity without expanding collector authority."""
+    workspace_id: UUID
     run_id: UUID
 
 
 class EventDelivery(BaseModel):
-    """Expose an outbox event's delivery status and payload."""
+    """Expose original principal plus event/dispatch identity; relock the claim before effects.
+
+    dispatched_at is nullable for an undispatched row. A detached queued status/timestamp
+    is only a captured claim, never permission to mutate a later dispatch attempt.
+    """
+    workspace_id: UUID
+    actor_user_id: int = Field(gt=0)
+    membership_revision: int = Field(gt=0)
     id: UUID
+    type: str
+    version: int
+    producer: str
+    dispatched_at: datetime | None
     status: str
     payload: dict[str, Any]
 
 
 class CollectorCredentialRead(BaseModel):
-    """Return a newly issued collector token with its owning source ID."""
+    """Return a one-time credential token with its authorized workspace and Source identity."""
+    workspace_id: UUID
     source_id: UUID
     token: str
 
@@ -124,7 +138,8 @@ class StageRead(BaseModel):
 
 
 class RunRead(BaseModel):
-    """Serialize an ingestion run and the statuses of its stages."""
+    """Serialize one authorized workspace run and owner-scoped stage counts; never implicit admission."""
+    workspace_id: UUID
     run_id: UUID
     source_id: UUID
     status: Literal["queued", "running", "succeeded", "needs_ocr", "failed"]
@@ -135,17 +150,26 @@ class RunRead(BaseModel):
 
 
 class SourceIngestionRead(BaseModel):
-    """Return the current run and a page of ingestion history for a source."""
+    """Return workspace-bound current/history runs with a principal/revision-bound pagination cursor."""
+    workspace_id: UUID
     current_run: RunRead | None
     items: list[RunRead]
     next_cursor: str | None
 
 
 class ConnectorCollectionLease(BaseModel):
-    """Detached source/revision reservation used across native provider I/O."""
+    """Retain exact workspace/actor/epoch/config and Source reservation across native I/O.
+
+    A detached lease is not authority: readers recheck current admission, Source,
+    connector revision, native credential and actual durable state token before effects.
+    """
+    workspace_id: UUID
+    actor_user_id: int = Field(gt=0)
+    membership_revision: int = Field(gt=0)
     model_config = ConfigDict(extra="forbid")
     source_id: UUID
     source_generation: int = Field(ge=1)
+    configuration_revision: int = Field(gt=0)
     connector_revision: int = Field(ge=1)
     token: UUID
     cursor_before: str | None = Field(default=None, max_length=16_384)
@@ -280,7 +304,10 @@ class NativeCollectionBatch(BaseModel):
 
 
 class NativeCollectionReceipt(BaseModel):
-    """Return the immutable batch/run outcome and private persisted cursor."""
+    """Return scoped batch/run outcome and private cursor under the original actor/membership epoch."""
+    workspace_id: UUID
+    actor_user_id: int = Field(gt=0)
+    membership_revision: int = Field(gt=0)
     model_config = ConfigDict(extra="forbid")
     batch_id: UUID | None
     run_id: UUID | None

@@ -1,9 +1,10 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 
 
 class GoogleStartRequest(BaseModel):
-    """Selects Google login or account linking flow."""
-    purpose: str = Field(pattern="^(login|link)$")
+    """Login/link or invitation-bound password enrollment; bearer never enters OAuth state."""
+    purpose: str = Field(pattern="^(login|link|invitation)$")
+    invitation_token: SecretStr | None = Field(default=None, min_length=40, max_length=256)
 
 
 class GoogleStatus(BaseModel):

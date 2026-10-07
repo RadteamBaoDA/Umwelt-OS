@@ -15,6 +15,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 
 from core.config import Settings
+from core.auth.public import get_active_account, lock_account_admission
+from core.auth.schemas import AccountSessionRef
+from core.workspaces.public import lock_access_fence, read_access_fence
+from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
 from core.model_gateway.schemas import (
     AIExecutionConfig,
     AISettingsRead,
@@ -24,6 +28,9 @@ from core.model_gateway.schemas import (
 )
 from modules.backup.schemas import ActivityReceipt, AdmissionReceipt
 from modules.settings.models import AISettingsRecord, OwnerPreferencesRecord, legacy_aliases
+from modules.settings.models import list_capabilities as list_capabilities
+from modules.settings.models import new_capability_result as new_capability_result
+from modules.settings.models import save_capability as save_capability
 from modules.settings.schemas import (
     ModuleLifecycleRead,
     OwnerPreferencesRead,
@@ -31,7 +38,6 @@ from modules.settings.schemas import (
     RetentionSettingsRead,
 )
 
-OWNER_ID = 1
 ALIASES = ("reasoning-large", "reasoning-small", "fast", "embedding", "reranker", "vision", "local-private")
 
 
@@ -103,9 +109,67 @@ def _decrypt(ciphertext: str | None, settings: Settings) -> str:
         raise HTTPException(status_code=503, detail="Saved AI credentials cannot be decrypted") from exc
 
 
-async def _row(session: AsyncSession) -> AISettingsRecord | None:
-    """Read the owner singleton while refreshing any identity-mapped row."""
-    return await session.scalar(select(AISettingsRecord).where(AISettingsRecord.owner_id == OWNER_ID).execution_options(populate_existing=True))
+def scope_actor(scope: Scope) -> int:
+    """Extract a typed actor; neither client dictionaries nor missing scope are authority."""
+    if isinstance(scope, InternalJobScope):
+        return scope.actor_user_id
+    if isinstance(scope, WorkspaceContext):
+        return scope.user_id
+    raise HTTPException(status_code=401, detail="Authentication required")
+
+
+async def require_settings_scope(
+    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
+    locked: bool = False, expected: AccessFence | None = None,
+    auth_sessions: tuple[AccountSessionRef, ...] = (),
+) -> AccessFence:
+    """Admit only current owned-default Settings, before any domain/settings lock.
+
+    Members cannot read Settings or secrets. Locked callers supply exact HTTP session
+    refs when applicable and own commit/rollback; never retain these locks over I/O.
+    """
+    scope_actor(scope)
+    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
+    if type(multi_workspace_enabled) is not bool:
+        raise ValueError("Explicit configured multi-workspace flag is required")
+    if locked:
+        return await lock_access_fence(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                                       expected=expected, auth_sessions=auth_sessions)
+    fence = await read_access_fence(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if expected is not None and fence != expected:
+        raise HTTPException(status_code=409, detail="Workspace access fence changed")
+    return fence
+
+
+async def require_preferences_account(
+    session: AsyncSession, *, actor_user_id: int, multi_workspace_enabled: bool,
+    locked: bool = False, auth_sessions: tuple[AccountSessionRef, ...] = (),
+) -> None:
+    """Require actual active account without selected-workspace dependency or owner1 fallback.
+
+    Locked mutation starts auth admission before preference rows; transaction completion
+    belongs to caller. An arbitrary actor argument is not HTTP authority.
+    """
+    if type(actor_user_id) is not int or actor_user_id <= 0 or type(multi_workspace_enabled) is not bool:
+        raise ValueError("Positive actor and explicit configured feature flag are required")
+    if locked:
+        accounts = await lock_account_admission(session, (actor_user_id,), actor_user_id=actor_user_id,
+                                                multi_workspace_enabled=multi_workspace_enabled, auth_sessions=auth_sessions)
+        account = accounts.get(actor_user_id)
+    else:
+        account = await get_active_account(session, actor_user_id, multi_workspace_enabled=multi_workspace_enabled)
+    if account is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+
+async def _row(session: AsyncSession, *, scope: Scope, locked: bool = False) -> AISettingsRecord | None:
+    """Read matching workspace+owner after admission; refresh identity map and optionally lock."""
+    query = select(AISettingsRecord).where(AISettingsRecord.owner_id == scope_actor(scope),
+                                          AISettingsRecord.workspace_id == scope.workspace_id)
+    if locked:
+        query = query.with_for_update()
+    return await session.scalar(query.execution_options(populate_existing=True))
 
 
 def _defaults(settings: Settings) -> tuple[str | None, str, dict[str, ModelMapping]]:
@@ -116,7 +180,11 @@ def _defaults(settings: Settings) -> tuple[str | None, str, dict[str, ModelMappi
 
 
 def _privacy(raw: dict[str, object] | None, destination: str | None, web_destination: str | None) -> PrivacySettings:
-    """Expose only explicit privacy grants bound to the current destinations."""
+    """Project explicit consent to each capability's actual validated destination.
+
+    Web search is independent of missing/denied OmniRoute; never emit its gateway
+    destination or None in the web-search allowlist.
+    """
     raw = raw or {}
     def granted(key: str, enabled: str) -> bool:
         """Check that a grant is enabled and includes this exact destination."""
@@ -133,7 +201,7 @@ def _privacy(raw: dict[str, object] | None, destination: str | None, web_destina
         allow_remote_web_search=web_search,
         reasoning_destinations=[destination] if reasoning else [],
         embedding_destinations=[destination] if embeddings else [],
-        web_search_destinations=[destination] if web_search else [],
+        web_search_destinations=[web_destination] if web_search else [],
     )
 
 
@@ -143,13 +211,14 @@ def _identity(endpoint: str | None, credential: str) -> tuple[str, str | None]:
     return _fingerprint(json.dumps((endpoint, _fingerprint(credential)), separators=(",", ":"))), destination
 
 
-async def get_ai_execution_config(session: AsyncSession, settings: Settings, redis: Redis | None = None) -> AIExecutionConfig:
-    """Resolve effective AI settings from persisted values and deployment defaults.
+async def get_ai_execution_config(session: AsyncSession, settings: Settings, redis: Redis | None = None, *, scope: Scope) -> AIExecutionConfig:
+    """Resolve one active owner workspace execution snapshot using actual settings feature flag.
 
     Enforces endpoint policy before returning credentials and scopes privacy
-    consent to the currently selected destinations.
+    consent to exact destinations. Explicit scope is mandatory; recheck snapshot under locks before send.
     """
-    row = await _row(session)
+    fence = await require_settings_scope(session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled)
+    row = await _row(session, scope=scope)
     if row is None:
         endpoint, credential, aliases = _defaults(settings)
         endpoint_policy_denied = False
@@ -159,7 +228,7 @@ async def get_ai_execution_config(session: AsyncSession, settings: Settings, red
             if exc.status_code != 422:
                 raise
             endpoint, credential, endpoint_policy_denied = None, "", True
-        aliases = await legacy_aliases(redis, settings)
+        aliases = await legacy_aliases(redis, settings, scope=scope)
         if credential:
             _cipher(settings)
         credential_configured = bool(settings.omniroute_api_key.get_secret_value())
@@ -195,8 +264,15 @@ async def get_ai_execution_config(session: AsyncSession, settings: Settings, red
         privacy = PrivacySettings()
         revision, chat_alias, brief_alias, timeout = 1, "reasoning-large", "reasoning-small", 20
         web_provider, web_endpoint, web_credential, web_configured = "none", None, "", False
-    identity, destination = _identity(endpoint, credential)
+    credential_identity, destination = _identity(endpoint, credential)
+    identity = _fingerprint(json.dumps((str(scope.workspace_id), scope_actor(scope), fence.membership_revision,
+        fence.configuration_revision, revision, credential_identity, {key: value.model_dump() for key, value in aliases.items()},
+        privacy.model_dump(), web_provider, web_endpoint, _fingerprint(web_credential), tuple(sorted(settings.ai_allowed_endpoint_hosts)),
+        tuple(sorted(settings.ai_allowed_endpoint_cidrs)), _fingerprint(settings.ai_credential_encryption_key.get_secret_value())),
+        sort_keys=True, separators=(",", ":"), default=str))
     return AIExecutionConfig(
+        workspace_id=scope.workspace_id, actor_user_id=scope_actor(scope), membership_revision=fence.membership_revision,
+        access_configuration_revision=fence.configuration_revision,
         configuration_revision=revision, gateway_identity=identity, endpoint_destination_id=destination,
         endpoint_policy_denied=endpoint_policy_denied, omniroute_credential_configured=credential_configured,
         endpoint_allowed_cidrs=tuple(settings.ai_allowed_endpoint_cidrs),
@@ -222,21 +298,47 @@ def _read(config: AIExecutionConfig) -> AISettingsRead:
     )
 
 
-async def read_ai_settings(session: AsyncSession, settings: Settings, redis: Redis | None = None) -> AISettingsRead:
-    """Return the public AI settings projection for the current owner."""
-    return _read(await get_ai_execution_config(session, settings, redis))
+async def check_ai_execution_config(
+    session: AsyncSession, settings: Settings, redis: Redis | None, *, scope: Scope,
+    expected: AIExecutionConfig, auth_sessions: tuple[AccountSessionRef, ...] = (),
+) -> None:
+    """Lock current identity/settings and reject a changed execution snapshot before send/publish.
+
+    Exact HTTP session refs are mandatory at HTTP callers. Workers supply their admitted
+    durable scope and separately validate resource/claim/provenance. Caller must rollback
+    or close this short transaction before network, then reacquire for publication.
+    No transport, commit or ambient scope occurs here.
+    """
+    fence = AccessFence(workspace_id=expected.workspace_id, user_id=expected.actor_user_id,
+                        membership_revision=expected.membership_revision,
+                        configuration_revision=expected.access_configuration_revision)
+    await require_settings_scope(session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
+                                 locked=True, expected=fence, auth_sessions=auth_sessions)
+    await _row(session, scope=scope, locked=True)
+    latest = await get_ai_execution_config(session, settings, redis, scope=scope)
+    if latest.gateway_identity != expected.gateway_identity or latest.configuration_revision != expected.configuration_revision:
+        raise HTTPException(status_code=409, detail="AI settings changed; prepare a fresh request")
 
 
-async def save_ai_settings(session: AsyncSession, update: AISettingsUpdate, settings: Settings) -> AISettingsRead:
+async def read_ai_settings(session: AsyncSession, settings: Settings, redis: Redis | None = None, *, scope: Scope) -> AISettingsRead:
+    """Return owner-only explicit workspace settings projection without plaintext secrets."""
+    return _read(await get_ai_execution_config(session, settings, redis, scope=scope))
+
+
+async def save_ai_settings(session: AsyncSession, update: AISettingsUpdate, settings: Settings, *, scope: Scope,
+                           auth_sessions: tuple[AccountSessionRef, ...] = ()) -> AISettingsRead:
     """Validate and persist an optimistic, revision-checked AI settings update.
 
-    Locks the owner singleton, encrypts replacement credentials, and clears
+    Locks admitted auth/workspace then matching owner settings, encrypts replacement credentials, and clears
     destination-bound privacy consent when its endpoint changes; the caller owns
     transaction commit/rollback.
     """
-    # Create then lock the owner singleton so concurrent first saves share the same CAS boundary.
-    await session.execute(insert(AISettingsRecord).values(owner_id=OWNER_ID).on_conflict_do_nothing(index_elements=["owner_id"]))
-    row = await session.scalar(select(AISettingsRecord).where(AISettingsRecord.owner_id == OWNER_ID).with_for_update())
+    await require_settings_scope(session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
+                                 locked=True, auth_sessions=auth_sessions)
+    # Composite schema ownership and scoped reread prevent borrowing another owner's PK.
+    await session.execute(insert(AISettingsRecord).values(owner_id=scope_actor(scope), workspace_id=scope.workspace_id)
+                          .on_conflict_do_nothing(index_elements=["owner_id"]))
+    row = await _row(session, scope=scope, locked=True)
     if row is None:
         raise RuntimeError("AI settings singleton could not be initialized")
     if row.configuration_revision != update.expected_revision:
@@ -257,7 +359,7 @@ async def save_ai_settings(session: AsyncSession, update: AISettingsUpdate, sett
         old_endpoint = old_endpoint or default_endpoint
         row.omniroute_base_url = old_endpoint
         if not row.aliases:
-            row.aliases = {key: value.model_dump() for key, value in (await legacy_aliases(None, settings)).items()}
+            row.aliases = {key: value.model_dump() for key, value in (await legacy_aliases(None, settings, scope=scope)).items()}
         if not row.omniroute_api_key_ciphertext and default_credential:
             row.omniroute_api_key_ciphertext = _cipher(settings).encrypt(default_credential.encode()).decode()
     if update.omniroute_credential_action == "replaced":
@@ -303,14 +405,15 @@ async def save_ai_settings(session: AsyncSession, update: AISettingsUpdate, sett
     row.request_timeout_seconds = update.request_timeout_seconds
     row.configuration_revision += 1
     await session.flush()
-    return await read_ai_settings(session, settings)
+    return await read_ai_settings(session, settings, scope=scope)
 
 
-async def read_owner_preferences(session: AsyncSession) -> OwnerPreferencesRead:
-    """Return persisted preferences or the documented defaults for a new owner."""
+async def read_owner_preferences(session: AsyncSession, *, actor_user_id: int, multi_workspace_enabled: bool) -> OwnerPreferencesRead:
+    """Return active account preferences/defaults; selected workspace is irrelevant."""
+    await require_preferences_account(session, actor_user_id=actor_user_id, multi_workspace_enabled=multi_workspace_enabled)
     row = await session.scalar(
         select(OwnerPreferencesRecord)
-        .where(OwnerPreferencesRecord.owner_id == OWNER_ID)
+        .where(OwnerPreferencesRecord.owner_id == actor_user_id)
         .execution_options(populate_existing=True)
     )
     if row is None:
@@ -330,25 +433,25 @@ async def read_owner_preferences(session: AsyncSession) -> OwnerPreferencesRead:
     )
 
 
-async def read_module_availability(session: AsyncSession) -> ModuleLifecycleRead:
-    """Return the persisted effective module view for cross-module owner boundaries."""
+async def read_module_availability(session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool) -> ModuleLifecycleRead:
+    """Return owner-only scoped module DTO with actual configured gate; never mutate process state."""
     from modules.settings.lifecycle import read_module_lifecycle
 
-    return await read_module_lifecycle(session)
+    return await read_module_lifecycle(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
 
 
-async def read_retention_settings(session: AsyncSession) -> RetentionSettingsRead:
-    """Return the owner-approved retention policy through Settings' public projection."""
+async def read_retention_settings(session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool) -> RetentionSettingsRead:
+    """Return admitted workspace retention DTO; workers must bind the same scope to cleanup."""
     from modules.settings.lifecycle import read_retention_settings as _read_retention_settings
 
-    return await _read_retention_settings(session)
+    return await _read_retention_settings(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
 
 
-async def module_is_enabled(session: AsyncSession, module_id: str) -> bool:
-    """Resolve current dependency-derived module availability for worker and tool dispatch."""
+async def module_is_enabled(session: AsyncSession, module_id: str, *, scope: Scope, multi_workspace_enabled: bool) -> bool:
+    """Resolve admitted owner workspace availability for jobs/tools, never global settings."""
     from modules.settings.lifecycle import module_is_enabled as _module_is_enabled
 
-    return await _module_is_enabled(session, module_id)
+    return await _module_is_enabled(session, module_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
 
 
 async def admit_write(
@@ -388,7 +491,7 @@ async def finish_activity(
 
 
 def module_dependency(module_id: str) -> Callable[..., Awaitable[None]]:
-    """Build the owner-first request dependency for routes owned by another module."""
+    """Build scoped availability dependency; domain owner separately enforces resource grants."""
     from modules.settings.lifecycle import module_dependency as _module_dependency
 
     return _module_dependency(module_id)
@@ -397,21 +500,24 @@ def module_dependency(module_id: str) -> Callable[..., Awaitable[None]]:
 async def save_owner_preferences(
     session: AsyncSession,
     update: OwnerPreferencesUpdate,
+    *, actor_user_id: int, multi_workspace_enabled: bool, auth_sessions: tuple[AccountSessionRef, ...] = (),
 ) -> OwnerPreferencesRead:
-    """Persist an optimistic, revision-checked owner preference update.
+    """Persist actual account preferences with exact-session auth admission and CAS.
 
-    Creates then locks the singleton row to serialize first writes; transaction
+    Creates then locks the actor row to serialize first writes; transaction
     completion remains the caller's responsibility.
     """
+    await require_preferences_account(session, actor_user_id=actor_user_id, multi_workspace_enabled=multi_workspace_enabled,
+                                      locked=True, auth_sessions=auth_sessions)
     await session.execute(
         insert(OwnerPreferencesRecord)
-        .values(owner_id=OWNER_ID)
+        .values(owner_id=actor_user_id)
         .on_conflict_do_nothing(index_elements=["owner_id"])
     )
     row = await session.scalar(
         select(OwnerPreferencesRecord)
-        .where(OwnerPreferencesRecord.owner_id == OWNER_ID)
-        .with_for_update()
+        .where(OwnerPreferencesRecord.owner_id == actor_user_id)
+        .with_for_update().execution_options(populate_existing=True)
     )
     if row is None:
         raise RuntimeError("Owner preferences singleton could not be initialized")

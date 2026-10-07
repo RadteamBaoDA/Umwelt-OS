@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Callable
 from functools import wraps
 from typing import Any, ClassVar, cast
@@ -143,9 +144,14 @@ def _arq_options(name: str) -> dict[str, Any]:
 
 
 async def startup(ctx: dict[str, object]) -> None:
-    """Load the bounded database pool and compose the worker-owned native/MCP agent registry."""
+    """Load the bounded database pool and compose the worker-owned native/MCP agent registry.
+
+    Keep one nested checkpoint and bounded-discovery lock shared across ARQ's copied
+    invocation contexts; neither is authority or durable, and both reset on restart.
+    """
     settings = Settings()
     ctx["settings"] = settings
+    ctx["ingestion_dispatch_scan_state"] = {"cursor": None, "lock": asyncio.Lock()}
     install_log_redaction()
     set_process_role("worker")
     engine = create_async_engine(settings.database_url, pool_pre_ping=True, pool_size=WorkerSettings.max_jobs + 1)

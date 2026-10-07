@@ -1,4 +1,5 @@
 from typing import Literal
+from uuid import UUID
 
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field
 
@@ -6,7 +7,16 @@ Capability = Literal["chat", "streaming", "embeddings", "structured", "tools", "
 
 
 class RequestPolicy(BaseModel):
-    """Mutable Pydantic request policy fields governing remote reasoning, embeddings, search, and permitted destinations."""
+    """Immutable request policy bound to an explicitly admitted execution identity.
+
+    Snapshot alone is not authorization: the client's mandatory before_send rechecks
+    current account/session, workspace, configuration and resource policy each attempt.
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    workspace_id: UUID
+    actor_user_id: int = Field(gt=0)
+    membership_revision: int = Field(gt=0)
+    gateway_identity: str = Field(pattern=r"^[0-9a-f]{64}$")
     reasoning_allowed: bool = False
     embeddings_allowed: bool = False
     web_search_allowed: bool = False
@@ -15,12 +25,12 @@ class RequestPolicy(BaseModel):
     reasoning_destinations: frozenset[str] = frozenset()
     embedding_destinations: frozenset[str] = frozenset()
     web_search_destinations: frozenset[str] = frozenset()
-    configuration_revision: int = 0
+    configuration_revision: int = Field(ge=0)
 
 
 class ModelMapping(BaseModel):
     """Validated configured model name, optional version, and known remote destination marker."""
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
     model: str = Field(default="", max_length=200)
     version: str | None = Field(default=None, max_length=200)
     destination: Literal["unknown", "remote"] = "unknown"
@@ -28,7 +38,7 @@ class ModelMapping(BaseModel):
 
 class PrivacySettings(BaseModel):
     """Owner-controlled remote capability flags and destination allowlists."""
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
     allow_remote_reasoning: bool = False
     allow_remote_embeddings: bool = False
     allow_remote_web_search: bool = False
@@ -42,11 +52,11 @@ class AISettingsUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     omniroute_base_url: AnyHttpUrl | None = None
     omniroute_credential_action: Literal["unchanged", "replaced", "removed"] = "unchanged"
-    omniroute_api_key: str | None = Field(default=None, max_length=4096)
+    omniroute_api_key: str | None = Field(default=None, max_length=4096, repr=False)
     web_search_provider: Literal["none", "tavily", "brave"] = "none"
     web_search_endpoint: AnyHttpUrl | None = None
     web_search_credential_action: Literal["unchanged", "replaced", "removed"] = "unchanged"
-    web_search_api_key: str | None = Field(default=None, max_length=4096)
+    web_search_api_key: str | None = Field(default=None, max_length=4096, repr=False)
     chat_alias: Literal["reasoning-large", "reasoning-small", "fast"] = "reasoning-large"
     brief_alias: Literal["reasoning-large", "reasoning-small", "fast"] = "reasoning-small"
     aliases: dict[str, ModelMapping] = Field(default_factory=dict)
@@ -59,14 +69,14 @@ class ConnectionDraft(BaseModel):
     """Temporary endpoint and credential input for a gateway probe."""
     model_config = ConfigDict(extra="forbid")
     base_url: AnyHttpUrl
-    api_key: str = Field(default="", max_length=4096)
+    api_key: str = Field(default="", max_length=4096, repr=False)
 
 
 class DraftProbeRequest(BaseModel):
     """Temporary endpoint/model/capability input for an unpersisted connection probe."""
     model_config = ConfigDict(extra="forbid")
     base_url: AnyHttpUrl
-    api_key: str = Field(default="", max_length=4096)
+    api_key: str = Field(default="", max_length=4096, repr=False)
     model: str = Field(min_length=1, max_length=200)
     version: str | None = Field(default=None, max_length=200)
     capability: Capability
@@ -79,15 +89,24 @@ class ConnectionCheck(BaseModel):
 
 
 class AIExecutionConfig(BaseModel):
-    """Resolved runtime gateway configuration, including endpoint policy decision and secrets needed by execution."""
+    """Owner-scoped detached execution snapshot; plaintext secrets are excluded from repr/serialization.
+
+    Workspace/actor/membership/access/config revisions and gateway identity bind cache and
+    request policy. Frozen scalar configuration is preparation, never current authorization;
+    use the fresh locked Settings check and caller's resource fence before each send/publish.
+    """
     model_config = ConfigDict(frozen=True)
-    configuration_revision: int
-    gateway_identity: str
+    workspace_id: UUID
+    actor_user_id: int = Field(gt=0)
+    membership_revision: int = Field(gt=0)
+    access_configuration_revision: int = Field(gt=0)
+    configuration_revision: int = Field(ge=1)
+    gateway_identity: str = Field(pattern=r"^[0-9a-f]{64}$")
     endpoint_destination_id: str | None
     endpoint_policy_denied: bool = False
     endpoint_allowed_cidrs: tuple[str, ...] = ()
     omniroute_base_url: str | None
-    omniroute_api_key: str
+    omniroute_api_key: str = Field(repr=False, exclude=True)
     omniroute_credential_configured: bool = False
     aliases: dict[str, ModelMapping]
     privacy: PrivacySettings
@@ -96,17 +115,20 @@ class AIExecutionConfig(BaseModel):
     request_timeout_seconds: int
     web_search_provider: str
     web_search_endpoint: str | None
-    web_search_api_key: str
+    web_search_api_key: str = Field(repr=False, exclude=True)
     web_search_credential_configured: bool = False
 
 
 class CapabilityResult(BaseModel):
-    """Stored or returned capability probe result tied to a model, gateway identity, and expiry."""
+    """Capability evidence for exact workspace/actor/membership/config/model and expiry; no secrets."""
+    workspace_id: UUID
+    actor_user_id: int = Field(gt=0)
+    membership_revision: int = Field(gt=0)
     alias: str
     model: str
     version: str | None = None
-    gateway_identity: str
-    configuration_revision: int = 0
+    gateway_identity: str = Field(pattern=r"^[0-9a-f]{64}$")
+    configuration_revision: int = Field(ge=1)
     capability: Capability
     result: Literal["supported", "unsupported", "failed"]
     checked_at: str

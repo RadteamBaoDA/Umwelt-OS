@@ -10,11 +10,12 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 import modules  # noqa: F401  # Domain model packages are imported here as they are added.
-from core.auth.models import AuthSession, Owner
+from core.auth.models import AuthSession, GoogleIdentity, Owner
 from core.database import Base
 from core.demo_seed import DemoSeedReceipt
 from core.realtime import ReplayHead, ReplayRecord
 from core.remote_heavy_models import RemoteHeavyGuard
+from core.workspaces.models import Workspace, WorkspaceInvitation, WorkspaceMembership
 from modules.agents.models import AgentApproval, AgentEffect, AgentRun, AgentToolCall
 from modules.automations.models import (
     Automation,
@@ -127,7 +128,8 @@ from modules.timeline.models import (
 )
 from modules.tools.models import BrowserPageEvidence, BrowserReadJob
 
-_auth_models = (AuthSession, Owner)
+_auth_models = (AuthSession, GoogleIdentity, Owner)
+_workspace_models = (Workspace, WorkspaceMembership, WorkspaceInvitation)
 _demo_seed_models = (DemoSeedReceipt,)
 _core_remote_heavy_models = (RemoteHeavyGuard,)
 _chat_models = (Conversation, Message, ResponseRun, StreamEvent, AgentActivityLink)

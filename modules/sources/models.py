@@ -3,13 +3,15 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
-    ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
+    UniqueConstraint,
     func,
     text,
 )
@@ -21,14 +23,24 @@ from core.database import Base
 
 
 class Source(Base):
-    """Persist a collection identity, lifecycle generation, and sync state."""
+    """Persist a collection identity, lifecycle generation, and sync state.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
     __tablename__ = "sources"
     __table_args__ = (
         CheckConstraint(
             "status IN ('active', 'paused', 'archived')", name="ck_sources_status"
         ),
         Index("ix_sources_created_at_id", "created_at", "id"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_sources_workspace", ondelete="RESTRICT"),
+        UniqueConstraint("workspace_id", "id", name="uq_w2_sources_id"),
+        Index("ix_w2_sources_scope", 'workspace_id', 'id'),
+        Index("ix_w2_sources_work", 'workspace_id', 'created_at', 'id'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     type: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -57,10 +69,17 @@ class Source(Base):
     )
 
 
+
 class SourcePurgeOperation(Base):
-    """Track source canonical deletion and truthful owner-stage cleanup progress."""
+    """Track source canonical deletion and truthful owner-stage cleanup progress.
+
+    Workspace and actor identities survive nullable or detached canonical references.
+    Captured membership_revision identifies the authorization epoch of the durable job;
+    runtime resolvers must revalidate it rather than infer authority from the remaining Source.
+    """
     __tablename__ = "source_purge_operations"
     __table_args__ = (
+        CheckConstraint("membership_revision > 0", name="ck_w2_source_purge_membership_revision_positive"),
         CheckConstraint("status IN ('queued', 'running', 'succeeded', 'failed')", name="ck_source_purge_operations_status"),
         CheckConstraint(
             "documents_status IN ('queued', 'deleted', 'failed', 'unavailable')",
@@ -86,10 +105,20 @@ class SourcePurgeOperation(Base):
                 "NOT IN ('evidence_identity_unavailable', 'legacy_provenance_unresolved')))"
             ),
         ),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_source_purge_operations_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "actor_user_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_source_purge_operations_principal", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "source_id"], ["sources.workspace_id", "sources.id"], name="fk_w2_source_purge_operations_source_id", ondelete="RESTRICT"),
+        Index("ix_w2_source_purge_operations_scope", 'workspace_id', 'id'),
+        Index("ix_w2_source_purge_operations_work", 'workspace_id', 'created_at', 'id'),
     )
 
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    actor_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    membership_revision: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
-    source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("sources.id", ondelete="RESTRICT"), nullable=False)
+    source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     generation: Mapped[int] = mapped_column(Integer, nullable=False)
     # The legacy URI JSON remains for compatibility repair; new work never populates it.
     documents_status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="queued")
@@ -110,4 +139,5 @@ class SourcePurgeOperation(Base):
     error_code: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
 

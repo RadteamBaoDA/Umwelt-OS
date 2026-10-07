@@ -7,6 +7,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -23,7 +24,10 @@ from core.database import Base
 
 
 class Document(Base):
-    """Persist current document metadata and its selected immutable revision."""
+    """Persist current document metadata and its selected immutable revision.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
     __tablename__ = "documents"
     __table_args__ = (
         UniqueConstraint("source_id", "external_id", name="uq_documents_source_external"),
@@ -31,11 +35,19 @@ class Document(Base):
         Index("ix_documents_external_id", "external_id"),
         Index("ix_documents_published_at", "published_at"),
         Index("ix_documents_created_at_id", "created_at", "id"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_documents_workspace", ondelete="RESTRICT"),
+        UniqueConstraint("workspace_id", "id", name="uq_w2_documents_id"),
+        ForeignKeyConstraint(["workspace_id", "source_id"], ["sources.workspace_id", "sources.id"], name="fk_w2_documents_source_id", ondelete="RESTRICT"),
+        Index("ix_w2_documents_scope", 'workspace_id', 'id'),
+        Index("ix_w2_documents_work", 'workspace_id', 'created_at', 'id'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     source_id: Mapped[UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("sources.id", ondelete="RESTRICT"), nullable=False
+        Uuid(as_uuid=True), nullable=False
     )
     external_id: Mapped[str | None] = mapped_column(String(512))
     title: Mapped[str] = mapped_column(String(500), nullable=False)
@@ -59,6 +71,7 @@ class Document(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
+
 
 
 class DocumentVersion(Base):
@@ -102,15 +115,29 @@ class DocumentInteraction(Base):
 
 
 class NormalizedDocumentIdentity(Base):
-    """Reserve a source/external-ID mapping, including deleted-identity tombstones."""
+    """Reserve a source/external-ID mapping, including deleted-identity tombstones.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
     __tablename__ = "normalized_document_identities"
-    __table_args__ = (UniqueConstraint("source_id", "external_id", name="uq_normalized_document_identities_source_external"),)
+    __table_args__ = (
+        UniqueConstraint("source_id", "external_id", name="uq_normalized_document_identities_source_external"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_normalized_document_identities_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "source_id"], ["sources.workspace_id", "sources.id"], name="fk_w2_normalized_document_identities_source_id", ondelete="CASCADE"),
+        # Scalar SET NULL clears only the parent ID; this deferred FK retains workspace.
+        ForeignKeyConstraint(["workspace_id", "document_id"], ["documents.workspace_id", "documents.id"], name="fk_w2_normalized_document_identities_document_id", ondelete="NO ACTION", deferrable=True, initially="DEFERRED"),
+        Index("ix_w2_normalized_document_identities_scope", 'workspace_id', 'id'),
+    )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
-    source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("sources.id", ondelete="CASCADE"), nullable=False)
+    source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     external_id: Mapped[str] = mapped_column(String(512), nullable=False)
     document_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL"))
     tombstoned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
 
 
 class NormalizedVersionProvenance(Base):
@@ -162,9 +189,18 @@ class DocumentChunk(Base):
 
 
 class DocumentCleanupOperation(Base):
-    """Retain individual or source-scoped document cleanup stages and detached identities."""
+    """Retain individual or source-scoped document cleanup stages and detached identities.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
     __tablename__ = "document_cleanup_operations"
     __table_args__ = (
+        CheckConstraint(
+            "(membership_revision IS NULL AND configuration_revision IS NULL AND source_generation IS NULL) OR "
+            "(membership_revision IS NOT NULL AND configuration_revision IS NOT NULL AND source_generation IS NOT NULL "
+            "AND membership_revision > 0 AND configuration_revision > 0 AND source_generation > 0)",
+            name="ck_document_cleanup_original_epoch",
+        ),
         CheckConstraint("status IN ('queued', 'running', 'succeeded', 'failed')", name="ck_document_cleanup_status"),
         CheckConstraint("record_status = 'deleted'", name="ck_document_cleanup_record_status"),
         CheckConstraint("graph_status = 'tombstoned'", name="ck_document_cleanup_graph_status"),
@@ -204,7 +240,20 @@ class DocumentCleanupOperation(Base):
             "source_purge_operation_id", "document_id", unique=True,
             postgresql_where=text("source_purge_operation_id IS NOT NULL"),
         ),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_document_cleanup_operations_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "actor_user_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_document_cleanup_operations_principal", ondelete="RESTRICT"),
+        UniqueConstraint("workspace_id", "id", name="uq_w2_document_cleanup_operations_id"),
+        Index("ix_w2_document_cleanup_operations_scope", 'workspace_id', 'id'),
+        Index("ix_w2_document_cleanup_operations_work", 'workspace_id', 'created_at', 'id'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    actor_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    # NULL is quarantined legacy authority; new receipts capture the exact admitted epoch.
+    membership_revision: Mapped[int | None] = mapped_column(BigInteger)
+    configuration_revision: Mapped[int | None] = mapped_column(BigInteger)
+    source_generation: Mapped[int | None] = mapped_column(Integer)
+
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
@@ -252,8 +301,12 @@ class DocumentCleanupOperation(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
 
+
 class DocumentCleanupEvidenceReference(Base):
-    """Retain immutable version/chunk IDs needed to clean copies after hard deletion."""
+    """Retain immutable version/chunk IDs needed to clean copies after hard deletion.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
 
     __tablename__ = "document_cleanup_evidence_references"
     __table_args__ = (
@@ -264,13 +317,20 @@ class DocumentCleanupEvidenceReference(Base):
         ),
         Index("ix_document_cleanup_evidence_operation_id", "operation_id", "id"),
         Index("ix_document_cleanup_evidence_document_version_id", "document_version_id"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_document_cleanup_evidence_references_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "operation_id"], ["document_cleanup_operations.workspace_id", "document_cleanup_operations.id"], name="fk_w2_document_cleanup_evidence_references_operation_id", ondelete="CASCADE"),
+        Index("ix_w2_document_cleanup_evidence_references_scope", 'workspace_id', 'id'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     operation_id: Mapped[UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("document_cleanup_operations.id", ondelete="CASCADE"), nullable=False
+        Uuid(as_uuid=True), nullable=False
     )
     # No FK to document_versions or document_chunks: these identities outlive their rows.
     document_version_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     chunk_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     reference_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+

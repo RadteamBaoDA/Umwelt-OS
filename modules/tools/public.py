@@ -6,7 +6,8 @@ from datetime import UTC, datetime
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from fastapi import HTTPException
+from sqlalchemy import Select, delete, func, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,6 +20,8 @@ from core.tools import (
     ToolRisk,
 )
 from core.tools.schemas import ToolOutputFence
+from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
+from modules.sources.schemas import SourceFence
 from modules.tools.mcp_admission import McpAdmission, McpInboundLease
 from modules.tools.mcp_collection import McpCollectionRead, read_collection_capability
 from modules.tools.mcp_repository import McpConflict, McpNotFound, McpUnavailable
@@ -172,6 +175,216 @@ PURGED_SESSION_HASH = "0" * 64
 PURGED_CONVERSATION_ID = UUID(int=0)
 
 
+async def _assert_source_browser_cleanup_in_uow(
+    session: AsyncSession, source_id: UUID, *, scope: Scope,
+    multi_workspace_enabled: bool, access_fence: AccessFence,
+    source_fence: SourceFence,
+) -> int:
+    """Freshly prove an exact cleanup anchor through nonlocking owner-public reads.
+
+    The caller already holds actual admission/Source locks in this transaction; detached
+    fences do not establish those locks. Accept only a real owner/default-workspace subject
+    and the explicit configured flag. Bound workers keep their exact Source and generation;
+    this helper never derives a successor scope or rescues stale access with current epochs.
+    All access fields and Source identity/workspace/status/generation/local_only must match.
+    Active, paused and archived anchors authorize destruction only, not browser execution.
+    Returns the admitted actor ID for private SQL predicates; malformed inputs raise TypeError,
+    members raise 403, mismatched/unavailable anchors raise 409 and admission errors propagate.
+    Suppressed autoflush prevents proof reads from causing incidental DML. No locks, mutation,
+    commit, session registry, authority token, foreign ORM or external I/O are involved.
+    """
+    from core.workspaces import public as workspaces
+    from modules.sources import public as sources
+
+    if not isinstance(scope, (WorkspaceContext, InternalJobScope)):
+        raise TypeError("An explicit Source browser cleanup scope is required")
+    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
+    if (not isinstance(source_id, UUID) or type(multi_workspace_enabled) is not bool
+            or not isinstance(access_fence, AccessFence) or not isinstance(source_fence, SourceFence)):
+        raise TypeError("Source browser cleanup requires typed fences and an explicit boolean feature flag")
+    actor_user_id = scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
+    if (access_fence.workspace_id != scope.workspace_id or access_fence.user_id != actor_user_id
+            or access_fence.membership_revision != scope.membership_revision
+            or source_fence.id != source_id or source_fence.workspace_id != scope.workspace_id
+            or (isinstance(scope, InternalJobScope) and scope.source_id is not None and (
+                scope.source_id != source_id or scope.source_generation != source_fence.generation
+            ))):
+        raise HTTPException(status_code=409, detail="Source browser cleanup subject changed")
+    with session.no_autoflush:
+        current_access = await workspaces.read_access_fence(
+            session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
+        current_source = await sources.get_source_fence(
+            session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
+    if (current_access != access_fence or current_source is None
+            or current_source != source_fence or current_source.status not in {"active", "paused", "archived"}):
+        raise HTTPException(status_code=409, detail="Source browser cleanup anchor is unavailable or stale")
+    return actor_user_id
+
+
+def _source_browser_job_ids(
+    source_id: UUID, *, workspace_id: UUID, actor_user_id: int,
+) -> Select[tuple[UUID]]:
+    """Build the complete identity-only relation for an already-proven Source cleanup.
+
+    Private callers supply the actor/workspace from fresh owner admission, never selector
+    unions or guessed identities. Every historical generation/epoch/status and scrubbed link
+    is included; there is no retention cutoff, live-session filter or LIMIT. Keeping this
+    one-column relation in SQL avoids materializing history or private page payload lists.
+    It performs no query, authorization, locking or mutation on its own.
+    """
+    from modules.tools.models import BrowserReadJob
+
+    return select(BrowserReadJob.id).where(
+        BrowserReadJob.workspace_id == workspace_id,
+        BrowserReadJob.owner_id == actor_user_id,
+        BrowserReadJob.source_id == source_id,
+    )
+
+
+async def _lock_source_browser_rows_in_uow(
+    session: AsyncSession, source_id: UUID, *, workspace_id: UUID, actor_user_id: int,
+) -> None:
+    """Lock the entire identity-scoped job set by UUID, then its pages by evidence PK UUID.
+
+    Caller has freshly proven the held Source/workspace subject and prepared all earlier
+    Connector/collector rows. Their serialization prevents supported writers from growing
+    this set; this function cannot manufacture that proof or acquire an earlier parent.
+    Both queries reread database identities and drain completely before the next phase.
+    Streams carry only IDs, not URL/raw/text payloads, and have no history truncation or
+    SKIP LOCKED. Pages are selected through proven parent jobs, never a page workspace field.
+    Autoflush is suppressed: preparation performs no DML, commit, network or authority return.
+    Database/lock failures propagate so the caller aborts the complete cleanup transaction.
+    """
+    from modules.tools.models import BrowserPageEvidence, BrowserReadJob
+
+    job_ids = _source_browser_job_ids(source_id, workspace_id=workspace_id, actor_user_id=actor_user_id)
+    with session.no_autoflush:
+        jobs = await session.stream_scalars(
+            job_ids.order_by(BrowserReadJob.id).with_for_update().execution_options(populate_existing=True)
+        )
+        try:
+            async for _job_id in jobs:
+                pass
+        finally:
+            await jobs.close()
+        # Drain every earlier job lock before acquiring the first evidence row lock.
+        pages = await session.stream_scalars(
+            select(BrowserPageEvidence.id).where(BrowserPageEvidence.job_id.in_(job_ids))
+            .order_by(BrowserPageEvidence.id).with_for_update().execution_options(populate_existing=True)
+        )
+        try:
+            async for _page_id in pages:
+                pass
+        finally:
+            await pages.close()
+
+
+async def _purge_source_browser_rows_in_uow(
+    session: AsyncSession, source_id: UUID, *, workspace_id: UUID, actor_user_id: int,
+) -> int:
+    """Erase all prepared Source page payloads and scrub private links, retaining job tombstones.
+
+    Caller keeps the same prepared transaction and all earlier locks, and freshly proves
+    its exact current Source/access anchor before entry. Identity-only SQL rereads that same
+    complete historical set without any SELECT FOR UPDATE or earlier parent acquisition.
+    Delete child URL/raw/text rows; only queued/running/uncertain jobs become cancel_requested.
+    Every job loses session/conversation links, including terminal and already-cancelled jobs.
+    Preserve IDs, operation/run/source identity, original epochs/generation, service identity,
+    digests, counters and terminal state; present cleanup authority never upgrades old jobs.
+    Flush only and return the deleted page count. Errors abort the caller's transaction; no
+    provider cancellation, commit or I/O occurs. Repeated prepared cleanup remains complete.
+    """
+    from modules.tools.models import BrowserPageEvidence, BrowserReadJob
+
+    job_ids = _source_browser_job_ids(source_id, workspace_id=workspace_id, actor_user_id=actor_user_id)
+    result = await session.execute(
+        delete(BrowserPageEvidence).where(BrowserPageEvidence.job_id.in_(job_ids))
+    )
+    await session.execute(
+        update(BrowserReadJob).where(
+            BrowserReadJob.id.in_(job_ids), BrowserReadJob.status.in_(("queued", "running", "uncertain")),
+        ).values(cancel_requested=True, status="cancel_requested")
+    )
+    await session.execute(
+        update(BrowserReadJob).where(BrowserReadJob.id.in_(job_ids)).values(
+            auth_session_hash=PURGED_SESSION_HASH, conversation_id=PURGED_CONVERSATION_ID,
+        )
+    )
+    await session.flush()
+    return int(cast("CursorResult[Any]", result).rowcount or 0)
+
+
+async def lock_source_browser_results_in_uow(
+    session: AsyncSession, source_id: UUID, *, scope: Scope,
+    multi_workspace_enabled: bool, access_fence: AccessFence,
+    source_fence: SourceFence,
+) -> None:
+    """Prepare complete historical Source browser cleanup under caller-held lifecycle locks.
+
+    Before entry the caller holds account/session where applicable, workspace/membership,
+    exact Source, optional/required Connector provisioning and sorted managed slots/browser
+    grant/native prerequisites, then Ingestion collector tokens. Call before GitHub grant,
+    ingestion state/receipt, outbox, hints or capacity. Fresh nonlocking owner reads must match
+    the original AccessFence and every supplied current SourceFence field with the actual
+    feature flag. Only real owner/default-workspace subjects and exact active/paused/archived
+    anchors are eligible; bound InternalJobScope keeps its exact Source and generation.
+    Missing/stale/foreign anchors fail, including when there are no browser jobs.
+
+    Lock all workspace+actor+Source jobs in UUID order across every historical generation,
+    epoch, status and link state, then all child pages in evidence PK UUID order. No LIMIT,
+    mutation, autoflush, earlier lock acquisition, commit or I/O; returns no authority object.
+    Keep this transaction and locks through purge. Visibility preparation uses active G or
+    paused G only in its Source owner; ordinary cleanup can prepare an exact archived anchor.
+    Source may later perform its approved active G->paused G+1 transition and supply only
+    its constrained successor scope/fence to purge; an unchanged paused anchor stays exact.
+    Supported insert/publication writers must share the held earlier Source serialization.
+    That remaining writer integration is a prerequisite for combined lifecycle acceptance.
+    """
+    actor_user_id = await _assert_source_browser_cleanup_in_uow(
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence, source_fence=source_fence,
+    )
+    await _lock_source_browser_rows_in_uow(
+        session, source_id, workspace_id=scope.workspace_id, actor_user_id=actor_user_id,
+    )
+
+
+async def purge_source_browser_results_in_uow(
+    session: AsyncSession, source_id: UUID, *, scope: Scope,
+    multi_workspace_enabled: bool, access_fence: AccessFence,
+    source_fence: SourceFence,
+) -> int:
+    """Apply Source-only browser erasure after preparation in the same retained transaction.
+
+    Caller retains actual admission/Source/Connector/collector and complete job-then-page
+    locks from lock_source_browser_results_in_uow; no detached fence or function name proves
+    held locks, and this mutation never reacquires them. Fresh nonlocking owner-public proof
+    must match original access and the now-current complete active/paused/archived Source
+    anchor using the actual flag. Only Source's verified lifecycle transition may supply a
+    successor cleanup subject; stale bound workers are never readmitted against later G.
+    Missing/stale/foreign proof fails even for an empty set, while a proven empty set returns 0.
+
+    Delete all historical owned Source page bytes/text/URLs; scrub session/conversation
+    links on every matched job and request cancellation only for queued/running/uncertain.
+    Keep terminal statuses, tombstones, IDs, original epochs/generation, digests, counters and
+    service identity. Old-job authority is never refreshed. Repeated paused/archived cleanup
+    repeats erasure/link scrubbing without inventing a new Source transition. Flush only,
+    return deleted page count, and leave commit/provider cancellation to the caller. This
+    mandatory-scoped path never delegates to legacy mixed-selector purge. Run/conversation
+    cleanup, browser writer/retention conversion and HTTP publication remain separate gates.
+    """
+    actor_user_id = await _assert_source_browser_cleanup_in_uow(
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence, source_fence=source_fence,
+    )
+    return await _purge_source_browser_rows_in_uow(
+        session, source_id, workspace_id=scope.workspace_id, actor_user_id=actor_user_id,
+    )
+
+
 async def purge_browser_results_in_uow(
     session: AsyncSession,
     *,
@@ -323,8 +536,10 @@ __all__ = [
     "ToolRisk",
     "create_inbound_mcp_bundle",
     "derive_mcp_public_endpoint",
+    "lock_source_browser_results_in_uow",
     "purge_browser_results_in_uow",
     "purge_expired_browser_evidence",
+    "purge_source_browser_results_in_uow",
     "read_collection_capability",
     "revalidate_native_output_fences",
     "send_webhook_once",

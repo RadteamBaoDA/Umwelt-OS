@@ -1,13 +1,15 @@
+"""Workspace-owner Source HTTP boundary; preserve scoped pagination and aggregate purge DTOs."""
+
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.auth.dependencies import require_owner, require_owner_write
-from core.auth.models import AuthSession
 from core.database import get_session
+from core.workspaces.dependencies import require_workspace_read, require_workspace_write
+from core.workspaces.schemas import WorkspaceContext
 from modules.settings.public import module_dependency
 from modules.sources import public
 from modules.sources.schemas import OperationRead, SourceCreate, SourceList, SourcePatch, SourceRead
@@ -18,19 +20,30 @@ router = APIRouter(
     dependencies=[Depends(module_dependency("sources"))],
 )
 Session = Annotated[AsyncSession, Depends(get_session)]
-OwnerRead = Annotated[AuthSession, Depends(require_owner)]
-OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]
+WorkspaceRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
+WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
+
+
+def _require_source_owner(scope: WorkspaceContext) -> None:
+    """Reject invited members before Source configuration, identities or counts are read."""
+    if scope.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
 
 
 @router.get("", response_model=SourceList)
 async def list_sources(
     session: Session,
-    _owner: OwnerRead,
+    request: Request,
+    scope: WorkspaceRead,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     cursor: str | None = None,
 ) -> SourceList:
-    """Return a bounded owner-only source page with its continuation cursor."""
-    items, next_cursor = await public.list_sources(session, limit, cursor)
+    """Return <=100 owned-workspace Sources through the principal-bound pagination seam."""
+    _require_source_owner(scope)
+    items, next_cursor = await public.list_sources(
+        session, limit, cursor, scope=scope,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+    )
     return SourceList(
         items=[SourceRead.model_validate(item, from_attributes=True) for item in items],
         next_cursor=next_cursor,
@@ -38,16 +51,28 @@ async def list_sources(
 
 
 @router.post("", response_model=SourceRead, status_code=201)
-async def create_source(payload: SourceCreate, session: Session, _owner: OwnerWrite) -> SourceRead:
-    """Create a source under owner write authorization."""
-    source = await public.create_source(session, payload)
+async def create_source(
+    payload: SourceCreate, session: Session, request: Request, scope: WorkspaceWrite,
+) -> SourceRead:
+    """Create in the selected owner workspace after CSRF/backup/module write admission."""
+    _require_source_owner(scope)
+    source = await public.create_source(
+        session, payload, scope=scope,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+    )
     return SourceRead.model_validate(source, from_attributes=True)
 
 
 @router.get("/{source_id}", response_model=SourceRead)
-async def get_source(source_id: UUID, session: Session, _owner: OwnerRead) -> SourceRead:
-    """Return one owner-only source or 404 when absent."""
-    source = await public.get_source(session, source_id)
+async def get_source(
+    source_id: UUID, session: Session, request: Request, scope: WorkspaceRead,
+) -> SourceRead:
+    """Read one owned-workspace Source; absent/foreign UUIDs preserve the same 404."""
+    _require_source_owner(scope)
+    source = await public.get_source(
+        session, source_id, scope=scope,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+    )
     if source is None:
         raise HTTPException(status_code=404, detail="Source not found")
     return SourceRead.model_validate(source, from_attributes=True)
@@ -55,17 +80,24 @@ async def get_source(source_id: UUID, session: Session, _owner: OwnerRead) -> So
 
 @router.patch("/{source_id}", response_model=SourceRead)
 async def update_source(
-    source_id: UUID, payload: SourcePatch, session: Session, _owner: OwnerWrite
+    source_id: UUID, payload: SourcePatch, session: Session, request: Request, scope: WorkspaceWrite,
 ) -> SourceRead:
-    """Update non-null source fields through the lifecycle owner contract."""
-    source = await public.get_source(session, source_id)
+    """Patch non-null fields in the selected owner workspace, retaining lifecycle conflicts."""
+    _require_source_owner(scope)
+    source = await public.get_source(
+        session, source_id, scope=scope,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+    )
     if source is None:
         raise HTTPException(status_code=404, detail="Source not found")
     if not payload.model_fields_set or any(
         getattr(payload, key) is None for key in payload.model_fields_set
     ):
         raise HTTPException(status_code=422, detail="At least one non-null field is required")
-    source = await public.update_source(session, source, payload)
+    source = await public.update_source(
+        session, source, payload, scope=scope,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+    )
     if source is None:
         raise HTTPException(status_code=404, detail="Source not found")
     return SourceRead.model_validate(source, from_attributes=True)
@@ -75,18 +107,24 @@ async def update_source(
 async def delete_source(
     source_id: UUID,
     session: Session,
-    _owner: OwnerWrite,
+    request: Request,
+    scope: WorkspaceWrite,
     with_data: bool = False,
 ) -> Response:
-    """Archive a source or queue a bounded identity-safe purge with its current owner progress."""
+    """Archive or queue retained owner-workspace purge; expose only allowlisted aggregate progress."""
+    _require_source_owner(scope)
     if with_data:
-        operation = await public.start_source_purge(session, source_id)
+        operation = await public.start_source_purge(
+            session, source_id, scope=scope,
+            multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        )
         if operation is None:
             raise HTTPException(status_code=404, detail="Source not found")
         return JSONResponse(
             status_code=202,
             content=OperationRead(
                 operation_id=operation.id,
+                workspace_id=operation.workspace_id,
                 source_id=operation.source_id,
                 status=operation.status,
                 error_code=operation.error_code,
@@ -98,7 +136,10 @@ async def delete_source(
                 updated_at=operation.updated_at,
             ).model_dump(mode="json"),
         )
-    source = await public.archive_source(session, source_id)
+    source = await public.archive_source(
+        session, source_id, scope=scope,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+    )
     if source is None:
         raise HTTPException(status_code=404, detail="Source not found")
     return Response(status_code=204)

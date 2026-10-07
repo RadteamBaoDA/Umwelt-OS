@@ -1,30 +1,51 @@
+from uuid import UUID
 from collections.abc import Awaitable
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 from redis.asyncio import Redis
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.types import Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from core.config import Settings
 from core.database import Base
-from core.model_gateway.cache import capability_alias_pattern, capability_key
-from core.model_gateway.schemas import CapabilityResult, ModelMapping
+from core.model_gateway.cache import capability_key, validate_capability_scope
+from core.model_gateway.schemas import AIExecutionConfig, CapabilityResult, ModelMapping
+from core.workspaces.schemas import InternalJobScope, Scope, WorkspaceContext
 
 
 class AISettingsRecord(Base):
     """Persist the owner-scoped AI gateway, model, and privacy configuration.
 
-    The owner primary key and database checks enforce the single-user boundary;
+    The owned-default workspace constraint scopes configuration;
     encrypted credential fields remain ciphertext at rest.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
     """
     __tablename__ = "ai_settings"
     __table_args__ = (
-        CheckConstraint("owner_id = 1", name="ck_ai_settings_single_owner"),
         CheckConstraint("configuration_revision > 0", name="ck_ai_settings_revision_positive"),
         CheckConstraint("request_timeout_seconds BETWEEN 5 AND 180", name="ck_ai_settings_timeout"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_ai_settings_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "owner_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_ai_settings_principal", ondelete="RESTRICT"),
+        Index("ix_w2_ai_settings_scope", 'workspace_id', 'owner_id'),
+        Index("ix_w2_ai_settings_work", 'workspace_id', 'created_at', 'owner_id'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
 
     owner_id: Mapped[int] = mapped_column(ForeignKey("owner.id", ondelete="CASCADE"), primary_key=True)
     configuration_revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
@@ -42,14 +63,16 @@ class AISettingsRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
 
+
 class OwnerPreferencesRecord(Base):
     """Persist the owner's revisioned theme, locale, and timezone preferences.
 
-    The singleton owner key and checks constrain this record to supported settings.
+    The account key and checks constrain this record to supported settings.
+
+    Account or Source lineage replaces the legacy bootstrap-only owner restriction.
     """
     __tablename__ = "owner_preferences"
     __table_args__ = (
-        CheckConstraint("owner_id = 1", name="ck_owner_preferences_single_owner"),
         CheckConstraint("configuration_revision > 0", name="ck_owner_preferences_revision_positive"),
         CheckConstraint("theme IN ('light', 'dark', 'system')", name="ck_owner_preferences_theme"),
         CheckConstraint("locale IN ('en-us', 'vi-vi')", name="ck_owner_preferences_locale"),
@@ -64,11 +87,14 @@ class OwnerPreferencesRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
 
+
 class OnboardingStateRecord(Base):
-    """Persist only the owner's resumable onboarding step and explicit completion."""
+    """Persist only the owner's resumable onboarding step and explicit completion.
+
+    Account or Source lineage replaces the legacy bootstrap-only owner restriction.
+    """
     __tablename__ = "onboarding_state"
     __table_args__ = (
-        CheckConstraint("owner_id = 1", name="ck_onboarding_state_single_owner"),
         CheckConstraint("configuration_revision > 0", name="ck_onboarding_state_revision_positive"),
         CheckConstraint("current_step IN ('ai_privacy', 'capability', 'sources', 'sample_or_import', 'indexing', 'complete')", name="ck_onboarding_state_step"),
         CheckConstraint("data_choice IS NULL OR data_choice IN ('sample', 'personal_import')", name="ck_onboarding_state_data_choice"),
@@ -84,15 +110,25 @@ class OnboardingStateRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
 
+
 class RetentionSettingsRecord(Base):
-    """Persist revisioned trace retention while raw-source and document history remain retained."""
+    """Persist revisioned trace retention while raw-source and document history remain retained.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
 
     __tablename__ = "retention_settings"
     __table_args__ = (
-        CheckConstraint("owner_id = 1", name="ck_retention_settings_single_owner"),
         CheckConstraint("configuration_revision > 0", name="ck_retention_settings_revision"),
         CheckConstraint("agent_trace_days BETWEEN 1 AND 3650", name="ck_retention_settings_trace_days"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_retention_settings_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "owner_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_retention_settings_principal", ondelete="RESTRICT"),
+        Index("ix_w2_retention_settings_scope", 'workspace_id', 'owner_id'),
+        Index("ix_w2_retention_settings_work", 'workspace_id', 'created_at', 'owner_id'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
 
     owner_id: Mapped[int] = mapped_column(ForeignKey("owner.id", ondelete="CASCADE"), primary_key=True)
     configuration_revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
@@ -101,14 +137,24 @@ class RetentionSettingsRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
 
+
 class ModuleLifecycleRecord(Base):
-    """Persist only owner-requested disables; descriptor dependencies compute effective availability."""
+    """Persist only owner-requested disables; descriptor dependencies compute effective availability.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
 
     __tablename__ = "module_lifecycle_settings"
     __table_args__ = (
-        CheckConstraint("owner_id = 1", name="ck_module_lifecycle_single_owner"),
         CheckConstraint("configuration_revision > 0", name="ck_module_lifecycle_revision"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_module_lifecycle_settings_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "owner_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_module_lifecycle_settings_principal", ondelete="RESTRICT"),
+        Index("ix_w2_module_lifecycle_settings_scope", 'workspace_id', 'owner_id'),
+        Index("ix_w2_module_lifecycle_settings_work", 'workspace_id', 'created_at', 'owner_id'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
 
     owner_id: Mapped[int] = mapped_column(ForeignKey("owner.id", ondelete="CASCADE"), primary_key=True)
     configuration_revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
@@ -116,18 +162,27 @@ class ModuleLifecycleRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
+
 ALIASES = ("reasoning-large", "reasoning-small", "fast", "embedding", "reranker", "vision", "local-private")
 _MAPPINGS = "bbd:settings:model-mappings"
 
 
-async def legacy_aliases(redis: Redis | None, settings: Settings) -> dict[str, ModelMapping]:
-    """Load configured model aliases and overlay valid legacy Redis mappings.
+async def legacy_aliases(redis: Redis | None, settings: Settings, *, scope: Scope) -> dict[str, ModelMapping]:
+    """Return server defaults; overlay old Redis aliases only for already-proven bootstrap owner.
 
-    Invalid cached JSON is ignored; Redis is optional and returned mappings are
-    limited to the supported aliases.
+    Caller first admits active owned-default scope with actual settings feature flag. Redis
+    singleton aliases never initialize a new workspace or grant remote-data consent.
     """
+    if isinstance(scope, InternalJobScope):
+        actor = scope.actor_user_id
+    elif isinstance(scope, WorkspaceContext) and scope.role == "owner":
+        actor = scope.user_id
+    else:
+        raise ValueError("An admitted owner scope is required")
+    if actor != 1 and not settings.multi_workspace_enabled:
+        raise ValueError("Multi-workspace execution is disabled")
     configured = {name: ModelMapping(model=model, destination="remote") for name, model in settings.omniroute_models.items() if name in ALIASES}
-    if redis is not None:
+    if redis is not None and actor == 1:
         for alias, value in (await cast("Awaitable[dict[Any, Any]]", redis.hgetall(_MAPPINGS))).items():
             try:
                 if alias in ALIASES:
@@ -137,45 +192,65 @@ async def legacy_aliases(redis: Redis | None, settings: Settings) -> dict[str, M
     return configured
 
 
-async def save_capability(redis: Redis, result: CapabilityResult) -> None:
-    """Cache a capability result using its expiry as a Redis TTL.
+async def save_capability(redis: Redis, result: CapabilityResult, *, config: AIExecutionConfig, scope: Scope, multi_workspace_enabled: bool) -> None:
+    """Cache only exact scoped configuration evidence after caller's locked publication fence.
 
-    Remaining lifetime is clamped to at least one second, so an already-expired
-    result can remain cache-visible for that final second.
+    Expired results are discarded; TTL max24h and exact namespace leave old workspace
+    configuration entries unreachable without deleting any other workspace's cache.
     """
-    ttl = max(1, int((datetime.fromisoformat(result.expires_at) - datetime.now(UTC)).total_seconds()))
-    key = capability_key(result.alias, result.model, result.version, result.capability, result.gateway_identity)
-    await redis.set(key, result.model_dump_json(), ex=ttl)
+    validate_capability_scope(config, scope, multi_workspace_enabled)
+    if (result.workspace_id != config.workspace_id or result.actor_user_id != config.actor_user_id
+            or result.membership_revision != config.membership_revision
+            or result.gateway_identity != config.gateway_identity
+            or result.configuration_revision != config.configuration_revision):
+        raise ValueError("Capability evidence does not match execution identity")
+    mapping = config.aliases.get(result.alias)
+    if mapping is None or mapping.model != result.model or mapping.version != result.version:
+        raise ValueError("Capability evidence does not match configured model")
+    ttl = int((datetime.fromisoformat(result.expires_at) - datetime.now(UTC)).total_seconds())
+    if ttl <= 0:
+        return
+    key = capability_key(result.alias, result.model, result.version, result.capability, result.gateway_identity,
+                         workspace_id=config.workspace_id, actor_user_id=config.actor_user_id)
+    await redis.set(key, result.model_dump_json(), ex=min(ttl, 86400))
 
 
-async def list_capabilities(redis: Redis, mappings: dict[str, ModelMapping], gateway_identity: str) -> list[CapabilityResult]:
-    """Return TTL-managed cached capabilities matching aliases and gateway identity.
-
-    Malformed entries and results for a different model version or gateway are
-    omitted. Redis SCAN iterates incrementally for every alias; COUNT=100 is a
-    work hint, not a maximum page size or total-result bound. Expiry is not
-    compared here; this reader relies on the stored Redis TTL.
-    """
+async def list_capabilities(redis: Redis, *, config: AIExecutionConfig, scope: Scope, multi_workspace_enabled: bool) -> list[CapabilityResult]:
+    """Read at most7 aliases x6 capabilities by exact workspace/actor/config keys, never global SCAN."""
+    validate_capability_scope(config, scope, multi_workspace_enabled)
     results: list[CapabilityResult] = []
-    for alias, mapping in mappings.items():
-        # Redis COUNT is a scan batch hint; it does not cap matches or total work.
-        async for key in redis.scan_iter(match=capability_alias_pattern(alias), count=100):
+    for alias, mapping in config.aliases.items():
+        if alias not in ALIASES:
+            continue
+        for capability in ("chat", "streaming", "embeddings", "structured", "tools", "reranking"):
+            key = capability_key(alias, mapping.model, mapping.version, capability, config.gateway_identity,
+                                 workspace_id=config.workspace_id, actor_user_id=config.actor_user_id)
             try:
                 value = CapabilityResult.model_validate_json(await redis.get(key))
+                expiry = datetime.fromisoformat(value.expires_at)
+                if expiry.tzinfo is None or expiry <= datetime.now(UTC):
+                    continue
             except (ValueError, TypeError):
                 continue
-            if value.gateway_identity == gateway_identity and value.model == mapping.model and value.version == mapping.version:
+            if (value.workspace_id == config.workspace_id and value.actor_user_id == config.actor_user_id
+                    and value.membership_revision == config.membership_revision
+                    and value.gateway_identity == config.gateway_identity
+                    and value.configuration_revision == config.configuration_revision
+                    and value.alias == alias and value.capability == capability
+                    and value.model == mapping.model and value.version == mapping.version):
                 results.append(value)
     return results
 
 
-def new_capability_result(alias: str, mapping: ModelMapping, capability: str, gateway_identity: str, result: str, configuration_revision: int = 0) -> CapabilityResult:
-    """Build a capability record with a 24-hour validity window.
+def new_capability_result(alias: str, mapping: ModelMapping, capability: str, result: str, *, config: AIExecutionConfig, scope: Scope, multi_workspace_enabled: bool) -> CapabilityResult:
+    """Detach probe evidence for the exact workspace/actor/configuration with24h validity.
 
-    The caller supplies the gateway identity and configuration revision so cached
-    results can be scoped to the settings that produced them.
+    Does not authorize storage: caller must reacquire matching identity/settings fence
+    after provider I/O before save_capability. Draft probes cannot supply this config.
     """
+    validate_capability_scope(config, scope, multi_workspace_enabled)
     now = datetime.now(UTC)
-    return CapabilityResult(alias=alias, model=mapping.model, version=mapping.version,
-        gateway_identity=gateway_identity, configuration_revision=configuration_revision, capability=capability, result=result,
-        checked_at=now.isoformat(), expires_at=(now + timedelta(hours=24)).isoformat())
+    return CapabilityResult(workspace_id=config.workspace_id, actor_user_id=config.actor_user_id,
+        membership_revision=config.membership_revision, alias=alias, model=mapping.model, version=mapping.version,
+        gateway_identity=config.gateway_identity, configuration_revision=config.configuration_revision,
+        capability=capability, result=result, checked_at=now.isoformat(), expires_at=(now + timedelta(hours=24)).isoformat())

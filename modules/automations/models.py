@@ -9,6 +9,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -27,13 +28,23 @@ class Automation(Base):
 
     The definition itself lives only in ``AutomationRevision`` so a run can always
     cite the exact revision that fired. Deletion is soft to keep run history valid.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
     """
 
     __tablename__ = "automations"
     __table_args__ = (
         CheckConstraint("revision >= 1", name="ck_automations_revision"),
         Index("ix_automations_owner", "owner_id", "deleted_at"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_automations_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "owner_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_automations_principal", ondelete="RESTRICT"),
+        UniqueConstraint("workspace_id", "id", name="uq_w2_automations_id"),
+        Index("ix_w2_automations_scope", 'workspace_id', 'id'),
+        Index("ix_w2_automations_work", 'workspace_id', 'created_at', 'id'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     owner_id: Mapped[int] = mapped_column(ForeignKey("owner.id", ondelete="CASCADE"), nullable=False)
@@ -45,6 +56,7 @@ class Automation(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
 
 
 class AutomationRevision(Base):
@@ -74,16 +86,25 @@ class AutomationTrigger(Base):
 
     ``depth`` and the origin columns carry the causal chain of events that an automation itself
     caused (0 = not caused by an automation), which bounds loops across modules.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
     """
 
     __tablename__ = "automation_triggers"
     __table_args__ = (
-        UniqueConstraint("owner_id", "trigger_type", "event_key", name="uq_automation_triggers_event"),
+        UniqueConstraint("workspace_id", "owner_id", "trigger_type", "event_key", name="uq_automation_triggers_event"),
         CheckConstraint("status IN ('pending','processed')", name="ck_automation_triggers_status"),
         CheckConstraint("depth BETWEEN 0 AND 50", name="ck_automation_triggers_depth"),
         Index("ix_automation_triggers_pending", "status", "created_at"),
         Index("ix_automation_triggers_document", "document_id", "id"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_automation_triggers_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "owner_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_automation_triggers_principal", ondelete="RESTRICT"),
+        Index("ix_w2_automation_triggers_scope", 'workspace_id', 'id'),
+        Index("ix_w2_automation_triggers_work", 'workspace_id', 'created_at', 'id'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     owner_id: Mapped[int] = mapped_column(ForeignKey("owner.id", ondelete="CASCADE"), nullable=False)
@@ -99,6 +120,7 @@ class AutomationTrigger(Base):
     origin_run_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
 
 
 class AutomationSchedule(Base):
@@ -125,6 +147,8 @@ class AutomationRun(Base):
 
     The unique identity is the dedupe fence: a duplicate event, retry or double slot insert
     conflicts instead of creating a second run. ``revision`` cites the exact snapshot.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
     """
 
     __tablename__ = "automation_runs"
@@ -137,11 +161,19 @@ class AutomationRun(Base):
         Index("ix_automation_runs_dispatch", "status", "next_attempt_at"),
         Index("ix_automation_runs_rule", "automation_id", "created_at"),
         Index("ix_automation_runs_document", "document_id", "id"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_automation_runs_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "owner_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_automation_runs_principal", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "automation_id"], ["automations.workspace_id", "automations.id"], name="fk_w2_automation_runs_automation_id", ondelete="RESTRICT"),
+        Index("ix_w2_automation_runs_scope", 'workspace_id', 'id'),
+        Index("ix_w2_automation_runs_work", 'workspace_id', 'status', 'next_attempt_at', 'id'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     owner_id: Mapped[int] = mapped_column(ForeignKey("owner.id", ondelete="CASCADE"), nullable=False)
-    automation_id: Mapped[UUID] = mapped_column(ForeignKey("automations.id", ondelete="RESTRICT"), nullable=False)
+    automation_id: Mapped[UUID] = mapped_column(nullable=False)
     revision: Mapped[int] = mapped_column(Integer, nullable=False)
     trigger_type: Mapped[str] = mapped_column(String(32), nullable=False)
     trigger_key: Mapped[str] = mapped_column(String(240), nullable=False)
@@ -165,6 +197,7 @@ class AutomationRun(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
 
 
 class AutomationRunAction(Base):
@@ -197,24 +230,44 @@ class AutomationRunAction(Base):
 
 
 class AutomationCursor(Base):
-    """Durable position of one producer sweep: the last ``(ts, id)`` it handed to the trigger inbox."""
+    """Durable position of one producer sweep: the last ``(ts, id)`` it handed to the trigger inbox.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
 
     __tablename__ = "automation_cursors"
+    __table_args__ = (
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_automation_cursors_workspace", ondelete="RESTRICT"),
+    )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+
 
     name: Mapped[str] = mapped_column(String(32), primary_key=True)
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     item_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
 
 
+
 class AutomationWebhookCredential(Base):
-    """Hash-only bearer slot for one owner-configured inbound alias."""
+    """Hash-only bearer slot for one owner-configured inbound alias.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
 
     __tablename__ = "automation_webhook_credentials"
     __table_args__ = (
         CheckConstraint("length(token_hash) = 64", name="ck_automation_webhook_credentials_hash"),
         CheckConstraint("revision >= 1", name="ck_automation_webhook_credentials_revision"),
         Index("ix_automation_webhook_credentials_expiry", "expires_at"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_automation_webhook_credentials_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "owner_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_automation_webhook_credentials_principal", ondelete="RESTRICT"),
+        Index("ix_w2_automation_webhook_credentials_scope", 'workspace_id', 'owner_id', 'alias'),
+        Index("ix_w2_automation_webhook_credentials_work", 'workspace_id', 'created_at', 'owner_id', 'alias'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
 
     owner_id: Mapped[int] = mapped_column(ForeignKey("owner.id", ondelete="CASCADE"), primary_key=True)
     alias: Mapped[str] = mapped_column(String(40), primary_key=True)
@@ -223,3 +276,4 @@ class AutomationWebhookCredential(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+

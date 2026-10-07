@@ -4,8 +4,18 @@ from datetime import datetime
 from hashlib import blake2b
 from uuid import NAMESPACE_URL, UUID, uuid5
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, func, select
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    String,
+    func,
+    select,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.types import Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from core.database import Base
@@ -20,7 +30,10 @@ class DemoSeedBusy(RuntimeError):
 
 
 class DemoSeedReceipt(Base):
-    """Record completed per-owner seed namespaces so deleted rows are not recreated later."""
+    """Record completed per-owner seed namespaces so deleted rows are not recreated later.
+
+    Workspace identity is mandatory and survives nullable or detached canonical references.
+    """
 
     __tablename__ = "demo_seed_receipts"
     __table_args__ = (
@@ -28,7 +41,13 @@ class DemoSeedReceipt(Base):
             "length(namespace) BETWEEN 1 AND 128",
             name="ck_demo_seed_receipts_namespace_length",
         ),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_demo_seed_receipts_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "owner_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_demo_seed_receipts_principal", ondelete="RESTRICT"),
+        Index("ix_w2_demo_seed_receipts_scope", 'workspace_id', 'owner_id', 'namespace'),
     )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
 
     owner_id: Mapped[int] = mapped_column(
         ForeignKey("owner.id", ondelete="CASCADE"), primary_key=True,
@@ -37,6 +56,7 @@ class DemoSeedReceipt(Base):
     completed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False,
     )
+
 
 
 def demo_seed_id(kind: str, identity: str) -> UUID:
