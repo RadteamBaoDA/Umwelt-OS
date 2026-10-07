@@ -40,6 +40,8 @@ STALL_TIMEOUT = 120.0
 DEADLINE = 2.0
 MARKER = "p14-t4-unread-when-checked"
 OWNER_PASSWORD = "test-owner-password-42"
+STREAM_CAP = 64  # modules.chat.routes.MAX_CHAT_STREAMS_PER_API_PROCESS
+API_PROCESSES = 2  # WEB_CONCURRENCY in api.Dockerfile; pinned by test_api_runs_two_uvicorn_workers
 
 
 async def _event_reads(engine: AsyncEngine) -> int:
@@ -332,19 +334,32 @@ async def test_65th_concurrent_stream_gets_503_and_closed_streams_free_their_per
     client = ready_owner_client
     run = await _seed_run(client, committed_engine, 0, 0, status="streaming",
                           fence=await _privacy_fence(client, committed_engine))
-    socks = [(await _open_stalled_socket(client, run))[0] for _ in range(64)]
+    # The cap is per API process (MAX_CHAT_STREAMS_PER_API_PROCESS) and the API runs API_PROCESSES uvicorn
+    # workers; the kernel picks which one accepts. So open until the first refusal: no process refuses
+    # before it holds the cap, and none can hold more, so the refusal comes in [cap, cap * processes].
+    socks: list[socket.socket] = []
     try:
-        refused = await client.get(f"/api/v1/responses/{run}/events")
-        assert refused.status_code == 503 and "Chat stream limit reached" in refused.text
+        while True:
+            sock, head = await _open_socket(client, run)
+            if not head.startswith(b"HTTP/1.1 200"):
+                break
+            socks.append(sock)
+            assert len(socks) <= STREAM_CAP * API_PROCESSES, "no stream was refused past the total cap"
+        while b"Chat stream limit reached" not in head and (chunk := await asyncio.to_thread(sock.recv, 1024)):
+            head += chunk
+        sock.close()
+        assert head.startswith(b"HTTP/1.1 503") and b"Chat stream limit reached" in head, head[:300]
+        assert len(socks) >= STREAM_CAP, f"refused with only {len(socks)} open streams"
     finally:
         for sock in socks:
             sock.close()
+    opened = len(socks)
 
-    # Closed clients release their permits promptly (not at garbage collection): 64 new streams fit again.
+    # Closed clients release their permits promptly (not at garbage collection): as many new streams fit again.
     reopened: list[socket.socket] = []
     try:
-        deadline = time.monotonic() + 10
-        while len(reopened) < 64:
+        deadline = time.monotonic() + 30
+        while len(reopened) < opened:
             sock, head = await _open_socket(client, run)
             if head.startswith(b"HTTP/1.1 200"):
                 reopened.append(sock)
