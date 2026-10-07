@@ -23,27 +23,36 @@ class BodyLimitMiddleware:
             return
         received = 0
         started = False
+        rejected = False
 
         async def counting_receive() -> Message:
-            nonlocal received
+            nonlocal received, rejected
+            if rejected:
+                return {"type": "http.disconnect"}
             message = await receive()
             if message["type"] == "http.request":
                 received += len(message.get("body", b""))
                 if received > limit:
-                    raise _TooLarge
+                    # Answer 413 here instead of raising: FastAPI wraps body-read errors into 400.
+                    # The app sees a disconnect, aborts its parse, and its own response is dropped.
+                    rejected = True
+                    if not started:
+                        await self._reject(send)
+                    return {"type": "http.disconnect"}
             return message
 
         async def tracking_send(message: Message) -> None:
             nonlocal started
+            if rejected:
+                return
             started = started or message["type"] == "http.response.start"
             await send(message)
 
         try:
             await self.app(scope, counting_receive, tracking_send)
-        except _TooLarge:
-            if started:
+        except Exception:
+            if not rejected:
                 raise
-            await self._reject(send)
 
     @staticmethod
     async def _reject(send: Send) -> None:
@@ -54,6 +63,3 @@ class BodyLimitMiddleware:
         ]})
         await send({"type": "http.response.body", "body": body})
 
-
-class _TooLarge(Exception):
-    """Raised from the wrapped receive when the streamed body exceeds the limit."""

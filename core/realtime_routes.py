@@ -4,13 +4,14 @@ import json
 import re
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from starlette.types import Receive, Scope, Send
 
 from core.auth.dependencies import SESSION_COOKIE
 from core.auth.models import AuthSession
@@ -46,21 +47,25 @@ def _token_hash(request: Request) -> str | None:
     return hashlib.sha256(token.encode()).hexdigest() if token else None
 
 
-async def _session_is_current(request: Request) -> bool | None:
-    """Check session existence and expiry within a bounded database read; return None when the read times out."""
-    token_hash = _token_hash(request)
+async def _token_is_current(session: AsyncSession, token_hash: str | None) -> bool:
+    """Return whether the hashed session token exists and is unexpired, using the caller's session."""
     if token_hash is None or not _TOKEN_CURSOR_RE.fullmatch(token_hash):
         return False
+    return await session.scalar(
+        select(AuthSession.token_hash).where(
+            AuthSession.token_hash == token_hash,
+            AuthSession.expires_at > datetime.now(UTC),
+        ).limit(1)
+    ) is not None
+
+
+async def _session_is_current(request: Request) -> bool | None:
+    """Check session existence and expiry within a bounded database read; return None when the read times out."""
     factory = request.app.state.session_factory
     try:
         async with asyncio.timeout(DB_READ_TIMEOUT_SECONDS):
             async with factory() as session:
-                return await session.scalar(
-                    select(AuthSession.token_hash).where(
-                        AuthSession.token_hash == token_hash,
-                        AuthSession.expires_at > datetime.now(UTC),
-                    ).limit(1)
-                ) is not None
+                return await _token_is_current(session, _token_hash(request))
     except TimeoutError:
         return None
 
@@ -93,6 +98,23 @@ def _sse_record(record: ReplayRecord) -> str:
     cursor = ReplayCursor(epoch=record.epoch, sequence=record.sequence).encode()
     payload = json.dumps(record.payload, separators=(",", ":"), ensure_ascii=False)
     return f"id: {cursor}\nevent: {record.event_type}\ndata: {payload}\n\n"
+
+
+class _PermitResponse(StreamingResponse):
+    """Streaming response that frees the stream permit if the generator never started (failed send, early error)."""
+
+    def __init__(self, content: AsyncIterator[str], started: asyncio.Event, semaphore: asyncio.Semaphore, **kwargs: Any) -> None:
+        super().__init__(content, **kwargs)
+        self._started = started
+        self._semaphore = semaphore
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            if not self._started.is_set():
+                self._started.set()  # idempotent guard against double release
+                self._semaphore.release()
 
 
 @router.get("/events")
@@ -138,9 +160,12 @@ async def stream_events(
     except TimeoutError as exc:
         raise HTTPException(status_code=503, detail="Realtime connection limit reached") from exc
 
+    started = asyncio.Event()
+
     async def body() -> AsyncIterator[str]:
         """Poll replay state, recheck session validity, emit events or heartbeats, and release the stream permit on every exit."""
         nonlocal initial_reason, latest_cursor
+        started.set()
         try:
             position = initial_cursor
             if initial_reason is not None:
@@ -168,12 +193,9 @@ async def stream_events(
                                 .limit(MAX_REPLAY_BATCH)
                             )).all())
                             latest_cursor = ReplayCursor(epoch=head.epoch, sequence=head.sequence).encode()
+                            # Same session/snapshot as the read; still before any write below.
+                            current = await _token_is_current(session, _token_hash(request))
                 except TimeoutError:
-                    yield "event: connection_unavailable\ndata: {}\n\n"
-                    return
-                # One auth check per poll, after the read and before anything is written.
-                current = await _session_is_current(request)
-                if current is None:
                     yield "event: connection_unavailable\ndata: {}\n\n"
                     return
                 if not current:
@@ -208,8 +230,10 @@ async def stream_events(
         finally:
             semaphore.release()
 
-    return StreamingResponse(
+    return _PermitResponse(
         body(),
+        started,
+        semaphore,
         media_type="text/event-stream",
         headers={
             "Cache-Control": "private, no-store, no-transform",

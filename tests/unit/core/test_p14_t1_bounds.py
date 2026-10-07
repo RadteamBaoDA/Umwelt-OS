@@ -3,18 +3,23 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
+from typing import Annotated
 from uuid import uuid4
 
 import pytest
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.testclient import TestClient
+from pydantic import BaseModel
+from starlette.requests import ClientDisconnect
 
 from apps.api.main import create_app
 from core import realtime_routes
 from core.body_limit import BodyLimitMiddleware
 from core.config import Settings
 from core.database import make_session_factory
+from core.errors import install_error_handling
 from core.realtime import ReplayCursor
 
 
@@ -57,6 +62,10 @@ def test_redis_client_bounds(monkeypatch: pytest.MonkeyPatch) -> None:
     assert app.state.redis.connection_pool.max_connections == 100
 
 
+class Item(BaseModel):
+    text: str
+
+
 def _limited_app() -> FastAPI:
     app = FastAPI()
     app.add_middleware(BodyLimitMiddleware, default_limit=1000, upload_limit=5000)
@@ -69,7 +78,55 @@ def _limited_app() -> FastAPI:
     async def upload(request: Request) -> dict[str, int]:
         return {"n": len(await request.body())}
 
+    @app.post("/model")
+    async def model(item: Item) -> dict[str, int]:
+        return {"n": len(item.text)}
+
+    @app.post("/form")
+    async def form(name: Annotated[str, Form()], file: Annotated[UploadFile, File()]) -> dict[str, int]:
+        return {"n": len(await file.read())}
+
     return app
+
+
+def _chunks(total: int, size: int = 600):
+    for _ in range(total // size + 1):
+        yield b"x" * size
+
+
+def test_body_limit_413_shape_on_model_and_form_routes() -> None:
+    client = TestClient(_limited_app())
+    expected = {"detail": "Request body too large"}
+    big = json.dumps({"text": "a" * 1500})
+    jh = {"content-type": "application/json"}
+    r = client.post("/model", content=big, headers=jh)  # content-length path
+    assert (r.status_code, r.json()) == (413, expected)
+    r = client.post("/model", content=(big[i:i + 600].encode() for i in range(0, len(big), 600)), headers=jh)  # chunked
+    assert (r.status_code, r.json()) == (413, expected)
+    r = client.post("/form", data={"name": "n"}, files={"file": ("f.txt", b"x" * 1500)})
+    assert (r.status_code, r.json()) == (413, expected)
+    boundary = "b0undary"
+    def multipart():
+        crlf = chr(13) + chr(10)
+        yield f'--{boundary}{crlf}Content-Disposition: form-data; name="name"{crlf}{crlf}n{crlf}'.encode()
+        yield f'--{boundary}{crlf}Content-Disposition: form-data; name="file"; filename="f.txt"{crlf}{crlf}'.encode()
+        yield from _chunks(1500)
+        yield f"{crlf}--{boundary}--{crlf}".encode()
+    r = client.post("/form", content=multipart(), headers={"content-type": f"multipart/form-data; boundary={boundary}"})
+    assert (r.status_code, r.json()) == (413, expected)
+    ok = client.post("/form", data={"name": "n"}, files={"file": ("f.txt", b"x" * 100)})
+    assert ok.json() == {"n": 100}
+
+
+def test_body_limit_passes_4_5_mib_on_normal_route() -> None:
+    app = create_app(Settings(csrf_signing_secret="s"))
+
+    @app.post("/p14-echo")
+    async def echo(request: Request) -> dict[str, int]:
+        return {"n": len(await request.body())}
+
+    size = 4 * 1024 * 1024 + 512 * 1024
+    assert TestClient(app).post("/p14-echo", content=b"x" * size).json() == {"n": size}
 
 
 def test_body_limit_content_length_and_chunked_and_upload() -> None:
@@ -132,6 +189,16 @@ def test_realtime_batch_is_one_chunk_with_one_auth_check(monkeypatch: pytest.Mon
         calls += 1
         return True
 
+    token_checks = 0
+
+    async def fake_token(_session, _hash):
+        nonlocal token_checks
+        token_checks += 1
+        return True
+
+    monkeypatch.setattr(realtime_routes, "_token_is_current", fake_token)
+    monkeypatch.setattr(realtime_routes, "_token_hash", lambda _r: "h")
+
     monkeypatch.setattr(realtime_routes, "current_head", fake_head)
     monkeypatch.setattr(realtime_routes, "_session_is_current", fake_current)
 
@@ -140,6 +207,7 @@ def test_realtime_batch_is_one_chunk_with_one_auth_check(monkeypatch: pytest.Mon
 
     request = SimpleNamespace(
         is_disconnected=disconnected,
+        cookies={},
         app=SimpleNamespace(state=SimpleNamespace(
             session_factory=lambda: _FakeSession(), realtime_connections=asyncio.Semaphore(1),
         )),
@@ -155,4 +223,50 @@ def test_realtime_batch_is_one_chunk_with_one_auth_check(monkeypatch: pytest.Mon
 
     chunk, polls_checked = asyncio.run(run())
     assert chunk.count("event: t") == 3
-    assert polls_checked == 2  # one at admission, one for the whole batch
+    assert polls_checked == 1  # admission only; the poll check reuses the read session
+    assert token_checks == 1
+
+
+def test_web_concurrency_non_integer_is_clear_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WEB_CONCURRENCY", "auto")
+    with pytest.raises(RuntimeError, match="WEB_CONCURRENCY must be a positive integer"):
+        create_app(Settings(csrf_signing_secret="s"))
+
+
+def test_stream_permit_released_when_response_never_starts() -> None:
+    sem = asyncio.Semaphore(1)
+
+    async def run() -> int:
+        await sem.acquire()
+
+        async def gen():
+            yield "x"
+
+        async def receive():
+            return {"type": "http.disconnect"}
+
+        async def send(_m):
+            raise OSError("client gone")
+
+        response = realtime_routes._PermitResponse(gen(), asyncio.Event(), sem)
+        with pytest.raises(ClientDisconnect):
+            await response({"type": "http", "asgi": {"spec_version": "2.4"}}, receive, send)
+        return sem._value
+
+    assert asyncio.run(run()) == 1
+
+
+@pytest.mark.parametrize(("sqlstate", "status"), [("57014", 503), ("55P03", 503), ("23505", 500)])
+def test_db_timeouts_map_to_503_only(sqlstate: str, status: int) -> None:
+    from sqlalchemy.exc import DBAPIError
+
+    app = FastAPI()
+    install_error_handling(app)
+
+    @app.get("/boom")
+    async def boom() -> None:
+        raise DBAPIError("SELECT 1", {}, SimpleNamespace(sqlstate=sqlstate))  # type: ignore[arg-type]
+
+    r = TestClient(app, raise_server_exceptions=False).get("/boom")
+    assert r.status_code == status
+    assert (r.headers.get("Retry-After") == "5") == (status == 503)
