@@ -1,6 +1,6 @@
 # Deployment
 
-The production Compose stack contains PostgreSQL with pgvector installed, Redis, a one-shot Alembic migration service, the FastAPI API, one ARQ worker, and the Next.js frontend. Application containers run as non-root users. Persistent database and Redis data live in named volumes.
+The production Compose stack contains PostgreSQL with pgvector installed, Redis, a one-shot Alembic migration service, the FastAPI API, one main ARQ worker, one chat ARQ worker, and the Next.js frontend. Application containers run as non-root users. Persistent database and Redis data live in named volumes.
 
 The web port binds to loopback by default. For remote access, terminate HTTPS at a trusted reverse proxy and set `PUBLIC_ORIGIN` to the exact browser origin and `SECURE_COOKIES=true` in `.env`. Keep the API, Redis, PostgreSQL, and Docker socket private. Do not deploy with the example placeholder values.
 
@@ -12,7 +12,25 @@ The web port binds to loopback by default. For remote access, terminate HTTPS at
 | `DB_STATEMENT_TIMEOUT_MS` | `60000` | API `statement_timeout` (also bounds lock waits). `0` disables. The worker never sets a statement timeout. |
 | `DB_IDLE_TX_TIMEOUT_MS` | `240000` | `idle_in_transaction_session_timeout` for API and worker connections; a backstop above the longest legitimate send-fence hold. `0` disables. |
 | `MAX_REQUEST_BODY_BYTES` | `5242880` | Request body cap returning 413; `POST /api/v1/documents/upload` allows `UPLOAD_MAX_BYTES` plus 1 MiB. |
-| `WEB_CONCURRENCY` | `1` | When above 1 the API refuses to start unless `CSRF_SIGNING_SECRET` is set, so every process signs sessions with the same secret. |
+| `WEB_CONCURRENCY` | `2` (image `ENV`) | API process count. Above 1 the API refuses to start unless `CSRF_SIGNING_SECRET` is set, so every process signs sessions with the same secret. |
+
+**`WEB_CONCURRENCY` is the only supported way to set the API process count.** uvicorn reads it as the `--workers` default, and `create_app()` reads it to enforce the shared-secret guard. Running `uvicorn --workers N` with `WEB_CONCURRENCY` unset (or `1`) starts N processes that bypass the guard and sign sessions with different random secrets; do not pass `--workers`. The production image `CMD` omits it on purpose.
+
+## Recommended values: 2 vCPU / 8 GiB host
+
+| Service | Memory limit / reservation | CPU shares | Key settings |
+|---|---|---|---|
+| postgres | 2.5 GiB / 1 GiB (`shm_size` 1 GiB) | 768 | `max_connections=100 shared_buffers=1GB effective_cache_size=4GB work_mem=16MB maintenance_work_mem=256MB` |
+| redis | 384 MiB / 64 MiB | 128 | `maxmemory 256mb`, `noeviction` (never drop queued ARQ jobs; writes fail loudly instead) |
+| api | 1 GiB / 512 MiB | 1024 | `WEB_CONCURRENCY=2`, uvicorn `asyncio` + `httptools`, `--proxy-headers --forwarded-allow-ips '*'` (safe only while 8000 is `expose`-only), keep-alive 15 s, graceful shutdown 8 s, `--limit-concurrency 400`; `stop_grace_period` 15 s |
+| worker | 1 GiB / 256 MiB | 512 | `max_jobs=6`, DB pool 7 + 10 |
+| chat-worker | 768 MiB / 256 MiB | 512 | `max_jobs=10`, `job_timeout=600`, DB pool 10 + 10 |
+| web | 768 MiB / 256 MiB | 512 | `NODE_OPTIONS=--max-old-space-size=512`, `experimental.proxyTimeout=120000` |
+| migrate | 512 MiB (one-shot, exits before the others start) | - | - |
+
+Memory limits sum to 6.4 GiB (2.5 + 0.375 + 1 + 1 + 0.75 + 0.75), leaving about 1.6 GiB for the OS, page cache and optional browser/n8n connectors; expected steady RSS is about 4.2 GiB. CPU shares apply only under contention (no hard CPU caps).
+
+Connection budget (`max_connections=100`): API 2 x (10 + 10) = 40, main worker 7 + 10 = 17, chat-worker 10 + 10 = 20, total 77; plus migrate, backup and admin about 5 = 82, leaving 18 spare. If you change `WEB_CONCURRENCY`, `DB_POOL_SIZE` or `DB_MAX_OVERFLOW`, recompute this before applying.
 
 Redis clients use `socket_timeout=5`, `socket_connect_timeout=2`, `health_check_interval=30` and at most 100 connections. Each API process allows 32 concurrent Realtime SSE streams. No global `lock_timeout` is set because it would turn waits on the Memory privacy lock into errors.
 

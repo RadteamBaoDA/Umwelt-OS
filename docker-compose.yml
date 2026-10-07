@@ -12,11 +12,30 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+    command:
+      - postgres
+      - -c
+      - max_connections=100
+      - -c
+      - shared_buffers=1GB
+      - -c
+      - effective_cache_size=4GB
+      - -c
+      - work_mem=16MB
+      - -c
+      - maintenance_work_mem=256MB
+    shm_size: 1gb
+    cpu_shares: 768
+    deploy:
+      resources:
+        limits: {memory: 2560M}
+        reservations: {memory: 1024M}
+    stop_grace_period: 30s
     restart: unless-stopped
 
   redis:
     image: redis:7.4.11-alpine
-    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1000"]
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1000", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
     volumes:
       - redis-data:/data
     healthcheck:
@@ -24,6 +43,11 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+    cpu_shares: 128
+    deploy:
+      resources:
+        limits: {memory: 384M}
+        reservations: {memory: 64M}
     restart: unless-stopped
 
   migrate:
@@ -38,6 +62,9 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    deploy:
+      resources:
+        limits: {memory: 512M}
     restart: "no"
 
   api:
@@ -65,6 +92,12 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+    cpu_shares: 1024
+    deploy:
+      resources:
+        limits: {memory: 1G}
+        reservations: {memory: 512M}
+    stop_grace_period: 15s
     restart: unless-stopped
 
   worker:
@@ -78,6 +111,12 @@ services:
       REDIS_URL: ${REDIS_URL:?Run setup to create .env}
       # Keep API and worker disabled unless the explicit observability overlay is included.
       BBD_LANGFUSE_ENABLED: "false"
+    healthcheck:
+      test: ["CMD", "arq", "--check", "apps.worker.main.WorkerSettings"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     init: true
     volumes:
       - app-data:/data
@@ -86,6 +125,12 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+    cpu_shares: 512
+    deploy:
+      resources:
+        limits: {memory: 1G}
+        reservations: {memory: 256M}
+    stop_grace_period: 30s
     restart: unless-stopped
 
   chat-worker:
@@ -112,6 +157,12 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+    cpu_shares: 512
+    deploy:
+      resources:
+        limits: {memory: 768M}
+        reservations: {memory: 256M}
+    stop_grace_period: 30s
     restart: unless-stopped
 
   web:
@@ -120,8 +171,20 @@ services:
       dockerfile: infrastructure/docker/web.Dockerfile
     environment:
       API_INTERNAL_URL: http://api:8000
+      NODE_OPTIONS: --max-old-space-size=512
     ports:
       - "127.0.0.1:${WEB_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    cpu_shares: 512
+    deploy:
+      resources:
+        limits: {memory: 768M}
+        reservations: {memory: 256M}
     depends_on:
       api:
         condition: service_healthy
