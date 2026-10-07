@@ -20,6 +20,7 @@ MAX_DEFINITIONS_PER_OWNER = 200
 MAX_INSTANCES_PER_DASHBOARD = 100
 MAX_SOURCES_PER_DEFINITION = 32
 MAX_RULES_PER_DEFINITION = 32
+MAX_TOPICS_PER_RULE = 8
 DEFAULT_PAGE_LIMIT = 50
 MAX_PAGE_LIMIT = 100
 
@@ -86,10 +87,26 @@ class HighlightRule(StrictConfiguration):
 
     id: UUID
     keywords: list[Annotated[str, Field(min_length=1, max_length=120)]] = Field(
-        min_length=1, max_length=16
+        default_factory=list, max_length=16
     )
     severity: Literal["info", "warning", "critical"]
     notify: StrictBool
+    topic_ids: list[UUID] = Field(default_factory=list, max_length=MAX_TOPICS_PER_RULE)
+    source_ids: list[UUID] = Field(default_factory=list, max_length=MAX_SOURCES_PER_DEFINITION)
+    exclude_source_ids: list[UUID] = Field(default_factory=list, max_length=MAX_SOURCES_PER_DEFINITION)
+
+    @model_validator(mode="after")
+    def ensure_conditions(self) -> "HighlightRule":
+        """Require a keyword or topic condition and keep every ID list distinct and non-overlapping."""
+        if not self.keywords and not self.topic_ids:
+            raise ValueError("a rule needs at least one keyword or topic")
+        for name in ("topic_ids", "source_ids", "exclude_source_ids"):
+            values = getattr(self, name)
+            if len(values) != len(set(values)):
+                raise ValueError(f"{name} must contain distinct values")
+        if set(self.source_ids) & set(self.exclude_source_ids):
+            raise ValueError("source_ids and exclude_source_ids must not overlap")
+        return self
 
 
 class GadgetConfiguration(StrictConfiguration):
@@ -541,3 +558,46 @@ class PresetPreviewRead(StrictConfiguration):
     target_revision: Revision | None
     layouts: PresetLayoutsRead
     preview_fingerprint: str
+
+
+class HighlightPreviewRequest(StrictConfiguration):
+    """Draft rules to dry-run against recent current evidence; nothing here is persisted."""
+
+    source_ids: list[UUID] = Field(min_length=1, max_length=MAX_SOURCES_PER_DEFINITION)
+    rules: list[HighlightRule] = Field(min_length=1, max_length=MAX_RULES_PER_DEFINITION)
+    days: Annotated[StrictInt, Field(ge=1, le=7)] = 7
+    source_item_ids: list[UUID] = Field(default_factory=list, max_length=100)  # the gadget's item scope
+
+    @model_validator(mode="after")
+    def ensure_distinct(self) -> "HighlightPreviewRequest":
+        """Reject repeated sources or rule ids so per-rule counts stay unambiguous."""
+        if len(self.source_ids) != len(set(self.source_ids)):
+            raise ValueError("source_ids must contain distinct values")
+        GadgetConfiguration(highlight_rules=self.rules)
+        return self
+
+
+class HighlightPreviewRuleRead(StrictConfiguration):
+    """Per-rule dry-run outcome including topics that no longer resolve."""
+
+    rule_id: UUID
+    match_count: int
+    unresolved_topic_ids: list[UUID]
+
+
+class HighlightPreviewRead(StrictConfiguration):
+    """Bounded dry-run result; ``truncated`` means more recent evidence was not scanned."""
+
+    window_days: int
+    scanned: int
+    truncated: bool
+    matches: list[DashboardHighlightRead] = Field(max_length=100)
+    rules: list[HighlightPreviewRuleRead]
+
+
+class GadgetDefinitionUsageRead(StrictConfiguration):
+    """One dashboard that places the definition (and so evaluates its rules)."""
+
+    dashboard_id: UUID
+    name: str
+    instance_count: int

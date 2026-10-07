@@ -2,11 +2,11 @@ import { apiRequest, csrfHeaders } from '@/core/api';
 import type { Topic, TopicCreate, TopicEntityOption, TopicPage, TopicUpdate } from './types';
 
 /** Fetches one bounded owner page, preserving the active filter in cursor scope. */
-export function fetchTopics(options: { isActive?: boolean; limit?: number; cursor?: string } = {}): Promise<TopicPage> {
+export function fetchTopics(options: { isActive?: boolean; limit?: number; cursor?: string; signal?: AbortSignal } = {}): Promise<TopicPage> {
   const params = new URLSearchParams({ limit: String(options.limit ?? 50) });
   if (options.isActive !== undefined) params.set('is_active', String(options.isActive));
   if (options.cursor) params.set('cursor', options.cursor);
-  return apiRequest<TopicPage>(`/api/v1/topics?${params}`);
+  return apiRequest<TopicPage>(`/api/v1/topics?${params}`, { signal: options.signal });
 }
 
 /** Fetches a single current owner topic for conflict review. */

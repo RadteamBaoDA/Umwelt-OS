@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -34,50 +35,82 @@ class HighlightMatch:
     reason: str
 
 
-def evaluate_highlights(text: str, rules: list[HighlightRule]) -> list[HighlightMatch]:
-    """Evaluate text content against configured highlight rules and return explainable match results.
+# ponytail: per-rule term cap bounds regex work (8 topics x 150 terms could otherwise reach ~1.2k per rule);
+# raise or switch to one alternation per rule if real topics need more.
+MAX_TERMS_PER_RULE = 256
 
-    Matches keywords case-insensitively using regex word boundary matching.
-    Results are ordered by severity (critical first, then warning, then info).
 
-    Args:
-        text: Target document, message, or headline string to evaluate.
-        rules: List of validated highlight rules from gadget definition.
+@dataclass(frozen=True, slots=True)
+class CompiledRule:
+    """A rule with its terms resolved and regexes compiled once, reusable across many items."""
 
-    Returns:
-        List of HighlightMatch records describing which rules and keywords matched.
+    rule: HighlightRule
+    terms: tuple[str, ...]
+    patterns: tuple[re.Pattern[str], ...]
+    unresolved: int
+
+
+def compile_rules(
+    rules: Sequence[HighlightRule], topic_terms: Mapping[UUID, list[str]] | None = None,
+) -> list[CompiledRule]:
+    """Resolve topic terms and compile each rule's patterns once; topics absent from the map are unresolved."""
+    compiled: list[CompiledRule] = []
+    for rule in rules:
+        terms = list(rule.keywords)
+        unresolved = 0
+        for topic_id in rule.topic_ids:
+            if topic_terms is not None and topic_id in topic_terms:
+                terms.extend(topic_terms[topic_id])
+            else:
+                unresolved += 1
+        distinct = tuple(dict.fromkeys(terms))[:MAX_TERMS_PER_RULE]
+        compiled.append(CompiledRule(
+            rule, distinct,
+            tuple(re.compile(rf"\b{re.escape(term)}\b", re.IGNORECASE) for term in distinct), unresolved,
+        ))
+    return compiled
+
+
+def match_compiled(
+    text: str, compiled: Sequence[CompiledRule], *, source_id: UUID | None = None,
+) -> list[HighlightMatch]:
+    """Match text against pre-compiled rules; results are ordered critical first."""
+    if not text or not compiled:
+        return []
+    matches: list[HighlightMatch] = []
+    for item in compiled:
+        rule = item.rule
+        if source_id is not None and (
+            source_id in rule.exclude_source_ids or (rule.source_ids and source_id not in rule.source_ids)
+        ):
+            continue
+        matched_words = [term for term, pattern in zip(item.terms, item.patterns, strict=True) if pattern.search(text)]
+        if matched_words:
+            matched_words = matched_words[:16]  # DashboardHighlightRead bound
+            reason = f"Matched {len(matched_words)} keyword(s): {', '.join(matched_words)}"
+            if item.unresolved:
+                reason += f" ({item.unresolved} topic(s) unavailable)"
+            matches.append(HighlightMatch(
+                rule_id=rule.id, matched_keywords=tuple(matched_words), severity=rule.severity,
+                notify=rule.notify, reason=reason,
+            ))
+    matches.sort(key=lambda m: _SEVERITY_ORDER.get(m.severity, 0), reverse=True)
+    return matches
+
+
+def evaluate_highlights(
+    text: str, rules: list[HighlightRule], *,
+    source_id: UUID | None = None, topic_terms: Mapping[UUID, list[str]] | None = None,
+) -> list[HighlightMatch]:
+    """Evaluate text against highlight rules and return explainable matches (compiles per call).
+
+    Matches terms case-insensitively with word boundaries. Per-rule include/exclude source filters apply
+    to ``source_id``. A topic id absent from ``topic_terms`` is unresolved: it never matches and is named
+    in the reason. Loops over many items should call ``compile_rules`` once and ``match_compiled``.
     """
     if not text or not rules:
         return []
-
-    matches: list[HighlightMatch] = []
-
-    for rule in rules:
-        matched_words: list[str] = []
-        for keyword in rule.keywords:
-            pattern = re.compile(rf"\b{re.escape(keyword)}\b", re.IGNORECASE)
-            if pattern.search(text):
-                matched_words.append(keyword)
-
-        if matched_words:
-            matched_tuple = tuple(matched_words)
-            reason = f"Matched {len(matched_words)} keyword(s): {', '.join(matched_words)}"
-            matches.append(
-                HighlightMatch(
-                    rule_id=rule.id,
-                    matched_keywords=matched_tuple,
-                    severity=rule.severity,
-                    notify=rule.notify,
-                    reason=reason,
-                )
-            )
-
-    # Sort descending by severity precedence
-    matches.sort(
-        key=lambda m: _SEVERITY_ORDER.get(m.severity, 0),
-        reverse=True,
-    )
-    return matches
+    return match_compiled(text, compile_rules(rules, topic_terms), source_id=source_id)
 
 
 def highest_severity(matches: list[HighlightMatch]) -> str | None:

@@ -31,8 +31,11 @@ from modules.dashboard.schemas import (
     GadgetDefinitionCreate,
     GadgetDefinitionPatch,
     GadgetDefinitionRead,
+    GadgetDefinitionUsageRead,
     GroupCreate,
     GroupPatch,
+    HighlightPreviewRead,
+    HighlightPreviewRequest,
     InstanceCreate,
     InstancePatch,
     LayoutReplace,
@@ -66,7 +69,8 @@ async def _call[T](operation: Awaitable[T]) -> T:
         raise HTTPException(status_code=409, detail={"code": exc.code, "message": str(exc), "details": details}) from exc
     except (ValueError, KeyError) as exc:
         message = "Unknown preset or renderer" if isinstance(exc, KeyError) else str(exc)
-        raise HTTPException(status_code=422, detail={"code": "invalid_dashboard_configuration", "message": message, "details": {}}) from exc
+        code = getattr(exc, "code", "invalid_dashboard_configuration")
+        raise HTTPException(status_code=422, detail={"code": code, "message": message, "details": {}}) from exc
 
 
 @router.get("/dashboards", response_model=list[DashboardSummary])
@@ -180,6 +184,23 @@ async def create_definition(payload: GadgetDefinitionCreate, session: Session, o
     """Save validated renderer configuration after source lifecycle checks and quota enforcement."""
     _no_store(response)
     return await _call(public.create_definition(session, owner.owner_id, payload))
+
+
+@router.post("/gadget-definitions/highlight-preview", response_model=HighlightPreviewRead)
+async def preview_highlights(payload: HighlightPreviewRequest, session: Session, owner: OwnerWrite, response: Response) -> HighlightPreviewRead:
+    """Dry-run draft rules over the last days of current evidence; never persists or notifies."""
+    _no_store(response)
+    return await _call(public.preview_highlights(session, owner.owner_id, payload))
+
+
+@router.get("/gadget-definitions/{definition_id}/usage", response_model=list[GadgetDefinitionUsageRead])
+async def definition_usage(definition_id: UUID, session: Session, owner: OwnerRead, response: Response) -> list[GadgetDefinitionUsageRead]:
+    """List the owner dashboards using one definition, for edit and delete warnings."""
+    _no_store(response)
+    result = await public.definition_usage(session, owner.owner_id, definition_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Definition not found", "details": {}})
+    return result
 
 
 @router.get("/gadget-definitions/{definition_id}", response_model=GadgetDefinitionRead)
