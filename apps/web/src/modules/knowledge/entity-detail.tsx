@@ -21,6 +21,7 @@ import { useGuardedNavigation } from '@/core/guarded-navigation';
 import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { addEntityAlias, deleteEntityAlias, entityKeys, getEntity, getEntityNeighbors, getEntityTimeline, getRelationshipEvidence, listEntities, listEntityEvidence, listEntityHistory, mergeEntity, previewMergeEntity, previewSplitEntity, splitEntity, suppressEntityEvidence, updateEntity, type Entity } from './api';
+import { FollowEntityButton } from '@/modules/detail/follow-entity';
 import { EntityGraph } from './entity-graph';
 import { EventDetail } from '@/modules/timeline/event-detail';
 
@@ -257,6 +258,7 @@ export function EntityDetail() {
   return <section className="content-panel">
     <Link href="/knowledge/entities">← {t('title')}</Link>
     <h1>{value.name ?? t('unnamedEntity')}</h1>
+    <FollowEntityButton entityId={value.id} name={value.name} />
     <p className="muted">{t(`type_${value.type}` as 'type_person')} · {t('revision')} {value.revision} · {value.first_seen_at ? `${t('firstSeen')} ${formatDateTime(value.first_seen_at, display.locale, display.timezone)}` : t('ownerManaged')}</p>
     {staleIdentity && <div className="card" role="status"><p>{t('revisionChanged', { base: baseline.current?.revision ?? 0, current: value.revision })}</p><Button type="button" className="secondary" onClick={() => { baseline.current = { id: value.id, revision: value.revision, name: value.name ?? '', description: value.description ?? '' }; }}>{t('keepDraft')}</Button><Button type="button" className="secondary" onClick={clearIdentityDraft}>{t('discardDraft')}</Button></div>}
     {update.error && <p className="error" role="alert">{formatError(update.error)}{update.error instanceof ApiError && update.error.status === 409 ? ` ${t('conflictReload')}` : ''}</p>}
