@@ -9,6 +9,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 export type UserMenuProps = {
   onOpenPreferences: () => void;
   onOpenAccount: () => void;
+  onOpenChangePassword: () => void;
   onSignOut: () => void;
   signOutPending?: boolean;
   /** Lets the shell return focus to the avatar after the dialogs it opens close. */
@@ -16,7 +17,7 @@ export type UserMenuProps = {
 };
 
 /** Header avatar menu; owns its open state and focus return. Wave 5 extends the items, the shell only passes handlers. */
-export function UserMenu({ onOpenPreferences, onOpenAccount, onSignOut, signOutPending, triggerRef }: UserMenuProps) {
+export function UserMenu({ onOpenPreferences, onOpenAccount, onOpenChangePassword, onSignOut, signOutPending, triggerRef }: UserMenuProps) {
   const t = useTranslations('shell');
   const a = useTranslations('account');
   const [open, setOpen] = useState(false);
@@ -39,6 +40,7 @@ export function UserMenu({ onOpenPreferences, onOpenAccount, onSignOut, signOutP
       <DropdownMenuItem asChild><Link href="/onboarding">{t('workspaceOnboarding')}</Link></DropdownMenuItem>
       <DropdownMenuItem asChild><Link href="/knowledge/memory">{a('assistantMemory')}</Link></DropdownMenuItem>
       <DropdownMenuItem onSelect={openDialog(onOpenAccount)}>{t('accountSettings')}</DropdownMenuItem>
+      <DropdownMenuItem onSelect={openDialog(onOpenChangePassword)}>{a('changePassword')}</DropdownMenuItem>
       <DropdownMenuItem disabled={signOutPending} onSelect={onSignOut}>{t('signOut')}</DropdownMenuItem>
     </DropdownMenuContent>
   </DropdownMenu>;
