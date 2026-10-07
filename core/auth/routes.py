@@ -93,6 +93,9 @@ async def _allow_attempt(request: Request, redis: Redis, action: str) -> None:
     """Atomically increment per-address and global minute counters; reject Redis outages or exceeded limits."""
     minute = int(time.time() // 60)
     address = request.client.host if request.client else "unknown"
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if getattr(request.app.state.settings, "auth_trust_forwarded_for", False) is True and forwarded.strip():
+        address = forwarded.rsplit(",", 1)[-1].strip()  # rightmost hop: the one our trusted proxy wrote
     keys = (f"auth:{action}:ip:{_hash(address)}:{minute}", f"auth:{action}:all:{minute}")
     try:
         pipeline = redis.pipeline(transaction=True)

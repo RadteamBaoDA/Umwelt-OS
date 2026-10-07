@@ -158,6 +158,9 @@ def test_csrf_secret_required_with_multiple_workers(monkeypatch: pytest.MonkeyPa
     create_app(Settings(csrf_signing_secret="set"))
     monkeypatch.setenv("WEB_CONCURRENCY", "1")
     create_app(Settings(csrf_signing_secret=""))
+    monkeypatch.setenv("UVICORN_WORKERS", "2")
+    with pytest.raises(RuntimeError, match="UVICORN_WORKERS"):
+        create_app(Settings(csrf_signing_secret=""))
 
 
 class _FakeSession:

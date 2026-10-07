@@ -273,8 +273,8 @@ class WorkerSettings:
     # processes by `core.heavy_work.heavy_job_slot` and retries on contention, so extra slots only
     # let light jobs (cron polls, cleanup stages, chat/agent/model calls bounded by ModelGateway's
     # own slots) run beside a long job instead of queueing behind it. Heavy jobs that lose the slot
-    # retry under HEAVY_JOB_MAX_TRIES. Four keeps the DB pool bounded (pool_size = max_jobs + 1).
-    max_jobs = 4
+    # retry under HEAVY_JOB_MAX_TRIES. Six keeps the DB pool bounded (pool_size = max_jobs + 1).
+    max_jobs = 6
     max_tries = 5
     # The graph owner budget is 150 seconds; ARQ must leave time for durable
     # uncertainty publication and cancellation before the 180-second lease ends.

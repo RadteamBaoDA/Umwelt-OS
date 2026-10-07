@@ -91,6 +91,8 @@ services:
     env_file: !reset []
     environment:
       FAKE_MODEL_NAME: fake-chat
+      # The image defaults to 2 API workers; the fake model is a single process.
+      WEB_CONCURRENCY: "1"
     volumes:
       - ./tests/integration/fake_model.py:/fake/fake_model.py:ro
     restart: unless-stopped
