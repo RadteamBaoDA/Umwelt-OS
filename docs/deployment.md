@@ -4,6 +4,18 @@ The production Compose stack contains PostgreSQL with pgvector installed, Redis,
 
 The web port binds to loopback by default. For remote access, terminate HTTPS at a trusted reverse proxy and set `PUBLIC_ORIGIN` to the exact browser origin and `SECURE_COOKIES=true` in `.env`. Keep the API, Redis, PostgreSQL, and Docker socket private. Do not deploy with the example placeholder values.
 
+## Resource bounds
+
+| Variable | Default | Effect |
+|---|---|---|
+| `DB_POOL_SIZE` / `DB_MAX_OVERFLOW` | `10` / `10` | API SQLAlchemy pool per process (pool timeout 5 s, recycle 1800 s). Size total connections across API processes, workers and admin below PostgreSQL `max_connections`. |
+| `DB_STATEMENT_TIMEOUT_MS` | `60000` | API `statement_timeout` (also bounds lock waits). `0` disables. The worker never sets a statement timeout. |
+| `DB_IDLE_TX_TIMEOUT_MS` | `240000` | `idle_in_transaction_session_timeout` for API and worker connections; a backstop above the longest legitimate send-fence hold. `0` disables. |
+| `MAX_REQUEST_BODY_BYTES` | `5242880` | Request body cap returning 413; `POST /api/v1/documents/upload` allows `UPLOAD_MAX_BYTES` plus 1 MiB. |
+| `WEB_CONCURRENCY` | `1` | When above 1 the API refuses to start unless `CSRF_SIGNING_SECRET` is set, so every process signs sessions with the same secret. |
+
+Redis clients use `socket_timeout=5`, `socket_connect_timeout=2`, `health_check_interval=30` and at most 100 connections. Each API process allows 32 concurrent Realtime SSE streams. No global `lock_timeout` is set because it would turn waits on the Memory privacy lock into errors.
+
 ## Realtime event stream
 
 The dashboard uses an authenticated Server-Sent Events connection at `/api/v1/realtime/events`. Configure the HTTPS reverse proxy to disable response buffering and caching for this route, preserve `Last-Event-ID`, and permit long-lived responses. Use an idle/read timeout of at least 75 seconds (the server sends a heartbeat every 15 seconds); do not apply a short response-body timeout. For Nginx, the location should include `proxy_buffering off`, `proxy_cache off`, `proxy_read_timeout 75s`, and `proxy_http_version 1.1`. Retain the normal request size limits and forward the original host/protocol headers. The browser reconnects with its last event ID and fetches a fresh snapshot when replay is no longer available.

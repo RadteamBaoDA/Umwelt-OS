@@ -13,11 +13,11 @@ from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
-    create_async_engine,
 )
 
 from core.auth.models import AuthSession
 from core.config import Settings
+from core.database import make_session_factory
 from core.heavy_work import HEAVY_JOB_MAX_TRIES
 from core.modules import register_modules, scheduled_job_owners
 from core.system.health import ARQ_WORKER_GENERATION_KEY, ARQ_WORKER_HEALTH_KEY
@@ -148,8 +148,14 @@ async def startup(ctx: dict[str, object]) -> None:
     ctx["settings"] = settings
     install_log_redaction()
     set_process_role("worker")
-    engine = create_async_engine(settings.database_url, pool_pre_ping=True, pool_size=WorkerSettings.max_jobs + 1)
-    ctx["session_factory"] = async_sessionmaker(engine, expire_on_commit=False)
+    engine, factory = make_session_factory(
+        settings.database_url,
+        pool_size=WorkerSettings.max_jobs + 1,
+        max_overflow=10,
+        statement_timeout_ms=0,
+        idle_tx_timeout_ms=settings.db_idle_tx_timeout_ms,
+    )
+    ctx["session_factory"] = factory
     ctx["db_engine"] = engine
     try:
         registry, admission, runtime = await compose_agent_registry(
