@@ -19,7 +19,7 @@ services:
       - -c
       - shared_buffers=1GB
       - -c
-      - effective_cache_size=4GB
+      - effective_cache_size=2GB
       - -c
       - work_mem=16MB
       - -c
@@ -114,7 +114,7 @@ services:
     healthcheck:
       test: ["CMD", "arq", "--check", "apps.worker.main.WorkerSettings"]
       interval: 30s
-      timeout: 5s
+      timeout: 10s
       retries: 3
       start_period: 30s
     init: true
@@ -146,7 +146,7 @@ services:
     healthcheck:
       test: ["CMD", "arq", "--check", "apps.worker.main.ChatWorkerSettings"]
       interval: 30s
-      timeout: 5s
+      timeout: 10s
       retries: 3
       start_period: 30s
     init: true
@@ -175,7 +175,7 @@ services:
     ports:
       - "127.0.0.1:${WEB_PORT:-3000}:3000"
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/health"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/icon.svg"]
       interval: 15s
       timeout: 5s
       retries: 5

@@ -9,10 +9,11 @@ The web port binds to loopback by default. For remote access, terminate HTTPS at
 | Variable | Default | Effect |
 |---|---|---|
 | `DB_POOL_SIZE` / `DB_MAX_OVERFLOW` | `10` / `10` | API SQLAlchemy pool per process (pool timeout 5 s, recycle 1800 s). Size total connections across API processes, workers and admin below PostgreSQL `max_connections`. |
-| `DB_STATEMENT_TIMEOUT_MS` | `60000` | API `statement_timeout` (also bounds lock waits). `0` disables. The worker never sets a statement timeout. |
+| `DB_STATEMENT_TIMEOUT_MS` | `60000` | API `statement_timeout` (also bounds lock waits). `0` disables. The main worker never sets a statement timeout; the chat-worker sets 60 s. |
 | `DB_IDLE_TX_TIMEOUT_MS` | `240000` | `idle_in_transaction_session_timeout` for API and worker connections; a backstop above the longest legitimate send-fence hold. `0` disables. |
 | `MAX_REQUEST_BODY_BYTES` | `5242880` | Request body cap returning 413; `POST /api/v1/documents/upload` allows `UPLOAD_MAX_BYTES` plus 1 MiB. |
-| `WEB_CONCURRENCY` | `2` (image `ENV`) | API process count. Above 1 the API refuses to start unless `CSRF_SIGNING_SECRET` is set, so every process signs sessions with the same secret. |
+| `WEB_CONCURRENCY` | `2` (image `ENV`) | API process count. Above 1 (also `UVICORN_WORKERS` > 1) the API refuses to start unless `CSRF_SIGNING_SECRET` is set, so every process signs sessions with the same secret. |
+| `AUTH_TRUST_FORWARDED_FOR` | `false` | Key the per-IP auth rate limit on the rightmost `X-Forwarded-For` entry. Default `false` keys on the TCP peer (the web container, so effectively one shared 5/min bucket per action). Set `true` only behind the front proxy configuration in "Client IP and `X-Forwarded-For`" below. |
 
 **`WEB_CONCURRENCY` is the only supported way to set the API process count.** uvicorn reads it as the `--workers` default, and `create_app()` reads it to enforce the shared-secret guard. Running `uvicorn --workers N` with `WEB_CONCURRENCY` unset (or `1`) starts N processes that bypass the guard and sign sessions with different random secrets; do not pass `--workers`. The production image `CMD` omits it on purpose.
 
@@ -20,19 +21,32 @@ The web port binds to loopback by default. For remote access, terminate HTTPS at
 
 | Service | Memory limit / reservation | CPU shares | Key settings |
 |---|---|---|---|
-| postgres | 2.5 GiB / 1 GiB (`shm_size` 1 GiB) | 768 | `max_connections=100 shared_buffers=1GB effective_cache_size=4GB work_mem=16MB maintenance_work_mem=256MB` |
+| postgres | 2.5 GiB / 1 GiB (`shm_size` 1 GiB) | 768 | `max_connections=100 shared_buffers=1GB effective_cache_size=2GB work_mem=16MB maintenance_work_mem=256MB` |
 | redis | 384 MiB / 64 MiB | 128 | `maxmemory 256mb`, `noeviction` (never drop queued ARQ jobs; writes fail loudly instead) |
-| api | 1 GiB / 512 MiB | 1024 | `WEB_CONCURRENCY=2`, uvicorn `asyncio` + `httptools`, `--proxy-headers --forwarded-allow-ips '*'` (safe only while 8000 is `expose`-only), keep-alive 15 s, graceful shutdown 8 s, `--limit-concurrency 400`; `stop_grace_period` 15 s |
+| api | 1 GiB / 512 MiB | 1024 | `WEB_CONCURRENCY=2`, uvicorn `asyncio` + `httptools` (no `--proxy-headers`: uvicorn never takes the client address from request headers), keep-alive 15 s, graceful shutdown 8 s, `--limit-concurrency 400`; `stop_grace_period` 15 s |
 | worker | 1 GiB / 256 MiB | 512 | `max_jobs=6`, DB pool 7 + 10 |
 | chat-worker | 768 MiB / 256 MiB | 512 | `max_jobs=10`, `job_timeout=600`, DB pool 10 + 10 |
 | web | 768 MiB / 256 MiB | 512 | `NODE_OPTIONS=--max-old-space-size=512`, `experimental.proxyTimeout=120000` |
 | migrate | 512 MiB (one-shot, exits before the others start) | - | - |
 
-Memory limits sum to 6.4 GiB (2.5 + 0.375 + 1 + 1 + 0.75 + 0.75), leaving about 1.6 GiB for the OS, page cache and optional browser/n8n connectors; expected steady RSS is about 4.2 GiB. CPU shares apply only under contention (no hard CPU caps).
+Memory limits sum to 6.4 GiB (2.5 + 0.375 + 1 + 1 + 0.75 + 0.75), leaving about 1.6 GiB for the OS and page cache. The optional connectors overlay adds limits of 768 MiB + 1.5 GiB (2.25 GiB), so with it the limits total about 8.65 GiB, above 8 GiB: they are caps, not reservations, and the stack relies on actual RSS (about 4.2 GiB steady, plus connectors) staying below RAM. CPU shares apply only under contention (no hard CPU caps).
 
-Connection budget (`max_connections=100`): API 2 x (10 + 10) = 40, main worker 7 + 10 = 17, chat-worker 10 + 10 = 20, total 77; plus migrate, backup and admin about 5 = 82, leaving 18 spare. If you change `WEB_CONCURRENCY`, `DB_POOL_SIZE` or `DB_MAX_OVERFLOW`, recompute this before applying.
+Connection budget (`max_connections=100`): API 2 x (10 + 10) = 40, main worker 7 + 10 = 17, chat-worker 10 + 10 = 20, total 77. The main worker also opens one non-pooled agent checkpoint connection per running agent run (at most 6, so worker worst case 23); plus migrate, backup and admin about 5 gives a worst case of about 88, leaving about 12 spare. If you change `WEB_CONCURRENCY`, `DB_POOL_SIZE` or `DB_MAX_OVERFLOW`, recompute this before applying.
 
 Redis clients use `socket_timeout=5`, `socket_connect_timeout=2`, `health_check_interval=30` and at most 100 connections. Each API process allows 32 concurrent Realtime SSE streams. No global `lock_timeout` is set because it would turn waits on the Memory privacy lock into errors.
+
+## Client IP and `X-Forwarded-For`
+
+The per-IP authentication limit (5 attempts/min per action, plus a global 20/min) keys on the TCP peer by default. Behind Next the peer is always the web container, so all clients share one bucket; this cannot be spoofed. Next forwards a client-supplied `X-Forwarded-For` unchanged (it only fills it when absent), so the header is trustworthy only if the front reverse proxy **overwrites** it (never appends) with the real client address:
+
+- nginx: `proxy_set_header X-Forwarded-For $remote_addr;` (not `$proxy_add_x_forwarded_for`).
+- Caddy: `reverse_proxy 127.0.0.1:3000 { header_up X-Forwarded-For {remote_host} }`.
+
+Only then set `AUTH_TRUST_FORWARDED_FOR=true` to get a separate bucket per client (the limiter uses the rightmost entry). If the web port is reachable directly (not loopback-only) or the proxy does not overwrite the header, leave it `false`. Redis memory is reported as `components.redis.memory` (`used_bytes`, `max_bytes`) in the owner-authenticated `/api/v1/system/health`; alert when used approaches the 256 MB `noeviction` cap.
+
+## Deploys and in-flight chats
+
+arq cancels running jobs on SIGTERM; `stop_grace_period` only covers shutdown hooks. A chat generation in flight during `docker compose up -d` is not resumed: its run stays `streaming` until `recover_chat_runs` fails it after `RECOVER_STREAMING_AFTER` (660 s), after which the owner can resend. A prompt-recovery shutdown hook is not implemented because it needs changes inside `modules/chat/`; schedule deploys when no chat is generating. Main-worker jobs are retried automatically.
 
 ## Realtime event stream
 

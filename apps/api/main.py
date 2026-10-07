@@ -82,11 +82,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     """
     app_settings = settings or Settings()
     csrf_secret = app_settings.csrf_signing_secret.get_secret_value()
-    workers_raw = os.getenv("WEB_CONCURRENCY", "1").strip() or "1"
-    if not workers_raw.isdigit():
-        raise RuntimeError(f"WEB_CONCURRENCY must be a positive integer, got {workers_raw!r}")
-    if not csrf_secret and int(workers_raw) > 1:
-        raise RuntimeError("CSRF_SIGNING_SECRET is required when WEB_CONCURRENCY > 1 (each worker would sign with a different secret)")
+    worker_counts = []
+    for name in ("WEB_CONCURRENCY", "UVICORN_WORKERS"):  # uvicorn honours both (click auto_envvar_prefix)
+        workers_raw = os.getenv(name, "1").strip() or "1"
+        if not workers_raw.isdigit():
+            raise RuntimeError(f"{name} must be a positive integer, got {workers_raw!r}")
+        worker_counts.append(int(workers_raw))
+    if not csrf_secret and max(worker_counts) > 1:
+        raise RuntimeError("CSRF_SIGNING_SECRET is required when WEB_CONCURRENCY or UVICORN_WORKERS > 1 (each worker would sign with a different secret)")
     engine, session_factory = make_session_factory(
         app_settings.database_url,
         pool_size=app_settings.db_pool_size,

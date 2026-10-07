@@ -332,3 +332,29 @@ class TestAuthRateLimiter:
         with pytest.raises(HTTPException) as exc_info:
             await _allow_attempt(request, redis, "login")
         assert exc_info.value.status_code == 503
+
+
+class TestAuthForwardedFor:
+    """Per-IP key uses the peer unless AUTH_TRUST_FORWARDED_FOR is enabled, then the rightmost XFF entry."""
+
+    @staticmethod
+    async def _key(trust: bool, xff: str) -> str:
+        request = MagicMock()
+        request.client.host = "172.18.0.5"
+        request.headers = {"x-forwarded-for": xff}
+        request.app.state.settings.auth_trust_forwarded_for = trust
+        pipeline = MagicMock()
+        pipeline.execute = AsyncMock(return_value=[1, True, 1, True])
+        redis = MagicMock()
+        redis.pipeline.return_value = pipeline
+        await _allow_attempt(request, redis, "login")
+        return str(pipeline.incr.call_args_list[0].args[0])
+
+    @pytest.mark.asyncio
+    async def test_untrusted_header_is_ignored(self) -> None:
+        assert await self._key(False, "1.1.1.1") == await self._key(False, "2.2.2.2")
+
+    @pytest.mark.asyncio
+    async def test_trusted_header_uses_rightmost_entry(self) -> None:
+        assert await self._key(True, "9.9.9.9, 3.3.3.3") == await self._key(True, "3.3.3.3")
+        assert await self._key(True, "3.3.3.3") != await self._key(True, "4.4.4.4")
