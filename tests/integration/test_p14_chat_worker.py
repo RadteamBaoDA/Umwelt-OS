@@ -201,3 +201,47 @@ async def test_chat_worker_sigterm_mid_stream_recovers_within_30s(
     while await status() in {"pending", "streaming"}:
         assert time.monotonic() < deadline, "run did not reach a terminal state within 30 s of restart"
         await asyncio.sleep(1)
+
+
+@pytest.mark.asyncio
+@requires_docker
+async def test_chat_worker_sigterm_before_first_delta_returns_pending_then_completes(
+    chat_ready: AsyncClient, committed_engine: AsyncEngine,
+) -> None:
+    """SIGTERM while the model has not produced a token: run goes back to pending, then completes cleanly."""
+    client = chat_ready
+    worker_container = _service_container("chat-worker")
+    response_id = await _send(client, "hello [fake:tokens=5,delay_ms=5,first_delay_ms=20000]")
+
+    async def status() -> str:
+        async with committed_engine.connect() as connection:
+            return str((await connection.execute(
+                text("SELECT status FROM chat_response_runs WHERE id = :id"), {"id": response_id},
+            )).scalar_one())
+
+    deadline = time.monotonic() + 30
+    while await status() != "streaming":
+        assert time.monotonic() < deadline, "run never started streaming"
+        await asyncio.sleep(0.5)
+    await asyncio.sleep(1)
+    await asyncio.to_thread(_docker, "kill", "--signal=SIGTERM", worker_container)
+    try:
+        deadline = time.monotonic() + 15
+        while await status() == "streaming":
+            assert time.monotonic() < deadline, "run stayed streaming after SIGTERM"
+            await asyncio.sleep(0.5)
+        assert await status() == "pending"
+    finally:
+        await asyncio.to_thread(_docker, "start", worker_container)
+    deadline = time.monotonic() + 60
+    while await status() != "completed":
+        assert time.monotonic() < deadline, "run did not complete after chat-worker restart"
+        await asyncio.sleep(1)
+    async with committed_engine.connect() as connection:
+        rows = (await connection.execute(
+            text("SELECT seq, event_id FROM chat_stream_events WHERE response_id = :id ORDER BY seq"),
+            {"id": response_id},
+        )).all()
+    seqs = [r[0] for r in rows]
+    assert len(seqs) == len(set(seqs)) and len({r[1] for r in rows}) == len(rows)
+    assert seqs.count(1) == 1 and rows[0][0] == 1

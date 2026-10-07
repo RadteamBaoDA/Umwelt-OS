@@ -29,6 +29,7 @@ from modules.agents.worker import (
 )
 from modules.automations.worker import process_automation_run, reconcile_automation_runs
 from modules.chat.worker import (
+    CHAT_JOB_TIMEOUT,
     CHAT_QUEUE,
     process_chat_response,
     purge_expired_chat_runs,
@@ -296,7 +297,7 @@ class ChatWorkerSettings:
     redis_settings = RedisSettings.from_dsn(Settings().redis_url)
     queue_name = CHAT_QUEUE
     max_jobs = 10
-    job_timeout = 600
+    job_timeout = CHAT_JOB_TIMEOUT
     max_tries = 1
     health_check_key = "arq:chat:health-check"
     health_check_interval = 15

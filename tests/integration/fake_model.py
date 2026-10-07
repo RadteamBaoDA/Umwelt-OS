@@ -2,7 +2,7 @@
 
 Run with `uvicorn fake_model:app`. Streaming output is `tok0 tok1 ...` (one token per SSE chunk).
 Control per request with `?tokens=N&delay_ms=M` or, when the gateway base URL cannot carry a query,
-with a `[fake:tokens=N,delay_ms=M]` marker anywhere in the last user message.
+with a `[fake:tokens=N,delay_ms=M,first_delay_ms=F]` marker anywhere in the last user message.
 """
 
 import asyncio
@@ -27,7 +27,7 @@ def fake_text(tokens: int) -> str:
     return "".join(f"tok{i} " for i in range(tokens))
 
 
-def _options(request: Request, body: dict) -> tuple[int, int]:
+def _options(request: Request, body: dict) -> tuple[int, int, int]:
     tokens, delay = DEFAULT_TOKENS, DEFAULT_DELAY_MS
     last = next((m.get("content", "") for m in reversed(body.get("messages", []))
                  if m.get("role") == "user" and isinstance(m.get("content"), str)), "")
@@ -35,7 +35,8 @@ def _options(request: Request, body: dict) -> tuple[int, int]:
     marker = dict(p.split("=", 1) for p in found.group(1).split(",") if "=" in p) if found else {}
     tokens = int(request.query_params.get("tokens", marker.get("tokens", tokens)))
     delay = int(request.query_params.get("delay_ms", marker.get("delay_ms", delay)))
-    return tokens, delay
+    first = int(request.query_params.get("first_delay_ms", marker.get("first_delay_ms", 0)))
+    return tokens, delay, first
 
 
 async def models(_request: Request) -> Response:
@@ -63,7 +64,7 @@ def _chunk(content: str | None, finish: str | None = None) -> str:
 
 async def chat_completions(request: Request) -> Response:
     body = await request.json()
-    tokens, delay = _options(request, body)
+    tokens, delay, first_delay = _options(request, body)
     if not body.get("stream"):
         return JSONResponse({"id": "chatcmpl-fake", "object": "chat.completion", "created": 0, "model": MODEL,
             "choices": [{"index": 0, "message": {"role": "assistant", "content": fake_text(tokens)},
@@ -71,6 +72,8 @@ async def chat_completions(request: Request) -> Response:
             "usage": {"prompt_tokens": 1, "completion_tokens": tokens, "total_tokens": tokens + 1}})
 
     async def events() -> AsyncIterator[str]:
+        if first_delay:
+            await asyncio.sleep(first_delay / 1000)
         for i in range(tokens):
             yield _chunk(f"tok{i} ")
             if delay:
