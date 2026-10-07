@@ -232,6 +232,8 @@ async def _handle_search_query(args: dict[str, Any], context: dict[str, Any]) ->
             session, context["redis"], context["settings"], request,
             destination=destination, source_generation_fences=source_generations,
             before_embedding_send=context.get("before_embedding_send"),
+            # Only a session this handler created is lock-free; a caller-owned one may hold a fence.
+            release_during_embed=context.get("session") is None,
         )
     _record_output_fences(
         context,
