@@ -341,6 +341,26 @@ class TestRedactionStableRecords:
         assert logging.Formatter("%(message)s").format(record) == out
         assert out == "a 1 b 2 c 1.5 d 2.5"
 
+    def test_mapping_args_are_frozen_by_value(self) -> None:
+        class Evil(int):
+            calls = 0
+
+            def __str__(self) -> str:
+                Evil.calls += 1
+                return "ok" if Evil.calls == 1 else "api_key=sk-abcdefghijklmnop1234"
+
+            __repr__ = __str__
+
+        record = self._record("%(a)s %(a)d", ({"a": Evil(1)},))
+        out = logging.Formatter("%(message)s").format(record)
+        assert "sk-abcdefghijklmnop1234" not in out
+        assert logging.Formatter("%(message)s").format(record) == out
+        assert out == "1 1"
+
+    def test_mapping_float_arg_still_formats(self) -> None:
+        record = self._record("%(b).1f %(n)s", ({"b": 1.25, "n": {"x": 1}},))
+        assert record.getMessage() == "1.2 {'x': 1}"
+
     def test_decimal_subclass_with_custom_str_is_still_frozen(self) -> None:
         from decimal import Decimal
 

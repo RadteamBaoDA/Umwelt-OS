@@ -139,9 +139,9 @@ def _freeze_arg(item: Any) -> Any:
     if type(item) in (int, float, bool, type(None), *_EXACT_NUMERIC_TYPES):
         return item
     if isinstance(item, int):  # int subclass (IntEnum...): drop its own __str__, keep %d/%s rendering
-        return int(item)
+        return int.__int__(item)
     if isinstance(item, float):
-        return float(item)
+        return float.__float__(item)
     return redact_text(item) if isinstance(item, str) else redact_text(str(redact_mapping(item)))
 
 
@@ -179,7 +179,7 @@ def install_log_redaction() -> None:
             if isinstance(record.msg, Mapping):
                 record.msg = redact_mapping(record.msg)
             if isinstance(record.args, Mapping):
-                record.args = redact_mapping(record.args)
+                record.args = {k: _freeze_arg(v) for k, v in redact_mapping(record.args).items()}
             elif isinstance(record.args, tuple):
                 # Redact by value: freeze non-primitives to their redacted str so a later __str__/__repr__
                 # call by a handler can never emit text that was not checked here.
