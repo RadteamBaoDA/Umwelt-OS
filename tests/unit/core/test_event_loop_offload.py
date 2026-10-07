@@ -96,11 +96,13 @@ async def test_add_content_chunks_runs_off_loop_thread(monkeypatch: pytest.Monke
 
 
 async def test_large_chunking_keeps_loop_responsive() -> None:
-    text = "lorem ipsum dolor sit amet " * 150_000  # ~4 MB
+    # ~9.5 MB: chunking it on the loop stalls ~0.7 s, so 0.25 s separates a regression from GIL
+    # scheduling noise in the worker thread (~0.13 s seen under a loaded host).
+    text = "lorem ipsum dolor sit amet " * 350_000
     lag = await _lag_while(
         documents_public.add_content_chunks(_Session(), SimpleNamespace(id=uuid4(), content=text))  # type: ignore[arg-type]
     )
-    assert lag < 0.1
+    assert lag < 0.25
 
 
 async def test_save_upload_oversize_removes_temp_file(tmp_path: Path) -> None:
