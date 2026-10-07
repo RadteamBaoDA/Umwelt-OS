@@ -59,7 +59,9 @@ class RequestContextMiddleware:
                 record(int(message["status"]))  # time to response start, as before
                 headers = MutableHeaders(scope=message)
                 headers["X-Request-ID"] = request_id
-                if cache is not None:
+                # Keep a route policy that already has every default directive (SSE adds no-transform).
+                current = {d.strip().lower() for d in headers.get("cache-control", "").split(",")}
+                if cache is not None and not set(cache.split(", ")) <= current:
                     headers["Cache-Control"] = cache
             await send(message)
 

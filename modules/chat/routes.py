@@ -62,8 +62,11 @@ OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]
 _TOKEN_RE = re.compile(r"^[0-9a-f]{64}$")
 DB_READ_TIMEOUT = 3.0
 STREAM_POLL_INTERVAL = 0.1
-STREAM_POLL_MAX_INTERVAL = 1.0
+# A stream lives only while its run is pending/streaming (terminal runs drain and return), so this cap
+# bounds the polling delay added to first token and after mid-run pauses: <= 0.5 s (mean ~0.25 s).
+STREAM_POLL_MAX_INTERVAL = 0.5
 STREAM_BATCH_SIZE = 64
+STREAM_BATCH_MAX_BYTES = 256 * 1024  # bounds the user-space buffer one stalled stream can pin
 MAX_CHAT_STREAMS_PER_API_PROCESS = 64
 HEARTBEAT_INTERVAL = 15.0
 EPHEMERAL_TTL = timedelta(hours=24)
@@ -212,6 +215,40 @@ async def _auth_row_current(session: AsyncSession, token_hash: str | None) -> bo
         ).limit(1)
     )
     return found is not None
+
+
+async def _poll_needs_lock(
+    session: AsyncSession, response_id: UUID, current_seq: int, token_hash: str | None,
+) -> bool:
+    """Lock-free pre-check for one SSE poll: is there an event to publish or a reason to close the stream?
+
+    Idle polls of active runs otherwise each took the GLOBAL Memory privacy key plus Conversation/Run
+    FOR UPDATE just to find nothing; 64 idle streams serialized on that key and exhausted the pool
+    (P14-T4 integration). This reads committed state only and publishes nothing, so I1-I5 are unchanged:
+    every write, and every terminal decision (missing/expired run or parent, fence change, revoked
+    session), still happens in the locked transaction, which re-checks all of it. A change committed
+    after this probe is seen by the next poll, as before.
+    """
+    run = await session.scalar(select(ResponseRun).where(ResponseRun.id == response_id))
+    if run is None or run.status not in ("pending", "streaming"):
+        return True
+    newer = await session.scalar(select(StreamEvent.seq).where(
+        StreamEvent.response_id == response_id, StreamEvent.seq > current_seq,
+    ).limit(1))
+    if newer is not None:
+        return True
+    parent = await session.scalar(select(Conversation).where(Conversation.id == run.conversation_id))
+    if parent is None or (parent.ephemeral and (parent.expires_at is None
+                                                or parent.expires_at <= datetime.now(UTC))):
+        return True
+    try:
+        current = _privacy_fence(await read_export_privacy(session))
+    except Exception:  # noqa: BLE001  # deliberate boundary: the locked path re-reads and cancels/reports
+        return True
+    stamp = (run.retrieval_context or {}).get("_chat_privacy_fence")
+    if stamp != current:
+        return True
+    return not await _auth_row_current(session, token_hash)
 
 
 async def _filter_citation_lists(session: AsyncSession, lists: list[object]) -> list[list[dict[str, object]]]:
@@ -802,6 +839,7 @@ async def mutate_message(
 async def get_response_events(
     response_id: UUID,
     request: Request,
+    request_session: Session,
     last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
     cursor: Annotated[str | None, Query(alias="last_event_id")] = None,
 ) -> StreamingResponse:
@@ -823,6 +861,11 @@ async def get_response_events(
     Raises:
         HTTPException: 401 if unauthenticated, 404 if run not found.
     """
+    # The router's module/owner dependency read through this request-scoped session, whose yield
+    # dependency only exits after the response ends: without this, every open stream would pin one
+    # pooled connection idle in transaction (pool 10+10 < the 64-stream cap). The stream uses its own
+    # short sessions from here on.
+    await request_session.close()
     initial_auth = await _session_is_current(request)
     if initial_auth is None:
         raise HTTPException(status_code=503, detail="Session verification temporarily unavailable")
@@ -881,77 +924,89 @@ async def get_response_events(
             while not await request.is_disconnected():
                 yield ""  # drain point: no transaction or lock is open here
                 batch_sent = False
+                batch_full = False
                 terminal_without_event = False
                 auth_expired = False
                 try:
-                    async with factory() as session:
-                        run_hint = await session.scalar(select(ResponseRun).where(ResponseRun.id == response_id))
-                        if run_hint is None:
-                            return
-                        # Current-evidence output follows Memory privacy before Chat parent/run locks
-                        # for both active and terminal transcripts.
-                        await lock_export_privacy(session)
-                        parent = await session.scalar(select(Conversation).where(
-                            Conversation.id == run_hint.conversation_id,
-                        ).with_for_update().execution_options(populate_existing=True))
-                        if parent is None:
-                            return
-                        if parent.ephemeral and (parent.expires_at is None
-                                                 or parent.expires_at <= datetime.now(UTC)):
-                            return
-                        current_run = await session.scalar(select(ResponseRun).where(
-                            ResponseRun.id == response_id,
-                        ).with_for_update().execution_options(populate_existing=True))
-                        if current_run is None:
-                            return
-                        if current_run.status in ("pending", "streaming"):
-                            stamp = (current_run.retrieval_context or {}).get("_chat_privacy_fence")
-                            try:
-                                await _require_privacy_fence(session, stamp)
-                            except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
-                                # A failed read can poison the transaction; release locks and retry
-                                # redaction in a fresh transaction before emitting only terminal status.
-                                await session.rollback()
-                                await _mark_privacy_cancelled(response_id, factory, current_seq)
-                                yield format_sse_event("status", {"status": "cancelled"})
+                    async with factory() as probe:
+                        # Lock-free probe: an idle poll (nothing to publish or close) takes no lock.
+                        needs_lock = await _poll_needs_lock(probe, response_id, current_seq, token_hash)
+                    if needs_lock:
+                        async with factory() as session:
+                            run_hint = await session.scalar(select(ResponseRun).where(ResponseRun.id == response_id))
+                            if run_hint is None:
                                 return
+                            # Current-evidence output follows Memory privacy before Chat parent/run locks
+                            # for both active and terminal transcripts.
+                            await lock_export_privacy(session)
+                            parent = await session.scalar(select(Conversation).where(
+                                Conversation.id == run_hint.conversation_id,
+                            ).with_for_update().execution_options(populate_existing=True))
+                            if parent is None:
+                                return
+                            if parent.ephemeral and (parent.expires_at is None
+                                                     or parent.expires_at <= datetime.now(UTC)):
+                                return
+                            current_run = await session.scalar(select(ResponseRun).where(
+                                ResponseRun.id == response_id,
+                            ).with_for_update().execution_options(populate_existing=True))
+                            if current_run is None:
+                                return
+                            if current_run.status in ("pending", "streaming"):
+                                stamp = (current_run.retrieval_context or {}).get("_chat_privacy_fence")
+                                try:
+                                    await _require_privacy_fence(session, stamp)
+                                except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
+                                    # A failed read can poison the transaction; release locks and retry
+                                    # redaction in a fresh transaction before emitting only terminal status.
+                                    await session.rollback()
+                                    await _mark_privacy_cancelled(response_id, factory, current_seq)
+                                    yield format_sse_event("status", {"status": "cancelled"})
+                                    return
 
-                        # Same transaction and snapshot as the write below (I5): no frame after revocation.
-                        if not await _auth_row_current(session, token_hash):
-                            auth_expired = True
-                        else:
-                            events = list((await session.scalars(
-                                select(StreamEvent)
-                                .where(
-                                    StreamEvent.response_id == response_id,
-                                    StreamEvent.seq > current_seq,
-                                )
-                                .order_by(StreamEvent.seq.asc())
-                                .limit(STREAM_BATCH_SIZE)
-                                .execution_options(populate_existing=True)
-                            )).all())
-                            if events:
-                                # Read, filtered and written inside this one locked transaction, so no
-                                # object loaded before another transaction's redaction is replayed.
-                                citations = await _filter_citation_lists(session, [
-                                    event.data.get("citations") if isinstance(event.data, dict) else None
-                                    for event in events
-                                ])
-                                frames = []
-                                for event, current_citations in zip(events, citations, strict=True):
-                                    event_data = event.data
-                                    if isinstance(event_data, dict) and isinstance(event_data.get("citations"), list):
-                                        event_data = {**event_data, "citations": current_citations}
-                                    frames.append(format_sse_event(
-                                        event=event.event_type, data=event_data, event_id=event.event_id,
-                                    ))
-                                # ONE send -> one non-blocking transport.write, under the locks.
-                                yield "".join(frames)
-                                current_seq = events[-1].seq
-                                batch_sent = True
+                            # Same transaction and snapshot as the write below (I5): no frame after revocation.
+                            if not await _auth_row_current(session, token_hash):
+                                auth_expired = True
                             else:
-                                terminal_without_event = current_run.status in ("completed", "cancelled", "failed")
-                        await session.commit()
+                                events = list((await session.scalars(
+                                    select(StreamEvent)
+                                    .where(
+                                        StreamEvent.response_id == response_id,
+                                        StreamEvent.seq > current_seq,
+                                    )
+                                    .order_by(StreamEvent.seq.asc())
+                                    .limit(STREAM_BATCH_SIZE)
+                                    .execution_options(populate_existing=True)
+                                )).all())
+                                if events:
+                                    # Read, filtered and written inside this one locked transaction, so no
+                                    # object loaded before another transaction's redaction is replayed.
+                                    citations = await _filter_citation_lists(session, [
+                                        event.data.get("citations") if isinstance(event.data, dict) else None
+                                        for event in events
+                                    ])
+                                    frames: list[str] = []
+                                    size = 0
+                                    batch_full = len(events) == STREAM_BATCH_SIZE
+                                    for event, current_citations in zip(events, citations, strict=True):
+                                        if size >= STREAM_BATCH_MAX_BYTES:
+                                            batch_full = True  # rest is re-read (and re-filtered) next poll
+                                            break
+                                        event_data = event.data
+                                        if isinstance(event_data, dict) and isinstance(event_data.get("citations"), list):
+                                            event_data = {**event_data, "citations": current_citations}
+                                        frame = format_sse_event(
+                                            event=event.event_type, data=event_data, event_id=event.event_id,
+                                        )
+                                        frames.append(frame)
+                                        size += len(frame.encode())
+                                        current_seq = event.seq
+                                    # ONE send -> one non-blocking transport.write, under the locks.
+                                    yield "".join(frames)
+                                    batch_sent = True
+                                else:
+                                    terminal_without_event = current_run.status in ("completed", "cancelled", "failed")
+                            await session.commit()
                 except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
                     logger.warning("Error querying stream events: %s", type(exc).__name__)
                     yield format_sse_event("status", {"status": "unavailable"})
@@ -963,7 +1018,11 @@ async def get_response_events(
                 if batch_sent:
                     last_heartbeat = loop.time()
                     delay = STREAM_POLL_INTERVAL
-                    continue  # more may be queued: poll again without sleeping
+                    if batch_full:
+                        continue  # more is queued: poll again without sleeping
+                    # A partial batch drained the backlog; the worker flushes at most every 100 ms.
+                    await asyncio.sleep(delay)
+                    continue
                 if terminal_without_event:
                     return
 
