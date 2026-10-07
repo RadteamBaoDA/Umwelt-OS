@@ -41,11 +41,11 @@ from modules.chat.schemas import (
 from modules.chat.stream import format_sse_event, parse_event_id
 from modules.chat.worker import (
     CANCEL_KEY_PREFIX,
+    CHAT_QUEUE,
     _cancel_response_locked,
     _mark_privacy_cancelled,
     _privacy_cancel_locked,
     _require_privacy_fence,
-    run_response_generation,
 )
 from modules.memory.public import lock_export_privacy, read_export_privacy
 from modules.settings.public import module_dependency
@@ -119,31 +119,19 @@ async def _reject_active_response(session: AsyncSession, conversation_id: UUID) 
 
 
 async def _dispatch_response_run(request: Request, response_id: UUID) -> None:
-    """Enqueue and locally schedule an already committed response run.
+    """Enqueue an already committed response run on the dedicated chat worker queue.
 
-    The durable run row is created by the caller before dispatch. Keeping both delivery
-    mechanisms here preserves normal-send behavior while allowing append-only revisions to
-    use the same worker and event stream.
+    PostgreSQL holds the durable run row; a lost push is replayed by `recover_chat_runs`.
     """
-    redis: Redis = request.app.state.redis
-    if hasattr(redis, "enqueue_job"):
-        try:
-            await redis.enqueue_job(
-                "process_chat_response",
-                str(response_id),
-                _job_id=f"chat-response:{response_id}",
-            )
-        except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
-            logger.warning("Failed to enqueue ARQ job: %s", exc)
-
-    asyncio.create_task(
-        run_response_generation(
-            response_id=response_id,
-            session_factory=request.app.state.session_factory,
-            settings=request.app.state.settings,
-            redis=redis,
+    try:
+        await request.app.state.redis.enqueue_job(
+            "process_chat_response",
+            str(response_id),
+            _job_id=f"chat-response:{response_id}",
+            _queue_name=CHAT_QUEUE,
         )
-    )
+    except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
+        logger.warning("Failed to enqueue chat response %s (%s)", response_id, type(exc).__name__)
 
 
 def _message_mutation_digest(

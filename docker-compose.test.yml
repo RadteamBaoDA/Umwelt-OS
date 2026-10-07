@@ -40,6 +40,11 @@ services:
       SETUP_TOKEN: bbd-os-disposable-test-token
       CSRF_SIGNING_SECRET: bbd-os-disposable-test-csrf-secret
       POSTGRES_PASSWORD: bbd-os-test-db-only
+      AI_ALLOWED_ENDPOINT_CIDRS: '["172.31.250.0/24"]'
+      OMNIROUTE_BASE_URL: http://fake-model:8000/v1
+      OMNIROUTE_API_KEY: fake-model-key
+      OMNIROUTE_MODELS: '{"reasoning-large":"fake-chat","embedding":"fake-embed"}'
+      AI_CREDENTIAL_ENCRYPTION_KEY: ${TEST_AI_CREDENTIAL_ENCRYPTION_KEY:-ZmFrZS1tb2RlbC10ZXN0LWtleS0wMDAwMDAwMDAwMDA=}
 
   worker:
     # Never read a developer's real .env into the disposable test stack.
@@ -50,6 +55,45 @@ services:
       SETUP_TOKEN: bbd-os-disposable-test-token
       CSRF_SIGNING_SECRET: bbd-os-disposable-test-csrf-secret
       POSTGRES_PASSWORD: bbd-os-test-db-only
+      AI_ALLOWED_ENDPOINT_CIDRS: '["172.31.250.0/24"]'
+      OMNIROUTE_BASE_URL: http://fake-model:8000/v1
+      OMNIROUTE_API_KEY: fake-model-key
+      OMNIROUTE_MODELS: '{"reasoning-large":"fake-chat","embedding":"fake-embed"}'
+      AI_CREDENTIAL_ENCRYPTION_KEY: ${TEST_AI_CREDENTIAL_ENCRYPTION_KEY:-ZmFrZS1tb2RlbC10ZXN0LWtleS0wMDAwMDAwMDAwMDA=}
+
+  chat-worker:
+    # Never read a developer's real .env into the disposable test stack.
+    env_file: !reset []
+    environment:
+      DATABASE_URL: postgresql+asyncpg://bbd_test:bbd-os-test-db-only@postgres:5432/bbd_test
+      REDIS_URL: redis://redis:6379/0
+      SETUP_TOKEN: bbd-os-disposable-test-token
+      CSRF_SIGNING_SECRET: bbd-os-disposable-test-csrf-secret
+      POSTGRES_PASSWORD: bbd-os-test-db-only
+      AI_ALLOWED_ENDPOINT_CIDRS: '["172.31.250.0/24"]'
+      OMNIROUTE_BASE_URL: http://fake-model:8000/v1
+      OMNIROUTE_API_KEY: fake-model-key
+      OMNIROUTE_MODELS: '{"reasoning-large":"fake-chat","embedding":"fake-embed"}'
+      AI_CREDENTIAL_ENCRYPTION_KEY: ${TEST_AI_CREDENTIAL_ENCRYPTION_KEY:-ZmFrZS1tb2RlbC10ZXN0LWtleS0wMDAwMDAwMDAwMDA=}
+
+  fake-model:
+    # Minimal OpenAI-compatible streaming server for chat acceptance tests.
+    build:
+      context: .
+      dockerfile: infrastructure/docker/api.Dockerfile
+    command: ["uvicorn", "fake_model:app", "--host", "0.0.0.0", "--port", "8000", "--app-dir", "/fake"]
+    env_file: !reset []
+    environment:
+      FAKE_MODEL_NAME: fake-chat
+    volumes:
+      - ./tests/integration/fake_model.py:/fake/fake_model.py:ro
+    restart: unless-stopped
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.31.250.0/24
 
 volumes:
   test-postgres-data:

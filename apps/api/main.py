@@ -4,8 +4,8 @@ import secrets
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 
+from arq.connections import ArqRedis
 from fastapi import FastAPI
-from redis.asyncio import Redis
 from starlette.middleware.sessions import SessionMiddleware
 
 from core.auth.routes import router as auth_router
@@ -94,7 +94,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         statement_timeout_ms=app_settings.db_statement_timeout_ms,
         idle_tx_timeout_ms=app_settings.db_idle_tx_timeout_ms,
     )
-    redis = Redis.from_url(
+    # ArqRedis subclasses Redis, so existing callers work and enqueue_job exists for chat/agent dispatch.
+    redis = ArqRedis.from_url(
         app_settings.redis_url,
         decode_responses=True,
         socket_timeout=5,

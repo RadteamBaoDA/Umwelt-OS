@@ -28,7 +28,12 @@ from modules.agents.worker import (
     reconcile_agent_dispatch,
 )
 from modules.automations.worker import process_automation_run, reconcile_automation_runs
-from modules.chat.worker import process_chat_response, purge_expired_chat_runs
+from modules.chat.worker import (
+    CHAT_QUEUE,
+    process_chat_response,
+    purge_expired_chat_runs,
+    recover_chat_runs,
+)
 from modules.connectors.worker import reconcile_connectors
 from modules.dashboard.worker import run_scheduled_brief, run_scheduled_highlights
 from modules.ingestion.dispatcher import WORKER_BY_EVENT, dispatch_pending_work
@@ -171,6 +176,23 @@ async def startup(ctx: dict[str, object]) -> None:
         raise
 
 
+async def chat_startup(ctx: dict[str, object]) -> None:
+    """Minimal chat-worker startup: bounded DB pool only (no agent registry, no worker-generation key)."""
+    settings = Settings()
+    ctx["settings"] = settings
+    install_log_redaction()
+    set_process_role("chat-worker")
+    engine, factory = make_session_factory(
+        settings.database_url,
+        pool_size=10,
+        max_overflow=10,
+        statement_timeout_ms=60000,
+        idle_tx_timeout_ms=settings.db_idle_tx_timeout_ms,
+    )
+    ctx["session_factory"] = factory
+    ctx["db_engine"] = engine
+
+
 async def shutdown(ctx: dict[str, object]) -> None:
     """Stop new worker MCP admissions and dispose the database engine when present."""
     admission = ctx.get("agent_mcp_admission")
@@ -211,7 +233,7 @@ class WorkerSettings:
         reconcile_connectors, instrument_job(process_document_ready, success_return_outcome="returned"),
         instrument_job(process_entity_extraction_work),
         instrument_job(process_timeline_extraction_work), instrument_job(process_graph_operation),
-        instrument_job(process_news_document_ready), instrument_job(process_chat_response), purge_expired_chat_runs,
+        instrument_job(process_news_document_ready), purge_expired_chat_runs,
         instrument_job(process_agent_run, run_id_kind="agent_run_id"), instrument_job(process_automation_run),
     ]
     functions = [_gate_module_job(function) for function in functions]
@@ -259,4 +281,22 @@ class WorkerSettings:
     health_check_key = ARQ_WORKER_HEALTH_KEY
     health_check_interval = 15
     on_startup = startup
+    on_shutdown = shutdown
+
+
+class ChatWorkerSettings:
+    """Dedicated arq worker for chat generation, isolated from the main worker's cron and heavy jobs."""
+    # keep_result=0: a gated (disabled module / backup) job that returns None must not block the
+    # fixed job id, or recovery could not re-enqueue the still-pending run.
+    functions: ClassVar[list[Any]] = [
+        _arq_func(_gate_backup_job(_gate_module_job(instrument_job(process_chat_response))), keep_result=0),
+    ]
+    cron_jobs: ClassVar[list[object]] = [cron(recover_chat_runs, second={0, 15, 30, 45})]
+    redis_settings = RedisSettings.from_dsn(Settings().redis_url)
+    queue_name = CHAT_QUEUE
+    max_jobs = 10
+    job_timeout = 600
+    max_tries = 1
+    health_check_key = "arq:chat:health-check"
+    on_startup = chat_startup
     on_shutdown = shutdown
