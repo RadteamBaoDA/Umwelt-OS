@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import random
 import secrets
 import time
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
@@ -19,6 +20,11 @@ from core.model_gateway.transport import EndpointNetworkPolicyError, approved_ht
 from core.telemetry import record_model_call
 
 _LEASE_PREFIX = "bbd:model-gateway:slot:"
+_SLOTS = 8
+_LEASE_WAIT_SECONDS = 10.0
+_LEASE_TTL_SECONDS = 60
+_LEASE_REFRESH_SECONDS = 20.0
+_REFRESH = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('pexpire', KEYS[1], ARGV[2]) else return 0 end"
 _RELEASE = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end"
 
 
@@ -67,25 +73,42 @@ class ModelGateway:
         except EndpointNetworkPolicyError as exc:
             raise ModelGatewayError("Model gateway network policy is unavailable") from exc
 
+    async def _keep_lease(self, key: str, token: str) -> None:
+        """Extend the lease TTL while the call runs; only our token is refreshed."""
+        while True:
+            await asyncio.sleep(_LEASE_REFRESH_SECONDS)
+            try:
+                await cast("Awaitable[Any]", self.redis.eval(_REFRESH, 1, key, token, str(_LEASE_TTL_SECONDS * 1000)))
+            except RedisError:
+                pass
+
     @asynccontextmanager
     async def _slot(self) -> AsyncIterator[None]:
-        """Acquire one of two Redis-backed gateway leases within the timeout and release only the matching lease token."""
+        """Acquire one of the Redis-backed gateway leases (bounded wait), hold it with a refreshed TTL, release only our token.
+
+        The timeout bounds lease acquisition only; the body runs outside it.
+        """
         token = secrets.token_urlsafe(18)
         key = None
+        refresher: asyncio.Task[None] | None = None
         try:
-            async with asyncio.timeout(self.timeout_seconds):
-                while key is None:
-                    for slot in range(2):
-                        candidate = f"{_LEASE_PREFIX}{slot}"
-                        if await self.redis.set(candidate, token, nx=True, ex=int(self.timeout_seconds) + 10):
-                            key = candidate
-                            break
-                    if key is None:
-                        await asyncio.sleep(0.05)
-                yield
-        except (RedisError, TimeoutError) as exc:
-            raise ModelGatewayError("Model capacity is unavailable") from exc
+            try:
+                async with asyncio.timeout(_LEASE_WAIT_SECONDS):
+                    while key is None:
+                        for slot in range(_SLOTS):
+                            candidate = f"{_LEASE_PREFIX}{slot}"
+                            if await self.redis.set(candidate, token, nx=True, ex=_LEASE_TTL_SECONDS):
+                                key = candidate
+                                break
+                        if key is None:
+                            await asyncio.sleep(0.1 + random.uniform(0, 0.05))
+            except (RedisError, TimeoutError) as exc:
+                raise ModelGatewayError("Model capacity is unavailable") from exc
+            refresher = asyncio.create_task(self._keep_lease(key, token))
+            yield
         finally:
+            if refresher is not None:
+                refresher.cancel()
             if key is not None:
                 try:
                     await cast("Awaitable[Any]", self.redis.eval(_RELEASE, 1, key, token))
@@ -93,9 +116,13 @@ class ModelGateway:
                     pass
 
     async def _with_slot[T](self, call: Callable[[], Awaitable[T]]) -> T:
-        """Run one async gateway operation while holding a bounded-capacity lease."""
+        """Run one non-stream gateway operation under a lease with a total deadline (lease wait excluded)."""
         async with self._slot():
-            return await call()
+            try:
+                async with asyncio.timeout(self.timeout_seconds):
+                    return await call()
+            except TimeoutError as exc:
+                raise ModelGatewayError("Model gateway request timed out") from exc
 
     async def _request(
         self,
