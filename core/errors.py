@@ -7,40 +7,73 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import DBAPIError
+from starlette.datastructures import MutableHeaders
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from core.telemetry import bind_trace, count, observe_ms
 
 logger = logging.getLogger("bbd.api")
 _TIMEOUT_SQLSTATES = {"57014", "55P03"}
 
+class RequestContextMiddleware:
+    """Pure-ASGI request ID, private cache headers and request metrics.
+
+    Pure ASGI on purpose: Starlette's BaseHTTPMiddleware relays body chunks through a task and a
+    memory stream, drops empty chunks, and returns the app's `send` before the bytes reach the
+    transport. Chat SSE relies on `send` reaching uvicorn directly (empty chunk = drain outside its
+    locked transaction; batch chunk = transport.write while the locks are held; chat/routes.py).
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        request_id = str(uuid4())
+        Request(scope).state.request_id = request_id
+        path: str = scope["path"]
+        cache = (
+            "no-store" if path.startswith("/api/v1/auth/")
+            else "private, no-store" if path.startswith("/api/v1/") else None
+        )
+        started = time.perf_counter()
+        recorded = False
+
+        def record(status: int) -> None:
+            nonlocal recorded
+            if recorded:
+                return
+            recorded = True
+            # Label is the matched route template (e.g. /api/v1/sources/{source_id}), never the raw
+            # path, so cardinality is bounded by the route table; unmatched/mounted paths fold to one value.
+            template = getattr(scope.get("route"), "path", None) or "unmatched"
+            labels = {"method": scope["method"], "route": template}
+            observe_ms("api_request_ms", started, **labels)
+            count("api_requests_total", **labels, status_class=f"{status // 100}xx")
+
+        async def send_with_context(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                record(int(message["status"]))  # time to response start, as before
+                headers = MutableHeaders(scope=message)
+                headers["X-Request-ID"] = request_id
+                if cache is not None:
+                    headers["Cache-Control"] = cache
+            await send(message)
+
+        try:
+            with bind_trace(request_id=request_id):
+                await self.app(scope, receive, send_with_context)
+        finally:
+            record(500)
+
+
 def install_error_handling(app: FastAPI) -> None:
     """Install request ID, private cache headers, and structured HTTP, validation, and generic error responses."""
 
-    @app.middleware("http")
-    async def request_id(request: Request, call_next: Any) -> Any:
-        """Attach a fresh request ID and apply no-store cache policy to API responses."""
-        request.state.request_id = str(uuid4())
-        started = time.perf_counter()
-        status = 500
-        try:
-            with bind_trace(request_id=request.state.request_id):
-                response = await call_next(request)
-            status = response.status_code
-        finally:
-            # Label is the matched route template (e.g. /api/v1/sources/{source_id}), never the raw
-            # path, so cardinality is bounded by the route table; unmatched/mounted paths fold to one value.
-            route = request.scope.get("route")
-            template = getattr(route, "path", None) or "unmatched"
-            labels = {"method": request.method, "route": template}
-            observe_ms("api_request_ms", started, **labels)
-            count("api_requests_total", **labels, status_class=f"{status // 100}xx")
-        response.headers["X-Request-ID"] = request.state.request_id
-        if request.url.path.startswith("/api/v1/auth/"):
-            response.headers["Cache-Control"] = "no-store"
-        elif request.url.path.startswith("/api/v1/"):
-            response.headers["Cache-Control"] = "private, no-store"
-        return response
+    app.add_middleware(RequestContextMiddleware)
 
     @app.exception_handler(StarletteHTTPException)
     async def http_error(request: Request, exc: StarletteHTTPException) -> JSONResponse:
