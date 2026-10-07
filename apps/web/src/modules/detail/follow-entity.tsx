@@ -40,10 +40,10 @@ export function FollowEntityButton({ entityId, name }: { entityId: string; name:
     mutationFn: async () => {
       const inactive = linked[0];
       if (inactive) return updateTopic(inactive.id, { expected_revision: inactive.revision, is_active: true }, csrfToken);
-      return createTopic({ name: name ?? '', entity_ids: [entityId] }, csrfToken);
+      return createTopic({ name: (name ?? '').trim().slice(0, 200), entity_ids: [entityId] }, csrfToken);
     },
     // A conflict means another write won; refetch so the button reflects the real state.
-    onSettled: () => queryClient.invalidateQueries({ queryKey: topicsKey }),
+    onSettled: () => Promise.all([queryClient.invalidateQueries({ queryKey: ['topics'] }), queryClient.invalidateQueries({ queryKey: ['news-stories'] })]),
   });
   if (topics.isError) return <p role="alert" className="text-xs text-destructive">{t('followLoadFailed')} <Button type="button" variant="outline" size="sm" onClick={() => { void topics.refetch(); }}>{t('retry')}</Button></p>;
   return <div className="flex flex-col items-start gap-1">

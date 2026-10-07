@@ -56,7 +56,7 @@ export const detailMessages = {
       following: 'Following',
       followLoadFailed: 'Could not check whether you follow this entity.',
       followFailed: 'Could not follow this entity.',
-      followConflict: 'A topic with this name already exists or changed. Check your topics and try again.',
+      followConflict: 'This topic changed since it was loaded. The button now shows its current state; try again if needed.',
   },
   'vi-vi': {
       close: 'Đóng',
@@ -114,6 +114,6 @@ export const detailMessages = {
       following: 'Đang theo dõi',
       followLoadFailed: 'Không thể kiểm tra bạn có đang theo dõi thực thể này không.',
       followFailed: 'Không thể theo dõi thực thể này.',
-      followConflict: 'Đã có chủ đề cùng tên hoặc chủ đề đã thay đổi. Hãy kiểm tra chủ đề của bạn rồi thử lại.',
+      followConflict: 'Chủ đề đã thay đổi kể từ khi tải. Nút hiện đã cập nhật trạng thái; hãy thử lại nếu cần.',
   },
 } as const;
