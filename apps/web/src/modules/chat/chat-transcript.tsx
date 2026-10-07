@@ -4,32 +4,69 @@ import * as React from 'react';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { AlertCircleIcon, BotIcon, CheckIcon, CopyIcon, Loader2Icon, PencilIcon, RefreshCwIcon, UserIcon } from 'lucide-react';
-import type { ChatMessage, Citation } from '@/modules/chat/api';
+import type { ChatMessage, Citation, WebSearchOutcome } from '@/modules/chat/api';
 import { Button } from '@/components/ui/button';
-import { CitationPanel } from './citation-panel';
+import { CitationPanel, webHost } from './citation-panel';
+import { safeHttpUrl } from '@/core/safe-url';
 import { ChatMarkdown } from './chat-markdown';
 import { useChatScroll } from './use-chat-scroll';
 import { useCopyMessage } from './use-copy-message';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { formatDateTime } from '@/core/i18n';
 
+const KNOWN_REASONS = ['not_configured', 'query_too_long', 'local_only_context', 'daily_limit', 'timeout', 'provider_error', 'network_denied', 'run_inactive'];
+
+/** Announced notice for a requested web search that was skipped or unavailable; renders nothing otherwise. */
+function WebSearchNotice({ outcome, live = false }: { outcome?: WebSearchOutcome | null; live?: boolean }) {
+  const t = useTranslations('chat');
+  if (!outcome || (outcome.status !== 'unavailable' && outcome.status !== 'skipped')) return null;
+  const reason = outcome.reason && KNOWN_REASONS.includes(outcome.reason) ? t(`webReason_${outcome.reason}`) : t('webReason_unknown');
+  const title = outcome.status === 'skipped' ? t('webSkipped') : t('webUnavailable');
+  return (
+    <p role={live ? 'status' : undefined} data-testid="web-search-notice" className={`mt-1 text-[11px] ${outcome.status === 'unavailable' ? 'text-destructive' : 'text-muted-foreground'}`}>
+      {title} {reason}
+    </p>
+  );
+}
+
 /** Compact numbered source links for the quick-chat drawer, where the full citation panel is not shown. */
 function CitationChips({ citations }: { citations: Citation[] }) {
   const t = useTranslations('chat');
   return (
     <ol aria-label={t('sourceLinks')} className="mt-1 flex flex-wrap gap-1.5 border-t border-border pt-2 text-[11px]">
-      {citations.map((citation, index) => (
+      {citations.map((citation, index) => {
+        const chipClass = 'inline-flex min-h-8 max-w-[14rem] items-center gap-1 rounded-md border border-border px-2 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
+        if (citation.sourceType === 'web') {
+          const href = safeHttpUrl(citation.url);
+          return (
+            <li key={`web-${index}`}>
+              {href ? (
+                <a href={href} target="_blank" rel="noopener noreferrer nofollow" title={`${citation.title} (${webHost(citation.url)})`} className={chipClass}>
+                  <sup className="font-semibold text-foreground">{index + 1}</sup>
+                  <span className="truncate">{webHost(citation.url)}</span>
+                </a>
+              ) : (
+                <span className={chipClass.replace('hover:text-foreground', '')}>
+                  <sup className="font-semibold text-foreground">{index + 1}</sup>
+                  <span className="truncate">{webHost(citation.url)}</span>
+                </span>
+              )}
+            </li>
+          );
+        }
+        return (
         <li key={`${citation.chunkId}-${index}`}>
           <Link
             href={`/knowledge/documents/${citation.documentId}?${new URLSearchParams({ versionId: citation.documentVersionId, chunkId: citation.chunkId })}#cited-chunk`}
             title={`${citation.title} (${t('viewCitation')})`}
-            className="inline-flex min-h-8 max-w-[14rem] items-center gap-1 rounded-md border border-border px-2 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className={chipClass}
           >
             <sup className="font-semibold text-foreground">{index + 1}</sup>
             <span className="truncate">{citation.title}</span>
           </Link>
         </li>
-      ))}
+        );
+      })}
     </ol>
   );
 }
@@ -45,6 +82,8 @@ export interface ChatTranscriptProps {
   streamingText?: string;
   /** Citations retrieved for the active response run, if available. */
   streamingCitations?: Citation[];
+  /** Web search outcome streamed for the active run. */
+  streamingWebSearch?: WebSearchOutcome | null;
   /** Whether response generation is actively streaming tokens. */
   isStreaming?: boolean;
   /** Whether a response run has been dispatched and is awaiting initial tokens. */
@@ -74,6 +113,7 @@ export function ChatTranscript({
   messages,
   streamingText,
   streamingCitations,
+  streamingWebSearch,
   isStreaming = false,
   isPending = false,
   error = null,
@@ -222,6 +262,7 @@ export function ChatTranscript({
               {mode === 'drawer' && !isUser && msg.citations && msg.citations.length > 0 && (
                 <CitationChips citations={msg.citations} />
               )}
+              {mode === 'full' && !isUser && <WebSearchNotice outcome={msg.web_search} />}
             </div>
           </div>
         );
@@ -253,6 +294,7 @@ export function ChatTranscript({
 
             <ChatMarkdown content={streamingText || ''} />
 
+            {mode === 'full' && <WebSearchNotice outcome={streamingWebSearch} live />}
             {mode === 'full' && streamingCitations && streamingCitations.length > 0 && (
               <CitationPanel citations={streamingCitations} variant="inline" />
             )}
