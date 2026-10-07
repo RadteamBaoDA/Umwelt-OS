@@ -192,6 +192,8 @@ export type MemoryPage = {
   items: MemoryItem[];
   next_cursor: string | null;
   total_count?: number | null;
+  kind_counts?: Record<string, number> | null;
+  counts_capped?: boolean;
 };
 
 export type MemoryCandidate = {

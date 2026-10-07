@@ -1,9 +1,9 @@
 'use client';
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeftIcon } from 'lucide-react';
 import Link from 'next/link';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import {
@@ -210,10 +210,25 @@ export function MemoryList() {
   const [editItem, setEditItem] = useState<MemoryItem | null>(null);
   const [forgetItem, setForgetItem] = useState<MemoryItem | null>(null);
 
+  const [debouncedQuery, setDebouncedQuery] = useState('');
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedQuery(searchQuery), 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
   const queryType = filterType === 'all' ? undefined : filterType;
+  const q = debouncedQuery || undefined;
   const memoriesQuery = useQuery({
-    queryKey: memoryKeys.list('active', queryType, searchQuery || undefined),
-    queryFn: () => listMemories(undefined, queryType, 'active', searchQuery || undefined),
+    queryKey: memoryKeys.list('active', queryType, q),
+    queryFn: () => listMemories(undefined, queryType, 'active', q),
+    placeholderData: keepPreviousData,
+  });
+  // Counts are per kind and the server only computes them for unfiltered pages: this query is shared with the list
+  // when the All chip is active, so switching type chips never triggers a recount.
+  const countsQuery = useQuery({
+    queryKey: memoryKeys.list('active', undefined, q),
+    queryFn: () => listMemories(undefined, undefined, 'active', q),
+    placeholderData: keepPreviousData,
   });
 
   const candidatesQuery = useQuery({
@@ -245,10 +260,11 @@ export function MemoryList() {
 
   const items = memoriesQuery.data?.items ?? [];
   const candidates = candidatesQuery.data?.items ?? [];
-  // Only the active tab shows a count: the server returns no per-kind aggregates, so the count is for the
-  // list currently loaded ("N+" when more pages exist) rather than invented for the other kinds.
-  const page = memoriesQuery.data;
-  const countSuffix = page ? ` ${page.total_count ?? items.length}${page.total_count == null && page.next_cursor ? '+' : ''}` : '';
+  // Counts cover only rows the list itself would show (server verifies each row). Past the cap the server sends no
+  // numbers (no cap marker either, so a capped result never hints at hidden rows); "All" also includes decision/procedural kinds that have no chip.
+  const kindCounts = countsQuery.data?.kind_counts ?? null;
+  const countFor = (key: MemoryFilterType) =>
+    kindCounts ? (key === 'all' ? Object.values(kindCounts).reduce((a, b) => a + b, 0) : (kindCounts[key] ?? 0)) : null;
 
   return (
     <section className="content-panel space-y-6" aria-labelledby="memory-title">
@@ -267,7 +283,9 @@ export function MemoryList() {
       {/* Filter and search toolbar */}
       <div className="flex flex-wrap items-center gap-3">
         <div role="group" aria-label={t('filterByType')} className="flex rounded-md border border-input bg-background p-0.5">
-          {(['all', 'fact', 'preference', 'instruction'] as const).map((typeKey) => (
+          {(['all', 'fact', 'preference', 'instruction'] as const).map((typeKey) => {
+            const n = countFor(typeKey);
+            return (
             <button
               key={typeKey}
               type="button"
@@ -279,9 +297,16 @@ export function MemoryList() {
                   : 'text-muted-foreground hover:text-foreground'
               }`}
             >
-              {typeKey === 'all' ? t('filterAll') : t(typeKey)}{filterType === typeKey ? countSuffix : ''}
+              {typeKey === 'all' ? t('filterAll') : t(typeKey)}
+              {n !== null && (
+                <>
+                  <span className="ml-1.5 tabular-nums" aria-hidden="true">{n}</span>
+                  <span className="sr-only">{t('kindCount', { count: n })}</span>
+                </>
+              )}
             </button>
-          ))}
+            );
+          })}
         </div>
 
         <div className="min-w-[200px] flex-1">
