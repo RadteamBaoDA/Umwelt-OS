@@ -302,10 +302,10 @@ function FeedStream({
   useEffect(() => {
     const budget = autoFetches.current;
     if (budget.scope !== serverScope || displayedItems.length > 0) { budget.scope = serverScope; budget.count = 0; }
-    if (displayedItems.length > 0 || initialItems?.length || !docsQuery.hasNextPage || docsQuery.isFetchingNextPage || docsQuery.isError || budget.count >= 3) return;
+    if (filtering || displayedItems.length > 0 || initialItems?.length || !docsQuery.hasNextPage || docsQuery.isFetching || docsQuery.isError || budget.count >= 3) return;
     budget.count += 1;
     void docsQuery.fetchNextPage();
-  }, [displayedItems.length, initialItems, docsQuery, serverScope]);
+  }, [displayedItems.length, initialItems, docsQuery, serverScope, filtering]);
 
   return (
     <div ref={rootRef} tabIndex={-1} className="flex flex-col h-full bg-card text-card-foreground p-3 space-y-3 overflow-y-auto overflow-x-hidden focus:outline-none">
@@ -444,8 +444,8 @@ function FeedStream({
             size="sm"
             variant="ghost"
             className="min-h-11"
-            disabled={interactionMutation.isPending}
-            onClick={() => setHidden(lastHidden, false)}
+            aria-disabled={interactionMutation.isPending || undefined}
+            onClick={() => { if (!interactionMutation.isPending) setHidden(lastHidden, false); }}
           >{undoFailed ? t('feedUndoRetry') : t('feedUndo')}</Button>
         )}
       </div>
@@ -469,7 +469,7 @@ function FeedStream({
       )}
 
       {/* Empty State */}
-      {!docsQuery.isLoading && !docsQuery.isError && !docsQuery.hasNextPage && displayedItems.length === 0 && (
+      {!docsQuery.isLoading && !docsQuery.isError && (!docsQuery.hasNextPage || filtering) && displayedItems.length === 0 && (
         <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-muted-foreground">
           <Newspaper className="w-8 h-8 mb-2 opacity-50" />
             <p className="text-xs font-semibold text-foreground mb-1">{t('feedEmptyTitle')}</p>

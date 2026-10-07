@@ -76,7 +76,8 @@ async def _feed(rows: list[DocumentInteraction], versions: list, **kwargs):  # t
     session = AsyncMock()
     session.scalars = AsyncMock(return_value=MagicMock(all=MagicMock(return_value=rows)))
     with patch.object(public, "list_news_document_projections", AsyncMock(return_value=([_projection(v) for v in versions], None))), \
-         patch.object(public, "_as_gadget_document_projection", lambda item, interaction=None: item.document_version_id),          patch.object(public, "GadgetDocumentProjectionList", lambda **kw: SimpleNamespace(**kw)):
+         patch.object(public, "_as_gadget_document_projection", lambda item, interaction=None: item.document_version_id), \
+         patch.object(public, "GadgetDocumentProjectionList", lambda **kw: SimpleNamespace(**kw)):
         page = await public.list_gadget_document_projections(session, owner_id=1, source_ids=(uuid4(),), **kwargs)
     return page.items
 
@@ -117,7 +118,8 @@ async def test_version_export_maps_interaction_fields_and_scopes_join() -> None:
         return _Result()
 
     session.stream = stream
-    with patch.object(public, "_require_document_export_owner", AsyncMock()),          patch.object(public, "_document_export_count", AsyncMock(return_value=1)):
+    with patch.object(public, "_require_document_export_owner", AsyncMock()), \
+         patch.object(public, "_document_export_count", AsyncMock(return_value=1)):
         page = await public.export_page(session, owner_id=7, record_kind="versions")
     item = page.items[0]
     assert (item.read_at, item.bookmarked_at, item.dismissed_at) == (read_at, saved_at, hidden_at)
