@@ -33,6 +33,10 @@ export interface ChatComposerProps {
   showCapabilityNote?: boolean;
   /** Per-message web search opt-in; passed only by the full Chat page. */
   webSearch?: { available: boolean; profileBlocked?: boolean; provider?: string; enabled: boolean; onChange: (enabled: boolean) => void };
+  /** Attachment controls rendered above the input (full Chat page only). */
+  attachments?: React.ReactNode;
+  /** Element id explaining why Send is blocked (e.g. attachments still processing); blocks Send when set. */
+  sendBlockedBy?: string | null;
 }
 
 /**
@@ -54,6 +58,8 @@ export function ChatComposer({
   sourcesCount = 0,
   showCapabilityNote = false,
   webSearch,
+  attachments,
+  sendBlockedBy = null,
 }: ChatComposerProps) {
   const t = useTranslations('chat');
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
@@ -63,9 +69,9 @@ export function ChatComposer({
    */
   const handleSend = React.useCallback(() => {
     const trimmed = value.trim();
-    if (!trimmed || isStreaming || disabled) return;
+    if (!trimmed || isStreaming || disabled || sendBlockedBy) return;
     onSend(trimmed);
-  }, [value, isStreaming, disabled, onSend]);
+  }, [value, isStreaming, disabled, sendBlockedBy, onSend]);
 
   /**
    * Handles keyboard shortcuts in the textarea: Enter submits, Shift+Enter inserts newline.
@@ -100,10 +106,11 @@ export function ChatComposer({
     textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`;
   }, [value]);
 
-  const canSend = value.trim().length > 0 && !isStreaming && !disabled;
+  const canSend = value.trim().length > 0 && !isStreaming && !disabled && !sendBlockedBy;
 
   return (
     <div className="relative flex flex-col gap-2 border-t border-border bg-background p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+      {attachments}
       <div className="relative flex items-end gap-2 rounded-xl border border-border bg-surface p-2 shadow-sm focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-1">
         <textarea
           ref={textareaRef}
@@ -132,9 +139,12 @@ export function ChatComposer({
             <Button
               type="button"
               onClick={handleSend}
-              disabled={!canSend}
-              className="flex items-center gap-1.5 px-3 py-1.5 h-9 rounded-lg bg-primary text-primary-foreground disabled:opacity-40 disabled:cursor-not-allowed font-medium text-xs shadow-sm transition-opacity"
+              // aria-disabled (not disabled) keeps Send focusable so its blocked reason stays reachable;
+              // handleSend is the click guard.
+              aria-disabled={!canSend}
+              className="flex items-center gap-1.5 px-3 py-1.5 h-9 rounded-lg bg-primary text-primary-foreground aria-disabled:opacity-40 aria-disabled:cursor-not-allowed font-medium text-xs shadow-sm transition-opacity"
               aria-label={t('send')}
+              aria-describedby={sendBlockedBy ?? undefined}
             >
               <SendIcon className="size-3.5" />
               <span>{t('send')}</span>

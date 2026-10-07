@@ -688,6 +688,7 @@ async def send_message(
     await session.flush()
 
     resolved_context = await chat_public.resolve_gadget_context(session, payload.context)
+    await chat_public.reject_unsendable_selection(session, resolved_context)
     response_run = ResponseRun(
         conversation_id=conversation_id,
         user_message_id=user_msg.id,
@@ -833,6 +834,8 @@ async def mutate_message(
     )
     if original_prompt is None:
         raise HTTPException(status_code=409, detail="The original prompt is unavailable")
+    # The stored fence is a snapshot: re-check its sources' current local_only before a new run exists.
+    await chat_public.reject_unsendable_selection(session, original_run.retrieval_context)
 
     user_message = Message(
         conversation_id=conversation_id,

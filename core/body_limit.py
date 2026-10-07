@@ -1,6 +1,6 @@
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-UPLOAD_PATH = "/api/v1/documents/upload"
+UPLOAD_PATHS = frozenset({"/api/v1/documents/upload", "/api/v1/documents/chat-attachments"})
 
 
 class BodyLimitMiddleware:
@@ -15,7 +15,7 @@ class BodyLimitMiddleware:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
-        upload = scope["method"] == "POST" and scope["path"] == UPLOAD_PATH
+        upload = scope["method"] == "POST" and scope["path"] in UPLOAD_PATHS
         limit = self.upload_limit if upload else self.default_limit
         declared = dict(scope["headers"]).get(b"content-length")
         if declared is not None and declared.isdigit() and int(declared) > limit:

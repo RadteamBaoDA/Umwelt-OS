@@ -83,6 +83,22 @@ class Receipt(BaseModel):
     status: Literal["queued", "running", "succeeded", "needs_ocr", "failed"]
 
 
+class ChatAttachmentRead(BaseModel):
+    """Report one chat attachment Document and whether it can be referenced as chat context.
+
+    ``status`` is ``pending`` while parsing, ``ready`` once a current version with chunks exists,
+    ``too_large`` when the version exceeds the whole-document selection bound, and ``failed``
+    otherwise. ``local_only`` mirrors the owning source: such content never reaches a cloud model.
+    """
+    document_id: UUID
+    source_id: UUID
+    title: str
+    status: Literal["pending", "ready", "too_large", "failed"]
+    document_version_id: UUID | None = None
+    local_only: bool
+    run_id: UUID | None = None
+
+
 class RetryRunRequest(BaseModel):
     """Select the failed ingestion stage to retry."""
     model_config = ConfigDict(extra="forbid")

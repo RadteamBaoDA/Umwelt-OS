@@ -23,6 +23,7 @@ import { ChatComposer } from './chat-composer';
 import { ChatTranscript } from './chat-transcript';
 import { ApiError } from '@/core/api';
 import { ChatContextBar, MAX_ITEMS } from './chat-context-bar';
+import { ATTACHMENT_STATUS_ID, ChatAttachmentBar, SELECTION_LOCAL_ONLY, useChatAttachments, withAttachments } from './chat-attachments';
 import { ConversationAgentActivity } from '@/modules/agents/conversation-agent-activity';
 import {
   PendingMessageMutationConflictError,
@@ -164,6 +165,11 @@ export function ChatSession({
   );
   // Specialist-agent sends (non-assistant profile or a pending profile retry) do not carry web_search.
   const webSearchProfileBlocked = selectedProfileId !== 'assistant' || Boolean(pendingProfileRun);
+  // Specialist runs and prompt edits carry no chat context, and a day/document/entity context cannot hold
+  // a selection, so attachments cannot ride along with any of them.
+  const attachmentsUnavailable = webSearchProfileBlocked || !!effectiveEditingMessageId
+    || (!!chatCtrl.context && chatCtrl.context.kind !== 'selection');
+  const attachments = useChatAttachments(session.csrfToken, attachmentsUnavailable);
   const webSearchUsable = WEB_SEARCH_SEND_ENABLED && webSearchAvailable && !webSearchProfileBlocked;
 
   const profiles = useQuery({ queryKey: ['agent-profiles'], queryFn: getAgentProfiles, enabled: mode === 'full' });
@@ -427,7 +433,9 @@ export function ChatSession({
         setIsPending(false);
         setError(mutationError instanceof PendingMessageMutationConflictError
           ? t('retryOriginalRevisionFirst')
-          : mutationError instanceof Error ? mutationError.message : t('revisionFailed'));
+          : mutationError instanceof ApiError && mutationError.code === SELECTION_LOCAL_ONLY
+            ? t('contextSelectionLocalOnly')
+            : mutationError instanceof Error ? mutationError.message : t('revisionFailed'));
       }
     }
   }, [chatCtrl, conversationId, isPending, isStreaming, messages, mode, queryClient, session.csrfToken, streamResponseRun, t, webSearchUsable, webSearchOn]);
@@ -487,7 +495,9 @@ export function ChatSession({
         ? { date: chatCtrl.context.date, timezone: chatCtrl.context.timezone }
         : null;
 
-      const selItems = chatCtrl.context?.kind === 'selection' ? chatCtrl.context.items ?? [] : [];
+      // Ready Chat attachments join the U3 selection mechanism; the composer blocks Send while any are not ready.
+      const sendContext = mode === 'full' ? withAttachments(chatCtrl.context, attachments.items) : chatCtrl.context;
+      const selItems = sendContext?.kind === 'selection' ? sendContext.items ?? [] : [];
       let selectionStage = false; // true only while the selection precheck / sendMessage can fail
       try {
         // Pre-validate the server's 1..32 distinct-document limit before the draft is cleared.
@@ -578,12 +588,13 @@ export function ChatSession({
           {
             content,
             client_request_id: clientRequestId,
-            context: chatCtrl.context ?? undefined,
+            context: sendContext ?? undefined,
             ...(mode === 'full' && webSearchUsable && webSearchOn ? { web_search: true } : {}),
           },
           session.csrfToken,
         );
         setWebSearchOn(false);
+        if (attachments.items.length && canUpdateCurrentView()) attachments.clear();
 
         selectionStage = false;
         if (!canUpdateCurrentView()) {
@@ -609,7 +620,7 @@ export function ChatSession({
           // Server detail strings are English-only, so selection failures get localized copy and keep the draft.
           if (selectionFailure) chatCtrl.setDraft(content);
           const errMsg = selectionFailure
-            ? t(err.status === 422 ? 'contextSelectionTooLarge' : 'contextSelectionUnavailable')
+            ? t(err.status === 422 ? 'contextSelectionTooLarge' : err.code === SELECTION_LOCAL_ONLY ? 'contextSelectionLocalOnly' : 'contextSelectionUnavailable')
             : attemptedProfileRun?.prompt === content
               ? tAgents('agentStartFailed')
               : err instanceof Error ? err.message : t('errorSending');
@@ -634,6 +645,7 @@ export function ChatSession({
       streamResponseRun,
       webSearchUsable,
       webSearchOn,
+      attachments,
     ],
   );
 
@@ -802,6 +814,13 @@ export function ChatSession({
         modelLabel={latestAssistant?.model_identity ?? null}
         sourcesCount={latestAssistant?.citations?.length ?? 0}
         showCapabilityNote={mode === 'full'}
+        attachments={mode === 'full' ? (
+          <ChatAttachmentBar
+            state={attachments}
+            disabled={isPending || isStreaming || attachmentsUnavailable}
+          />
+        ) : undefined}
+        sendBlockedBy={mode === 'full' && attachments.sendBlock ? ATTACHMENT_STATUS_ID : null}
         webSearch={mode === 'full' && WEB_SEARCH_SEND_ENABLED ? { available: webSearchAvailable, provider: aiSettings.data?.web_search_provider === 'brave' ? 'Brave' : 'Tavily', profileBlocked: webSearchProfileBlocked, enabled: webSearchOn, onChange: setWebSearchOn } : undefined}
       />
     </div>
