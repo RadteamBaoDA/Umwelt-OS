@@ -2,7 +2,10 @@
 
 Run with `uvicorn fake_model:app`. Streaming output is `tok0 tok1 ...` (one token per SSE chunk).
 Control per request with `?tokens=N&delay_ms=M` or, when the gateway base URL cannot carry a query,
-with a `[fake:tokens=N,delay_ms=M,first_delay_ms=F]` marker anywhere in the last user message.
+with a `[fake:tokens=N,delay_ms=M,first_delay_ms=F,cite=1]` marker anywhere in the last user message.
+Non-stream chat honours `first_delay_ms` too (slept after the body is read, before the headers), and
+`cite=1` appends " [1]" so a daily brief validates. `GET /_fake/received?contains=X` counts the chat
+bodies received whose last user message contains X (tests wait on it to know the body was written).
 """
 
 import asyncio
@@ -20,6 +23,7 @@ MODEL = os.getenv("FAKE_MODEL_NAME", "fake-chat")
 DEFAULT_TOKENS = int(os.getenv("FAKE_MODEL_TOKENS", "5"))
 DEFAULT_DELAY_MS = int(os.getenv("FAKE_MODEL_DELAY_MS", "0"))
 _MARKER = re.compile(r"\[fake:([^\]]*)\]")
+RECEIVED: list[str] = []
 
 
 def fake_text(tokens: int) -> str:
@@ -27,10 +31,14 @@ def fake_text(tokens: int) -> str:
     return "".join(f"tok{i} " for i in range(tokens))
 
 
+def _last_user(body: dict) -> str:
+    return next((m.get("content", "") for m in reversed(body.get("messages", []))
+                 if m.get("role") == "user" and isinstance(m.get("content"), str)), "")
+
+
 def _options(request: Request, body: dict) -> tuple[int, int, int]:
     tokens, delay = DEFAULT_TOKENS, DEFAULT_DELAY_MS
-    last = next((m.get("content", "") for m in reversed(body.get("messages", []))
-                 if m.get("role") == "user" and isinstance(m.get("content"), str)), "")
+    last = _last_user(body)
     found = _MARKER.search(last)
     marker = dict(p.split("=", 1) for p in found.group(1).split(",") if "=" in p) if found else {}
     tokens = int(request.query_params.get("tokens", marker.get("tokens", tokens)))
@@ -69,12 +77,21 @@ def _chunk(content: str | None, finish: str | None = None) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
 
+async def received(request: Request) -> Response:
+    needle = request.query_params.get("contains", "")
+    return JSONResponse({"count": sum(1 for text in RECEIVED if needle in text)})
+
+
 async def chat_completions(request: Request) -> Response:
     body = await request.json()
+    RECEIVED.append(_last_user(body))
     tokens, delay, first_delay = _options(request, body)
     if not body.get("stream"):
+        if first_delay:
+            await asyncio.sleep(first_delay / 1000)
+        content = fake_text(tokens) + (" [1]" if "cite=1" in _last_user(body) else "")
         return JSONResponse({"id": "chatcmpl-fake", "object": "chat.completion", "created": 0, "model": MODEL,
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": fake_text(tokens)},
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": content},
                          "finish_reason": "stop"}],
             "usage": {"prompt_tokens": 1, "completion_tokens": tokens, "total_tokens": tokens + 1}})
 
@@ -96,4 +113,5 @@ app = Starlette(routes=[
     Route("/v1/embeddings", embeddings, methods=["POST"]),
     Route("/v1/rerank", rerank, methods=["POST"]),
     Route("/v1/chat/completions", chat_completions, methods=["POST"]),
+    Route("/_fake/received", received),
 ])
