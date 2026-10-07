@@ -18,4 +18,4 @@ RUN groupadd --system --gid 10001 bbd && useradd --system --uid 10001 --gid bbd 
 COPY --from=build --chown=bbd:bbd /app /app
 USER bbd
 EXPOSE 8000
-CMD ["uvicorn", "apps.api.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--loop", "asyncio", "--http", "httptools", "--timeout-keep-alive", "15", "--timeout-graceful-shutdown", "8", "--limit-concurrency", "400", "--no-proxy-headers"]
+CMD ["uvicorn", "apps.api.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--loop", "asyncio", "--http", "apps.api.protocol:NoDelayHttpToolsProtocol", "--timeout-keep-alive", "15", "--timeout-graceful-shutdown", "8", "--limit-concurrency", "400", "--no-proxy-headers"]

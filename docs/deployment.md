@@ -23,7 +23,7 @@ The web port binds to loopback by default. For remote access, terminate HTTPS at
 |---|---|---|---|
 | postgres | 2.5 GiB / 1 GiB (`shm_size` 1 GiB) | 768 | `max_connections=100 shared_buffers=1GB effective_cache_size=2GB work_mem=16MB maintenance_work_mem=256MB` |
 | redis | 384 MiB / 64 MiB | 128 | `maxmemory 256mb`, `noeviction` (never drop queued ARQ jobs; writes fail loudly instead) |
-| api | 1 GiB / 512 MiB | 1024 | `WEB_CONCURRENCY=2`, uvicorn `asyncio` + `httptools` (no `--proxy-headers`: uvicorn never takes the client address from request headers), keep-alive 15 s, graceful shutdown 8 s, `--limit-concurrency 400`; `stop_grace_period` 15 s |
+| api | 1 GiB / 512 MiB | 1024 | `WEB_CONCURRENCY=2`, uvicorn `asyncio` + `httptools` via `apps.api.protocol:NoDelayHttpToolsProtocol` (sets TCP_NODELAY; pre-bound multi-worker sockets lack it) (no `--proxy-headers`: uvicorn never takes the client address from request headers), keep-alive 15 s, graceful shutdown 8 s, `--limit-concurrency 400`; `stop_grace_period` 15 s |
 | worker | 1 GiB / 256 MiB | 512 | `max_jobs=6`, DB pool 7 + 10 |
 | chat-worker | 768 MiB / 256 MiB | 512 | `max_jobs=10`, `job_timeout=600`, DB pool 10 + 10 |
 | web | 768 MiB / 256 MiB | 512 | `NODE_OPTIONS=--max-old-space-size=512`, `experimental.proxyTimeout=120000` |
