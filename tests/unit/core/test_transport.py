@@ -47,6 +47,14 @@ from modules.chat.web_search import search
         "fe80::1",
         "240.0.0.1",
         "192.0.2.1",
+        "2001:0:a00:1:8000:63bf:f7f7:f7f7",  # Teredo, server 10.0.0.1 / client 8.8.8.8
+        "2002:808:808::",  # 6to4 (deprecated)
+        "64:ff9b:1:a9fe:a9:fe00:808:808",  # local-use NAT64 /48 -> 169.254.169.254
+        "::8.8.8.8",  # IPv4-compatible
+        "192.88.99.1",  # 6to4 relay anycast
+        # IANA special-purpose registry vectors
+        "0.1.2.3", "192.0.0.1", "198.18.0.1", "198.51.100.1", "203.0.113.1", "255.255.255.255",
+        "100::1", "100:0:0:1::1", "2001:db8::1", "2001:10::1", "2001:2::1", "3fff::1", "5f00::1",
     ],
 )
 def test_is_public_denies(value: str) -> None:
@@ -55,7 +63,7 @@ def test_is_public_denies(value: str) -> None:
 
 @pytest.mark.parametrize(
     "value",
-    ["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111", "64:ff9b::808:808", "2002:808:808::", "::ffff:8.8.8.8"],
+    ["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111", "64:ff9b::808:808", "::ffff:8.8.8.8", "2606:4700::1111", "2001:20::1", "2001:3::1", "2001:4:112::1"],
 )
 def test_is_public_allows(value: str) -> None:
     assert _is_public(ipaddress.ip_address(value)) is True
@@ -155,6 +163,11 @@ def test_factory_enforces_host_allowlist() -> None:
     with pytest.raises(EndpointNetworkPolicyError, match="invalid"):
         approved_web_search_transport("https://user@api.tavily.com", {"api.tavily.com"})
     assert approved_web_search_transport("https://api.tavily.com:8443", {"api.tavily.com:8443"})
+    with pytest.raises(EndpointNetworkPolicyError, match="not allowed"):  # bare entry = default port only
+        approved_web_search_transport("https://api.tavily.com:8443", {"api.tavily.com"})
+    with pytest.raises(EndpointNetworkPolicyError, match="invalid"):  # https only
+        approved_web_search_transport("http://api.tavily.com", {"api.tavily.com"})
+    assert approved_web_search_transport("https://[2606:4700::1111]", {"[2606:4700::1111]"})
     transport = approved_web_search_transport("https://API.tavily.com", {"api.tavily.com"})
     delegate = transport._delegate
     assert isinstance(delegate, httpx.AsyncHTTPTransport)
@@ -172,3 +185,14 @@ async def test_factory_transport_accepted_by_w1a_search() -> None:
         assert await search("tavily", "https://api.tavily.com", "k", "hello", transport=transport) == []
     assert delegate.seen[0].url.host == "8.8.8.8"
     assert delegate.seen[0].headers["Host"] == "api.tavily.com"
+
+
+def test_web_search_cidrs_reject_broad_ranges() -> None:
+    from pydantic import ValidationError
+
+    from core.config import Settings
+
+    for bad in ("0.0.0.0/0", "::/0", "10.0.0.0/7", "fe00::/15"):
+        with pytest.raises(ValidationError):
+            Settings.model_validate({"WEB_SEARCH_ALLOWED_CIDRS": [bad]})
+    assert Settings.model_validate({"WEB_SEARCH_ALLOWED_CIDRS": ["10.0.0.0/8", "fc00::/16"]})

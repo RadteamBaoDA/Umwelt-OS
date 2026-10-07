@@ -129,6 +129,16 @@ class Settings(BaseSettings):
             networks.append(network.with_prefixlen)
         return sorted(set(networks))
 
+    @field_validator("web_search_allowed_cidrs")
+    @classmethod
+    def reject_broad_web_search_cidrs(cls, values: list[str]) -> list[str]:
+        """Reject ranges so broad (IPv4 shorter than /8, IPv6 shorter than /16) that they would disable the public-address guard."""
+        for value in values:
+            network = ipaddress.ip_network(value, strict=False)
+            if network.prefixlen < (8 if network.version == 4 else 16):
+                raise ValueError("WEB_SEARCH_ALLOWED_CIDRS ranges must be at least /8 (IPv4) or /16 (IPv6)")
+        return values
+
     @field_validator("mcp_allowed_endpoint_cidrs", mode="before")
     @classmethod
     def normalize_mcp_endpoint_origins(cls, values: object) -> object:
