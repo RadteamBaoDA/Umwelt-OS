@@ -1,0 +1,209 @@
+"""P14-T3: arq-only chat dispatch, coalesced deltas, per-flush fence, recovery, agent dispatch."""
+
+import asyncio
+import json
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
+
+import pytest
+from arq.connections import ArqRedis
+
+from core.config import Settings
+from modules.chat import routes, worker
+from modules.chat.models import Message, StreamEvent
+from modules.chat.schemas import AnswerContext
+from tests.unit.test_b1c_regressions import _config, _evidence, _factory
+
+NOW = datetime(2026, 1, 1, tzinfo=UTC)
+
+
+def _request(redis: Any) -> Any:
+    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(redis=redis)))
+
+
+async def test_dispatch_enqueues_on_chat_queue_and_never_creates_task(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(*_a: Any, **_k: Any) -> None:
+        raise AssertionError("asyncio.create_task must not run chat generation")
+
+    monkeypatch.setattr(asyncio, "create_task", boom)
+    redis = SimpleNamespace(enqueue_job=AsyncMock())
+    run_id = uuid4()
+    await routes._dispatch_response_run(_request(redis), run_id)
+    redis.enqueue_job.assert_awaited_once_with(
+        "process_chat_response", str(run_id), _job_id=f"chat-response:{run_id}", _queue_name="arq:chat",
+    )
+
+
+async def test_dispatch_enqueue_failure_is_logged_not_raised() -> None:
+    redis = SimpleNamespace(enqueue_job=AsyncMock(side_effect=ConnectionError("down")))
+    await routes._dispatch_response_run(_request(redis), uuid4())
+
+
+def test_api_redis_is_arq_client() -> None:
+    from apps.api.main import create_app
+
+    app = create_app(Settings(csrf_signing_secret="s"))
+    assert isinstance(app.state.redis, ArqRedis) and hasattr(app.state.redis, "enqueue_job")
+
+
+async def test_agent_dispatch_enqueues_on_arq_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    from modules.agents import routes as agent_routes
+    from modules.agents.schemas import ProfileRunStart
+
+    run_id = uuid4()
+    redis = SimpleNamespace(enqueue_job=AsyncMock())
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+        redis=redis, settings=object(), tool_registry=object())))
+    monkeypatch.setattr(agent_routes.settings_public, "get_ai_execution_config", AsyncMock())
+    monkeypatch.setattr(agent_routes.public, "create_profile_run_in_uow",
+                        AsyncMock(return_value=SimpleNamespace(id=run_id)))
+    session = SimpleNamespace(commit=AsyncMock())
+    owner = SimpleNamespace(owner_id=1, token_hash="h")
+    payload = ProfileRunStart.model_construct(prompt="hi")
+    result = await agent_routes.start_run("researcher", payload, request, session, owner)  # type: ignore[arg-type]
+    assert result.id == run_id
+    redis.enqueue_job.assert_awaited_once_with(
+        "process_agent_run", str(run_id), 1, _job_id=f"agent-run:{run_id}:1",
+    )
+
+
+# ------------------------------------------------------------------ coalescing
+
+
+class _Gen:
+    """Runs run_response_generation over a scripted token stream with a fake session."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, tokens: list[str]) -> None:
+        self.added: list[Any] = []
+        self.fence = AsyncMock(return_value=(True, []))
+        self.privacy_cancel = AsyncMock(return_value=0)
+        self.failed = AsyncMock()
+        self.tokens = tokens
+        context = AnswerContext(
+            query="q", evidence=[_evidence(content="Umwelt docs.")], has_sufficient_evidence=True,
+        )
+        scalars = iter([
+            SimpleNamespace(content="q?", revision_of_message_id=None, created_at=NOW, role="user"),
+            None, SimpleNamespace(expires_at=None),
+        ])
+        self.session = MagicMock()
+        self.session.execute = AsyncMock(return_value=SimpleNamespace(
+            fetchone=lambda: (uuid4(), uuid4(), {}, False)))
+        self.session.scalar = AsyncMock(side_effect=lambda *a, **k: next(scalars, None))
+        self.session.scalars = AsyncMock(return_value=SimpleNamespace(all=list))
+        self.session.add = self.added.append
+        for name in ("commit", "flush", "rollback", "close", "begin"):
+            setattr(self.session, name, AsyncMock())
+        seq = iter(range(100, 10_000))
+        monkeypatch.setattr(worker, "_lock_live_response", AsyncMock(return_value=(True, MagicMock())))
+        monkeypatch.setattr(worker, "is_run_cancelled", AsyncMock(return_value=False))
+        monkeypatch.setattr(worker, "revalidate_context_fence", self.fence)
+        monkeypatch.setattr(worker, "_privacy_cancel_locked", self.privacy_cancel)
+        monkeypatch.setattr(worker, "_next_event_seq", AsyncMock(side_effect=lambda *a, **k: next(seq)))
+        monkeypatch.setattr(worker, "build_context", AsyncMock(return_value=context))
+        monkeypatch.setattr(worker.settings_public, "get_ai_execution_config",
+                            AsyncMock(return_value=_config(aliases={})))
+        monkeypatch.setattr(worker, "ModelGateway", lambda **kw: SimpleNamespace(stream=self.stream))
+        monkeypatch.setattr(worker, "_mark_failed", self.failed)
+
+    async def stream(self, **_kwargs: Any) -> AsyncIterator[str]:
+        for token in self.tokens:
+            if token == "__SLEEP__":
+                await asyncio.sleep(0.15)
+                continue
+            yield "data: " + json.dumps({"choices": [{"delta": {"content": token}}]})
+        yield "data: [DONE]"
+
+    async def run(self) -> None:
+        await worker.run_response_generation(
+            uuid4(), _factory(self.session), SimpleNamespace(ai_allowed_endpoint_cidrs=()),  # type: ignore[arg-type]
+            MagicMock(),
+        )
+
+    @property
+    def deltas(self) -> list[str]:
+        return [e.data["text"] for e in self.added if isinstance(e, StreamEvent) and e.event_type == "message.delta"]
+
+
+async def test_200_single_char_tokens_coalesce(monkeypatch: pytest.MonkeyPatch) -> None:
+    gen = _Gen(monkeypatch, ["a"] * 200)
+    await gen.run()
+    gen.failed.assert_not_awaited()
+    assert len(gen.deltas) <= 2  # ceil(200/256) + 1 is the plan bound; 200 fast tokens fit one 100 ms window
+    assert "".join(gen.deltas) == "a" * 200
+
+
+async def test_size_threshold_flushes_at_256_chars(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(worker, "STREAM_FLUSH_SECONDS", 3600.0)
+    gen = _Gen(monkeypatch, ["x"] + ["y" * 100] * 6)
+    await gen.run()
+    # first token flushes at once (last_flush=-inf); 100/200/300 chars flushes at 300; the rest is the final flush
+    assert gen.deltas == ["x", "y" * 300, "y" * 300]
+
+
+async def test_time_threshold_flushes_and_final_flush_publishes_remainder(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(worker, "STREAM_FLUSH_CHARS", 10_000)
+    gen = _Gen(monkeypatch, ["a", "b", "__SLEEP__", "c", "d"])
+    await gen.run()
+    assert gen.deltas == ["a", "bc", "d"]  # a: first flush; c arrives after 150 ms; d is the final flush
+    done = next(e for e in gen.added if isinstance(e, StreamEvent) and e.event_type == "message.done")
+    assert done.data["status"] == "completed"
+    assert any(isinstance(m, Message) for m in gen.added)
+
+
+async def test_fence_revalidated_for_every_flush(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(worker, "STREAM_FLUSH_SECONDS", 3600.0)
+    gen = _Gen(monkeypatch, ["x"] + ["y" * 100] * 6)
+    await gen.run()
+    locked = [c for c in gen.fence.await_args_list if c.kwargs.get("lock_evidence")]
+    assert len(locked) == len(gen.deltas) + 1  # one per flush plus the completion fence
+
+
+async def test_fence_failure_between_flushes_drops_buffer_and_redacts(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(worker, "STREAM_FLUSH_SECONDS", 3600.0)
+    gen = _Gen(monkeypatch, ["x"] + ["SECRET" * 20] * 6)
+    results = iter([(True, []), (False, ["consent"])])  # flush 1 ok, flush 2 fails
+    gen.fence.side_effect = lambda *a, **k: next(results, (False, ["consent"]))
+    await gen.run()
+    assert gen.deltas == ["x"]
+    gen.privacy_cancel.assert_awaited_once()
+    assert not any("SECRET" in str(e.data) for e in gen.added if isinstance(e, StreamEvent))
+    assert not any(isinstance(m, Message) for m in gen.added)
+
+
+# -------------------------------------------------------------------- recovery
+
+
+async def test_recover_requeues_pending_and_fails_abandoned_streaming(monkeypatch: pytest.MonkeyPatch) -> None:
+    pending_id, stale_id = uuid4(), uuid4()
+    session = MagicMock()
+    session.scalars = AsyncMock(return_value=[pending_id])
+    session.execute = AsyncMock(return_value=SimpleNamespace(
+        all=lambda: [(stale_id, {"_chat_privacy_fence": {"rev": 3}})]))
+    session.scalar = AsyncMock(return_value=7)
+    failed = AsyncMock()
+    monkeypatch.setattr(worker, "_mark_failed", failed)
+    redis = SimpleNamespace(enqueue_job=AsyncMock())
+    factory = _factory(session)
+    result = await worker.recover_chat_runs({"session_factory": factory, "redis": redis})
+    assert result == {"requeued": 1, "failed": 1}
+    redis.enqueue_job.assert_awaited_once_with(
+        "process_chat_response", str(pending_id), _job_id=f"chat-response:{pending_id}", _queue_name="arq:chat",
+    )
+    args = failed.await_args.args
+    assert args[0] == stale_id and args[1] is factory and args[2] == 7 and args[3] == {"rev": 3}
+    assert isinstance(args[4], TimeoutError)
+
+
+def test_chat_worker_settings_isolated_queue() -> None:
+    from apps.worker.main import ChatWorkerSettings, WorkerSettings
+
+    assert ChatWorkerSettings.queue_name == "arq:chat"
+    assert (ChatWorkerSettings.max_jobs, ChatWorkerSettings.job_timeout, ChatWorkerSettings.max_tries) == (10, 600, 1)
+    assert [f.name for f in ChatWorkerSettings.functions] == ["process_chat_response"]
+    main_names = [getattr(f, "name", getattr(f, "__name__", "")) for f in WorkerSettings.functions]
+    assert "process_chat_response" not in main_names

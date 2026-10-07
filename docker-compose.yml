@@ -88,6 +88,26 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  chat-worker:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/api.Dockerfile
+    command: ["arq", "apps.worker.main.ChatWorkerSettings"]
+    env_file: .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Run setup to create .env}
+      REDIS_URL: ${REDIS_URL:?Run setup to create .env}
+      BBD_LANGFUSE_ENABLED: "false"
+    init: true
+    volumes:
+      - app-data:/data
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
   web:
     build:
       context: .
