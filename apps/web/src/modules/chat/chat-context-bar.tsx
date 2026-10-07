@@ -26,7 +26,7 @@ export const MAX_ITEMS = 32;
 const noFilters = { source_ids: [], date_from: null, date_to: null, content_types: [] };
 type Item = NonNullable<ChatContext['items']>[number];
 
-/** Search-and-select dialog. Search does not filter local_only sources; the server re-fences every item and blocks local-only content at send. */
+/** Search-and-select dialog. Search does not filter local_only sources; the server re-fences every item at send, and local-only content is rejected later when the run uses a cloud model. */
 function ContextPicker({ open, onOpenChange, current, onConfirm }: { open: boolean; onOpenChange: (open: boolean) => void; current: Item[]; onConfirm: (hits: SearchHit[]) => void }) {
   const t = useTranslations('chat');
   const [query, setQuery] = React.useState('');
@@ -114,7 +114,9 @@ export function ChatContextBar({ context, onRemove, onChange }: { context: ChatC
   };
   const nameOf = (i: Item, idx: number) => titles[i.documentId] ?? `${t('contextDocumentItem')} ${idx + 1}`;
   const removeAt = (idx: number) => {
-    setAnnounce(t('contextRemoved', { label: nameOf(items[idx], idx) }));
+    const msg = t('contextRemoved', { label: nameOf(items[idx], idx) });
+    setAnnounce('');
+    setTimeout(() => setAnnounce(msg), 50);
     setItems(items.filter((_, k) => k !== idx));
     focusChip(document.getElementById(barId), idx);
   };

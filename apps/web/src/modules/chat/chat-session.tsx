@@ -19,7 +19,7 @@ import {
 import { ChatComposer } from './chat-composer';
 import { ChatTranscript } from './chat-transcript';
 import { ApiError } from '@/core/api';
-import { ChatContextBar } from './chat-context-bar';
+import { ChatContextBar, MAX_ITEMS } from './chat-context-bar';
 import { ConversationAgentActivity } from '@/modules/agents/conversation-agent-activity';
 import {
   PendingMessageMutationConflictError,
@@ -443,9 +443,11 @@ export function ChatSession({
         : null;
 
       const selItems = chatCtrl.context?.kind === 'selection' ? chatCtrl.context.items ?? [] : [];
+      let selectionStage = false; // true only while the selection precheck / sendMessage can fail
       try {
         // Pre-validate the server's 1..32 distinct-document limit before the draft is cleared.
-        if (selItems.length > 32 || new Set(selItems.map((i) => i.documentId)).size !== selItems.length) {
+        if (selItems.length > MAX_ITEMS || new Set(selItems.map((i) => i.documentId)).size !== selItems.length) {
+          selectionStage = true;
           throw new ApiError(422, 'selection limit');
         }
         const selected = mode === 'full' && selectedProfileId !== 'assistant'
@@ -525,6 +527,7 @@ export function ChatSession({
           : `req-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
         const responseConversationId = targetId;
 
+        selectionStage = true;
         const responseRun = await sendMessage(
           responseConversationId,
           {
@@ -535,6 +538,7 @@ export function ChatSession({
           session.csrfToken,
         );
 
+        selectionStage = false;
         if (!canUpdateCurrentView()) {
           void queryClient.invalidateQueries({ queryKey: chatKeys.conversation(responseConversationId) });
           void queryClient.invalidateQueries({ queryKey: chatKeys.conversations() });
@@ -553,7 +557,7 @@ export function ChatSession({
           setIsPending(false);
           setIsStreaming(false);
           setActiveResponseId(null);
-          const selectionFailure = selItems.length > 0 && err instanceof ApiError && (err.status === 409 || err.status === 422);
+          const selectionFailure = selectionStage && selItems.length > 0 && err instanceof ApiError && (err.status === 409 || err.status === 422) && /\bselect/i.test(err.message);
           // Server detail strings are English-only, so selection failures get localized copy and keep the draft.
           if (selectionFailure) chatCtrl.setDraft(content);
           const errMsg = selectionFailure
