@@ -26,6 +26,7 @@ from modules.automations.routes import webhook_router as automation_webhook_rout
 from modules.automations.tools import register_automation_tools
 from modules.backup.middleware import BackupActivityMiddleware
 from modules.backup.routes import router as backup_router
+from modules.chat.routes import MAX_CHAT_STREAMS_PER_API_PROCESS
 from modules.chat.routes import router as chat_router
 from modules.connectors.github.routes import router as github_oauth_router
 from modules.connectors.provisioning_routes import router as connector_provisioning_router
@@ -133,6 +134,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = app_settings
     app.state.session_factory = session_factory
     app.state.realtime_connections = asyncio.Semaphore(MAX_STREAMS_PER_API_PROCESS)
+    app.state.chat_streams = asyncio.Semaphore(MAX_CHAT_STREAMS_PER_API_PROCESS)
     app.state.redis = redis
     app.add_middleware(
         SessionMiddleware,

@@ -112,6 +112,11 @@ class _PermitResponse(StreamingResponse):
         try:
             await super().__call__(scope, receive, send)
         finally:
+            # Starlette never closes body_iterator (e.g. a disconnect cancels the send task mid-stream);
+            # close it here so the generator's finally (permit release, rollback) runs now, not at GC.
+            aclose = getattr(self.body_iterator, "aclose", None)
+            if aclose is not None:
+                await aclose()
             if not self._started.is_set():
                 self._started.set()  # idempotent guard against double release
                 self._semaphore.release()
