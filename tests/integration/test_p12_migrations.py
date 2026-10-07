@@ -26,6 +26,11 @@ def _p12_revisions() -> tuple[str, list[str]]:
     assert head is not None
     chain: list[str] = []
     revision = script.get_revision(head)
+    # Skip later (non-P12) revisions above the P12 chain so new heads do not break collection.
+    while revision is not None and not revision.revision.startswith("p12_"):
+        parent = revision.down_revision
+        assert isinstance(parent, str), "revisions above P12 form a linear chain"
+        revision = script.get_revision(parent)
     while revision is not None and revision.revision.startswith("p12_"):
         chain.append(revision.revision)
         parent = revision.down_revision
@@ -36,7 +41,8 @@ def _p12_revisions() -> tuple[str, list[str]]:
 
 
 PRE_P12, P12_CHAIN = _p12_revisions()
-HEAD = P12_CHAIN[0]
+HEAD = str(ScriptDirectory.from_config(Config(str(REPOSITORY_ROOT / "alembic.ini"))).get_current_head())
+R15_PARENT = "p12_evidence_version_index"
 
 
 def _alembic(database_url: str, *arguments: str) -> str:
@@ -209,3 +215,27 @@ async def test_repeated_upgrade_head_is_idempotent(
     _alembic(url, "upgrade", "head")
     assert await _version(url) == [HEAD]
     assert await _schema(url) == first
+
+
+async def test_r15_language_backfill_round_trip_with_seeded_documents(
+    scratch_database: Callable[[], Awaitable[str]],
+) -> None:
+    url = await scratch_database()
+    _alembic(url, "upgrade", "head")
+    before = await _seed_rows(url)  # demo documents have NULL language, so the backfill UPDATE really runs
+    at_head = await _schema(url)
+
+    _alembic(url, "downgrade", R15_PARENT)
+    assert await _version(url) == [R15_PARENT]
+    _alembic(url, "upgrade", "head")
+    assert await _version(url) == [HEAD]
+    assert await _schema(url) == at_head
+    engine = create_async_engine(url)
+    try:
+        async with engine.connect() as connection:
+            assert await connection.scalar(text("SELECT count(*) FROM documents")) == before["documents"]
+            assert await connection.scalar(text(
+                "SELECT indisvalid FROM pg_index WHERE indexrelid = 'ix_documents_language_created_at_id'::regclass"
+            ))
+    finally:
+        await engine.dispose()

@@ -74,8 +74,10 @@ export type EntityTimelineResult = { canonical_entity_id: string; timeline: impo
 /** Lists documents from the knowledge API in pages of 50 and appends the opaque cursor when provided. */
 export function listDocuments(cursor?: string, sourceId?: string) { const query = new URLSearchParams({ limit: '50' }); if (cursor) query.set('cursor', cursor); if (sourceId) query.set('source_id', sourceId); return apiRequest<DocumentPage>(`/api/v1/documents?${query}`); }
 /** Reads current active source records through the owner-validated dashboard projection. */
-export function listGadgetDocumentProjections(sourceIds: string[], channelIds: string[] = [], cursor?: string) {
+export function listGadgetDocumentProjections(sourceIds: string[], channelIds: string[] = [], cursor?: string, filters: { language?: string; since?: string } = {}) {
   const query = new URLSearchParams({ limit: '100' });
+  if (filters.language) query.set('language', filters.language);
+  if (filters.since) query.set('since', filters.since);
   if (cursor) query.set('cursor', cursor);
   for (const sourceId of [...new Set(sourceIds)].slice(0, 32)) query.append('source_ids', sourceId);
   for (const channelId of [...new Set(channelIds)].slice(0, 32)) query.append('channel_ids', channelId);

@@ -5,7 +5,7 @@ import json
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID, uuid4, uuid5
@@ -1341,7 +1341,7 @@ async def news_current_scope_status(
 async def list_news_document_projections(
     session: AsyncSession, *, source_ids: tuple[UUID, ...], limit: int = 50,
     cursor: str | None = None, observed_since: datetime | None = None,
-    channel_ids: tuple[str, ...] | None = None,
+    channel_ids: tuple[str, ...] | None = None, language: str | None = None,
 ) -> tuple[list[NewsDocumentProjection], str | None]:
     """Page bounded current ready versions from explicitly authorized active sources."""
     if not source_ids or len(source_ids) > 32 or len(set(source_ids)) != len(source_ids) or not 1 <= limit <= 100:
@@ -1363,6 +1363,12 @@ async def list_news_document_projections(
     )
     if observed_since is not None:
         statement = statement.where(func.coalesce(Document.observed_at, DocumentVersion.observed_at) >= observed_since)
+    if language is not None:
+        if language not in FEED_LANGUAGES:
+            raise ValueError("Language filter must be an allowlisted code")
+        # Unknown (NULL) language never matches a concrete language; only "Any" (None) returns it.
+        # Stored normalized (primary subtag, lowercase) so this equality can use ix_documents_language_created_at_id.
+        statement = statement.where(Document.language == language)
     if channel_ids is not None:
         statement = statement.where(
             Source.provider == "telegram",
@@ -1394,18 +1400,42 @@ async def list_news_document_projections(
     return projections, next_cursor
 
 
+# Keep in sync with the language options in apps/web feed-gadget.tsx.
+FEED_LANGUAGES = frozenset({"en", "vi", "fr", "de", "es", "pt", "it", "ru", "ja", "ko", "zh", "id", "th"})
+
+
+def normalize_document_language(raw: object) -> str | None:
+    """Return the allowlisted primary language subtag ("en-US" -> "en") or None when unknown/invalid."""
+    if not isinstance(raw, str):
+        return None
+    primary = raw.strip().lower().replace("_", "-").split("-", 1)[0]
+    return primary if primary in FEED_LANGUAGES else None
+
+
+def _provenance_language(provenance: object) -> str | None:
+    """Extract the normalized language from ingestion provenance ``metadata.language``."""
+    metadata = provenance.get("metadata") if isinstance(provenance, dict) else None
+    return normalize_document_language(metadata.get("language") if isinstance(metadata, dict) else None)
+FEED_MAX_WINDOW = timedelta(days=366)
+
+
 async def list_gadget_document_projections(
     session: AsyncSession, *, owner_id: int, source_ids: tuple[UUID, ...], limit: int = 50,
     cursor: str | None = None, channel_ids: tuple[str, ...] | None = None,
+    language: str | None = None, since: datetime | None = None,
 ) -> GadgetDocumentProjectionList:
     """Return active, current, ready source records as a small dashboard projection page.
 
     Documents retains source-generation and provider-scope validation. Only short excerpts and
     typed immutable provider fields leave this owner boundary; full text stays out of dashboard APIs.
     """
+    if since is not None:
+        now = datetime.now(UTC)
+        if since.tzinfo is None or not now - FEED_MAX_WINDOW <= since <= now + timedelta(minutes=5):
+            raise ValueError("Time filter must be a timezone-aware instant within the last year")
     projections, next_cursor = await list_news_document_projections(
         session, source_ids=source_ids, limit=limit, cursor=cursor,
-        channel_ids=channel_ids,
+        channel_ids=channel_ids, language=language, observed_since=since,
     )
     version_ids = [item.document_version_id for item in projections]
     interaction_rows = (await session.scalars(
@@ -2246,6 +2276,7 @@ async def upsert_normalized_document(
             canonical_url=payload.canonical_url, published_at=payload.published_at,
             observed_at=payload.observed_at, current_version=0,
             content_hash=content_hash(payload.content), extraction_status="ready",
+            language=_provenance_language(payload.provenance),
         )
         session.add(document)
         await session.flush()
@@ -2351,6 +2382,7 @@ async def upsert_normalized_document(
         document.published_at = payload.published_at
         document.content_type = payload.content_type
         document.observed_at = payload.observed_at
+        document.language = _provenance_language(payload.provenance)
         document.extraction_status = "ready"
     await session.flush()
     return NormalizedDocumentResult(
@@ -2414,6 +2446,7 @@ async def select_current_world_document_version(
     document.published_at = provenance.published_at
     document.content_type = provenance.content_type
     document.observed_at = provenance.observed_at
+    document.language = _provenance_language(provenance.provenance_json)
     document.extraction_status = "ready"
     await session.flush()
     return True

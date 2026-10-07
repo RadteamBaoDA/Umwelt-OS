@@ -4,7 +4,6 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import {
   Bookmark,
   ExternalLink,
-  Eye,
   FileText,
   Newspaper,
   RotateCw,
@@ -12,10 +11,11 @@ import {
   Send,
 } from 'lucide-react';
 import Link from 'next/link';
-import { useTranslations } from 'next-intl';
+import { useLocale, useTranslations } from 'next-intl';
 import React, { useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { formatDateTime } from '@/core/i18n';
 import { safeHttpUrl } from '@/core/safe-url';
@@ -23,6 +23,7 @@ import { useDisplayPreferences } from '@/core/query-provider';
 import { useChatController } from '@/core/app-shell/chat-controller';
 import { documentKeys, listGadgetDocumentProjections, setGadgetDocumentInteraction } from '@/modules/knowledge/api';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
+import { NewsFeed } from './news-feed';
 import { dashboardKeys, listGadgetSources, type GadgetInstance } from '../api';
 
 /** Feed item model supporting documents, news articles, and telegram messages. */
@@ -105,12 +106,47 @@ function safeFeedUrl(value: string | null, telegram: boolean): string | null {
  * @param props Gadget instance configuration and feed handlers.
  * @returns Accessible feed stream gadget component.
  */
-export function FeedGadget({
+export function FeedGadget(props: FeedGadgetProps) {
+  const t = useTranslations('dashboard');
+  const [tab, setTab] = useState<'items' | 'stories'>('items');
+  // Story clusters come from the news module; Telegram records have no story clusters.
+  if (props.instance.definition.renderer === 'telegram_feed') return <FeedStream {...props} />;
+  return (
+    <Tabs value={tab} onValueChange={(value) => setTab(value as 'items' | 'stories')} className="flex h-full min-h-0 flex-col">
+      <TabsList aria-label={t('feedTabs')} className="h-auto justify-start gap-1 rounded-none bg-transparent p-0 px-3 pt-2">
+        <TabsTrigger value="items" className="min-h-11 rounded-none border-b-2 border-transparent text-xs text-muted-foreground data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none">
+          {t('feedTabItems')}
+        </TabsTrigger>
+        <TabsTrigger value="stories" className="min-h-11 rounded-none border-b-2 border-transparent text-xs text-muted-foreground data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none">
+          {t('feedTabStories')}
+        </TabsTrigger>
+      </TabsList>
+      <TabsContent value="items" className="mt-0 min-h-0 flex-1 overflow-hidden"><FeedStream {...props} /></TabsContent>
+      <TabsContent value="stories" className="mt-0 min-h-0 flex-1 overflow-hidden"><NewsFeed instance={props.instance} /></TabsContent>
+    </Tabs>
+  );
+}
+
+/** Localized language name for an allowlisted code; falls back to the uppercase code. */
+function languageLabel(locale: string, code: string): string {
+  try {
+    return new Intl.DisplayNames([locale], { type: 'language' }).of(code) ?? code.toUpperCase();
+  } catch {
+    return code.toUpperCase();
+  }
+}
+
+const WINDOW_HOURS: Record<string, number> = { '24h': 24, '7d': 168, '30d': 720 };
+// Keep in sync with FEED_LANGUAGES in modules/knowledge/documents/public.py.
+const FEED_LANGUAGES = ['en', 'vi', 'fr', 'de', 'es', 'pt', 'it', 'ru', 'ja', 'ko', 'zh', 'id', 'th'];
+
+function FeedStream({
   instance,
   initialItems,
   onUnreadCountChange,
 }: FeedGadgetProps) {
   const t = useTranslations('dashboard');
+  const locale = useLocale();
   const display = useDisplayPreferences();
   const session = useWorkspaceSession();
   const { openDrawer } = useChatController();
@@ -133,15 +169,21 @@ export function FeedGadget({
   const [onlyUnread, setOnlyUnread] = useState<boolean>(false);
   const [searchText, setSearchText] = useState('');
   const [sourceFilter, setSourceFilter] = useState('all');
+  const [language, setLanguage] = useState('any');
+  const [timeWindow, setTimeWindow] = useState('any');
   const [selectedTelegram, setSelectedTelegram] = useState<Record<string, SelectedTelegramIdentity>>({});
 
   // Query documents as live feed items
   const docsQuery = useInfiniteQuery({
-    queryKey: [...documentKeys.all, 'gadget', sourceIds, channelIds],
+    queryKey: [...documentKeys.all, 'gadget', sourceIds, channelIds, language, timeWindow],
     initialPageParam: undefined as string | undefined,
     queryFn: async ({ pageParam }) => {
       if (sourceIds.length === 0) return { items: [], next_cursor: null };
-      return listGadgetDocumentProjections(sourceIds, channelIds, pageParam);
+      const hours = WINDOW_HOURS[timeWindow];
+      return listGadgetDocumentProjections(sourceIds, channelIds, pageParam, {
+        language: language === 'any' ? undefined : language,
+        since: hours ? new Date(Date.now() - hours * 3_600_000).toISOString() : undefined,
+      });
     },
     getNextPageParam: (last) => last.next_cursor ?? undefined,
     staleTime: 30_000,
@@ -206,6 +248,7 @@ export function FeedGadget({
     && (!needle || `${i.title} ${i.excerpt ?? ''}`.toLowerCase().includes(needle)),
   );
   const filtering = onlyUnread || sourceFilter !== 'all' || needle !== '';
+  const serverFiltered = language !== 'any' || timeWindow !== 'any';
   React.useEffect(() => onUnreadCountChange?.(unreadCount), [onUnreadCountChange, unreadCount]);
 
   return (
@@ -270,6 +313,26 @@ export function FeedGadget({
             </SelectContent>
           </Select>
         )}
+        <Select value={language} onValueChange={setLanguage}>
+          <SelectTrigger aria-label={t('feedLanguageLabel')} className="h-11 w-auto min-w-28 text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="any" className="text-xs">{t('feedLanguageAny')}</SelectItem>
+            {FEED_LANGUAGES.map((code) => <SelectItem key={code} value={code} className="text-xs">{languageLabel(locale, code)}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <Select value={timeWindow} onValueChange={setTimeWindow}>
+          <SelectTrigger aria-label={t('feedWindowLabel')} className="h-11 w-auto min-w-28 text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="any" className="text-xs">{t('feedWindowAny')}</SelectItem>
+            <SelectItem value="24h" className="text-xs">{t('feedWindow24h')}</SelectItem>
+            <SelectItem value="7d" className="text-xs">{t('feedWindow7d')}</SelectItem>
+            <SelectItem value="30d" className="text-xs">{t('feedWindow30d')}</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
       {filtering && <p className="text-[11px] text-muted-foreground">{t('feedFiltersNote')}</p>}
 
@@ -333,6 +396,8 @@ export function FeedGadget({
           <p className="text-[11px] max-w-xs text-muted-foreground">
             {needle || sourceFilter !== 'all'
               ? t('feedNoMatch')
+              : serverFiltered
+              ? t('feedNoServerMatch')
               : onlyUnread
               ? t('feedCaughtUp')
               : t('feedEmptyDetail')}

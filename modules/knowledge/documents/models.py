@@ -31,6 +31,7 @@ class Document(Base):
         Index("ix_documents_external_id", "external_id"),
         Index("ix_documents_published_at", "published_at"),
         Index("ix_documents_created_at_id", "created_at", "id"),
+        Index("ix_documents_language_created_at_id", "language", "created_at", "id"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
