@@ -6,6 +6,7 @@ when inputs are unchanged and ``force`` is false); a model outage never replaces
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import re
@@ -19,6 +20,7 @@ from zoneinfo import ZoneInfo
 from redis.asyncio import Redis
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import Settings
@@ -53,6 +55,10 @@ class BriefEmpty(Exception):
 
 class BriefUnavailable(Exception):
     """Raised when the model is unconfigured, denied by privacy policy, down, or returned unusable text."""
+
+
+class BriefEvidenceRevoked(BriefUnavailable):
+    """Raised when the automation publish guard fails mid-call (trigger evidence purged or ineligible)."""
 
 
 async def _with_live_status(session: AsyncSession, rows: list[DailyBrief]) -> list[BriefRead]:
@@ -526,7 +532,7 @@ async def _relock_and_verify(
     from modules.dashboard import context  # local import: context imports this module
 
     if guard is not None and not await guard(session):
-        raise BriefUnavailable("Brief trigger evidence is no longer eligible")
+        raise BriefEvidenceRevoked("Brief trigger evidence is no longer eligible")
     await _lock_fact_dependencies(session, facts)
     widgets = await context.build_daily_widgets(session, owner_id, day, timezone)
     current = await _facts(session, widgets, owner_id=owner_id, lock_events=True)
@@ -605,6 +611,17 @@ async def generate_brief(
     # Rollback, not commit: nothing was written, and a caller transaction is never committed by mistake.
     await session.rollback()
 
+    async def verify_settings() -> None:
+        """Deny when AI settings, destination, mapping or consent changed since Phase A."""
+        now = await settings_public.get_ai_execution_config(session, settings, redis)
+        now_mapping = now.aliases.get(alias)
+        if (now.configuration_revision != config.configuration_revision
+                or now.endpoint_destination_id != destination or now.brief_alias != alias
+                or now.gateway_identity != config.gateway_identity or now_mapping != mapping
+                or not may_send(_brief_policy(now), alias, now_mapping, destination or "",
+                                bool(now.omniroute_api_key), "chat")):
+            raise PrivacyPolicyDenied("Brief egress denied by current settings")
+
     # Phase B: per-attempt egress fence, released when the request body is handed to the transport.
     async def send_fence() -> None:
         """Re-lock and re-verify facts, publish guard and AI settings immediately before each attempt."""
@@ -612,17 +629,12 @@ async def generate_brief(
             await _relock_and_verify(
                 session, owner_id, day, timezone, facts, fingerprint, guard=publish_guard,
             )
-            now = await settings_public.get_ai_execution_config(session, settings, redis)
-            now_mapping = now.aliases.get(alias)
-            if (now.configuration_revision != config.configuration_revision
-                    or now.endpoint_destination_id != destination or now.brief_alias != alias
-                    or now.gateway_identity != config.gateway_identity or now_mapping != mapping
-                    or not may_send(_brief_policy(now), alias, now_mapping, destination or "",
-                                    bool(now.omniroute_api_key), "chat")):
-                raise PrivacyPolicyDenied("Brief egress denied by current settings")
+            await verify_settings()
         except BaseException:
             # before_send runs outside the gateway's after_send finally: release our own fence (P2-4).
-            await session.rollback()
+            # A dead connection must not mask the original error.
+            with contextlib.suppress(DBAPIError):
+                await session.rollback()
             raise
 
     async def release_fence() -> None:
@@ -644,6 +656,10 @@ async def generate_brief(
     except (ModelGatewayError, KeyError, IndexError, TypeError) as exc:
         await release_fence()
         raise BriefUnavailable(str(exc)) from exc
+    except DBAPIError as exc:  # deadlock, lock timeout or dead connection inside the fence: 503, not 500
+        with contextlib.suppress(DBAPIError):
+            await release_fence()
+        raise BriefUnavailable("Brief fence database error") from exc
     except BaseException:
         await release_fence()
         raise
@@ -657,6 +673,10 @@ async def generate_brief(
         current_widgets = await _relock_and_verify(
             session, owner_id, day, timezone, facts, fingerprint, guard=publish_guard,
         )
+        try:
+            await verify_settings()  # P3-1: remote reasoning turned off mid-call publishes nothing
+        except PrivacyPolicyDenied as exc:
+            raise BriefUnavailable(str(exc)) from exc
         await session.execute(
             text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
             {"key": f"brief:{owner_id}:{day}:{timezone}"},

@@ -76,8 +76,11 @@ async def _wait_received(nonce: str, timeout: float = 30) -> None:
     raise AssertionError("the fake model never received the brief request body")
 
 
-async def _seed_supported_story(client: AsyncClient, engine: AsyncEngine, nonce: str) -> UUID:
-    """Create a Source + Document through the API and a news story observed now that cites its chunk."""
+async def _seed_supported_story(client: AsyncClient, engine: AsyncEngine, nonce: str) -> tuple[UUID, UUID]:
+    """Create a Source + Document through the API and a news story observed now that cites its chunk.
+
+    Returns ``(source_id, story_id)``; ``_assert_story_in_context`` proves the dashboard reads the seed.
+    """
     created = await client.post("/api/v1/sources", json={"type": "manual", "name": f"p14 brief {nonce}"})
     created.raise_for_status()
     source_id = UUID(created.json()["id"])
@@ -87,13 +90,21 @@ async def _seed_supported_story(client: AsyncClient, engine: AsyncEngine, nonce:
     })
     document.raise_for_status()
     document_id = UUID(document.json()["id"])
+    query = text(
+        "SELECT v.id AS version_id, v.version_number, c.id AS chunk_id, s.generation "
+        "FROM document_versions v JOIN document_chunks c ON c.document_version_id = v.id "
+        "JOIN sources s ON s.id = :source WHERE v.document_id = :document "
+        "ORDER BY v.version_number DESC, c.id LIMIT 1"
+    )
+    row = None
+    for _ in range(60):  # ingest may chunk asynchronously: bounded poll, never .one() on an empty set
+        async with engine.connect() as connection:
+            row = (await connection.execute(query, {"source": source_id, "document": document_id})).mappings().first()
+        if row:
+            break
+        await asyncio.sleep(0.5)
+    assert row, "the document was never chunked"
     async with engine.begin() as connection:
-        row = (await connection.execute(text(
-            "SELECT v.id AS version_id, v.version_number, c.id AS chunk_id, s.generation "
-            "FROM document_versions v JOIN document_chunks c ON c.document_version_id = v.id "
-            "JOIN sources s ON s.id = :source WHERE v.document_id = :document "
-            "ORDER BY v.version_number DESC LIMIT 1"
-        ), {"source": source_id, "document": document_id})).mappings().one()
         story_id = uuid4()
         await connection.execute(text(
             "INSERT INTO news_stories (id, identity_key, identity_kind) VALUES (:id, :key, 'hash')"
@@ -109,7 +120,25 @@ async def _seed_supported_story(client: AsyncClient, engine: AsyncEngine, nonce:
             "number": row["version_number"], "hash": hashlib.sha256(nonce.encode()).hexdigest(),
             "title": f"Brief story {nonce}", "excerpt": f"Fictional story body {nonce}.",
         })
-    return source_id
+    return source_id, story_id
+
+
+async def _assert_story_in_context(client: AsyncClient, day: object, story_id: UUID) -> None:
+    """The seed is real only if the dashboard's stories widget (the brief's fact source) lists it."""
+    context = await client.get("/api/v1/dashboard/context/daily", params={"date": str(day), "timezone": TZ})
+    assert context.status_code == 200, context.text
+    stories = next(w for w in context.json()["widgets"] if w["id"] == "stories")
+    assert str(story_id) in {item["id"] for item in stories["items"]}, "seeded story missing from the brief facts"
+
+
+async def _clear_earlier_tasks(client: AsyncClient) -> None:
+    """Delete earlier ``Plan [fake:`` tasks so the shared DB cannot push the story out of MAX_FACTS."""
+    page = await client.get("/api/v1/tasks", params={"q": "Plan [fake:", "limit": 100})
+    page.raise_for_status()
+    for item in page.json()["items"]:
+        if item["title"].startswith("Plan [fake:"):
+            gone = await client.delete(f"/api/v1/tasks/{item['id']}", params={"expected_revision": item["revision"]})
+            assert gone.status_code == 204, gone.text
 
 
 async def _revisions(engine: AsyncEngine, day: object) -> int:
@@ -138,8 +167,10 @@ async def test_slow_brief_holds_no_lock_and_a_mid_call_purge_publishes_no_revisi
     brief_ready: AsyncClient, committed_engine: AsyncEngine,
 ) -> None:
     client, nonce = brief_ready, uuid4().hex[:12]
-    source_id = await _seed_supported_story(client, committed_engine, nonce)
+    await _clear_earlier_tasks(client)
+    source_id, story_id = await _seed_supported_story(client, committed_engine, nonce)
     day = datetime.now(UTC).astimezone(ZoneInfo(TZ)).date()
+    await _assert_story_in_context(client, day, story_id)
     before = await _revisions(committed_engine, day)
     day, generate = await _start_slow_brief(client, nonce)
 
@@ -153,11 +184,12 @@ async def test_slow_brief_holds_no_lock_and_a_mid_call_purge_publishes_no_revisi
         client.delete(f"/api/v1/sources/{source_id}", params={"with_data": "true"}), DEADLINE,
     )
     assert queued.status_code == 202, queued.text
-    # (c) No backend (the API's brief session included) sits idle in transaction.
+    # (c) No API backend that touched brief tables sits idle in transaction (workers on other tables excluded).
     async with committed_engine.connect() as connection:
         idle = await connection.scalar(text(
             "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() "
-            "AND state = 'idle in transaction' AND now() - state_change > interval '1 second' "
+            "AND state = 'idle in transaction' AND query ~* '(sources|documents|timeline_events|daily_briefs|news_)' "
+            "AND now() - state_change > interval '1 second' "
             "AND pid <> pg_backend_pid()"
         ))
     assert idle == 0
@@ -176,8 +208,10 @@ async def test_slow_brief_without_interference_publishes_one_revision(
 ) -> None:
     """Control: the same slow call publishes, so the 503 above is the discard, not an outage."""
     client, nonce = brief_ready, uuid4().hex[:12]
-    await _seed_supported_story(client, committed_engine, nonce)
+    await _clear_earlier_tasks(client)
+    _, story_id = await _seed_supported_story(client, committed_engine, nonce)
     day = datetime.now(UTC).astimezone(ZoneInfo(TZ)).date()
+    await _assert_story_in_context(client, day, story_id)
     before = await _revisions(committed_engine, day)
     day, generate = await _start_slow_brief(client, nonce)
     response = await generate

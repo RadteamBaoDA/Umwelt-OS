@@ -184,7 +184,7 @@ async def test_phases_run_in_order_with_canonical_lock_order_and_no_lock_during_
         # B: guard -> sources/documents -> events, settings recheck, egress, release at body write
         "guardB", "lock", "widgets", "facts+events", "config", "egress", "rollback", "wait",
         # C: guard -> sources/documents -> events -> day advisory, publish
-        "guardC", "lock", "widgets", "facts+events", "advisory", "notify", "commit",
+        "guardC", "lock", "widgets", "facts+events", "config", "advisory", "notify", "commit",
     ]
     assert env.tx_during_wait == [False]
     assert brief.revision == 1 and len(env.committed) == 1
@@ -265,6 +265,30 @@ async def test_settings_change_before_egress_is_denied(env: _Env) -> None:
     assert "egress" not in env.log and not env.session.in_transaction()
 
 
+async def test_settings_change_during_the_model_call_discards_the_output(env: _Env) -> None:
+    def bump(call: int) -> None:
+        if call == 3:
+            env.revision = 2  # Phase C re-read: settings changed after the body was sent
+
+    env.on_config = bump
+    with pytest.raises(briefs.BriefUnavailable):
+        await _generate(env)
+    assert "commit" not in env.log and not env.committed and not env.session.in_transaction()
+
+
+async def test_database_error_inside_the_fence_maps_to_unavailable(env: _Env) -> None:
+    from sqlalchemy.exc import OperationalError
+
+    def deadlock(call: int) -> None:
+        if call == 2:
+            raise OperationalError("SELECT 1", {}, Exception("deadlock detected"))
+
+    env.on_config = deadlock
+    with pytest.raises(briefs.BriefUnavailable):
+        await _generate(env)
+    assert "egress" not in env.log and not env.session.in_transaction()
+
+
 async def test_remote_consent_withdrawn_before_egress_is_denied(env: _Env) -> None:
     def withdraw(call: int) -> None:
         if call == 1:
@@ -288,7 +312,7 @@ async def test_concurrent_revision_is_not_reused_and_ours_is_numbered_after_it(e
 
 @pytest.mark.parametrize("phase", ["B", "C"])
 async def test_publish_guard_is_rechecked_before_egress_and_before_publish(env: _Env, phase: str) -> None:
-    with pytest.raises(briefs.BriefUnavailable, match="trigger evidence"):
+    with pytest.raises(briefs.BriefEvidenceRevoked, match="trigger evidence"):  # automation maps this to skipped
         await _generate(env, guard=_guard(env, {phase: False}))
     assert ("egress" in env.log) is (phase == "C")
     assert env.committed == [] and not env.session.in_transaction()

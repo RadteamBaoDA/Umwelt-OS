@@ -303,7 +303,7 @@ async def list_brief_revisions(
 async def generate_brief(
     payload: BriefGenerateRequest, request: Request, session: Session, owner: OwnerWrite, response: Response,
 ) -> BriefRead:
-    """Generate a new brief revision; a model outage returns 503 and keeps the earlier revisions."""
+    """Generate a new brief revision; a model outage, or inputs changed or purged mid-call, returns 503 and keeps the earlier revisions."""
     _no_store(response)
     try:
         return await briefs.generate_brief(

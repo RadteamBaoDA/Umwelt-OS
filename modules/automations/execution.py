@@ -1165,6 +1165,9 @@ async def _generate_brief(ctx: dict[str, Any], run: AutomationRun, row: Automati
     except dashboard.BriefEmpty:
         await _mark(factory, run.id, row.ordinal, "succeeded", None, "brief:empty")
         return "succeeded"
+    except dashboard.BriefEvidenceRevoked:  # purge landed mid-call: drop like the step-start check, any attempt
+        await _mark(factory, run.id, row.ordinal, "skipped", "document_evidence_unavailable")
+        return "dropped"
     except dashboard.BriefUnavailable:
         return await _transient(factory, run.id, row.ordinal)
     except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
