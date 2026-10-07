@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from collections.abc import Set as AbstractSet
 from datetime import UTC, date, datetime
 from typing import Any
@@ -22,7 +22,8 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import Settings
-from core.model_gateway.client import ModelGateway, ModelGatewayError
+from core.model_gateway.client import ModelGateway, ModelGatewayError, PrivacyPolicyDenied
+from core.model_gateway.policy import may_send
 from core.model_gateway.schemas import RequestPolicy
 from core.realtime import commit_with_replay, make_dashboard_change
 from modules.dashboard.daily_schemas import (
@@ -502,19 +503,57 @@ def _messages(day: date, facts: list[dict[str, Any]]) -> list[dict[str, str]]:
     ]
 
 
-async def generate_brief(
-    session: AsyncSession, owner_id: int, day: date, timezone: str, *,
-    settings: Settings, redis: Redis, force: bool,
-) -> BriefRead:
-    """Generate and persist the next brief revision for a local day.
+def _brief_policy(config: Any) -> RequestPolicy:
+    """Build the brief's remote request policy from one AI execution config snapshot."""
+    destination = config.endpoint_destination_id
+    return RequestPolicy(
+        reasoning_allowed=config.privacy.allow_remote_reasoning, local_only=False,
+        permitted_destinations=frozenset({destination}) if destination else frozenset(),
+        reasoning_destinations=frozenset(config.privacy.reasoning_destinations),
+        configuration_revision=config.configuration_revision,
+    )
 
-    A per-day advisory transaction lock serializes concurrent generation (the lock is held across the
-    model call by design; the owner-scale queue is tiny and this prevents duplicate revisions).
-    Raises ``BriefEmpty`` or ``BriefUnavailable`` without touching earlier revisions.
+
+async def _relock_and_verify(
+    session: AsyncSession, owner_id: int, day: date, timezone: str, facts: list[dict[str, Any]],
+    fingerprint: str, *, guard: Callable[[AsyncSession], Awaitable[bool]] | None,
+) -> list[DailyWidget]:
+    """Re-take the canonical fence (guard, Sources, Documents, Events) and prove the snapshot is current.
+
+    Raises ``BriefUnavailable`` when the guard fails, a cited Source/Document became ineligible, or
+    the rebuilt facts no longer hash to ``fingerprint``. The caller owns rollback.
     """
     from modules.dashboard import context  # local import: context imports this module
 
-    # Fact-only widgets: reading saved history here would take Event locks before Source locks.
+    if guard is not None and not await guard(session):
+        raise BriefUnavailable("Brief trigger evidence is no longer eligible")
+    await _lock_fact_dependencies(session, facts)
+    widgets = await context.build_daily_widgets(session, owner_id, day, timezone)
+    current = await _facts(session, widgets, owner_id=owner_id, lock_events=True)
+    if _fingerprint(day, timezone, current) != fingerprint:
+        raise BriefUnavailable("Daily brief facts changed during generation")
+    return widgets
+
+
+async def generate_brief(
+    session: AsyncSession, owner_id: int, day: date, timezone: str, *,
+    settings: Settings, redis: Redis, force: bool,
+    publish_guard: Callable[[AsyncSession], Awaitable[bool]] | None = None,
+) -> BriefRead:
+    """Generate and persist the next brief revision for a local day, in three short transactions.
+
+    A: snapshot facts + fingerprint under the canonical locks, then roll back (nothing held).
+    B: each model attempt re-locks, re-verifies the fingerprint, ``publish_guard`` and AI settings in
+       ``before_send``; the fence is released once the request body is handed to the transport.
+    C: re-lock, re-verify, take the per-day advisory lock and publish ``latest.revision + 1``, or
+       discard the output (no revision) when inputs changed or were purged mid-call.
+    No connection or lock is held while waiting for the model response. ``publish_guard`` (automation)
+    runs first in B and C, before the brief's own locks. Raises ``BriefEmpty`` or ``BriefUnavailable``
+    without touching earlier revisions.
+    """
+    from modules.dashboard import context  # local import: context imports this module
+
+    # Phase A: snapshot. Fact-only widgets: saved history here would take Event before Source locks.
     relation = context.relation_to_today(day, timezone)
     widgets = await context.build_daily_widgets(session, owner_id, day, timezone, relation=relation)
     initial_facts = await _facts(session, widgets, owner_id=owner_id)
@@ -562,79 +601,117 @@ async def generate_brief(
     alias = config.brief_alias
     mapping = config.aliases.get(alias)
     destination = config.endpoint_destination_id
-    privacy = config.privacy
-    policy = RequestPolicy(
-        reasoning_allowed=privacy.allow_remote_reasoning, local_only=False,
-        permitted_destinations=frozenset({destination}) if destination else frozenset(),
-        reasoning_destinations=frozenset(privacy.reasoning_destinations),
-        configuration_revision=config.configuration_revision,
-    )
+    policy = _brief_policy(config)
+    # Rollback, not commit: nothing was written, and a caller transaction is never committed by mistake.
+    await session.rollback()
+
+    # Phase B: per-attempt egress fence, released when the request body is handed to the transport.
+    async def send_fence() -> None:
+        """Re-lock and re-verify facts, publish guard and AI settings immediately before each attempt."""
+        try:
+            await _relock_and_verify(
+                session, owner_id, day, timezone, facts, fingerprint, guard=publish_guard,
+            )
+            now = await settings_public.get_ai_execution_config(session, settings, redis)
+            now_mapping = now.aliases.get(alias)
+            if (now.configuration_revision != config.configuration_revision
+                    or now.endpoint_destination_id != destination or now.brief_alias != alias
+                    or now.gateway_identity != config.gateway_identity or now_mapping != mapping
+                    or not may_send(_brief_policy(now), alias, now_mapping, destination or "",
+                                    bool(now.omniroute_api_key), "chat")):
+                raise PrivacyPolicyDenied("Brief egress denied by current settings")
+        except BaseException:
+            # before_send runs outside the gateway's after_send finally: release our own fence (P2-4).
+            await session.rollback()
+            raise
+
+    async def release_fence() -> None:
+        """Idempotently end the fence transaction (body-written hook, then the gateway's finally)."""
+        if session.in_transaction():
+            await session.rollback()
+
     gateway = ModelGateway(
         redis=redis, base_url=config.omniroute_base_url, api_key=config.omniroute_api_key,
         destination_id=destination or "", timeout_seconds=config.request_timeout_seconds,
         gateway_identity=config.gateway_identity, approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
     )
     try:
-        response = await gateway.chat(alias, mapping, policy, _messages(day, facts), max_tokens=500, temperature=0.2)
+        response = await gateway.chat(
+            alias, mapping, policy, _messages(day, facts), max_tokens=500, temperature=0.2,
+            before_send=send_fence, after_send=release_fence,
+        )
         content = str(response["choices"][0]["message"]["content"]).strip()
     except (ModelGatewayError, KeyError, IndexError, TypeError) as exc:
-        await session.rollback()
+        await release_fence()
         raise BriefUnavailable(str(exc)) from exc
+    except BaseException:
+        await release_fence()
+        raise
     cited = sorted({int(m) for m in _CITATION.findall(content) if 1 <= int(m) <= len(facts)})
     if not content or not cited:
-        await session.rollback()
         raise BriefUnavailable("model returned an uncited brief")
 
-    current_widgets = await context.build_daily_widgets(session, owner_id, day, timezone)
-    current_facts = await _facts(
-        session, current_widgets, owner_id=owner_id, lock_events=True,
-    )
-    if _fingerprint(day, timezone, current_facts) != fingerprint:
-        await session.rollback()
-        raise BriefUnavailable("Daily brief facts changed before saved publication")
-
-    row = DailyBrief(
-        owner_id=owner_id, brief_date=day, timezone=timezone,
-        revision=(latest.revision + 1) if latest else 1, input_fingerprint=fingerprint,
-        content=content[:4000], model_alias=alias,
-        evidence_capture_version=1, evidence_capture_status="captured", evidence_fact_count=len(facts),
-        citations=[{"ref": n, **{k: facts[n - 1][k] for k in ("kind", "id", "title", "source_ids")}} for n in cited],
-    )
-    session.add(row)
-    await session.flush()
-    for reference, fact in enumerate(facts, start=1):
-        common = {
-            "brief_id": row.id, "fact_ref": reference, "fact_kind": fact["kind"],
-            "fact_id": fact["id"], "fact_hash": fact["_fact_hash"],
-        }
-        if fact["_lineage_status"] == "independent":
-            session.add(DailyBriefEvidence(**common, support_index=0))
-        else:
-            session.add_all([
-                DailyBriefEvidence(
-                    **common, support_index=index,
-                    document_id=UUID(item["document_id"]),
-                    document_version_id=UUID(item["document_version_id"]),
-                    chunk_id=UUID(item["chunk_id"]),
-                    source_id=UUID(item["source_id"]),
-                )
-                for index, item in enumerate(fact["_supports"])
-            ])
-    await session.flush()
-    await notifications.emit(session, owner_id, NotificationEmit(
-        dedupe_key=f"brief:{day}:{timezone}:{row.revision}", kind="brief.ready",
-        params={"date": day.isoformat(), "revision": row.revision},
-        link=f"/app?date={day.isoformat()}",
-    ))
-    open_tasks = [w for w in current_widgets if w.id == "tasks"]
-    due = sum(1 for w in open_tasks for t in w.items if t["status"] not in ("done", "cancelled"))
-    if relation == "today" and due:
+    # Phase C: publish or discard. A purge or local_only flip committed mid-call fails the relock or
+    # the fingerprint, so the output is dropped and no revision is written.
+    try:
+        current_widgets = await _relock_and_verify(
+            session, owner_id, day, timezone, facts, fingerprint, guard=publish_guard,
+        )
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+            {"key": f"brief:{owner_id}:{day}:{timezone}"},
+        )
+        # Re-read under the day lock; a revision committed concurrently is never reused (P2-5).
+        latest = await session.scalar(
+            select(DailyBrief).where(
+                DailyBrief.owner_id == owner_id, DailyBrief.brief_date == day, DailyBrief.timezone == timezone
+            ).order_by(DailyBrief.revision.desc()).limit(1)
+        )
+        row = DailyBrief(
+            owner_id=owner_id, brief_date=day, timezone=timezone,
+            revision=(latest.revision + 1) if latest else 1, input_fingerprint=fingerprint,
+            content=content[:4000], model_alias=alias,
+            evidence_capture_version=1, evidence_capture_status="captured", evidence_fact_count=len(facts),
+            citations=[{"ref": n, **{k: facts[n - 1][k] for k in ("kind", "id", "title", "source_ids")}} for n in cited],
+        )
+        session.add(row)
+        await session.flush()
+        for reference, fact in enumerate(facts, start=1):
+            common = {
+                "brief_id": row.id, "fact_ref": reference, "fact_kind": fact["kind"],
+                "fact_id": fact["id"], "fact_hash": fact["_fact_hash"],
+            }
+            if fact["_lineage_status"] == "independent":
+                session.add(DailyBriefEvidence(**common, support_index=0))
+            else:
+                session.add_all([
+                    DailyBriefEvidence(
+                        **common, support_index=index,
+                        document_id=UUID(item["document_id"]),
+                        document_version_id=UUID(item["document_version_id"]),
+                        chunk_id=UUID(item["chunk_id"]),
+                        source_id=UUID(item["source_id"]),
+                    )
+                    for index, item in enumerate(fact["_supports"])
+                ])
+        await session.flush()
         await notifications.emit(session, owner_id, NotificationEmit(
-            dedupe_key=f"tasks.due:{day}:{timezone}", kind="tasks.due",
-            params={"count": due}, link=f"/app?date={day.isoformat()}",
+            dedupe_key=f"brief:{day}:{timezone}:{row.revision}", kind="brief.ready",
+            params={"date": day.isoformat(), "revision": row.revision},
+            link=f"/app?date={day.isoformat()}",
         ))
-    # Atomic commit + replay row: realtime clients invalidate the day context and notification bell.
-    await commit_with_replay(session, [make_dashboard_change("brief", row.id, row.revision)])
+        open_tasks = [w for w in current_widgets if w.id == "tasks"]
+        due = sum(1 for w in open_tasks for t in w.items if t["status"] not in ("done", "cancelled"))
+        if relation == "today" and due:
+            await notifications.emit(session, owner_id, NotificationEmit(
+                dedupe_key=f"tasks.due:{day}:{timezone}", kind="tasks.due",
+                params={"count": due}, link=f"/app?date={day.isoformat()}",
+            ))
+        # Atomic commit + replay row: realtime clients invalidate the day context and notification bell.
+        await commit_with_replay(session, [make_dashboard_change("brief", row.id, row.revision)])
+    except BaseException:
+        await session.rollback()
+        raise
     return BriefRead.model_validate(row).model_copy(update={"lineage_status": "captured"})
 
 
