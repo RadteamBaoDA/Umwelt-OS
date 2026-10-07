@@ -28,7 +28,7 @@ Session = Annotated[AsyncSession, Depends(get_session)]
 POLL_INTERVAL_SECONDS = 2
 HEARTBEAT_INTERVAL_SECONDS = 15
 DB_READ_TIMEOUT_SECONDS = 3
-MAX_STREAMS_PER_API_PROCESS = 4
+MAX_STREAMS_PER_API_PROCESS = 32
 _TOKEN_CURSOR_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -148,13 +148,6 @@ async def stream_events(
                 return
             last_heartbeat = asyncio.get_running_loop().time()
             while not await request.is_disconnected():
-                current = await _session_is_current(request)
-                if current is None:
-                    yield "event: connection_unavailable\ndata: {}\n\n"
-                    return
-                if not current:
-                    yield "event: auth_expired\ndata: {}\n\n"
-                    return
                 try:
                     async with asyncio.timeout(DB_READ_TIMEOUT_SECONDS):
                         async with factory() as session:
@@ -178,6 +171,14 @@ async def stream_events(
                 except TimeoutError:
                     yield "event: connection_unavailable\ndata: {}\n\n"
                     return
+                # One auth check per poll, after the read and before anything is written.
+                current = await _session_is_current(request)
+                if current is None:
+                    yield "event: connection_unavailable\ndata: {}\n\n"
+                    return
+                if not current:
+                    yield "event: auth_expired\ndata: {}\n\n"
+                    return
                 if stale_reason is not None:
                     yield _resync(stale_reason, latest_cursor)
                     return
@@ -192,29 +193,15 @@ async def stream_events(
                     yield _resync("replay_gap", latest_cursor)
                     return
                 if records:
-                    for record in records:
-                        current = await _session_is_current(request)
-                        if current is None:
-                            yield "event: connection_unavailable\ndata: {}\n\n"
-                            return
-                        if not current:
-                            yield "event: auth_expired\ndata: {}\n\n"
-                            return
-                        if await request.is_disconnected():
-                            return
-                        yield _sse_record(record)
-                        position = ReplayCursor(epoch=record.epoch, sequence=record.sequence)
+                    # One write for the whole batch (records are invalidation pointers).
+                    if await request.is_disconnected():
+                        return
+                    yield "".join(_sse_record(record) for record in records)
+                    position = ReplayCursor(epoch=records[-1].epoch, sequence=records[-1].sequence)
                     last_heartbeat = asyncio.get_running_loop().time()
                     continue
                 now = asyncio.get_running_loop().time()
                 if now - last_heartbeat >= HEARTBEAT_INTERVAL_SECONDS:
-                    current = await _session_is_current(request)
-                    if current is None:
-                        yield "event: connection_unavailable\ndata: {}\n\n"
-                        return
-                    if not current:
-                        yield "event: auth_expired\ndata: {}\n\n"
-                        return
                     yield ": heartbeat\n\n"
                     last_heartbeat = now
                 await asyncio.sleep(POLL_INTERVAL_SECONDS)
