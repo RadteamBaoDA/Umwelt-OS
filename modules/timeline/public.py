@@ -588,6 +588,12 @@ async def _list_partition(session: AsyncSession, query: TimelineQuery, partition
         # Escape SQL LIKE metacharacters so the user value remains a literal substring.
         type_pattern = query.type.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         statement = statement.where(Event.type.ilike(f"%{type_pattern}%", escape="\\"))
+    if query.q is not None:
+        # ponytail: ILIKE scan bounded by the page limit; add a pg_trgm index if event volume grows.
+        q_pattern = query.q.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
+        statement = statement.where(or_(
+            Event.title.ilike(f"%{q_pattern}%", escape="\\"), Event.summary.ilike(f"%{q_pattern}%", escape="\\"),
+        ))
     if partition == 0:
         statement = statement.where(Event.date_precision == "timed")
         if query.date_from is not None:
@@ -624,9 +630,13 @@ async def _list_partition(session: AsyncSession, query: TimelineQuery, partition
     return list((await session.scalars(statement.limit(limit))).all())
 
 
-async def list_events(session: AsyncSession, *, limit: int = 50, cursor: str | None = None, source_id: UUID | None = None) -> EventPage:
-    """Return bounded events with stable timed/date/unknown cursor partitions."""
-    query = TimelineQuery(source_id=source_id)
+async def list_events(session: AsyncSession, *, limit: int = 50, cursor: str | None = None,
+                      source_id: UUID | None = None, q: str | None = None) -> EventPage:
+    """Return bounded events with stable timed/date/unknown cursor partitions.
+
+    ``q`` is a literal title/summary substring that rides the same visibility filters and cursor fingerprint.
+    """
+    query = TimelineQuery(source_id=source_id, q=q)
     return await _list_page(session, query, limit, cursor)
 
 

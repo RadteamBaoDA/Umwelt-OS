@@ -170,6 +170,7 @@ __all__ = [
     "read_memory_export_origin",
     "revalidate_context_fence",
     "run_response_generation",
+    "search_conversations",
     "validate_answer_citations",
     "validate_citations",
     "validate_export_fences",
@@ -793,14 +794,44 @@ async def _chat_export_privacy(session: AsyncSession) -> tuple[bool, bool, _date
     return privacy.store_conversation_history, persisted, updated_at
 
 
+async def search_conversations(
+    session: AsyncSession, q: str, *, limit: int, offset: int, archived: bool,
+) -> list[Conversation]:
+    """Search retained conversation titles by literal substring, newest first.
+
+    Search shows nothing when history storage is off, and never ephemeral,
+    expired or automation threads. Deleted rows are gone, so they never match.
+    """
+    # Lock-free consent read (the export path's); is_history_storage_enabled would hold Memory's advisory lock.
+    if not (await _chat_export_privacy(session))[0]:
+        return []
+    escaped = q.strip().replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
+    # ponytail: ILIKE scan over the owner's own titles; add a pg_trgm index if title volume grows.
+    statement = (
+        _select(Conversation)
+        .where(Conversation.archived == archived, Conversation.title.ilike(f"%{escaped}%", escape="\\"))
+        .where(*_chat_export_scope_retained(_datetime.now(_UTC)))
+        .order_by(Conversation.updated_at.desc(), Conversation.id.desc())
+        .offset(offset).limit(limit)
+    )
+    return list((await session.scalars(statement)).all())
+
+
+def _chat_export_scope_retained(now: _datetime) -> tuple[ColumnElement[bool], ...]:
+    """Retention predicates shared by export scope and search (no snapshot cutoff)."""
+    return (
+        Conversation.ephemeral.is_(False),
+        _or(Conversation.expires_at.is_(None), Conversation.expires_at > now),
+        _or(Conversation.context_kind.is_(None), Conversation.context_kind != "automation"),
+    )
+
+
 def _chat_export_scope(snapshot_at: _datetime, now: _datetime) -> tuple[ColumnElement[bool], ...]:
     """Filter to retained, non-automation conversation history unchanged at the cutoff."""
     return (
         Conversation.created_at <= snapshot_at,
         Conversation.updated_at <= snapshot_at,
-        Conversation.ephemeral.is_(False),
-        _or(Conversation.expires_at.is_(None), Conversation.expires_at > now),
-        _or(Conversation.context_kind.is_(None), Conversation.context_kind != "automation"),
+        *_chat_export_scope_retained(now),
     )
 
 

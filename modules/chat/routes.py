@@ -211,6 +211,7 @@ async def list_conversations(
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
     archived: bool = False,
+    q: Annotated[str | None, Query(min_length=1, max_length=200)] = None,
 ) -> list[ConversationRead]:
     """List persistent owner conversations ordered by most recent update.
 
@@ -221,13 +222,16 @@ async def list_conversations(
         limit: Maximum number of conversations to return (1-100).
         offset: Offset for pagination.
         archived: Filter to archived or active conversations.
+        q: Optional literal title substring; uses the retained-history search path.
 
     Returns:
         List of ConversationRead schemas.
     """
     response.headers["Cache-Control"] = "private, no-store"
     now = datetime.now(UTC)
-    rows = (
+    if q is not None and not q.strip():
+        raise HTTPException(status_code=422, detail="q must not be blank")
+    rows = await chat_public.search_conversations(session, q, limit=limit, offset=offset, archived=archived) if q is not None else (
         await session.scalars(
             select(Conversation)
             .where(Conversation.archived == archived)

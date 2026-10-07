@@ -31,6 +31,7 @@ export function TimelinePage() {
   const entityId = params.get('entity_id') ?? '';
   const precision = (['all', 'timed', 'date', 'unknown'].includes(params.get('precision') ?? '') ? params.get('precision') : 'all') as Precision;
   const eventType = (params.get('type') ?? '').trim();
+  const searchText = (params.get('q') ?? '').trim().slice(0, 200);
   const [draftDateFrom, setDraftDateFrom] = useState(dateFrom);
   const [draftDateTo, setDraftDateTo] = useState(dateTo);
   const [draftSourceId, setDraftSourceId] = useState(sourceId);
@@ -49,7 +50,7 @@ export function TimelinePage() {
 
   const query: TimelineQuery = {
     date_from: dateFrom, date_to: dateTo, timezone: display.timezone,
-    source_id: sourceId, entity_id: entityId, precision, type: eventType,
+    source_id: sourceId, entity_id: entityId, precision, type: eventType, q: searchText,
   };
   const timeline = useInfiniteQuery({
     // A normalized server filter in the key starts a fresh cursor chain whenever the filter changes.
@@ -103,6 +104,7 @@ export function TimelinePage() {
       <p className="muted">{t('rangeHelp')} · {t('timezoneLabel', { timezone: display.timezone })}</p>
       <Button type="submit">{t('applyFilters')}</Button>
     </form>
+    {searchText && <p className="muted" role="status">{t('searchActive', { query: searchText })} <Button type="button" className="secondary" onClick={() => router.push('/timeline')}>{t('clearSearch')}</Button></p>}
     {timeline.isPending && !appliedTypeTooLong && <div className="skeleton" aria-label={t('loading')} />}
     {timeline.isError && <p className="error" role="alert">{timeline.error instanceof ApiError ? timeline.error.message : t('loadFailed')} <Button type="button" className="secondary" onClick={() => timeline.refetch()}>{t('retry')}</Button></p>}
     {timeline.data && <>

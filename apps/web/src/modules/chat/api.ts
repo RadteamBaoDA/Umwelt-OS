@@ -159,11 +159,13 @@ export async function listConversations(params?: {
   limit?: number;
   offset?: number;
   archived?: boolean;
+  q?: string;
 }): Promise<Conversation[]> {
   const query = new URLSearchParams();
   if (params?.limit !== undefined) query.set('limit', String(params.limit));
   if (params?.offset !== undefined) query.set('offset', String(params.offset));
   if (params?.archived !== undefined) query.set('archived', String(params.archived));
+  if (params?.q?.trim()) query.set('q', params.q.trim().slice(0, 200));
   const queryString = query.toString();
   const path = `/api/v1/conversations${queryString ? `?${queryString}` : ''}`;
   return apiRequest<Conversation[]>(path);

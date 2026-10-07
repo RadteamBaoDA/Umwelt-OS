@@ -415,6 +415,18 @@ class TimelineQuery(BaseModel):
     entity_id: UUID | None = None
     type: str | None = Field(default=None, min_length=1, max_length=64)
     precision: Literal["all", "timed", "date", "unknown"] = "all"
+    q: str | None = Field(default=None, min_length=1, max_length=200)
+
+    @field_validator("q")
+    @classmethod
+    def normalize_search_text(cls, value: str | None) -> str | None:
+        """Trim the literal title/summary search text and reject whitespace-only input."""
+        if value is None:
+            return None
+        result = value.strip()
+        if not result:
+            raise ValueError("q must not be blank")
+        return result
 
     @field_validator("type")
     @classmethod
