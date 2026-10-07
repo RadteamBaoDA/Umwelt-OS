@@ -185,8 +185,12 @@ async def test_recover_requeues_pending_and_fails_abandoned_streaming(monkeypatc
     session.execute = AsyncMock(return_value=SimpleNamespace(
         all=lambda: [(stale_id, {"_chat_privacy_fence": {"rev": 3}})]))
     session.scalar = AsyncMock(return_value=7)
-    failed = AsyncMock()
-    monkeypatch.setattr(worker, "_mark_failed", failed)
+    run = SimpleNamespace(status="streaming", conversation_id=uuid4())
+    session.scalar = AsyncMock(side_effect=[7, run, object(), run, 7])
+    session.add = MagicMock()
+    session.commit = AsyncMock()
+    monkeypatch.setattr(worker, "lock_export_privacy", AsyncMock())
+    monkeypatch.setattr(worker, "_require_privacy_fence", AsyncMock())
     redis = SimpleNamespace(enqueue_job=AsyncMock())
     factory = _factory(session)
     result = await worker.recover_chat_runs({"session_factory": factory, "redis": redis})
@@ -194,9 +198,11 @@ async def test_recover_requeues_pending_and_fails_abandoned_streaming(monkeypatc
     redis.enqueue_job.assert_awaited_once_with(
         "process_chat_response", str(pending_id), _job_id=f"chat-response:{pending_id}", _queue_name="arq:chat",
     )
-    args = failed.await_args.args
-    assert args[0] == stale_id and args[1] is factory and args[2] == 7 and args[3] == {"rev": 3}
-    assert isinstance(args[4], TimeoutError)
+    assert run.status == "failed" and run.error_code == "TimeoutError"
+    event = session.add.call_args.args[0]
+    assert isinstance(event, StreamEvent) and event.response_id == stale_id and event.seq == 8
+    assert event.event_type == "status" and event.data["status"] == "failed"
+    session.commit.assert_awaited_once()
 
 
 def test_chat_worker_settings_isolated_queue() -> None:
@@ -205,5 +211,16 @@ def test_chat_worker_settings_isolated_queue() -> None:
     assert ChatWorkerSettings.queue_name == "arq:chat"
     assert (ChatWorkerSettings.max_jobs, ChatWorkerSettings.job_timeout, ChatWorkerSettings.max_tries) == (10, 600, 1)
     assert [f.name for f in ChatWorkerSettings.functions] == ["process_chat_response"]
+    assert ChatWorkerSettings.keep_result == 0
     main_names = [getattr(f, "name", getattr(f, "__name__", "")) for f in WorkerSettings.functions]
     assert "process_chat_response" not in main_names
+
+
+async def test_legacy_aliases_overlay_accepts_bytes_keys() -> None:
+    from modules.settings.models import ALIASES, legacy_aliases
+
+    alias = next(iter(ALIASES))
+    value = json.dumps({"model": "m", "destination": "remote"}).encode()
+    redis = SimpleNamespace(hgetall=AsyncMock(return_value={alias.encode(): value}))
+    mappings = await legacy_aliases(redis, Settings(csrf_signing_secret="s"))  # type: ignore[arg-type]
+    assert mappings[alias].model == "m"

@@ -185,10 +185,14 @@ async def _resolve_approval_request(
         ), definition=definition,
     )
     if run.status == "queued":
-        await request.app.state.redis.enqueue_job(
-            "process_agent_run", str(run.id), run.dispatch_generation,
-            _job_id=f"agent-run:{run.id}:{run.dispatch_generation}",
-        )
+        # The decision is committed; a lost push is replayed by the reconciler, so never 500 here.
+        try:
+            await request.app.state.redis.enqueue_job(
+                "process_agent_run", str(run.id), run.dispatch_generation,
+                _job_id=f"agent-run:{run.id}:{run.dispatch_generation}",
+            )
+        except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
+            logger.warning("Approval dispatch deferred for %s (%s)", run.id, type(exc).__name__)
     return ApprovalDecisionRead(id=row.id, status=row.status, run_status=run.status)
 
 

@@ -40,7 +40,9 @@ services:
       SETUP_TOKEN: bbd-os-disposable-test-token
       CSRF_SIGNING_SECRET: bbd-os-disposable-test-csrf-secret
       POSTGRES_PASSWORD: bbd-os-test-db-only
-      AI_ALLOWED_ENDPOINT_CIDRS: '["172.31.250.0/24"]'
+      AI_ALLOWED_ENDPOINT_HOSTS: '["fake-model:8000"]'
+      # Docker default bridge pools; the host allowlist above pins the authority to the fake model.
+      AI_ALLOWED_ENDPOINT_CIDRS: '["172.16.0.0/12","192.168.0.0/16","10.0.0.0/8"]'
       OMNIROUTE_BASE_URL: http://fake-model:8000/v1
       OMNIROUTE_API_KEY: fake-model-key
       OMNIROUTE_MODELS: '{"reasoning-large":"fake-chat","embedding":"fake-embed"}'
@@ -55,7 +57,9 @@ services:
       SETUP_TOKEN: bbd-os-disposable-test-token
       CSRF_SIGNING_SECRET: bbd-os-disposable-test-csrf-secret
       POSTGRES_PASSWORD: bbd-os-test-db-only
-      AI_ALLOWED_ENDPOINT_CIDRS: '["172.31.250.0/24"]'
+      AI_ALLOWED_ENDPOINT_HOSTS: '["fake-model:8000"]'
+      # Docker default bridge pools; the host allowlist above pins the authority to the fake model.
+      AI_ALLOWED_ENDPOINT_CIDRS: '["172.16.0.0/12","192.168.0.0/16","10.0.0.0/8"]'
       OMNIROUTE_BASE_URL: http://fake-model:8000/v1
       OMNIROUTE_API_KEY: fake-model-key
       OMNIROUTE_MODELS: '{"reasoning-large":"fake-chat","embedding":"fake-embed"}'
@@ -70,7 +74,9 @@ services:
       SETUP_TOKEN: bbd-os-disposable-test-token
       CSRF_SIGNING_SECRET: bbd-os-disposable-test-csrf-secret
       POSTGRES_PASSWORD: bbd-os-test-db-only
-      AI_ALLOWED_ENDPOINT_CIDRS: '["172.31.250.0/24"]'
+      AI_ALLOWED_ENDPOINT_HOSTS: '["fake-model:8000"]'
+      # Docker default bridge pools; the host allowlist above pins the authority to the fake model.
+      AI_ALLOWED_ENDPOINT_CIDRS: '["172.16.0.0/12","192.168.0.0/16","10.0.0.0/8"]'
       OMNIROUTE_BASE_URL: http://fake-model:8000/v1
       OMNIROUTE_API_KEY: fake-model-key
       OMNIROUTE_MODELS: '{"reasoning-large":"fake-chat","embedding":"fake-embed"}'
@@ -88,12 +94,6 @@ services:
     volumes:
       - ./tests/integration/fake_model.py:/fake/fake_model.py:ro
     restart: unless-stopped
-
-networks:
-  default:
-    ipam:
-      config:
-        - subnet: 172.31.250.0/24
 
 volumes:
   test-postgres-data:
