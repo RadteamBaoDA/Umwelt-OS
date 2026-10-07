@@ -301,6 +301,43 @@ async def _topic_read(session: AsyncSession, topic: Topic) -> TopicRead:
         return _to_topic_read(topic, list(dict.fromkeys(visible)))
 
 
+async def resolve_topic_terms(
+    session: AsyncSession, owner_id: int, topic_ids: list[UUID],
+) -> dict[UUID, list[str]]:
+    """Read-only: return current keywords plus entity names for the owner's live, active topics.
+
+    Missing, foreign, deleted or inactive topics are simply absent from the result so callers
+    treat them as unresolved. Never writes and never contacts a provider.
+    """
+    from modules.knowledge.entities import public as entities
+    if not topic_ids:
+        return {}
+    rows = (await session.scalars(select(Topic).where(
+        Topic.id.in_(topic_ids), Topic.owner_id == owner_id,
+        Topic.deleted_at.is_(None), Topic.is_active.is_(True),
+    ))).all()
+    resolved: dict[UUID, list[str]] = {}
+    for topic in rows:
+        terms = list(topic.keywords or [])
+        entity_ids = [UUID(value) for value in (topic.entity_ids or [])]
+        if entity_ids:
+            try:
+                terms += [ref.name for ref in await entities.get_entity_refs(session, entity_ids) if ref.name]
+            except LookupError:
+                pass  # ponytail: a deleted entity drops all entity names; keywords still match
+        resolved[topic.id] = list(dict.fromkeys(terms))
+    return resolved
+
+
+async def live_topic_ids(session: AsyncSession, owner_id: int, topic_ids: list[UUID]) -> set[UUID]:
+    """Return which of the given IDs are the owner's live (non-deleted) topics."""
+    if not topic_ids:
+        return set()
+    return set((await session.scalars(select(Topic.id).where(
+        Topic.id.in_(topic_ids), Topic.owner_id == owner_id, Topic.deleted_at.is_(None),
+    ))).all())
+
+
 def _encode_topic_cursor(created_at: datetime, topic_id: UUID, owner_id: int, is_active: bool | None) -> str:
     """Encode deterministic keyset state bound to owner and active filter."""
     value = json.dumps([created_at.isoformat(), str(topic_id), owner_id, is_active], separators=(",", ":"))

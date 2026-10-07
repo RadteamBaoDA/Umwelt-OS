@@ -78,7 +78,21 @@ export type HighlightRule = {
   keywords: string[];
   severity: 'info' | 'warning' | 'critical';
   notify: boolean;
+  /** Optional conditions: topics (max 8) and per-rule source include/exclude, subsets of the gadget's sources. */
+  topic_ids?: string[];
+  source_ids?: string[];
+  exclude_source_ids?: string[];
 };
+
+/** Dry-run result over recent current evidence; nothing is stored or notified. */
+export type HighlightPreview = {
+  window_days: number; scanned: number; truncated: boolean;
+  matches: DashboardHighlightMatch[];
+  rules: { rule_id: string; match_count: number; unresolved_topic_ids: string[] }[];
+};
+
+/** A dashboard that places one gadget definition. */
+export type GadgetDefinitionUsage = { dashboard_id: string; name: string; instance_count: number };
 
 /** Dashboard gadget placement reference and the associated saved definition projection. */
 export type GadgetInstance = {
@@ -341,6 +355,18 @@ export function listGadgetSources(limit = 50, cursor?: string, signal?: AbortSig
 /** Evaluates configured rules and returns bounded exact-version matches. */
 export function evaluateGadgetHighlights(definitionId: string) {
   return apiRequest<DashboardHighlightMatch[]>(`/api/v1/gadget-definitions/${definitionId}/highlights`);
+}
+
+/** Dry-runs draft rules over the last days (max 7) of current data; never notifies or saves. */
+export function previewHighlightRules(payload: { source_ids: string[]; rules: HighlightRule[]; days?: number }, csrfToken: string, signal?: AbortSignal) {
+  return apiRequest<HighlightPreview>('/api/v1/gadget-definitions/highlight-preview', {
+    method: 'POST', headers: csrfHeaders(csrfToken), body: JSON.stringify(payload), signal,
+  });
+}
+
+/** Lists the dashboards that use one gadget definition, to warn before editing or deleting its rules. */
+export function getGadgetDefinitionUsage(id: string, signal?: AbortSignal) {
+  return apiRequest<GadgetDefinitionUsage[]>(`/api/v1/gadget-definitions/${encodeURIComponent(id)}/usage`, { signal });
 }
 
 /** Lists the static preset catalog without applying or creating anything. */
