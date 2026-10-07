@@ -659,6 +659,9 @@ async def send_message(
             )
         )
         if existing_run is not None:
+            # A replay returns the original run and ignores every changed field (content and web_search
+            # alike): no new run is created, so a flipped flag cannot cause egress. Mutations hash the
+            # flag into their digest and answer 409 instead, because they have no other identity check.
             return SendMessageResponse(
                 message_id=existing_run.user_message_id,
                 response_id=existing_run.id,
@@ -845,8 +848,9 @@ async def mutate_message(
         user_message_id=user_message.id,
         client_request_id=payload.client_request_id,
         status="pending",
-        # Retain the original captured context byte-for-byte. The worker rechecks its
-        # source/version fences before retrieval and before remote send.
+        # Retain the original client-visible context; every server-private `_` key (privacy fence,
+        # web search opt-in) is rewritten by `_run_context`. The worker rechecks its source/version
+        # fences before retrieval and before remote send.
         retrieval_context=_run_context(original_run.retrieval_context, privacy, payload.web_search),
         ephemeral=conversation.ephemeral,
         expires_at=conversation.expires_at,

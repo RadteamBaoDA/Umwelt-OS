@@ -14,7 +14,7 @@ import { useCopyMessage } from './use-copy-message';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { formatDateTime } from '@/core/i18n';
 
-const KNOWN_REASONS = ['not_configured', 'query_too_long', 'local_only_context', 'daily_limit', 'timeout', 'provider_error', 'network_denied', 'run_inactive'];
+const KNOWN_REASONS = ['not_configured', 'query_too_long', 'empty_query', 'local_only_context', 'daily_limit', 'timeout', 'provider_error', 'network_denied', 'run_inactive'];
 
 /** Announced notice for a requested web search that was skipped or unavailable; renders nothing otherwise. */
 function WebSearchNotice({ outcome, live = false }: { outcome?: WebSearchOutcome | null; live?: boolean }) {

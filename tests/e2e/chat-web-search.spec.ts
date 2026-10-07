@@ -2,8 +2,8 @@ import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
 
 // Web search UI (P15 W4). All network is mocked via page.route; nothing reaches a real backend or provider.
-// Toggle-on cases are skipped while WEB_SEARCH_SEND_ENABLED (modules/chat/api.ts) is false; W3 flips it and removes the skips.
-const SEND_ENABLED = false;
+// Mirrors WEB_SEARCH_SEND_ENABLED (modules/chat/api.ts), enabled with W2; the toggle-off case is skipped while it is true.
+const SEND_ENABLED = true;
 
 type Cit = Record<string, unknown>;
 const web = (url: string, title: string, quote = 'snippet'): Cit => ({ sourceType: 'web', url, title, quote, provider: 'tavily', retrievedAt: '2026-10-07T00:00:00Z' });

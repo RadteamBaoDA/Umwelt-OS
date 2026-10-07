@@ -222,6 +222,18 @@ def _read(config: AIExecutionConfig) -> AISettingsRead:
     )
 
 
+async def lock_ai_settings_for_share(session: AsyncSession) -> bool:
+    """Share-lock the owner AI settings row until the caller's transaction ends.
+
+    Blocks ``save_ai_settings`` (row ``FOR UPDATE``) so a consent/provider/endpoint/key read in the same
+    transaction cannot be revoked before the caller releases it. A leaf lock: savers lock nothing else.
+    Returns False when no row exists (nothing was locked; callers treat that as "not configured").
+    """
+    return (await session.scalar(
+        select(AISettingsRecord.owner_id).where(AISettingsRecord.owner_id == OWNER_ID).with_for_update(read=True)
+    )) is not None
+
+
 async def read_ai_settings(session: AsyncSession, settings: Settings, redis: Redis | None = None) -> AISettingsRead:
     """Return the public AI settings projection for the current owner."""
     return _read(await get_ai_execution_config(session, settings, redis))

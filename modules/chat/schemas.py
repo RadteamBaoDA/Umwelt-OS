@@ -6,6 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from modules.chat.web_search import sanitize_url
 from modules.knowledge.documents.schemas import GadgetDocumentSelectionFence
 
 MAX_RETRIEVAL_LIMIT = 50
@@ -78,6 +79,14 @@ class WebCitation(BaseModel):
     quote: str = Field(default="", max_length=MAX_QUOTE_LENGTH)
     provider: str = Field(min_length=1, max_length=32)
     retrievedAt: datetime
+
+    @field_validator("url")
+    @classmethod
+    def _http_url(cls, value: str) -> str:
+        """Readers drop a stored web citation whose URL is not a clean http(s) URL (W3 review P3-1)."""
+        if sanitize_url(value) is None:
+            raise ValueError("Web citation URL must be http(s) without credentials")
+        return value
 
 
 class WebSearchOutcomeRead(BaseModel):
