@@ -92,7 +92,7 @@ async def _stories_widget(
 async def _events_widget(session: AsyncSession, day: date, timezone: str) -> DailyWidget:
     """Timeline events on the day; with no calendar connector only manual/imported events appear."""
     page = await timeline.list_timeline(
-        session, TimelineQuery(date_from=day, date_to=day, timezone=timezone), limit=MAX_ITEMS
+        session, TimelineQuery(date_from=day, date_to=day + timedelta(days=1), timezone=timezone), limit=MAX_ITEMS
     )
     return DailyWidget(
         id="events", module="timeline", title_key="dayEvents", status="ok" if page.items else "empty",

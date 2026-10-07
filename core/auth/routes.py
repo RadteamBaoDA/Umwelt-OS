@@ -287,6 +287,27 @@ async def _lock_owner_session(
     return owner, auth_session
 
 
+async def _lock_owner_session_retrying(
+    request: Request, session: AsyncSession, stale_session: AuthSession, attempts: int = 5
+) -> tuple[Owner, AuthSession]:
+    """Take the owner/session locks for CSRF rotation, briefly retrying NOWAIT contention.
+
+    Rotation is idempotent for the caller, so concurrent tabs wait a few tens of milliseconds for
+    each other instead of surfacing a 409. Still 409 if the locks stay busy after ``attempts``.
+    """
+    # rollback expires loaded rows; keep the two identifiers the lock helpers read on a detached copy.
+    ids = AuthSession(token_hash=stale_session.token_hash, owner_id=stale_session.owner_id)
+    for attempt in range(attempts):
+        try:
+            return await _lock_owner_session(request, session, ids, None, check_csrf=False)
+        except HTTPException as exc:
+            if exc.status_code != 409 or attempt == attempts - 1:
+                raise
+            await session.rollback()  # a failed NOWAIT aborts the transaction
+            await asyncio.sleep(0.02 * (attempt + 1))
+    raise AssertionError("unreachable")
+
+
 async def _lock_identity_for_owner(
     session: AsyncSession, owner_id: int
 ) -> GoogleIdentity | None:
@@ -639,13 +660,13 @@ async def auth_session(
         request.state.backup_activity = receipt
         # Persist admission before locking the owner/session rows for rotation.
         await session.commit()
-    _owner, row = await _lock_owner_session(
-        request, session, row, None, check_csrf=False
-    )
     if csrf_is_current:
+        # Read-only: _current_session already validated existence and expiry, and nothing is written,
+        # so no NOWAIT owner/session lock is needed (concurrent tabs must not 409 on a plain read).
         assert existing_token is not None
         csrf_token = existing_token
     else:
+        _owner, row = await _lock_owner_session_retrying(request, session, row)
         csrf_token, csrf_cookie = _new_csrf(settings)
         row.csrf_hash = _hash(csrf_token)
         await session.commit()
