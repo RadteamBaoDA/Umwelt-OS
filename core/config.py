@@ -82,6 +82,10 @@ class Settings(BaseSettings):
         default="", validation_alias="MCP_STDIO_PROFILE_MANIFEST", repr=False
     )
     webhook_profiles_json: str = Field(default="", validation_alias="WEBHOOK_PROFILES", repr=False)
+    # Extra CIDRs for web search egress only (test compose); never the gateway CIDRs (review P3-8).
+    web_search_allowed_cidrs: list[str] = Field(
+        default_factory=list, validation_alias="WEB_SEARCH_ALLOWED_CIDRS", repr=False
+    )
     web_search_daily_limit: int = Field(default=50, ge=0, le=1000, validation_alias="WEB_SEARCH_DAILY_LIMIT")
     approval_expiry_hours: int = Field(default=24, ge=1, le=72, validation_alias="APPROVAL_EXPIRY_HOURS")
 
@@ -113,7 +117,7 @@ class Settings(BaseSettings):
             normalized.add(f"{authority_host}:{port}" if port is not None else authority_host)
         return normalized
 
-    @field_validator("ai_allowed_endpoint_cidrs")
+    @field_validator("ai_allowed_endpoint_cidrs", "web_search_allowed_cidrs")
     @classmethod
     def normalize_endpoint_cidrs(cls, values: list[str]) -> list[str]:
         """Parse, canonicalize, deduplicate, and sort approved endpoint CIDRs; reject IPv4-mapped IPv6 networks."""
