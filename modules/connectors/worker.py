@@ -739,3 +739,33 @@ async def dispatch_github_webhooks(ctx: dict[str, object]) -> int:
         else:
             await session.rollback()
     return progressed + 1
+
+
+async def process_collection_request(ctx: dict[str, object], request_id: str) -> str:
+    """Admit one queued native request and hand it to the registered collection executor.
+
+    The executor (C3) is looked up in ``ctx["collection_executor"]``; without it nothing is
+    admitted, so no provider attempt is burned. An executor error is a retryable failure, and
+    an executor that already settled the request makes the fallback settlement a stale no-op.
+    """
+    from modules.connectors import scheduler
+
+    executor = ctx.get("collection_executor")
+    if executor is None:
+        return "no_executor"
+    settings = cast(Settings, ctx["settings"])
+    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    async with factory() as session:
+        admission = await scheduler.admit_collection_request(
+            session, UUID(request_id), multi_workspace_enabled=settings.multi_workspace_enabled)
+    if admission is None:
+        return "deferred"
+    try:
+        await cast(Any, executor)(ctx, admission)
+    except Exception:
+        async with factory() as session:
+            await scheduler.settle_admission(
+                session, admission.request_id, admission.admission_token,
+                outcome="failed", error_code="executor_error", retryable=True)
+        return "failed"
+    return "admitted"

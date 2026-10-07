@@ -54,6 +54,7 @@ from modules.sources.schemas import ConnectorSource, SourceFence
 
 if TYPE_CHECKING:
     from core.config import Settings
+    from modules.connectors.collection_schemas import CollectionAdmissionRead, CollectionAdmissionRequest, CollectionRequestRead
     from modules.connectors.github.schemas import GitHubBindingFence, GitHubSegmentProof
     from modules.connectors.github.sync import GitHubValidatedSegment
     from modules.connectors.github.webhooks import (
@@ -2821,3 +2822,35 @@ async def map_github_version(session: AsyncSession, ready: object, *, scope: Sco
     if source is None or source.provider != "github" or source.status != "active" or source.generation != getattr(ready, "source_generation", None):
         return False
     return await _map(session, ready, scope=scope, multi_workspace_enabled=multi_workspace_enabled)  # type: ignore[arg-type]
+
+
+async def request_collection(
+    session: AsyncSession, scope: Scope, source_id: UUID, trigger: Literal["manual", "scheduled", "retry"],
+    expected_revision: int, *, multi_workspace_enabled: bool,
+) -> "CollectionRequestRead":
+    """Persist or coalesce one durable collection request for the owner and commit it."""
+    from modules.connectors import scheduler
+
+    return await scheduler.request_collection(
+        session, scope, source_id, trigger, expected_revision, multi_workspace_enabled=multi_workspace_enabled)
+
+
+async def get_collection_request(
+    session: AsyncSession, scope: Scope, source_id: UUID, request_id: UUID, *, multi_workspace_enabled: bool,
+) -> "CollectionRequestRead":
+    """Read a collection request after owner source-scope admission."""
+    from modules.connectors import scheduler
+
+    return await scheduler.get_collection_request(
+        session, scope, source_id, request_id, multi_workspace_enabled=multi_workspace_enabled)
+
+
+async def admit_managed_collection(
+    session: AsyncSession, scope: Scope, source_id: UUID, fence: "CollectionAdmissionRequest",
+    *, trigger: Literal["manual", "scheduled"] = "scheduled", multi_workspace_enabled: bool,
+) -> "CollectionAdmissionRead":
+    """Admit a managed n8n run and return its fenced token, or raise 409 when busy."""
+    from modules.connectors import scheduler
+
+    return await scheduler.admit_managed_collection(
+        session, scope, source_id, fence, trigger=trigger, multi_workspace_enabled=multi_workspace_enabled)

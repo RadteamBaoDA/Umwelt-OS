@@ -1,3 +1,17 @@
+<!-- production-readiness-status:start -->
+## Production readiness / free data / translation — live status (2026-10-07 22:10)
+
+Plan `docs/superpowers/plans/2026-10-07-production-readiness-master.md`; ledger `D:/Project/Umwelt-OS-free-data-pilot/.superpowers/sdd/2026-10-07-production-readiness-master/progress.md`. Controller Opus 5.5, implementers Sonnet 5.5, reviewers Opus 5.5. develop `466d8ff` = partial W1/W2 checkpoint.
+
+| Task | State |
+| --- | --- |
+| W1, C1 | source/build accepted (in develop) |
+| W2 | in progress — D1 accepted; S3b-r1 `b50c418` accepted (provider P1s → S3d `d8a92f6` in review); backfill caller `25a688f` in review; **~307 unconverted caller sites / ~50 files found (runtime TypeError on develop paths)** → Opus slicing ruling active; D2 pending |
+| C2 | **merged to develop** — scheduler/admission/request contract + p14_collection (`4057f5e`, review r1 `a86e018`); Opus review clean; gate: import smoke, alembic single head, API image build. Routes/n8n template admission → C4; executor/receipts → C3; quota → P1 |
+| W3–W5, C3–C5, P1–P4, T1–T4 | pending |
+| V1–V5 | pending (no validation run) |
+<!-- production-readiness-status:end -->
+
 <!-- current-implementation-snapshot:start -->
 ## Current implementation snapshot — 2026-10-07 10:50 — P12 CODE + P13 UI + TEST STAGE COMPLETE (live/capacity gates blocked)
 
