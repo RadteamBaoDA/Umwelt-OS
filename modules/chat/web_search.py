@@ -34,9 +34,15 @@ TITLE_MAX = 200
 SNIPPET_MAX = 500
 URL_MAX = 2048
 
-FailureCode = Literal["query_too_long", "timeout", "provider_error"]
+FailureCode = Literal["query_too_long", "empty_query", "timeout", "provider_error"]
 _TAG = re.compile(r"<[^>]*>")
-_BAD_URL_CHARS = re.compile(r"[\s<>\"'`]")
+_BAD_URL_CHARS = re.compile(r"[\s<>\"'`\\]")
+_HOST_OK = re.compile(r"[a-z0-9.-]{1,253}")
+# NFKC does not fold these CJK/math brackets to ASCII
+_BRACKETS = {
+    0x3C: "‹", 0x3E: "›", 0x5B: "(", 0x5D: ")",
+    **{ord(c): "(" for c in "【〔⟦〖「『"}, **{ord(c): ")" for c in "】〕⟧〗」』"},
+}
 
 
 class WebSearchError(Exception):
@@ -55,25 +61,26 @@ class WebSearchResult:
     snippet: str
 
 
-def suppress_httpx_request_logging() -> None:
-    """httpx logs full request URLs (Brave's ``?q=``) at INFO; keep them out of logs."""
-    for name in ("httpx", "httpcore"):
-        logging.getLogger(name).setLevel(logging.WARNING)
+# httpx logs full request URLs (Brave's ``?q=``) at INFO; pin it once at import (a later dictConfig can undo it).
+for _name in ("httpx", "httpcore"):
+    logging.getLogger(_name).setLevel(logging.WARNING)
 
 
 def normalize_query(message: str) -> str:
     """Literal query: strip + whitespace collapse. Over-long or empty input is refused, never truncated."""
     query = " ".join(message.split())
-    if not query or len(query) > WEB_QUERY_MAX_CHARS:
+    if not query:
+        raise WebSearchError("empty_query")
+    if len(query) > WEB_QUERY_MAX_CHARS:
         raise WebSearchError("query_too_long")
     return query
 
 
 def sanitize_text(text: str, limit: int) -> str:
-    """unescape, strip tags, drop Cc/Cf, <>-> single guillemets, []-> (), collapse, truncate (review P2-4)."""
-    text = _TAG.sub("", html.unescape(text))
+    """unescape, NFKC, strip tags, drop Cc/Cf, <>-> single guillemets, []-> (), collapse, truncate (review P2-4)."""
+    text = _TAG.sub("", unicodedata.normalize("NFKC", html.unescape(text)))
     text = "".join(c for c in text if c in "\n\t" or unicodedata.category(c) not in ("Cc", "Cf"))
-    text = text.translate({0x3C: "‹", 0x3E: "›", 0x5B: "(", 0x5D: ")"})
+    text = text.translate(_BRACKETS)
     return " ".join(text.split())[:limit]
 
 
@@ -88,6 +95,12 @@ def sanitize_url(raw: str) -> tuple[str, str] | None:
     except ValueError:
         return None
     if parts.scheme not in ("http", "https") or not host or "@" in parts.netloc:
+        return None
+    try:
+        host = host.encode("idna").decode("ascii").lower()  # punycode A-label; homographs show as xn--
+    except UnicodeError:
+        return None
+    if not _HOST_OK.fullmatch(host):
         return None
     return urlunsplit(parts._replace(fragment="")), host
 
@@ -128,7 +141,7 @@ def web_search_permitted(config: AIExecutionConfig) -> bool:
 
 
 async def _fetch(
-    provider: str, endpoint: str, api_key: str, query: str, transport: httpx.AsyncBaseTransport | None
+    provider: str, endpoint: str, api_key: str, query: str, transport: httpx.AsyncBaseTransport
 ) -> Any:
     base = endpoint.rstrip("/")
     if provider == "tavily":
@@ -150,7 +163,7 @@ async def _fetch(
         response = await client.send(request, stream=True)
         try:
             content_type = response.headers.get("content-type", "").lower()
-            if not response.is_success or not content_type.startswith("application/json"):
+            if not response.is_success or content_type.split(";")[0].strip() != "application/json":
                 raise WebSearchError("provider_error")
             async for chunk in response.aiter_bytes():  # decoded bytes: defeats gzip bombs
                 body += chunk
@@ -160,18 +173,23 @@ async def _fetch(
             await response.aclose()
     try:
         return json.loads(bytes(body))
-    except ValueError as exc:
-        raise WebSearchError("provider_error") from exc
+    except ValueError:
+        raise WebSearchError("provider_error") from None
 
 
 async def search(
-    provider: str, endpoint: str, api_key: str, message: str, *, transport: httpx.AsyncBaseTransport | None = None
+    provider: str, endpoint: str, api_key: str, message: str, *, transport: httpx.AsyncBaseTransport
 ) -> list[WebSearchResult]:
-    """One provider call for the literal ``message``. Raises only WebSearchError (or CancelledError)."""
+    """One provider call for the literal ``message``. Raises only WebSearchError (or CancelledError).
+
+    ``transport`` is required on purpose: there is no stock-httpx path. Production callers MUST pass
+    the approved-endpoint transport (DNS/CIDR/origin pinned, ``allow_global``), provided by task W1b;
+    tests pass ``httpx.MockTransport``. A key that is not printable ASCII is refused before any request
+    is built (``provider_error``: a bad credential, and no new failure code is needed).
+    """
     query = normalize_query(message)
-    if provider not in ("tavily", "brave"):
+    if provider not in ("tavily", "brave") or not (api_key.isascii() and api_key.isprintable()):
         raise WebSearchError("provider_error")
-    suppress_httpx_request_logging()
     loop = asyncio.get_running_loop()
     started, code = loop.time(), "ok"
     try:
@@ -180,12 +198,12 @@ async def search(
     except WebSearchError as exc:
         code = exc.code
         raise
-    except (TimeoutError, httpx.TimeoutException) as exc:
+    except (TimeoutError, httpx.TimeoutException):
         code = "timeout"
-        raise WebSearchError("timeout") from exc
-    except httpx.HTTPError as exc:  # never log str(exc): it embeds the URL/query
+        raise WebSearchError("timeout") from None
+    except Exception as exc:  # noqa: BLE001 - deliberate catch-all; never log str(exc)/chain: it can embed the key, URL or query
         code = f"provider_error:{type(exc).__name__}"
-        raise WebSearchError("provider_error") from exc
+        raise WebSearchError("provider_error") from None
     finally:
         logger.info("web_search provider=%s outcome=%s ms=%d", provider, code, int((loop.time() - started) * 1000))
 

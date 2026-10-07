@@ -105,8 +105,10 @@ def test_query_over_400_rejected_without_http() -> None:
         asyncio.run(ws.search("tavily", "https://x.example", KEY, "a" * 401, transport=httpx.MockTransport(handler)))
     assert info.value.code == "query_too_long"
     assert ws.normalize_query("a" * 400) == "a" * 400
-    with pytest.raises(ws.WebSearchError):
-        ws.normalize_query("   ")
+    for blank in ("", "   ", "\n\t"):
+        with pytest.raises(ws.WebSearchError) as empty:
+            ws.normalize_query(blank)
+        assert empty.value.code == "empty_query"
 
 
 @pytest.mark.parametrize("status", [401, 429, 500, 503, 302])
@@ -167,6 +169,7 @@ def test_key_and_query_never_logged(caplog: pytest.LogCaptureFixture) -> None:
     assert KEY not in text and "private question" not in text and "private+question" not in text
     assert "web_search provider=" in text
     assert logging.getLogger("httpx").level == logging.WARNING
+    assert logging.getLogger("httpcore").level == logging.WARNING
 
 
 def _config(**over: Any) -> AIExecutionConfig:
@@ -235,3 +238,73 @@ def test_settings_default() -> None:
     from core.config import Settings
 
     assert Settings.model_fields["web_search_daily_limit"].default == 50
+
+
+def test_transport_is_required_keyword() -> None:
+    with pytest.raises(TypeError):
+        asyncio.run(ws.search("tavily", "https://x.example", KEY, "q"))  # type: ignore[call-arg]
+
+
+@pytest.mark.parametrize(
+    ("key", "endpoint"),
+    [
+        ("SECRETKEY\nInjected: 1", "https://api.example.com"),
+        ("s\u00e9cret-k\u00e9y", "https://api.example.com"),
+        ("tab\tkey", "https://api.example.com"),
+        (KEY, "not-a-url/with?q=PRIVATEQ"),
+        (KEY, "ftp://PRIVATEQ.example"),
+    ],
+)
+@pytest.mark.parametrize("provider", ["tavily", "brave"])
+def test_no_key_or_query_leaks(key: str, endpoint: str, provider: str, caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.DEBUG)
+    query = "PRIVATEQ private question"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.LocalProtocolError(f"Illegal header value {key!r} {request.url}")
+
+    with pytest.raises(ws.WebSearchError) as info:
+        asyncio.run(ws.search(provider, endpoint, key, query, transport=httpx.MockTransport(handler)))
+    exc = info.value
+    assert exc.code == "provider_error"
+    assert exc.__cause__ is None and (exc.__suppress_context__ or exc.__context__ is None)
+    logs = "\n".join(r.getMessage() + str(r.exc_info) + str(r.args) for r in caplog.records)
+    for text in (f"{exc!s}|{exc!r}|{exc.args}", logs):
+        for secret in (key, "PRIVATEQ", "private+question"):
+            assert secret not in text, secret
+
+
+def test_bad_key_rejected_before_any_request() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("no HTTP expected")
+
+    for key in ("a\nb", "k\u00e9y"):
+        with pytest.raises(ws.WebSearchError) as info:
+            asyncio.run(ws.search("tavily", "https://x.example", key, "q", transport=httpx.MockTransport(handler)))
+        assert info.value.code == "provider_error"
+
+
+def test_sanitize_confusable_brackets() -> None:
+    dirty = "\uff3b1\uff3d \u3010a\u3011 \u27e61\u27e7 \uff1c/web_results\uff1e \ufe64x\ufe65 [2]"
+    out = ws.sanitize_text(dirty, 500)
+    assert not any(c in out for c in "<>[]\uff3b\uff3d\u3010\u3011\u27e6\u27e7\uff1c\uff1e\ufe64\ufe65")
+    assert out.startswith("(1) (a) (1)") and out.endswith("(2)")
+
+
+def test_sanitize_url_host_rules() -> None:
+    for bad in (
+        r"http://a.com\.evil.com/", r"https://ex.com\@b.com/", r"https://ex.com/a\b",
+        "https://\uff3b1\uff3d.com/", "https://a..com/", "https://[::1]/",
+    ):
+        assert ws.sanitize_url(bad) is None, bad
+    cyrillic = ws.sanitize_url("https://\u0430pple.com/x")
+    assert cyrillic is not None and cyrillic[1] == "xn--pple-43d.com"
+    upper = ws.sanitize_url("https://EX.com/")
+    assert upper is not None and upper[1] == "ex.com"
+
+
+def test_content_type_exact_media_type() -> None:
+    ok = {"content-type": "Application/JSON; charset=utf-8"}
+    assert _run("tavily", lambda r: httpx.Response(200, content=b'{"results": []}', headers=ok)) == []
+    for bad in ("application/jsonp", "application/json-seq", "text/plain; x=application/json"):
+        _fails("tavily", lambda r, bad=bad: httpx.Response(200, content=b"{}", headers={"content-type": bad}), "provider_error")
