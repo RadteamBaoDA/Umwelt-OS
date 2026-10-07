@@ -3,20 +3,27 @@
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy.dialects import postgresql
 
 from modules.dashboard import public
 from modules.dashboard.highlights import evaluate_highlights
 from modules.dashboard.schemas import (
     GadgetDefinitionCreate,
+    GadgetDefinitionPatch,
     HighlightPreviewRequest,
     HighlightRule,
 )
 
 SRC_A, SRC_B, TOPIC = uuid4(), uuid4(), uuid4()
+
+
+def sql_text(stmt: Any) -> str:
+    """Render a statement with literal values so tests can assert its filters."""
+    return str(stmt.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
 
 
 def rule(**kw: Any) -> HighlightRule:
@@ -50,11 +57,10 @@ def test_source_include_and_exclude() -> None:
     assert evaluate_highlights("x", [exc], source_id=SRC_B)
 
 
-def test_legacy_rules_unchanged_and_fingerprint_dump_stable() -> None:
+def test_legacy_rules_unchanged_match_reason() -> None:
     r = HighlightRule.model_validate(
         {"id": str(uuid4()), "keywords": ["a"], "severity": "info", "notify": False}
     )
-    assert set(r.model_dump(mode="json", exclude_defaults=True)) == {"id", "keywords", "severity", "notify"}
     assert evaluate_highlights("a b", [r])[0].reason == "Matched 1 keyword(s): a"
 
 
@@ -108,10 +114,79 @@ async def test_validate_rules_subset_and_topic_ownership(news: FakeNews) -> None
         await public.validate_highlight_rules(
             None, 1, [SRC_B], [rule(keywords=["a"], exclude_source_ids=[SRC_A])]  # type: ignore[arg-type]
         )
-    with pytest.raises(ValueError, match="topic"):
+    with pytest.raises(public.HighlightRuleError) as err:
         await public.validate_highlight_rules(
             None, 1, [SRC_A], [rule(topic_ids=[uuid4()])]  # type: ignore[arg-type]
         )
+    assert err.value.code == "rule_topic_unknown"
+
+
+@pytest.mark.asyncio
+async def test_validate_rejects_rule_excluding_every_source(news: FakeNews) -> None:
+    every = rule(keywords=["a"], exclude_source_ids=[SRC_A, SRC_B])
+    with pytest.raises(public.HighlightRuleError) as err:
+        await public.validate_highlight_rules(None, 1, [SRC_A, SRC_B], [every])  # type: ignore[arg-type]
+    assert err.value.code == "rule_excludes_all_sources"
+    some = rule(keywords=["a"], exclude_source_ids=[SRC_A])
+    await public.validate_highlight_rules(None, 1, [SRC_A, SRC_B], [some])  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_validate_only_checks_newly_added_topics(news: FakeNews) -> None:
+    dead = uuid4()  # stored earlier, deleted since
+    stale = rule(topic_ids=[dead, TOPIC])
+    await public.validate_highlight_rules(None, 1, [SRC_A], [stale], known_topic_ids={dead})  # type: ignore[arg-type]
+    with pytest.raises(public.HighlightRuleError):
+        await public.validate_highlight_rules(None, 1, [SRC_A], [stale])  # type: ignore[arg-type]
+    with pytest.raises(public.HighlightRuleError):  # a new dead id is still rejected
+        await public.validate_highlight_rules(
+            None, 1, [SRC_A], [rule(topic_ids=[dead, uuid4()])], known_topic_ids={dead},  # type: ignore[arg-type]
+        )
+
+
+class _Stop(Exception):
+    """Raised by the validation spy to end create/patch right after validation."""
+
+
+class _PatchSession:
+    async def scalars(self, _stmt: Any) -> Any:
+        return SimpleNamespace(all=list)
+
+
+@pytest.mark.asyncio
+async def test_create_and_patch_call_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[dict[str, Any]] = []
+
+    async def fake_validate(_s: Any, _o: int, source_ids: Any, rules: Any, **kw: Any) -> None:
+        seen.append({"sources": list(source_ids), "rules": list(rules), **kw})
+        raise _Stop
+
+    async def fake_lock_sources(*_a: Any, **_k: Any) -> None:
+        return None
+
+    monkeypatch.setattr(public, "validate_highlight_rules", fake_validate)
+    monkeypatch.setattr(public, "_lock_selected_sources", fake_lock_sources)
+    monkeypatch.setattr(public, "_lock_owner_creation_quota", fake_lock_sources)
+    r = rule(topic_ids=[TOPIC])
+    payload = GadgetDefinitionCreate(name="n", renderer="highlights", source_ids=[SRC_A], highlight_rules=[r])
+    with pytest.raises(_Stop):
+        await public.create_definition(object(), 1, payload)  # type: ignore[arg-type]
+    assert seen[0]["sources"] == [SRC_A] and "known_topic_ids" not in seen[0]  # create: every topic is checked
+
+    row = SimpleNamespace(
+        revision=1, name="n", renderer="highlights", source_ids=[str(SRC_A)], scope={}, filters={},
+        highlight_rules=[r.model_dump(mode="json")],
+    )
+
+    async def lock_definition(*_a: Any, **_k: Any) -> Any:
+        return row
+
+    monkeypatch.setattr(public, "_lock_definition", lock_definition)
+    with pytest.raises(_Stop):
+        await public.patch_definition(
+            _PatchSession(), 1, uuid4(), GadgetDefinitionPatch(expected_revision=1, name="renamed"),  # type: ignore[arg-type]
+        )
+    assert seen[1]["known_topic_ids"] == {TOPIC}  # stored topics are not re-checked on a rename
 
 
 # --- preview: read-only, bounded, privacy ----------------------------------------------------
@@ -190,16 +265,28 @@ async def test_preview_not_truncated_when_cursor_exhausted(
 
 
 @pytest.mark.asyncio
-async def test_preview_rejects_foreign_topic_and_widened_sources(
+async def test_preview_reports_dead_topic_unresolved_and_rejects_widened_sources(
     monkeypatch: pytest.MonkeyPatch, news: FakeNews,
 ) -> None:
-    patch_projections(monkeypatch, [([], None)], [])
-    bad_topic = HighlightPreviewRequest(source_ids=[SRC_A], rules=[rule(topic_ids=[uuid4()])])
-    with pytest.raises(ValueError, match="topic"):
-        await public.preview_highlights(ReadOnlySession(), 1, bad_topic)  # type: ignore[arg-type]
+    patch_projections(monkeypatch, [([item(SRC_A, "rates")], None)], [])
+    dead = uuid4()
+    request = HighlightPreviewRequest(source_ids=[SRC_A], rules=[rule(topic_ids=[dead])])
+    result = await public.preview_highlights(ReadOnlySession(), 1, request)  # type: ignore[arg-type]
+    assert result.rules[0].unresolved_topic_ids == [dead] and result.rules[0].match_count == 0
     widened = HighlightPreviewRequest(source_ids=[SRC_A], rules=[rule(keywords=["a"], source_ids=[SRC_B])])
-    with pytest.raises(ValueError, match="subset"):
+    with pytest.raises(public.HighlightRuleError, match="subset"):
         await public.preview_highlights(ReadOnlySession(), 1, widened)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_preview_respects_item_scope(monkeypatch: pytest.MonkeyPatch, news: FakeNews) -> None:
+    inside, outside = item(SRC_A, "rates"), item(SRC_A, "rates")
+    patch_projections(monkeypatch, [([inside, outside], None)], [])
+    request = HighlightPreviewRequest(
+        source_ids=[SRC_A], rules=[rule(keywords=["rates"])], source_item_ids=[inside.document_id],
+    )
+    result = await public.preview_highlights(ReadOnlySession(), 1, request)  # type: ignore[arg-type]
+    assert result.scanned == 1 and result.rules[0].match_count == 1
 
 
 # --- usage lookup ----------------------------------------------------------------------------
@@ -217,9 +304,116 @@ class UsageSession:
 
 
 @pytest.mark.asyncio
+async def test_usage_query_is_owner_scoped() -> None:
+    captured: list[Any] = []
+
+    class Capture(UsageSession):
+        async def scalar(self, stmt: Any) -> Any:
+            captured.append(stmt)
+            return uuid4()
+
+        async def execute(self, stmt: Any) -> Any:
+            captured.append(stmt)
+            return SimpleNamespace(all=list)
+
+    await public.definition_usage(Capture(True, []), 7, uuid4())  # type: ignore[arg-type]
+    sql = [sql_text(stmt) for stmt in captured]
+    assert len(sql) == 2
+    assert "gadget_definitions.owner_id = 7" in sql[0]
+    assert "dashboards.owner_id = 7" in sql[1]
+
+
+@pytest.mark.asyncio
 async def test_usage_lookup() -> None:
     d = uuid4()
     rows = [(d, "Overview", 2)]
     (usage,) = await public.definition_usage(UsageSession(True, rows), 1, uuid4()) or []  # type: ignore[arg-type]
     assert (usage.dashboard_id, usage.name, usage.instance_count) == (d, "Overview", 2)
     assert await public.definition_usage(UsageSession(False, []), 1, uuid4()) is None  # type: ignore[arg-type]
+
+
+# --- golden fingerprint + scheduled notification path -----------------------------------------
+
+RULE_ID = UUID("00000000-0000-0000-0000-0000000000a1")
+FP_SOURCE = UUID("00000000-0000-0000-0000-0000000000b1")
+# sha256 of the pre-T6a payload (legacy 4-key rule). Changing it re-scans every stored cursor.
+LEGACY_FINGERPRINT = "4c8797dc1cb8669a12d8e66f7516ccbb5a5dc37a62d07c1edfea5eb77ade8d13"
+
+
+class EmitSession:
+    """Session double for the locked scheduled path: records progress and commits."""
+
+    def __init__(self, definition: Any) -> None:
+        self.definition, self.progress, self.commits = definition, None, 0
+
+    async def scalar(self, _stmt: Any) -> Any:
+        return self.definition
+
+    async def get(self, _model: Any, _key: Any, **_kw: Any) -> Any:
+        return self.progress
+
+    def add(self, row: Any) -> None:
+        self.progress = row
+
+    async def flush(self) -> None:
+        return None
+
+    async def commit(self) -> None:
+        self.commits += 1
+
+
+def run_emit(monkeypatch: pytest.MonkeyPatch, definition: Any, items: list[Any]) -> EmitSession:
+    from modules.knowledge.documents import public as documents
+
+    async def page(_s: Any, **_kw: Any) -> SimpleNamespace:
+        return SimpleNamespace(
+            items=items, selection_fences=[], has_more=False, cursor_created_at=None, cursor_version_id=None,
+        )
+
+    monkeypatch.setattr(documents, "list_gadget_highlight_projection_page", page)
+    return EmitSession(definition)
+
+
+def definition_row(rules: list[dict[str, Any]], sources: list[UUID]) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=uuid4(), renderer="highlights", source_ids=[str(s) for s in sources], scope={},
+        highlight_rules=rules, revision=1,
+    )
+
+
+@pytest.mark.asyncio
+async def test_emit_path_fingerprint_matches_legacy_golden(
+    monkeypatch: pytest.MonkeyPatch, news: FakeNews, emit_spy: list[Any],
+) -> None:
+    legacy = {"id": str(RULE_ID), "keywords": ["rates"], "severity": "warning", "notify": True}
+    session = run_emit(monkeypatch, definition_row([legacy], [FP_SOURCE]), [])
+    await public.evaluate_gadget_highlights(session, 1, uuid4(), emit_notifications=True)  # type: ignore[arg-type]
+    assert session.progress.rules_fingerprint == LEGACY_FINGERPRINT
+    # Re-stored in the new shape (explicit empty lists) must not change it either.
+    restored = {**legacy, "topic_ids": [], "source_ids": [], "exclude_source_ids": []}
+    session = run_emit(monkeypatch, definition_row([restored], [FP_SOURCE]), [])
+    await public.evaluate_gadget_highlights(session, 1, uuid4(), emit_notifications=True)  # type: ignore[arg-type]
+    assert session.progress.rules_fingerprint == LEGACY_FINGERPRINT
+
+
+@pytest.mark.asyncio
+async def test_emit_path_applies_source_and_topic_conditions(
+    monkeypatch: pytest.MonkeyPatch, news: FakeNews, emit_spy: list[Any],
+) -> None:
+    excluded = rule(topic_ids=[TOPIC], exclude_source_ids=[SRC_B])
+    items = [item(SRC_A, "Rates rise"), item(SRC_B, "Rates rise"), item(SRC_A, "weather")]
+    session = run_emit(monkeypatch, definition_row([excluded.model_dump(mode="json")], [SRC_A, SRC_B]), items)
+    matches = await public.evaluate_gadget_highlights(  # type: ignore[arg-type]
+        session, 1, uuid4(), emit_notifications=True,
+    )
+    assert [m.source_id for m in matches] == [SRC_A]  # excluded source and non-topic text both skipped
+    assert len(emit_spy) == 1 and session.commits == 1
+    assert emit_spy[0][0][2].body.startswith("Matched 1 keyword(s): rates")
+
+
+def test_term_cap_per_rule() -> None:
+    from modules.dashboard.highlights import MAX_TERMS_PER_RULE, compile_rules
+
+    terms = {TOPIC: [f"t{i}" for i in range(MAX_TERMS_PER_RULE + 50)]}
+    (compiled,) = compile_rules([rule(topic_ids=[TOPIC])], terms)
+    assert len(compiled.patterns) == MAX_TERMS_PER_RULE

@@ -69,7 +69,8 @@ async def _call[T](operation: Awaitable[T]) -> T:
         raise HTTPException(status_code=409, detail={"code": exc.code, "message": str(exc), "details": details}) from exc
     except (ValueError, KeyError) as exc:
         message = "Unknown preset or renderer" if isinstance(exc, KeyError) else str(exc)
-        raise HTTPException(status_code=422, detail={"code": "invalid_dashboard_configuration", "message": message, "details": {}}) from exc
+        code = getattr(exc, "code", "invalid_dashboard_configuration")
+        raise HTTPException(status_code=422, detail={"code": code, "message": message, "details": {}}) from exc
 
 
 @router.get("/dashboards", response_model=list[DashboardSummary])

@@ -8,11 +8,12 @@ through the shared replay transaction.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
@@ -115,7 +116,7 @@ async def evaluate_gadget_highlights(
     Highlight notification titles carry exact private Document/version provenance; Notifications
     rechecks the selected current version and keeps that provenance out of its public DTO.
     """
-    from modules.dashboard.highlights import evaluate_highlights
+    from modules.dashboard.highlights import compile_rules, match_compiled
     from modules.dashboard.models import GadgetHighlightProgress
     from modules.dashboard.schemas import HighlightRule
     from modules.knowledge.documents import public as documents
@@ -160,7 +161,7 @@ async def evaluate_gadget_highlights(
             progress.rules_fingerprint = rules_fingerprint
             progress.cursor_created_at = None
             progress.cursor_version_id = None
-        topic_terms = await _rule_topic_terms(session, owner_id, rules)
+        compiled = compile_rules(rules, await _rule_topic_terms(session, owner_id, rules))
         page = await documents.list_gadget_highlight_projection_page(
             session, source_ids=source_ids, limit=HIGHLIGHT_SCAN_PAGE_LIMIT,
             cursor_created_at=progress.cursor_created_at,
@@ -180,9 +181,7 @@ async def evaluate_gadget_highlights(
         for item in page.items:
             if item_scope and str(item.document_id) not in item_scope:
                 continue
-            for match in evaluate_highlights(
-                item.excerpt, rules, source_id=item.source_id, topic_terms=topic_terms,
-            ):
+            for match in match_compiled(item.excerpt, compiled, source_id=item.source_id):
                 matches.append(DashboardHighlightRead(
                     document_id=item.document_id, document_version_id=item.document_version_id,
                     source_id=item.source_id, title=item.title, observed_at=item.observed_at,
@@ -222,14 +221,12 @@ async def evaluate_gadget_highlights(
     rules = [HighlightRule.model_validate(rule) for rule in definition_read.highlight_rules]
     raw_item_scope = definition_read.scope.get("source_item_ids", [])
     item_scope = {str(value) for value in raw_item_scope} if isinstance(raw_item_scope, list) else set()
-    topic_terms = await _rule_topic_terms(session, owner_id, rules)
+    compiled = compile_rules(rules, await _rule_topic_terms(session, owner_id, rules))
     matches = []
     for item in projection_page.items:
         if item_scope and str(item.document_id) not in item_scope:
             continue
-        for match in evaluate_highlights(
-            item.excerpt, rules, source_id=item.source_id, topic_terms=topic_terms,
-        ):
+        for match in match_compiled(item.excerpt, compiled, source_id=item.source_id):
             matches.append(DashboardHighlightRead(
                 document_id=item.document_id, document_version_id=item.document_version_id,
                 source_id=item.source_id, title=item.title, observed_at=item.observed_at,
@@ -248,20 +245,44 @@ async def _rule_topic_terms(
     return await news.resolve_topic_terms(session, owner_id, topic_ids)
 
 
+class HighlightRuleError(ValueError):
+    """A rule breaks a scope or ownership invariant; ``code`` lets the web client localize it."""
+
+    def __init__(self, code: str, message: str) -> None:
+        """Keep the stable machine code beside the English message."""
+        super().__init__(message)
+        self.code = code
+
+
 async def validate_highlight_rules(
     session: AsyncSession, owner_id: int, source_ids: Sequence[UUID], rules: Sequence[HighlightRule],
+    *, known_topic_ids: Collection[UUID] | None = (),
 ) -> None:
-    """Trust-boundary check: rule sources stay inside the definition scope; topics exist for the owner."""
+    """Trust-boundary check: rule sources stay inside the definition scope; new topics must be the owner's.
+
+    Topic ids in ``known_topic_ids`` (already stored on the definition) are not re-checked, so a topic
+    deleted later never blocks edits; ``None`` skips the topic check (preview reports them unresolved).
+    """
     from modules.news import public as news
     allowed = set(source_ids)
     for rule in rules:
-        if not set(rule.source_ids) <= allowed:
-            raise ValueError("Rule source_ids must be a subset of the definition sources")
-        if not set(rule.exclude_source_ids) <= allowed:
-            raise ValueError("Rule exclude_source_ids must be a subset of the definition sources")
-    topic_ids = list(dict.fromkeys(topic for rule in rules for topic in rule.topic_ids))
+        if not set(rule.source_ids) <= allowed or not set(rule.exclude_source_ids) <= allowed:
+            raise HighlightRuleError("rule_sources_not_subset", "Rule sources must be a subset of the definition sources")
+        if allowed and allowed <= set(rule.exclude_source_ids):
+            raise HighlightRuleError("rule_excludes_all_sources", "A rule cannot exclude every definition source")
+    if known_topic_ids is None:
+        return
+    topic_ids = list(dict.fromkeys(
+        topic for rule in rules for topic in rule.topic_ids if topic not in known_topic_ids
+    ))
     if topic_ids and set(topic_ids) - await news.live_topic_ids(session, owner_id, topic_ids):
-        raise ValueError("Rule topic_ids must reference your existing topics")
+        raise HighlightRuleError("rule_topic_unknown", "Rule topic_ids must reference your existing topics")
+
+
+def _match_items(items: Sequence[Any], compiled: Sequence[Any]) -> list[list[Any]]:
+    """Match every item against pre-compiled rules (pure CPU; safe to run in a thread)."""
+    from modules.dashboard.highlights import match_compiled
+    return [match_compiled(item.excerpt, compiled, source_id=item.source_id) for item in items]
 
 
 async def preview_highlights(
@@ -272,12 +293,14 @@ async def preview_highlights(
     Uses the same projection reads as the display path, so purged, paused or superseded content is
     never scanned. Nothing is written or committed and ``emit`` is never imported.
     """
-    from modules.dashboard.highlights import evaluate_highlights
+    from modules.dashboard.highlights import compile_rules
     from modules.knowledge.documents import public as documents
-    await validate_highlight_rules(session, owner_id, payload.source_ids, payload.rules)
+    await validate_highlight_rules(session, owner_id, payload.source_ids, payload.rules, known_topic_ids=None)
     since = datetime.now(UTC) - timedelta(days=payload.days)
     source_ids = tuple(payload.source_ids)
     topic_terms = await _rule_topic_terms(session, owner_id, payload.rules)
+    compiled = compile_rules(payload.rules, topic_terms)
+    item_scope = {str(value) for value in payload.source_item_ids}
     counts = {rule.id: 0 for rule in payload.rules}
     matches: list[DashboardHighlightRead] = []
     scanned = 0
@@ -288,11 +311,12 @@ async def preview_highlights(
             session, owner_id=owner_id, source_ids=source_ids, limit=PREVIEW_PAGE_SIZE,
             cursor=cursor, since=since,
         )
-        for item in page.items:
-            scanned += 1
-            for match in evaluate_highlights(
-                item.excerpt, payload.rules, source_id=item.source_id, topic_terms=topic_terms,
-            ):
+        items = [item for item in page.items if not item_scope or str(item.document_id) in item_scope]
+        scanned += len(items)
+        # Regex work is CPU-bound; keep it off the event loop.
+        per_item = await asyncio.to_thread(_match_items, items, compiled)
+        for item, item_matches in zip(items, per_item, strict=True):
+            for match in item_matches:
                 counts[match.rule_id] += 1
                 if len(matches) < PREVIEW_MAX_MATCHES:
                     matches.append(DashboardHighlightRead(
@@ -1251,7 +1275,10 @@ async def patch_definition(session: AsyncSession, owner_id: int, definition_id: 
         highlight_rules=candidate["highlight_rules"] if candidate["highlight_rules"] is not None else [HighlightRule.model_validate(item) for item in row.highlight_rules],
     )
     gadgets.validate_renderer_configuration(candidate["renderer"], config)
-    await validate_highlight_rules(session, owner_id, candidate["source_ids"], config.highlight_rules)
+    stored_topics = {UUID(str(topic)) for item in row.highlight_rules for topic in item.get("topic_ids", [])}
+    await validate_highlight_rules(
+        session, owner_id, candidate["source_ids"], config.highlight_rules, known_topic_ids=stored_topics,
+    )
     row.name = candidate["name"]
     row.renderer = candidate["renderer"]
     row.source_ids = [str(item) for item in candidate["source_ids"]]

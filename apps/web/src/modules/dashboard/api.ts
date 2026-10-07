@@ -1,4 +1,4 @@
-import { apiRequest, csrfHeaders } from '@/core/api';
+import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
 
 /** Dashboard summary returned by the owner-scoped collection endpoint. */
 export type DashboardSummary = {
@@ -358,7 +358,7 @@ export function evaluateGadgetHighlights(definitionId: string) {
 }
 
 /** Dry-runs draft rules over the last days (max 7) of current data; never notifies or saves. */
-export function previewHighlightRules(payload: { source_ids: string[]; rules: HighlightRule[]; days?: number }, csrfToken: string, signal?: AbortSignal) {
+export function previewHighlightRules(payload: { source_ids: string[]; rules: HighlightRule[]; days?: number; source_item_ids?: string[] }, csrfToken: string, signal?: AbortSignal) {
   return apiRequest<HighlightPreview>('/api/v1/gadget-definitions/highlight-preview', {
     method: 'POST', headers: csrfHeaders(csrfToken), body: JSON.stringify(payload), signal,
   });
@@ -394,4 +394,13 @@ export function applyDashboardPreset(presetId: string, payload: PresetPreviewReq
     method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
     body: JSON.stringify(payload), signal,
   });
+}
+
+const highlightRuleErrorKeys: Record<string, string> = {
+  rule_sources_not_subset: 'ruleErrSources', rule_excludes_all_sources: 'ruleErrExcludesAll', rule_topic_unknown: 'ruleErrTopic',
+};
+
+/** Maps a rule-condition 422 to a localized gadgetSettings key, or null when the code is not a rule error. */
+export function highlightRuleErrorKey(error: unknown): string | null {
+  return error instanceof ApiError && error.status === 422 ? highlightRuleErrorKeys[error.code ?? ''] ?? null : null;
 }

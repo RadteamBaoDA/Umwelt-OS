@@ -566,6 +566,7 @@ class HighlightPreviewRequest(StrictConfiguration):
     source_ids: list[UUID] = Field(min_length=1, max_length=MAX_SOURCES_PER_DEFINITION)
     rules: list[HighlightRule] = Field(min_length=1, max_length=MAX_RULES_PER_DEFINITION)
     days: Annotated[StrictInt, Field(ge=1, le=7)] = 7
+    source_item_ids: list[UUID] = Field(default_factory=list, max_length=100)  # the gadget's item scope
 
     @model_validator(mode="after")
     def ensure_distinct(self) -> "HighlightPreviewRequest":

@@ -11,7 +11,7 @@ import { ApiError } from '@/core/api';
 import { apiFailureKey } from '@/core/api-failure-key';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import {
-  createGadgetDefinition, dashboardKeys, deleteGadgetDefinition, evaluateGadgetHighlights, listGadgetDefinitions,
+  createGadgetDefinition, dashboardKeys, deleteGadgetDefinition, evaluateGadgetHighlights, highlightRuleErrorKey, listGadgetDefinitions,
   listGadgetRenderers, patchGadgetDefinition, type GadgetDefinition,
 } from '@/modules/dashboard/api';
 import { MULTI_SOURCE_RENDERERS, SOURCE_BACKED_RENDERERS, SourceMultiPicker, SourcePicker } from '@/modules/dashboard/source-picker';
@@ -139,7 +139,7 @@ function GadgetForm({ def, onDone, onEditRules }: { def: GadgetDefinition | null
         {def && <p className="muted text-xs">{t('previewNote')}</p>}
       </section>
     </fieldset>
-    {save.error && <p className="error" role="alert">{t(apiFailureKey(save.error) ?? 'saveFailed')}</p>}
+    {save.error && <p className="error" role="alert">{t((highlightRuleErrorKey(save.error) ?? apiFailureKey(save.error) ?? 'saveFailed') as 'saveFailed')}</p>}
     {remove.error && <p className="error" role="alert">{t(remove.error instanceof ApiError && remove.error.code === 'definition_in_use' ? 'inUse' : apiFailureKey(remove.error) === 'conflict' ? 'conflict' : 'deleteFailed')}</p>}
     <div className="form-actions sticky bottom-0 z-10 flex-wrap items-center gap-2 border-t border-border bg-background py-3">
       <p className="muted me-auto text-xs" role="status">{dirty ? t('unsaved') : def ? t('saveRevision', { revision: def.revision + 1 }) : t('saveNew')}</p>

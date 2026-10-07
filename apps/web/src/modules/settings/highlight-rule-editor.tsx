@@ -12,17 +12,34 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { apiFailureKey } from '@/core/api-failure-key';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import {
-  dashboardKeys, evaluateGadgetHighlights, getGadgetDefinitionUsage, listGadgetDefinitions, listGadgetSources, patchGadgetDefinition, previewHighlightRules,
+  dashboardKeys, evaluateGadgetHighlights, getGadgetDefinitionUsage, highlightRuleErrorKey, listGadgetDefinitions, listGadgetSources, patchGadgetDefinition, previewHighlightRules,
   type GadgetDefinition, type HighlightRule,
 } from '@/modules/dashboard/api';
 import { fetchTopics } from '@/modules/news/api';
+import type { Topic } from '@/modules/news/types';
 import { parseKeywordList } from './gadget-library';
 
 type Severity = HighlightRule['severity'];
 type SourceMode = 'any' | 'only' | 'exclude';
 type RuleDraft = { id: string; keywords: string; severity: Severity; notify: boolean; topicIds: string[]; sourceModes: Record<string, SourceMode> };
 const MAX_TOPICS = 8;
+const TOPIC_PAGE = 100;
+const TOPIC_MAX_PAGES = 10; // 1000 active topics; the owner topic cap is far below this
+
 const sourceModeKeys = { any: 'sourceAny', only: 'sourceOnly', exclude: 'sourceExclude' } as const;
+
+/** Reads every active owner topic (bounded pages) so a selected topic is never hidden behind a page cap. */
+async function fetchActiveTopics(signal?: AbortSignal): Promise<Topic[]> {
+  const items: Topic[] = [];
+  let cursor: string | undefined;
+  for (let page = 0; page < TOPIC_MAX_PAGES; page += 1) {
+    const result = await fetchTopics({ isActive: true, limit: TOPIC_PAGE, cursor, signal });
+    items.push(...result.items);
+    if (!result.next_cursor) break;
+    cursor = result.next_cursor;
+  }
+  return items;
+}
 
 /** Builds the API rule from a draft, keeping only conditions that are set. */
 function toRule(draft: RuleDraft, keywords: string[]): HighlightRule {
@@ -70,10 +87,10 @@ function RuleList({ def }: { def: GadgetDefinition }) {
   const rules = def.highlight_rules ?? [];
   const usage = useQuery({ queryKey: [...dashboardKeys.definition(def.id), 'usage'], queryFn: ({ signal }) => getGadgetDefinitionUsage(def.id, signal) });
   const usageNames = (usage.data ?? []).map((item) => item.name).join(', ');
-  const topics = useQuery({ queryKey: ['highlight-rule-topics'], queryFn: () => fetchTopics({ isActive: true, limit: 50 }) });
+  const topics = useQuery({ queryKey: ['highlight-rule-topics'], queryFn: ({ signal }) => fetchActiveTopics(signal) });
   const sources = useQuery({ queryKey: ['highlight-rule-sources'], queryFn: ({ signal }) => listGadgetSources(100, undefined, signal) });
   const sourceName = (id: string) => sources.data?.items.find((item) => item.id === id)?.name ?? id;
-  const preview = useMutation({ mutationFn: (rule: HighlightRule) => previewHighlightRules({ source_ids: def.source_ids, rules: [rule], days: 7 }, session.csrfToken) });
+  const preview = useMutation({ mutationFn: (rule: HighlightRule) => previewHighlightRules({ source_ids: def.source_ids, rules: [rule], days: 7, source_item_ids: def.scope.source_item_ids }, session.csrfToken) });
   const matches = useQuery({ queryKey: [...dashboardKeys.definition(def.id), 'highlights', def.revision], queryFn: () => evaluateGadgetHighlights(def.id) });
   const write = useMutation({
     mutationFn: (next: HighlightRule[]) => patchGadgetDefinition(def.id, { expected_revision: def.revision, highlight_rules: next }, session.csrfToken),
@@ -114,22 +131,23 @@ function RuleList({ def }: { def: GadgetDefinition }) {
         <h3 className="font-semibold">{isNew ? t('ruleNew') : t('ruleTitle')}</h3>
         <label className="field"><span className="label">{t('ruleKeywords')}</span><Input value={editing.keywords} aria-invalid={touched && !valid} onChange={(event) => setEditing({ ...editing, keywords: event.target.value })} /><span className="muted text-xs">{t('ruleKeywordsHelp')}</span>{touched && !valid && <span className="error" role="alert">{t('ruleNeedsCondition')}</span>}</label>
         <fieldset className="field"><legend className="label">{t('ruleTopics')}</legend><span className="muted text-xs">{t('ruleTopicsHelp')}</span>
-          {topics.isSuccess && topics.data.items.length === 0 && <span className="muted">{t('ruleTopicsNone')}</span>}
-          {topics.isSuccess && topics.data.items.map((topic) => <label key={topic.id} className="flex items-center gap-2"><Checkbox checked={editing.topicIds.includes(topic.id)} onCheckedChange={(checked) => setEditing({ ...editing, topicIds: checked === true ? [...editing.topicIds, topic.id] : editing.topicIds.filter((id) => id !== topic.id) })} /> {topic.name}</label>)}
+          {topics.isSuccess && topics.data.length === 0 && editing.topicIds.length === 0 && <span className="muted">{t('ruleTopicsNone')}</span>}
+          {topics.isSuccess && topics.data.map((topic) => <label key={topic.id} className="flex items-center gap-2"><Checkbox checked={editing.topicIds.includes(topic.id)} onCheckedChange={(checked) => setEditing({ ...editing, topicIds: checked === true ? [...editing.topicIds, topic.id] : editing.topicIds.filter((id) => id !== topic.id) })} /> {topic.name}</label>)}
+          {topics.isSuccess && editing.topicIds.filter((id) => !topics.data.some((topic) => topic.id === id)).map((id) => <div key={id} className="flex items-center gap-2"><span className="muted min-w-0 flex-1">{t('ruleTopicUnavailable')}</span><Button type="button" className="secondary" onClick={() => setEditing({ ...editing, topicIds: editing.topicIds.filter((value) => value !== id) })}>{t('ruleTopicRemove')}</Button></div>)}
           {editing.topicIds.length > MAX_TOPICS && <span className="error" role="alert">{t('ruleTopicsLimit')}</span>}
         </fieldset>
-        {def.source_ids.length > 1 && <fieldset className="field"><legend className="label">{t('ruleSources')}</legend><span className="muted text-xs">{t('ruleSourcesHelp')}</span>
+        {(def.source_ids.length > 1 || Object.values(editing.sourceModes).some((mode) => mode !== 'any')) && <fieldset className="field"><legend className="label">{t('ruleSources')}</legend><span className="muted text-xs">{t('ruleSourcesHelp')}</span>
           {def.source_ids.map((id) => <div key={id} className="flex flex-wrap items-center gap-2"><span className="min-w-0 flex-1">{sourceName(id)}</span>
-            <Select value={editing.sourceModes[id] ?? 'any'} onValueChange={(value) => setEditing({ ...editing, sourceModes: { ...editing.sourceModes, [id]: value as SourceMode } })}><SelectTrigger aria-label={sourceName(id)} className="w-40"><SelectValue /></SelectTrigger><SelectContent>{(Object.keys(sourceModeKeys) as SourceMode[]).map((mode) => <SelectItem key={mode} value={mode}>{t(sourceModeKeys[mode])}</SelectItem>)}</SelectContent></Select></div>)}
+            <Select value={editing.sourceModes[id] ?? 'any'} onValueChange={(value) => setEditing({ ...editing, sourceModes: { ...editing.sourceModes, [id]: value as SourceMode } })}><SelectTrigger aria-label={`${t('ruleSourceMode')}: ${sourceName(id)}`} className="w-40"><SelectValue /></SelectTrigger><SelectContent>{(Object.keys(sourceModeKeys) as SourceMode[]).map((mode) => <SelectItem key={mode} value={mode}>{t(sourceModeKeys[mode])}</SelectItem>)}</SelectContent></Select></div>)}
         </fieldset>}
         <label className="field max-w-xs"><span className="label">{t('severity')}</span>
           <Select value={editing.severity} onValueChange={(value) => setEditing({ ...editing, severity: value as Severity })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{(Object.keys(severityKeys) as Severity[]).map((item) => <SelectItem key={item} value={item}>{t(severityKeys[item])}</SelectItem>)}</SelectContent></Select></label>
         <label className="field"><Checkbox checked={editing.notify} onCheckedChange={(checked) => setEditing({ ...editing, notify: checked === true })} /> {t('notify')}</label>
       </fieldset>
-      {write.error && <p className="error" role="alert">{t(apiFailureKey(write.error) ?? 'saveFailed')}</p>}
+      {write.error && <p className="error" role="alert">{t((highlightRuleErrorKey(write.error) ?? apiFailureKey(write.error) ?? 'saveFailed') as 'saveFailed')}</p>}
       <div className="form-actions"><Button type="submit" disabled={write.isPending}>{write.isPending ? t('saving') : t('saveRule')}</Button><Button type="button" className="secondary" disabled={write.isPending || !valid || def.source_ids.length === 0 || preview.isPending} onClick={() => preview.mutate(toRule(editing, keywords))}><Eye className="size-4" aria-hidden="true" /> {preview.isPending ? t('rulePreviewRunning') : t('rulePreview')}</Button><Button type="button" className="secondary" disabled={write.isPending} onClick={() => setEditing(null)}>{t('cancelRule')}</Button></div>
       <div aria-live="polite" className="space-y-1">
-        {preview.isError && <p className="error" role="alert">{t(apiFailureKey(preview.error) ?? 'rulePreviewFailed')}</p>}
+        {preview.isError && <p className="error" role="alert">{t((highlightRuleErrorKey(preview.error) ?? apiFailureKey(preview.error) ?? 'rulePreviewFailed') as 'rulePreviewFailed')}</p>}
         {preview.data && <>
           <p>{t('rulePreviewSummary', { matches: preview.data.rules[0]?.match_count ?? 0, scanned: preview.data.scanned })}</p>
           {preview.data.truncated && <p className="muted text-xs">{t('rulePreviewTruncated')}</p>}
@@ -147,7 +165,7 @@ function RuleList({ def }: { def: GadgetDefinition }) {
       {matches.isSuccess && <ul className="space-y-1">{matches.data.map((match) => <li key={`${match.rule_id}:${match.document_version_id}`}><span className="font-medium">{match.title}</span> <span className="muted text-xs">{t('previewMatch', { keywords: match.matched_keywords.join(', ') })} · {t(severityKeys[match.severity])}</span></li>)}</ul>}
       <p className="muted text-xs">{t('matchesNote')}</p>
     </section>
-    {write.error && !editing && <p className="error" role="alert">{t(apiFailureKey(write.error) ?? 'saveFailed')}</p>}
+    {write.error && !editing && <p className="error" role="alert">{t((highlightRuleErrorKey(write.error) ?? apiFailureKey(write.error) ?? 'saveFailed') as 'saveFailed')}</p>}
     <AlertDialog open={deleteId !== null} onOpenChange={(value) => { if (!value) setDeleteId(null); }}>
       <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{t('deleteRuleTitle')}</AlertDialogTitle><AlertDialogDescription>{t('deleteRuleBody')}{usageNames && ` ${t('usageDelete', { names: usageNames })}`}</AlertDialogDescription></AlertDialogHeader>
         <AlertDialogFooter><AlertDialogCancel>{t('cancelRule')}</AlertDialogCancel><AlertDialogAction onClick={() => write.mutate(rules.filter((item) => item.id !== deleteId))}>{t('deleteRule')}</AlertDialogAction></AlertDialogFooter>

@@ -14,13 +14,22 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.mark.asyncio
-async def test_preview_writes_no_notifications_and_rejects_unknown_topic(
+async def test_preview_matches_seeded_item_without_notifying_and_reports_dead_topic(
     ready_owner_client: AsyncClient, committed_engine: AsyncEngine,
 ) -> None:
     client = ready_owner_client
     source = await client.post("/api/v1/sources", json={"type": "manual", "name": f"rules {uuid4().hex[:8]}"})
     source.raise_for_status()
     source_id = source.json()["id"]
+    created = await client.post("/api/v1/documents", json={
+        "source_id": source_id, "title": "Rates rise", "content": f"central bank rates {uuid4().hex}",
+        "external_id": f"p15-rules-{uuid4().hex}",
+    })
+    created.raise_for_status()
+    async with committed_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE documents SET extraction_status = 'ready' WHERE id = :id"), {"id": created.json()["id"]},
+        )
     rule = {"id": str(uuid4()), "keywords": ["rates"], "severity": "warning", "notify": True}
     async with committed_engine.connect() as conn:
         before = (await conn.execute(text("select count(*) from notifications"))).scalar_one()
@@ -28,11 +37,20 @@ async def test_preview_writes_no_notifications_and_rejects_unknown_topic(
         "/api/v1/gadget-definitions/highlight-preview", json={"source_ids": [source_id], "rules": [rule], "days": 7}
     )
     assert ok.status_code == 200 and ok.json()["window_days"] == 7
-    bad = await client.post(
+    assert ok.json()["scanned"] >= 1 and ok.json()["rules"][0]["match_count"] >= 1  # the seed is really scanned
+    dead = str(uuid4())
+    unresolved = await client.post(
         "/api/v1/gadget-definitions/highlight-preview",
-        json={"source_ids": [source_id], "rules": [{**rule, "keywords": [], "topic_ids": [str(uuid4())]}]},
+        json={"source_ids": [source_id], "rules": [{**rule, "keywords": [], "topic_ids": [dead]}]},
     )
-    assert bad.status_code == 422
+    assert unresolved.status_code == 200 and unresolved.json()["rules"][0]["unresolved_topic_ids"] == [dead]
+    created_def = await client.post("/api/v1/gadget-definitions", json={
+        "name": "bad topic", "renderer": "highlights", "source_ids": [source_id],
+        "highlight_rules": [{**rule, "keywords": [], "topic_ids": [dead]}],
+    })
+    assert created_def.status_code == 422
+    body = created_def.json()
+    assert (body.get("error") or body["detail"])["code"] == "rule_topic_unknown"
     async with committed_engine.connect() as conn:
         after = (await conn.execute(text("select count(*) from notifications"))).scalar_one()
     assert after == before
