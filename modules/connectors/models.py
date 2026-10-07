@@ -14,6 +14,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -36,6 +37,8 @@ class ConnectorProvisioning(Base):
             "desired_revision > 0 AND applied_revision >= 0",
             name="ck_connector_provisioning_revisions",
         ),
+        CheckConstraint("execution_backend IN ('native', 'n8n')", name="ck_connector_provisioning_backend"),
+        CheckConstraint("backend_revision > 0", name="ck_connector_provisioning_backend_revision"),
     )
 
     source_id: Mapped[UUID] = mapped_column(
@@ -50,6 +53,9 @@ class ConnectorProvisioning(Base):
     workflow_id: Mapped[str | None] = mapped_column(String(128))
     workflow_name: Mapped[str | None] = mapped_column(String(255))
     desired_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    # Legacy rows keep n8n; C4 owns transitions and bumps backend_revision to fence old executions.
+    execution_backend: Mapped[str] = mapped_column(String(16), nullable=False, server_default="n8n")
+    backend_revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     workflow_operation: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     activation_intent: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     state: Mapped[str] = mapped_column(String(32), nullable=False, server_default="queued")
@@ -424,3 +430,132 @@ class GithubOAuthOperation(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+
+
+class ConnectorSchedule(Base):
+    """Persist one source's regular collection cadence; PostgreSQL is the only schedule owner."""
+    __tablename__ = "connector_schedules"
+    __table_args__ = (
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_connector_schedules_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["workspace_id", "source_id"], ["sources.workspace_id", "sources.id"],
+            name="fk_connector_schedules_source", ondelete="CASCADE",
+        ),
+        CheckConstraint("interval_minutes IN (15, 30, 60, 360, 1440)", name="ck_connector_schedules_interval"),
+        CheckConstraint("failure_count >= 0", name="ck_connector_schedules_failures"),
+        Index("ix_connector_schedules_due", "enabled", "next_due_at"),
+        Index("ix_connector_schedules_workspace", "workspace_id", "last_considered_at"),
+    )
+
+    source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    interval_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    next_due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_dispatch_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_considered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    failure_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    next_eligible_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Set when credential/schema/terms failures need owner action; gates manual and scheduled calls.
+    blocked_error_code: Mapped[str | None] = mapped_column(String(64))
+
+
+class ConnectorCollectionRequest(Base):
+    """Persist one durable collection request with its captured fences; Redis carries only its id."""
+    __tablename__ = "connector_collection_requests"
+    __table_args__ = (
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_connector_collection_requests_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["workspace_id", "source_id"], ["sources.workspace_id", "sources.id"],
+            name="fk_connector_collection_requests_source", ondelete="CASCADE",
+        ),
+        CheckConstraint("trigger IN ('manual', 'scheduled', 'retry')", name="ck_connector_collection_requests_trigger"),
+        CheckConstraint(
+            "status IN ('queued', 'running', 'succeeded', 'no_changes', 'failed', 'cancelled')",
+            name="ck_connector_collection_requests_status",
+        ),
+        CheckConstraint("captured_backend IN ('native', 'n8n')", name="ck_connector_collection_requests_backend"),
+        CheckConstraint("attempt BETWEEN 0 AND 5", name="ck_connector_collection_requests_attempt"),
+        CheckConstraint(
+            "(status = 'running') = (active_admission_token IS NOT NULL)",
+            name="ck_connector_collection_requests_admission",
+        ),
+        Index(
+            "uq_connector_collection_requests_active", "source_id", unique=True,
+            postgresql_where=text("status IN ('queued', 'running')"),
+        ),
+        Index(
+            "ix_connector_collection_requests_enqueue", "available_at", "enqueue_next_at",
+            postgresql_where=text("status = 'queued'"),
+        ),
+        Index("ix_connector_collection_requests_workspace", "workspace_id", "source_id", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    actor_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    membership_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    trigger: Mapped[str] = mapped_column(String(16), nullable=False)
+    source_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    connector_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    backend_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    captured_backend: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="queued")
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    active_admission_token: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    ingestion_run_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    provider_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    enqueue_next_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    enqueue_claim_token: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    enqueue_claim_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ConnectorAdmissionSlot(Base):
+    """Seeded global network-capacity slots 1 and 2; the token fences each admitted attempt.
+
+    Occupancy has no request FK on purpose: an expired row stays occupied until fenced cleanup
+    clears it, even if its request was cascaded away with its Source.
+    """
+    __tablename__ = "connector_admission_slots"
+    __table_args__ = (
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_connector_admission_slots_workspace", ondelete="RESTRICT"),
+        CheckConstraint("slot_id IN (1, 2)", name="ck_connector_admission_slots_id"),
+        CheckConstraint(
+            "(occupied_request_id IS NULL) = (workspace_id IS NULL) "
+            "AND (occupied_request_id IS NULL) = (admission_token IS NULL) "
+            "AND (occupied_request_id IS NULL) = (expires_at IS NULL)",
+            name="ck_connector_admission_slots_occupancy",
+        ),
+        Index(
+            "uq_connector_admission_slots_request", "occupied_request_id", unique=True,
+            postgresql_where=text("occupied_request_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_connector_admission_slots_workspace", "workspace_id", unique=True,
+            postgresql_where=text("workspace_id IS NOT NULL"),
+        ),
+    )
+
+    slot_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    occupied_request_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    workspace_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    admission_token: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ConnectorWorkspaceDispatch(Base):
+    """Persist fair-turn timestamps per workspace; a scheduling summary, never authorization."""
+    __tablename__ = "connector_workspace_dispatch"
+
+    workspace_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), primary_key=True
+    )
+    last_considered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -30,7 +30,8 @@ from modules.agents.worker import (
 )
 from modules.automations.worker import process_automation_run, reconcile_automation_runs
 from modules.chat.worker import process_chat_response, purge_expired_chat_runs
-from modules.connectors.worker import reconcile_connectors
+from modules.connectors.scheduler import dispatch_due_collections
+from modules.connectors.worker import process_collection_request, reconcile_connectors
 from modules.dashboard.worker import run_scheduled_brief, run_scheduled_highlights
 from modules.ingestion.dispatcher import WORKER_BY_EVENT, dispatch_pending_work
 from modules.ingestion.worker import (
@@ -208,7 +209,8 @@ class WorkerSettings:
         instrument_job(process_normalize_event, success_return_outcome="returned"),
         instrument_job(process_uploaded_file, success_return_outcome="returned"), process_source_purge,
         process_source_memory_coverage, process_document_cleanup,
-        reconcile_connectors, instrument_job(process_document_ready, success_return_outcome="returned"),
+        reconcile_connectors, dispatch_due_collections, process_collection_request,
+        instrument_job(process_document_ready, success_return_outcome="returned"),
         instrument_job(process_entity_extraction_work),
         instrument_job(process_timeline_extraction_work), instrument_job(process_graph_operation),
         instrument_job(process_news_document_ready), instrument_job(process_chat_response), purge_expired_chat_runs,
@@ -230,6 +232,7 @@ class WorkerSettings:
         cron(dispatch_pending_work, second=set(range(0, 60, 5)), run_at_startup=True),
         cron(index_pending_chunks, minute=set(range(0, 60, 1))),
         cron(reconcile_connectors, second=set(range(0, 60, 5)), run_at_startup=True),
+        cron(dispatch_due_collections, second={0, 15, 30, 45}, run_at_startup=True),
         cron(reconcile_document_memory_cleanup, second=set(range(0, 60, 5)), run_at_startup=True),
         cron(reconcile_document_agent_cleanup, second=set(range(0, 60, 5)), run_at_startup=True),
         cron(reconcile_document_copied_stage_cleanup, second=set(range(0, 60, 5)), run_at_startup=True),
