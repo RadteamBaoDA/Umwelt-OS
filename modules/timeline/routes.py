@@ -30,12 +30,13 @@ OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]
 async def list_events(session: Session, _owner: OwnerRead, response: Response,
                       limit: Annotated[int, Query(ge=1, le=100)] = 50,
                       cursor: Annotated[str | None, Query(max_length=1024)] = None,
-                      source_id: UUID | None = None) -> EventPage:
+                      source_id: UUID | None = None,
+                      q: Annotated[str | None, Query(min_length=1, max_length=200)] = None) -> EventPage:
     """List owner events in bounded stable pages and prevent HTTP caching."""
     if response is not None:
         response.headers["Cache-Control"] = "no-store"
     try:
-        return await public.list_events(session, limit=limit, cursor=cursor, source_id=source_id)
+        return await public.list_events(session, limit=limit, cursor=cursor, source_id=source_id, q=q)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -67,6 +68,7 @@ async def list_timeline(session: Session, _owner: OwnerRead, response: Response,
                         entity_id: UUID | None = None,
                         type_filter: Annotated[str | None, Query(alias="type", min_length=1, max_length=64)] = None,
                         precision: Annotated[str, Query(pattern="^(all|timed|date|unknown)$")] = "all",
+                        q: Annotated[str | None, Query(min_length=1, max_length=200)] = None,
                         limit: Annotated[int, Query(ge=1, le=100)] = 50,
                         cursor: Annotated[str | None, Query(max_length=1024)] = None) -> TimelinePage:
     """Return filtered timeline partitions with no-store caching and cursor-bound filters."""
@@ -76,6 +78,7 @@ async def list_timeline(session: Session, _owner: OwnerRead, response: Response,
             "date_from": date_from, "date_to": date_to, "timezone": timezone,
             "source_id": source_id, "entity_id": entity_id, "type": type_filter,
             "precision": precision,
+            "q": q,
         })
         return await public.list_timeline(session, query, limit=limit, cursor=cursor)
     except ValueError as exc:
