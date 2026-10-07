@@ -146,7 +146,12 @@ def install_log_redaction() -> None:
                 record.args = redact_mapping(record.args)
             elif isinstance(record.args, tuple):
                 record.args = tuple(redact_mapping(item) for item in record.args)
-            record.msg, record.args = redact_text(record.getMessage()), None
+            message = record.getMessage()
+            redacted = redact_text(message)
+            # Args were redacted individually above; keep the template and args when the formatted
+            # text is unchanged so formatters that unpack record.args (uvicorn access log) still work.
+            if redacted != message or not isinstance(record.msg, str):
+                record.msg, record.args = redacted, None
         except Exception:  # noqa: BLE001 - formatting faults must not fail the caller
             record.msg, record.args = "[unformattable log message]", None
         # Keep each field name attached so secret/content key rules apply at the record boundary.

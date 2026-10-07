@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import logging
 import sys
 from pathlib import Path
 from typing import Any
@@ -240,3 +241,34 @@ class TestAsyncSpansAndTiming:
             assert entry["sum_ms"] >= 15.0
         finally:
             telemetry.registry = initial_reg
+
+
+class TestRedactedRecordsStayFormattable:
+    """Redaction must not strip record.args: uvicorn's AccessFormatter unpacks it per request."""
+
+    def _record(self, msg: str, args: tuple[Any, ...]) -> logging.LogRecord:
+        telemetry.install_log_redaction()
+        return logging.getLogger("uvicorn.access").makeRecord(
+            "uvicorn.access", logging.INFO, __file__, 1, msg, args, None
+        )
+
+    def test_uvicorn_access_formatter_formats_redacted_record(self) -> None:
+        from uvicorn.logging import AccessFormatter
+
+        record = self._record(
+            '%s - "%s %s HTTP/%s" %d',
+            ("127.0.0.1:1", "GET", "/api?token=sk-live-abcdef1234567890abcdef", "1.1", 200),
+        )
+        out = AccessFormatter("%(client_addr)s - %(request_line)s %(status_code)s", use_colors=False).format(record)
+        assert "GET" in out and "200" in out
+        assert "sk-live-abcdef1234567890abcdef" not in out
+
+    def test_secret_spanning_template_and_args_is_still_redacted(self) -> None:
+        record = self._record("Authorization: Bearer %s", ("abcdefghijklmnop1234567890",))
+        assert "abcdefghijklmnop1234567890" not in record.getMessage()
+        assert "abcdefghijklmnop1234567890" not in logging.Formatter("%(message)s").format(record)
+
+    def test_plain_record_keeps_args_for_any_formatter(self) -> None:
+        record = self._record("hello %s", ("world",))
+        assert record.args == ("world",)
+        assert logging.Formatter("%(message)s").format(record) == "hello world"
