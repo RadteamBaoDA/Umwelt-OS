@@ -4,7 +4,7 @@ import asyncio
 import json
 import re
 import time
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from hashlib import sha256
@@ -117,14 +117,30 @@ def _parse_time(value: str | None) -> datetime | None:
     return parsed.astimezone(UTC)
 
 
-async def _read_feed(url: str) -> bytes:
-    """Fetch one fixed feed response with TLS, no redirects, and a 10 MiB cap."""
+def send_fence_trace(before_request: Callable[[], Awaitable[None]]) -> Callable[[str, dict[str, object]], Awaitable[None]]:
+    """Build an httpx trace hook that reruns the native fence right before request headers hit the wire."""
+    async def final_send_fence(event_name: str, info: dict[str, object]) -> None:
+        """Recheck original authority after connection admission, before headers send."""
+        if event_name.endswith("send_request_headers.started"):
+            await before_request()
+    return final_send_fence
+
+
+async def _read_feed(url: str, before_request: Callable[[], Awaitable[None]]) -> bytes:
+    """Fetch one fixed feed response with TLS, no redirects, and a 10 MiB cap.
+
+    ``before_request`` runs immediately before the send and aborts it by raising.
+    """
     try:
         async with asyncio.timeout(30):
             async with httpx.AsyncClient(  # noqa: SIM117  # style-only rewrite skipped to avoid touching control flow
                 timeout=httpx.Timeout(30), trust_env=False, follow_redirects=False, verify=True
             ) as client:
-                async with client.stream("GET", url, headers={"Accept": "application/atom+xml, application/xml, text/xml"}) as response:
+                await before_request()
+                async with client.stream(
+                    "GET", url, headers={"Accept": "application/atom+xml, application/xml, text/xml"},
+                    extensions={"trace": send_fence_trace(before_request)},
+                ) as response:
                     if response.status_code == 429:
                         deadline = _retry_deadline(response.headers, datetime.now(UTC))
                         raise ProviderRateLimited(deadline)
@@ -417,15 +433,19 @@ async def collect_provider_feed(
     *,
     collected_at: datetime,
     session_factory: async_sessionmaker[AsyncSession],
+    before_request: Callable[[], Awaitable[None]],
 ) -> ProviderCollectionPage:
-    """Collect one bounded public Atom snapshot and serialize arXiv requests across workers."""
+    """Collect one bounded public Atom snapshot and serialize arXiv requests across workers.
+
+    ``before_request`` is the native every-physical-send fence callback.
+    """
     if collected_at.tzinfo is None or collected_at.utcoffset() is None:
         raise ValueError("collected_at must be timezone-aware")
     url = provider_feed_url(source)
     if source.provider == "youtube":
         try:
             async with asyncio.timeout(30):
-                body = await _read_feed(url)
+                body = await _read_feed(url, before_request)
         except ProviderRateLimited as exc:
             return ProviderCollectionPage(records=(), coverage="returned_snapshot", next_eligible_at=exc.next_eligible_at)
         return _records_from_feed(source, body, collected_at)
@@ -447,7 +467,7 @@ async def collect_provider_feed(
                 await asyncio.sleep(max(0.0, 3.0 - (time.monotonic() - spacing_started)))
                 # ponytail: one global key serializes every arXiv source; per-category locks only if upstream permits higher throughput.
                 try:
-                    body = await _read_feed(url)
+                    body = await _read_feed(url, before_request)
                 except ProviderRateLimited as exc:
                     return ProviderCollectionPage(records=(), coverage="returned_snapshot", next_eligible_at=exc.next_eligible_at)
         return _records_from_feed(source, body, collected_at)

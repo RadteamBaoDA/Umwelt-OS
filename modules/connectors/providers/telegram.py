@@ -3,6 +3,7 @@
 import asyncio
 import json
 import re
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import Any
@@ -10,6 +11,7 @@ from urllib.parse import quote
 
 import httpx
 
+from modules.connectors.providers.feed_catalog import send_fence_trace
 from modules.connectors.public import (
     ProviderRateLimited,
     TelegramScopeValidation,
@@ -44,14 +46,22 @@ def _validate_token(token: str) -> None:
 async def _telegram_call(
     client: httpx.AsyncClient, token: str, method: str, payload: dict[str, object] | None = None,
     *, max_response_bytes: int = _MAX_RESPONSE_BYTES,
+    before_request: Callable[[], Awaitable[None]] | None = None,
 ) -> tuple[Any, int]:
-    """Call one Bot API method under an absolute 30-second budget and return its full body size."""
+    """Call one Bot API method under an absolute 30-second budget and return its full body size.
+
+    Native fetch passes ``before_request`` (run immediately before the send, aborting by raising);
+    setup-time scope validation has no native fence and omits it.
+    """
     if method not in _METHODS:
         raise ValueError("telegram_method_unsupported")
     try:
         async with asyncio.timeout(30):
+            if before_request is not None:
+                await before_request()
             async with client.stream(
-                "POST", f"https://api.telegram.org/bot{quote(token, safe='')}/{method}", json=payload or {}
+                "POST", f"https://api.telegram.org/bot{quote(token, safe='')}/{method}", json=payload or {},
+                extensions={"trace": send_fence_trace(before_request)} if before_request is not None else {},
             ) as response:
                 body = bytearray()
                 async for chunk in response.aiter_bytes():
@@ -136,7 +146,8 @@ async def validate_telegram_scope(
 
 
 async def fetch_telegram_updates(
-    token: str, *, offset: int | None, remaining_bytes: int = _MAX_RESPONSE_BYTES
+    token: str, *, offset: int | None, before_request: Callable[[], Awaitable[None]],
+    remaining_bytes: int = _MAX_RESPONSE_BYTES,
 ) -> TelegramUpdatePage:
     """Fetch one update page within its 10 MiB page and caller-supplied trigger byte budgets."""
     _validate_token(token)
@@ -157,7 +168,8 @@ async def fetch_telegram_updates(
             timeout=httpx.Timeout(30), trust_env=False, follow_redirects=False, verify=True
         ) as client:
             result, transport_bytes = await _telegram_call(
-                client, token, "getUpdates", payload, max_response_bytes=response_limit
+                client, token, "getUpdates", payload, max_response_bytes=response_limit,
+                before_request=before_request,
             )
     if len(result) > 100:
         raise _TelegramAPIError("telegram_response_invalid")

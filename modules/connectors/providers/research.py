@@ -2,12 +2,13 @@
 
 import asyncio
 import json
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from urllib.parse import quote
 
 import httpx
 
-from modules.connectors.providers.feed_catalog import _parse_time, _retry_deadline, _selected_hash
+from modules.connectors.providers.feed_catalog import _parse_time, _retry_deadline, _selected_hash, send_fence_trace
 from modules.connectors.public import ConnectorConfig, ProviderCollectionPage, ProviderRateLimited
 from modules.ingestion.schemas import IngestionRecord
 from modules.knowledge.documents.public import ProviderRecordMetadata
@@ -16,8 +17,11 @@ from modules.sources.schemas import ConnectorSource
 _MAX_PAGE_BYTES = 10 * 1024 * 1024
 
 
-async def _fetch_models(author: str) -> list[dict[str, object]]:
-    """Fetch one fixed public author listing with bounded bytes and no pagination or redirects."""
+async def _fetch_models(author: str, before_request: Callable[[], Awaitable[None]]) -> list[dict[str, object]]:
+    """Fetch one fixed public author listing with bounded bytes and no pagination or redirects.
+
+    ``before_request`` runs immediately before the send and aborts it by raising.
+    """
     url = "https://huggingface.co/api/models?" + "&".join(
         (f"author={quote(author, safe='')}", "sort=lastModified", "limit=100", "full=true")
     )
@@ -26,7 +30,11 @@ async def _fetch_models(author: str) -> list[dict[str, object]]:
             async with httpx.AsyncClient(  # noqa: SIM117  # style-only rewrite skipped to avoid touching control flow
                 timeout=httpx.Timeout(30), trust_env=False, follow_redirects=False, verify=True
             ) as client:
-                async with client.stream("GET", url, headers={"Accept": "application/json"}) as response:
+                await before_request()
+                async with client.stream(
+                    "GET", url, headers={"Accept": "application/json"},
+                    extensions={"trace": send_fence_trace(before_request)},
+                ) as response:
                     if response.status_code == 429:
                         raise ProviderRateLimited(_retry_deadline(response.headers, datetime.now(UTC)))
                     if response.status_code == 403:
@@ -57,7 +65,7 @@ async def _fetch_models(author: str) -> list[dict[str, object]]:
 
 
 async def collect_huggingface_models(
-    source: ConnectorSource, *, collected_at: datetime
+    source: ConnectorSource, *, collected_at: datetime, before_request: Callable[[], Awaitable[None]],
 ) -> ProviderCollectionPage:
     """Collect at most 100 public model metadata rows for the configured author."""
     if collected_at.tzinfo is None or collected_at.utcoffset() is None:
@@ -67,7 +75,7 @@ async def collect_huggingface_models(
     if source.provider != "huggingface" or source.type != "api" or not author or config.history_mode != "returned_snapshot":
         raise ValueError("provider_scope_invalid")
     try:
-        models = await _fetch_models(author)
+        models = await _fetch_models(author, before_request)
     except ProviderRateLimited as exc:
         return ProviderCollectionPage(
             records=(), coverage="returned_snapshot", next_eligible_at=exc.next_eligible_at
