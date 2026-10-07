@@ -299,5 +299,6 @@ class ChatWorkerSettings:
     job_timeout = 600
     max_tries = 1
     health_check_key = "arq:chat:health-check"
+    health_check_interval = 15
     on_startup = chat_startup
     on_shutdown = shutdown
