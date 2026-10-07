@@ -1,6 +1,7 @@
 import asyncio
 import hmac
 import json
+import logging
 import secrets
 import time
 from datetime import UTC, datetime, timedelta
@@ -12,7 +13,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from joserfc.errors import JoseError
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -37,6 +38,7 @@ from core.auth.google_schemas import (
 from core.auth.models import AuthSession, GoogleIdentity, Owner
 from core.auth.schemas import (
     AuthState,
+    ChangePasswordRequest,
     CsrfResponse,
     LoginRequest,
     SetupRequest,
@@ -48,6 +50,7 @@ from core.config import Settings
 from core.database import get_session
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
+logger = logging.getLogger("bbd.auth")
 
 
 def _is_owner_conflict(exc: IntegrityError) -> bool:
@@ -373,6 +376,31 @@ async def reauthenticate(
         raise HTTPException(status_code=403, detail="Password is incorrect")
     auth_session.reauthenticated_at = datetime.now(UTC)
     await session.commit()
+
+
+@router.post("/password", status_code=204)
+async def change_password(
+    request: Request,
+    body: ChangePasswordRequest,
+    auth_session: Annotated[AuthSession, Depends(require_owner_write)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    redis: Annotated[Redis, Depends(get_auth_redis)],
+    csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
+) -> None:
+    """Verify the current password, store the new hash, and revoke every other owner session."""
+    await _allow_attempt(request, redis, "password")
+    owner, auth_session = await _lock_owner_session(request, session, auth_session, csrf_token)
+    if not await asyncio.to_thread(verify_password, owner.password_hash, body.currentPassword):
+        raise HTTPException(status_code=403, detail="Password is incorrect")
+    owner.password_hash = await asyncio.to_thread(hash_password, body.newPassword)
+    auth_session.reauthenticated_at = datetime.now(UTC)
+    revoked = await session.execute(
+        delete(AuthSession).where(
+            AuthSession.owner_id == owner.id, AuthSession.token_hash != auth_session.token_hash
+        )
+    )
+    await session.commit()
+    logger.info("owner password changed; other sessions revoked: %s", getattr(revoked, "rowcount", 0))
 
 
 @router.post("/google/start", response_model=GoogleStartResponse)

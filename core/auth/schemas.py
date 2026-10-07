@@ -30,3 +30,9 @@ class AuthState(BaseModel):
 class CsrfResponse(BaseModel):
     """Response carrying a newly issued client CSRF token."""
     csrfToken: str
+
+
+class ChangePasswordRequest(BaseModel):
+    """Current password plus a replacement validated with the same policy as first-run setup."""
+    currentPassword: str = Field(min_length=1, max_length=128)
+    newPassword: str = Field(min_length=12, max_length=128)

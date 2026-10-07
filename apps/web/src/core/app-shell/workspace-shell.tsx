@@ -17,6 +17,7 @@ import { SettingsNav, SourcesSubNav } from '@/core/app-shell/settings-nav';
 import { destinationEnabled, mainNavigation, settingsGroups, type ModuleAvailability } from '@/core/module-registry';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { useRealtime } from '@/core/realtime-provider';
+import { ChangePasswordDialog } from '@/modules/account/change-password-dialog';
 import { GoogleLink } from '@/modules/account/google-link';
 import { UserMenu } from '@/modules/account/user-menu';
 import { OwnerPreferences, PreferencesDialog } from '@/modules/account/preferences-dialog';
@@ -86,6 +87,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
   const realtime = useRealtime();
   const online = useBrowserOnline();
   const [accountOpen, setAccountOpen] = useState(false);
+  const [passwordOpen, setPasswordOpen] = useState(false);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   const menuTriggerRef = useRef<HTMLButtonElement>(null);
   const sessionEndedRef = useRef(false);
@@ -190,7 +192,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
           <div className="top-actions">
             {visibleMainNavigation.some((item) => item.id === 'chat') && <ChatTriggerButton />}
             <CommandPalette />
-            <UserMenu triggerRef={menuTriggerRef} onOpenPreferences={() => setPreferencesOpen(true)} onOpenAccount={() => setAccountOpen(true)} onSignOut={() => logout.mutate()} signOutPending={logout.isPending} />
+            <UserMenu triggerRef={menuTriggerRef} onOpenPreferences={() => setPreferencesOpen(true)} onOpenAccount={() => setAccountOpen(true)} onOpenChangePassword={() => setPasswordOpen(true)} onSignOut={() => logout.mutate()} signOutPending={logout.isPending} />
           </div>
         </header>
         <div className="workspace">
@@ -226,6 +228,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
             <GoogleLink />
           </DialogContent>
         </Dialog>
+        <ChangePasswordDialog open={passwordOpen} onOpenChange={setPasswordOpen} csrfToken={session.data.csrfToken} closeLabel={t('close')} onCloseAutoFocus={restoreMenuFocus} />
         <ChatDrawer />
       </div>
   </SessionContext.Provider>;
