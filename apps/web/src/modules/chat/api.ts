@@ -526,7 +526,7 @@ export async function streamResponseEvents(
 export const ATTACHMENT_ACCEPT = '.txt,.md,.markdown,.json,.csv,.pdf,.docx';
 /** Server-enforced per-message cap on Chat attachments. */
 export const MAX_ATTACHMENTS = 5;
-/** Default server upload size cap (UPLOAD_MAX_BYTES); the server stays authoritative. */
+/** Mirrors the server's default upload cap (`upload_max_bytes` in `core/config.py`); the server stays authoritative. */
 export const ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
 
 /** One chat attachment Document and whether it can be referenced as chat context. */
@@ -540,14 +540,18 @@ export interface ChatAttachment {
   run_id?: string | null;
 }
 
-/** Uploads one file into the owner's local-only "Chat attachments" source through the shared ingestion pipeline. */
-export async function uploadChatAttachment(file: File, csrfToken: string): Promise<ChatAttachment> {
+/**
+ * Uploads one file through the shared ingestion pipeline. The server picks the destination: the private,
+ * local-only "Chat attachments" source by default, or "Chat attachments (shared)" when `shareWithModel` is set.
+ */
+export async function uploadChatAttachment(file: File, csrfToken: string, shareWithModel = false, signal?: AbortSignal): Promise<ChatAttachment> {
   const form = new FormData();
   form.set('file', file);
-  return apiRequest<ChatAttachment>('/api/v1/documents/chat-attachments', { method: 'POST', headers: csrfHeaders(csrfToken), body: form });
+  if (shareWithModel) form.set('share_with_model', 'true');
+  return apiRequest<ChatAttachment>('/api/v1/documents/chat-attachments', { method: 'POST', headers: csrfHeaders(csrfToken), body: form, signal });
 }
 
 /** Reads a chat attachment's ingest status and current document version. */
-export async function getChatAttachment(documentId: string): Promise<ChatAttachment> {
-  return apiRequest<ChatAttachment>(`/api/v1/documents/chat-attachments/${encodeURIComponent(documentId)}`);
+export async function getChatAttachment(documentId: string, signal?: AbortSignal): Promise<ChatAttachment> {
+  return apiRequest<ChatAttachment>(`/api/v1/documents/chat-attachments/${encodeURIComponent(documentId)}`, { signal });
 }

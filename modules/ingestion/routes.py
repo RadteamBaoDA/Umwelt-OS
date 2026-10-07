@@ -217,13 +217,16 @@ async def upload_chat_attachment(
     upload: Annotated[UploadFile, File(alias="file")],
     session: Session,
     _owner: OwnerWrite,
+    share_with_model: Annotated[bool, Form()] = False,
 ) -> ChatAttachmentRead:
-    """Store a chat attachment as an ordinary Document in the owner's local-only Chat attachments source.
+    """Store a chat attachment as an ordinary Document in one of two server-owned sources.
 
-    The destination source is server-chosen (get-or-create), so purge, export, backup and
-    deletion treat the file exactly like any other uploaded Document.
+    ``share_with_model`` (default false) only picks between the private, local-only "Chat
+    attachments" source and "Chat attachments (shared)"; the client can never name a source.
+    Both are plain manual sources, so purge, export, backup and deletion treat the file exactly
+    like any other uploaded Document.
     """
-    source = await sources.get_or_create_chat_attachments_source(session)
+    source = await sources.get_or_create_chat_attachments_source(session, shared=share_with_model)
     run, document_id = await _intake_upload(request, session, source.id, upload)
     return await _chat_attachment_read(session, document_id, run.id)
 

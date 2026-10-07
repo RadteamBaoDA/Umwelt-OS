@@ -289,22 +289,31 @@ async def ensure_demo_source(session: AsyncSession, source_id: UUID, namespace: 
 
 CHAT_ATTACHMENTS_MARKER = "chat_attachments"
 CHAT_ATTACHMENTS_NAME = "Chat attachments"
+CHAT_ATTACHMENTS_SHARED_NAME = "Chat attachments (shared)"
 
 
-async def get_or_create_chat_attachments_source(session: AsyncSession) -> Source:
-    """Return the owner's single non-archived "Chat attachments" manual source, creating it once.
+async def get_or_create_chat_attachments_source(session: AsyncSession, *, shared: bool = False) -> Source:
+    """Return one of the owner's two server-owned Chat attachments manual sources, creating it once.
 
-    A transaction-scoped advisory lock serializes concurrent first uploads, so two requests can
-    never create two sources. An archived/purged attachments source is retired history and a
-    fresh one is created; a paused one is returned so intake reports it as inactive (409).
-    The source is ``local_only`` like every manual source. Commits before returning.
+    ``shared=False`` (the default) selects the private "Chat attachments" source (``local_only``);
+    ``shared=True`` selects "Chat attachments (shared)", which is not ``local_only`` and therefore
+    eligible for cloud chat, embeddings, extraction and briefs. Both carry the same server-set
+    marker and differ only in ``local_only``, which no owner API can change.
+
+    A transaction-scoped advisory lock (one key per variant) serializes concurrent first uploads, so
+    two requests never create two sources of the same variant. An archived/purged source is retired
+    history and a fresh one is created; a paused one is returned so intake reports it as inactive
+    (409). Commits before returning.
     """
+    variant = "shared" if shared else "private"
     await session.execute(
-        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"), {"key": "umwelt.sources.chat_attachments"},
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+        {"key": f"umwelt.sources.chat_attachments.{variant}"},
     )
     source = await session.scalar(
         select(Source).where(
             Source.configuration[CHAT_ATTACHMENTS_MARKER].as_boolean().is_(True),
+            Source.local_only.is_(not shared),
             Source.status != "archived",
         ).order_by(Source.created_at.desc()).limit(1)
     )
@@ -312,8 +321,8 @@ async def get_or_create_chat_attachments_source(session: AsyncSession) -> Source
         await session.commit()
         return source
     source = Source(
-        type="manual", name=CHAT_ATTACHMENTS_NAME, local_only=True,
-        configuration={CHAT_ATTACHMENTS_MARKER: True},
+        type="manual", name=CHAT_ATTACHMENTS_SHARED_NAME if shared else CHAT_ATTACHMENTS_NAME,
+        local_only=not shared, configuration={CHAT_ATTACHMENTS_MARKER: True},
     )
     session.add(source)
     await session.flush()

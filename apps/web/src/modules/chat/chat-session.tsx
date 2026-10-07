@@ -23,7 +23,7 @@ import { ChatComposer } from './chat-composer';
 import { ChatTranscript } from './chat-transcript';
 import { ApiError } from '@/core/api';
 import { ChatContextBar, MAX_ITEMS } from './chat-context-bar';
-import { ATTACHMENT_STATUS_ID, ChatAttachmentBar, useChatAttachments, withAttachments } from './chat-attachments';
+import { ATTACHMENT_STATUS_ID, ChatAttachmentBar, SELECTION_LOCAL_ONLY, useChatAttachments, withAttachments } from './chat-attachments';
 import { ConversationAgentActivity } from '@/modules/agents/conversation-agent-activity';
 import {
   PendingMessageMutationConflictError,
@@ -433,7 +433,9 @@ export function ChatSession({
         setIsPending(false);
         setError(mutationError instanceof PendingMessageMutationConflictError
           ? t('retryOriginalRevisionFirst')
-          : mutationError instanceof Error ? mutationError.message : t('revisionFailed'));
+          : mutationError instanceof ApiError && mutationError.code === SELECTION_LOCAL_ONLY
+            ? t('contextSelectionLocalOnly')
+            : mutationError instanceof Error ? mutationError.message : t('revisionFailed'));
       }
     }
   }, [chatCtrl, conversationId, isPending, isStreaming, messages, mode, queryClient, session.csrfToken, streamResponseRun, t, webSearchUsable, webSearchOn]);
@@ -618,7 +620,7 @@ export function ChatSession({
           // Server detail strings are English-only, so selection failures get localized copy and keep the draft.
           if (selectionFailure) chatCtrl.setDraft(content);
           const errMsg = selectionFailure
-            ? t(err.status === 422 ? 'contextSelectionTooLarge' : /local-only/i.test(err.message) ? 'contextSelectionLocalOnly' : 'contextSelectionUnavailable')
+            ? t(err.status === 422 ? 'contextSelectionTooLarge' : err.code === SELECTION_LOCAL_ONLY ? 'contextSelectionLocalOnly' : 'contextSelectionUnavailable')
             : attemptedProfileRun?.prompt === content
               ? tAgents('agentStartFailed')
               : err instanceof Error ? err.message : t('errorSending');

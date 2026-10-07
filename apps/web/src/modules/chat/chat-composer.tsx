@@ -139,8 +139,10 @@ export function ChatComposer({
             <Button
               type="button"
               onClick={handleSend}
-              disabled={!canSend}
-              className="flex items-center gap-1.5 px-3 py-1.5 h-9 rounded-lg bg-primary text-primary-foreground disabled:opacity-40 disabled:cursor-not-allowed font-medium text-xs shadow-sm transition-opacity"
+              // aria-disabled (not disabled) keeps Send focusable so its blocked reason stays reachable;
+              // handleSend is the click guard.
+              aria-disabled={!canSend}
+              className="flex items-center gap-1.5 px-3 py-1.5 h-9 rounded-lg bg-primary text-primary-foreground aria-disabled:opacity-40 aria-disabled:cursor-not-allowed font-medium text-xs shadow-sm transition-opacity"
               aria-label={t('send')}
               aria-describedby={sendBlockedBy ?? undefined}
             >

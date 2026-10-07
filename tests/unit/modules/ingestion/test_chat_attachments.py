@@ -104,6 +104,8 @@ async def test_attachment_upload_targets_server_chosen_source(monkeypatch: pytes
 
     assert await routes.upload_chat_attachment(_request(), upload, MagicMock(), MagicMock()) == "read"
     assert intake.await_args.args[2] == source_id  # the same pipeline the manual upload route uses
+    # Default is the private (local_only) source.
+    assert routes.sources.get_or_create_chat_attachments_source.await_args.kwargs == {"shared": False}
     assert read.await_args.args[1:] == (document_id, run_id)
 
 
@@ -189,14 +191,17 @@ async def test_attachment_becomes_a_selection_reference_and_local_only_is_refuse
     assert resolved["selected_refs"][0]["chunk_id"] == str(chunk_id)
     assert resolved["selection_fences"][0]["local_only"] is True
 
-    monkeypatch.setattr(sources_public, "is_chat_attachments_source", AsyncMock(return_value=True))
+    monkeypatch.setattr(sources_public, "get_source", AsyncMock(return_value=Source(
+        local_only=True, configuration={"chat_attachments": True})))
     with pytest.raises(HTTPException) as caught:
         await chat_public.reject_unsendable_selection(MagicMock(), resolved)
-    assert caught.value.status_code == 409 and "local-only" in str(caught.value.detail)
+    assert caught.value.status_code == 409
+    assert caught.value.detail["code"] == "selection_local_only"  # machine code the UI maps
 
 
 async def test_per_message_attachment_count_is_capped(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(sources_public, "is_chat_attachments_source", AsyncMock(return_value=True))
+    monkeypatch.setattr(sources_public, "get_source", AsyncMock(return_value=Source(
+        local_only=False, configuration={"chat_attachments": True})))
     fences = [{"source_id": str(uuid4()), "local_only": False}
               for _ in range(chat_public.MAX_CHAT_ATTACHMENTS_PER_MESSAGE + 1)]
     with pytest.raises(HTTPException) as caught:
@@ -219,3 +224,173 @@ def test_attachments_source_is_a_plain_manual_source_row() -> None:
     marker in ``configuration`` is the sole difference and no cleanup path needs to know about it."""
     columns = {column.name for column in Source.__table__.columns}
     assert "configuration" in columns and "chat_attachments" not in columns
+
+
+# --- Fix round 1: per-upload "share with model" routing between two server-owned sources ----------
+
+@pytest.mark.parametrize(("shared", "name", "local_only"), [
+    (False, "Chat attachments", True),
+    (True, "Chat attachments (shared)", False),
+])
+async def test_get_or_create_variant_has_own_lock_lookup_and_privacy(
+    monkeypatch: pytest.MonkeyPatch, shared: bool, name: str, local_only: bool,
+) -> None:
+    session = MagicMock()
+    session.execute = AsyncMock()
+    session.scalar = AsyncMock(return_value=None)
+    session.flush = AsyncMock()
+    session.refresh = AsyncMock()
+    monkeypatch.setattr(sources_public, "commit_with_replay", AsyncMock())
+    monkeypatch.setattr(sources_public, "make_source_change", MagicMock())
+
+    source = await sources_public.get_or_create_chat_attachments_source(session, shared=shared)
+
+    assert source.name == name and source.local_only is local_only and source.type == "manual"
+    assert source.configuration == {"chat_attachments": True}
+    variant = "shared" if shared else "private"
+    assert session.execute.await_args.args[1] == {"key": f"umwelt.sources.chat_attachments.{variant}"}
+    lookup = session.scalar.await_args.args[0].compile(compile_kwargs={"literal_binds": True})
+    assert f"sources.local_only IS {'false' if shared else 'true'}" in str(lookup)
+
+
+def _attachment_app(monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, AsyncMock]:
+    from core.auth.dependencies import require_owner_write
+    from core.database import get_session
+
+    get_or_create = AsyncMock(return_value=SimpleNamespace(id=uuid4()))
+    monkeypatch.setattr(routes.sources, "get_or_create_chat_attachments_source", get_or_create)
+    intake = AsyncMock(return_value=(SimpleNamespace(id=uuid4()), uuid4()))
+    monkeypatch.setattr(routes, "_intake_upload", intake)
+    monkeypatch.setattr(routes, "_chat_attachment_read", AsyncMock(return_value={
+        "document_id": str(uuid4()), "source_id": str(uuid4()), "title": "a.txt",
+        "status": "pending", "local_only": True,
+    }))
+    app = FastAPI()
+    app.add_api_route("/upload", routes.upload_chat_attachment, methods=["POST"], status_code=202)
+    app.dependency_overrides[get_session] = lambda: MagicMock()
+    app.dependency_overrides[require_owner_write] = lambda: MagicMock()
+    return TestClient(app), get_or_create
+
+
+@pytest.mark.parametrize(("form", "shared"), [
+    ({}, False),
+    ({"share_with_model": "false"}, False),
+    ({"share_with_model": "true"}, True),
+])
+def test_upload_routes_by_share_flag_and_defaults_private(
+    monkeypatch: pytest.MonkeyPatch, form: dict[str, str], shared: bool,
+) -> None:
+    client, get_or_create = _attachment_app(monkeypatch)
+    response = client.post("/upload", data=form, files={"file": ("a.txt", b"hi", "text/plain")})
+    assert response.status_code == 202
+    assert get_or_create.await_args.kwargs == {"shared": shared}
+
+
+def test_client_cannot_choose_the_destination_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, get_or_create = _attachment_app(monkeypatch)
+    chosen = uuid4()
+    response = client.post(
+        "/upload", data={"source_id": str(chosen)}, files={"file": ("a.txt", b"hi", "text/plain")},
+    )
+    assert response.status_code == 202
+    server_source = get_or_create.return_value.id
+    assert routes._intake_upload.await_args.args[2] == server_source != chosen  # type: ignore[attr-defined]
+    assert get_or_create.await_args.kwargs == {"shared": False}
+
+
+async def test_shared_attachment_is_sendable_and_private_one_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    fence = {"selection_fences": [{"source_id": str(uuid4()), "local_only": False}]}
+    monkeypatch.setattr(sources_public, "get_source", AsyncMock(return_value=Source(
+        local_only=False, configuration={"chat_attachments": True})))
+    await chat_public.reject_unsendable_selection(MagicMock(), fence)
+    # A stale fence snapshot is not trusted: the source's current local_only decides.
+    monkeypatch.setattr(sources_public, "get_source", AsyncMock(return_value=Source(
+        local_only=True, configuration={"chat_attachments": True})))
+    with pytest.raises(HTTPException) as caught:
+        await chat_public.reject_unsendable_selection(MagicMock(), fence)
+    assert caught.value.status_code == 409
+
+
+def test_both_attachment_sources_stay_plain_rows_for_purge_export_and_deletion() -> None:
+    """Purge, export and owner deletion key on ``sources.id`` with no kind/privacy/marker filter,
+    so the private and the shared source are both covered without special casing."""
+    sql = str(sources_public.export_eligible_source_ids())
+    assert "local_only" not in sql and "configuration" not in sql
+
+
+# --- route wiring: the 409 happens before any ResponseRun, commit or dispatch -------------------
+
+def _chat_route_mocks(monkeypatch: pytest.MonkeyPatch) -> tuple[MagicMock, AsyncMock]:
+    from modules.chat import routes as chat_routes
+
+    session = MagicMock()
+    session.flush = AsyncMock()
+    session.commit = AsyncMock()
+    session.refresh = AsyncMock()
+    monkeypatch.setattr(chat_routes, "lock_export_privacy", AsyncMock())
+    monkeypatch.setattr(chat_routes, "read_export_privacy", AsyncMock(
+        return_value=SimpleNamespace(store_conversation_history=True)))
+    monkeypatch.setattr(chat_routes, "_lock_conversation", AsyncMock(
+        return_value=SimpleNamespace(ephemeral=False, expires_at=None)))
+    monkeypatch.setattr(chat_routes, "_reject_expired_conversation", MagicMock())
+    monkeypatch.setattr(chat_routes, "_reject_active_response", AsyncMock())
+    dispatch = AsyncMock()
+    monkeypatch.setattr(chat_routes, "_dispatch_response_run", dispatch)
+    monkeypatch.setattr(sources_public, "get_source", AsyncMock(return_value=Source(
+        local_only=True, configuration={"chat_attachments": True})))
+    return session, dispatch
+
+
+def _assert_nothing_persisted(session: MagicMock, dispatch: AsyncMock) -> None:
+    from modules.chat.models import ResponseRun
+
+    assert not any(isinstance(call.args[0], ResponseRun) for call in session.add.call_args_list)
+    session.commit.assert_not_awaited()
+    dispatch.assert_not_awaited()
+
+
+async def test_send_message_refuses_local_only_selection_before_any_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    from modules.chat import routes as chat_routes
+    from modules.chat.schemas import SendMessageRequest
+
+    session, dispatch = _chat_route_mocks(monkeypatch)
+    session.scalar = AsyncMock(return_value=None)  # no idempotent replay
+    monkeypatch.setattr(chat_public, "resolve_gadget_context", AsyncMock(return_value={
+        "selection_fences": [{"source_id": str(uuid4()), "local_only": True}],
+    }))
+    payload = SendMessageRequest(content="hi", client_request_id="r1")
+
+    with pytest.raises(HTTPException) as caught:
+        await chat_routes.send_message(uuid4(), payload, MagicMock(), session, MagicMock())
+
+    assert caught.value.status_code == 409 and caught.value.detail["code"] == "selection_local_only"
+    _assert_nothing_persisted(session, dispatch)
+
+
+@pytest.mark.parametrize("action", ["edit", "regenerate"])
+async def test_mutate_message_rechecks_current_local_only(monkeypatch: pytest.MonkeyPatch, action: str) -> None:
+    import hashlib
+
+    from modules.chat import routes as chat_routes
+    from modules.chat.schemas import MessageMutationRequest
+
+    session, dispatch = _chat_route_mocks(monkeypatch)
+    target = SimpleNamespace(id=uuid4(), role="user" if action == "edit" else "assistant", content="old",
+                             response_id=uuid4())
+    # The stored snapshot says not local_only; the source is local_only now.
+    original_run = SimpleNamespace(user_message_id=uuid4(), retrieval_context={
+        "selection_fences": [{"source_id": str(uuid4()), "local_only": False}],
+    })
+    prompt = SimpleNamespace(content="old")
+    session.scalar = AsyncMock(side_effect=[None, None, target, original_run, prompt])
+    payload = MessageMutationRequest(
+        action=action, base_content_hash=hashlib.sha256(b"old").hexdigest(), client_request_id="m1",
+        content="new" if action == "edit" else None,
+    )
+
+    with pytest.raises(HTTPException) as caught:
+        await chat_routes.mutate_message(uuid4(), target.id, payload, MagicMock(), session, MagicMock())
+
+    assert caught.value.status_code == 409 and caught.value.detail["code"] == "selection_local_only"
+    session.add.assert_not_called()  # no prompt, run or receipt
+    _assert_nothing_persisted(session, dispatch)
