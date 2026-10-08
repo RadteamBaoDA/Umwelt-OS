@@ -232,7 +232,9 @@ async def evaluate_gadget_highlights(
                 deliver = notification_allowed(
                     rules_by_id[match.rule_id], now, tz, last_notified.get(str(match.rule_id)),
                 )
-                if not deliver:
+                expires = rules_by_id[match.rule_id].expires_at
+                # ponytail: quiet/cooldown rows grow unbounded; upgrade is version-based pruning (R1 option 2).
+                if not deliver and not (expires is not None and now >= expires):  # expiry is permanent until edit
                     await session.execute(pg_insert(GadgetHighlightSuppression).values(
                         definition_id=definition.id, dedupe_key=dedupe_key,
                     ).on_conflict_do_nothing())

@@ -171,6 +171,16 @@ async def test_quiet_hours_suppress_not_defer_across_runs(
 
 
 @pytest.mark.asyncio
+async def test_expired_rule_writes_no_suppression_row(
+    monkeypatch: pytest.MonkeyPatch, news: FakeNews, dedupe_emit: list[str], frozen: None,
+) -> None:
+    r = rule(expires_at=NOW - timedelta(days=1))
+    session = run_emit(monkeypatch, definition_row([dump(r)], [FP_SOURCE]), [item(FP_SOURCE, "rates")])
+    await evaluate(session)
+    assert dedupe_emit == [] and len(session.suppressed) == 0
+
+
+@pytest.mark.asyncio
 async def test_cooldown_suppresses_not_defers_across_runs(
     monkeypatch: pytest.MonkeyPatch, news: FakeNews, dedupe_emit: list[str], frozen: None,
 ) -> None:
