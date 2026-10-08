@@ -5,6 +5,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import (
+    AwareDatetime,
     BaseModel,
     ConfigDict,
     Field,
@@ -82,6 +83,10 @@ class GadgetFilters(StrictConfiguration):
     show_precise_locations: StrictBool = False
 
 
+MAX_COOLDOWN_MINUTES = 7 * 24 * 60
+QuietTime = Annotated[str, Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")]
+
+
 class HighlightRule(StrictConfiguration):
     """Represent a non-executable highlight rule; notification behavior belongs to R12."""
 
@@ -94,6 +99,11 @@ class HighlightRule(StrictConfiguration):
     topic_ids: list[UUID] = Field(default_factory=list, max_length=MAX_TOPICS_PER_RULE)
     source_ids: list[UUID] = Field(default_factory=list, max_length=MAX_SOURCES_PER_DEFINITION)
     exclude_source_ids: list[UUID] = Field(default_factory=list, max_length=MAX_SOURCES_PER_DEFINITION)
+    # Delivery (T6b). Defaults are dropped by exclude_defaults so legacy fingerprints stay stable.
+    cooldown_minutes: int = Field(default=0, ge=0, le=MAX_COOLDOWN_MINUTES)
+    expires_at: AwareDatetime | None = None
+    quiet_start: QuietTime | None = None
+    quiet_end: QuietTime | None = None
 
     @model_validator(mode="after")
     def ensure_conditions(self) -> "HighlightRule":
@@ -106,6 +116,10 @@ class HighlightRule(StrictConfiguration):
                 raise ValueError(f"{name} must contain distinct values")
         if set(self.source_ids) & set(self.exclude_source_ids):
             raise ValueError("source_ids and exclude_source_ids must not overlap")
+        if (self.quiet_start is None) != (self.quiet_end is None):
+            raise ValueError("quiet_start and quiet_end must be set together")
+        if self.quiet_start is not None and self.quiet_start == self.quiet_end:
+            raise ValueError("quiet hours must not be empty or cover the whole day")
         return self
 
 

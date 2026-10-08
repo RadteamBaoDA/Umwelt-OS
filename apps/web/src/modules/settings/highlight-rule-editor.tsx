@@ -21,7 +21,8 @@ import { parseKeywordList } from './gadget-library';
 
 type Severity = HighlightRule['severity'];
 type SourceMode = 'any' | 'only' | 'exclude';
-type RuleDraft = { id: string; keywords: string; severity: Severity; notify: boolean; topicIds: string[]; sourceModes: Record<string, SourceMode> };
+type RuleDraft = { id: string; keywords: string; severity: Severity; notify: boolean; topicIds: string[]; sourceModes: Record<string, SourceMode>; cooldown: string; expires: string; quietStart: string; quietEnd: string };
+const MAX_COOLDOWN = 7 * 24 * 60;
 const MAX_TOPICS = 8;
 const TOPIC_PAGE = 100;
 const TOPIC_MAX_PAGES = 10; // 1000 active topics; the owner topic cap is far below this
@@ -41,12 +42,22 @@ async function fetchActiveTopics(signal?: AbortSignal): Promise<Topic[]> {
   return items;
 }
 
+/** ISO instant to the `datetime-local` value in the browser time zone. */
+const toLocalInput = (iso?: string | null) => {
+  if (!iso) return '';
+  const date = new Date(iso);
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+};
+
 /** Builds the API rule from a draft, keeping only conditions that are set. */
 function toRule(draft: RuleDraft, keywords: string[]): HighlightRule {
   const ids = (mode: SourceMode) => Object.entries(draft.sourceModes).filter(([, value]) => value === mode).map(([id]) => id);
   return {
     id: draft.id, keywords, severity: draft.severity, notify: draft.notify,
     topic_ids: draft.topicIds, source_ids: ids('only'), exclude_source_ids: ids('exclude'),
+    cooldown_minutes: Number(draft.cooldown) || 0,
+    expires_at: draft.expires ? new Date(draft.expires).toISOString() : null,
+    quiet_start: draft.quietStart || null, quiet_end: draft.quietEnd || null,
   };
 }
 
@@ -97,7 +108,10 @@ function RuleList({ def }: { def: GadgetDefinition }) {
     onSuccess: () => { setEditing(null); setDeleteId(null); setTouched(false); void client.invalidateQueries({ queryKey: dashboardKeys.definitions }); },
   });
   const keywords = editing ? parseKeywordList(editing.keywords) : [];
-  const valid = (keywords.length >= 1 || (editing?.topicIds.length ?? 0) >= 1) && keywords.length <= 16 && (editing?.topicIds.length ?? 0) <= MAX_TOPICS;
+  const cooldownNumber = Number(editing?.cooldown ?? 0);
+  const deliveryValid = Number.isInteger(cooldownNumber) && cooldownNumber >= 0 && cooldownNumber <= MAX_COOLDOWN
+    && Boolean(editing?.quietStart) === Boolean(editing?.quietEnd) && (!editing?.quietStart || editing.quietStart !== editing.quietEnd);
+  const valid = (keywords.length >= 1 || (editing?.topicIds.length ?? 0) >= 1) && keywords.length <= 16 && (editing?.topicIds.length ?? 0) <= MAX_TOPICS && deliveryValid;
   /** Persists the edited rule, replacing an existing rule by id or appending a new one. */
   const saveRule = () => {
     setTouched(true);
@@ -110,7 +124,7 @@ function RuleList({ def }: { def: GadgetDefinition }) {
     const sourceModes: Record<string, SourceMode> = {};
     rule?.source_ids?.forEach((id) => { sourceModes[id] = 'only'; });
     rule?.exclude_source_ids?.forEach((id) => { sourceModes[id] = 'exclude'; });
-    setEditing(rule ? { id: rule.id, keywords: rule.keywords.join(', '), severity: rule.severity, notify: rule.notify, topicIds: rule.topic_ids ?? [], sourceModes } : { id: crypto.randomUUID(), keywords: '', severity: 'info', notify: false, topicIds: [], sourceModes });
+    setEditing(rule ? { id: rule.id, keywords: rule.keywords.join(', '), severity: rule.severity, notify: rule.notify, topicIds: rule.topic_ids ?? [], sourceModes, cooldown: String(rule.cooldown_minutes ?? 0), expires: toLocalInput(rule.expires_at), quietStart: rule.quiet_start ?? '', quietEnd: rule.quiet_end ?? '' } : { id: crypto.randomUUID(), keywords: '', severity: 'info', notify: false, topicIds: [], sourceModes, cooldown: '0', expires: '', quietStart: '', quietEnd: '' });
   };
   return <div className="space-y-4">
     <div className="flex items-center justify-between gap-2">
@@ -143,6 +157,16 @@ function RuleList({ def }: { def: GadgetDefinition }) {
         <label className="field max-w-xs"><span className="label">{t('severity')}</span>
           <Select value={editing.severity} onValueChange={(value) => setEditing({ ...editing, severity: value as Severity })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{(Object.keys(severityKeys) as Severity[]).map((item) => <SelectItem key={item} value={item}>{t(severityKeys[item])}</SelectItem>)}</SelectContent></Select></label>
         <label className="field"><Checkbox checked={editing.notify} onCheckedChange={(checked) => setEditing({ ...editing, notify: checked === true })} /> {t('notify')}</label>
+        <fieldset className="field"><legend className="label">{t('ruleDelivery')}</legend><span className="muted text-xs">{t('ruleDeliveryHelp')}</span>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="field"><span className="label">{t('ruleCooldown')}</span><Input type="number" min={0} max={MAX_COOLDOWN} step={1} inputMode="numeric" value={editing.cooldown} aria-invalid={touched && !deliveryValid} aria-describedby={touched && !deliveryValid ? 'rule-cooldown-help rule-delivery-error' : 'rule-cooldown-help'} onChange={(event) => setEditing({ ...editing, cooldown: event.target.value })} /><span id="rule-cooldown-help" className="muted text-xs">{t('ruleCooldownHelp')}</span></label>
+            <label className="field"><span className="label">{t('ruleExpires')}</span><Input type="datetime-local" value={editing.expires} onChange={(event) => setEditing({ ...editing, expires: event.target.value })} /><span className="muted text-xs">{t('ruleExpiresHelp')}</span></label>
+            <label className="field"><span className="label">{t('ruleQuietStart')}</span><Input type="time" value={editing.quietStart} aria-invalid={touched && !deliveryValid} aria-describedby={touched && !deliveryValid ? 'rule-delivery-error rule-quiet-note' : 'rule-quiet-note'} onChange={(event) => setEditing({ ...editing, quietStart: event.target.value })} /></label>
+            <label className="field"><span className="label">{t('ruleQuietEnd')}</span><Input type="time" value={editing.quietEnd} aria-invalid={touched && !deliveryValid} aria-describedby={touched && !deliveryValid ? 'rule-delivery-error rule-quiet-note' : 'rule-quiet-note'} onChange={(event) => setEditing({ ...editing, quietEnd: event.target.value })} /></label>
+          </div>
+          <span id="rule-quiet-note" className="muted text-xs">{t('ruleQuietNote')}</span>
+          {touched && !deliveryValid && <span id="rule-delivery-error" className="error" role="alert">{t('ruleDeliveryInvalid')}</span>}
+        </fieldset>
       </fieldset>
       {write.error && <p className="error" role="alert">{t((highlightRuleErrorKey(write.error) ?? apiFailureKey(write.error) ?? 'saveFailed') as 'saveFailed')}</p>}
       <div className="form-actions"><Button type="submit" disabled={write.isPending}>{write.isPending ? t('saving') : t('saveRule')}</Button><Button type="button" className="secondary" disabled={write.isPending || !valid || def.source_ids.length === 0 || preview.isPending} onClick={() => preview.mutate(toRule(editing, keywords))}><Eye className="size-4" aria-hidden="true" /> {preview.isPending ? t('rulePreviewRunning') : t('rulePreview')}</Button><Button type="button" className="secondary" disabled={write.isPending} onClick={() => setEditing(null)}>{t('cancelRule')}</Button></div>

@@ -211,8 +211,9 @@ def emit_spy(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
     calls: list[Any] = []
     import modules.notifications.public as notif
 
-    async def spy(*args: Any, **kwargs: Any) -> None:
+    async def spy(*args: Any, **kwargs: Any) -> bool:
         calls.append((args, kwargs))
+        return True
 
     monkeypatch.setattr(notif, "emit", spy)
     return calls
@@ -345,6 +346,17 @@ class EmitSession:
 
     def __init__(self, definition: Any) -> None:
         self.definition, self.progress, self.commits = definition, None, 0
+        self.suppressed: set[str] = set()
+
+    async def execute(self, stmt: Any) -> Any:
+        from sqlalchemy import Delete, Insert
+        from sqlalchemy.dialects import postgresql
+
+        if isinstance(stmt, Delete):
+            self.suppressed.clear()
+        elif isinstance(stmt, Insert):
+            self.suppressed.add(stmt.compile(dialect=postgresql.dialect()).params["dedupe_key"])  # type: ignore[no-untyped-call]
+        return SimpleNamespace(scalars=lambda: list(self.suppressed))
 
     async def scalar(self, _stmt: Any) -> Any:
         return self.definition

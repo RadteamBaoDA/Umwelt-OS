@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timedelta, tzinfo
 from uuid import UUID
 
 from modules.dashboard.schemas import HighlightRule
@@ -96,6 +97,27 @@ def match_compiled(
             ))
     matches.sort(key=lambda m: _SEVERITY_ORDER.get(m.severity, 0), reverse=True)
     return matches
+
+
+def _minutes(value: str) -> int:
+    return int(value[:2]) * 60 + int(value[3:])
+
+
+def notification_allowed(
+    rule: HighlightRule, now: datetime, tz: tzinfo, last_notified: datetime | None,
+) -> bool:
+    """Decide delivery only: expired, quiet-hours (suppressed, not deferred) and cooldown skip the notification."""
+    if rule.expires_at is not None and now >= rule.expires_at:
+        return False
+    if rule.quiet_start is not None and rule.quiet_end is not None:
+        local = now.astimezone(tz)
+        current, start, end = local.hour * 60 + local.minute, _minutes(rule.quiet_start), _minutes(rule.quiet_end)
+        if (start <= current < end) if start < end else (current >= start or current < end):
+            return False
+    return not (
+        rule.cooldown_minutes and last_notified is not None
+        and now - last_notified < timedelta(minutes=rule.cooldown_minutes)
+    )
 
 
 def evaluate_highlights(

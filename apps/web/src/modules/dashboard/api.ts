@@ -82,6 +82,11 @@ export type HighlightRule = {
   topic_ids?: string[];
   source_ids?: string[];
   exclude_source_ids?: string[];
+  /** Delivery: cooldown 0..10080 min, optional ISO expiry, quiet window (HH:MM, both or neither) that suppresses notifications only. */
+  cooldown_minutes?: number;
+  expires_at?: string | null;
+  quiet_start?: string | null;
+  quiet_end?: string | null;
 };
 
 /** Dry-run result over recent current evidence; nothing is stored or notified. */
