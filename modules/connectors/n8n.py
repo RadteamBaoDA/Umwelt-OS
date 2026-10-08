@@ -1,4 +1,6 @@
+import contextlib
 import json
+from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
@@ -276,24 +278,44 @@ def workflow_matches(expected: dict[str, Any], actual: dict[str, Any]) -> bool:
     return all(actual_settings.get(key) == value for key, value in expected_settings.items())
 
 
-async def read_rss(url: str, cursor: str | None) -> dict[str, object]:
-    """Fetch bounded RSS/Atom pages with URL checks, overlap filtering, and normalized records."""
+async def read_rss(
+    url: str, cursor: str | None, *, fetch: Callable[[str], Awaitable[bytes]] | None = None,
+    stats: dict[str, bool] | None = None,
+) -> dict[str, object]:
+    """Fetch bounded RSS/Atom pages with URL checks, overlap filtering, and normalized records.
+
+    ``fetch`` (native collection) replaces the built-in client with the caller's pinned, gated
+    transport that returns one body per call. ``stats["truncated"]`` is set when a page/record
+    cap stopped the walk while a continuation link still existed, so the caller can refuse to
+    advance the cursor instead of silently skipping the remainder.
+    """
     from modules.connectors.registry import normalize
 
-    await validate_public_url(url)
+    if fetch is None:
+        await validate_public_url(url)
     floor = overlap_floor(cursor)
     visited: set[str] = set()
     records: list[dict[str, object]] = []
     cursor_times: list[str] = []
     total_bytes = 0
     current_url: str | None = url
-    async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
+    async with contextlib.AsyncExitStack() as stack:
+        client = None if fetch is not None else await stack.enter_async_context(
+            httpx.AsyncClient(timeout=15, follow_redirects=False))
         for _ in range(10):
             if current_url is None or current_url in visited:
                 break
-            await validate_public_url(current_url)
+            if fetch is None:
+                await validate_public_url(current_url)
             visited.add(current_url)
-            async with client.stream("GET", current_url, headers={"Accept": "application/atom+xml, application/rss+xml, application/xml, text/xml"}) as response:
+            if fetch is not None:
+                body = bytearray(await fetch(current_url))
+                total_bytes += len(body)
+                if total_bytes > 25 * 1024 * 1024:
+                    raise ValueError("RSS pagination exceeded the 25 MiB limit")
+            else:
+              assert client is not None
+              async with client.stream("GET", current_url, headers={"Accept": "application/atom+xml, application/rss+xml, application/xml, text/xml"}) as response:
                 if response.is_redirect:
                     location = response.headers.get("location")
                     if not location:
@@ -316,7 +338,8 @@ async def read_rss(url: str, cursor: str | None) -> dict[str, object]:
                         return "".join(child.itertext()).strip()
                 return ""
 
-            for item in (node for node in root.iter() if node.tag.rsplit("}", 1)[-1].lower() in {"item", "entry"}):
+            page_items = [node for node in root.iter() if node.tag.rsplit("}", 1)[-1].lower() in {"item", "entry"}]
+            for position, item in enumerate(page_items):
                 identifier = text(item, {"guid", "id", "link"})
                 title = text(item, {"title"})
                 content = text(item, {"encoded", "content", "summary", "description"}) or title
@@ -365,6 +388,8 @@ async def read_rss(url: str, cursor: str | None) -> dict[str, object]:
                         )
                     )
                 if len(records) == 500:
+                    if stats is not None and position < len(page_items) - 1:
+                        stats["truncated"] = True  # unread items remain on this page
                     break
 
             next_link = next(
@@ -373,7 +398,12 @@ async def read_rss(url: str, cursor: str | None) -> dict[str, object]:
             )
             current_url = urljoin(current_url, next_link) if next_link else None
             if len(records) >= 500:
+                if stats is not None and (current_url is not None or len(records) > 500):
+                    stats["truncated"] = True
                 break
+        else:
+            if stats is not None and current_url is not None and current_url not in visited:
+                stats["truncated"] = True  # ten-page cap reached with a continuation link left
     return {
         "cursor_before": cursor,
         "cursor_after": max(cursor_times, default=cursor),

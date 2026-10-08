@@ -468,7 +468,7 @@ async def settle_admission_in_uow(
         request.status, request.error_code = "cancelled", error_code
     elif outcome == "deferred":
         request.status, request.attempt = "queued", max(request.attempt - 1, 0)
-        request.available_at = request.enqueue_next_at = now + BUSY_DEFER
+        request.available_at = request.enqueue_next_at = max(now + BUSY_DEFER, request.provider_deadline or now)
     elif error_code in ACTION_REQUIRED:
         request.status, request.error_code = "failed", error_code
         if schedule is not None:

@@ -1169,15 +1169,15 @@ async def dispatch_github_webhooks(ctx: dict[str, object]) -> int:
 async def process_collection_request(ctx: dict[str, object], request_id: str) -> str:
     """Admit one queued native request and hand it to the registered collection executor.
 
-    The executor (C3) is looked up in ``ctx["collection_executor"]``; without it nothing is
-    admitted, so no provider attempt is burned. An executor error is a retryable failure, and
-    an executor that already settled the request makes the fallback settlement a stale no-op.
+    The executor defaults to the shared collection service (``collection.execute_collection``);
+    ``ctx["collection_executor"]`` overrides it (tests, alternative composition). An executor
+    error is a retryable failure, and an executor that already settled the request makes the
+    fallback settlement a stale no-op.
     """
     from modules.connectors import scheduler
+    from modules.connectors.collection import execute_collection
 
-    executor = ctx.get("collection_executor")
-    if executor is None:
-        return "no_executor"
+    executor = ctx.get("collection_executor") or execute_collection
     settings = cast(Settings, ctx["settings"])
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     async with factory() as session:
