@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -14,7 +15,7 @@ from sqlalchemy.dialects import postgresql
 
 from core import worker_cursors
 from core.workspaces.schemas import WorkspaceContext
-from modules.automations import execution, producers, public, routes, tools, worker
+from modules.automations import execution, producers, public, routes, scheduler, tools, worker
 from modules.automations.models import AutomationCursor
 from modules.automations.schemas import AutomationCreate, AutomationUpdate, PreviewRequest
 from modules.chat.public import Conversation
@@ -199,12 +200,59 @@ async def test_denial_in_one_workspace_does_not_stop_the_next() -> None:
 
 
 @pytest.mark.asyncio
-async def test_non_denial_http_error_propagates() -> None:
+@pytest.mark.parametrize("failure", ["tick", "resolve"])
+async def test_non_denial_error_skips_workspace_and_continues(failure: str) -> None:
+    first, second = sorted(uuid4() for _ in range(2))
+    session = _session([first, second])
+    overrides: dict[str, object] = {}
+    seen: list[UUID] = []
+
+    async def tick(_factory: object, *, scope: object, multi_workspace_enabled: bool) -> int:
+        seen.append(scope.workspace_id)  # type: ignore[attr-defined]
+        if failure == "tick" and scope.workspace_id == first:  # type: ignore[attr-defined]
+            raise HTTPException(status_code=503, detail="replay storage")
+        return 0
+
+    async def resolve(_session: object, workspace_id: UUID, *, multi_workspace_enabled: bool) -> MagicMock:
+        if workspace_id == first:
+            raise HTTPException(status_code=409, detail="concurrent revision disagreement")
+        return _owner_ctx()
+
+    overrides["modules.automations.worker.scheduler.tick"] = tick
+    if failure == "resolve":
+        overrides["modules.automations.worker.workspaces.resolve_workspace_owner_context"] = resolve
+    es, mocks = _enter(_worker_patches(**overrides))
+    with es:
+        assert await worker.reconcile_automation_runs(_ctx(session)) == 1
+    assert seen[-1] == second
+    sweep = mocks["modules.automations.worker.producers.sweep"]
+    assert [c.kwargs["scope"].workspace_id for c in sweep.call_args_list] == [second]
+
+
+@pytest.mark.asyncio
+async def test_worker_cancellation_propagates() -> None:
     session = _session([WS])
-    boom = AsyncMock(side_effect=HTTPException(status_code=500, detail="x"))
+    boom = AsyncMock(side_effect=asyncio.CancelledError())
     es, _ = _enter(_worker_patches(**{"modules.automations.worker.scheduler.tick": boom}))
-    with es, pytest.raises(HTTPException):
+    with es, pytest.raises(asyncio.CancelledError):
         await worker.reconcile_automation_runs(_ctx(session))
+
+
+# ---------------------------------------------------------------- scheduler.tick scope
+@pytest.mark.asyncio
+async def test_scheduler_tick_scopes_existing_and_due_selects() -> None:
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=MagicMock(all=list))
+    session.scalars = AsyncMock(return_value=MagicMock(all=list))
+    with patch.object(scheduler, "_admit", AsyncMock()), patch.object(scheduler, "commit_with_replay", AsyncMock()):
+        await scheduler.tick(_factory(session), **SC)
+    existing, _ = _sql(session.scalars.call_args.args[0])
+    assert "JOIN automations" in existing
+    assert "automations.workspace_id" in existing and "automations.owner_id" in existing
+    due, params = _sql(session.execute.call_args_list[-1].args[0])
+    assert "JOIN automations ON" in due and WS in params
+    assert due.index("automations.workspace_id") < due.index("LIMIT")
+    assert "automations.owner_id" in due
 
 
 # ---------------------------------------------------------------- producers
@@ -267,6 +315,7 @@ async def test_inbound_selects_by_alias_and_token_digest() -> None:
     assert "automation_webhook_credentials.alias" in text and "automation_webhook_credentials.token_hash" in text
     assert hash_inbound_token("secret") in params and "hook" in params
     assert "owner_id" not in text.split("WHERE")[1] and 1 not in params  # no literal owner 1
+    assert "LIMIT" in text
 
 
 @pytest.mark.asyncio
@@ -288,6 +337,51 @@ async def test_inbound_owner_mismatch_is_unauthorized() -> None:
          pytest.raises(HTTPException) as caught:
         await _receive(session)
     assert caught.value.status_code == 401
+
+
+def _stream_request(body: bytes = b'{"event": "ping"}') -> MagicMock:
+    request = _request()
+
+    async def stream():
+        yield body
+
+    request.stream = stream
+    return request
+
+
+async def _phase2(accepted: bool, prior: object = None) -> tuple[AsyncMock, AsyncMock, object]:
+    session = AsyncMock()
+    cred = _credential("secret")
+    session.scalars = AsyncMock(return_value=MagicMock(all=lambda: [cred]))
+    session.scalar = AsyncMock(side_effect=[cred, prior])
+    enqueue = AsyncMock(return_value=accepted)
+    with patch("modules.automations.routes.workspaces.resolve_workspace_owner_context", AsyncMock(return_value=_owner_ctx())),          patch.object(routes, "module_is_enabled", AsyncMock(return_value=True)),          patch.object(routes, "register_request_activity", AsyncMock()),          patch.object(routes, "_admit", AsyncMock()), patch.object(routes, "enqueue_trigger", enqueue),          patch.object(routes, "commit_with_replay", AsyncMock()):
+        result = await routes.receive_inbound_webhook(
+            "hook", _stream_request(), session, MagicMock(headers={}), token="secret", event_key="evt-1")
+    return session, enqueue, result
+
+
+@pytest.mark.asyncio
+async def test_inbound_phase_two_locks_and_enqueues_in_credential_scope() -> None:
+    session, enqueue, result = await _phase2(True)
+    assert result == {"accepted": True}
+    text, params = _sql(session.scalar.call_args_list[0].args[0])
+    assert "FOR UPDATE" in text
+    for column in ("workspace_id", "owner_id", "alias", "token_hash"):
+        assert f"automation_webhook_credentials.{column}" in text.split("WHERE")[1]
+    assert WS in params and OWNER.user_id in params
+    assert enqueue.call_args.kwargs["scope"].workspace_id == WS
+    assert enqueue.call_args.kwargs["scope"].actor_user_id == OWNER.user_id
+
+
+@pytest.mark.asyncio
+async def test_inbound_prior_lookup_is_scoped() -> None:
+    prior = SimpleNamespace(payload={"event": "ping", "hook": "hook"})
+    session, _, result = await _phase2(False, prior)
+    assert result == {"accepted": False}
+    text, params = _sql(session.scalar.call_args_list[1].args[0])
+    assert "automation_triggers.workspace_id" in text and "automation_triggers.owner_id" in text
+    assert WS in params and OWNER.user_id in params
 
 
 # ---------------------------------------------------------------- T-F2 and tools
@@ -361,3 +455,19 @@ def test_no_literal_owner_one_remains() -> None:
     for module in (execution, producers, public, routes, worker):
         source = inspect.getsource(module)
         assert "OWNER_ID" not in source and "owner_id == 1" not in source and "owner_id=1" not in source
+
+
+# ---------------------------------------------------------------- _start_agent HTTPException handling
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("status", "mark_code", "transient"), [(503, None, True), (409, "agent_rejected", False)])
+async def test_start_agent_http_errors_retry_5xx_and_reject_4xx(status: int, mark_code: str | None, transient: bool) -> None:
+    ctx = {"session_factory": _factory(AsyncMock()), "agent_tool_registry": MagicMock()}
+    run = SimpleNamespace(id=uuid4())
+    mark, retry = AsyncMock(), AsyncMock(return_value="retry")
+    with patch.object(execution, "_admit", AsyncMock(side_effect=HTTPException(status_code=status, detail="x"))),          patch.object(execution, "_mark", mark), patch.object(execution, "_transient", retry):
+        result = await execution._start_agent(ctx, run, 0, {"type": "run_agent"}, "hash", "rule", **SC)  # type: ignore[arg-type]
+    assert retry.called is transient
+    if transient:
+        assert result == "retry" and not mark.called
+    else:
+        assert result == "failed" and mark.call_args.args[3:5] == ("failed", mark_code)

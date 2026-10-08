@@ -1362,7 +1362,9 @@ async def _start_agent(
             pass
     except asyncio.CancelledError:
         raise  # stays in_flight; the idempotent start is attempted again on resume
-    except HTTPException:
+    except HTTPException as exc:
+        if exc.status_code >= 500:  # replay-storage blip etc.: retry, never a terminal rejection
+            return await _transient(factory, run.id, ordinal, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         await _mark(factory, run.id, ordinal, "failed", "agent_rejected", scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         return "failed"
     except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
