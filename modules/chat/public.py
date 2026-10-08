@@ -788,11 +788,18 @@ def _chat_export_privacy_marker(persisted: bool, updated_at: _datetime | None) -
     return persisted, updated_at
 
 
-async def _chat_export_privacy(session: AsyncSession) -> tuple[bool, bool, _datetime | None]:
+async def _chat_export_privacy(
+    session: AsyncSession, *, scope: _Any = None, multi_workspace_enabled: bool | None = None,
+) -> tuple[bool, bool, _datetime | None]:
     """Read Memory's current history-storage grant and its minimal persisted-row fence."""
     from modules.chat.scope import read_owner_export_privacy
 
-    privacy = await read_owner_export_privacy(session)
+    if scope is not None and multi_workspace_enabled is not None:
+        from modules.memory.public import read_export_privacy
+
+        privacy = await read_export_privacy(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    else:
+        privacy = await read_owner_export_privacy(session)
     persisted, updated_at = _chat_export_privacy_marker(privacy.persisted, privacy.updated_at)
     return privacy.store_conversation_history, persisted, updated_at
 
@@ -878,6 +885,8 @@ async def export_page(
     record_kind: str,
     limit: int = 50,
     cursor: str | None = None,
+    scope: _Any,
+    multi_workspace_enabled: bool,
 ) -> ChatExportPage:
     """Return a bounded owner-authorized page of conversations or retained message revisions.
 
@@ -896,7 +905,8 @@ async def export_page(
     else:
         snapshot_at, position_at, position_id = _decode_chat_export_cursor(cursor, owner_id, record_kind)
         position = (position_at, position_id)
-    history_enabled, privacy_persisted, privacy_updated_at = await _chat_export_privacy(session)
+    history_enabled, privacy_persisted, privacy_updated_at = await _chat_export_privacy(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if not history_enabled:
         return ChatExportPage(
             owner_id=owner_id, record_kind=record_kind, snapshot_at=snapshot_at,
@@ -1094,6 +1104,8 @@ async def validate_export_fences(
     privacy_persisted: bool,
     privacy_updated_at: _datetime | None,
     fences: Sequence[ChatExportFence],
+    scope: _Any,
+    multi_workspace_enabled: bool,
 ) -> ChatExportFenceValidation:
     """Revalidate bounded chat rows, privacy, deletion, and exact citation evidence before publication."""
     if record_kind not in {"conversations", "messages"} or not 0 <= expected_snapshot_count <= 2**63 - 1:
@@ -1106,7 +1118,8 @@ async def validate_export_fences(
             valid=False, reason="owner_unavailable", observed_snapshot_count=0,
             privacy_persisted=privacy_persisted, privacy_updated_at=privacy_updated_at,
         )
-    history_enabled, current_privacy_persisted, current_privacy_updated_at = await _chat_export_privacy(session)
+    history_enabled, current_privacy_persisted, current_privacy_updated_at = await _chat_export_privacy(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if not history_enabled:
         return ChatExportFenceValidation(
             valid=False, reason="conversation_history_disabled", observed_snapshot_count=0,
