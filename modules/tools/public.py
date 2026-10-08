@@ -9,6 +9,7 @@ from uuid import UUID
 from fastapi import HTTPException
 from sqlalchemy import Select, delete, func, select, update
 from sqlalchemy.engine import CursorResult
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.tools import (
@@ -70,6 +71,7 @@ async def revalidate_native_output_fences(
     principal: ToolExecutionPrincipal,
     *,
     destination_kind: str,
+    multi_workspace_enabled: bool,
 ) -> bool:
     """Recheck bounded server-captured source and result identities before native output delivery.
 
@@ -77,7 +79,7 @@ async def revalidate_native_output_fences(
     contracts are queried in short sessions; malformed or stale state denies the complete result.
     No transaction or row lock is kept across network transmission.
     """
-    if not isinstance(principal, ToolExecutionPrincipal):
+    if type(multi_workspace_enabled) is not bool or not isinstance(principal, ToolExecutionPrincipal):
         return False
     try:
         destination = ToolDestination(destination_kind)
@@ -138,7 +140,7 @@ async def revalidate_native_output_fences(
             current_sources = await sources.list_tool_sources(
                 session, limit=100, cursor=None,
                 source_ids=frozenset(source_generations), owner_all=False,
-                destination=destination,
+                destination=destination, scope=principal.scope, multi_workspace_enabled=multi_workspace_enabled,
             )
         current_generation_map = {item.id: item.generation for item in current_sources.items}
         if current_sources.next_cursor is not None or current_generation_map != source_generations:
@@ -151,6 +153,7 @@ async def revalidate_native_output_fences(
                 valid = await search.revalidate_tool_search_fences(
                     session, search_fences, source_ids=principal_source_ids,
                     owner_all=principal.owner_all_sources, destination=destination,
+                    scope=principal.scope, multi_workspace_enabled=multi_workspace_enabled,
                 )
             if not valid:
                 return False
@@ -161,11 +164,12 @@ async def revalidate_native_output_fences(
                 valid = await documents.revalidate_tool_document_fences(
                     session, document_fences, source_ids=principal_source_ids,
                     owner_all=principal.owner_all_sources, destination=destination,
+                    scope=principal.scope, multi_workspace_enabled=multi_workspace_enabled,
                 )
             if not valid:
                 return False
-    except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
-        # Database/owner validation failures suppress output instead of bypassing the fence.
+    except (HTTPException, SQLAlchemyError, ValueError):
+        # Admission/database/validation failures suppress output; TypeError/AttributeError are bugs and propagate.
         return False
     return True
 
@@ -391,6 +395,8 @@ async def purge_browser_results_in_uow(
     run_ids: tuple[UUID, ...] | list[UUID] = (),
     source_ids: tuple[UUID, ...] | list[UUID] = (),
     conversation_ids: tuple[UUID, ...] | list[UUID] = (),
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> int:
     """Erase private page bytes and text inside the owning run/source privacy transaction.
 
@@ -403,6 +409,12 @@ async def purge_browser_results_in_uow(
 
     from modules.tools.models import BrowserPageEvidence, BrowserReadJob
 
+    if not isinstance(scope, (WorkspaceContext, InternalJobScope)):
+        raise TypeError("An explicit workspace scope is required")
+    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
+    if type(multi_workspace_enabled) is not bool:
+        raise TypeError("The configured multi-workspace feature flag must be a boolean")
     selectors = []
     if run_ids:
         selectors.append(BrowserReadJob.run_id.in_(tuple(run_ids)))
@@ -412,7 +424,9 @@ async def purge_browser_results_in_uow(
         selectors.append(BrowserReadJob.conversation_id.in_(tuple(conversation_ids)))
     if not selectors:
         return 0
-    job_ids = tuple((await session.scalars(select(BrowserReadJob.id).where(or_(*selectors)))).all())
+    job_ids = tuple((await session.scalars(select(BrowserReadJob.id).where(
+        BrowserReadJob.workspace_id == scope.workspace_id, or_(*selectors),
+    ))).all())
     if not job_ids:
         return 0
     from sqlalchemy import delete

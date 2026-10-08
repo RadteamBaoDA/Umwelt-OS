@@ -13,6 +13,7 @@ from core.tools.schemas import (
     ToolOutputFence,
     ToolRisk,
 )
+from core.workspaces.schemas import Scope
 
 
 @asynccontextmanager
@@ -28,12 +29,20 @@ async def _resolve_session(context: dict[str, Any]) -> AsyncIterator[Any]:
         yield session
 
 
-def _scope(context: dict[str, Any]) -> tuple[ToolExecutionPrincipal, frozenset[UUID], bool]:
-    """Extract the registry-injected principal; never trust scope data from tool args."""
+def _principal_scope(
+    context: dict[str, Any],
+) -> tuple[ToolExecutionPrincipal, frozenset[UUID], bool, Scope, bool]:
+    """Extract the registry-injected principal, workspace scope and flag; never trust tool args."""
     principal = context.get("principal")
     if not isinstance(principal, ToolExecutionPrincipal):
         raise PermissionError("Trusted principal required")
-    return principal, frozenset(UUID(value) for value in principal.source_ids), principal.owner_all_sources
+    flag = getattr(context.get("settings"), "multi_workspace_enabled", None)
+    if type(flag) is not bool:
+        raise PermissionError("Trusted workspace configuration required")
+    return (
+        principal, frozenset(UUID(value) for value in principal.source_ids),
+        principal.owner_all_sources, principal.scope, flag,
+    )
 
 
 def _destination(context: dict[str, Any]) -> ToolDestination:
@@ -61,7 +70,7 @@ def _record_output_fences(
     result identities per invocation. It raises PermissionError for missing remote authority,
     malformed state, out-of-scope rows or any bound/identity mismatch.
     """
-    principal, source_ids, owner_all = _scope(context)
+    principal, source_ids, owner_all, _, _ = _principal_scope(context)
     destination = _destination(context)
     if "output_fence_sink" not in context:
         if destination == ToolDestination.LOCAL and principal.is_owner:
@@ -118,11 +127,11 @@ async def _handle_knowledge_get_document(args: dict[str, Any], context: dict[str
     row fence, but remote invocations must still provide the server-owned result sink.
     """
     from modules.knowledge.documents import public
-    _, source_ids, owner_all = _scope(context)
+    _, source_ids, owner_all, scope, flag = _principal_scope(context)
     async with _resolve_session(context) as session:
         item = await public.get_tool_document(
             session, UUID(args["document_id"]), source_ids=source_ids,
-            owner_all=owner_all, destination=_destination(context),
+            owner_all=owner_all, destination=_destination(context), scope=scope, multi_workspace_enabled=flag,
         )
     if item is None:
         _record_output_fences(context, [], {})
@@ -150,11 +159,12 @@ async def _handle_knowledge_list_documents(args: dict[str, Any], context: dict[s
     page at the sender, so the continuation cursor is never separated from its captured rows.
     """
     from modules.knowledge.documents import public
-    _, source_ids, owner_all = _scope(context)
+    _, source_ids, owner_all, scope, flag = _principal_scope(context)
     async with _resolve_session(context) as session:
         page = await public.list_tool_documents(
             session, limit=args.get("limit", 20), cursor=args.get("cursor"),
             source_ids=source_ids, owner_all=owner_all, destination=_destination(context),
+            scope=scope, multi_workspace_enabled=flag,
         )
     _record_output_fences(
         context,
@@ -183,7 +193,7 @@ async def _handle_search_query(args: dict[str, Any], context: dict[str, Any]) ->
     """
     from modules.search import public
     from modules.search.schemas import SearchFilters, SearchRequest
-    _, source_ids, owner_all = _scope(context)
+    _, source_ids, owner_all, scope, flag = _principal_scope(context)
     requested = frozenset(UUID(value) for value in args.get("source_ids", []))
     destination = _destination(context)
     source_generations: dict[UUID, int] = {}
@@ -193,7 +203,7 @@ async def _handle_search_query(args: dict[str, Any], context: dict[str, Any]) ->
         if owner_all and not requested:
             page = await sources.list_tool_sources(
                 session, limit=100, cursor=None, source_ids=frozenset(), owner_all=True,
-                destination=destination,
+                destination=destination, scope=scope, multi_workspace_enabled=flag,
             )
             if page.next_cursor is not None:
                 raise PermissionError("Owner source scope exceeds the bounded search fence")
@@ -207,7 +217,7 @@ async def _handle_search_query(args: dict[str, Any], context: dict[str, Any]) ->
             for source_id in candidates:
                 candidate_source = await sources.get_tool_source(
                     session, source_id, source_ids=source_ids, owner_all=owner_all,
-                    destination=destination,
+                    destination=destination, scope=scope, multi_workspace_enabled=flag,
                 )
                 if candidate_source is not None:
                     allowed_set.add(source_id)
@@ -231,7 +241,7 @@ async def _handle_search_query(args: dict[str, Any], context: dict[str, Any]) ->
         result = await public.search(
             session, context["redis"], context["settings"], request,
             destination=destination, source_generation_fences=source_generations,
-            before_embedding_send=context.get("before_embedding_send"),
+            before_embedding_send=context.get("before_embedding_send"), scope=scope, multi_workspace_enabled=flag,
         )
     _record_output_fences(
         context,
@@ -248,11 +258,12 @@ async def _handle_search_query(args: dict[str, Any], context: dict[str, Any]) ->
 async def _handle_sources_list_sources(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """List active detached source identities within exact server-authorized source scope."""
     from modules.sources import public
-    _, source_ids, owner_all = _scope(context)
+    _, source_ids, owner_all, scope, flag = _principal_scope(context)
     async with _resolve_session(context) as session:
         page = await public.list_tool_sources(
             session, limit=args.get("limit", 20), cursor=args.get("cursor"),
             source_ids=source_ids, owner_all=owner_all, destination=_destination(context),
+            scope=scope, multi_workspace_enabled=flag,
         )
     items = [item.__dict__ for item in page.items]
     return {"items": items, "next_cursor": page.next_cursor}
@@ -261,11 +272,11 @@ async def _handle_sources_list_sources(args: dict[str, Any], context: dict[str, 
 async def _handle_sources_get_source(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any] | None:
     """Read an active detached source identity only when its exact ID is granted."""
     from modules.sources import public
-    _, source_ids, owner_all = _scope(context)
+    _, source_ids, owner_all, scope, flag = _principal_scope(context)
     async with _resolve_session(context) as session:
         item = await public.get_tool_source(
             session, UUID(args["source_id"]), source_ids=source_ids,
-            owner_all=owner_all, destination=_destination(context),
+            owner_all=owner_all, destination=_destination(context), scope=scope, multi_workspace_enabled=flag,
         )
     return item.__dict__ if item else None
 
@@ -280,20 +291,22 @@ async def _handle_github_list_project_events(args: dict[str, Any], context: dict
     from modules.sources import public as sources_public
     from modules.timeline import public as timeline_public
     from modules.timeline.schemas import TimelineQuery
-    _, source_ids, owner_all = _scope(context)
+    _, source_ids, owner_all, scope, flag = _principal_scope(context)
     source_id = UUID(args["source_id"])
     async with _resolve_session(context) as session:
         source = await sources_public.get_tool_source(
             session, source_id, source_ids=source_ids, owner_all=owner_all,
-            destination=_destination(context),
+            destination=_destination(context), scope=scope, multi_workspace_enabled=flag,
         )
-        detached = await sources_public.get_connector_source(session, source_id) if source else None
+        detached = (
+            await sources_public.get_connector_source(session, source_id, scope=scope, multi_workspace_enabled=flag) if source else None
+        )
         if source is None or detached is None or detached.provider != "github":
             _record_output_fences(context, [], {})
             return {"items": [], "next_cursor": None}
         page = await timeline_public.list_timeline(
             session, TimelineQuery(source_id=source_id, type="github_"),
-            limit=args.get("limit", 20), cursor=args.get("cursor"),
+            limit=args.get("limit", 20), cursor=args.get("cursor"), scope=scope, multi_workspace_enabled=flag,
         )
     # Document-level fences (chunk_id None) are revalidated by the Documents owner, like
     # knowledge.get_document; one per document, so an edit that selects a new version denies the result.

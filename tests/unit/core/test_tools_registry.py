@@ -25,6 +25,9 @@ from core.tools.schemas import (
     compute_argument_hash,
 )
 from core.tools.validator import check_json_schema, validate_json_schema
+from core.workspaces.schemas import WorkspaceContext
+
+SCOPE = WorkspaceContext(user_id=1, workspace_id=uuid4(), role="owner", membership_revision=1)
 
 
 class TestToolSchemas:
@@ -280,10 +283,12 @@ class TestToolRegistryAsync:
         assert len(filtered) == 0
 
     @pytest.fixture(autouse=True)
-    def mock_refresh_module_registry(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Mock _refresh_module_registry to return True for unit testing without live db session."""
+    def mock_refresh_module_registry(
+        self, monkeypatch: pytest.MonkeyPatch, test_module_registry: dict[str, Any],
+    ) -> None:
+        """Mock _refresh_module_registry to return the fixture modules without a live db session."""
         from unittest.mock import AsyncMock
-        monkeypatch.setattr(ToolRegistry, "_refresh_module_registry", AsyncMock(return_value=True))
+        monkeypatch.setattr(ToolRegistry, "_refresh_module_registry", AsyncMock(return_value=test_module_registry))
 
     @pytest.mark.asyncio
     async def test_invoke_tool_success_read_only(self, test_module_registry: dict[str, Any]) -> None:
@@ -311,7 +316,7 @@ class TestToolRegistryAsync:
         registry.register_tool(defn, add_handler)
 
         principal = ToolExecutionPrincipal(
-            actor_id="user_owner",
+            actor_id="user_owner", scope=SCOPE,
             is_owner=True,
             allowed_tools=frozenset(["math.add"]),
             destinations=frozenset(["local_dest"]),
@@ -334,7 +339,7 @@ class TestToolRegistryAsync:
     async def test_invoke_tool_unknown_tool(self, test_module_registry: dict[str, Any]) -> None:
         """invoke_tool returns tool_unavailable error for nonexistent tools."""
         registry = ToolRegistry(module_registry=test_module_registry)
-        principal = ToolExecutionPrincipal(actor_id="user_1", is_owner=True)
+        principal = ToolExecutionPrincipal(actor_id="user_1", scope=SCOPE, is_owner=True)
 
         result = await registry.invoke_tool("nonexistent", {}, principal)
         assert result.success is False
@@ -351,7 +356,7 @@ class TestToolRegistryAsync:
         defn = ToolDefinition(name="restricted.tool", module="sample_module")
         registry.register_tool(defn, noop)
 
-        principal = ToolExecutionPrincipal(actor_id="user_1", is_owner=True, allowed_tools=frozenset())
+        principal = ToolExecutionPrincipal(actor_id="user_1", scope=SCOPE, is_owner=True, allowed_tools=frozenset())
         result = await registry.invoke_tool("restricted.tool", {}, principal)
         assert result.success is False
         assert result.error_code == "forbidden"
@@ -372,7 +377,7 @@ class TestToolRegistryAsync:
         registry.register_tool(defn, noop)
 
         principal = ToolExecutionPrincipal(
-            actor_id="user_1", is_owner=True,
+            actor_id="user_1", scope=SCOPE, is_owner=True,
             allowed_tools=frozenset(["strict.input"]),
             destinations=frozenset(["dest"]),
         )
@@ -395,7 +400,7 @@ class TestToolRegistryAsync:
         registry.register_tool(defn, write_handler)
 
         principal = ToolExecutionPrincipal(
-            actor_id="user_1", is_owner=True,
+            actor_id="user_1", scope=SCOPE, is_owner=True,
             allowed_tools=frozenset(["db.write"]),
             destinations=frozenset(["dest"]),
         )

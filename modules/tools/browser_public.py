@@ -11,14 +11,72 @@ from datetime import datetime
 from typing import Any, Literal, cast
 from uuid import UUID, uuid4
 
+from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 from sqlalchemy import select
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.realtime import commit_with_replay
+from core.workspaces import public as workspaces
+from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
 from modules.agents.public import BrowserRunAuthorization
 from modules.connectors.public import AgentBrowserScope
 from modules.tools.models import BrowserPageEvidence, BrowserReadJob
+
+
+def _actor(scope: Scope) -> int:
+    return scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
+
+
+def _require_owner(scope: Scope) -> None:
+    if not isinstance(scope, (WorkspaceContext, InternalJobScope)):
+        raise TypeError("An explicit workspace scope is required")
+    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
+
+
+async def _admit(
+    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
+    lock: bool = False, expected: AccessFence | None = None,
+) -> AccessFence:
+    """Owner admission; a member is denied before any session await."""
+    _require_owner(scope)
+    if type(multi_workspace_enabled) is not bool:
+        raise TypeError("The configured multi-workspace feature flag must be a boolean")
+    if lock:
+        return await workspaces.lock_access_fence(
+            session, scope=scope, expected=expected, multi_workspace_enabled=multi_workspace_enabled,
+        )
+    return await workspaces.read_access_fence(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+
+
+async def _job_authority(
+    session: AsyncSession, job: BrowserReadJob, *, multi_workspace_enabled: bool,
+) -> tuple[InternalJobScope, AccessFence] | None:
+    """Recipe J: lock the job's ORIGINAL access epoch; None means authority revoked.
+
+    Legacy rows without a captured epoch are quarantined (never rebased onto the current epoch),
+    and an admission denial or any fence that differs from the original also returns None. The
+    caller rolls back and marks the job failed ``authority_revoked`` in a fresh transaction.
+    """
+    if type(multi_workspace_enabled) is not bool:
+        raise TypeError("The configured multi-workspace feature flag must be a boolean")
+    if job.membership_revision is None or job.configuration_revision is None:
+        return None
+    scope = InternalJobScope(
+        workspace_id=job.workspace_id, actor_user_id=job.owner_id, membership_revision=job.membership_revision,
+    )
+    original = AccessFence(job.workspace_id, job.owner_id, job.membership_revision, job.configuration_revision)
+    try:
+        fence = await workspaces.lock_access_fence(
+            session, scope=scope, expected=original, multi_workspace_enabled=multi_workspace_enabled,
+        )
+    except HTTPException as exc:
+        if exc.status_code in {401, 403, 404, 409}:
+            return None
+        raise
+    return (scope, fence) if fence == original else None
 
 
 def browser_capability_verified() -> bool:
@@ -137,13 +195,16 @@ def _read(row: BrowserReadJob) -> BrowserReadJobRead:
 
 async def submit_browser_read_in_uow(
     session: AsyncSession,
-    owner_id: int,
     run_id: UUID,
     tool_slot: int,
     auth_session_hash: str,
-    scope: AgentBrowserScope,
+    grant: AgentBrowserScope,
     args: BrowserReadArgs,
     budget: BrowserReadBudget,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
 ) -> BrowserReadJobRead:
     """Flush one unique durable job per run slot after Agents and Connectors authorization.
 
@@ -151,10 +212,15 @@ async def submit_browser_read_in_uow(
     returns the existing record; changed input conflicts, so observations never
     rerun under a completed slot.
     """
+    _require_owner(scope)
+    if type(multi_workspace_enabled) is not bool:
+        raise TypeError("The configured multi-workspace feature flag must be a boolean")
     authorization = budget.authorization
     if (
-        owner_id != 1 or not scope.enabled or scope.source_id != args.source_id
-        or authorization.owner_id != owner_id or authorization.run_id != run_id
+        authorization.owner_id != _actor(scope) or access_fence.workspace_id != scope.workspace_id
+        or grant.workspace_id != scope.workspace_id
+        or not grant.enabled or grant.source_id != args.source_id
+        or authorization.run_id != run_id
         or authorization.tool_slot != tool_slot
         or args.source_id not in authorization.source_ids
         or authorization.auth_session_hash != auth_session_hash
@@ -169,28 +235,32 @@ async def submit_browser_read_in_uow(
     ):
         raise PermissionError("Browser job authorization is invalid")
     existing = await session.scalar(select(BrowserReadJob).where(
+        BrowserReadJob.workspace_id == scope.workspace_id,
+        BrowserReadJob.owner_id == _actor(scope),
         BrowserReadJob.run_id == run_id,
         BrowserReadJob.tool_slot == tool_slot,
     ).with_for_update())
     if existing is not None:
         if (
             existing.arguments_hash != authorization.arguments_hash
-            or existing.source_id != scope.source_id
-            or existing.scope_hash != scope.scope_hash
+            or existing.source_id != grant.source_id
+            or existing.scope_hash != grant.scope_hash
             or existing.auth_session_hash != auth_session_hash
         ):
             raise ValueError("Browser tool slot was already used with different arguments")
         return _read(existing)
     row = BrowserReadJob(
-        id=uuid4(), operation_id=budget.operation_id, owner_id=owner_id, run_id=run_id,
+        id=uuid4(), operation_id=budget.operation_id, workspace_id=scope.workspace_id,
+        owner_id=_actor(scope), membership_revision=access_fence.membership_revision,
+        configuration_revision=access_fence.configuration_revision, run_id=run_id,
         tool_slot=tool_slot, auth_session_hash=auth_session_hash,
         conversation_id=authorization.conversation_id,
         profile_id=authorization.profile_id,
         authorized_source_ids=sorted(str(item) for item in authorization.source_ids),
         profile_revision_hash=authorization.profile_revision_hash,
-        claim_generation=authorization.claim_generation, source_id=scope.source_id,
-        source_generation=scope.source_generation, connector_revision=scope.connector_revision,
-        grant_revision=scope.grant_revision, scope_hash=scope.scope_hash,
+        claim_generation=authorization.claim_generation, source_id=grant.source_id,
+        source_generation=grant.source_generation, connector_revision=grant.connector_revision,
+        grant_revision=grant.grant_revision, scope_hash=grant.scope_hash,
         arguments_hash=authorization.arguments_hash, max_pages=args.max_pages,
         max_bytes=budget.max_bytes, max_active_seconds=budget.max_active_seconds,
         service_token_hash=budget.service_token_hash, expires_at=budget.expires_at,
@@ -202,11 +272,15 @@ async def submit_browser_read_in_uow(
 
 
 async def cancel_browser_job_in_uow(
-    session: AsyncSession, owner_id: int, job_id: UUID
+    session: AsyncSession, job_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
 ) -> BrowserReadJobRead:
     """Record cancellation intent under the job lock; caller commits before remote cleanup."""
+    _require_owner(scope)
+    if type(multi_workspace_enabled) is not bool:
+        raise TypeError("The configured multi-workspace feature flag must be a boolean")
     row = await session.scalar(select(BrowserReadJob).where(
-        BrowserReadJob.id == job_id, BrowserReadJob.owner_id == owner_id,
+        BrowserReadJob.id == job_id, BrowserReadJob.workspace_id == scope.workspace_id,
+        BrowserReadJob.owner_id == _actor(scope),
     ).with_for_update())
     if row is None:
         raise LookupError("Browser job not found")
@@ -227,6 +301,7 @@ async def execute_browser_read(
     claim_generation: int,
     *,
     deadline: float,
+    multi_workspace_enabled: bool,
 ) -> BrowserReadResult:
     """Await one isolated service job directly, then persist only after fresh local authority.
 
@@ -247,6 +322,8 @@ async def execute_browser_read(
     from modules.connectors import public as connectors
     from modules.sources import public as sources
 
+    if type(multi_workspace_enabled) is not bool:
+        raise TypeError("The configured multi-workspace feature flag must be a boolean")
     settings = Settings()
     async with session_factory() as session:
         candidate = await session.scalar(select(BrowserReadJob).where(
@@ -260,9 +337,22 @@ async def execute_browser_read(
             candidate.operation_id, candidate.source_id, candidate.run_id, candidate.tool_slot,
             candidate.claim_generation, candidate.auth_session_hash, candidate.profile_id,
         )
-        source = await sources.lock_source(session, candidate.source_id)
-        source_view = await sources.get_connector_source(session, candidate.source_id)
-        scope = await connectors.resolve_agent_browser_scope(session, candidate.owner_id, candidate.source_id)
+        authority = await _job_authority(session, candidate, multi_workspace_enabled=multi_workspace_enabled)
+        if authority is None:
+            await session.rollback()
+            return await _fail_job(session_factory, job_id, "authority_revoked")
+        job_scope, fence = authority
+        source = await sources.lock_source(
+            session, candidate.source_id, scope=job_scope, multi_workspace_enabled=multi_workspace_enabled,
+            expected_access_fence=fence,
+        )
+        source_view = await sources.get_connector_source(
+            session, candidate.source_id, scope=job_scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
+        grant = await connectors.resolve_agent_browser_scope(
+            session, candidate.owner_id, candidate.source_id,
+            scope=job_scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
         auth = BrowserRunAuthorization(
             candidate.owner_id, candidate.run_id, candidate.tool_slot, candidate.arguments_hash,
             candidate.auth_session_hash, candidate.conversation_id, candidate.profile_id,
@@ -273,7 +363,9 @@ async def execute_browser_read(
         session_valid = await revalidate_owner_session(
             session, candidate.auth_session_hash, candidate.owner_id,
         )
-        run_valid = await revalidate_browser_run_authority(session, auth)
+        run_valid = await revalidate_browser_run_authority(
+            session, auth, scope=job_scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
         # Lock Tools only after Sources and Agents; an owner cancellation may
         # have changed the durable job while authority was being revalidated.
         row = await session.scalar(select(BrowserReadJob).where(
@@ -288,31 +380,35 @@ async def execute_browser_read(
             source is not None and source.status == "active"
             and source.generation == row.source_generation
             and source_view is not None
-            and scope is not None and scope.enabled
-            and scope.scope_hash == row.scope_hash
-            and scope.connector_revision == row.connector_revision
-            and scope.grant_revision == row.grant_revision
+            and grant is not None and grant.enabled
+            and grant.scope_hash == row.scope_hash
+            and grant.connector_revision == row.connector_revision
+            and grant.grant_revision == row.grant_revision
             and session_valid and run_valid
         )
-        if not valid or scope is None:
+        if not valid or grant is None:
             row.status = "failed"
             row.error_code = "authority_revoked"
-            await session.commit()
+            await commit_with_replay(
+                session, [], scope=job_scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+            )
             return BrowserReadResult(job=_read(row), pages=())
         service_secret = settings.browser_shared_token.get_secret_value()
         job_token = derive_browser_job_token(service_secret, row.operation_id, claim_generation)
         if not hmac.compare_digest(hashlib.sha256(job_token.encode("ascii")).hexdigest(), row.service_token_hash):
             row.status = "failed"
             row.error_code = "token_mismatch"
-            await session.commit()
+            await commit_with_replay(
+                session, [], scope=job_scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+            )
             return BrowserReadResult(job=_read(row), pages=())
-        target_url = scope.origin + ("" if scope.path_prefix == "/" else scope.path_prefix)
+        target_url = grant.origin + ("" if grant.path_prefix == "/" else grant.path_prefix)
         payload: dict[str, Any] = {
             "job_id": str(row.id), "operation_id": str(row.operation_id),
             "claim_generation": row.claim_generation,
             "service_instance_id": "", "job_token": job_token,
-            "target_url": target_url, "origin": scope.origin,
-            "path_prefix": scope.path_prefix, "max_pages": row.max_pages,
+            "target_url": target_url, "origin": grant.origin,
+            "path_prefix": grant.path_prefix, "max_pages": row.max_pages,
             "timeout_seconds": min(row.max_active_seconds, max(1, int(deadline - time.monotonic()))),
         }
         service_url = str(settings.browser_service_url).rstrip("/")
@@ -466,8 +562,8 @@ async def execute_browser_read(
             from modules.connectors.public import agent_browser_target_in_scope
 
             if (
-                not agent_browser_target_in_scope(scope, str(item.get("requested_url", "")))
-                or not agent_browser_target_in_scope(scope, str(item.get("final_url", "")))
+                not agent_browser_target_in_scope(grant, str(item.get("requested_url", "")))
+                or not agent_browser_target_in_scope(grant, str(item.get("final_url", "")))
             ):
                 raise PermissionError("Browser page target is outside the source grant")
             if not isinstance(raw_value, str) or not isinstance(text_value, str) or len(text_value.encode("utf-8")) > 20_000:
@@ -518,9 +614,22 @@ async def execute_browser_read(
             candidate.operation_id, candidate.source_id, candidate.run_id, candidate.tool_slot,
             candidate.claim_generation, candidate.auth_session_hash, candidate.profile_id,
         )
-        source = await sources.lock_source(session, candidate.source_id)
-        source_view = await sources.get_connector_source(session, candidate.source_id)
-        scope = await connectors.resolve_agent_browser_scope(session, candidate.owner_id, candidate.source_id)
+        authority = await _job_authority(session, candidate, multi_workspace_enabled=multi_workspace_enabled)
+        if authority is None:
+            await session.rollback()
+            return await _fail_job(session_factory, job_id, "authority_revoked")
+        job_scope, fence = authority
+        source = await sources.lock_source(
+            session, candidate.source_id, scope=job_scope, multi_workspace_enabled=multi_workspace_enabled,
+            expected_access_fence=fence,
+        )
+        source_view = await sources.get_connector_source(
+            session, candidate.source_id, scope=job_scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
+        grant = await connectors.resolve_agent_browser_scope(
+            session, candidate.owner_id, candidate.source_id,
+            scope=job_scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
         auth = BrowserRunAuthorization(
             candidate.owner_id, candidate.run_id, candidate.tool_slot, candidate.arguments_hash,
             candidate.auth_session_hash, candidate.conversation_id, candidate.profile_id,
@@ -531,7 +640,9 @@ async def execute_browser_read(
         session_valid = await revalidate_owner_session(
             session, candidate.auth_session_hash, candidate.owner_id,
         )
-        run_valid = await revalidate_browser_run_authority(session, auth)
+        run_valid = await revalidate_browser_run_authority(
+            session, auth, scope=job_scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
         # Source and Agent locks fence against revoke/cancel before the job row
         # and its private page evidence are published.
         row = await session.scalar(select(BrowserReadJob).where(
@@ -545,7 +656,9 @@ async def execute_browser_read(
         if row.cancel_requested or row.status != "running":
             if row.status in {"queued", "running", "cancel_requested", "uncertain"}:
                 row.status = "cancelled"
-            await session.commit()
+            await commit_with_replay(
+                session, [], scope=job_scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+            )
             raise PermissionError("Browser result was cancelled before publication")
         from core.remote_heavy import get_remote_heavy_guard
 
@@ -554,10 +667,10 @@ async def execute_browser_read(
             not session_valid or not run_valid
             or source is None or source.status != "active"
             or source.generation != row.source_generation
-            or source_view is None or scope is None or not scope.enabled
-            or scope.scope_hash != row.scope_hash
-            or scope.connector_revision != row.connector_revision
-            or scope.grant_revision != row.grant_revision
+            or source_view is None or grant is None or not grant.enabled
+            or grant.scope_hash != row.scope_hash
+            or grant.connector_revision != row.connector_revision
+            or grant.grant_revision != row.grant_revision
             or response_data.get("service_instance_id") != row.service_instance_id
             or guard is None or guard.state != "cleared"
             or guard.service_instance_id != row.service_instance_id
@@ -569,7 +682,9 @@ async def execute_browser_read(
         ):
             row.status = "failed"
             row.error_code = "authority_revoked"
-            await session.commit()
+            await commit_with_replay(
+                session, [], scope=job_scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+            )
             return BrowserReadResult(job=_read(row), pages=())
         session.add_all(persisted_rows)
         row.actual_pages = len(persisted)
@@ -579,16 +694,20 @@ async def execute_browser_read(
         row.error_code = None
         row.service_instance_id = str(response_data["service_instance_id"])
         await session.flush()
-        await session.commit()
+        await commit_with_replay(
+                session, [], scope=job_scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+            )
         return BrowserReadResult(job=_read(row), pages=tuple(persisted))
 
 
 async def read_browser_result(
     session: AsyncSession,
-    owner_id: int,
     auth_session_hash: str,
     job_id: UUID,
     session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> BrowserReadResult | None:
     """Return successful observations only while the original session/run/Chat/profile/source grant stays current."""
     from sqlalchemy import select
@@ -598,10 +717,13 @@ async def read_browser_result(
     from modules.connectors import public as connectors
     from modules.tools.models import BrowserPageEvidence
 
-    if owner_id != 1:
-        return None
+    _require_owner(scope)
+    if type(multi_workspace_enabled) is not bool:
+        raise TypeError("The configured multi-workspace feature flag must be a boolean")
+    owner_id = _actor(scope)
     row = await session.scalar(select(BrowserReadJob).where(
-        BrowserReadJob.id == job_id, BrowserReadJob.owner_id == owner_id,
+        BrowserReadJob.id == job_id, BrowserReadJob.workspace_id == scope.workspace_id,
+        BrowserReadJob.owner_id == owner_id,
     ))
     if row is None or row.status != "succeeded" or row.expires_at <= datetime.now(row.expires_at.tzinfo):
         return None
@@ -616,15 +738,19 @@ async def read_browser_result(
     async with session_factory() as fresh:
         if (
             not await revalidate_owner_session(fresh, auth_session_hash, owner_id)
-            or not await revalidate_browser_run_authority(fresh, authorization)
+            or not await revalidate_browser_run_authority(
+                fresh, authorization, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
         ):
             return None
-        scope = await connectors.resolve_agent_browser_scope(fresh, owner_id, row.source_id)
+        grant = await connectors.resolve_agent_browser_scope(
+            fresh, owner_id, row.source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
     if (
-        scope is None or not scope.enabled or scope.scope_hash != row.scope_hash
-        or scope.source_generation != row.source_generation
-        or scope.connector_revision != row.connector_revision
-        or scope.grant_revision != row.grant_revision
+        grant is None or not grant.enabled or grant.scope_hash != row.scope_hash
+        or grant.source_generation != row.source_generation
+        or grant.connector_revision != row.connector_revision
+        or grant.grant_revision != row.grant_revision
     ):
         return None
     pages = list((await session.scalars(select(BrowserPageEvidence).where(

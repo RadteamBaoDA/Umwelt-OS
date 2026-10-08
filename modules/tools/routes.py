@@ -13,15 +13,19 @@ from core.auth.dependencies import require_owner, require_owner_write
 from core.auth.models import AuthSession
 from core.auth.public import revalidate_owner_session
 from core.database import get_session
+from core.realtime import commit_with_replay
 from core.tools import ToolExecutionPrincipal
+from core.workspaces.dependencies import require_workspace_read, require_workspace_write
+from core.workspaces.schemas import WorkspaceContext
 from modules.settings.public import module_dependency
 from modules.tools.browser_public import (
-    _read as read_browser_job,
-)
-from modules.tools.browser_public import (
+    _admit,
     cancel_browser_job_in_uow,
     derive_browser_job_token,
     read_browser_result,
+)
+from modules.tools.browser_public import (
+    _read as read_browser_job,
 )
 from modules.tools.models import BrowserReadJob
 
@@ -30,6 +34,8 @@ browser_jobs_router = APIRouter(prefix="/api/v1/agent-browser-jobs", tags=["agen
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[AuthSession, Depends(require_owner)]
 OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]
+WorkspaceRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
+WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 
 
 class ToolInvocation(BaseModel):
@@ -41,7 +47,7 @@ class ToolInvocation(BaseModel):
 
 
 @router.get("")
-async def list_tools(request: Request, _owner: OwnerRead) -> dict[str, Any]:
+async def list_tools(request: Request, _owner: OwnerRead, _scope: WorkspaceRead) -> dict[str, Any]:
     """Return enabled registered tool contracts to the authenticated owner."""
     registry = request.app.state.tool_registry
     return {"items": [item.model_dump(mode="json") for item in registry.list_tools()]}
@@ -49,7 +55,7 @@ async def list_tools(request: Request, _owner: OwnerRead) -> dict[str, Any]:
 
 @router.post("/invoke")
 async def invoke_tool(
-    request: Request, session: Session, owner: OwnerWrite,
+    request: Request, session: Session, owner: OwnerWrite, scope: WorkspaceWrite,
 ) -> dict[str, Any]:
     """Invoke one owner-authorized registered tool with fresh auth and output-fence checks.
 
@@ -84,14 +90,14 @@ async def invoke_tool(
     allowed = frozenset(item.name for item in registry.list_tools())
     owner_id, owner_token_hash = owner.owner_id, owner.token_hash
     principal = ToolExecutionPrincipal(
-        actor_id=f"owner:{owner_id}", is_owner=True, allowed_tools=allowed,
+        actor_id=f"owner:{owner_id}", scope=scope, is_owner=True, allowed_tools=allowed,
         source_ids=frozenset(), owner_all_sources=True, destinations=frozenset({"local"}),
         capabilities=frozenset({"source.read"}),
     )
 
     async def revalidate_owner(current: ToolExecutionPrincipal) -> bool:
         """Recheck the same owner session in a fresh short transaction after async tool work."""
-        if current.actor_id != f"owner:{owner_id}" or not current.is_owner:
+        if current.actor_id != f"owner:{owner_id}" or not current.is_owner or current.scope != scope:
             return False
         try:
             async with request.app.state.session_factory() as fresh_session:
@@ -120,17 +126,20 @@ async def invoke_tool(
 
 @browser_jobs_router.get("/{job_id}")
 async def read_browser_job_route(
-    job_id: UUID, request: Request, session: Session, owner: OwnerRead,
+    job_id: UUID, request: Request, session: Session, owner: OwnerRead, scope: WorkspaceRead,
 ) -> dict[str, Any]:
     """Read bounded job metadata and current evidence for its original owner session only."""
+    flag = request.app.state.settings.multi_workspace_enabled
+    await _admit(session, scope=scope, multi_workspace_enabled=flag)
     row = await session.scalar(select(BrowserReadJob).where(
-        BrowserReadJob.id == job_id, BrowserReadJob.owner_id == owner.owner_id,
+        BrowserReadJob.id == job_id, BrowserReadJob.workspace_id == scope.workspace_id,
+        BrowserReadJob.owner_id == scope.user_id,
     ))
     if row is None or row.auth_session_hash != owner.token_hash:
         raise HTTPException(status_code=404, detail="Browser job not found")
     result = await read_browser_result(
-        session, owner.owner_id, owner.token_hash, job_id,
-        request.app.state.session_factory,
+        session, owner.token_hash, job_id, request.app.state.session_factory,
+        scope=scope, multi_workspace_enabled=flag,
     ) if row.status == "succeeded" else None
     return {
         "job": read_browser_job(row).model_dump(mode="json"),
@@ -140,19 +149,22 @@ async def read_browser_job_route(
 
 @browser_jobs_router.post("/{job_id}/cancel")
 async def cancel_browser_job_route(
-    job_id: UUID, request: Request, session: Session, owner: OwnerWrite,
+    job_id: UUID, request: Request, session: Session, owner: OwnerWrite, scope: WorkspaceWrite,
 ) -> dict[str, Any]:
     """Commit local erasure and cancellation intent before requesting isolated service cleanup."""
+    flag = request.app.state.settings.multi_workspace_enabled
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=flag, lock=True)
     row = await session.scalar(select(BrowserReadJob).where(
-        BrowserReadJob.id == job_id, BrowserReadJob.owner_id == owner.owner_id,
+        BrowserReadJob.id == job_id, BrowserReadJob.workspace_id == scope.workspace_id,
+        BrowserReadJob.owner_id == scope.user_id,
     ).with_for_update())
     if row is None or row.auth_session_hash != owner.token_hash:
         raise HTTPException(status_code=404, detail="Browser job not found")
     operation_id = row.operation_id
     instance_id = row.service_instance_id
     claim_generation = row.claim_generation
-    job = await cancel_browser_job_in_uow(session, owner.owner_id, job_id)
-    await session.commit()
+    job = await cancel_browser_job_in_uow(session, job_id, scope=scope, multi_workspace_enabled=flag)
+    await commit_with_replay(session, [], scope=scope, multi_workspace_enabled=flag, access_fence=fence)
     cleanup_acknowledged = False
     if instance_id is not None:
         settings = request.app.state.settings

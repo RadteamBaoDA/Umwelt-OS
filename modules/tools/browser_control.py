@@ -20,7 +20,7 @@ from core.remote_heavy import (
 )
 from modules.agents.public import BrowserRunAuthorization, revalidate_browser_run_authority
 from modules.connectors import public as connectors
-from modules.tools.browser_public import browser_capability_verified
+from modules.tools.browser_public import _job_authority, browser_capability_verified
 from modules.tools.models import BrowserReadJob
 
 # Guard lifetime: longer than any service job (bounded at 47 s or less) but inside the
@@ -84,15 +84,26 @@ def _target_in_scope(value: str | None, origin: str, path_prefix: str) -> bool:
 
 
 async def _current_authority(
-    session: AsyncSession, job: BrowserReadJob
+    session: AsyncSession, job: BrowserReadJob, *, multi_workspace_enabled: bool,
 ) -> tuple[bool, connectors.AgentBrowserScope | None]:
     """Check original run/session/profile/Chat and source grant in this short callback transaction."""
     from core.auth.public import revalidate_owner_session
     from modules.sources import public as sources
 
-    source = await sources.lock_source(session, job.source_id)
-    source_view = await sources.get_connector_source(session, job.source_id)
-    scope = await connectors.resolve_agent_browser_scope(session, job.owner_id, job.source_id)
+    authority = await _job_authority(session, job, multi_workspace_enabled=multi_workspace_enabled)
+    if authority is None:
+        return False, None
+    job_scope, fence = authority
+    source = await sources.lock_source(
+        session, job.source_id, scope=job_scope, multi_workspace_enabled=multi_workspace_enabled,
+        expected_access_fence=fence,
+    )
+    source_view = await sources.get_connector_source(
+        session, job.source_id, scope=job_scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    grant = await connectors.resolve_agent_browser_scope(
+        session, job.owner_id, job.source_id, scope=job_scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
 
     authorization = BrowserRunAuthorization(
         job.owner_id, job.run_id, job.tool_slot, job.arguments_hash,
@@ -101,19 +112,21 @@ async def _current_authority(
         job.claim_generation, 0, 0, 0, 1,
     )
     session_valid = await revalidate_owner_session(session, job.auth_session_hash, job.owner_id)
-    run_valid = await revalidate_browser_run_authority(session, authorization)
+    run_valid = await revalidate_browser_run_authority(
+        session, authorization, scope=job_scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     if (
         not session_valid or not run_valid or job.source_id not in authorization.source_ids
         or source is None or source.status != "active"
         or source.generation != job.source_generation
         or source_view is None
-        or scope is None or not scope.enabled or scope.scope_hash != job.scope_hash
-        or scope.source_generation != job.source_generation
-        or scope.connector_revision != job.connector_revision
-        or scope.grant_revision != job.grant_revision
+        or grant is None or not grant.enabled or grant.scope_hash != job.scope_hash
+        or grant.source_generation != job.source_generation
+        or grant.connector_revision != job.connector_revision
+        or grant.grant_revision != job.grant_revision
     ):
         return False, None
-    return True, scope
+    return True, grant
 
 
 @router.post("/jobs/{job_id}/event")
@@ -150,7 +163,9 @@ async def browser_control_event(
         )
         # Cross-module row locks follow Sources -> Agents -> Tools. The job is
         # reread under lock only after both current authorities have been checked.
-        valid, _scope = await _current_authority(session, candidate)
+        valid, grant = await _current_authority(
+            session, candidate, multi_workspace_enabled=settings.multi_workspace_enabled,
+        )
         job = await session.scalar(select(BrowserReadJob).where(
             BrowserReadJob.id == job_id,
         ).with_for_update().execution_options(populate_existing=True))
@@ -212,16 +227,15 @@ async def browser_control_event(
         if payload.event == "authorize":
             if not _browser_network_verified():
                 raise HTTPException(status_code=503, detail="Browser network capability is unverified")
-            scope = _scope
             if (
                 # The API enforces the guard bound: no new permits after expiry.
                 guard.expires_at <= datetime.now(UTC)
-                or not valid or scope is None
+                or not valid or grant is None
                 or payload.request_ordinal != job.request_ordinal + 1
                 or payload.request_ordinal > 6
                 or payload.actual_pages != 0 or payload.actual_bytes != 0
                 or payload.result_hash is not None
-                or not _target_in_scope(payload.target_url, scope.origin, scope.path_prefix)
+                or not _target_in_scope(payload.target_url, grant.origin, grant.path_prefix)
             ):
                 raise HTTPException(status_code=403, detail="Browser request is outside current authority")
             job.request_ordinal = payload.request_ordinal
