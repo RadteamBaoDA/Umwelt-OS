@@ -303,3 +303,53 @@ async def test_process_source_purge_other_errors_propagate() -> None:
          patch.object(worker, "make_source_change", MagicMock(return_value=object())),          pytest.raises(RuntimeError):
         await worker.process_source_purge(ctx, str(uuid4()))
     assert isinstance(UUID(str(OP)), UUID)
+
+
+# --- snapshot fence carry (review P3-2) --------------------------------------------------------
+
+async def _drift_run(fn, status="queued"):
+    lock = AsyncMock(return_value=(None, None))
+    session = MagicMock()
+    factory = MagicMock()
+    factory.return_value.__aenter__ = AsyncMock(return_value=session)
+    factory.return_value.__aexit__ = AsyncMock(return_value=False)
+    delivery = _delivery()
+    delivery.type = "source.purge.coverage"
+    delivery.status = status
+    with patch.object(worker.ingestion, "resolve_ingestion_event_scope", AsyncMock(return_value=_scope())), \
+         patch.object(worker.ingestion, "get_event_delivery", AsyncMock(return_value=delivery)), \
+         patch.object(worker.sources, "read_source_purge_job_capture", AsyncMock(return_value=_identity())), \
+         patch.object(worker, "read_access_fence", AsyncMock(return_value=_fence(membership=4))), \
+         patch.object(worker, "_lock_operation", lock):
+        await fn(factory, delivery)
+    return lock
+
+
+async def test_recover_memory_coverage_fence_drift_is_noop() -> None:
+    lock = await _drift_run(
+        lambda factory, d: worker._recover_memory_coverage(
+            factory, uuid4(), (), reset=False, scope=_scope(), multi_workspace_enabled=True,
+            dispatched_at=d.dispatched_at, access_fence=_fence()))
+    lock.assert_not_awaited()
+
+
+async def test_evict_memory_cache_fence_drift_is_noop() -> None:
+    lock = await _drift_run(
+        lambda factory, d: worker._evict_memory_cache_after_commit(
+            factory, MagicMock(), OP, uuid4(), scope=_scope(), multi_workspace_enabled=True,
+            dispatched_at=d.dispatched_at, attempt=(), access_fence=_fence()), status="pending")
+    lock.assert_not_awaited()
+
+
+async def test_memory_coverage_passes_admitted_fence_to_recovery() -> None:
+    factory = MagicMock()
+    factory.return_value.__aenter__ = AsyncMock(return_value=MagicMock())
+    factory.return_value.__aexit__ = AsyncMock(return_value=False)
+    ctx = {"session_factory": factory, "redis": MagicMock(), "settings": SimpleNamespace(multi_workspace_enabled=True)}
+    recover = AsyncMock()
+    with patch.object(worker, "_admit_event", AsyncMock(return_value=(OP, _scope(), _fence(), _delivery()))), \
+         patch.object(worker, "_lock_operation", AsyncMock(side_effect=RuntimeError("boom"))), \
+         patch.object(worker, "_recover_memory_coverage", recover):
+        await worker.process_source_memory_coverage(ctx, str(uuid4()))
+    recover.assert_awaited_once()
+    assert recover.await_args.kwargs["access_fence"] == _fence()

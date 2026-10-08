@@ -194,6 +194,7 @@ async def _lock_operation(
         SourcePurgeOperation.workspace_id == scope.workspace_id,
         SourcePurgeOperation.actor_user_id == scope.actor_user_id,
         SourcePurgeOperation.membership_revision == scope.membership_revision,
+        SourcePurgeOperation.configuration_revision == access_fence.configuration_revision,
         SourcePurgeOperation.source_id == scope.source_id,
         SourcePurgeOperation.generation == scope.source_generation,
     ).with_for_update().execution_options(populate_existing=True))

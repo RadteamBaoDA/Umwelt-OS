@@ -51,8 +51,8 @@ from modules.knowledge.documents.models import (
 )
 from modules.knowledge.documents.schemas import (
     PROVIDER_IDS,
-    DocumentCleanupJobIdentity,  # noqa: F401 - owner re-export used by D2a-3 readers
-    DocumentCleanupPreparationLimitError,  # noqa: F401 - re-export consumed by modules.sources.worker
+    DocumentCleanupJobIdentity,
+    DocumentCleanupPreparationLimitError,
     DocumentCreate,
     DocumentExportFence,
     DocumentExportFenceValidation,
@@ -107,6 +107,8 @@ async def observability_quality_summary(
 
 # Explicit re-exports consumed by other modules (mypy strict forbids implicit re-export).
 __all__ = [
+    "DocumentCleanupJobIdentity",
+    "DocumentCleanupPreparationLimitError",
     "EvidenceReferenceRead",
     "NormalizedDocumentKeyState",
     "NormalizedDocumentPreparation",
