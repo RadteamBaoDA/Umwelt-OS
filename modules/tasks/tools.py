@@ -8,11 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.tools import ToolDefinition, ToolRegistry, ToolResult, ToolRisk
 from core.tools.registry import ToolHandler
+from core.workspaces.schemas import Scope
 from modules.tasks import public
 from modules.tasks.schemas import TaskCreate, TaskFilter, TaskUpdate
 
 _STATUS = ["inbox", "todo", "in_progress", "blocked", "done", "cancelled"]
-_Action = Callable[[AsyncSession, int, dict[str, Any], Callable[[Any], UUID]], Awaitable[str]]
+_Action = Callable[[AsyncSession, Scope, bool, dict[str, Any], Callable[[Any], UUID]], Awaitable[str]]
 _UUID = {"type": "string", "format": "uuid"}
 _WRITE_OUT = {
     "type": "object", "required": ["accepted", "status_code", "result_reference"], "additionalProperties": False,
@@ -36,7 +37,10 @@ _TASK_FIELDS = {
 async def _list(arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
     """Read one bounded owner-scoped task page; no write path and no session from the arguments."""
     async with context["session_factory"]() as session:
-        page = await public.list_tasks(session, 1, TaskFilter.model_validate(arguments))
+        page = await public.list_tasks(
+            session, TaskFilter.model_validate(arguments), scope=context["principal"].scope,
+            multi_workspace_enabled=context["settings"].multi_workspace_enabled,
+        )
     return ToolResult(success=True, data=page.model_dump(mode="json"))
 
 
@@ -46,44 +50,48 @@ def _writer(action: _Action) -> ToolHandler:
         """Execute exactly one approved task mutation and record its effect outcome."""
         from modules.agents.internal_writes import run_approved_write, uuid_arg
 
-        async def perform(session: AsyncSession, owner_id: int) -> str:
-            """Run the public task service call and return its reference."""
-            return await action(session, owner_id, arguments, uuid_arg)
+        async def perform(session: AsyncSession, scope: Scope) -> str:
+            """Run the public task service call with the admitted approval scope."""
+            return await action(session, scope, context["settings"].multi_workspace_enabled, arguments, uuid_arg)
 
         return await run_approved_write(arguments, context, perform, (public.TaskConflict, public.TaskMissing))
     return handler
 
 
 async def _create(
-    session: AsyncSession, owner_id: int, args: dict[str, Any], uuid_arg: Callable[[Any], UUID],
+    session: AsyncSession, scope: Scope, multi_workspace_enabled: bool,
+    args: dict[str, Any], uuid_arg: Callable[[Any], UUID],
 ) -> str:
     """Create a task from validated arguments."""
-    return f"task:{(await public.create_task(session, owner_id, TaskCreate.model_validate(args))).id}"
+    return f"task:{(await public.create_task(session, TaskCreate.model_validate(args), scope=scope, multi_workspace_enabled=multi_workspace_enabled)).id}"
 
 
 async def _update(
-    session: AsyncSession, owner_id: int, args: dict[str, Any], uuid_arg: Callable[[Any], UUID],
+    session: AsyncSession, scope: Scope, multi_workspace_enabled: bool,
+    args: dict[str, Any], uuid_arg: Callable[[Any], UUID],
 ) -> str:
     """Patch a task under its expected revision."""
     body = {key: value for key, value in args.items() if key != "task_id"}
-    updated = await public.update_task(session, owner_id, uuid_arg(args["task_id"]), TaskUpdate.model_validate(body))
+    updated = await public.update_task(session, uuid_arg(args["task_id"]), TaskUpdate.model_validate(body), scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     return f"task:{updated.id}"
 
 
 async def _complete(
-    session: AsyncSession, owner_id: int, args: dict[str, Any], uuid_arg: Callable[[Any], UUID],
+    session: AsyncSession, scope: Scope, multi_workspace_enabled: bool,
+    args: dict[str, Any], uuid_arg: Callable[[Any], UUID],
 ) -> str:
     """Mark a task done under its expected revision."""
     payload = TaskUpdate(status="done", expected_revision=args["expected_revision"])
-    return f"task:{(await public.update_task(session, owner_id, uuid_arg(args['task_id']), payload)).id}"
+    return f"task:{(await public.update_task(session, uuid_arg(args['task_id']), payload, scope=scope, multi_workspace_enabled=multi_workspace_enabled)).id}"
 
 
 async def _delete(
-    session: AsyncSession, owner_id: int, args: dict[str, Any], uuid_arg: Callable[[Any], UUID],
+    session: AsyncSession, scope: Scope, multi_workspace_enabled: bool,
+    args: dict[str, Any], uuid_arg: Callable[[Any], UUID],
 ) -> str:
     """Soft-delete a task under its expected revision."""
     task_id = uuid_arg(args["task_id"])
-    await public.delete_task(session, owner_id, task_id, args["expected_revision"])
+    await public.delete_task(session, task_id, args["expected_revision"], scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     return f"task:{task_id}"
 
 

@@ -1,12 +1,41 @@
 """Owner-local fictional Phase 8 goal fixtures and linked milestone records."""
 
 from datetime import date
+from typing import Any, cast
+from uuid import NAMESPACE_URL, UUID, uuid5
 
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.demo_seed import demo_seed_id
+from core.workspaces import public as workspaces
+from core.workspaces.schemas import InternalJobScope, Scope, WorkspaceContext
 from modules.goals.models import Goal
+
+
+async def _admit_seed(session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool) -> None:
+    """Admit the owner workspace before inspecting or creating demo rows."""
+    if not isinstance(scope, (WorkspaceContext, InternalJobScope)):
+        raise TypeError("An explicit seed workspace scope is required")
+    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
+    if type(multi_workspace_enabled) is not bool:
+        raise TypeError("The configured multi-workspace feature flag must be a boolean")
+    await workspaces.read_access_fence(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+
+
+def _actor(scope: Scope) -> int:
+    """Return the principal recorded by a real workspace or durable job scope."""
+    return scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
+
+
+def _ws_id(scope: Scope, seed_id: object) -> UUID:
+    """Derive a workspace-local stable ID so one workspace's fixtures never collide with another's."""
+    return uuid5(NAMESPACE_URL, f"bbd-os.demo.seed:{scope.workspace_id}:{seed_id}")
+
 
 GOAL_SEEDS = (
     {
@@ -72,28 +101,36 @@ GOAL_SEEDS = (
 )
 
 
-async def ensure_demo_goals(session: AsyncSession, owner_id: int) -> tuple[int, int]:
+async def ensure_demo_goals(
+    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
+) -> tuple[int, int]:
     """Add missing owner goals with stable milestone/task references and return created/existing counts.
 
-    The authenticated singleton owner ID comes from the CLI coordinator. Existing rows are read
-    owner-scoped and left untouched, including revisions and edits; a durable coordinator receipt
+    The CLI coordinator supplies the owner workspace scope. Existing rows are read
+    workspace-scoped and left untouched, including revisions and edits; a durable coordinator receipt
     prevents this function from running again after hard deletion. This function flushes but never
     commits so the linked tasks and completion receipt remain one transaction.
     """
+    await _admit_seed(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     created = 0
     existing = 0
     for seed in GOAL_SEEDS:
+        goal_id = _ws_id(scope, seed["id"])
         found = await session.scalar(select(Goal.id).where(
-            Goal.id == seed["id"], Goal.owner_id == owner_id,
+            Goal.id == goal_id, Goal.workspace_id == scope.workspace_id,
         ))
         if found is not None:
             existing += 1
             continue
         session.add(Goal(
-            id=seed["id"], owner_id=owner_id, title=seed["title"],
+            id=goal_id, workspace_id=scope.workspace_id, owner_id=_actor(scope), title=seed["title"],
             description=seed["description"], desired_outcome=seed["desired_outcome"],
             deadline=seed["deadline"], progress=seed["progress"],
-            manual_progress=False, status="active", milestones=seed["milestones"],
+            manual_progress=False, status="active", milestones=[
+                {**item, "id": str(_ws_id(scope, item["id"])),
+                 "task_id": str(_ws_id(scope, item["task_id"])) if item["task_id"] else None}
+                for item in cast(list[dict[str, Any]], seed["milestones"])
+            ],
             entity_ids=[], accepted_proposals=[], revision=1,
         ))
         created += 1

@@ -23,6 +23,7 @@ from uuid import uuid4
 
 import pytest
 
+from core.workspaces.schemas import WorkspaceContext
 from modules.knowledge.relationships.public import (
     MAX_CLEANUP_SUPPORTS,
     _decode_neighbor_cursor,
@@ -45,6 +46,16 @@ from modules.knowledge.relationships.schemas import (
     RelationshipSnapshot,
 )
 
+SCOPE = WorkspaceContext(user_id=1, workspace_id=uuid4(), role="owner", membership_revision=1)
+KW = {"scope": SCOPE, "multi_workspace_enabled": False}
+
+
+@pytest.fixture(autouse=True)
+def _admitted() -> object:
+    """Admission is covered in test_scope; these tests exercise the domain logic past it."""
+    with patch("modules.knowledge.relationships.public._admit", AsyncMock(return_value=MagicMock())):
+        yield
+
 
 class TestListRelationships:
     """Tests for list_relationships query bounds, filters, cursor, and pagination."""
@@ -54,10 +65,10 @@ class TestListRelationships:
         """Verify list_relationships rejects limit < 1 or limit > 100."""
         session = AsyncMock()
         with pytest.raises(ValueError, match="Relationship page limit must be between 1 and 100"):
-            await list_relationships(session, limit=0, cursor=None)
+            await list_relationships(session, limit=0, cursor=None, **KW)
 
         with pytest.raises(ValueError, match="Relationship page limit must be between 1 and 100"):
-            await list_relationships(session, limit=101, cursor=None)
+            await list_relationships(session, limit=101, cursor=None, **KW)
 
     @pytest.mark.asyncio
     async def test_naive_datetime_rejected(self) -> None:
@@ -66,10 +77,10 @@ class TestListRelationships:
         naive_dt = datetime(2026, 10, 5, 12, 0, 0)  # No tzinfo  # noqa: DTZ001  # intentionally naive: wall-clock/DST math or naive-rejection test
 
         with pytest.raises(ValueError, match="Relationship time controls require aware instants"):
-            await list_relationships(session, limit=10, cursor=None, valid_at=naive_dt)
+            await list_relationships(session, limit=10, cursor=None, valid_at=naive_dt, **KW)
 
         with pytest.raises(ValueError, match="Relationship time controls require aware instants"):
-            await list_relationships(session, limit=10, cursor=None, knowledge_as_of=naive_dt)
+            await list_relationships(session, limit=10, cursor=None, knowledge_as_of=naive_dt, **KW)
 
     @pytest.mark.asyncio
     async def test_invalid_cursor_rejected(self) -> None:
@@ -79,16 +90,16 @@ class TestListRelationships:
         # Cursor exceeds 1024 bytes
         long_cursor = "a" * 1025
         with pytest.raises(ValueError, match="Invalid relationship filter cursor"):
-            await list_relationships(session, limit=10, cursor=long_cursor)
+            await list_relationships(session, limit=10, cursor=long_cursor, **KW)
 
         # Invalid base64
         with pytest.raises(ValueError, match="Invalid relationship filter cursor"):
-            await list_relationships(session, limit=10, cursor="!!!not-base64!!!")
+            await list_relationships(session, limit=10, cursor="!!!not-base64!!!", **KW)
 
         # Scope fingerprint mismatch
         wrong_scope_cursor = base64.urlsafe_b64encode(json.dumps(["wrong_scope", "2026-10-05"]).encode()).decode()
         with pytest.raises(ValueError, match="Invalid relationship filter cursor"):
-            await list_relationships(session, limit=10, cursor=wrong_scope_cursor)
+            await list_relationships(session, limit=10, cursor=wrong_scope_cursor, **KW)
 
     @pytest.mark.asyncio
     async def test_canonical_entity_id_resolution(self) -> None:
@@ -99,9 +110,9 @@ class TestListRelationships:
         canonical_id = uuid4()
 
         with patch("modules.knowledge.entities.public.resolve_canonical_entity_id", AsyncMock(return_value=canonical_id)) as mock_resolve:
-            page = await list_relationships(session, limit=10, cursor=None, entity_id=requested_id)
+            page = await list_relationships(session, limit=10, cursor=None, entity_id=requested_id, **KW)
 
-        mock_resolve.assert_awaited_once_with(session, requested_id)
+        mock_resolve.assert_awaited_once_with(session, requested_id, **KW)
         assert isinstance(page, RelationshipPage)
         assert page.items == []
         assert page.next_cursor is None
@@ -118,7 +129,7 @@ class TestListRelationships:
         )
 
         with patch("modules.knowledge.relationships.public._list_relationships_as_of", AsyncMock(return_value=expected_page)) as mock_as_of:
-            page = await list_relationships(session, limit=10, cursor=None, knowledge_as_of=as_of)
+            page = await list_relationships(session, limit=10, cursor=None, knowledge_as_of=as_of, **KW)
 
         assert page == expected_page
         mock_as_of.assert_awaited_once()
@@ -149,7 +160,7 @@ class TestListRelationships:
         )
 
         with patch("modules.knowledge.relationships.public.get_relationship_snapshot", AsyncMock(return_value=mock_snapshot)):
-            page = await list_relationships(session, limit=2, cursor=None)
+            page = await list_relationships(session, limit=2, cursor=None, **KW)
 
         assert len(page.items) == 2
         assert page.next_cursor is not None
@@ -163,10 +174,10 @@ class TestGetNeighbors:
         """Verify get_neighbors rejects limit < 2 or limit > 100."""
         session = AsyncMock()
         with pytest.raises(ValueError, match="Neighbor page limit must be between 2 and 100 total nodes"):
-            await get_neighbors(session, entity_id=uuid4(), limit=1)
+            await get_neighbors(session, entity_id=uuid4(), limit=1, **KW)
 
         with pytest.raises(ValueError, match="Neighbor page limit must be between 2 and 100 total nodes"):
-            await get_neighbors(session, entity_id=uuid4(), limit=101)
+            await get_neighbors(session, entity_id=uuid4(), limit=101, **KW)
 
     def test_neighbor_cursor_roundtrip_and_validation(self) -> None:
         """Verify _encode_neighbor_cursor and _decode_neighbor_cursor roundtrip and reject mismatch."""
@@ -196,7 +207,7 @@ class TestGetNeighbors:
         """Verify get_neighbors returns None when focus entity is not found."""
         session = AsyncMock()
         with patch("modules.knowledge.entities.public.get_entity_refs", AsyncMock(side_effect=LookupError)):
-            result = await get_neighbors(session, entity_id=uuid4(), limit=10)
+            result = await get_neighbors(session, entity_id=uuid4(), limit=10, **KW)
         assert result is None
 
 
@@ -208,10 +219,10 @@ class TestListRelationshipEvidence:
         """Verify limit must be between 1 and 100."""
         session = AsyncMock()
         with pytest.raises(ValueError, match="Relationship evidence limit must be between 1 and 100"):
-            await list_relationship_evidence(session, relationship_id=uuid4(), limit=0, cursor=None)
+            await list_relationship_evidence(session, relationship_id=uuid4(), limit=0, cursor=None, **KW)
 
         with pytest.raises(ValueError, match="Relationship evidence limit must be between 1 and 100"):
-            await list_relationship_evidence(session, relationship_id=uuid4(), limit=101, cursor=None)
+            await list_relationship_evidence(session, relationship_id=uuid4(), limit=101, cursor=None, **KW)
 
     @pytest.mark.asyncio
     async def test_naive_cutoff_rejected(self) -> None:
@@ -219,15 +230,15 @@ class TestListRelationshipEvidence:
         session = AsyncMock()
         naive_dt = datetime(2026, 10, 5, 12, 0, 0)  # noqa: DTZ001  # intentionally naive: wall-clock/DST math or naive-rejection test
         with pytest.raises(ValueError, match="Evidence cutoff requires an aware instant"):
-            await list_relationship_evidence(session, relationship_id=uuid4(), limit=10, cursor=None, knowledge_as_of=naive_dt)
+            await list_relationship_evidence(session, relationship_id=uuid4(), limit=10, cursor=None, knowledge_as_of=naive_dt, **KW)
 
     @pytest.mark.asyncio
     async def test_missing_relationship_returns_none(self) -> None:
         """Verify non-existent relationship returns (None, None)."""
         session = AsyncMock()
-        session.get = AsyncMock(return_value=None)
+        session.scalar = AsyncMock(return_value=None)
 
-        evidence, next_cursor = await list_relationship_evidence(session, relationship_id=uuid4(), limit=10, cursor=None)
+        evidence, next_cursor = await list_relationship_evidence(session, relationship_id=uuid4(), limit=10, cursor=None, **KW)
         assert evidence is None
         assert next_cursor is None
 
@@ -248,7 +259,7 @@ class TestCreateRelationship:
             reason="Test",
         )
         with pytest.raises(ValueError, match="Relationship endpoints must be different"):
-            await create_relationship(session, payload, actor_id=1)
+            await create_relationship(session, payload, **KW)
 
     @pytest.mark.asyncio
     async def test_derived_without_evidence_rejected(self) -> None:
@@ -263,7 +274,7 @@ class TestCreateRelationship:
             reason="Test",
         )
         with pytest.raises(ValueError, match="Derived relationships require at least one evidence reference"):
-            await create_relationship(session, payload, actor_id=1)
+            await create_relationship(session, payload, **KW)
 
     @pytest.mark.asyncio
     async def test_duplicate_evidence_pairs_rejected(self) -> None:
@@ -286,7 +297,7 @@ class TestCreateRelationship:
             reason="Test",
         )
         with pytest.raises(ValueError, match="Relationship evidence membership pairs must be unique"):
-            await create_relationship(session, payload, actor_id=1)
+            await create_relationship(session, payload, **KW)
 
     @pytest.mark.asyncio
     async def test_endpoint_entity_not_found_raises_lookup_error(self) -> None:
@@ -305,7 +316,7 @@ class TestCreateRelationship:
             patch("modules.knowledge.entities.public.get_entity_refs", AsyncMock(side_effect=LookupError("Entity missing"))),
         ):
             with pytest.raises(LookupError, match="Relationship entity not found"):
-                await create_relationship(session, payload, actor_id=1)
+                await create_relationship(session, payload, **KW)
 
 
 class TestPlanValidations:
