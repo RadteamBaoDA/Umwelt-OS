@@ -26,6 +26,11 @@ def _p12_revisions() -> tuple[str, list[str]]:
     assert head is not None
     chain: list[str] = []
     revision = script.get_revision(head)
+    # Skip later (non-P12) revisions above the P12 chain so new heads do not break collection.
+    while revision is not None and not revision.revision.startswith("p12_"):
+        parent = revision.down_revision
+        assert isinstance(parent, str), "revisions above P12 form a linear chain"
+        revision = script.get_revision(parent)
     while revision is not None and revision.revision.startswith("p12_"):
         chain.append(revision.revision)
         parent = revision.down_revision
@@ -36,7 +41,7 @@ def _p12_revisions() -> tuple[str, list[str]]:
 
 
 PRE_P12, P12_CHAIN = _p12_revisions()
-HEAD = P12_CHAIN[0]
+HEAD = str(ScriptDirectory.from_config(Config(str(REPOSITORY_ROOT / "alembic.ini"))).get_current_head())
 
 
 def _alembic(database_url: str, *arguments: str) -> str:
