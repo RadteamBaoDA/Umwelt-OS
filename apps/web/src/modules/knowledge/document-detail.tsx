@@ -4,11 +4,15 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState, type FormEvent } from 'react';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ApiError } from '@/core/api';
+import { apiFailureKey } from '@/core/api-failure-key';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
+import { formatDateTime } from '@/core/i18n';
+import { useDisplayPreferences } from '@/core/query-provider';
 import { getSource } from '@/modules/sources/api';
 import { deleteDocument, documentDeletionKeys, documentKeys, getCitationTarget, getDocument, getVersion, listVersions, updateContent, updateDocument } from './api';
 import { useTranslations } from 'next-intl';
@@ -20,7 +24,8 @@ import { DocumentDeletionReceiptPanel } from './document-deletion-receipt';
  */
 export function DocumentDetail({ id, citedVersion, citationVersionId, citationChunkId, deletionOperationId }: { id: string; citedVersion: number | null; citationVersionId?: string | null; citationChunkId?: string | null; deletionOperationId?: string | null }) {
   const { csrfToken } = useWorkspaceSession();
-  const t = useTranslations('shell');
+  const t = useTranslations('documents');
+  const display = useDisplayPreferences();
   const queryClient = useQueryClient();
   const router = useRouter();
   const [acceptedOperation, setAcceptedOperation] = useState<{ documentId: string; operationId: string } | null>(null);
@@ -49,7 +54,7 @@ export function DocumentDetail({ id, citedVersion, citationVersionId, citationCh
   const [metadata, setMetadata] = useState<string | null>(null);
   const [content, setContent] = useState<string | null>(null);
   const [expectedVersion, setExpectedVersion] = useState<number | null>(null);
-  const [metadataError, setMetadataError] = useState('');
+  const [metadataError, setMetadataError] = useState<'metadataNotObject' | 'enterTitle' | 'invalidMetadata' | ''>('');
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs state to an external or prop change; reset-on-change is intentional here
@@ -91,36 +96,42 @@ export function DocumentDetail({ id, citedVersion, citationVersionId, citationCh
     event.preventDefault();
     try {
       const value: unknown = JSON.parse(metadata ?? '{}');
-      if (!value || Array.isArray(value) || typeof value !== 'object') throw new Error('Metadata must be a JSON object.');
-      if (!title?.trim()) throw new Error('Enter a title.');
+      if (!value || Array.isArray(value) || typeof value !== 'object') throw new Error('metadataNotObject');
+      if (!title?.trim()) throw new Error('enterTitle');
       setMetadataError('');
       saveMetadata.mutate({ title: title.trim(), metadata: value as Record<string, unknown> });
-    } catch (error) { setMetadataError(error instanceof Error ? error.message : 'Invalid metadata JSON.'); }
+    } catch (error) { setMetadataError(error instanceof Error && (error.message === 'metadataNotObject' || error.message === 'enterTitle') ? error.message : 'invalidMetadata'); }
   }
 
   // Render the retained receipt before deleted-document pending or 404 branches can replace this route.
   if (visibleDeletionOperationId) return <DocumentDeletionReceiptPanel operationId={visibleDeletionOperationId} />;
-  if (document.isPending) return <div className="content-panel skeleton" aria-label="Loading document" />;
-  if (document.isError) return <section className="content-panel"><h1>Document unavailable</h1><p className="error" role="alert">{document.error instanceof ApiError ? document.error.message : 'Could not load document.'}</p><Button className="secondary" onClick={() => document.refetch()}>Retry</Button></section>;
+  if (document.isPending) return <div className="content-panel skeleton" aria-label={t('loadingDocument')} />;
+  if (document.isError) return <section className="content-panel"><h1>{t('unavailable')}</h1><p className="error" role="alert">{t(apiFailureKey(document.error) ?? 'loadFailed')}</p><Button className="secondary" onClick={() => document.refetch()}>{t('retry')}</Button></section>;
 
-  return <section className="content-panel"><Link href="/knowledge/documents">← Documents</Link><div className="section-heading"><div><span className="brand">Knowledge</span><h1>{document.data.title}</h1><p className="muted">Source: {source.data?.name ?? document.data.source_id} · Version {document.data.current_version} · Updated {new Date(document.data.updated_at).toLocaleString()}</p>{Array.isArray(document.data.metadata.warnings) && document.data.metadata.warnings.includes('parsed_text_truncated') && <p className="error" role="status">{t('parsedTextTruncated')}</p>}{document.data.raw_uri && <a href={`/api/v1/documents/${document.data.id}/raw`}>Inspect original file and provenance</a>}</div><Button className="secondary" disabled={remove.isPending} onClick={() => { if (window.confirm(`Permanently delete ${document.data.title} and its version history?`)) remove.mutate(id); }}>Delete document</Button></div>
-    {remove.error && <p className="error" role="alert">{remove.error instanceof ApiError ? remove.error.message : 'Could not delete document.'}</p>}
-    {citationTarget.isError && <p className="error" role="alert">Cited evidence is no longer available under the current source access policy.</p>}
-    {citationTarget.data && <section className="sub-panel" id="cited-chunk"><h2>Cited chunk · Version {citationTarget.data.version_number}</h2><pre>{citationTarget.data.excerpt}</pre></section>}
+  return <section className="content-panel"><Link href="/knowledge/documents">{t('back')}</Link><div className="section-heading"><div><span className="brand">{t('brand')}</span><h1>{document.data.title}</h1><p className="muted">{t('sourceLine', { source: source.data?.name ?? document.data.source_id, version: document.data.current_version, updated: formatDateTime(document.data.updated_at, display.locale, display.timezone) })}</p>{Array.isArray(document.data.metadata.warnings) && document.data.metadata.warnings.includes('parsed_text_truncated') && <p className="muted rounded-md border border-border p-3 text-sm" role="note">{t('parsedTextTruncated')}</p>}{document.data.raw_uri && <a href={`/api/v1/documents/${document.data.id}/raw`}>{t('inspectOriginal')}</a>}</div><AlertDialog>
+        <AlertDialogTrigger asChild><Button className="secondary" aria-disabled={remove.isPending} onClick={(event) => { if (remove.isPending) event.preventDefault(); }}>{t('deleteDocument')}</Button></AlertDialogTrigger>
+        <AlertDialogContent>
+          <AlertDialogHeader><AlertDialogTitle>{t('deleteTitle', { title: document.data.title })}</AlertDialogTitle><AlertDialogDescription>{t('deleteBody')}</AlertDialogDescription></AlertDialogHeader>
+          <AlertDialogFooter><AlertDialogCancel>{t('cancel')}</AlertDialogCancel><AlertDialogAction variant="destructive" onClick={() => remove.mutate(id)}>{t('deleteDocument')}</AlertDialogAction></AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog></div>
+    {remove.error && <p className="error" role="alert">{t(apiFailureKey(remove.error) ?? 'deleteFailed')}</p>}
+    {citationTarget.isError && <p className="error" role="alert">{t('citedUnavailable')}</p>}
+    {citationTarget.data && <section className="sub-panel" id="cited-chunk"><h2>{t('citedChunk', { version: citationTarget.data.version_number })}</h2><pre>{citationTarget.data.excerpt}</pre></section>}
     <div className="detail-grid"><div>
-      <section className="sub-panel"><h2>Content</h2>{current.isPending && <p className="muted">Loading content…</p>}{current.isError && <p className="error" role="alert">Could not load current version. <Button className="secondary" onClick={() => current.refetch()}>Retry</Button></p>}
-        {current.data && <div className="saved-content"><h3>Saved version {current.data.version_number}</h3><pre>{current.data.content}</pre></div>}
-        {content !== null && expectedVersion !== null && <form className="form" onSubmit={(event) => { event.preventDefault(); saveContent.mutate(); }}><div className="field"><Label htmlFor="content">Content</Label><textarea id="content" className="input text-area" value={content} onChange={(event) => setContent(event.target.value)} /></div>
-          {saveContent.error && <p className="error" role="alert">{saveContent.error instanceof ApiError && saveContent.error.status === 409 ? 'A newer version exists. Your draft is still here; review the latest version before saving again.' : saveContent.error instanceof ApiError ? saveContent.error.message : 'Could not save content.'}</p>}
-          {saveContent.error instanceof ApiError && saveContent.error.status === 409 && <Button type="button" className="secondary" onClick={async () => { const latest = await document.refetch(); if (latest.data) setExpectedVersion(latest.data.current_version); }}>Use latest version number</Button>}
-          <Button type="submit" disabled={saveContent.isPending}>Save content</Button></form>}
+      <section className="sub-panel"><h2>{t('content')}</h2>{current.isPending && <p className="muted">{t('loadingContent')}</p>}{current.isError && <p className="error" role="alert">{t('contentLoadFailed')} <Button className="secondary" onClick={() => current.refetch()}>{t('retry')}</Button></p>}
+        {current.data && <div className="saved-content"><h3>{t('savedVersion', { version: current.data.version_number })}</h3><pre>{current.data.content}</pre></div>}
+        {content !== null && expectedVersion !== null && <form className="form" onSubmit={(event) => { event.preventDefault(); saveContent.mutate(); }}><div className="field"><Label htmlFor="content">{t('content')}</Label><textarea id="content" className="input text-area" value={content} onChange={(event) => setContent(event.target.value)} /></div>
+          {saveContent.error && <p className="error" role="alert">{saveContent.error instanceof ApiError && saveContent.error.status === 409 ? t('newerVersion') : t(apiFailureKey(saveContent.error) ?? 'saveContentFailed')}</p>}
+          {saveContent.error instanceof ApiError && saveContent.error.status === 409 && <Button type="button" className="secondary" onClick={async () => { const latest = await document.refetch(); if (latest.data) setExpectedVersion(latest.data.current_version); }}>{t('useLatest')}</Button>}
+          <Button type="submit" disabled={saveContent.isPending}>{t('saveContent')}</Button></form>}
       </section>
-      <section className="sub-panel"><h2>Details</h2><form className="form" onSubmit={submitMetadata}><div className="field"><Label htmlFor="title">Title</Label><Input id="title" maxLength={500} value={title ?? ''} onChange={(event) => setTitle(event.target.value)} /></div><div className="field"><Label htmlFor="metadata">Metadata (JSON object)</Label><textarea id="metadata" className="input text-area compact" value={metadata ?? ''} onChange={(event) => setMetadata(event.target.value)} /></div>
-        {metadataError && <p className="error" role="alert">{metadataError}</p>}{saveMetadata.error && <p className="error" role="alert">{saveMetadata.error instanceof ApiError ? saveMetadata.error.message : 'Could not save details.'}</p>}<Button type="submit" disabled={saveMetadata.isPending}>Save details</Button></form></section>
-    </div><aside className="sub-panel"><h2>Version history</h2>{versions.isPending && <p className="muted">Loading versions…</p>}{versions.isError && <p className="error" role="alert">Could not load versions. <Button className="secondary" onClick={() => versions.refetch()}>Retry</Button></p>}
-      {versions.data && <ul className="version-list">{versions.data.pages.flatMap((page) => page.items).map((version) => <li key={version.id}><button type="button" className="text-button" onClick={() => setSelectedVersion(version.version_number)}>Version {version.version_number}</button><span className="muted">{new Date(version.created_at).toLocaleString()}</span></li>)}</ul>}
-      {versions.hasNextPage && <Button className="secondary" disabled={versions.isFetchingNextPage} onClick={() => versions.fetchNextPage()}>Load more versions</Button>}
-      {selectedVersion !== null && <div className="version-preview" id="cited-revision"><h3>Version {selectedVersion}</h3>{selected.isPending && <p className="muted">Loading version…</p>}{selected.isError && <p className="error" role="alert">Could not load version.</p>}{selected.data && <pre>{selected.data.content}</pre>}</div>}
+      <section className="sub-panel"><h2>{t('details')}</h2><form className="form" onSubmit={submitMetadata}><div className="field"><Label htmlFor="title">{t('titleLabel')}</Label><Input id="title" maxLength={500} value={title ?? ''} onChange={(event) => setTitle(event.target.value)} /></div><div className="field"><Label htmlFor="metadata">{t('metadataLabel')}</Label><textarea id="metadata" className="input text-area compact" value={metadata ?? ''} onChange={(event) => setMetadata(event.target.value)} /></div>
+        {metadataError && <p className="error" role="alert">{t(metadataError)}</p>}{saveMetadata.error && <p className="error" role="alert">{t(apiFailureKey(saveMetadata.error) ?? 'saveDetailsFailed')}</p>}<Button type="submit" disabled={saveMetadata.isPending}>{t('saveDetails')}</Button></form></section>
+    </div><aside className="sub-panel"><h2>{t('versionHistory')}</h2>{versions.isPending && <p className="muted">{t('loadingVersions')}</p>}{versions.isError && <p className="error" role="alert">{t('versionsLoadFailed')} <Button className="secondary" onClick={() => versions.refetch()}>{t('retry')}</Button></p>}
+      {versions.data && <ul className="version-list">{versions.data.pages.flatMap((page) => page.items).map((version) => <li key={version.id}><button type="button" className="text-button" onClick={() => setSelectedVersion(version.version_number)}>{t('version', { version: version.version_number })}</button><span className="muted">{formatDateTime(version.created_at, display.locale, display.timezone)}</span></li>)}</ul>}
+      {versions.hasNextPage && <Button className="secondary" disabled={versions.isFetchingNextPage} onClick={() => versions.fetchNextPage()}>{t('loadMoreVersions')}</Button>}
+      {selectedVersion !== null && <div className="version-preview" id="cited-revision"><h3>{t('version', { version: selectedVersion })}</h3>{selected.isPending && <p className="muted">{t('loadingVersion')}</p>}{selected.isError && <p className="error" role="alert">{t('versionLoadFailed')}</p>}{selected.data && <pre>{selected.data.content}</pre>}</div>}
     </aside></div>
   </section>;
 }

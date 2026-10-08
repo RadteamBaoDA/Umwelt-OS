@@ -428,4 +428,4 @@ def test_term_cap_per_rule() -> None:
 
     terms = {TOPIC: [f"t{i}" for i in range(MAX_TERMS_PER_RULE + 50)]}
     (compiled,) = compile_rules([rule(topic_ids=[TOPIC])], terms)
-    assert len(compiled.patterns) == MAX_TERMS_PER_RULE
+    assert len(compiled.patterns) == MAX_TERMS_PER_RULE == 64

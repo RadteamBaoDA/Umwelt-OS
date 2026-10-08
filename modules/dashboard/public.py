@@ -105,6 +105,7 @@ HIGHLIGHT_SCAN_PAGE_LIMIT = max(
 )
 HIGHLIGHT_MATCHES_PER_PAGE_MAX = HIGHLIGHT_SCAN_PAGE_LIMIT * MAX_RULES_PER_DEFINITION
 PREVIEW_PAGE_SIZE = 100
+PREVIEW_MATCH_TIMEOUT_SECONDS = 5
 PREVIEW_MAX_PAGES = 2  # 200 current versions at most
 PREVIEW_MAX_MATCHES = 100
 
@@ -279,10 +280,11 @@ async def evaluate_gadget_highlights(
     item_scope = {str(value) for value in raw_item_scope} if isinstance(raw_item_scope, list) else set()
     compiled = compile_rules(rules, await _rule_topic_terms(session, owner_id, rules))
     matches = []
-    for item in projection_page.items:
-        if item_scope and str(item.document_id) not in item_scope:
-            continue
-        for match in match_compiled(item.excerpt, compiled, source_id=item.source_id):
+    scoped = [item for item in projection_page.items if not item_scope or str(item.document_id) in item_scope]
+    # Regex work is CPU-bound; keep it off the API event loop.
+    per_item = await asyncio.to_thread(_match_items, scoped, compiled)
+    for item, item_matches in zip(scoped, per_item, strict=True):
+        for match in item_matches:
             matches.append(DashboardHighlightRead(
                 document_id=item.document_id, document_version_id=item.document_version_id,
                 source_id=item.source_id, title=item.title, observed_at=item.observed_at,
@@ -370,7 +372,14 @@ async def preview_highlights(
         items = [item for item in page.items if not item_scope or str(item.document_id) in item_scope]
         scanned += len(items)
         # Regex work is CPU-bound; keep it off the event loop.
-        per_item = await asyncio.to_thread(_match_items, items, compiled)
+        try:
+            per_item = await asyncio.wait_for(
+                asyncio.to_thread(_match_items, items, compiled), PREVIEW_MATCH_TIMEOUT_SECONDS,
+            )
+        except TimeoutError as exc:
+            raise HTTPException(
+                status_code=504, detail={"code": "preview_timeout", "message": "Preview took too long", "details": {}},
+            ) from exc
         for item, item_matches in zip(items, per_item, strict=True):
             for match in item_matches:
                 counts[match.rule_id] += 1

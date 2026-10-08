@@ -82,21 +82,21 @@ export function CitationPanel({
             const href = safeHttpUrl(citation.url);
             // Title and snippet are untrusted third-party text: plain React text only, never markdown or HTML.
             return (
-              <div key={`web-${idx}`} className="flex flex-col gap-1.5 p-2.5 rounded-lg border border-border bg-background text-xs">
+              <div key={`web-${idx}`} className="flex flex-col gap-2 p-3 rounded-lg border border-border bg-background text-xs">
                 <div className="flex items-start justify-between gap-2">
                   <span className="font-semibold text-foreground line-clamp-2">[{idx + 1}] {citation.title}</span>
-                  <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-border bg-secondary px-1.5 text-[10px] text-muted-foreground">
-                    <GlobeIcon className="size-3" />{t('webBadge')}
+                  <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-border bg-background px-2 text-xs text-muted-foreground">
+                    <GlobeIcon className="size-3" aria-hidden="true" />{t('webBadge')}
                   </span>
                 </div>
                 {citation.quote && (
-                  <p className="pl-2 border-l-2 border-primary/40 text-muted-foreground line-clamp-4 text-[11px] leading-relaxed">{citation.quote}</p>
+                  <p className="pl-2 border-l-2 border-primary/40 text-muted-foreground line-clamp-4 text-xs leading-relaxed">{citation.quote}</p>
                 )}
-                <div className="flex items-center justify-between gap-2 text-[10px] text-muted-foreground pt-1 border-t border-border/40">
+                <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground pt-1 border-t border-border/40">
                   <span className="truncate">{webHost(citation.url)}</span>
                   {href && (
-                    <a href={href} target="_blank" rel="noopener noreferrer nofollow" className="inline-flex shrink-0 items-center gap-1 text-primary hover:underline" aria-label={`${t('openWebResult')}: ${webHost(citation.url)}`}>
-                      <span>{t('openWebResult')}</span><ExternalLinkIcon className="size-3" />
+                    <a href={href} target="_blank" rel="noopener noreferrer nofollow" className="inline-flex min-h-11 shrink-0 items-center gap-1 text-primary hover:underline" aria-label={t('openWebResultFor', { host: webHost(citation.url) })}>
+                      <span>{t('openWebResult')}</span><ExternalLinkIcon className="size-3" aria-hidden="true" />
                     </a>
                   )}
                 </div>
@@ -115,42 +115,42 @@ export function CitationPanel({
           return (
             <div
               key={`${citation.chunkId}-${idx}`}
-              className="flex flex-col gap-1.5 p-2.5 rounded-lg border border-border bg-background text-xs"
+              className="flex flex-col gap-2 p-3 rounded-lg border border-border bg-background text-xs"
             >
               <div className="flex items-start justify-between gap-2">
                 <span className="font-semibold text-foreground line-clamp-1">
                   [{idx + 1}] {citation.title}
                 </span>
-                <div className="flex items-center gap-1.5 shrink-0">
+                <div className="flex items-center gap-2 shrink-0">
                   <Link
                     href={docHref}
-                    className="inline-flex items-center gap-1 text-[11px] text-primary hover:underline font-medium"
+                    className="inline-flex items-center gap-1 text-xs text-primary hover:underline font-medium"
                     title={t('openDocument')}
                   >
                     <span>{t('document')}</span>
-                    <ExternalLinkIcon className="size-3" />
+                    <ExternalLinkIcon className="size-3" aria-hidden="true" />
                   </Link>
                   {safeHttpUrl(citation.url) && (
                     <a
                       href={safeHttpUrl(citation.url)}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+                      className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
                       title={safeHttpUrl(citation.url)}
                     >
-                      <ExternalLinkIcon className="size-3" />
+                      <ExternalLinkIcon className="size-3" aria-hidden="true" />
                     </a>
                   )}
                 </div>
               </div>
 
               {citation.quote && (
-                <blockquote className="pl-2 border-l-2 border-primary/40 italic text-muted-foreground line-clamp-4 text-[11px] leading-relaxed">
+                <blockquote className="pl-2 border-l-2 border-primary/40 italic text-muted-foreground line-clamp-4 text-xs leading-relaxed">
                   &ldquo;{citation.quote}&rdquo;
                 </blockquote>
               )}
 
-              <div className="flex items-center justify-between text-[10px] text-muted-foreground pt-1 border-t border-border/40">
+              <div className="flex items-center justify-between text-xs text-muted-foreground pt-1 border-t border-border/40">
                 <span>{t('source')}: {citation.sourceType}</span>
                 {formattedDate && <span>{formattedDate}</span>}
               </div>

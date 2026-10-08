@@ -24,6 +24,7 @@ import { gadgetSettingsMessages } from './messages/gadget-settings';
 import { taskGoalMessages } from './messages/task-goal';
 import { searchEntitiesMessages } from './messages/search';
 import { detailMessages } from './messages/detail';
+import { documentsMessages } from './messages/documents';
 
 /**
  * Compose every locale from per-area fragments in ./messages/<area>.ts.
@@ -53,6 +54,7 @@ export const messages = {
     exports: exportMessages['en-us'],
     mcp: mcpCatalog['en-us'],
     detail: detailMessages['en-us'],
+    documents: documentsMessages['en-us'],
     news: storyMessages['en-us'],
     daily: dailyMessages['en-us'],
     github: githubMessages['en-us'],
@@ -82,6 +84,7 @@ export const messages = {
     exports: exportMessages['vi-vi'],
     mcp: mcpCatalog['vi-vi'],
     detail: detailMessages['vi-vi'],
+    documents: documentsMessages['vi-vi'],
     news: storyMessages['vi-vi'],
     daily: dailyMessages['vi-vi'],
     github: githubMessages['vi-vi'],

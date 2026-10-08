@@ -63,6 +63,8 @@ export interface ChatContext {
     documentId: string;
     documentVersionId?: string;
     chunkId?: string;
+    /** Client-only chip label; stripped before sending (the server forbids extra fields). */
+    title?: string;
   }>;
   [key: string]: unknown;
 }

@@ -123,6 +123,7 @@ function SourceEntry({
   editingId,
   onEdit,
   onChanged,
+  onRemoved,
 }: {
   source: Source;
   schedule: string;
@@ -136,6 +137,8 @@ function SourceEntry({
   editingId: string | null;
   onEdit: (source: Source) => void;
   onChanged: () => void;
+  /** Called when a confirmed disconnect removes this row, so the owner can place focus. */
+  onRemoved: () => void;
 }) {
   const t = useTranslations('sources');
   const display = useDisplayPreferences();
@@ -159,6 +162,16 @@ function SourceEntry({
   });
   const { busy, error, toggleStatus, disconnect } = useSourceActions({ source, activation: activation.data, onResumed: onEdit, onChanged, onPurgeStarted });
 
+  const nameCellRef = useRef<HTMLTableCellElement>(null);
+  const confirmedRef = useRef(false);
+  const everConfirmedRef = useRef(false);
+  const onRemovedRef = useRef(onRemoved);
+  useEffect(() => { onRemovedRef.current = onRemoved; });
+  // A confirmed disconnect that unmounts the row leaves focus on <body>; hand it to the list heading.
+  useEffect(() => () => {
+    const lost = !document.activeElement || document.activeElement === document.body;
+    if (everConfirmedRef.current && lost) onRemovedRef.current();
+  }, []);
   const editedHere = editingId === source.id;
   const rowState = sourceRowState(source, activation.data);
   const chipKey: Record<SourceRowState, 'statusActive' | 'statusPaused' | 'statusArchived' | 'stateSavedNotActive' | 'stateError' | 'stateReconnect'> = {
@@ -169,7 +182,7 @@ function SourceEntry({
   const mobileLabel = (key: 'colSchedule' | 'colCollected' | 'colIndexed') => <span className="muted mr-1 min-[721px]:hidden">{t(key)}:</span>;
   return <>
     <tr className="border-b border-border max-[720px]:mb-3 max-[720px]:block max-[720px]:rounded-lg max-[720px]:border max-[720px]:p-3">
-      <th scope="row" className={`${cell} font-normal`}>
+      <th scope="row" ref={nameCellRef} tabIndex={-1} className={`${cell} font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}>
         <strong>{source.name}</strong>
         <p className="muted">{providerLabel(source.provider, t) ?? source.type}</p>
         {(source.collection_error_code || source.processing_error_code) && <p className="error">{t('collectionError')}: {source.collection_error_code ?? t('noError')} · {t('processingError')}: {source.processing_error_code ?? t('noError')}</p>}
@@ -187,8 +200,9 @@ function SourceEntry({
           {connector && source.status !== 'archived' && <Button className="secondary" onClick={() => onEdit(source)}>{t('configure')}</Button>}
           {connector && source.status === 'active' && activation.data?.state === 'active' && <Button className="secondary" disabled={collect.isPending || busy} onClick={() => collect.mutate()}>{collect.isPending ? t('collecting') : t('collectNow')}</Button>}
           {!editedHere && source.status !== 'archived' && <Button className="secondary" disabled={busy} onClick={toggleStatus}>{busy ? t(source.status === 'paused' ? 'resuming' : 'pausing') : t(source.status === 'paused' ? 'resume' : 'pause')}</Button>}
-          {!editedHere && !purged && <DisconnectDialog sourceId={source.id} name={source.name} archived={source.status === 'archived'} disabled={busy} onConfirm={(deleteData) => void disconnect(deleteData)}
-            trigger={<Button className="secondary" disabled={busy}>{busy ? t('disconnecting') : t(source.status === 'archived' ? 'disconnectDelete' : 'disconnectAction')}</Button>} />}
+          {!editedHere && !purged && <DisconnectDialog sourceId={source.id} name={source.name} archived={source.status === 'archived'} disabled={busy} onConfirm={(deleteData) => { confirmedRef.current = true; everConfirmedRef.current = true; void disconnect(deleteData); }}
+            onCloseAutoFocus={(event) => { if (!confirmedRef.current) return; confirmedRef.current = false; event.preventDefault(); nameCellRef.current?.focus(); }}
+            trigger={<Button className="secondary" aria-disabled={busy}>{busy ? t('disconnecting') : t(source.status === 'archived' ? 'disconnectDelete' : 'disconnectAction')}</Button>} />}
           {connector && <Button className="secondary" aria-expanded={historyOpen} onClick={() => setHistoryOpen((open) => !open)}>{t(historyOpen ? 'hideHistory' : 'showHistory')}</Button>}
         </div>
       </td>
@@ -209,6 +223,7 @@ export function SourceList() {
   const display = useDisplayPreferences();
   const queryClient = useQueryClient();
   const { ensureSourcesDocument } = useGuardedNavigation();
+  const headingRef = useRef<HTMLHeadingElement>(null);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<Source | null | undefined>(undefined);
   const [editSession, setEditSession] = useState(0);
@@ -291,10 +306,11 @@ export function SourceList() {
     {sources.isPending && <div className="skeleton" aria-label={t('loading')} />}
     {sources.isError && <p className="error" role="alert">{t('loadFailed')} <Button className="secondary" onClick={() => sources.refetch()}>{t('retry')}</Button></p>}
     {sources.isSuccess && items.length === 0 && <p className="empty-state">{t('empty')}</p>}
+    {items.length > 0 && <h2 ref={headingRef} tabIndex={-1} className="text-base font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring">{t('tableCaption')}</h2>}
     {items.length > 0 && <SourcesTable filter={filter} counts={counts} onFilterChange={setFilter}>
       {visible.map((source) => {
         const configuration = configurationBySourceId.get(source.id);
-        return <SourceEntry key={source.id} source={source} schedule={configuration?.data ? scheduleLabel(configuration.data.configuration.schedule_interval_minutes, t) : t('scheduleUnknown')} timezone={configuration?.data?.configuration.timezone ?? null} operationId={operations[source.id] ?? ''} editingId={editing?.id ?? null} onPurgeStarted={(id) => setOperations((current) => ({ ...current, [source.id]: id }))} purged={Boolean(purged[source.id])} onPurgeFinished={() => { if (purged[source.id]) return; setPurged((current) => ({ ...current, [source.id]: true })); void refresh(); }} onEdit={(value) => transition(value)} onChanged={() => { void refresh(); }} />;
+        return <SourceEntry key={source.id} source={source} schedule={configuration?.data ? scheduleLabel(configuration.data.configuration.schedule_interval_minutes, t) : t('scheduleUnknown')} timezone={configuration?.data?.configuration.timezone ?? null} operationId={operations[source.id] ?? ''} editingId={editing?.id ?? null} onPurgeStarted={(id) => setOperations((current) => ({ ...current, [source.id]: id }))} purged={Boolean(purged[source.id])} onPurgeFinished={() => { if (purged[source.id]) return; setPurged((current) => ({ ...current, [source.id]: true })); void refresh(); }} onEdit={(value) => transition(value)} onChanged={() => { void refresh(); }} onRemoved={() => headingRef.current?.focus()} />;
       })}
     </SourcesTable>}
     {items.length > 0 && visible.length === 0 && <p className="empty-state">{t('emptyFiltered')}</p>}

@@ -6,7 +6,7 @@ import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { apiRequest, csrfHeaders } from '@/core/api';
+import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
 import { apiFailureKey } from '@/core/api-failure-key';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 
@@ -64,7 +64,7 @@ export function GoogleLink() {
       {status.data.linked
         ? <Button type="button" className="secondary" disabled={!password || unlink.isPending} onClick={() => unlink.mutate()}>{unlink.isPending ? t('unlinking') : t('unlinkGoogle')}</Button>
         : <Button type="button" disabled={!password || link.isPending} onClick={() => link.mutate()}>{link.isPending ? t('linking') : t('linkGoogle')}</Button>}
-      {error && <p className="error" role="alert">{t(apiFailureKey(error) ?? 'changeFailed')}</p>}
+      {error && <p className="error" role="alert">{t(error instanceof ApiError && error.code === 'password_incorrect' ? 'passwordIncorrect' : apiFailureKey(error) ?? 'changeFailed')}</p>}
     </>}
   </section>;
 }

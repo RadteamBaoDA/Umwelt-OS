@@ -36,9 +36,10 @@ class HighlightMatch:
     reason: str
 
 
-# ponytail: per-rule term cap bounds regex work (8 topics x 150 terms could otherwise reach ~1.2k per rule);
-# raise or switch to one alternation per rule if real topics need more.
-MAX_TERMS_PER_RULE = 256
+# ponytail: hard caps bound regex work per item (<= 512 terms/definition, one alternation per rule);
+# raise only with a fresh CPU measurement. Stored rules above the caps are truncated at match time.
+MAX_TERMS_PER_RULE = 64
+MAX_TERMS_PER_DEFINITION = 512
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +50,16 @@ class CompiledRule:
     terms: tuple[str, ...]
     patterns: tuple[re.Pattern[str], ...]
     unresolved: int
+    folded: tuple[str, ...] = ()
+    gate: re.Pattern[str] | None = None
+    truncated: int = 0
+
+
+_TURKISH_I = {0x130: "i", 0x131: "i"}  # re.IGNORECASE equates İ/ı with i; casefold alone does not
+
+
+def _fold(value: str) -> str:
+    return value.translate(_TURKISH_I).casefold()
 
 
 def compile_rules(
@@ -56,6 +67,7 @@ def compile_rules(
 ) -> list[CompiledRule]:
     """Resolve topic terms and compile each rule's patterns once; topics absent from the map are unresolved."""
     compiled: list[CompiledRule] = []
+    per_rule = min(MAX_TERMS_PER_RULE, MAX_TERMS_PER_DEFINITION // max(1, len(rules)))
     for rule in rules:
         terms = list(rule.keywords)
         unresolved = 0
@@ -64,10 +76,15 @@ def compile_rules(
                 terms.extend(topic_terms[topic_id])
             else:
                 unresolved += 1
-        distinct = tuple(dict.fromkeys(terms))[:MAX_TERMS_PER_RULE]
+        unique = tuple(dict.fromkeys(terms))
+        distinct = unique[:per_rule]
+        gate = re.compile(
+            "|".join(rf"\b{re.escape(term)}\b" for term in sorted(distinct, key=len, reverse=True)), re.IGNORECASE,
+        ) if distinct else None
         compiled.append(CompiledRule(
             rule, distinct,
             tuple(re.compile(rf"\b{re.escape(term)}\b", re.IGNORECASE) for term in distinct), unresolved,
+            tuple(_fold(term) for term in distinct), gate, len(unique) - len(distinct),
         ))
     return compiled
 
@@ -78,6 +95,7 @@ def match_compiled(
     """Match text against pre-compiled rules; results are ordered critical first."""
     if not text or not compiled:
         return []
+    folded_text = _fold(text)
     matches: list[HighlightMatch] = []
     for item in compiled:
         rule = item.rule
@@ -85,15 +103,24 @@ def match_compiled(
             source_id in rule.exclude_source_ids or (rule.source_ids and source_id not in rule.source_ids)
         ):
             continue
-        matched_words = [term for term, pattern in zip(item.terms, item.patterns, strict=True) if pattern.search(text)]
+        # Cheap substring pre-check, then one alternation pass; only then per-term checks (exact, keeps
+        # overlapping terms such as "new york" and "york" both reported).
+        if item.gate is None or not any(term in folded_text for term in item.folded) or not item.gate.search(text):
+            continue
+        matched_words = [
+            term for term, folded, pattern in zip(item.terms, item.folded, item.patterns, strict=True)
+            if folded in folded_text and pattern.search(text)
+        ]
         if matched_words:
             matched_words = matched_words[:16]  # DashboardHighlightRead bound
             reason = f"Matched {len(matched_words)} keyword(s): {', '.join(matched_words)}"
             if item.unresolved:
                 reason += f" ({item.unresolved} topic(s) unavailable)"
+            if item.truncated:
+                reason += f" ({item.truncated} topic term(s) not checked)"
             matches.append(HighlightMatch(
                 rule_id=rule.id, matched_keywords=tuple(matched_words), severity=rule.severity,
-                notify=rule.notify, reason=reason,
+                notify=rule.notify, reason=reason[:1000],
             ))
     matches.sort(key=lambda m: _SEVERITY_ORDER.get(m.severity, 0), reverse=True)
     return matches
