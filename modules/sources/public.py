@@ -501,6 +501,7 @@ def _connector_source(source: Source) -> ConnectorSource:
         status=source.status,
         generation=source.generation,
         configuration=deepcopy(source.configuration or {}),
+        local_only=source.local_only,
         provider=source.provider,
     )
 

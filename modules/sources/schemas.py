@@ -186,6 +186,7 @@ class ConnectorSource(BaseModel):
     status: str
     generation: int
     configuration: dict[str, object]
+    local_only: bool
     provider: str | None = None
 
 
