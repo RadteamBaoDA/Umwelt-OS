@@ -185,9 +185,9 @@ async def chat_startup(ctx: dict[str, object]) -> None:
     set_process_role("chat-worker")
     engine, factory = make_session_factory(
         settings.database_url,
-        pool_size=10,
-        max_overflow=10,
-        statement_timeout_ms=60000,
+        pool_size=settings.db_pool_size,
+        max_overflow=settings.db_max_overflow,
+        statement_timeout_ms=settings.db_statement_timeout_ms,
         idle_tx_timeout_ms=settings.db_idle_tx_timeout_ms,
     )
     ctx["session_factory"] = factory

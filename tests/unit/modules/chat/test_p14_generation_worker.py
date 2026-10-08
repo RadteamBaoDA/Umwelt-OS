@@ -182,7 +182,7 @@ async def test_fence_failure_between_flushes_drops_buffer_and_redacts(monkeypatc
 async def test_recover_requeues_pending_and_fails_abandoned_streaming(monkeypatch: pytest.MonkeyPatch) -> None:
     pending_id, stale_id = uuid4(), uuid4()
     session = MagicMock()
-    session.scalars = AsyncMock(return_value=[pending_id])
+    session.scalars = AsyncMock(side_effect=[[pending_id], []])
     session.execute = AsyncMock(return_value=SimpleNamespace(
         all=lambda: [(stale_id, {"_chat_privacy_fence": {"rev": 3}})]))
     session.scalar = AsyncMock(return_value=7)
@@ -349,3 +349,41 @@ async def test_legacy_aliases_overlay_accepts_bytes_keys() -> None:
     redis = SimpleNamespace(hgetall=AsyncMock(return_value={alias.encode(): value}))
     mappings = await legacy_aliases(redis, Settings(csrf_signing_secret="s"))  # type: ignore[arg-type]
     assert mappings[alias].model == "m"
+
+
+async def test_recover_fails_expired_pending_instead_of_requeueing(monkeypatch: pytest.MonkeyPatch) -> None:
+    old_id = uuid4()
+    session = MagicMock()
+    session.scalars = AsyncMock(side_effect=[[], [old_id]])
+    session.execute = AsyncMock(return_value=SimpleNamespace(all=list))
+    run = SimpleNamespace(status="pending", conversation_id=uuid4())
+    session.scalar = AsyncMock(side_effect=[run, object(), run, 0])
+    session.add = MagicMock()
+    session.commit = AsyncMock()
+    monkeypatch.setattr(worker, "lock_export_privacy", AsyncMock())
+    monkeypatch.setattr(worker, "_next_event_seq", AsyncMock(return_value=1))
+    redis = SimpleNamespace(enqueue_job=AsyncMock())
+    result = await worker.recover_chat_runs({"session_factory": _factory(session), "redis": redis})
+    assert result == {"requeued": 0, "failed": 1}
+    redis.enqueue_job.assert_not_awaited()
+    assert run.status == "failed" and session.add.call_args.args[0].data["status"] == "failed"
+
+
+async def test_stream_iterator_closed_and_cancel_check_throttled(monkeypatch: pytest.MonkeyPatch) -> None:
+    gen = _Gen(monkeypatch, [])
+    closed: list[bool] = []
+
+    async def stream(**_k: Any) -> AsyncIterator[str]:
+        try:
+            for _ in range(50):
+                yield "data: " + json.dumps({"choices": [{"delta": {"content": ""}}]})
+            yield "data: [DONE]"
+        finally:
+            closed.append(True)
+
+    monkeypatch.setattr(worker, "ModelGateway", lambda **kw: SimpleNamespace(stream=stream))
+    checks = worker.is_run_cancelled
+    await gen.run()
+    assert closed == [True]
+    # 50 instantaneous lines: the throttle allows no per-line check (only claim/flush checks remain)
+    assert checks.await_count <= 3  # type: ignore[attr-defined]
