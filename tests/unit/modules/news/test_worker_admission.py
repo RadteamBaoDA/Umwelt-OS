@@ -1,0 +1,75 @@
+"""N-F8/N-F12: news worker admission order and shared cursor state."""
+
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import uuid4
+
+import pytest
+
+from core.workspaces.schemas import AccessFence, InternalJobScope
+from modules.news import worker
+
+WS = uuid4()
+FENCE = AccessFence(workspace_id=WS, user_id=1, membership_revision=2, configuration_revision=3)
+SCOPE = InternalJobScope(workspace_id=WS, actor_user_id=1, membership_revision=2)
+
+
+def _session_factory() -> MagicMock:
+    session = AsyncMock()
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=session)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    return MagicMock(return_value=cm)
+
+
+@pytest.mark.asyncio
+async def test_invalid_provenance_locks_admission_before_checkpoint_and_outbox() -> None:
+    """With no provenance, original admission is locked before checkpoint and outbox locks."""
+    order: list[str] = []
+    delivery = SimpleNamespace(status="pending", type="news.document.ready", version=1, payload={})
+    event = SimpleNamespace(status="pending", version=1, valid_payload=False)
+
+    def rec(name: str, result: object = None) -> AsyncMock:
+        async def _call(*_a: object, **_k: object) -> object:
+            order.append(name)
+            return result
+        return AsyncMock(side_effect=_call)
+
+    ctx = {"session_factory": _session_factory(), "settings": SimpleNamespace(multi_workspace_enabled=True)}
+    with patch.object(worker.ingestion, "resolve_ingestion_event_scope", rec("scope", SCOPE)), \
+         patch.object(worker.workspaces, "read_access_fence", rec("read", FENCE)), \
+         patch.object(worker.workspaces, "lock_access_fence", rec("lock_admission", FENCE)), \
+         patch.object(worker.settings_public, "module_is_enabled", rec("module", True)), \
+         patch.object(worker.ingestion, "get_event_delivery", rec("delivery", delivery)), \
+         patch.object(worker.ingestion, "resolve_ready_event_provenance", rec("provenance", None)), \
+         patch.object(worker, "_ensure_recovery_checkpoint", rec("checkpoint")), \
+         patch.object(worker.ingestion, "lock_news_document_ready_event", rec("outbox", event)), \
+         patch.object(worker.ingestion, "fail_news_document_ready_event", rec("fail")), \
+         patch.object(worker, "commit_with_replay", rec("commit")):
+        await worker.process_news_document_ready(ctx, str(uuid4()))
+    assert order.index("lock_admission") < order.index("delivery")
+    assert order.index("lock_admission") < order.index("checkpoint") < order.index("outbox")
+
+
+@pytest.mark.asyncio
+async def test_cursor_survives_arq_style_ctx_copies_and_failed_redis_set() -> None:
+    """Shared startup state keeps progress across per-job ctx copies even when Redis SET fails."""
+    redis = AsyncMock()
+    redis.get.return_value = None
+    redis.set.side_effect = RuntimeError("down")
+    base = {"redis": redis, "w2_cursor_state": {}}
+    first = uuid4()
+    await worker._write_cursor({**base}, worker.RECOVERY_CURSOR_KEY, first)
+    redis.get.return_value = str(uuid4()).encode()  # stale remote value
+    assert await worker._read_cursor({**base}, worker.RECOVERY_CURSOR_KEY) == first
+
+
+@pytest.mark.asyncio
+async def test_cursor_rejects_unknown_key_and_bad_uuid() -> None:
+    """Only fixed keys are accepted and malformed stored values read as no cursor."""
+    redis = AsyncMock()
+    redis.get.return_value = b"not-a-uuid"
+    ctx = {"redis": redis, "w2_cursor_state": {}}
+    with pytest.raises(KeyError):
+        await worker._read_cursor(ctx, "other")
+    assert await worker._read_cursor(ctx, worker.RECOVERY_INIT_CURSOR_KEY) is None

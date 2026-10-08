@@ -40,11 +40,6 @@ FUZZY_WINDOW = timedelta(hours=72)
 FUZZY_THRESHOLD = 0.92
 
 
-def _actor(scope: Scope) -> int:
-    """Return the admitted owner actor used to bind story cursors and profiles."""
-    return scope.user_id if isinstance(scope, WorkspaceContext) else scope.actor_user_id
-
-
 async def _admit(session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool) -> AccessFence:
     """Admit owner story reads before source selection, counts, or enrichment."""
     if isinstance(scope, WorkspaceContext) and scope.role != "owner":
@@ -521,7 +516,6 @@ async def list_stories(
 ) -> StoryPage:
     """Return a bounded keyset page whose titles and counts use live authorized supports only."""
     access_fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    owner_id = _actor(scope)
     if filters.date_from and filters.date_to and filters.date_from >= filters.date_to:
         raise HTTPException(status_code=422, detail="date_from must be earlier than date_to")
     as_of = datetime.now(UTC)
@@ -660,6 +654,62 @@ async def list_stories(
                      capability="partial" if page_reasons or any(item.relevance_state != "available" for item in scored) else "available")
 
 
+DETAIL_CURSOR_DOMAIN = "news_story_detail"
+DETAIL_CURSOR_SORT = "support_key_asc"
+_DETAIL_CURSOR_FIELDS = {
+    "v", "domain", "workspace_id", "actor_user_id", "membership_revision", "configuration_revision",
+    "story_id", "source_ids", "as_of", "after", "source_selection_incomplete", "sort",
+}
+
+
+def _encode_detail_cursor(
+    fence: AccessFence, story_id: UUID, source_ids: tuple[UUID, ...], as_of: datetime,
+    after: tuple[UUID, UUID, UUID], source_selection_incomplete: bool,
+) -> str:
+    """Bind a Story detail evidence token to the admitted workspace, actor, revisions and snapshot."""
+    raw = json.dumps({
+        "v": 2, "domain": DETAIL_CURSOR_DOMAIN, "workspace_id": str(fence.workspace_id),
+        "actor_user_id": str(fence.user_id), "membership_revision": fence.membership_revision,
+        "configuration_revision": fence.configuration_revision, "story_id": str(story_id),
+        "source_ids": sorted(str(value) for value in source_ids), "as_of": as_of.isoformat(),
+        "after": [str(value) for value in after], "source_selection_incomplete": source_selection_incomplete,
+        "sort": DETAIL_CURSOR_SORT,
+    }, sort_keys=True, separators=(",", ":"))
+    return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+
+
+def _decode_detail_cursor(
+    value: str, fence: AccessFence, story_id: UUID, requested_source_ids: tuple[UUID, ...],
+) -> tuple[tuple[UUID, ...], datetime, tuple[UUID, UUID, UUID], bool]:
+    """Reject legacy (six-field), cross-workspace, stale-revision or mismatched detail tokens with HTTP 422."""
+    try:
+        raw = base64.urlsafe_b64decode(value + "=" * (-len(value) % 4)).decode()
+        parts = json.loads(raw)
+        if (
+            not isinstance(parts, dict) or set(parts) != _DETAIL_CURSOR_FIELDS
+            or parts["v"] != 2 or parts["domain"] != DETAIL_CURSOR_DOMAIN or parts["sort"] != DETAIL_CURSOR_SORT
+            or parts["workspace_id"] != str(fence.workspace_id)
+            or parts["actor_user_id"] != str(fence.user_id)
+            or parts["membership_revision"] != fence.membership_revision
+            or parts["configuration_revision"] != fence.configuration_revision
+            or parts["story_id"] != str(story_id)
+            or not isinstance(parts["source_ids"], list) or len(parts["source_ids"]) > 32
+            or len(set(parts["source_ids"])) != len(parts["source_ids"])
+            or (requested_source_ids and sorted(map(str, requested_source_ids)) != sorted(parts["source_ids"]))
+            or not isinstance(parts["source_selection_incomplete"], bool)
+            or not isinstance(parts["after"], list) or len(parts["after"]) != 3
+            or base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=") != value
+        ):
+            raise ValueError
+        as_of = datetime.fromisoformat(parts["as_of"])
+        if as_of.utcoffset() is None:
+            raise ValueError
+        after = (UUID(parts["after"][0]), UUID(parts["after"][1]), UUID(parts["after"][2]))
+        return tuple(UUID(item) for item in parts["source_ids"]), as_of, after, parts["source_selection_incomplete"]
+    except (ValueError, TypeError, KeyError, UnicodeDecodeError, binascii.Error) as exc:
+        raise HTTPException(status_code=422, detail="Invalid story evidence cursor") from exc
+
+
 async def get_story(
     session: AsyncSession, story_id: UUID, source_ids: tuple[UUID, ...], *,
     evidence_limit: int = 100, evidence_cursor: str | None = None,
@@ -667,8 +717,10 @@ async def get_story(
 ) -> StoryDetail | None:
     """Return current excerpts or a title-free partial page with bounded continuation.
 
-    The opaque cursor binds owner, story, the resolved source snapshot, fixed
-    ``as_of``, default-source truncation state, and last scanned support key.
+    The opaque v2 cursor binds workspace, actor, membership/configuration revision,
+    the Story-detail domain, story, the resolved source snapshot, fixed ``as_of``,
+    default-source truncation state, sort, and last scanned support key; the
+    legacy six-field token is rejected.
     Historical/current authority is reprojected on each page; omitted source IDs
     during continuation reuse the pinned scope and can never widen it. A stale
     support window returns no title or evidence but retains a cursor when later
@@ -676,37 +728,16 @@ async def get_story(
     Invalid cursors raise HTTP 422, and current document/source fences are checked
     before detached content is returned.
     """
-    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    owner_id = _actor(scope)
+    access_fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if not 1 <= evidence_limit <= 100:
         raise ValueError("Evidence page size must be between 1 and 100")
     after_key: tuple[UUID, UUID, UUID] | None = None
     as_of = datetime.now(UTC)
     source_selection_incomplete = False
     if evidence_cursor:
-        try:
-            raw = base64.urlsafe_b64decode(evidence_cursor + "=" * (-len(evidence_cursor) % 4)).decode()
-            parts = json.loads(raw)
-            if (
-                not isinstance(parts, dict)
-                or set(parts) != {"owner_id", "story_id", "source_ids", "as_of", "after", "source_selection_incomplete"}
-                or parts["owner_id"] != owner_id or parts["story_id"] != str(story_id)
-                or not isinstance(parts["source_ids"], list) or len(parts["source_ids"]) > 32
-                or len(set(parts["source_ids"])) != len(parts["source_ids"])
-                or (source_ids and sorted(map(str, source_ids)) != sorted(parts["source_ids"]))
-                or not isinstance(parts["source_selection_incomplete"], bool)
-                or not isinstance(parts["after"], list) or len(parts["after"]) != 3
-                or base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=") != evidence_cursor
-            ):
-                raise ValueError
-            source_ids = tuple(UUID(value) for value in parts["source_ids"])
-            as_of = datetime.fromisoformat(parts["as_of"])
-            if as_of.utcoffset() is None:
-                raise ValueError
-            after_key = (UUID(parts["after"][0]), UUID(parts["after"][1]), UUID(parts["after"][2]))
-            source_selection_incomplete = parts["source_selection_incomplete"]
-        except (ValueError, TypeError, KeyError, UnicodeDecodeError, binascii.Error) as exc:
-            raise HTTPException(status_code=422, detail="Invalid story evidence cursor") from exc
+        source_ids, as_of, after_key, source_selection_incomplete = _decode_detail_cursor(
+            evidence_cursor, access_fence, story_id, source_ids,
+        )
     else:
         source_ids, source_selection_incomplete = await _resolve_source_scope(session, source_ids,
             scope=scope, multi_workspace_enabled=multi_workspace_enabled)
@@ -722,13 +753,9 @@ async def get_story(
     evidence_page = evidence[:evidence_limit]
     next_evidence_cursor = None
     if page_live.next_evidence is not None:
-        raw = json.dumps({
-            "owner_id": owner_id, "story_id": str(story_id),
-            "source_ids": sorted(str(value) for value in source_ids),
-            "as_of": as_of.isoformat(), "after": [str(value) for value in page_live.next_evidence],
-            "source_selection_incomplete": source_selection_incomplete,
-        }, sort_keys=True, separators=(",", ":"))
-        next_evidence_cursor = base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+        next_evidence_cursor = _encode_detail_cursor(
+            access_fence, story_id, source_ids, as_of, page_live.next_evidence, source_selection_incomplete,
+        )
     # A stale support prefix can hide later current evidence. Continue that
     # bounded scan without borrowing a title from stale observations.
     if match is None and page_match is None:

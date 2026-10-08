@@ -1,5 +1,6 @@
 """ARQ-owned schedules for daily briefs and bounded dashboard highlight evaluation."""
 
+import logging
 from typing import cast
 from uuid import UUID
 
@@ -14,39 +15,61 @@ from core.workspaces import public as workspaces
 from core.workspaces.schemas import InternalJobScope
 from modules.dashboard import briefs, public
 from modules.dashboard.daily_schemas import BriefSchedule
-from modules.dashboard.models import BriefSchedule as BriefScheduleRow, GadgetDefinition
+from modules.dashboard.models import BriefSchedule as BriefScheduleRow
+from modules.dashboard.models import GadgetDefinition
 from modules.settings import public as settings_public
 
 HIGHLIGHT_CURSOR_KEY = "dashboard:highlights:workspace-cursor"
 BRIEF_CURSOR_KEY = "dashboard:briefs:workspace-cursor"
 
 
+_log = logging.getLogger(__name__)
+CURSOR_STATE_KEY = "w2_cursor_state"
+_CURSOR_KEYS = frozenset({HIGHLIGHT_CURSOR_KEY, BRIEF_CURSOR_KEY})
+_UNSYNCED = "unsynced"
+
+
+def _cursor_state(ctx: dict[str, object]) -> dict[str, object]:
+    """Return the startup-installed shared cursor object (ARQ copies ``ctx`` per job, not this dict)."""
+    return cast(dict[str, object], ctx[CURSOR_STATE_KEY])
+
+
 async def _read_workspace_cursor(ctx: dict[str, object], key: str) -> UUID | None:
-    """Read a bounded UUID cursor from Redis, falling back to the current ARQ context."""
-    local_key = f"{key}:local"
-    raw = ctx.get(local_key)
+    """Read one fixed identity cursor from Redis, falling back to the shared startup state.
+
+    A cursor whose last Redis write failed is kept in the shared state and wins over the stale
+    remote value until a write succeeds again.
+    """
+    if key not in _CURSOR_KEYS:
+        raise KeyError(key)
+    state = _cursor_state(ctx)
+    raw = state.get(key)
     redis = cast(Redis | None, ctx.get("redis"))
-    if redis is not None:
+    unsynced = cast(set[str], state.setdefault(_UNSYNCED, set()))
+    if redis is not None and key not in unsynced:
         try:
             remote = await redis.get(key)
             if remote is not None:
                 raw = remote
-        except Exception:
-            # Cursors only improve fairness latency; durable rows remain the source of work.
-            pass
+        except Exception:  # noqa: BLE001 - best-effort cursor store
+            _log.debug("cursor read failed", exc_info=True)
     if isinstance(raw, bytes):
         raw = raw.decode("ascii", errors="ignore")
     try:
-        cursor = UUID(raw) if isinstance(raw, str) else None
+        cursor = UUID(raw) if isinstance(raw, str) and raw else None
     except ValueError:
         cursor = None
-    ctx[local_key] = str(cursor) if cursor is not None else ""
+    state[key] = str(cursor) if cursor is not None else ""
     return cursor
 
 
 async def _write_workspace_cursor(ctx: dict[str, object], key: str, cursor: UUID | None) -> None:
-    """Persist one identity-only cursor locally and opportunistically in Redis."""
-    ctx[f"{key}:local"] = str(cursor) if cursor is not None else ""
+    """Persist one fixed identity cursor in the shared state and opportunistically in Redis."""
+    if key not in _CURSOR_KEYS:
+        raise KeyError(key)
+    state = _cursor_state(ctx)
+    state[key] = str(cursor) if cursor is not None else ""
+    unsynced = cast(set[str], state.setdefault(_UNSYNCED, set()))
     redis = cast(Redis | None, ctx.get("redis"))
     if redis is None:
         return
@@ -55,9 +78,10 @@ async def _write_workspace_cursor(ctx: dict[str, object], key: str, cursor: UUID
             await redis.delete(key)
         else:
             await redis.set(key, str(cursor))
-    except Exception:
-        # The local ARQ context retains progress if Redis is temporarily unavailable.
-        pass
+        unsynced.discard(key)
+    except Exception:  # noqa: BLE001 - shared startup state retains progress
+        _log.debug("cursor write failed", exc_info=True)
+        unsynced.add(key)
 
 
 async def run_scheduled_highlights(ctx: dict[str, object]) -> int:
@@ -66,7 +90,8 @@ async def run_scheduled_highlights(ctx: dict[str, object]) -> int:
     The identity cursor advances past denied subjects as well as successful visits, so unavailable
     owners cannot pin the scan or let a later definition starve. A 100-ID discovery bound and
     ten-evaluation execution bound rotate by definition ID. Each selected workspace gets a fresh
-    session and current Recipe W admission; Redis is only an optimization over the ARQ fallback.
+    session and current Recipe W admission; Redis is only an optimization over the shared
+    ``ctx['w2_cursor_state']`` object installed at worker startup.
     """
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     cursor = await _read_workspace_cursor(ctx, HIGHLIGHT_CURSOR_KEY)

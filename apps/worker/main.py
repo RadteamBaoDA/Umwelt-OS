@@ -153,6 +153,7 @@ async def startup(ctx: dict[str, object]) -> None:
     settings = Settings()
     ctx["settings"] = settings
     ctx["ingestion_dispatch_scan_state"] = {"cursor": None, "lock": asyncio.Lock()}
+    ctx["w2_cursor_state"] = {}  # shared across ARQ per-job ctx copies; N workers keep fallback cursors here
     install_log_redaction()
     set_process_role("worker")
     engine = create_async_engine(settings.database_url, pool_pre_ping=True, pool_size=WorkerSettings.max_jobs + 1)

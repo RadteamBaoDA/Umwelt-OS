@@ -1,13 +1,13 @@
 """Process durable News readiness receipts under source and document fences."""
 
+import logging
 from typing import cast
 from uuid import UUID
 
-from sqlalchemy import select
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from redis.asyncio import Redis
 from fastapi import HTTPException
+from redis.asyncio import Redis
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
 from core.realtime import commit_with_replay
@@ -15,13 +15,66 @@ from core.workspaces import public as workspaces
 from core.workspaces.schemas import InternalJobScope
 from modules.ingestion import public as ingestion
 from modules.knowledge.documents import public as documents
-from modules.news.models import NewsObservation, NewsRecoveryCheckpoint
+from modules.news.models import NewsRecoveryCheckpoint
 from modules.news.stories import cluster_observation
 from modules.settings import public as settings_public
 from modules.sources import public as sources
 
 RECOVERY_CURSOR_KEY = "news:recovery:workspace-cursor"
 RECOVERY_INIT_CURSOR_KEY = "news:recovery:initialization-cursor"
+
+
+_log = logging.getLogger(__name__)
+CURSOR_STATE_KEY = "w2_cursor_state"
+_CURSOR_KEYS = frozenset({RECOVERY_CURSOR_KEY, RECOVERY_INIT_CURSOR_KEY})
+_UNSYNCED = "unsynced"
+
+
+async def _read_cursor(ctx: dict[str, object], key: str) -> UUID | None:
+    """Read a fixed cursor from Redis, falling back to the startup-installed shared state.
+
+    ARQ copies ``ctx`` per job, so progress lives in the shared ``w2_cursor_state`` object. A
+    cursor whose last Redis write failed wins over the stale remote value until a write succeeds.
+    """
+    if key not in _CURSOR_KEYS:
+        raise KeyError(key)
+    state = cast(dict[str, object], ctx[CURSOR_STATE_KEY])
+    unsynced = cast(set[str], state.setdefault(_UNSYNCED, set()))
+    raw = state.get(key)
+    if key not in unsynced:
+        try:
+            remote = await cast(Redis, ctx["redis"]).get(key)
+            if remote is not None:
+                raw = remote
+        except Exception:  # noqa: BLE001 - best-effort cursor store
+            _log.debug("cursor read failed", exc_info=True)
+    if isinstance(raw, bytes):
+        raw = raw.decode("ascii", errors="ignore")
+    try:
+        cursor = UUID(raw) if isinstance(raw, str) and raw else None
+    except ValueError:
+        cursor = None
+    state[key] = str(cursor) if cursor is not None else ""
+    return cursor
+
+
+async def _write_cursor(ctx: dict[str, object], key: str, cursor: UUID | None) -> None:
+    """Persist a fixed cursor to the shared state and opportunistically to Redis."""
+    if key not in _CURSOR_KEYS:
+        raise KeyError(key)
+    state = cast(dict[str, object], ctx[CURSOR_STATE_KEY])
+    unsynced = cast(set[str], state.setdefault(_UNSYNCED, set()))
+    state[key] = str(cursor) if cursor is not None else ""
+    redis = cast(Redis, ctx["redis"])
+    try:
+        if cursor is None:
+            await redis.delete(key)
+        else:
+            await redis.set(key, str(cursor))
+        unsynced.discard(key)
+    except Exception:  # noqa: BLE001 - best-effort cursor store
+        _log.debug("cursor write failed", exc_info=True)
+        unsynced.add(key)
 
 
 async def _ensure_recovery_checkpoint(session: AsyncSession, workspace_id: UUID) -> None:
@@ -42,7 +95,8 @@ def _factory(ctx: dict[str, object]) -> async_sessionmaker[AsyncSession]:
 async def process_news_document_ready(ctx: dict[str, object], event_id: str) -> None:
     """Cluster one immutable ready version and ACK its outbox event atomically.
 
-    Admit the retained event principal first, then lock and recheck Source and
+    Admit the retained event principal and lock its original admission first on
+    every branch (including malformed or stale receipts), then lock and recheck Source and
     Document evidence before locking the Ingestion outbox row. Exact provenance
     must still match after those domain locks; stale receipts are terminally ACKed
     without recreating a story. No external I/O occurs in this transaction.
@@ -67,6 +121,12 @@ async def process_news_document_ready(ctx: dict[str, object], event_id: str) -> 
                 session, "news", scope=scope, multi_workspace_enabled=flag,
             ):
                 return
+            # Lock original admission (account -> workspace -> membership) on every
+            # branch, including malformed/stale receipts, before any Source,
+            # checkpoint or outbox lock. The captured fence stays the original one.
+            await workspaces.lock_access_fence(
+                session, scope=scope, expected=access_fence, multi_workspace_enabled=flag,
+            )
 
             # Discover the bounded outbox envelope without a lock. The row itself is
             # acquired only after the exact Source and Document evidence is prepared.
@@ -211,22 +271,7 @@ async def recover_news_work(ctx: dict[str, object]) -> int:
     """
     factory = _factory(ctx)
     settings = cast(Settings, ctx["settings"])
-    redis = cast(Redis, ctx["redis"])
-    init_local_key = f"{RECOVERY_INIT_CURSOR_KEY}:local"
-    raw_init_cursor = ctx.get(init_local_key)
-    try:
-        remote_init_cursor = await redis.get(RECOVERY_INIT_CURSOR_KEY)
-        if remote_init_cursor is not None:
-            raw_init_cursor = remote_init_cursor
-    except Exception:
-        # Redis only shortens the wrap interval; the worker context retains progress.
-        pass
-    if isinstance(raw_init_cursor, bytes):
-        raw_init_cursor = raw_init_cursor.decode("ascii", errors="ignore")
-    try:
-        init_cursor = UUID(raw_init_cursor) if isinstance(raw_init_cursor, str) else None
-    except ValueError:
-        init_cursor = None
+    init_cursor = await _read_cursor(ctx, RECOVERY_INIT_CURSOR_KEY)
     async with factory() as session:
         initialization_ids = await documents.list_ready_document_workspace_ids(
             session, after=init_cursor, limit=100,
@@ -273,32 +318,11 @@ async def recover_news_work(ctx: dict[str, object]) -> int:
                         await session.rollback()
                         continue
                     raise
-        ctx[init_local_key] = str(initialization_ids[-1])
-        try:
-            await redis.set(RECOVERY_INIT_CURSOR_KEY, str(initialization_ids[-1]))
-        except Exception:
-            pass
+        await _write_cursor(ctx, RECOVERY_INIT_CURSOR_KEY, initialization_ids[-1])
     else:
-        ctx[init_local_key] = ""
-        try:
-            await redis.delete(RECOVERY_INIT_CURSOR_KEY)
-        except Exception:
-            pass
+        await _write_cursor(ctx, RECOVERY_INIT_CURSOR_KEY, None)
 
-    cursor_local_key = f"{RECOVERY_CURSOR_KEY}:local"
-    raw_cursor = ctx.get(cursor_local_key)
-    try:
-        remote_cursor = await redis.get(RECOVERY_CURSOR_KEY)
-        if remote_cursor is not None:
-            raw_cursor = remote_cursor
-    except Exception:
-        pass
-    if isinstance(raw_cursor, bytes):
-        raw_cursor = raw_cursor.decode("ascii", errors="ignore")
-    try:
-        cursor = UUID(raw_cursor) if isinstance(raw_cursor, str) else None
-    except ValueError:
-        cursor = None
+    cursor = await _read_cursor(ctx, RECOVERY_CURSOR_KEY)
     async with factory() as session:
         statement = select(NewsRecoveryCheckpoint.workspace_id)
         if cursor is not None:
@@ -307,11 +331,7 @@ async def recover_news_work(ctx: dict[str, object]) -> int:
             statement.order_by(NewsRecoveryCheckpoint.workspace_id).limit(100)
         )).all())
     if not workspace_ids:
-        ctx[cursor_local_key] = ""
-        try:
-            await redis.delete(RECOVERY_CURSOR_KEY)
-        except Exception:
-            pass
+        await _write_cursor(ctx, RECOVERY_CURSOR_KEY, None)
         return 0
     total_processed = 0
     flag = settings.multi_workspace_enabled
@@ -402,9 +422,5 @@ async def recover_news_work(ctx: dict[str, object]) -> int:
                     await session.rollback()
                     continue
                 raise
-    ctx[cursor_local_key] = str(workspace_ids[-1])
-    try:
-        await redis.set(RECOVERY_CURSOR_KEY, str(workspace_ids[-1]))
-    except Exception:
-        pass
+    await _write_cursor(ctx, RECOVERY_CURSOR_KEY, workspace_ids[-1])
     return total_processed

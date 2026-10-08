@@ -9,6 +9,7 @@ Covers:
 - Conservative fuzzy clustering thresholds (_fuzzy_candidate): 72-hour window limit, entity overlap requirement, local_only exclusion, and 0.92 cosine similarity threshold.
 """
 
+import dataclasses
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -17,6 +18,7 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi import HTTPException
 
+from core.workspaces.schemas import AccessFence, InternalJobScope
 from modules.news.models import (
     NewsObservation,
     NewsStory,
@@ -30,7 +32,9 @@ from modules.news.stories import (
     ALGORITHM_VERSION,
     _canonical_url,
     _decode_cursor,
+    _decode_detail_cursor,
     _encode_cursor,
+    _encode_detail_cursor,
     _filter_hash,
     _fuzzy_candidate,
     _identity_keys,
@@ -38,6 +42,10 @@ from modules.news.stories import (
     _tokens,
     cluster_observation,
 )
+
+FENCE = AccessFence(workspace_id=uuid4(), user_id=1, membership_revision=2, configuration_revision=3)
+SCOPE = InternalJobScope(workspace_id=FENCE.workspace_id, actor_user_id=1, membership_revision=2)
+KW = {"scope": SCOPE, "multi_workspace_enabled": True}
 
 
 class TestUrlCanonicalizationAndIdentityKeys:
@@ -119,7 +127,9 @@ class TestStoryCursorCodec:
         filters = StoryFilter(source_ids=[s_id])
         fh = _filter_hash(filters)
         cursor = StoryCursor(
-            owner_id=1,
+            domain="news_stories", workspace_id=FENCE.workspace_id, actor_user_id=1,
+            membership_revision=2, configuration_revision=3,
+            sort="observed_at_desc_story_id_desc",
             filter_hash=fh,
             as_of=now,
             after_observed_at=now,
@@ -128,18 +138,20 @@ class TestStoryCursorCodec:
             source_selection_incomplete=False,
         )
         encoded = _encode_cursor(cursor)
-        decoded = _decode_cursor(encoded, owner_id=1, filters=filters)
-        assert decoded.owner_id == cursor.owner_id
+        decoded = _decode_cursor(encoded, FENCE, filters)
+        assert decoded.actor_user_id == cursor.actor_user_id
         assert decoded.filter_hash == cursor.filter_hash
         assert decoded.after_story_id == cursor.after_story_id
 
     def test_story_cursor_owner_mismatch_raises_422(self) -> None:
-        """_decode_cursor raises HTTP 422 if owner_id does not match."""
+        """_decode_cursor raises HTTP 422 if the membership revision is stale."""
         now = datetime.now(UTC)
         filters = StoryFilter()
         fh = _filter_hash(filters)
         cursor = StoryCursor(
-            owner_id=1,
+            domain="news_stories", workspace_id=FENCE.workspace_id, actor_user_id=1,
+            membership_revision=2, configuration_revision=3,
+            sort="observed_at_desc_story_id_desc",
             filter_hash=fh,
             as_of=now,
             after_observed_at=now,
@@ -149,7 +161,8 @@ class TestStoryCursorCodec:
         )
         encoded = _encode_cursor(cursor)
         with pytest.raises(HTTPException) as exc_info:
-            _decode_cursor(encoded, owner_id=2, filters=filters)  # Wrong owner!
+            _decode_cursor(encoded, AccessFence(workspace_id=FENCE.workspace_id, user_id=1, membership_revision=9,
+                                                configuration_revision=3), filters)  # stale revision
         assert exc_info.value.status_code == 422
         assert "Invalid story cursor" in exc_info.value.detail
 
@@ -192,7 +205,7 @@ class TestStoryClustering:
         """cluster_observation returns None when get_news_document_projection returns None."""
         session = AsyncMock()
         with patch("modules.knowledge.documents.public.get_news_document_projection", return_value=None):
-            result = await cluster_observation(session, document_id=uuid4(), expected_source_generation=1)
+            result = await cluster_observation(session, document_id=uuid4(), expected_source_generation=1, **KW)
             assert result is None
 
     @pytest.mark.asyncio
@@ -210,7 +223,7 @@ class TestStoryClustering:
         session.scalar.return_value = prior_obs
 
         with patch("modules.knowledge.documents.public.get_news_document_projection", return_value=proj):
-            result = await cluster_observation(session, document_id=proj.document_id, expected_source_generation=1)
+            result = await cluster_observation(session, document_id=proj.document_id, expected_source_generation=1, **KW)
             assert result == existing_story_id
 
     @pytest.mark.asyncio
@@ -235,7 +248,7 @@ class TestStoryClustering:
 
         with patch("modules.knowledge.documents.public.get_news_document_projection", return_value=proj), \
              patch("modules.knowledge.entities.public.list_version_membership_refs", return_value=[]):
-            result = await cluster_observation(session, document_id=proj.document_id, expected_source_generation=1)
+            result = await cluster_observation(session, document_id=proj.document_id, expected_source_generation=1, **KW)
             assert result == existing_story_id
 
     @pytest.mark.asyncio
@@ -244,7 +257,7 @@ class TestStoryClustering:
         session = AsyncMock()
         proj = self._sample_projection(local_only=True)
         res = await _fuzzy_candidate(
-            session, projection=proj, current_entity_ids={"ent-1"}, observed_at=datetime.now(UTC)  # type: ignore[arg-type]
+            session, projection=proj, current_entity_ids={"ent-1"}, observed_at=datetime.now(UTC), **KW  # type: ignore[arg-type]
         )
         assert res is None
 
@@ -254,7 +267,7 @@ class TestStoryClustering:
         session = AsyncMock()
         proj = self._sample_projection(local_only=False)
         res = await _fuzzy_candidate(
-            session, projection=proj, current_entity_ids=set(), observed_at=datetime.now(UTC)  # type: ignore[arg-type]
+            session, projection=proj, current_entity_ids=set(), observed_at=datetime.now(UTC), **KW  # type: ignore[arg-type]
         )
         assert res is None
 
@@ -310,6 +323,54 @@ class TestStoryClustering:
                 session,
                 projection=proj,  # type: ignore[arg-type]
                 current_entity_ids={"00000000-0000-0000-0000-000000000001"},
-                observed_at=now,
+                observed_at=now, **KW,
             )
             assert res is None  # Below 0.92 threshold -> rejected!
+
+
+class TestStoryDetailCursor:
+    """N-F7: the Story detail evidence token binds workspace, actor, revisions, story and snapshot."""
+
+    def _token(self):  # type: ignore[no-untyped-def]
+        story_id = uuid4()
+        sources = (uuid4(),)
+        after = (uuid4(), uuid4(), uuid4())
+        as_of = datetime.now(UTC)
+        return story_id, sources, after, as_of, _encode_detail_cursor(FENCE, story_id, sources, as_of, after, True)
+
+    def test_roundtrip(self) -> None:
+        """A current-fence token decodes to the pinned sources, snapshot, position and flag."""
+        story_id, sources, after, as_of, token = self._token()
+        assert _decode_detail_cursor(token, FENCE, story_id, ()) == (sources, as_of, after, True)
+
+    @pytest.mark.parametrize("field,value", [
+        ("membership_revision", 9), ("configuration_revision", 9), ("user_id", 7), ("workspace_id", uuid4()),
+    ])
+    def test_stale_or_foreign_fence_rejected(self, field: str, value: object) -> None:
+        """Revision, actor or workspace drift rejects the token before any position is applied."""
+        story_id, _s, _a, _t, token = self._token()
+        other = dataclasses.replace(FENCE, **{field: value})
+        with pytest.raises(HTTPException) as exc:
+            _decode_detail_cursor(token, other, story_id, ())
+        assert exc.value.status_code == 422
+
+    def test_other_story_and_source_mismatch_rejected(self) -> None:
+        """A token cannot be replayed on another story or a different explicit source selection."""
+        story_id, _s, _a, _t, token = self._token()
+        for sid, srcs in ((uuid4(), ()), (story_id, (uuid4(),))):
+            with pytest.raises(HTTPException):
+                _decode_detail_cursor(token, FENCE, sid, srcs)
+
+    def test_legacy_six_field_token_rejected(self) -> None:
+        """The pre-cutover owner-only token format is no longer accepted."""
+        import base64
+        import json
+        story_id = uuid4()
+        raw = json.dumps({
+            "owner_id": 1, "story_id": str(story_id), "source_ids": [], "as_of": datetime.now(UTC).isoformat(),
+            "after": [str(uuid4())] * 3, "source_selection_incomplete": False,
+        }, sort_keys=True, separators=(",", ":"))
+        token = base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+        with pytest.raises(HTTPException) as exc:
+            _decode_detail_cursor(token, FENCE, story_id, ())
+        assert exc.value.status_code == 422
