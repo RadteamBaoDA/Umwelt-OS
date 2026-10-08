@@ -62,7 +62,7 @@ function ContextPicker({ open, onOpenChange, current, onConfirm }: { open: boole
           <DialogDescription>{t('contextPickerHint', { max: MAX_ITEMS })}</DialogDescription>
         </DialogHeader>
         <Input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('contextPickerSearch')} aria-label={t('contextPickerSearch')} autoFocus />
-        <div role="group" aria-label={t('contextPickerResults')} className="flex max-h-72 flex-col gap-1 overflow-y-auto">
+        <div role="group" aria-label={t('contextPickerResults')} className="flex max-h-[40dvh] flex-col gap-1 overflow-y-auto">
           {/* Always mounted so assistive tech announces the text change. */}
           <p role="status" className="text-sm text-muted-foreground">{(results.isFetching || (query.trim() !== debounced)) && query.trim() !== '' ? t('contextPickerSearching') : ''}</p>
           {results.isError && <p role="alert" className="text-sm text-destructive">{t('contextPickerError')}</p>}
