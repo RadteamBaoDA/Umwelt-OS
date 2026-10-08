@@ -62,3 +62,31 @@ async def test_readiness_times_out_a_stalled_database_probe(monkeypatch) -> None
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/api/v1/system/ready")
     assert response.status_code == 503
+
+
+def test_chat_worker_health_key_matches_worker_settings() -> None:
+    from apps.worker.main import ChatWorkerSettings
+
+    assert health_module.ARQ_CHAT_WORKER_HEALTH_KEY == ChatWorkerSettings.health_check_key
+
+
+@pytest.mark.asyncio
+async def test_missing_chat_worker_heartbeat_degrades_health() -> None:
+    class FakeRedis:
+        async def ping(self):
+            return True
+
+        async def get(self, key):
+            return None if key == health_module.ARQ_CHAT_WORKER_HEALTH_KEY else b"1"
+
+        async def info(self, _section):
+            return {}
+
+    class OkSession:
+        async def execute(self, _statement):
+            return None
+
+    result = await system_health(cast(AsyncSession, OkSession()), cast(Redis, FakeRedis()), Settings())
+    assert result["components"]["worker"]["status"] == "healthy"
+    assert result["components"]["chat_worker"]["status"] == "unavailable"
+    assert result["overall"] == "degraded"
