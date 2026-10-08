@@ -1,7 +1,7 @@
 """Grounded context retrieval, context budgeting, permitted reranking, and fence revalidation."""
 
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -12,6 +12,7 @@ from core.config import Settings
 from core.model_gateway.client import ModelGateway, ModelGatewayError
 from core.model_gateway.policy import may_send
 from core.model_gateway.schemas import RequestPolicy
+from core.workspaces.schemas import Scope
 from modules.chat.schemas import (
     MAX_CONTEXT_BUDGET_BYTES,
     MAX_ENTITY_SCOPE,
@@ -24,7 +25,11 @@ from modules.chat.schemas import (
     EvidenceItem,
     TemporalContextItem,
 )
-from modules.chat.scope import ensure_ai_config_unchanged, owner_scope_kwargs
+from modules.chat.scope import (
+    ensure_ai_config_unchanged,
+    multi_workspace_enabled,
+    owner_scope_kwargs,
+)
 from modules.knowledge.documents import public as documents_public
 from modules.knowledge.entities import public as entities_public
 from modules.knowledge.relationships import public as relationships_public
@@ -67,6 +72,13 @@ def _extract_rerank_indices(rerank_payload: Any) -> list[int] | None:
     return None
 
 
+async def _scope_kwargs(session: AsyncSession, scope: Scope | None) -> dict[str, Any]:
+    """Frozen-call scope kwargs: the caller's job/request scope, else the owner's default workspace."""
+    if scope is None:
+        return await owner_scope_kwargs(session)
+    return {"scope": scope, "multi_workspace_enabled": multi_workspace_enabled()}
+
+
 async def _apply_configured_reranking(
     session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
@@ -74,6 +86,7 @@ async def _apply_configured_reranking(
     settings: Settings,
     query: str,
     evidence_items: list[EvidenceItem],
+    scope: Scope | None = None,
 ) -> tuple[list[EvidenceItem], str, list[str]]:
     """Execute configured permitted reranking through ModelGateway.
 
@@ -87,6 +100,7 @@ async def _apply_configured_reranking(
         settings: Application settings.
         query: User search query.
         evidence_items: Current ordered candidate evidence items.
+        scope: Workspace scope of the caller; the owner's default when omitted.
 
     Returns:
         Tuple of (reordered evidence items, rerank_status, list of warning strings).
@@ -99,7 +113,7 @@ async def _apply_configured_reranking(
         return evidence_items, "unavailable", ["Remote reranking skipped because evidence contains local-only sources"]
 
     try:
-        scope_kw = await owner_scope_kwargs(session)
+        scope_kw = await _scope_kwargs(session, scope)
         config = await settings_public.get_ai_execution_config(
             session, settings, redis, scope=scope_kw["scope"],  # type: ignore[arg-type]
         )
@@ -227,6 +241,7 @@ async def build_context(
     redis: Redis,
     settings: Settings,
     request: AnswerContextRequest,
+    scope: Scope | None = None,
 ) -> AnswerContext:
     """Retrieve and assemble grounded context across search, entities, temporal events, and documents.
 
@@ -241,6 +256,7 @@ async def build_context(
         redis: Redis connection for caching and rate limiting.
         settings: Application settings.
         request: Validated AnswerContextRequest DTO.
+        scope: Workspace scope of the caller (job scope in the worker); the owner's default when omitted.
 
     Returns:
         AnswerContext DTO containing ordered bounded evidence and contextual summaries.
@@ -248,7 +264,7 @@ async def build_context(
     warnings: list[str] = []
     collected_refs: list[tuple[UUID, UUID]] = []
     hit_scores: dict[tuple[UUID, UUID], float] = {}
-    scope_kw = await owner_scope_kwargs(session)
+    scope_kw = await _scope_kwargs(session, scope)
 
     if request.selected_only:
         fence_by_document = {item.document_id: item for item in request.selection_fences}
@@ -276,7 +292,10 @@ async def build_context(
                 mode=request.mode if request.allow_hybrid else "lexical",
                 limit=min(request.limit, MAX_RETRIEVAL_LIMIT),
             )
-            search_res = await search_public.search(session, redis, settings, search_req, **scope_kw)
+            # worker.py commits right before build_context, so the session holds no locks here.
+            search_res = await search_public.search(
+                session, redis, settings, search_req, release_during_embed=True, **scope_kw,
+            )
             warnings.extend(search_res.warnings)
             for hit in search_res.items:
                 ref = (hit.document_version_id, hit.chunk_id)
@@ -359,15 +378,15 @@ async def build_context(
             date_to: date | None = None
             if isinstance(request.date_context, datetime):
                 date_from = request.date_context.date()
-                date_to = date_from
+                date_to = date_from + timedelta(days=1)  # TimelineQuery is half-open
             elif isinstance(request.date_context, date):
                 date_from = request.date_context
-                date_to = date_from
+                date_to = date_from + timedelta(days=1)  # TimelineQuery is half-open
             elif isinstance(request.date_context, str):
                 try:
                     parsed_dt = datetime.fromisoformat(request.date_context)
                     date_from = parsed_dt.date()
-                    date_to = date_from
+                    date_to = date_from + timedelta(days=1)  # TimelineQuery is half-open
                 except ValueError:
                     pass
 
@@ -469,7 +488,7 @@ async def build_context(
         reranked_items, rerank_status, rerank_warnings = budgeted_items, "skipped", []
     else:
         reranked_items, rerank_status, rerank_warnings = await _apply_configured_reranking(
-            session, session_factory, redis, settings, request.query, budgeted_items
+            session, session_factory, redis, settings, request.query, budgeted_items, scope,
         )
     warnings.extend(rerank_warnings)
 
@@ -511,6 +530,7 @@ async def revalidate_context_fence(
     destination: str = "remote",
     require_current_versions: bool = False,
     lock_evidence: bool = False,
+    scope: Scope | None = None,
 ) -> tuple[bool, list[str]]:
     """Revalidate retrieved evidence at egress and publication, optionally serializing deletion.
 
@@ -530,7 +550,7 @@ async def revalidate_context_fence(
         Tuple of (is_valid: bool, list of rejection reason strings).
     """
     reasons: list[str] = []
-    scope_kw = await owner_scope_kwargs(session)
+    scope_kw = await _scope_kwargs(session, scope)
 
     selection_valid = True
     if context.selection_fences:

@@ -11,6 +11,7 @@ from typing import Any, cast
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
+from fastapi import HTTPException
 from redis.asyncio import Redis
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -18,6 +19,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from core.config import Settings
 from core.model_gateway.client import ModelGateway, PrivacyPolicyDenied
 from core.model_gateway.schemas import RequestPolicy
+from core.workspaces import public as workspaces
+from core.workspaces.schemas import AccessFence, InternalJobScope, Scope
 from modules.chat.citations import (
     parse_citation_markers,
     renumber_citation_markers,
@@ -37,10 +40,13 @@ from modules.chat.retrieval import (
     revalidate_context_fence,
 )
 from modules.chat.schemas import AnswerContextRequest, Citation
-from modules.chat.scope import ensure_ai_config_unchanged
-from modules.chat.scope import read_owner_export_privacy as read_export_privacy
+from modules.chat.scope import (
+    ensure_ai_config_unchanged,
+    multi_workspace_enabled,
+    owner_default_scope,
+)
 from modules.chat.stream import make_event_id
-from modules.memory.public import lock_export_privacy
+from modules.memory.public import lock_export_privacy, read_export_privacy
 from modules.settings import public as settings_public
 
 logger = logging.getLogger(__name__)
@@ -65,6 +71,59 @@ class PrivacyFenceChanged(RuntimeError):
 
 class ResponseNoLongerActive(RuntimeError):
     """Another serialized action completed or cancelled this response before publication."""
+
+
+async def _job_scope(session: AsyncSession, workspace_id: UUID, actor_user_id: int) -> InternalJobScope:
+    """Durable-job subject for a run's stamped workspace; no admission lock is taken.
+
+    Raises:
+        PrivacyFenceChanged: The workspace owner is not the stamped actor or is no longer active.
+    """
+    try:
+        owner = await workspaces.resolve_workspace_owner_context(
+            session, workspace_id, multi_workspace_enabled=multi_workspace_enabled(),
+        )
+    except HTTPException as exc:
+        raise PrivacyFenceChanged("Chat owner is unavailable") from exc
+    if owner is None or owner.user_id != actor_user_id:
+        raise PrivacyFenceChanged("Chat owner is no longer the run actor")
+    return InternalJobScope(
+        workspace_id=workspace_id, actor_user_id=actor_user_id, membership_revision=owner.membership_revision,
+    )
+
+
+async def _admit_job(
+    session_factory: async_sessionmaker[AsyncSession], workspace_id: UUID, actor_user_id: int,
+) -> tuple[InternalJobScope, AccessFence]:
+    """Admit the run's actor in its stamped workspace and snapshot the access fence (D6).
+
+    The fence is carried in worker memory and compared under lock at every send and publication.
+    The transaction is rolled back before any model I/O.
+
+    Raises:
+        PrivacyFenceChanged: Admission was denied or the actor/workspace pair no longer matches.
+    """
+    async with session_factory() as session:
+        scope = await _job_scope(session, workspace_id, actor_user_id)
+        try:
+            fence = await workspaces.authorize_internal_job(
+                session, scope=scope, multi_workspace_enabled=multi_workspace_enabled(),
+            )
+        except HTTPException as exc:
+            raise PrivacyFenceChanged("Chat job admission denied") from exc
+        await session.rollback()
+    return scope, fence
+
+
+async def _scope_for_run(
+    session_factory: async_sessionmaker[AsyncSession], workspace_id: UUID, actor_user_id: int,
+) -> InternalJobScope | None:
+    """Best-effort job scope for terminal/recovery paths; None sends them to the redaction fallback."""
+    try:
+        async with session_factory() as session:
+            return await _job_scope(session, workspace_id, actor_user_id)
+    except Exception:  # noqa: BLE001  # boundary: no scope means terminal paths redact instead of read consent
+        return None
 
 
 def _day_scope(context: dict[str, Any], metadata: dict[str, Any] | None) -> tuple[str, str] | None:
@@ -112,15 +171,18 @@ async def is_history_storage_enabled(session: AsyncSession) -> bool:
         Holds Memory's owner privacy advisory lock until the caller commits or rolls back.
     """
     await lock_export_privacy(session)
-    return (await read_export_privacy(session)).store_conversation_history
+    return (await read_export_privacy(
+        session, scope=await owner_default_scope(session), multi_workspace_enabled=multi_workspace_enabled(),
+    )).store_conversation_history
 
 
-async def _require_privacy_fence(session: AsyncSession, expected: object) -> bool:
+async def _require_privacy_fence(session: AsyncSession, expected: object, *, scope: Scope | None) -> bool:
     """Lock and compare the public Memory consent version against response admission.
 
     Args:
         session: Transaction that will retain the Memory advisory lock through publication.
         expected: Serialized value, persisted marker, and updated timestamp stamped by Chat.
+        scope: The run actor's workspace scope; None (actor no longer admitted) fails the fence.
 
     Returns:
         The captured boolean value when the strict snapshot still matches.
@@ -129,8 +191,10 @@ async def _require_privacy_fence(session: AsyncSession, expected: object) -> boo
         PrivacyFenceChanged: The stamp is missing, malformed, changed, or unavailable.
     """
     await lock_export_privacy(session)
+    if scope is None:
+        raise PrivacyFenceChanged("History consent is unavailable")
     try:
-        current = await read_export_privacy(session)
+        current = await read_export_privacy(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled())
     except Exception as exc:
         raise PrivacyFenceChanged("History consent is unavailable") from exc
     if not isinstance(expected, dict):
@@ -151,6 +215,9 @@ async def _lock_live_response(
     response_id: UUID,
     conversation_id: UUID,
     expected_fence: object,
+    *,
+    scope: InternalJobScope | None,
+    access_fence: AccessFence | None,
 ) -> tuple[bool, ResponseRun]:
     """Lock Memory consent, live conversation, then run through a sensitive transaction.
 
@@ -159,6 +226,8 @@ async def _lock_live_response(
         response_id: Run whose pending status and sequence must be serialized.
         conversation_id: Parent whose existence and ephemeral deadline gate publication.
         expected_fence: Memory consent snapshot attached at request admission.
+        scope: Job subject admitted at claim.
+        access_fence: Account/workspace/membership snapshot taken at claim (D6), compared under lock.
 
     Returns:
         Current history choice and the locked active ResponseRun.
@@ -167,7 +236,15 @@ async def _lock_live_response(
         PrivacyFenceChanged: Consent changed/unavailable or the parent expired/disappeared.
         ResponseNoLongerActive: A serialized Stop or completion already won the run lock.
     """
-    history_enabled = await _require_privacy_fence(session, expected_fence)
+    if scope is None or access_fence is None:
+        raise PrivacyFenceChanged("Chat job was not admitted")
+    try:
+        await workspaces.lock_access_fence(
+            session, scope=scope, expected=access_fence, multi_workspace_enabled=multi_workspace_enabled(),
+        )
+    except HTTPException as exc:
+        raise PrivacyFenceChanged("Chat access changed after response admission") from exc
+    history_enabled = await _require_privacy_fence(session, expected_fence, scope=scope)
     conversation = await session.scalar(
         select(Conversation).where(Conversation.id == conversation_id)
         .with_for_update().execution_options(populate_existing=True)
@@ -264,8 +341,8 @@ async def purge_expired_chat_runs(ctx: dict[str, object]) -> int:
             link_count = await session.scalar(select(func.count()).select_from(AgentActivityLink).where(
                 AgentActivityLink.conversation_id == conversation_id,
             )) or 0
-            # This single-owner app uses owner id 1; the public helper verifies that owner exists.
-            if await delete_chat_conversation(session, conversation_id, owner_id=1):
+            # The conversation's own actor owns the delete; the public helper resolves that actor's scope.
+            if await delete_chat_conversation(session, conversation_id, owner_id=conversation.actor_user_id):
                 removed += 1 + run_count + message_count + receipt_count + stream_count + link_count
 
         # Expired activity links can belong to an otherwise retained conversation. Retain the
@@ -398,6 +475,8 @@ async def run_response_generation(
         None: All operational errors are caught, logged without sensitive content, and persisted.
     """
     seq = 0
+    job_scope: InternalJobScope | None = None
+    access_fence: AccessFence | None = None
 
     # 1. Claim run atomically
     try:
@@ -409,6 +488,7 @@ async def run_response_generation(
                 .returning(
                     ResponseRun.conversation_id, ResponseRun.user_message_id,
                     ResponseRun.retrieval_context, ResponseRun.ephemeral,
+                    ResponseRun.workspace_id, ResponseRun.actor_user_id,
                 )
             )
             claimed = result.fetchone()
@@ -416,8 +496,8 @@ async def run_response_generation(
                 # Run was already claimed or cancelled before start
                 return
 
-            conversation_id, user_message_id, raw_context_req, run_ephemeral = cast(
-                "tuple[UUID, UUID, dict[str, Any] | None, bool]", tuple(claimed),
+            conversation_id, user_message_id, raw_context_req, run_ephemeral, run_workspace_id, run_actor_id = cast(
+                "tuple[UUID, UUID, dict[str, Any] | None, bool, UUID, int]", tuple(claimed),
             )
             seq += 1
             event_id = make_event_id(response_id, seq)
@@ -445,9 +525,11 @@ async def run_response_generation(
     accumulated_text = ""
     privacy_fence = (raw_context_req or {}).get("_chat_privacy_fence") if isinstance(raw_context_req, dict) else None
     try:
+        # S1/D6: scope comes from the claimed run row; admission failure takes the privacy-cancel path.
+        job_scope, access_fence = await _admit_job(session_factory, run_workspace_id, run_actor_id)
         async with session_factory() as session:
             history_enabled, live_run = await _lock_live_response(
-                session, response_id, conversation_id, privacy_fence,
+                session, response_id, conversation_id, privacy_fence, scope=job_scope, access_fence=access_fence,
             )
             if await is_run_cancelled(response_id, redis):
                 await _cancel_response_locked(session, live_run, seq)
@@ -534,19 +616,17 @@ async def run_response_generation(
 
             # Grounded retrieval
             answer_context = await build_context(
-                session, session_factory, redis, settings, answer_request,
+                session, session_factory, redis, settings, answer_request, job_scope,
             )
 
             # Recheck cancellation before model egress
             if await is_run_cancelled(response_id, redis):
-                await _mark_cancelled(response_id, session_factory, seq, privacy_fence)
+                await _mark_cancelled(response_id, session_factory, seq, privacy_fence, scope=job_scope)
                 return
 
         # 3. ModelGateway configuration and streaming
         async with session_factory() as session:
-            from modules.chat.scope import owner_default_scope
-
-            owner_scope = await owner_default_scope(session)
+            owner_scope = job_scope
             ai_config = await settings_public.get_ai_execution_config(
                 session, settings, redis, scope=owner_scope,
             )
@@ -596,6 +676,7 @@ async def run_response_generation(
                         await send_attempt_session.begin()
                         _, live_run = await _lock_live_response(
                             send_attempt_session, response_id, conversation_id, privacy_fence,
+                            scope=job_scope, access_fence=access_fence,
                         )
                         if await is_run_cancelled(response_id, redis):
                             await _cancel_response_locked(send_attempt_session, live_run, seq)
@@ -605,7 +686,7 @@ async def run_response_generation(
                             fences_ok, _fence_reasons = await revalidate_context_fence(
                                 send_attempt_session, answer_context, destination="remote",
                                 require_current_versions=answer_request.selected_only,
-                                lock_evidence=True,
+                                lock_evidence=True, scope=job_scope,
                             )
                             if not fences_ok:
                                 await _privacy_cancel_locked(send_attempt_session, live_run, seq)
@@ -678,6 +759,7 @@ async def run_response_generation(
             async with session_factory() as session:
                 _, live_run = await _lock_live_response(
                     session, response_id, conversation_id, privacy_fence,
+                    scope=job_scope, access_fence=access_fence,
                 )
                 if await is_run_cancelled(response_id, redis):
                     pending = ""
@@ -688,7 +770,7 @@ async def run_response_generation(
                     fences_ok, _fence_reasons = await revalidate_context_fence(
                         session, answer_context, destination="remote",
                         require_current_versions=answer_request.selected_only,
-                        lock_evidence=True,
+                        lock_evidence=True, scope=job_scope,
                     )
                     if not fences_ok:
                         pending = ""
@@ -717,7 +799,7 @@ async def run_response_generation(
                 if loop.time() - last_cancel_check >= CANCEL_CHECK_INTERVAL:
                     last_cancel_check = loop.time()
                     if await is_run_cancelled(response_id, redis):
-                        await _mark_cancelled(response_id, session_factory, seq, privacy_fence)
+                        await _mark_cancelled(response_id, session_factory, seq, privacy_fence, scope=job_scope)
                         return
 
                 line = raw_line.strip()
@@ -778,7 +860,9 @@ async def run_response_generation(
         valid_citations = [c.model_dump(mode="json", by_alias=True) for c in validated.citations]
 
         async with session_factory() as session:
-            _, live_run = await _lock_live_response(session, response_id, conversation_id, privacy_fence)
+            _, live_run = await _lock_live_response(
+                session, response_id, conversation_id, privacy_fence, scope=job_scope, access_fence=access_fence,
+            )
             if await is_run_cancelled(response_id, redis):
                 await _cancel_response_locked(session, live_run, seq)
                 await session.commit()
@@ -788,7 +872,7 @@ async def run_response_generation(
                 fences_ok, _fence_reasons = await revalidate_context_fence(
                     session, answer_context, destination="remote",
                     require_current_versions=answer_request.selected_only,
-                    lock_evidence=True,
+                    lock_evidence=True, scope=job_scope,
                 )
                 if not fences_ok:
                     await _privacy_cancel_locked(session, live_run, seq)
@@ -865,7 +949,7 @@ async def run_response_generation(
         timed_out = time.monotonic() - claimed_at >= CHAT_JOB_TIMEOUT - SHUTDOWN_TIMEOUT_MARGIN
         try:
             await asyncio.wait_for(
-                _release_on_shutdown(response_id, session_factory, privacy_fence, timed_out),
+                _release_on_shutdown(response_id, session_factory, privacy_fence, timed_out, scope=job_scope),
                 SHUTDOWN_RELEASE_TIMEOUT,
             )
         except Exception as exc:  # noqa: BLE001  # boundary: recovery's abandonment threshold is the safety net
@@ -873,11 +957,12 @@ async def run_response_generation(
         raise
     except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
         logger.error("Response generation failed for run %s: %s", response_id, type(exc).__name__)
-        await _mark_failed(response_id, session_factory, seq, privacy_fence, exc)
+        await _mark_failed(response_id, session_factory, seq, privacy_fence, exc, scope=job_scope)
 
 
 async def _release_on_shutdown(
     response_id: UUID, session_factory: async_sessionmaker[AsyncSession], expected_fence: object, timed_out: bool = False,
+    *, scope: InternalJobScope | None = None,
 ) -> None:
     """Worker is stopping: hand a streaming run back as pending, or fail it truthfully if content was published.
 
@@ -912,7 +997,7 @@ async def _release_on_shutdown(
             StreamEvent.response_id == response_id,
         )) or 0
         await session.rollback()
-    await _mark_failed(response_id, session_factory, seq, expected_fence, TimeoutError("generation timed out" if timed_out else "chat worker shutting down"))
+    await _mark_failed(response_id, session_factory, seq, expected_fence, TimeoutError("generation timed out" if timed_out else "chat worker shutting down"), scope=scope)
 
 
 async def _privacy_cancel_locked(session: AsyncSession, run: ResponseRun, current_seq: int = 0) -> int:
@@ -978,6 +1063,8 @@ async def _mark_cancelled(
     session_factory: async_sessionmaker[AsyncSession],
     seq: int,
     expected_fence: object,
+    *,
+    scope: InternalJobScope | None,
 ) -> None:
     """Honor Stop under consent/parent/run locks and redact when the admitted fence drifted.
 
@@ -1001,7 +1088,7 @@ async def _mark_cancelled(
         if run is None or run.status not in ("pending", "streaming"):
             return
         try:
-            await _require_privacy_fence(session, expected_fence)
+            await _require_privacy_fence(session, expected_fence, scope=scope)
         except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
             # The Memory read can abort this transaction. Drop every held lock before retrying
             # redaction in a clean transaction; otherwise the fallback writes may fail too.
@@ -1042,6 +1129,8 @@ async def _mark_failed(
     seq: int,
     expected_fence: object,
     exc: Exception,
+    *,
+    scope: InternalJobScope | None,
 ) -> None:
     """Serialize terminal failure with consent revocation and Stop; drift takes redaction path."""
     privacy_read_failed = False
@@ -1059,7 +1148,7 @@ async def _mark_failed(
         if run is None or run.status != "streaming":
             return
         try:
-            await _require_privacy_fence(session, expected_fence)
+            await _require_privacy_fence(session, expected_fence, scope=scope)
         except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
             # A failed Memory read may leave PostgreSQL's transaction aborted. Retry the
             # durable redaction only after releasing this transaction and its row locks.
@@ -1156,7 +1245,7 @@ async def recover_chat_runs(ctx: dict[str, object]) -> dict[str, int]:
         )
         cutoff = now - RECOVER_STREAMING_AFTER
         stale = (await session.execute(
-            select(ResponseRun.id, ResponseRun.retrieval_context)
+            select(ResponseRun.id, ResponseRun.retrieval_context, ResponseRun.workspace_id, ResponseRun.actor_user_id)
             .where(
                 ResponseRun.status == "streaming",
                 ResponseRun.updated_at < cutoff,
@@ -1174,11 +1263,14 @@ async def recover_chat_runs(ctx: dict[str, object]) -> dict[str, int]:
             )
         except Exception as exc:  # noqa: BLE001  # boundary: next poll retries
             logger.warning("Chat run re-enqueue failed for %s (%s)", run_id, type(exc).__name__)
-    for stale_id, context in stale:
+    for stale_id, context, stale_workspace, stale_actor in stale:
         fence = context.get("_chat_privacy_fence") if isinstance(context, dict) else None
         async with factory() as session:
             seq = await session.scalar(select(func.coalesce(func.max(StreamEvent.seq), 0)).where(
                 StreamEvent.response_id == stale_id,
             )) or 0
-        await _mark_failed(cast(UUID, stale_id), factory, seq, fence, TimeoutError("generation abandoned"))
+        await _mark_failed(
+            cast(UUID, stale_id), factory, seq, fence, TimeoutError("generation abandoned"),
+            scope=await _scope_for_run(factory, stale_workspace, stale_actor),
+        )
     return {"requeued": len(pending_ids), "failed": len(stale) + len(expired)}

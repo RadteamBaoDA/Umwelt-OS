@@ -13,6 +13,7 @@ import pytest
 from arq.connections import ArqRedis
 
 from core.config import Settings
+from core.workspaces.schemas import InternalJobScope
 from modules.chat import routes, worker
 from modules.chat.models import Message, StreamEvent
 from modules.chat.schemas import AnswerContext
@@ -57,14 +58,18 @@ async def test_agent_dispatch_enqueues_on_arq_client(monkeypatch: pytest.MonkeyP
     run_id = uuid4()
     redis = SimpleNamespace(enqueue_job=AsyncMock())
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
-        redis=redis, settings=object(), tool_registry=object())))
+        redis=redis, settings=SimpleNamespace(multi_workspace_enabled=False), tool_registry=object())))
     monkeypatch.setattr(agent_routes.settings_public, "get_ai_execution_config", AsyncMock())
+    monkeypatch.setattr(agent_routes.public, "lock_write_admission", AsyncMock())
+    monkeypatch.setattr(agent_routes, "commit_with_replay", AsyncMock())
     monkeypatch.setattr(agent_routes.public, "create_profile_run_in_uow",
                         AsyncMock(return_value=SimpleNamespace(id=run_id)))
     session = SimpleNamespace(commit=AsyncMock())
     owner = SimpleNamespace(owner_id=1, token_hash="h")
     payload = ProfileRunStart.model_construct(prompt="hi")
-    result = await agent_routes.start_run("researcher", payload, request, session, owner)  # type: ignore[arg-type]
+    result = await agent_routes.start_run(  # type: ignore[arg-type]
+        "researcher", payload, request, session, owner, SimpleNamespace(),
+    )
     assert result.id == run_id
     redis.enqueue_job.assert_awaited_once_with(
         "process_agent_run", str(run_id), 1, _job_id=f"agent-run:{run_id}:1",
@@ -92,13 +97,14 @@ class _Gen:
         ])
         self.session = MagicMock()
         self.session.execute = AsyncMock(return_value=SimpleNamespace(
-            fetchone=lambda: (uuid4(), uuid4(), {}, False)))
+            fetchone=lambda: (uuid4(), uuid4(), {}, False, uuid4(), 1)))
         self.session.scalar = AsyncMock(side_effect=lambda *a, **k: next(scalars, None))
         self.session.scalars = AsyncMock(return_value=SimpleNamespace(all=list))
         self.session.add = self.added.append
         for name in ("commit", "flush", "rollback", "close", "begin"):
             setattr(self.session, name, AsyncMock())
         seq = iter(range(100, 10_000))
+        monkeypatch.setattr(worker, "_admit_job", AsyncMock(return_value=(SimpleNamespace(), SimpleNamespace())))
         monkeypatch.setattr(worker, "_lock_live_response", AsyncMock(return_value=(True, MagicMock())))
         monkeypatch.setattr(worker, "is_run_cancelled", AsyncMock(return_value=False))
         monkeypatch.setattr(worker, "revalidate_context_fence", self.fence)
@@ -184,7 +190,7 @@ async def test_recover_requeues_pending_and_fails_abandoned_streaming(monkeypatc
     session = MagicMock()
     session.scalars = AsyncMock(side_effect=[[pending_id], []])
     session.execute = AsyncMock(return_value=SimpleNamespace(
-        all=lambda: [(stale_id, {"_chat_privacy_fence": {"rev": 3}})]))
+        all=lambda: [(stale_id, {"_chat_privacy_fence": {"rev": 3}}, uuid4(), 1)]))
     session.scalar = AsyncMock(return_value=7)
     run = SimpleNamespace(status="streaming", conversation_id=uuid4())
     session.scalar = AsyncMock(side_effect=[7, run, object(), run, 7])
@@ -192,6 +198,7 @@ async def test_recover_requeues_pending_and_fails_abandoned_streaming(monkeypatc
     session.commit = AsyncMock()
     monkeypatch.setattr(worker, "lock_export_privacy", AsyncMock())
     monkeypatch.setattr(worker, "_require_privacy_fence", AsyncMock())
+    monkeypatch.setattr(worker, "_scope_for_run", AsyncMock(return_value=SimpleNamespace()))
     redis = SimpleNamespace(enqueue_job=AsyncMock())
     factory = _factory(session)
     result = await worker.recover_chat_runs({"session_factory": factory, "redis": redis})
@@ -347,7 +354,8 @@ async def test_legacy_aliases_overlay_accepts_bytes_keys() -> None:
     alias = next(iter(ALIASES))
     value = json.dumps({"model": "m", "destination": "remote"}).encode()
     redis = SimpleNamespace(hgetall=AsyncMock(return_value={alias.encode(): value}))
-    mappings = await legacy_aliases(redis, Settings(csrf_signing_secret="s"))  # type: ignore[arg-type]
+    scope = InternalJobScope(workspace_id=uuid4(), actor_user_id=1, membership_revision=1)
+    mappings = await legacy_aliases(redis, Settings(csrf_signing_secret="s"), scope=scope)  # type: ignore[arg-type]
     assert mappings[alias].model == "m"
 
 

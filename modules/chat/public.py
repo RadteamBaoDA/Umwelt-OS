@@ -188,27 +188,28 @@ async def delete_conversation(
     Owner and any requested pin filter are checked after the parent lock is acquired. This function
     never commits; the route or owning service commits after its unit of work.
     """
-    from modules.memory.public import lock_export_privacy
-
-    await lock_export_privacy(session)
-    conversation = await session.scalar(
-        _select(Conversation)
-        .where(Conversation.id == conversation_id)
-        .with_for_update()
-        .execution_options(populate_existing=True)
-    )
-    if conversation is None:
-        return False
-    owner = await session.scalar(_select(_Owner.id).where(_Owner.id == owner_id))
-    if owner is None or (skip_pinned and conversation.pinned):
-        return False
+    from fastapi import HTTPException
 
     from modules.agents.public import purge_conversation_actions
     from modules.chat.scope import multi_workspace_enabled, owner_default_scope
+    from modules.memory.public import lock_export_privacy
+
+    try:
+        scope = await owner_default_scope(session, owner_id)
+    except HTTPException:
+        return False
+    await lock_export_privacy(session)
+    conversation = await session.scalar(
+        _select(Conversation)
+        .where(Conversation.id == conversation_id, Conversation.workspace_id == scope.workspace_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if conversation is None or (skip_pinned and conversation.pinned):
+        return False
 
     await purge_conversation_actions(
-        session, conversation_id, scope=await owner_default_scope(session, owner_id),
-        multi_workspace_enabled=multi_workspace_enabled(),
+        session, conversation_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled(),
     )
     await session.delete(conversation)
     return True

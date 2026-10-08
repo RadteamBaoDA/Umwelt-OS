@@ -476,7 +476,7 @@ class TestDayScopedTemporalContext:
 
         seen = []
 
-        async def fake_list_timeline(_session, query, limit):
+        async def fake_list_timeline(_session, query, limit, **_scope):
             seen.append(query)
             event = SimpleNamespace(
                 id=uuid4(), title="Meeting", type="note", started_at=datetime(2026, 10, 7, tzinfo=UTC),
