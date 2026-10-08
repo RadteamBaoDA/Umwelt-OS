@@ -940,9 +940,13 @@ async def run_response_generation(
             )
             if validated.citations or web_only:
                 answer_text = accumulated_text if web_only else answer_text
+                by_url: dict[str, int] = {}  # one citation per URL; duplicate hits reuse its number
                 for n in web_numbers:
                     hit = web_run.results[n - evidence_count - 1]
-                    number_map[n] = len(validated.citations) + len(web_citations) + 1
+                    if hit.url in by_url:
+                        number_map[n] = by_url[hit.url]
+                        continue
+                    number_map[n] = by_url[hit.url] = len(validated.citations) + len(web_citations) + 1
                     web_citations.append(WebCitation(
                         url=hit.url, title=hit.title, quote=hit.snippet,
                         provider=web_run.provider, retrievedAt=web_run.retrieved_at or datetime.now(UTC),

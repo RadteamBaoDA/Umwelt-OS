@@ -62,7 +62,7 @@ test.describe('web search toggle', () => {
     });
     await openChat(page);
     await page.locator('#chat-web-search').check();
-    await page.getByRole('textbox').fill('q1');
+    await page.getByRole('textbox', { name: /Ask a question about your knowledge/ }).fill('q1');
     await page.keyboard.press('Enter');
     await expect.poll(() => bodies.length).toBe(1);
     expect(bodies[0].web_search).toBe(true);
@@ -86,11 +86,7 @@ test.describe('web citations (EN)', () => {
     await expect(page.locator('a[href^="javascript:"], a[href*="user:pass"], a[href*="evil.example"]')).toHaveCount(0);
   });
 
-  test('dedupes citations with the same URL', async ({ page }) => {
-    await mockChat(page, { citations: [web('https://example.com/same', 'First'), web('https://example.com/same', 'Second')] });
-    await openChat(page);
-    await expect(page.locator('a[href="https://example.com/same"]')).toHaveCount(1);
-  });
+  // Same-URL dedupe happens server-side before numbering (test_web_citations_with_same_url_are_deduped); the client renders stored citations 1:1 so [n] markers stay aligned.
 
   const reasons: Array<[string, string, string]> = [
     ['not_configured', 'skipped', 'not configured'],

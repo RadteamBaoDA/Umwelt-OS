@@ -495,3 +495,11 @@ def test_web_citation_rejects_unsafe_url(url: str) -> None:
     with pytest.raises(ValidationError):
         WebCitation(url=url, title="t", provider="tavily", retrievedAt=NOW_UTC)
     assert WebCitation(url="https://e.com/a", title="t", provider="tavily", retrievedAt=NOW_UTC)
+
+
+async def test_web_citations_with_same_url_are_deduped(monkeypatch: pytest.MonkeyPatch) -> None:
+    dup = WebSearchResult("Dup", R1.url, R1.host, "other snippet")
+    gen = _WebGen(monkeypatch, ["Web says [1] and [2]"], worker._web_search_run(None, [R1, dup], "brave"), evidence=[])
+    await gen.run()
+    assert [c["url"] for c in gen.message.citations] == [R1.url]
+    assert gen.message.content == "Web says [1] and [1]"
