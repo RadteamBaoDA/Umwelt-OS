@@ -18,12 +18,14 @@ if TYPE_CHECKING:
 
 from fastapi import HTTPException
 from redis.asyncio import Redis
-from sqlalchemy import ColumnElement, delete, desc, func, or_, select, text, tuple_
+from sqlalchemy import ColumnElement, Select, delete, desc, func, or_, select, text, tuple_
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.auth.models import Owner
 from core.pagination import decode_cursor, encode_cursor
+from core.realtime import commit_with_replay
+from core.workspaces import public as workspaces
+from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
 from modules.memory.models import Memory, MemoryCandidate, MemoryPrivacyRecord
 from modules.memory.schemas import (
     MemoryCandidateExportRead,
@@ -53,6 +55,50 @@ from modules.memory.selection import (
 logger = logging.getLogger(__name__)
 
 CACHE_KEY_MEMORIES_ACTIVE = "cache:memory:active"
+
+
+def _cache_key(scope: Scope) -> str:
+    """Return the per-workspace active-Memory cache key; the legacy global key is never reused."""
+    return f"{CACHE_KEY_MEMORIES_ACTIVE}:{scope.workspace_id}"
+
+
+def _privacy_select(scope: Scope) -> Select[MemoryPrivacyRecord]:
+    """Select the single privacy row of this workspace actor."""
+    return select(MemoryPrivacyRecord).where(
+        MemoryPrivacyRecord.workspace_id == scope.workspace_id,
+        MemoryPrivacyRecord.owner_id == _actor(scope),
+    )
+
+
+def _actor(scope: Scope) -> int:
+    """Return the principal recorded by a real workspace or durable job scope."""
+    return scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
+
+
+async def _admit(
+    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
+    lock: bool = False, expected: AccessFence | None = None,
+) -> AccessFence:
+    """Require owner scope and capture or lock authorization before any Memory query or lock.
+
+    Members stay denied (403) before any statement runs; W3 sharing adds grants later. The
+    access fence itself rejects non-default workspaces, so private Memory never leaves the
+    actor's actual default workspace. ``lock=True`` takes the fence ahead of the privacy,
+    Source and Document locks; otherwise a non-locking snapshot is returned.
+    """
+    if not isinstance(scope, (WorkspaceContext, InternalJobScope)):
+        raise TypeError("An explicit Memory workspace scope is required")
+    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
+    if type(multi_workspace_enabled) is not bool:
+        raise TypeError("The configured multi-workspace feature flag must be a boolean")
+    if lock:
+        return await workspaces.lock_access_fence(
+            session, scope=scope, expected=expected, multi_workspace_enabled=multi_workspace_enabled,
+        )
+    return await workspaces.read_access_fence(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
 MEMORY_EXPORT_PAGE_MAX_BYTES = 16_777_216
 _DOCUMENT_MEMORY_CLEANUP_REASON = "Source document evidence removed"
 _DOCUMENT_MEMORY_UNRESOLVED_REASON = "legacy_provenance_unresolved"
@@ -168,9 +214,12 @@ def _candidate_export_read(
 
 
 async def _memory_export_source_fence(
-    session: AsyncSession, row: Memory | MemoryCandidate,
+    session: AsyncSession, row: Memory | MemoryCandidate, *, scope: Scope, multi_workspace_enabled: bool,
 ) -> tuple[dict[str, object], MemoryExportProvenance | None]:
     """Project only independently verified provenance and fence its live owner evidence.
+
+    Chat, Document and Source evidence is resolved under the caller's workspace scope, so a
+    copy whose provenance names a foreign-workspace identity is treated as removed.
 
     Explicitly manual Memory remains exportable after optional evidence is removed. Every
     model-derived or candidate copy needs exact retained Chat message or document evidence.
@@ -223,7 +272,7 @@ async def _memory_export_source_fence(
                 raise HTTPException(status_code=409, detail="Memory export cannot verify partial conversation provenance")
         else:
             origin = await chat_public.read_memory_export_origin(
-                session, owner_id=1, conversation_id=conversation_id, message_id=message_id,
+                session, owner_id=_actor(scope), conversation_id=conversation_id, message_id=message_id,
             )
             if origin is None:
                 if not manual_memory:
@@ -245,7 +294,10 @@ async def _memory_export_source_fence(
         else:
             try:
                 assert version_id is not None and chunk_id is not None  # complete_doc
-                refs = await documents_public.read_evidence_refs(session, [(version_id, chunk_id)])
+                refs = await documents_public.read_evidence_refs(
+                    session, [(version_id, chunk_id)], scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
+                )
             except ValueError:
                 refs = []
             if (len(refs) == 1 and refs[0].document_id == document_id
@@ -261,12 +313,18 @@ async def _memory_export_source_fence(
     if doc_evidence is not None:
         source_id = doc_evidence.source_id
     if source_id is not None:
-        source = await sources_public.get_source_fence(session, source_id)
+        source = await sources_public.get_source_fence(
+            session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
         # Export eligibility reopens when a purge succeeds, so source-only copies also need the
         # durable fence: once any data purge exists, no new Source-tied copy may be admitted.
         eligible = bool(source and await sources_public.filter_export_eligible_sources(
-            session, [SourceExportFence(source_id=source_id, generation=source.generation)],
-        ) and not await sources_public.source_data_purge_exists(session, source_id))
+            session, [SourceExportFence(
+                source_id=source_id, workspace_id=scope.workspace_id, generation=source.generation,
+            )], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        ) and not await sources_public.source_data_purge_exists(
+            session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        ))
         if not eligible:
             if not manual_memory:
                 raise HTTPException(status_code=409, detail="Memory source evidence was removed or is being purged")
@@ -300,41 +358,48 @@ async def _memory_export_source_fence(
     return {**source_fence_data, **chat_evidence}, projected
 
 
-def _memory_export_scope(record_kind: str, snapshot_at: datetime) -> tuple[ColumnElement[bool], ...]:
-    """Select only records created and last changed by the immutable page cutoff."""
+def _memory_export_scope(
+    record_kind: str, snapshot_at: datetime, scope: Scope,
+) -> tuple[ColumnElement[bool], ...]:
+    """Select only this workspace's records created and last changed by the immutable page cutoff."""
     if record_kind == "memories":
-        return (Memory.status != "forgotten", Memory.created_at <= snapshot_at, Memory.updated_at <= snapshot_at)
-    return (MemoryCandidate.created_at <= snapshot_at, MemoryCandidate.updated_at <= snapshot_at)
+        return (Memory.workspace_id == scope.workspace_id, Memory.status != "forgotten",
+                Memory.created_at <= snapshot_at, Memory.updated_at <= snapshot_at)
+    return (MemoryCandidate.workspace_id == scope.workspace_id,
+            MemoryCandidate.created_at <= snapshot_at, MemoryCandidate.updated_at <= snapshot_at)
 
 
-async def _memory_export_count(session: AsyncSession, record_kind: str, snapshot_at: datetime) -> int:
-    """Count the retained owner inventory at one fixed cutoff for page and final checks."""
+async def _memory_export_count(
+    session: AsyncSession, record_kind: str, snapshot_at: datetime, scope: Scope,
+) -> int:
+    """Count the retained workspace inventory at one fixed cutoff for page and final checks."""
     model: type[Memory | MemoryCandidate] = Memory if record_kind == "memories" else MemoryCandidate
     return int(await session.scalar(
-        select(func.count()).select_from(model).where(*_memory_export_scope(record_kind, snapshot_at))
+        select(func.count()).select_from(model).where(*_memory_export_scope(record_kind, snapshot_at, scope))
     ) or 0)
 
 
 async def export_page(
-    session: AsyncSession, *, owner_id: int, record_kind: str, limit: int = 50, cursor: str | None = None,
+    session: AsyncSession, *, owner_id: int, record_kind: str, scope: Scope,
+    multi_workspace_enabled: bool, limit: int = 50, cursor: str | None = None,
 ) -> MemoryExportPage:
-    """Return a bounded owner page after taking the privacy fence and validating copied evidence.
+    """Return a bounded workspace page after admission, the privacy fence and evidence validation.
 
-    The immutable cutoff and content digests support the export publisher's second source/owner
-    fence. No arbitrary copied provenance JSON is included in the portable projection.
+    ``owner_id`` must equal the scope actor. The immutable cutoff and content digests support the
+    export publisher's second source/owner fence. No arbitrary copied provenance JSON is included
+    in the portable projection. The workspace predicate precedes ordering and LIMIT.
     """
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     await lock_export_privacy(session)
-    if owner_id != 1 or record_kind not in {"memories", "candidates"} or not 1 <= limit <= 100:
+    if owner_id != _actor(scope) or record_kind not in {"memories", "candidates"} or not 1 <= limit <= 100:
         raise ValueError("Memory export owner, kind or page limit is invalid")
-    if await session.scalar(select(Owner.id).where(Owner.id == owner_id)) is None:
-        raise HTTPException(status_code=404, detail="Owner not found")
     if cursor is None:
         snapshot_at, position = datetime.now(UTC), None
     else:
         snapshot_at, position_at, position_id = _decode_memory_export_cursor(cursor, owner_id, record_kind)
         position = (position_at, position_id)
     model: type[Memory | MemoryCandidate] = Memory if record_kind == "memories" else MemoryCandidate
-    statement = select(model).where(*_memory_export_scope(record_kind, snapshot_at))
+    statement = select(model).where(*_memory_export_scope(record_kind, snapshot_at, scope))
     if position is not None:
         statement = statement.where(tuple_(model.created_at, model.id) > position)
     # `model` is chosen by record_kind, so every row is exactly one of the two ORM types.
@@ -349,7 +414,9 @@ async def export_page(
     payload_bytes = 2
     for row in rows:
         try:
-            provenance_fence, provenance = await _memory_export_source_fence(session, row)
+            provenance_fence, provenance = await _memory_export_source_fence(
+                session, row, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
         except HTTPException as exc:
             if exc.status_code != 409:
                 raise
@@ -372,7 +439,7 @@ async def export_page(
         ))
     return MemoryExportPage(
         owner_id=owner_id, record_kind=record_kind, snapshot_at=snapshot_at,
-        snapshot_count=await _memory_export_count(session, record_kind, snapshot_at),
+        snapshot_count=await _memory_export_count(session, record_kind, snapshot_at, scope),
         omitted_count=omitted_count, items=items, fences=fences, payload_bytes=payload_bytes,
         max_payload_bytes=MEMORY_EXPORT_PAGE_MAX_BYTES,
         available=omitted_count == 0,
@@ -384,26 +451,33 @@ async def export_page(
 
 async def validate_export_fences(
     session: AsyncSession, *, owner_id: int, record_kind: str, snapshot_at: datetime,
-    expected_snapshot_count: int, fences: list[MemoryExportFence],
+    expected_snapshot_count: int, fences: list[MemoryExportFence], scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> MemoryExportFenceValidation:
-    """Recheck privacy, retained owner rows, exact content and inventory before publication."""
-    await lock_export_privacy(session)
-    if owner_id != 1 or record_kind not in {"memories", "candidates"} or len(fences) > 100:
-        raise ValueError("Memory export validation input is invalid")
-    if await session.scalar(select(Owner.id).where(Owner.id == owner_id)) is None:
+    """Recheck admission, privacy, retained workspace rows, exact content and inventory before publication."""
+    try:
+        await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    except HTTPException as exc:
+        if exc.status_code not in {401, 404}:
+            raise
         return MemoryExportFenceValidation(valid=False, reason="owner_unavailable", observed_snapshot_count=0)
-    observed = await _memory_export_count(session, record_kind, snapshot_at)
+    await lock_export_privacy(session)
+    if owner_id != _actor(scope) or record_kind not in {"memories", "candidates"} or len(fences) > 100:
+        raise ValueError("Memory export validation input is invalid")
+    observed = await _memory_export_count(session, record_kind, snapshot_at, scope)
     if observed != expected_snapshot_count:
         return MemoryExportFenceValidation(valid=False, reason="snapshot_count_changed", observed_snapshot_count=observed)
     model: type[Memory | MemoryCandidate] = Memory if record_kind == "memories" else MemoryCandidate
     for fence in fences:
         row: Memory | MemoryCandidate | None = await session.scalar(select(model).where(
-            model.id == fence.id, *_memory_export_scope(record_kind, snapshot_at),
+            model.id == fence.id, *_memory_export_scope(record_kind, snapshot_at, scope),
         ).execution_options(populate_existing=True))
         if row is None or row.created_at != fence.created_at or row.updated_at != fence.updated_at:
             return MemoryExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
         try:
-            source_fence, provenance = await _memory_export_source_fence(session, row)
+            source_fence, provenance = await _memory_export_source_fence(
+                session, row, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
         except HTTPException:
             return MemoryExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
         item = (_memory_export_read(cast(Memory, row), provenance) if record_kind == "memories"
@@ -446,11 +520,14 @@ async def lock_export_privacy(session: AsyncSession) -> None:
 
 async def _lock_live_provenance_evidence(
     session: AsyncSession, provenance: object, *, require_copy_evidence: bool,
+    scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence | None = None,
 ) -> None:
     """Acquire privacy-held live evidence locks in Source then Document order and reject stale claims.
 
     Callers first read a provenance hint, acquire the privacy lock, then use this helper before
-    locking the copied Memory/Candidate rows and comparing the locked row to its hint.
+    locking the copied Memory/Candidate rows and comparing the locked row to its hint. Every
+    owner call runs under the caller's workspace scope; ``access_fence`` (the caller's locked
+    admission) is compared before each Source lock so a revoked membership cannot publish.
     """
     if not isinstance(provenance, dict):
         raise HTTPException(status_code=409, detail="Memory provenance is not verifiable")
@@ -478,7 +555,8 @@ async def _lock_live_provenance_evidence(
             raise HTTPException(status_code=409, detail="Memory document provenance is incomplete")
         try:
             refs = await documents_public.read_evidence_refs(
-                session, [(version_id, chunk_id)], for_write=True,
+                session, [(version_id, chunk_id)], scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled, for_write=True,
             )
         except ValueError:
             # Documents raises (rather than returning fewer rows) when the evidence Source vanishes
@@ -490,10 +568,17 @@ async def _lock_live_provenance_evidence(
         source_id = refs[0].source_id
         document_verified = True
     elif source_id is not None:
-        source = await sources_public.lock_source(session, source_id)
+        source = await sources_public.lock_source(
+            session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            expected_access_fence=access_fence,
+        )
         eligible = bool(source and await sources_public.filter_export_eligible_sources(
-            session, [SourceExportFence(source_id=source_id, generation=source.generation)],
-        ) and not await sources_public.source_data_purge_exists(session, source_id))
+            session, [SourceExportFence(
+                source_id=source_id, workspace_id=scope.workspace_id, generation=source.generation,
+            )], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        ) and not await sources_public.source_data_purge_exists(
+            session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        ))
         if not eligible:
             raise HTTPException(status_code=409, detail="Memory source evidence is removed or unavailable")
 
@@ -505,7 +590,7 @@ async def _lock_live_provenance_evidence(
         if conversation_id is None or message_id is None:
             raise HTTPException(status_code=409, detail="Memory conversation provenance is incomplete")
         chat_verified = await chat_public.read_memory_export_origin(
-            session, owner_id=1, conversation_id=conversation_id, message_id=message_id,
+            session, owner_id=_actor(scope), conversation_id=conversation_id, message_id=message_id,
         ) is not None
         if not chat_verified:
             raise HTTPException(status_code=409, detail="Memory transcript evidence is removed or unavailable")
@@ -513,13 +598,23 @@ async def _lock_live_provenance_evidence(
         raise HTTPException(status_code=409, detail="Memory copied-content evidence is not verifiable")
 
 
-async def read_export_privacy(session: AsyncSession) -> MemoryExportPrivacy:
-    """Read only the history-retention value and its persisted-row snapshot fence."""
+async def read_export_privacy(
+    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
+) -> MemoryExportPrivacy:
+    """Read only the history-retention value and its persisted-row snapshot fence.
+
+    Admits the caller's owner scope first (members are denied before any query) and reads the
+    one privacy row of that workspace actor.
+    """
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     row = (await session.execute(
         select(
             MemoryPrivacyRecord.store_conversation_history,
             MemoryPrivacyRecord.updated_at,
-        ).where(MemoryPrivacyRecord.owner_id == 1)
+        ).where(
+            MemoryPrivacyRecord.workspace_id == scope.workspace_id,
+            MemoryPrivacyRecord.owner_id == _actor(scope),
+        )
     )).one_or_none()
     if row is None:
         # Match MemoryService.get_privacy_config without inserting defaults or committing.
@@ -944,9 +1039,9 @@ async def purge_source_copied_evidence_page(
     )
 
 
-async def invalidate_memory_cache(redis: Redis) -> None:
-    """Evict active Memory data after cleanup commit; propagate failure for receipt retry."""
-    await redis.delete(CACHE_KEY_MEMORIES_ACTIVE)
+async def invalidate_memory_cache(redis: Redis, *, scope: Scope) -> None:
+    """Evict one workspace's active Memory data after cleanup commit; propagate failure for receipt retry."""
+    await redis.delete(_cache_key(scope))
 
 
 def _to_memory_read(item: Memory, provenance: dict[str, Any] | None = None) -> MemoryRead:
@@ -978,7 +1073,7 @@ def _to_memory_read(item: Memory, provenance: dict[str, Any] | None = None) -> M
 
 
 async def _verified_memory_read(
-    session: AsyncSession, item: Memory,
+    session: AsyncSession, item: Memory, *, scope: Scope, multi_workspace_enabled: bool,
 ) -> MemoryRead | None:
     """Return a current-evidence projection or suppress a copied record whose origin is unverified."""
     try:
@@ -986,16 +1081,20 @@ async def _verified_memory_read(
         if item.is_manual is not True:
             await _lock_live_provenance_evidence(
                 session, item.provenance, require_copy_evidence=True,
+                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
             )
         elif isinstance(item.provenance, dict):
             try:
                 await _lock_live_provenance_evidence(
                     session, item.provenance, require_copy_evidence=False,
+                    scope=scope, multi_workspace_enabled=multi_workspace_enabled,
                 )
             except HTTPException as exc:
                 if exc.status_code != 409:
                     raise
-        _, provenance = await _memory_export_source_fence(session, item)
+        _, provenance = await _memory_export_source_fence(
+            session, item, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
     except HTTPException as exc:
         if exc.status_code == 409:
             return None
@@ -1007,15 +1106,18 @@ async def _verified_memory_read(
 
 
 async def _verified_candidate_read(
-    session: AsyncSession, item: MemoryCandidate,
+    session: AsyncSession, item: MemoryCandidate, *, scope: Scope, multi_workspace_enabled: bool,
 ) -> MemoryCandidateRead | None:
     """Return a candidate only while its copied evidence still has an owner-valid projection."""
     try:
         await lock_export_privacy(session)
         await _lock_live_provenance_evidence(
             session, item.provenance, require_copy_evidence=True,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
-        _, provenance = await _memory_export_source_fence(session, item)
+        _, provenance = await _memory_export_source_fence(
+            session, item, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
     except HTTPException as exc:
         if exc.status_code == 409:
             return None
@@ -1056,7 +1158,12 @@ def _to_candidate_read(
 
 
 class MemoryService:
-    """Service managing memory lifecycle, candidates, evaluation, and privacy settings."""
+    """Service managing memory lifecycle, candidates, evaluation, and privacy settings.
+
+    Construction only binds a session and optional cache client. Every content method requires
+    an explicit ``scope`` and the actual ``multi_workspace_enabled`` flag, admits the owner scope
+    before any query, and filters by workspace before ordering and LIMIT.
+    """
 
     def __init__(self, session: AsyncSession, redis: Redis | None = None) -> None:
         """Bind active database session and optional cache client.
@@ -1068,11 +1175,11 @@ class MemoryService:
         self.session = session
         self.redis = redis
 
-    async def _invalidate_cache(self) -> None:
-        """Evict active memory cache key if Redis client is available."""
+    async def _invalidate_cache(self, scope: Scope) -> None:
+        """Evict the workspace's active memory cache key if a Redis client is available."""
         if self.redis is not None:
             try:
-                await self.redis.delete(CACHE_KEY_MEMORIES_ACTIVE)
+                await self.redis.delete(_cache_key(scope))
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Failed to evict memory cache: %s", exc)
 
@@ -1084,6 +1191,8 @@ class MemoryService:
         memory_type: str | None = None,
         status: str = "active",
         query: str | None = None,
+        scope: Scope,
+        multi_workspace_enabled: bool,
     ) -> MemoryPage:
         """Retrieve cursor-paginated memory items matching filter criteria.
 
@@ -1099,8 +1208,9 @@ class MemoryService:
         Returns:
             MemoryPage with items list and next_cursor.
         """
+        await _admit(self.session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         clamped_limit = max(1, min(limit, 100))
-        stmt = select(Memory).where(Memory.status == status)
+        stmt = select(Memory).where(Memory.workspace_id == scope.workspace_id, Memory.status == status)
 
         if memory_type:
             stmt = stmt.where(Memory.memory_type == memory_type)
@@ -1119,7 +1229,7 @@ class MemoryService:
         examined = 0
         for row in rows[:100]:
             examined += 1
-            projected = await _verified_memory_read(self.session, row)
+            projected = await _verified_memory_read(self.session, row, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
             if projected is not None:
                 items.append(projected)
                 if len(items) == clamped_limit:
@@ -1135,7 +1245,9 @@ class MemoryService:
             next_cursor=next_cursor,
         )
 
-    async def get_memory(self, memory_id: UUID) -> MemoryRead | None:
+    async def get_memory(
+        self, memory_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+    ) -> MemoryRead | None:
         """Fetch a single memory item by identifier.
 
         Args:
@@ -1144,9 +1256,12 @@ class MemoryService:
         Returns:
             MemoryRead if found, None otherwise.
         """
+        await _admit(self.session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         await lock_export_privacy(self.session)
-        item = await self.session.get(Memory, memory_id)
-        return await _verified_memory_read(self.session, item) if item is not None else None
+        item = await self.session.scalar(select(Memory).where(
+            Memory.id == memory_id, Memory.workspace_id == scope.workspace_id,
+        ))
+        return await _verified_memory_read(self.session, item, scope=scope, multi_workspace_enabled=multi_workspace_enabled) if item is not None else None
 
     async def create_memory(
         self,
@@ -1154,6 +1269,8 @@ class MemoryService:
         *,
         is_manual: bool = True,
         candidate_id: UUID | None = None,
+        scope: Scope,
+        multi_workspace_enabled: bool,
     ) -> MemoryRead:
         """Explicitly create an owner memory or persist an accepted candidate.
 
@@ -1165,9 +1282,13 @@ class MemoryService:
         Returns:
             Newly created MemoryRead.
         """
+        fence = await _admit(
+            self.session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True,
+        )
         await lock_export_privacy(self.session)
         await _lock_live_provenance_evidence(
             self.session, payload.provenance, require_copy_evidence=not is_manual,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
         )
         now = datetime.now(UTC)
         prov = dict(payload.provenance)
@@ -1175,6 +1296,7 @@ class MemoryService:
             prov["origin"] = "manual"
 
         item = Memory(
+            workspace_id=scope.workspace_id, actor_user_id=_actor(scope),
             content=payload.content.strip(),
             memory_type=payload.type,
             provenance=prov,
@@ -1187,15 +1309,20 @@ class MemoryService:
             updated_at=now,
         )
         self.session.add(item)
-        await self.session.commit()
+        await commit_with_replay(
+            self.session, (), scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=fence,
+        )
         await self.session.refresh(item)
-        await self._invalidate_cache()
-        projected = await _verified_memory_read(self.session, item)
+        await self._invalidate_cache(scope)
+        projected = await _verified_memory_read(self.session, item, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         if projected is None:
             raise HTTPException(status_code=409, detail="Memory evidence is removed or unavailable")
         return projected
 
-    async def update_memory(self, memory_id: UUID, payload: MemoryUpdate) -> MemoryRead | None:
+    async def update_memory(
+        self, memory_id: UUID, payload: MemoryUpdate, *, scope: Scope, multi_workspace_enabled: bool,
+    ) -> MemoryRead | None:
         """Update an existing active memory's content, type, or reason.
 
         Args:
@@ -1205,8 +1332,13 @@ class MemoryService:
         Returns:
             Updated MemoryRead, or None if not found or not active.
         """
+        fence = await _admit(
+            self.session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True,
+        )
         hint = await self.session.execute(
-            select(Memory.id, Memory.provenance).where(Memory.id == memory_id)
+            select(Memory.id, Memory.provenance).where(
+                Memory.id == memory_id, Memory.workspace_id == scope.workspace_id,
+            )
         )
         hinted = hint.one_or_none()
         if hinted is None:
@@ -1215,11 +1347,14 @@ class MemoryService:
         await _lock_live_provenance_evidence(
             self.session, hinted.provenance,
             require_copy_evidence=bool(await self.session.scalar(
-                select(Memory.is_manual).where(Memory.id == memory_id)
+                select(Memory.is_manual).where(
+                    Memory.id == memory_id, Memory.workspace_id == scope.workspace_id,
+                )
             ) is False),
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
         )
         item = await self.session.scalar(select(Memory).where(
-            Memory.id == memory_id,
+            Memory.id == memory_id, Memory.workspace_id == scope.workspace_id,
         ).with_for_update().execution_options(populate_existing=True))
         if item is None or item.status != "active":
             return None
@@ -1237,12 +1372,17 @@ class MemoryService:
             item.reason = payload.reason
         item.updated_at = now
 
-        await self.session.commit()
+        await commit_with_replay(
+            self.session, (), scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=fence,
+        )
         await self.session.refresh(item)
-        await self._invalidate_cache()
-        return await _verified_memory_read(self.session, item)
+        await self._invalidate_cache(scope)
+        return await _verified_memory_read(self.session, item, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
 
-    async def forget_memory(self, memory_id: UUID, *, reason: str | None = None) -> MemoryRead | None:
+    async def forget_memory(
+        self, memory_id: UUID, *, reason: str | None = None, scope: Scope, multi_workspace_enabled: bool,
+    ) -> MemoryRead | None:
         """Immediately mark a memory forgotten, removing it from retrieval and purging candidate links.
 
         Makes content unavailable to retrieval immediately. Durable deletion cleans
@@ -1255,17 +1395,23 @@ class MemoryService:
         Returns:
             Forgotten MemoryRead, or None if not found.
         """
+        fence = await _admit(
+            self.session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True,
+        )
         hinted = (await self.session.execute(
-            select(Memory.provenance, Memory.is_manual).where(Memory.id == memory_id)
+            select(Memory.provenance, Memory.is_manual).where(
+                Memory.id == memory_id, Memory.workspace_id == scope.workspace_id,
+            )
         )).one_or_none()
         if hinted is None:
             return None
         await lock_export_privacy(self.session)
         await _lock_live_provenance_evidence(
             self.session, hinted.provenance, require_copy_evidence=hinted.is_manual is False,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
         )
         item = await self.session.scalar(select(Memory).where(
-            Memory.id == memory_id,
+            Memory.id == memory_id, Memory.workspace_id == scope.workspace_id,
         ).with_for_update().execution_options(populate_existing=True))
         if item is None:
             return None
@@ -1283,6 +1429,7 @@ class MemoryService:
         if item.candidate_id is not None:
             cand = await self.session.scalar(select(MemoryCandidate).where(
                 MemoryCandidate.id == item.candidate_id,
+                MemoryCandidate.workspace_id == scope.workspace_id,
             ).with_for_update().execution_options(populate_existing=True))
             if cand is not None:
                 cand.status = "superseded"
@@ -1291,15 +1438,20 @@ class MemoryService:
                 cand.reason = _DOCUMENT_MEMORY_CLEANUP_REASON
                 cand.provenance = {}
 
-        await self.session.commit()
+        await commit_with_replay(
+            self.session, (), scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=fence,
+        )
         await self.session.refresh(item)
-        await self._invalidate_cache()
-        projected = await _verified_memory_read(self.session, item)
+        await self._invalidate_cache(scope)
+        projected = await _verified_memory_read(self.session, item, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         if projected is None:
             raise HTTPException(status_code=409, detail="Memory evidence is removed or unavailable")
         return projected
 
-    async def invalidate_memory(self, memory_id: UUID, *, reason: str) -> MemoryRead | None:
+    async def invalidate_memory(
+        self, memory_id: UUID, *, reason: str, scope: Scope, multi_workspace_enabled: bool,
+    ) -> MemoryRead | None:
         """Mark an active memory invalidated due to factual inaccuracy or policy.
 
         Args:
@@ -1309,17 +1461,23 @@ class MemoryService:
         Returns:
             Invalidated MemoryRead, or None if not found.
         """
+        fence = await _admit(
+            self.session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True,
+        )
         hinted = (await self.session.execute(
-            select(Memory.provenance, Memory.is_manual).where(Memory.id == memory_id)
+            select(Memory.provenance, Memory.is_manual).where(
+                Memory.id == memory_id, Memory.workspace_id == scope.workspace_id,
+            )
         )).one_or_none()
         if hinted is None:
             return None
         await lock_export_privacy(self.session)
         await _lock_live_provenance_evidence(
             self.session, hinted.provenance, require_copy_evidence=hinted.is_manual is False,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
         )
         item = await self.session.scalar(select(Memory).where(
-            Memory.id == memory_id,
+            Memory.id == memory_id, Memory.workspace_id == scope.workspace_id,
         ).with_for_update().execution_options(populate_existing=True))
         if item is None:
             return None
@@ -1332,10 +1490,13 @@ class MemoryService:
         item.updated_at = now
         item.reason = reason
 
-        await self.session.commit()
+        await commit_with_replay(
+            self.session, (), scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=fence,
+        )
         await self.session.refresh(item)
-        await self._invalidate_cache()
-        projected = await _verified_memory_read(self.session, item)
+        await self._invalidate_cache(scope)
+        projected = await _verified_memory_read(self.session, item, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         if projected is None:
             raise HTTPException(status_code=409, detail="Memory evidence is removed or unavailable")
         return projected
@@ -1344,6 +1505,9 @@ class MemoryService:
         self,
         memory_id: UUID,
         payload: MemorySupersedeRequest,
+        *,
+        scope: Scope,
+        multi_workspace_enabled: bool,
     ) -> tuple[MemoryRead, MemoryRead] | None:
         """Supersede an existing memory with newer, updated knowledge.
 
@@ -1358,17 +1522,23 @@ class MemoryService:
         Returns:
             Tuple of (superseded_old_memory, new_replacement_memory), or None if not found.
         """
+        fence = await _admit(
+            self.session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True,
+        )
         hinted = (await self.session.execute(
-            select(Memory.provenance, Memory.is_manual).where(Memory.id == memory_id)
+            select(Memory.provenance, Memory.is_manual).where(
+                Memory.id == memory_id, Memory.workspace_id == scope.workspace_id,
+            )
         )).one_or_none()
         if hinted is None:
             return None
         await lock_export_privacy(self.session)
         await _lock_live_provenance_evidence(
             self.session, hinted.provenance, require_copy_evidence=hinted.is_manual is False,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
         )
         old_item = await self.session.scalar(select(Memory).where(
-            Memory.id == memory_id,
+            Memory.id == memory_id, Memory.workspace_id == scope.workspace_id,
         ).with_for_update().execution_options(populate_existing=True))
         if old_item is None:
             return None
@@ -1382,6 +1552,7 @@ class MemoryService:
             else old_item.provenance
         ) if derived_replacement else {"supersedes": str(old_item.id), "origin": "manual"}
         new_item = Memory(
+            workspace_id=scope.workspace_id, actor_user_id=_actor(scope),
             content=payload.new_content.strip(),
             memory_type=payload.type or old_item.memory_type,
             # The lifecycle FK below records supersession. Derived copies must retain their
@@ -1402,45 +1573,59 @@ class MemoryService:
         old_item.superseded_by_id = new_item.id
         old_item.updated_at = now
 
-        await self.session.commit()
+        await commit_with_replay(
+            self.session, (), scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=fence,
+        )
         await self.session.refresh(old_item)
         await self.session.refresh(new_item)
-        await self._invalidate_cache()
+        await self._invalidate_cache(scope)
 
-        old_read = await _verified_memory_read(self.session, old_item)
-        new_read = await _verified_memory_read(self.session, new_item)
+        old_read = await _verified_memory_read(self.session, old_item, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        new_read = await _verified_memory_read(self.session, new_item, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         if old_read is None or new_read is None:
             raise HTTPException(status_code=409, detail="Memory evidence is removed or unavailable")
         return old_read, new_read
 
-    async def get_privacy_config(self) -> MemoryPrivacyConfig:
+    async def get_privacy_config(
+        self, *, scope: Scope, multi_workspace_enabled: bool,
+    ) -> MemoryPrivacyConfig:
         """Read owner memory and conversation privacy settings, initializing defaults if needed.
 
         Returns:
             MemoryPrivacyConfig with store_conversation_history, store_agent_memory, auto_accept_memory.
         """
-        rec = await self.session.get(MemoryPrivacyRecord, 1)
+        await _admit(self.session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        rec = await self.session.scalar(_privacy_select(scope))
+        fence: AccessFence | None = None
         if rec is None:
             # Some read routes create these defaults, so fence the insert just like
             # a user write before it becomes part of the snapshot boundary.
             from modules.settings.public import admit_write
 
             await admit_write(self.session, "memory_privacy_default")
+            fence = await _admit(
+                self.session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True,
+            )
             # Serialize first-default insertion with consent updates and Chat's absent-row fence.
             await lock_export_privacy(self.session)
             rec = await self.session.scalar(
-                select(MemoryPrivacyRecord).where(MemoryPrivacyRecord.owner_id == 1)
-                .with_for_update().execution_options(populate_existing=True)
+                _privacy_select(scope).with_for_update().execution_options(populate_existing=True)
             )
         if rec is None:
+            assert fence is not None  # only the locked branch reaches an insert
             rec = MemoryPrivacyRecord(
-                owner_id=1,
+                workspace_id=scope.workspace_id,
+                owner_id=_actor(scope),
                 store_conversation_history=True,
                 store_agent_memory=False,
                 auto_accept_memory=False,
             )
             self.session.add(rec)
-            await self.session.commit()
+            await commit_with_replay(
+                self.session, (), scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                access_fence=fence,
+            )
             await self.session.refresh(rec)
 
         return MemoryPrivacyConfig(
@@ -1449,27 +1634,38 @@ class MemoryService:
             auto_accept_memory=rec.auto_accept_memory,
         )
 
-    async def _read_privacy_config_under_fence(self) -> MemoryPrivacyConfig:
+    async def _read_privacy_config_under_fence(
+        self, *, scope: Scope, multi_workspace_enabled: bool, lock_fence: bool = False,
+    ) -> tuple[MemoryPrivacyConfig, AccessFence]:
         """Read fresh consent while holding the privacy lock through the caller's decision.
+
+        Admission precedes the privacy lock; ``lock_fence=True`` returns a locked fence that a
+        writing caller later passes to its fenced commit. The returned fence is always the one
+        taken after any default-row initialization, which releases earlier locks.
 
         The default-row initializer admits writes before acquiring this owner lock and may
         commit internally. If the fresh locked read finds no row, release its read transaction,
         initialize through that existing admission path, then reacquire the privacy fence and
         reread with populate_existing before the caller acts on consent.
         """
+        fence = await _admit(
+            self.session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=lock_fence,
+        )
         await lock_export_privacy(self.session)
         rec = await self.session.scalar(
-            select(MemoryPrivacyRecord).where(MemoryPrivacyRecord.owner_id == 1)
-            .with_for_update().execution_options(populate_existing=True)
+            _privacy_select(scope).with_for_update().execution_options(populate_existing=True)
         )
         if rec is None:
             # Do not acquire the backup admission barrier after the privacy owner lock.
             await self.session.rollback()
-            await self.get_privacy_config()
+            await self.get_privacy_config(scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+            fence = await _admit(
+                self.session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                lock=lock_fence,
+            )
             await lock_export_privacy(self.session)
             rec = await self.session.scalar(
-                select(MemoryPrivacyRecord).where(MemoryPrivacyRecord.owner_id == 1)
-                .with_for_update().execution_options(populate_existing=True)
+                _privacy_select(scope).with_for_update().execution_options(populate_existing=True)
             )
         if rec is None:
             raise HTTPException(status_code=503, detail="Memory privacy settings are unavailable")
@@ -1477,9 +1673,11 @@ class MemoryService:
             store_conversation_history=rec.store_conversation_history,
             store_agent_memory=rec.store_agent_memory,
             auto_accept_memory=rec.auto_accept_memory,
-        )
+        ), fence
 
-    async def update_privacy_config(self, payload: MemoryPrivacyUpdate) -> MemoryPrivacyConfig:
+    async def update_privacy_config(
+        self, payload: MemoryPrivacyUpdate, *, scope: Scope, multi_workspace_enabled: bool,
+    ) -> MemoryPrivacyConfig:
         """Update owner memory privacy controls.
 
         Args:
@@ -1488,14 +1686,16 @@ class MemoryService:
         Returns:
             Updated MemoryPrivacyConfig.
         """
+        fence = await _admit(
+            self.session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True,
+        )
         # Consent changes share the same xact lock Chat holds through admission/publication.
         await lock_export_privacy(self.session)
         rec = await self.session.scalar(
-            select(MemoryPrivacyRecord).where(MemoryPrivacyRecord.owner_id == 1)
-            .with_for_update().execution_options(populate_existing=True)
+            _privacy_select(scope).with_for_update().execution_options(populate_existing=True)
         )
         if rec is None:
-            rec = MemoryPrivacyRecord(owner_id=1)
+            rec = MemoryPrivacyRecord(workspace_id=scope.workspace_id, owner_id=_actor(scope))
             self.session.add(rec)
 
         if payload.store_conversation_history is not None:
@@ -1506,7 +1706,10 @@ class MemoryService:
             rec.auto_accept_memory = payload.auto_accept_memory
         rec.updated_at = datetime.now(UTC)
 
-        await self.session.commit()
+        await commit_with_replay(
+            self.session, (), scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=fence,
+        )
         await self.session.refresh(rec)
 
         return MemoryPrivacyConfig(
@@ -1519,6 +1722,9 @@ class MemoryService:
         self,
         content: str,
         memory_type: str = "fact",
+        *,
+        scope: Scope,
+        multi_workspace_enabled: bool,
     ) -> dict[str, Any]:
         """Evaluate content novelty and usefulness against active memories.
 
@@ -1529,14 +1735,16 @@ class MemoryService:
         Returns:
             Dictionary containing novelty_score, usefulness_score, confidence, and recommendation.
         """
-        privacy = await self._read_privacy_config_under_fence()
+        privacy, _ = await self._read_privacy_config_under_fence(
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
         source_rows = list((await self.session.scalars(
-            select(Memory).where(Memory.status == "active")
+            select(Memory).where(Memory.workspace_id == scope.workspace_id, Memory.status == "active")
             .order_by(desc(Memory.confidence), desc(Memory.created_at)).limit(100)
         )).all())
         active_contents: list[str] = []
         for row in source_rows:
-            if await _verified_memory_read(self.session, row) is not None:
+            if await _verified_memory_read(self.session, row, scope=scope, multi_workspace_enabled=multi_workspace_enabled) is not None:
                 active_contents.append(row.content)
         evaluation = evaluate_candidate(
             content,
@@ -1561,6 +1769,8 @@ class MemoryService:
         conversation_id: UUID | None = None,
         message_id: UUID | None = None,
         provenance: dict[str, Any] | None = None,
+        scope: Scope,
+        multi_workspace_enabled: bool,
     ) -> list[MemoryCandidateRead]:
         """Extract memory candidate proposals from text, evaluate them, and persist candidates.
 
@@ -1576,7 +1786,9 @@ class MemoryService:
         Returns:
             List of created MemoryCandidateRead objects.
         """
-        privacy = await self._read_privacy_config_under_fence()
+        privacy, fence = await self._read_privacy_config_under_fence(
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock_fence=True,
+        )
         if not privacy.store_agent_memory:
             return []
 
@@ -1592,15 +1804,16 @@ class MemoryService:
         prov["origin"] = "agent"
         await _lock_live_provenance_evidence(
             self.session, prov, require_copy_evidence=True,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
         )
 
         source_rows = list((await self.session.scalars(
-            select(Memory).where(Memory.status == "active")
+            select(Memory).where(Memory.workspace_id == scope.workspace_id, Memory.status == "active")
             .order_by(desc(Memory.confidence), desc(Memory.created_at)).limit(100)
         )).all())
         active_contents: list[str] = []
         for row in source_rows:
-            if await _verified_memory_read(self.session, row) is not None:
+            if await _verified_memory_read(self.session, row, scope=scope, multi_workspace_enabled=multi_workspace_enabled) is not None:
                 active_contents.append(row.content)
 
         now = datetime.now(UTC)
@@ -1619,6 +1832,7 @@ class MemoryService:
                 continue
 
             cand = MemoryCandidate(
+                workspace_id=scope.workspace_id, actor_user_id=_actor(scope),
                 content=p["content"],
                 memory_type=p["type"],
                 provenance=prov,
@@ -1637,6 +1851,7 @@ class MemoryService:
             # If auto-accepted, create active Memory immediately
             if evaluation.should_auto_accept:
                 mem = Memory(
+                    workspace_id=scope.workspace_id, actor_user_id=_actor(scope),
                     content=cand.content,
                     memory_type=cand.memory_type,
                     provenance=prov,
@@ -1652,13 +1867,18 @@ class MemoryService:
 
             results.append(_to_candidate_read(cand))
 
-        await self.session.commit()
-        await self._invalidate_cache()
+        await commit_with_replay(
+            self.session, (), scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=fence,
+        )
+        await self._invalidate_cache(scope)
         safe_results: list[MemoryCandidateRead] = []
         for result in results:
-            candidate_row = await self.session.get(MemoryCandidate, result.id)
+            candidate_row = await self.session.scalar(select(MemoryCandidate).where(
+                MemoryCandidate.id == result.id, MemoryCandidate.workspace_id == scope.workspace_id,
+            ))
             if candidate_row is not None:
-                projected = await _verified_candidate_read(self.session, candidate_row)
+                projected = await _verified_candidate_read(self.session, candidate_row, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
                 if projected is not None:
                     safe_results.append(projected)
         return safe_results
@@ -1669,6 +1889,8 @@ class MemoryService:
         limit: int = 50,
         cursor: str | None = None,
         status: str = "pending",
+        scope: Scope,
+        multi_workspace_enabled: bool,
     ) -> MemoryCandidatePage:
         """List cursor-paginated memory candidates.
 
@@ -1680,8 +1902,11 @@ class MemoryService:
         Returns:
             MemoryCandidatePage.
         """
+        await _admit(self.session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         clamped_limit = max(1, min(limit, 100))
-        stmt = select(MemoryCandidate).where(MemoryCandidate.status == status)
+        stmt = select(MemoryCandidate).where(
+            MemoryCandidate.workspace_id == scope.workspace_id, MemoryCandidate.status == status,
+        )
 
         if cursor:
             created_at, identifier = decode_cursor(cursor)
@@ -1698,7 +1923,7 @@ class MemoryService:
         examined = 0
         for row in rows[:100]:
             examined += 1
-            projected = await _verified_candidate_read(self.session, row)
+            projected = await _verified_candidate_read(self.session, row, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
             if projected is not None:
                 items.append(projected)
                 if len(items) == clamped_limit:
@@ -1714,7 +1939,9 @@ class MemoryService:
             next_cursor=next_cursor,
         )
 
-    async def accept_candidate(self, candidate_id: UUID) -> MemoryRead | None:
+    async def accept_candidate(
+        self, candidate_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+    ) -> MemoryRead | None:
         """Accept a pending candidate into active owner memory.
 
         Args:
@@ -1723,24 +1950,29 @@ class MemoryService:
         Returns:
             Created MemoryRead, or None if candidate not found.
         """
+        fence = await _admit(
+            self.session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True,
+        )
         hinted = (await self.session.execute(
-            select(MemoryCandidate.provenance, MemoryCandidate.status)
-            .where(MemoryCandidate.id == candidate_id)
+            select(MemoryCandidate.provenance, MemoryCandidate.status).where(
+                MemoryCandidate.id == candidate_id, MemoryCandidate.workspace_id == scope.workspace_id,
+            )
         )).one_or_none()
         if hinted is None:
             return None
         await lock_export_privacy(self.session)
         await _lock_live_provenance_evidence(
             self.session, hinted.provenance, require_copy_evidence=True,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
         )
         cand = await self.session.scalar(select(MemoryCandidate).where(
-            MemoryCandidate.id == candidate_id,
+            MemoryCandidate.id == candidate_id, MemoryCandidate.workspace_id == scope.workspace_id,
         ).with_for_update().execution_options(populate_existing=True))
         if cand is None or cand.status != "pending":
             return None
         if cand.provenance != hinted.provenance:
             raise HTTPException(status_code=409, detail="Candidate evidence changed while it was being accepted")
-        if await _verified_candidate_read(self.session, cand) is None:
+        if await _verified_candidate_read(self.session, cand, scope=scope, multi_workspace_enabled=multi_workspace_enabled) is None:
             raise HTTPException(status_code=409, detail="Candidate evidence is removed or unavailable")
 
         now = datetime.now(UTC)
@@ -1748,6 +1980,7 @@ class MemoryService:
         cand.updated_at = now
 
         mem = Memory(
+            workspace_id=scope.workspace_id, actor_user_id=_actor(scope),
             content=cand.content,
             memory_type=cand.memory_type,
             provenance=cand.provenance,
@@ -1760,16 +1993,20 @@ class MemoryService:
             updated_at=now,
         )
         self.session.add(mem)
-        await self.session.commit()
+        await commit_with_replay(
+            self.session, (), scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=fence,
+        )
         await self.session.refresh(mem)
-        await self._invalidate_cache()
-        projected = await _verified_memory_read(self.session, mem)
+        await self._invalidate_cache(scope)
+        projected = await _verified_memory_read(self.session, mem, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         if projected is None:
             raise HTTPException(status_code=409, detail="Candidate evidence is removed or unavailable")
         return projected
 
     async def reject_candidate(
-        self, candidate_id: UUID, *, reason: str | None = None
+        self, candidate_id: UUID, *, reason: str | None = None, scope: Scope,
+        multi_workspace_enabled: bool,
     ) -> MemoryCandidateRead | None:
         """Reject a pending memory candidate.
 
@@ -1780,17 +2017,23 @@ class MemoryService:
         Returns:
             Updated MemoryCandidateRead, or None if not found.
         """
+        fence = await _admit(
+            self.session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True,
+        )
         hinted = (await self.session.execute(
-            select(MemoryCandidate.provenance).where(MemoryCandidate.id == candidate_id)
+            select(MemoryCandidate.provenance).where(
+                MemoryCandidate.id == candidate_id, MemoryCandidate.workspace_id == scope.workspace_id,
+            )
         )).one_or_none()
         if hinted is None:
             return None
         await lock_export_privacy(self.session)
         await _lock_live_provenance_evidence(
             self.session, hinted.provenance, require_copy_evidence=True,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
         )
         cand = await self.session.scalar(select(MemoryCandidate).where(
-            MemoryCandidate.id == candidate_id,
+            MemoryCandidate.id == candidate_id, MemoryCandidate.workspace_id == scope.workspace_id,
         ).with_for_update().execution_options(populate_existing=True))
         if cand is None:
             return None
@@ -1802,14 +2045,19 @@ class MemoryService:
         cand.rejection_reason = reason
         cand.updated_at = now
 
-        await self.session.commit()
+        await commit_with_replay(
+            self.session, (), scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=fence,
+        )
         await self.session.refresh(cand)
-        projected = await _verified_candidate_read(self.session, cand)
+        projected = await _verified_candidate_read(self.session, cand, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         if projected is None:
             raise HTTPException(status_code=409, detail="Candidate evidence is removed or unavailable")
         return projected
 
-    async def purge_memories(self, options: MemoryPurgeRequest) -> MemoryPurgeResponse:
+    async def purge_memories(
+        self, options: MemoryPurgeRequest, *, scope: Scope, multi_workspace_enabled: bool,
+    ) -> MemoryPurgeResponse:
         """Perform durable cleanup of forgotten memories, rejected candidates, or conversation history.
 
         Args:
@@ -1818,6 +2066,9 @@ class MemoryService:
         Returns:
             MemoryPurgeResponse with counts of deleted records.
         """
+        fence = await _admit(
+            self.session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True,
+        )
         # Establish the global privacy-before-Memory-row lock order for this transaction.
         await lock_export_privacy(self.session)
 
@@ -1826,12 +2077,15 @@ class MemoryService:
         purged_conversations = 0
 
         if options.purge_forgotten_memories:
-            memory_purge = await self.session.execute(delete(Memory).where(Memory.status == "forgotten"))
+            memory_purge = await self.session.execute(delete(Memory).where(
+                Memory.workspace_id == scope.workspace_id, Memory.status == "forgotten",
+            ))
             purged_memories = cast("CursorResult[Any]", memory_purge).rowcount or 0
 
         if options.purge_rejected_candidates:
             candidate_purge = await self.session.execute(delete(MemoryCandidate).where(
-                MemoryCandidate.status.in_(["rejected", "expired", "superseded"])
+                MemoryCandidate.workspace_id == scope.workspace_id,
+                MemoryCandidate.status.in_(["rejected", "expired", "superseded"]),
             ))
             purged_candidates = cast("CursorResult[Any]", candidate_purge).rowcount or 0
 
@@ -1839,11 +2093,14 @@ class MemoryService:
             from modules.chat.public import purge_unpinned_conversations
 
             purged_conversations = await purge_unpinned_conversations(
-                self.session, owner_id=1,
+                self.session, owner_id=_actor(scope),
             )
 
-        await self.session.commit()
-        await self._invalidate_cache()
+        await commit_with_replay(
+            self.session, (), scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=fence,
+        )
+        await self._invalidate_cache(scope)
 
         return MemoryPurgeResponse(
             purged_memories_count=purged_memories,
@@ -1851,7 +2108,9 @@ class MemoryService:
             purged_conversations_count=purged_conversations,
         )
 
-    async def get_active_memory_context(self, *, limit: int = 20) -> list[MemoryRead]:
+    async def get_active_memory_context(
+        self, *, limit: int = 20, scope: Scope, multi_workspace_enabled: bool,
+    ) -> list[MemoryRead]:
         """Fetch active memories formatted for prompt context injection.
 
         Excluded forgotten or invalidated items. Bounded to specified limit.
@@ -1862,21 +2121,23 @@ class MemoryService:
         Returns:
             List of active MemoryRead objects.
         """
-        privacy = await self._read_privacy_config_under_fence()
+        privacy, _ = await self._read_privacy_config_under_fence(
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
         # If agent memory is explicitly disabled, do not inject memories into prompt
         if not privacy.store_agent_memory:
             return []
 
         stmt = (
             select(Memory)
-            .where(Memory.status == "active")
+            .where(Memory.workspace_id == scope.workspace_id, Memory.status == "active")
             .order_by(desc(Memory.confidence), desc(Memory.created_at))
             .limit(101)
         )
         rows = list((await self.session.scalars(stmt)).all())
         result: list[MemoryRead] = []
         for row in rows[:100]:
-            projected = await _verified_memory_read(self.session, row)
+            projected = await _verified_memory_read(self.session, row, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
             if projected is not None:
                 result.append(projected)
                 if len(result) >= max(1, min(limit, 50)):

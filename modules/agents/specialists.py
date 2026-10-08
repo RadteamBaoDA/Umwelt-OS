@@ -10,6 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.model_gateway.schemas import AIExecutionConfig
 from core.tools import ToolRegistry, ToolRisk
+from core.workspaces.schemas import Scope
+from modules.agents.access import actor, admit
 from modules.agents.handoff import HANDOFF_TOOL
 from modules.agents.internal_writes import (
     AUTOMATION_PROFILE_TOOLS,
@@ -126,12 +128,17 @@ def _profile_content(value: AgentProfileRead) -> dict[str, object]:
 
 
 async def list_profiles(
-    session: AsyncSession, owner_id: int, registry: ToolRegistry, config: AIExecutionConfig,
+    session: AsyncSession, registry: ToolRegistry, config: AIExecutionConfig,
+    *, scope: Scope, multi_workspace_enabled: bool,
 ) -> tuple[AgentProfileRead, ...]:
-    """List the fixed specialist roster and mark unavailable aliases or domain adapters explicitly."""
-    if owner_id != 1:
-        raise HTTPException(status_code=404, detail="Agent profiles not found")
-    rows = (await session.scalars(select(AgentProfile).where(AgentProfile.owner_id == owner_id))).all()
+    """List the fixed specialist roster of the admitted workspace and mark unavailable aliases or adapters.
+
+    Owner admission precedes the query; profile rows are bound to ``scope.workspace_id``.
+    """
+    await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    rows = (await session.scalars(select(AgentProfile).where(
+        AgentProfile.workspace_id == scope.workspace_id,
+    ))).all()
     by_id = {row.profile_id: row for row in rows}
     profiles = []
     for profile_id in PROFILE_TITLES:
@@ -149,14 +156,19 @@ async def list_profiles(
 
 
 async def get_profile(
-    session: AsyncSession, owner_id: int, profile_id: str,
+    session: AsyncSession, profile_id: str,
     registry: ToolRegistry, config: AIExecutionConfig,
+    *, scope: Scope, multi_workspace_enabled: bool,
 ) -> AgentProfileRead:
-    """Return one known fixed-roster profile or a non-enumerating not-found response."""
+    """Return one known fixed-roster profile or a non-enumerating not-found response.
+
+    Owner admission precedes the query; the profile row is read within the admitted workspace.
+    """
+    await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if profile_id not in PROFILE_TITLES:
         raise HTTPException(status_code=404, detail="Agent profile not found")
     row = await session.scalar(select(AgentProfile).where(
-        AgentProfile.owner_id == owner_id, AgentProfile.profile_id == profile_id,
+        AgentProfile.workspace_id == scope.workspace_id, AgentProfile.profile_id == profile_id,
     ))
     value = _snapshot(row, profile_id, registry)
     alias = value["model_alias"]
@@ -171,19 +183,27 @@ async def get_profile(
 
 
 async def update_profile_in_uow(
-    session: AsyncSession, owner_id: int, profile_id: str, patch: AgentProfilePatch,
+    session: AsyncSession, profile_id: str, patch: AgentProfilePatch,
     registry: ToolRegistry, config: AIExecutionConfig,
+    *, scope: Scope, multi_workspace_enabled: bool,
 ) -> AgentProfileRead:
-    """Write one optimistic profile revision into the caller's transaction without committing it."""
-    if owner_id != 1 or profile_id not in PROFILE_TITLES:
+    """Write one optimistic profile revision into the caller's transaction without committing it.
+
+    The access fence is locked first (before the profile lock and any Source lock); the caller
+    commits with the same fence via ``commit_with_replay``.
+    """
+    await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    if profile_id not in PROFILE_TITLES:
         raise HTTPException(status_code=404, detail="Agent profile not found")
+    owner_id = actor(scope)
+    workspace_id = scope.workspace_id
     # A row lock cannot serialize concurrent creation while this profile has no row yet.
     await session.execute(
         text("SELECT pg_advisory_xact_lock(:lock_key)"),
-        {"lock_key": int.from_bytes(hashlib.sha256(f"profile:{owner_id}:{profile_id}".encode()).digest()[:8], "big", signed=True)},
+        {"lock_key": int.from_bytes(hashlib.sha256(f"profile:{workspace_id}:{profile_id}".encode()).digest()[:8], "big", signed=True)},
     )
     row = await session.scalar(select(AgentProfile).where(
-        AgentProfile.owner_id == owner_id, AgentProfile.profile_id == profile_id,
+        AgentProfile.workspace_id == workspace_id, AgentProfile.profile_id == profile_id,
     ).with_for_update())
     current_revision = row.revision if row is not None else 0
     if patch.expected_revision != current_revision:
@@ -193,7 +213,7 @@ async def update_profile_in_uow(
     if patch.model_alias not in config.aliases:
         raise HTTPException(status_code=422, detail="Model alias is not configured")
     contracts = _tool_contracts(registry)
-    chosen = [item.model_dump() for item in patch.allowed_tools]
+    chosen = [item.model_dump(mode="json") for item in patch.allowed_tools]
     if len({item["name"] for item in chosen}) != len(chosen) or any(contracts.get(item["name"]) != item for item in chosen):
         raise HTTPException(status_code=422, detail="Selected tool contract is no longer available")
     if "webhook.send" in {item["name"] for item in chosen} and profile_id not in {"supervisor", "research"}:
@@ -209,14 +229,15 @@ async def update_profile_in_uow(
 
         selected_source_ids = frozenset(patch.source_ids)
         sources = await list_tool_sources(
-            session, limit=len(selected_source_ids), cursor=None,
+            session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            limit=len(selected_source_ids), cursor=None,
             source_ids=selected_source_ids, owner_all=False,
         )
         if {item.id for item in sources.items} != selected_source_ids:
             raise HTTPException(status_code=422, detail="Source scope contains an inactive source")
     revision = current_revision + 1
     if row is None:
-        row = AgentProfile(profile_id=profile_id, owner_id=owner_id)
+        row = AgentProfile(workspace_id=workspace_id, profile_id=profile_id, owner_id=owner_id)
         session.add(row)
     row.enabled = patch.enabled
     row.model_alias = patch.model_alias
@@ -228,7 +249,7 @@ async def update_profile_in_uow(
     snapshot = _profile_content(_read_profile(profile_view))
     snapshot_hash = hashlib.sha256(_canonical_json(snapshot)).hexdigest()
     session.add(AgentProfileRevision(
-        profile_id=profile_id, owner_id=owner_id, revision=revision,
+        workspace_id=workspace_id, profile_id=profile_id, owner_id=owner_id, revision=revision,
         snapshot=snapshot, snapshot_hash=snapshot_hash,
     ))
     await session.flush()
@@ -236,11 +257,15 @@ async def update_profile_in_uow(
 
 
 async def resolve_profile_snapshot(
-    session: AsyncSession, owner_id: int, profile_id: str, expected_revision: int,
+    session: AsyncSession, profile_id: str, expected_revision: int,
     registry: ToolRegistry, config: AIExecutionConfig,
+    *, scope: Scope, multi_workspace_enabled: bool,
 ) -> tuple[dict[str, Any], str]:
     """Resolve a selected enabled revision and bind its exact current tool/model contracts before enqueue."""
-    profile = await get_profile(session, owner_id, profile_id, registry, config)
+    profile = await get_profile(
+        session, profile_id, registry, config,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     if profile.revision != expected_revision:
         raise HTTPException(status_code=409, detail="Agent profile changed; reload before starting")
     if not profile.enabled or profile.capability == "unavailable":

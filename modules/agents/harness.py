@@ -4,12 +4,13 @@ import asyncio
 import json
 import math
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime
 from typing import Any, Literal, NotRequired, TypedDict, cast
 from uuid import UUID
 
+from fastapi import HTTPException
 from redis.asyncio import Redis
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
@@ -19,9 +20,12 @@ from core.config import Settings
 from core.model_gateway.client import ModelGateway
 from core.model_gateway.policy import may_send
 from core.model_gateway.schemas import AIExecutionConfig, ModelMapping, RequestPolicy
+from core.realtime import commit_with_replay
 from core.tools import ToolExecutionPrincipal, ToolRegistry, ToolRisk
 from core.tools.schemas import ToolOutputFence
 from core.tools.validator import validate_json_schema
+from core.workspaces.schemas import AccessFence, InternalJobScope
+from modules.agents.access import admit
 from modules.agents.handoff import (
     HANDOFF_EXCLUDED_TOOLS,
     HANDOFF_TARGETS,
@@ -171,7 +175,8 @@ class HarnessContext:
     def __init__(
         self,
         run_id: UUID,
-        owner_id: int,
+        scope: InternalJobScope,
+        original_fence: AccessFence,
         claim_generation: int,
         session_factory: async_sessionmaker[AsyncSession],
         engine: AsyncEngine,
@@ -187,14 +192,20 @@ class HarnessContext:
         workflow_version: str = WORKFLOW_VERSION,
         prompt_version: str = PROMPT_VERSION,
         profile_snapshot: dict[str, Any] | None = None,
+        modules: Mapping[str, Any] | None = None,
     ) -> None:
         """Bind the claimed owner and current worker services outside checkpoint state.
 
-        Owner identity is copied from the locked PostgreSQL run row and checked on every fresh
-        snapshot; credentials, service handles, and ORM objects never enter graph state.
+        Workspace, owner and the original access fence are rebuilt from the durable run row
+        (Recipe J) by the worker; every fresh snapshot re-admits ``scope`` and requires the live
+        fence to equal ``original_fence``. Credentials, service handles, and ORM objects never
+        enter graph state.
         """
         self.run_id = run_id
-        self.owner_id = owner_id
+        self.scope = scope
+        self.original_fence = original_fence
+        self.owner_id = scope.actor_user_id
+        self.multi_workspace_enabled: bool = settings.multi_workspace_enabled
         self.claim_generation = claim_generation
         self.session_factory = session_factory
         self.engine = engine
@@ -210,6 +221,8 @@ class HarnessContext:
         self.workflow_version = workflow_version
         self.prompt_version = prompt_version
         self.profile_snapshot = profile_snapshot
+        # Workspace-effective module map; never written to the shared ToolRegistry (O1).
+        self.modules = modules
         self.model_send_attempts = 0
         self.unobservable_model_usage = False
         # 0 for a run's own profile, 1 inside a supervisor handoff; depth never exceeds 1.
@@ -234,6 +247,23 @@ class HarnessContext:
         ):
             raise RunCancelled("Profile checkpoint authority no longer matches its durable run")
 
+    async def admit_original(self, session: AsyncSession, *, lock: bool = False) -> AccessFence:
+        """Admit the run's captured scope and require the live fence to equal the original epoch.
+
+        Any revoked owner, membership or configuration change cancels the run (never rebases it).
+        ``lock=True`` takes the fence ahead of Source, Document and run locks for a publication.
+        """
+        try:
+            fence = await admit(
+                session, scope=self.scope, multi_workspace_enabled=self.multi_workspace_enabled,
+                lock=lock, expected=self.original_fence if lock else None,
+            )
+        except HTTPException as exc:
+            raise RunCancelled("Workspace access is no longer valid") from exc
+        if fence != self.original_fence:
+            raise RunCancelled("Workspace access changed since the run was created")
+        return fence
+
     async def assert_lease(self) -> None:
         """Require this same PostgreSQL backend session to retain exclusive run ownership."""
         try:
@@ -250,9 +280,12 @@ class HarnessContext:
             raise RunCancelled("Run lease connection is unavailable") from exc
 
     async def _run_snapshot(self) -> AgentRun:
-        """Read the current run and verify owner, auth session, version, cancellation, and claim fence."""
+        """Read the current run and verify workspace epoch, owner, auth session, version, cancellation, and claim fence."""
         async with self.session_factory() as session:
-            row = await session.scalar(select(AgentRun).where(AgentRun.id == self.run_id))
+            await self.admit_original(session)
+            row = await session.scalar(select(AgentRun).where(
+                AgentRun.id == self.run_id, AgentRun.workspace_id == self.scope.workspace_id,
+            ))
             expected_schema = SPECIALIST_CHECKPOINT_SCHEMA_VERSION if self.profile_snapshot is not None else CHECKPOINT_SCHEMA_VERSION
             if (
                 row is None or row.owner_id != self.owner_id or row.status != "running" or row.cancel_requested
@@ -271,7 +304,10 @@ class HarnessContext:
                 profile_id = self.profile_snapshot.get("id")
                 if not isinstance(profile_id, str):
                     raise RunCancelled("Run profile snapshot is invalid")
-                profile = await session.get(AgentProfile, profile_id)
+                profile = await session.scalar(select(AgentProfile).where(
+                    AgentProfile.workspace_id == self.scope.workspace_id,
+                    AgentProfile.profile_id == profile_id,
+                ))
                 if profile is not None:
                     if not profile.enabled:
                         raise RunCancelled("Agent profile is disabled")
@@ -282,7 +318,10 @@ class HarnessContext:
                     if not set(self.profile_snapshot.get("source_ids", [])) <= current_sources:
                         raise RunCancelled("Agent profile source scope changed")
             detached = AgentRun(
-                id=row.id, owner_id=row.owner_id, auth_session_hash=row.auth_session_hash,
+                id=row.id, workspace_id=row.workspace_id, owner_id=row.owner_id,
+                membership_revision=row.membership_revision,
+                configuration_revision=row.configuration_revision,
+                auth_session_hash=row.auth_session_hash,
                 agent_id=row.agent_id, workflow_version=row.workflow_version,
                 prompt_version=row.prompt_version, checkpoint_schema_version=row.checkpoint_schema_version,
                 checkpoint_thread_id=row.checkpoint_thread_id, prompt=row.prompt,
@@ -310,10 +349,15 @@ class HarnessContext:
             from core.modules import effective_modules, register_modules
             from modules.settings.public import read_module_availability
 
+            if principal.scope != self.scope:
+                return False
             async with self.session_factory() as availability_session:
-                lifecycle = await read_module_availability(availability_session)
+                lifecycle = await read_module_availability(
+                    availability_session, scope=self.scope,
+                    multi_workspace_enabled=self.multi_workspace_enabled,
+                )
             disabled = {item.id for item in lifecycle.modules if item.explicitly_disabled}
-            self.registry.set_module_registry(effective_modules(disabled, register_modules()))
+            self.modules = effective_modules(disabled, register_modules())
             if not next((item.enabled for item in lifecycle.modules if item.id == "agents"), False):
                 return False
             row = await self._run_snapshot()
@@ -321,7 +365,7 @@ class HarnessContext:
                 return False
             available = {
                 definition.name: definition
-                for definition in self.registry.list_tools(allowed_tools=self.allowed_tools)
+                for definition in self.registry.list_tools(allowed_tools=self.allowed_tools, modules=self.modules)
             }
             for name in self.allowed_tools:
                 expected = self.tool_contracts.get(name, {})
@@ -329,6 +373,8 @@ class HarnessContext:
                 if current is None or not self.supports_definition(current, expected):
                     return False
             return True
+        except TypeError:
+            raise
         except Exception:  # noqa: BLE001  # fail-closed boundary: any failure denies/degrades
             return False
 
@@ -362,6 +408,7 @@ class HarnessContext:
             if state.get("source_fences") and not await revalidate_native_output_fences(
                 self.session_factory, self.decode_fences(state["source_fences"]),
                 self.owner_principal(state, destination_id), destination_kind="remote",
+                multi_workspace_enabled=self.multi_workspace_enabled,
             ):
                 return False
             return await reserve_effect_before_send(
@@ -369,8 +416,12 @@ class HarnessContext:
                 owner_id=run.owner_id, auth_session_hash=run.auth_session_hash,
                 claim_generation=self.claim_generation, definition=definition,
                 arguments=arguments, destination_id=destination_id,
-                destination_revision=profile.revision,
+                destination_revision=profile.revision, scope=self.scope,
+                original_fence=self.original_fence,
+                multi_workspace_enabled=self.multi_workspace_enabled,
             )
+        except TypeError:
+            raise
         except Exception:  # noqa: BLE001  # fail-closed boundary: any failure denies/degrades
             return False
 
@@ -386,6 +437,7 @@ class HarnessContext:
             if state.get("source_fences") and not await revalidate_native_output_fences(
                 self.session_factory, self.decode_fences(state["source_fences"]),
                 self.owner_principal(state, destination_id), destination_kind="remote",
+                multi_workspace_enabled=self.multi_workspace_enabled,
             ):
                 return False
             return await reserve_effect_before_send(
@@ -393,8 +445,12 @@ class HarnessContext:
                 owner_id=run.owner_id, auth_session_hash=run.auth_session_hash,
                 claim_generation=self.claim_generation, definition=definition,
                 arguments=arguments, destination_id=destination_id,
-                destination_revision=destination_revision,
+                destination_revision=destination_revision, scope=self.scope,
+                original_fence=self.original_fence,
+                multi_workspace_enabled=self.multi_workspace_enabled,
             )
+        except TypeError:
+            raise
         except Exception:  # noqa: BLE001  # fail-closed boundary: any failure denies/degrades
             return False
 
@@ -402,7 +458,9 @@ class HarnessContext:
         """Resolve current gateway settings in a short transaction after the run fences pass."""
         await self._run_snapshot()
         async with self.session_factory() as session:
-            return await settings_public.get_ai_execution_config(session, self.settings, self.redis)
+            return await settings_public.get_ai_execution_config(
+                session, self.settings, self.redis, scope=self.scope,
+            )
 
     async def authorize_remote_send(
         self,
@@ -420,6 +478,7 @@ class HarnessContext:
             if not await revalidate_native_output_fences(
                 self.session_factory, self.decode_fences(state["source_fences"]), principal,
                 destination_kind="remote",
+            multi_workspace_enabled=self.multi_workspace_enabled,
             ):
                 raise RunCancelled("Source evidence is no longer authorized")
         config = await self.read_gateway_config()
@@ -446,6 +505,9 @@ class HarnessContext:
         if expected_destination is not None and destination != expected_destination:
             raise RunCancelled("Gateway destination changed during execution")
         policy = RequestPolicy(
+            workspace_id=self.scope.workspace_id, actor_user_id=self.owner_id,
+            membership_revision=self.scope.membership_revision,
+            gateway_identity=config.gateway_identity,
             reasoning_allowed=config.privacy.allow_remote_reasoning,
             local_only=False,
             permitted_destinations=frozenset(config.privacy.reasoning_destinations),
@@ -489,10 +551,12 @@ class HarnessContext:
         if state.get("source_fences") and not await revalidate_native_output_fences(
             self.session_factory, self.decode_fences(state["source_fences"]), principal,
             destination_kind="remote",
+            multi_workspace_enabled=self.multi_workspace_enabled,
         ):
             raise RunCancelled("Earlier source evidence is no longer authorized")
         if not await revalidate_native_output_fences(
             self.session_factory, fence, principal, destination_kind="remote",
+            multi_workspace_enabled=self.multi_workspace_enabled,
         ):
             raise RunCancelled("Search source scope changed before embedding")
         current_mapping = current.aliases.get("embedding")
@@ -505,6 +569,9 @@ class HarnessContext:
         ):
             raise RunCancelled("Embedding gateway settings changed before send")
         current_policy = RequestPolicy(
+            workspace_id=self.scope.workspace_id, actor_user_id=self.owner_id,
+            membership_revision=self.scope.membership_revision,
+            gateway_identity=current.gateway_identity,
             embeddings_allowed=current.privacy.allow_remote_embeddings,
             local_only=False,
             permitted_destinations=frozenset({current.endpoint_destination_id} if current.endpoint_destination_id else set()),
@@ -540,7 +607,8 @@ class HarnessContext:
         if "webhook.send" in self.allowed_tools:
             capabilities.add("webhook.send")
         return ToolExecutionPrincipal(
-            actor_id=f"owner:{self.owner_id}", is_owner=True, allowed_tools=self.allowed_tools,
+            actor_id=f"owner:{self.owner_id}", scope=self.scope, is_owner=True,
+            allowed_tools=self.allowed_tools,
             source_ids=source_ids, owner_all_sources=owner_all_sources,
             destinations=frozenset({destination}) if destination else frozenset(),
             capabilities=frozenset(capabilities),
@@ -601,12 +669,15 @@ async def _lock_native_output_fences_for_publication(
     session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]],
     encoded: dict[str, Any],
     principal: ToolExecutionPrincipal,
+    *, multi_workspace_enabled: bool, access_fence: AccessFence,
 ) -> bool:
     """Hold privacy→Source→Document fences through a later Agent publication commit.
 
     The ordinary Tools revalidation uses short independent read sessions, so by itself it cannot
     serialize a successful check with hard deletion. Acquire canonical owner locks before AgentRun
     locks, then revalidate while those locks remain held through the caller's transaction commit.
+    ``access_fence`` is the caller's already locked original fence (it precedes every lock here);
+    each Source lock re-compares it and the Document locks run under the principal's scope.
     """
     fences = HarnessContext.decode_fences(encoded)
     records = fences["records"]
@@ -616,6 +687,7 @@ async def _lock_native_output_fences_for_publication(
     if not records and not generations:
         return await revalidate_native_output_fences(
             session_factory, fences, principal, destination_kind="remote",
+            multi_workspace_enabled=multi_workspace_enabled,
         )
     from modules.knowledge.documents import public as documents
     from modules.memory.public import lock_export_privacy
@@ -623,14 +695,20 @@ async def _lock_native_output_fences_for_publication(
 
     await lock_export_privacy(session)
     for source_id, generation in sorted(generations.items(), key=lambda item: str(item[0])):
-        source = await sources.lock_source(session, source_id)
+        source = await sources.lock_source(
+            session, source_id, scope=principal.scope, multi_workspace_enabled=multi_workspace_enabled,
+            expected_access_fence=access_fence,
+        )
         if source is None or source.status != "active" or source.generation != generation:
             return False
     document_ids = sorted({item.document_id for item in records}, key=str)
-    if await documents.lock_document_ids(session, document_ids) != document_ids:
+    if await documents.lock_document_ids(
+        session, document_ids, scope=principal.scope, multi_workspace_enabled=multi_workspace_enabled,
+    ) != document_ids:
         return False
     return await revalidate_native_output_fences(
         session_factory, fences, principal, destination_kind="remote",
+            multi_workspace_enabled=multi_workspace_enabled,
     )
 
 
@@ -647,7 +725,10 @@ async def _reserve_step(
     """
     await context.assert_lease()
     async with context.session_factory() as session:
-        row = await session.scalar(select(AgentRun).where(AgentRun.id == context.run_id).with_for_update())
+        fence = await context.admit_original(session, lock=True)
+        row = await session.scalar(select(AgentRun).where(
+            AgentRun.id == context.run_id, AgentRun.workspace_id == context.scope.workspace_id,
+        ).with_for_update())
         if (
             row is None or row.status != "running" or row.cancel_requested or row.evidence_revoked
             or row.claim_generation != context.claim_generation
@@ -687,7 +768,10 @@ async def _reserve_step(
                 input_source_fences=input_source_fences,
                 input_provenance_version=1 if input_source_fences is not None else None,
             ))
-        await session.commit()
+        await commit_with_replay(
+            session, (), scope=context.scope,
+            multi_workspace_enabled=context.multi_workspace_enabled, access_fence=fence,
+        )
         session.expunge(row)
         return row
 
@@ -695,7 +779,7 @@ async def _reserve_step(
 def _tool_specs(context: HarnessContext) -> list[dict[str, Any]]:
     """Project exact current registered READ_ONLY tools to the OpenAI-compatible call format."""
     items = {
-        item.name: item for item in context.registry.list_tools(allowed_tools=context.allowed_tools)
+        item.name: item for item in context.registry.list_tools(allowed_tools=context.allowed_tools, modules=context.modules)
     }
     if set(items) != set(context.allowed_tools):
         raise RunIncompatible("A persisted workflow tool is no longer registered")
@@ -729,7 +813,8 @@ class HandoffContext(HarnessContext):
     ) -> None:
         """Bind the specialist profile to the parent's process handles and budget clock."""
         super().__init__(
-            parent.run_id, parent.owner_id, parent.claim_generation, parent.session_factory,
+            parent.run_id, parent.scope, parent.original_fence, parent.claim_generation,
+            parent.session_factory,
             parent.engine, parent.settings, parent.redis, parent.registry, parent.lease_connection,
             parent.lease_key, parent.segment_started, allowed_tools, tool_contracts,
             parent.active_seconds, workflow_version=parent.workflow_version,
@@ -789,9 +874,13 @@ async def run_specialist_handoff(
             raise HandoffRefused("forbidden")
         config = await parent.read_gateway_config()
         try:
-            profile = await get_profile(session, parent.owner_id, specialist, parent.registry, config)
+            profile = await get_profile(
+                session, specialist, parent.registry, config,
+                scope=parent.scope, multi_workspace_enabled=parent.multi_workspace_enabled,
+            )
             snapshot, digest = await resolve_profile_snapshot(
-                session, parent.owner_id, specialist, profile.revision, parent.registry, config,
+                session, specialist, profile.revision, parent.registry, config,
+                scope=parent.scope, multi_workspace_enabled=parent.multi_workspace_enabled,
             )
         except HTTPException as exc:
             # Disabled, unavailable alias/tools or a stale revision: refuse rather than degrade.
@@ -880,14 +969,6 @@ def build_workflow(context: HarnessContext, checkpointer: Any) -> Any:
         specs = _tool_specs(context)
         config, policy, alias, mapping = await context.authorize_remote_send(state)
         remaining = min(SEGMENT_ACTIVE_SECONDS - context.elapsed(), context.remaining_active())
-        gateway = ModelGateway(
-            redis=context.redis, base_url=config.omniroute_base_url,
-            api_key=config.omniroute_api_key, destination_id=config.endpoint_destination_id or "",
-            timeout_seconds=max(1.0, min(float(config.request_timeout_seconds), remaining, 25.0)),
-            gateway_identity=config.gateway_identity,
-            approved_endpoint_cidrs=tuple(context.settings.ai_allowed_endpoint_cidrs),
-        )
-
         async def before_send() -> None:
             """Recheck session, claim, source fences, revision and destination per retry."""
             await context.authorize_remote_send(
@@ -899,6 +980,14 @@ def build_workflow(context: HarnessContext, checkpointer: Any) -> Any:
                 context.unobservable_model_usage = True
             context.model_send_attempts += 1
 
+        gateway = ModelGateway(
+            redis=context.redis, base_url=config.omniroute_base_url,
+            api_key=config.omniroute_api_key, destination_id=config.endpoint_destination_id or "",
+            timeout_seconds=max(1.0, min(float(config.request_timeout_seconds), remaining, 25.0)),
+            scope=context.scope, gateway_identity=config.gateway_identity,
+            configuration_revision=config.configuration_revision, before_send=before_send,
+            approved_endpoint_cidrs=tuple(context.settings.ai_allowed_endpoint_cidrs),
+        )
         messages = [
             {"role": "system", "content": (
                 f"{context.profile_snapshot['prompt']}\n\n"
@@ -1153,6 +1242,8 @@ def build_workflow(context: HarnessContext, checkpointer: Any) -> Any:
                             destination_id=approval_destination[0], destination_revision=approval_destination[1],
                             source_fences=approval_fences,
                             expiry_hours=context.settings.approval_expiry_hours,
+                            scope=context.scope, original_fence=context.original_fence,
+                            multi_workspace_enabled=context.multi_workspace_enabled,
                         )
                         async with context.session_factory() as session:
                             pending_call = await session.scalar(select(AgentToolCall).where(
@@ -1197,6 +1288,8 @@ def build_workflow(context: HarnessContext, checkpointer: Any) -> Any:
                                 claim_generation=context.claim_generation, definition=current, arguments=values,
                                 destination_id=approval_destination[0],
                                 destination_revision=approval_destination[1],
+                                scope=context.scope, original_fence=context.original_fence,
+                                multi_workspace_enabled=context.multi_workspace_enabled,
                             ))
 
                         async def before_internal_write(requested_action_id: str) -> bool:
@@ -1304,11 +1397,15 @@ def build_workflow(context: HarnessContext, checkpointer: Any) -> Any:
                 "content": json.dumps(result_payload, ensure_ascii=False, separators=(",", ":")),
             })
         async with context.session_factory() as session:
+            # Access fence first (original epoch), then privacy, Source, Document and run locks.
+            publication_fence = await context.admit_original(session, lock=True)
             if exact and not forced_error and not pause_for_review:
                 try:
                     fences_current = await _lock_native_output_fences_for_publication(
                         session, context.session_factory, encoded_sink,
                         context.owner_principal(state, destination),
+                        multi_workspace_enabled=context.multi_workspace_enabled,
+                        access_fence=publication_fence,
                     )
                 except (TypeError, ValueError, KeyError, RunCancelled):
                     fences_current = False
@@ -1321,7 +1418,9 @@ def build_workflow(context: HarnessContext, checkpointer: Any) -> Any:
                         tool_messages[-1]["content"] = json.dumps(
                             result_payload, separators=(",", ":"),
                         )
-            run = await session.scalar(select(AgentRun).where(AgentRun.id == context.run_id).with_for_update())
+            run = await session.scalar(select(AgentRun).where(
+                AgentRun.id == context.run_id, AgentRun.workspace_id == context.scope.workspace_id,
+            ).with_for_update())
             if (
                 run is None or run.owner_id != context.owner_id or run.status != "running"
                 or run.claim_generation != context.claim_generation or run.cancel_requested
@@ -1359,7 +1458,10 @@ def build_workflow(context: HarnessContext, checkpointer: Any) -> Any:
                 "created_at": datetime.now(UTC).isoformat(),
             })
             run.activities = entries[-64:]
-            await session.commit()
+            await commit_with_replay(
+                session, (), scope=context.scope,
+                multi_workspace_enabled=context.multi_workspace_enabled, access_fence=publication_fence,
+            )
         await publish_agent_activity_safely(
             context.session_factory, run_id=context.run_id, owner_id=row.owner_id,
             auth_session_hash=row.auth_session_hash, status=call_status,
