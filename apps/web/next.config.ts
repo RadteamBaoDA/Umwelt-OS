@@ -3,8 +3,8 @@ import createNextIntlPlugin from 'next-intl/plugin';
 
 const nextConfig: NextConfig = {
   output: 'standalone',
-  // Default proxy timeout is 30 s; slow model calls (brief generate) go through the /api rewrite.
-  experimental: { proxyTimeout: 120_000 },
+  // Default proxy timeout is 30 s; brief generate (lease wait + up to 180 s model time) goes through the /api rewrite.
+  experimental: { proxyTimeout: 210_000 },
   async rewrites() {
     return [
       {
