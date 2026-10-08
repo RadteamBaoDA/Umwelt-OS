@@ -4,13 +4,15 @@ from datetime import datetime
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.dependencies import require_owner, require_owner_write
 from core.auth.models import AuthSession
 from core.config import Settings
 from core.database import get_session
+from core.workspaces.dependencies import require_workspace_read
+from core.workspaces.schemas import WorkspaceContext
 from modules.knowledge.entities.schemas import EntityHistoryPage
 from modules.knowledge.service import KnowledgeService
 from modules.knowledge.temporal import public
@@ -26,14 +28,18 @@ router = APIRouter(tags=["temporal-knowledge"])
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[AuthSession, Depends(require_owner)]
 OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]
+WorkspaceRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
 
 
 @router.get("/api/v1/system/graph/status", response_model=list[GraphStatus])
-async def graph_status(session: Session, _owner: OwnerRead, response: Response,
+async def graph_status(session: Session, _owner: OwnerRead, workspace: WorkspaceRead, request: Request, response: Response,
                         document_version_ids: Annotated[list[UUID], Query(max_length=100)]) -> list[GraphStatus]:
     """Return a bounded authorized graph-status batch alongside usable canonical records; prevent caching."""
     response.headers["Cache-Control"] = "no-store"
-    return await public.mapping_statuses(session, document_version_ids, graph_enabled=Settings().graph_enabled)
+    return await public.mapping_statuses(
+        session, document_version_ids, graph_enabled=request.app.state.settings.graph_enabled,
+        scope=workspace, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+    )
 
 
 @router.post("/api/v1/system/graph/reconcile", status_code=202)

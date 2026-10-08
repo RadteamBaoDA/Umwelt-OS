@@ -12,6 +12,8 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.realtime import KnowledgeChanged, make_knowledge_change
+from core.workspaces import public as workspaces
+from core.workspaces.schemas import Scope, WorkspaceContext
 from modules.knowledge.documents import public as documents
 from modules.knowledge.entities import public as entities
 from modules.knowledge.temporal.models import (
@@ -33,6 +35,17 @@ from modules.knowledge.temporal.schemas import (
     ReconcileStatus,
 )
 from modules.sources import public as sources
+
+
+async def _admit(session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool) -> None:
+    """Require current owner workspace access before Temporal owner queries or writes."""
+    from fastapi import HTTPException
+
+    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
+    await workspaces.read_access_fence(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
 
 
 async def unresolved_backup_effects(session: AsyncSession) -> dict[str, int]:
@@ -74,7 +87,10 @@ def _after(cursor: str | None, fingerprint: str) -> int:
         raise ValueError("Invalid temporal cursor") from exc
 
 
-async def schedule_version(session: AsyncSession, ready: documents.ReadyVersionRef) -> UUID:
+async def schedule_version(
+    session: AsyncSession, ready: documents.ReadyVersionRef, *,
+    scope: Scope, multi_workspace_enabled: bool,
+) -> UUID:
     """Reserve one immutable bounded bucket/episode and durable intent under the caller's source/document fence.
 
     No provider work or commit occurs here. Bucket slots include tombstones and failed
@@ -82,7 +98,9 @@ async def schedule_version(session: AsyncSession, ready: documents.ReadyVersionR
     Out-of-bound immutable input creates blocked mapping/intent status without
     rolling back canonical readiness or truncating evidence for graph inference.
     """
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     mapping = await session.scalar(select(GraphMapping).where(
+        GraphMapping.workspace_id == scope.workspace_id,
         GraphMapping.document_version_id == ready.document_version_id,
         GraphMapping.source_generation == ready.source_generation,
     ).with_for_update())
@@ -90,7 +108,10 @@ async def schedule_version(session: AsyncSession, ready: documents.ReadyVersionR
         return mapping.id
     input_error = None
     try:
-        data = await documents.read_extraction_input(session, ready.document_version_id)
+        data = await documents.read_extraction_input(
+            session, ready.document_version_id, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
     except documents.ExtractionInputLimitError:
         # An optional projection's capacity limit must not poison the canonical
         # ready event/outbox transaction or its other consumers' durable work.
@@ -98,10 +119,12 @@ async def schedule_version(session: AsyncSession, ready: documents.ReadyVersionR
         input_error = "graph_extraction_input_limit"
     chunk_count = len(data.chunks) if data is not None else 0
     await session.execute(insert(GraphAllocation).values(
-        source_id=ready.source_id, generation=ready.source_generation, next_bucket=0,
+        workspace_id=scope.workspace_id, source_id=ready.source_id,
+        generation=ready.source_generation, next_bucket=0,
     ).on_conflict_do_nothing())
     allocation = await session.get(GraphAllocation, (ready.source_id, ready.source_generation), with_for_update=True)
     partition = await session.scalar(select(GraphPartition).where(
+        GraphPartition.workspace_id == scope.workspace_id,
         GraphPartition.source_id == ready.source_id, GraphPartition.generation == ready.source_generation,
         GraphPartition.sealed.is_(False),
     ).order_by(GraphPartition.ordinal.desc()).limit(1).with_for_update())
@@ -109,7 +132,8 @@ async def schedule_version(session: AsyncSession, ready: documents.ReadyVersionR
         if partition is not None:
             partition.sealed = True
         assert allocation is not None
-        partition = GraphPartition(source_id=ready.source_id, generation=ready.source_generation,
+        partition = GraphPartition(workspace_id=scope.workspace_id, source_id=ready.source_id,
+                                   generation=ready.source_generation,
                                    ordinal=allocation.next_bucket, reservations=0)
         allocation.next_bucket += 1
         session.add(partition)
@@ -117,7 +141,7 @@ async def schedule_version(session: AsyncSession, ready: documents.ReadyVersionR
     partition.reservations += 1
     partition.evidence_reservations += chunk_count
     state = {"version_id": str(ready.document_version_id), "generation": ready.source_generation}
-    mapping = GraphMapping(partition_id=partition.id, source_id=ready.source_id,
+    mapping = GraphMapping(workspace_id=scope.workspace_id, partition_id=partition.id, source_id=ready.source_id,
                            source_generation=ready.source_generation, document_id=ready.document_id,
                            document_version_id=ready.document_version_id, local_only=ready.local_only,
                            desired_digest=digest(state), canonical_state=state)
@@ -125,7 +149,7 @@ async def schedule_version(session: AsyncSession, ready: documents.ReadyVersionR
     await session.flush()
     if data is not None:
         for chunk in data.chunks:
-            session.add(GraphSupport(mapping_id=mapping.id, document_version_id=ready.document_version_id,
+            session.add(GraphSupport(workspace_id=scope.workspace_id, mapping_id=mapping.id, document_version_id=ready.document_version_id,
                                      chunk_id=chunk.id, document_id=ready.document_id,
                                      source_id=ready.source_id, source_generation=ready.source_generation))
     operation_id = await _queue(session, mapping, "upsert")
@@ -147,7 +171,8 @@ async def _queue(session: AsyncSession, mapping: GraphMapping, kind: str) -> UUI
         GraphOperation.kind == kind, GraphOperation.status.in_(["pending", "running", "blocked", "reconcile_needed"]),
     ).order_by(GraphOperation.created_at.desc()).limit(1))
     if operation is None:
-        operation = GraphOperation(mapping_id=mapping.id, partition_id=mapping.partition_id, kind=kind,
+        operation = GraphOperation(workspace_id=mapping.workspace_id, mapping_id=mapping.id,
+                                   partition_id=mapping.partition_id, kind=kind,
                                    desired_revision=mapping.desired_revision, desired_digest=mapping.desired_digest,
                                    next_attempt_at=datetime.now(UTC), replacement_created_at=datetime.now(UTC))
         session.add(operation)
@@ -157,22 +182,25 @@ async def _queue(session: AsyncSession, mapping: GraphMapping, kind: str) -> UUI
 
 async def schedule_canonical_change(session: AsyncSession, *, kind: str, canonical_id: UUID,
                                     revision: int | None, fields: list[str], support: list[tuple[UUID, UUID]],
-                                    origin: str, deleted: bool = False) -> None:
+                                    origin: str, deleted: bool = False,
+                                    scope: Scope, multi_workspace_enabled: bool) -> None:
     """Atomically capture identifier-only canonical change and refresh every affected temporal desired state.
 
     Call after owner mutations while their locks are held, before owner commit/replay.
     Support is exact owner evidence, not inferred names; deleted text is never retained.
     """
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if kind not in {"entity", "relationship", "event"} or len(fields) > 100:
         raise ValueError("Invalid canonical change identity")
     pairs = sorted(set(support), key=lambda item: (str(item[0]), str(item[1])))
-    session.add(GraphChange(kind=kind, canonical_id=canonical_id, revision=revision,
+    session.add(GraphChange(workspace_id=scope.workspace_id, kind=kind, canonical_id=canonical_id, revision=revision,
                             fingerprint=digest([kind, str(canonical_id), revision, fields, pairs, deleted]),
                             changed_fields=sorted(set(fields)), origin=origin, deleted=deleted,
                             support=[[str(version), str(chunk)] for version, chunk in pairs]))
     version_ids = {item[0] for item in pairs}
     # Existing identity linkage also covers edits/deletion whose current evidence is empty.
     rows = (await session.scalars(select(GraphMapping).where(
+        GraphMapping.workspace_id == scope.workspace_id,
         (GraphMapping.document_version_id.in_(version_ids)) |
         (GraphMapping.canonical_state.contains({kind + "_ids": [str(canonical_id)]})),
     ).order_by(GraphMapping.id).with_for_update())).all()
@@ -214,7 +242,10 @@ async def tombstone_scope(session: AsyncSession, *, document_id: UUID | None = N
     await session.flush()
 
 
-async def mapping_statuses(session: AsyncSession, version_ids: list[UUID], *, graph_enabled: bool = False) -> list[GraphStatus]:
+async def mapping_statuses(
+    session: AsyncSession, version_ids: list[UUID], *, graph_enabled: bool = False,
+    scope: Scope, multi_workspace_enabled: bool,
+) -> list[GraphStatus]:
     """Read retained owner-version graph status under the current source-generation fence.
 
     Missing/deleted versions and stale source generations expose no detached graph
@@ -222,7 +253,10 @@ async def mapping_statuses(session: AsyncSession, version_ids: list[UUID], *, gr
     """
     if len(version_ids) > 100:
         raise ValueError("Status batch exceeds100 versions")
-    fences = await documents.review_version_fences(session, version_ids)
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    fences = await documents.review_version_fences(
+        session, version_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     if not fences:
         return []
     # Apply the owner fence in SQL: filtering after .all() would load every
@@ -233,6 +267,7 @@ async def mapping_statuses(session: AsyncSession, version_ids: list[UUID], *, gr
                          GraphMapping.source_generation == fence.current_source_generation)
                      for version_id, fence in fences.items()))
     rows = (await session.scalars(select(GraphMapping).where(
+        GraphMapping.workspace_id == scope.workspace_id,
         retained, GraphMapping.tombstoned.is_(False),
     ).order_by(GraphMapping.created_at.desc()))).all()
     return [GraphStatus(mapping_id=row.id, document_version_id=row.document_version_id,

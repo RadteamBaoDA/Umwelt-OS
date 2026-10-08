@@ -29,6 +29,8 @@ from core.heavy_work import (
 from core.model_gateway.client import ModelGateway, PrivacyPolicyDenied
 from core.model_gateway.schemas import ModelMapping, RequestPolicy
 from core.realtime import commit_with_replay
+from core.workspaces import public as workspaces
+from core.workspaces.schemas import InternalJobScope, Scope
 from modules.knowledge.documents import public as documents
 from modules.knowledge.entities import public as entities
 from modules.knowledge.relationships import public as relationships
@@ -73,18 +75,28 @@ OWNER_BUDGET_SECONDS = 150
 
 
 async def _dependency_fingerprint(session: AsyncSession, ctx: dict[str, object], graph_state: GraphState,
-                                    partition_id: UUID | None = None) -> str:
+                                    partition_id: UUID | None = None, *, scope: Scope,
+                                    multi_workspace_enabled: bool) -> str:
     """Hash nonsecret policy/model and graph configuration so blocked work retries only after an actual dependency change."""
     settings = cast(Settings, ctx["settings"])
-    config = await settings_public.get_ai_execution_config(session, settings, cast(Redis, ctx["redis"]))
+    config = await settings_public.get_ai_execution_config(
+        session, settings, cast(Redis, ctx["redis"]), scope=scope,
+    )
     owner_state = []
     if partition_id is not None:
-        rows = (await session.scalars(select(GraphMapping).where(GraphMapping.partition_id == partition_id)
+        rows = (await session.scalars(select(GraphMapping).where(
+            GraphMapping.workspace_id == scope.workspace_id, GraphMapping.partition_id == partition_id,
+        )
             .order_by(GraphMapping.id).limit(101))).all()
         owner_state = [[str(row.id), row.desired_revision, row.desired_digest, row.tombstoned,
             row.external_state, row.embedding_identity] for row in rows]
-        partition = await session.get(GraphPartition, partition_id)
-        source = await sources.get_source_fence(session, partition.source_id) if partition is not None else None
+        partition = await session.scalar(select(GraphPartition).where(
+            GraphPartition.id == partition_id, GraphPartition.workspace_id == scope.workspace_id,
+        ))
+        source = await sources.get_source_fence(
+            session, partition.source_id, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        ) if partition is not None else None
         owner_state.append([source.status, source.generation, source.local_only] if source else ["source_unavailable"])
     return public.digest([str(graph_state), owner_state, settings.graph_enabled, settings.graph_host, settings.graph_port,
         settings.graph_database, settings.graph_embedding_dimensions,
@@ -200,11 +212,22 @@ async def _claim(factory: async_sessionmaker[AsyncSession], operation_id: UUID) 
         return token
 
 
-async def _lease(factory: async_sessionmaker[AsyncSession], operation_id: UUID, token: UUID) -> None:
+async def _lease(
+    factory: async_sessionmaker[AsyncSession], operation_id: UUID, token: UUID, *,
+    scope: Scope, multi_workspace_enabled: bool,
+) -> None:
     """Recheck live exact partition/intent ownership; stale results cannot publish or authorize writes."""
     async with factory() as session:
-        operation = await session.get(GraphOperation, operation_id)
-        partition = await session.get(GraphPartition, operation.partition_id) if operation else None
+        await workspaces.read_access_fence(
+            session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
+        operation = await session.scalar(select(GraphOperation).where(
+            GraphOperation.id == operation_id, GraphOperation.workspace_id == scope.workspace_id,
+        ))
+        partition = await session.scalar(select(GraphPartition).where(
+            GraphPartition.id == operation.partition_id,
+            GraphPartition.workspace_id == scope.workspace_id,
+        )) if operation else None
         now = datetime.now(UTC)
         if (operation is None or partition is None or operation.lease_owner != token
                 or partition.lease_token != token or operation.lease_expires_at is None
@@ -347,18 +370,25 @@ async def _record(factory: async_sessionmaker[AsyncSession], operation_id: UUID,
 
 async def _inventory(session: AsyncSession, mapping: GraphMapping) -> tuple[list[GraphMapping], list[GraphSupport]]:
     """Read every reservation/support in a selected bounded bucket, including historical/unknown rows."""
-    rows = list((await session.scalars(select(GraphMapping).where(GraphMapping.partition_id == mapping.partition_id)
+    rows = list((await session.scalars(select(GraphMapping).where(
+                                       GraphMapping.workspace_id == mapping.workspace_id,
+                                       GraphMapping.partition_id == mapping.partition_id)
                                       .order_by(GraphMapping.id).limit(101))).all())
     if len(rows) > 100 or len({row.document_version_id for row in rows}) > 100:
         raise GraphOperationError("graph_partition_over_bound")
-    supports = list((await session.scalars(select(GraphSupport).where(GraphSupport.mapping_id.in_([row.id for row in rows]))
+    supports = list((await session.scalars(select(GraphSupport).where(
+                                           GraphSupport.workspace_id == mapping.workspace_id,
+                                           GraphSupport.mapping_id.in_([row.id for row in rows]))
                                           .order_by(GraphSupport.mapping_id, GraphSupport.chunk_id).limit(101))).all())
     if len(supports) > 100:
         raise GraphOperationError("graph_partition_support_over_bound")
     return rows, supports
 
 
-async def _bindings(session: AsyncSession, mapping: GraphMapping, supports: list[GraphSupport]) -> tuple[CanonicalEntityBinding, ...]:
+async def _bindings(
+    session: AsyncSession, mapping: GraphMapping, supports: list[GraphSupport], *,
+    scope: Scope, multi_workspace_enabled: bool,
+) -> tuple[CanonicalEntityBinding, ...]:
     """Resolve exact owner memberships/seeds, assigning stable graph UUIDs only to proven canonical identities."""
     memberships = []
     by_version: dict[UUID, list[UUID]] = {}
@@ -366,10 +396,16 @@ async def _bindings(session: AsyncSession, mapping: GraphMapping, supports: list
         if not support.removed:
             by_version.setdefault(support.document_version_id, []).append(support.chunk_id)
     for version_id, chunk_ids in sorted(by_version.items(), key=lambda item: str(item[0])):
-        memberships.extend(await entities.list_retained_version_membership_refs(session, version_id, chunk_ids))
+        memberships.extend(await entities.list_retained_version_membership_refs(
+            session, version_id, chunk_ids, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        ))
     if len(memberships) > 100:
         raise GraphOperationError("graph_membership_closure_over_bound")
-    seeds = await entities.get_temporal_node_seeds(session, [item.membership_id for item in memberships]) if memberships else ()
+    seeds = await entities.get_temporal_node_seeds(
+        session, [item.membership_id for item in memberships], scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    ) if memberships else ()
     bound_ids = {seed.entity_id for seed in seeds}
     if bound_ids != {item.entity_id for item in memberships}:
         raise GraphOperationError("graph_canonical_seed_unavailable")
@@ -396,33 +432,49 @@ async def _bindings(session: AsyncSession, mapping: GraphMapping, supports: list
 
 async def _context(factory: async_sessionmaker[AsyncSession], session: AsyncSession, ctx: dict[str, object],
                    operation: GraphOperation, mapping: GraphMapping, token: UUID,
-                   *, cleanup: bool) -> tuple[OperationAuthorization, ModelGateway, list[GraphMapping]]:
+                   *, cleanup: bool, scope: Scope, multi_workspace_enabled: bool) -> tuple[OperationAuthorization, ModelGateway, list[GraphMapping]]:
     """Build real callbacks from owner contracts under sorted source/document fences; cleanup permits detached IDs only."""
+    access_fence = await workspaces.read_access_fence(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     rows, supports = await _inventory(session, mapping)
-    source = await sources.lock_source(session, mapping.source_id)
+    source = await sources.lock_source(
+        session, mapping.source_id, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=access_fence,
+    )
     documents_ids = sorted({row.document_id for row in rows if not row.tombstoned}, key=str)
-    await documents.lock_document_ids(session, documents_ids)
+    await documents.lock_document_ids(
+        session, documents_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     live_support = [item for item in supports if not item.removed]
     if not cleanup and (source is None or source.status != "active" or source.generation != mapping.source_generation):
         raise GraphOperationError("graph_source_generation_terminal")
     if live_support:
-        refs = await documents.read_evidence_refs(session, [(item.document_version_id, item.chunk_id) for item in live_support])
+        refs = await documents.read_evidence_refs(
+            session, [(item.document_version_id, item.chunk_id) for item in live_support],
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
         if {item.source_id for item in refs} != {mapping.source_id}:
             raise GraphOperationError("graph_support_source_changed")
     # Current canonical revisions remain current; mapping_revision identifies
     # the journal being recovered, which may predate a newer queued correction.
     bindings = tuple(replace(binding, mapping_revision=operation.desired_revision)
-        for binding in await _bindings(session, mapping, live_support)) if live_support else ()
-    await entities.lock_entity_ids(session, sorted({binding.canonical_entity_id for binding in bindings}, key=str))
+        for binding in await _bindings(session, mapping, live_support, scope=scope,
+                                       multi_workspace_enabled=multi_workspace_enabled)) if live_support else ()
+    await entities.lock_entity_ids(
+        session, sorted({binding.canonical_entity_id for binding in bindings}, key=str),
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     # Field support is re-read under canonical locks; owner edits cannot race
     # a source-proved seed between authorization and the external mutation.
     bindings = tuple(replace(binding, mapping_revision=operation.desired_revision)
-        for binding in await _bindings(session, mapping, live_support)) if live_support else ()
+        for binding in await _bindings(session, mapping, live_support, scope=scope,
+                                       multi_workspace_enabled=multi_workspace_enabled)) if live_support else ()
     evidence = tuple(EvidenceIdentity(item.source_id, item.source_generation, item.document_id,
                                       item.document_version_id, item.chunk_id) for item in live_support)
     settings = cast(Settings, ctx["settings"])
     redis = cast(Redis, ctx["redis"])
-    config = await settings_public.get_ai_execution_config(session, settings, redis)
+    config = await settings_public.get_ai_execution_config(session, settings, redis, scope=scope)
     embedding = config.aliases.get("embedding")
     if not cleanup:
         if embedding is None or settings.graph_embedding_dimensions is None:
@@ -449,7 +501,8 @@ async def _context(factory: async_sessionmaker[AsyncSession], session: AsyncSess
 
     async def validate_partition(mode: str, episode_id: str | None) -> None:
         """Recheck full owner inventory and current generation; only identifier cleanup may survive source deletion."""
-        await _lease(factory, operation.id, token)
+        await _lease(factory, operation.id, token, scope=scope,
+                     multi_workspace_enabled=multi_workspace_enabled)
         current_rows, _current_support = await _inventory(session, mapping)
         if {(row.id, row.desired_revision, row.tombstoned) for row in current_rows} != {
             (row.id, row.desired_revision, row.tombstoned) for row in rows
@@ -461,7 +514,10 @@ async def _context(factory: async_sessionmaker[AsyncSession], session: AsyncSess
             if any(row.status in {"reconcile_needed", "failed"} for row in current_rows if row.id != mapping.id):
                 raise GraphOperationError("graph_partition_requires_recovery")
         if mode != "delete" and live_support:
-            await documents.read_evidence_refs(session, [(item.document_version_id, item.chunk_id) for item in live_support])
+            await documents.read_evidence_refs(
+                session, [(item.document_version_id, item.chunk_id) for item in live_support],
+                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
 
     async def authorize(capability: str) -> None:
         """Recheck nonsecret gateway configuration and every exact permitted support immediately before inference."""
@@ -469,7 +525,7 @@ async def _context(factory: async_sessionmaker[AsyncSession], session: AsyncSess
             raise PrivacyPolicyDenied("Identifier cleanup cannot invoke inference")
         await validate_partition("upsert", str(mapping.episode_id))
         async with factory() as check:
-            current = await settings_public.get_ai_execution_config(check, settings, redis)
+            current = await settings_public.get_ai_execution_config(check, settings, redis, scope=scope)
         fingerprint = public.digest([current.configuration_revision, current.gateway_identity,
                                      {alias: value.model_dump(mode="json") for alias, value in current.aliases.items()},
                                      current.privacy.model_dump(mode="json"), current.endpoint_destination_id])

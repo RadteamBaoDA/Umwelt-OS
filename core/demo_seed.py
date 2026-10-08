@@ -76,12 +76,13 @@ def p12_demo_seed_id(kind: str, identity: str) -> UUID:
     return uuid5(NAMESPACE_URL, f"{P12_DEMO_NAMESPACE}/{kind}/{identity}")
 
 
-async def claim_demo_seed(session: AsyncSession, owner_id: int, namespace: str) -> bool:
-    """Try-lock one owner/namespace in the caller transaction and report whether it remains unseeded.
+async def claim_demo_seed(session: AsyncSession, owner_id: int, namespace: str, *, workspace_id: UUID) -> bool:
+    """Try-lock one workspace/owner/namespace and report whether it remains unseeded.
 
     The caller must hold the transaction through all P08 flushes, receipt insertion, and commit.
     Concurrent callers fail immediately with DemoSeedBusy; a completed receipt returns false so
-    later calls cannot recreate hard-deleted goals or detached task/topic links.
+    later calls cannot recreate hard-deleted goals or detached task/topic links. Workspace identity
+    scopes both the PostgreSQL lock and receipt lookup, so one workspace's seed never suppresses another.
     """
     if not session.in_transaction():
         raise RuntimeError("Demo seed claiming requires the coordinator transaction")
@@ -89,7 +90,7 @@ async def claim_demo_seed(session: AsyncSession, owner_id: int, namespace: str) 
         raise ValueError("Invalid owner or demo seed namespace")
     # PostgreSQL's single-key transaction lock uses a stable signed 64-bit digest of this scope.
     lock_key = int.from_bytes(
-        blake2b(f"bbd-os.demo-seed:{owner_id}:{namespace}".encode(), digest_size=8).digest(),
+        blake2b(f"bbd-os.demo-seed:{workspace_id}:{owner_id}:{namespace}".encode(), digest_size=8).digest(),
         byteorder="big",
         signed=True,
     )
@@ -97,6 +98,7 @@ async def claim_demo_seed(session: AsyncSession, owner_id: int, namespace: str) 
     if not locked:
         raise DemoSeedBusy("A demo seed is already running for this owner and namespace")
     receipt = await session.scalar(select(DemoSeedReceipt.owner_id).where(
+        DemoSeedReceipt.workspace_id == workspace_id,
         DemoSeedReceipt.owner_id == owner_id,
         DemoSeedReceipt.namespace == namespace,
     ))
@@ -104,10 +106,10 @@ async def claim_demo_seed(session: AsyncSession, owner_id: int, namespace: str) 
 
 
 async def record_demo_seed_receipt(
-    session: AsyncSession, owner_id: int, namespace: str,
+    session: AsyncSession, owner_id: int, namespace: str, *, workspace_id: UUID,
 ) -> None:
-    """Flush a completion receipt into the caller's transaction without committing it."""
+    """Flush a workspace-bound completion receipt into the caller transaction without committing."""
     if not session.in_transaction():
         raise RuntimeError("Demo seed receipt requires the coordinator transaction")
-    session.add(DemoSeedReceipt(owner_id=owner_id, namespace=namespace))
+    session.add(DemoSeedReceipt(workspace_id=workspace_id, owner_id=owner_id, namespace=namespace))
     await session.flush()

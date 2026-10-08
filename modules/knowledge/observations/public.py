@@ -12,9 +12,8 @@ from fastapi import HTTPException
 from sqlalchemy import Table, and_, func, or_, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.auth.models import Owner
-from core.workspaces.public import read_access_fence
-from core.workspaces.schemas import AccessFence, Scope
+from core.workspaces import public as workspaces
+from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
 from modules.connectors import public as connectors
 from modules.knowledge.documents import public as documents
 from modules.knowledge.observations.models import Observation
@@ -34,29 +33,71 @@ from modules.sources.schemas import SourceExportFence, SourceFence
 OBSERVATION_EXPORT_PAGE_MAX_BYTES = 16_777_216
 
 
-def _observation_export_cursor(owner_id: int, snapshot_at: datetime, accepted_at: datetime, row_id: UUID) -> str:
-    """Encode the fixed owner, cutoff and accepted-time/ID keyset position."""
-    value = {"v": 1, "owner": owner_id, "kind": "observations", "snapshot": snapshot_at.astimezone(UTC).isoformat(),
+def _actor(scope: Scope) -> int:
+    """Return the actor bound to a validated workspace or internal-job scope."""
+    return scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
+
+
+async def _admit(
+    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool, lock: bool = False,
+) -> AccessFence:
+    """Admit owner-only observation access before domain reads or writes; W3 owns member grants."""
+    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
+    if type(multi_workspace_enabled) is not bool:
+        raise TypeError("The configured multi-workspace feature flag must be a boolean")
+    if lock:
+        return await workspaces.lock_access_fence(
+            session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
+    return await workspaces.read_access_fence(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+
+
+def _observation_export_cursor(
+    owner_id: int, workspace_id: UUID, snapshot_at: datetime, accepted_at: datetime, row_id: UUID,
+    access_fence: AccessFence,
+) -> str:
+    """Encode owner/workspace, admission revisions, cutoff and accepted-time/ID position."""
+    if owner_id != access_fence.user_id or workspace_id != access_fence.workspace_id:
+        raise ValueError("Observation export cursor identity does not match its access fence")
+    value = {"v": 3, "owner": owner_id, "workspace": str(workspace_id), "kind": "observations",
+             "membership_revision": access_fence.membership_revision,
+             "configuration_revision": access_fence.configuration_revision,
+             "snapshot": snapshot_at.astimezone(UTC).isoformat(),
              "at": accepted_at.astimezone(UTC).isoformat(), "id": str(row_id)}
     return base64.urlsafe_b64encode(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).decode().rstrip("=")
 
 
-def _decode_observation_export_cursor(cursor: str, owner_id: int) -> tuple[datetime, datetime, UUID]:
-    """Validate a canonical cutoff-bound cursor and reject cross-owner reuse."""
+def _decode_observation_export_cursor(
+    cursor: str, owner_id: int, workspace_id: UUID, access_fence: AccessFence,
+) -> tuple[datetime, datetime, UUID]:
+    """Validate owner, workspace and admission revisions for the canonical export keyset."""
     try:
         if not cursor or len(cursor) > 1024 or "=" in cursor:
             raise ValueError
         value = json.loads(base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True))
-        if not isinstance(value, dict) or set(value) != {"v", "owner", "kind", "snapshot", "at", "id"}:
+        if not isinstance(value, dict) or set(value) != {
+            "v", "owner", "workspace", "kind", "membership_revision", "configuration_revision",
+            "snapshot", "at", "id",
+        }:
             raise ValueError
-        if value["v"] != 1 or value["owner"] != owner_id or value["kind"] != "observations":
+        if (value["v"] != 3 or value["owner"] != owner_id
+                or value["workspace"] != str(workspace_id) or value["kind"] != "observations"
+                or owner_id != access_fence.user_id or workspace_id != access_fence.workspace_id
+                or value["membership_revision"] != access_fence.membership_revision
+                or value["configuration_revision"] != access_fence.configuration_revision):
             raise ValueError
         snapshot, position = datetime.fromisoformat(value["snapshot"]), datetime.fromisoformat(value["at"])
         if any(item.tzinfo is None or item.utcoffset() is None for item in (snapshot, position)):
             raise ValueError
         snapshot, position = snapshot.astimezone(UTC), position.astimezone(UTC)
         row_id = UUID(value["id"])
-        if snapshot > datetime.now(UTC) or _observation_export_cursor(owner_id, snapshot, position, row_id) != cursor:
+        if (snapshot > datetime.now(UTC)
+                or _observation_export_cursor(
+                    owner_id, workspace_id, snapshot, position, row_id, access_fence,
+                ) != cursor):
             raise ValueError
         return snapshot, position, row_id
     except (ValueError, TypeError, KeyError, UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -69,13 +110,16 @@ def _observation_export_digest(item: ObservationExportRead) -> str:
                                      separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
 
 
-async def _observation_export_count(session: AsyncSession, snapshot_at: datetime) -> int:
+async def _observation_export_count(
+    session: AsyncSession, snapshot_at: datetime, *, scope: Scope, multi_workspace_enabled: bool,
+) -> int:
     """Count only rows whose current source scope and exact document version remain valid."""
     # ponytail: exact public evidence filtering scans O(N) per page; replace with a Documents-owned
     # SQL eligibility count only when capacity evidence shows this bounded-memory path is too slow.
     base = select(Observation).where(
+        Observation.workspace_id == scope.workspace_id,
         Observation.is_current.is_(True), Observation.accepted_at <= snapshot_at,
-        Observation.source_id.in_(sources.export_eligible_source_ids()),
+        Observation.source_id.in_(sources.export_eligible_source_ids(scope=scope)),
     )
     count, position = 0, None
     while True:
@@ -89,39 +133,54 @@ async def _observation_export_count(session: AsyncSession, snapshot_at: datetime
         scope_by_source: dict[UUID, Any] = {}
         candidates = []
         for row in rows:
-            scope = scope_by_source.get(row.source_id)
+            provider_scope = scope_by_source.get(row.source_id)
             if row.source_id not in scope_by_source:
-                source = await sources.get_connector_source(session, row.source_id)
-                scope = (await connectors.export_provider_scope(session, row.source_id, source.generation)
+                source = await sources.get_connector_source(
+                    session, row.source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                )
+                provider_scope = (await connectors.export_provider_scope(
+                    session, row.source_id, source.generation, scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
+                )
                          if source is not None else None)
-                scope_by_source[row.source_id] = scope
-            if scope is not None and scope.provider_id == row.provider:
+                scope_by_source[row.source_id] = provider_scope
+            provider_scope = scope_by_source[row.source_id]
+            if provider_scope is not None and provider_scope.provider_id == row.provider:
                 candidates.append((documents.ObservationExportEvidenceCandidate(
                     observation_id=row.id, source_id=row.source_id, accepted_source_generation=row.source_generation,
                     provider=row.provider, provider_scope_discriminator=row.provider_scope_discriminator,
                     external_id=row.external_id, document_id=row.document_id, document_version_id=row.document_version_id,
-                ), scope))
-        for candidate, scope in candidates:
-            count += int(await documents.export_observation_evidence(session, candidate, scope) is not None)
+                ), provider_scope))
+        for candidate, provider_scope in candidates:
+            count += int(await documents.export_observation_evidence(
+                session, candidate, provider_scope, scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+            ) is not None)
         position = (rows[-1].accepted_at, rows[-1].id)
 
 
 async def export_page(session: AsyncSession, *, owner_id: int, record_kind: str, limit: int = 50,
-                      cursor: str | None = None) -> ObservationExportPage:
-    """Export bounded current measurements; require current source scope and exact retained document evidence."""
+                      cursor: str | None = None, scope: Scope, multi_workspace_enabled: bool) -> ObservationExportPage:
+    """Export bounded actor/workspace measurements with current Source and exact retained Documents evidence."""
     if record_kind != "observations" or not 1 <= limit <= 100:
         raise ValueError("Observation export kind or limit is invalid")
-    if owner_id != 1 or await session.scalar(select(Owner.id).where(Owner.id == owner_id)) is None:
-        raise PermissionError("Observation export requires the current owner")
+    if owner_id != _actor(scope):
+        raise ValueError("Observation export actor does not match the admitted scope")
+    access_fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if cursor is None:
         snapshot, position = datetime.now(UTC), None
     else:
-        snapshot, position_at, position_id = _decode_observation_export_cursor(cursor, owner_id)
+        snapshot, position_at, position_id = _decode_observation_export_cursor(
+            cursor, owner_id, scope.workspace_id, access_fence,
+        )
         position = (position_at, position_id)
-    count = await _observation_export_count(session, snapshot)
+    count = await _observation_export_count(
+        session, snapshot, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     statement = select(Observation).where(
+        Observation.workspace_id == scope.workspace_id,
         Observation.is_current.is_(True), Observation.accepted_at <= snapshot,
-        Observation.source_id.in_(sources.export_eligible_source_ids()),
+        Observation.source_id.in_(sources.export_eligible_source_ids(scope=scope)),
     )
     if position is not None:
         statement = statement.where(tuple_(Observation.accepted_at, Observation.id) > position)
@@ -132,19 +191,24 @@ async def export_page(session: AsyncSession, *, owner_id: int, record_kind: str,
     fences: list[ObservationExportFence] = []
     last_examined: tuple[datetime, UUID] | None = None
     for row in rows[:limit]:
-        source = await sources.get_connector_source(session, row.source_id)
+        source = await sources.get_connector_source(
+            session, row.source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
         if source is None:
             last_examined = (row.accepted_at, row.id)
             continue
-        scope = await connectors.export_provider_scope(session, row.source_id, source.generation)
-        if scope is None or scope.provider_id != row.provider:
+        provider_scope = await connectors.export_provider_scope(
+            session, row.source_id, source.generation, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+        if provider_scope is None or provider_scope.provider_id != row.provider:
             last_examined = (row.accepted_at, row.id)
             continue
         evidence = await documents.export_observation_evidence(session, documents.ObservationExportEvidenceCandidate(
             observation_id=row.id, source_id=row.source_id, accepted_source_generation=row.source_generation,
             provider=row.provider, provider_scope_discriminator=row.provider_scope_discriminator,
             external_id=row.external_id, document_id=row.document_id, document_version_id=row.document_version_id,
-        ), scope)
+        ), provider_scope, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         if evidence is None:
             last_examined = (row.accepted_at, row.id)
             continue
@@ -170,10 +234,12 @@ async def export_page(session: AsyncSession, *, owner_id: int, record_kind: str,
         fences.append(ObservationExportFence(
             id=row.id, source_id=row.source_id, accepted_source_generation=row.source_generation,
             current_source_generation=evidence.current_source_generation,
-            provider_scope_digest=hashlib.sha256(scope.discriminator.encode()).hexdigest(),
+            provider_scope_digest=hashlib.sha256(provider_scope.discriminator.encode()).hexdigest(),
             record_digest=_observation_export_digest(item),
         ))
-    next_cursor = (_observation_export_cursor(owner_id, snapshot, *last_examined)
+    next_cursor = (_observation_export_cursor(
+        owner_id, scope.workspace_id, snapshot, last_examined[0], last_examined[1], access_fence,
+    )
                    if more and last_examined is not None else None)
     payload = len(json.dumps([item.model_dump(mode="json") for item in items], ensure_ascii=False,
                              separators=(",", ":")).encode())
@@ -183,26 +249,37 @@ async def export_page(session: AsyncSession, *, owner_id: int, record_kind: str,
 
 async def validate_export_fences(session: AsyncSession, *, owner_id: int, record_kind: str,
                                  snapshot_at: datetime, expected_snapshot_count: int,
-                                 fences: list[ObservationExportFence]) -> ObservationExportFenceValidation:
-    """Recheck snapshot count, current provider scope, generation and exact exported fields."""
+                                 fences: list[ObservationExportFence], scope: Scope,
+                                 multi_workspace_enabled: bool) -> ObservationExportFenceValidation:
+    """Recheck one admitted actor/workspace snapshot, provider scope, generation and exact exported fields."""
     if record_kind != "observations" or len(fences) > 100 or expected_snapshot_count < 0:
         raise ValueError("Observation export validation input is invalid")
-    if owner_id != 1 or await session.scalar(select(Owner.id).where(Owner.id == owner_id)) is None:
-        return ObservationExportFenceValidation(valid=False, reason="owner_unavailable", observed_snapshot_count=0)
-    observed = await _observation_export_count(session, snapshot_at)
+    if owner_id != _actor(scope):
+        raise ValueError("Observation export actor does not match the admitted scope")
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    observed = await _observation_export_count(
+        session, snapshot_at, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     if observed != expected_snapshot_count:
         return ObservationExportFenceValidation(valid=False, reason="snapshot_count_changed", observed_snapshot_count=observed)
     for fence in fences:
-        row = await session.scalar(select(Observation).where(Observation.id == fence.id).execution_options(populate_existing=True))
+        row = await session.scalar(select(Observation).where(
+            Observation.id == fence.id, Observation.workspace_id == scope.workspace_id,
+        ).execution_options(populate_existing=True))
         if (row is None or row.source_id != fence.source_id
                 or row.source_generation != fence.accepted_source_generation):
             return ObservationExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
-        source = await sources.get_connector_source(session, row.source_id)
-        scope = (await connectors.export_provider_scope(session, row.source_id, source.generation)
+        source = await sources.get_connector_source(
+            session, row.source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
+        provider_scope = (await connectors.export_provider_scope(
+            session, row.source_id, source.generation, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
                  if source is not None else None)
-        if (source is None or source.generation != fence.current_source_generation or scope is None
-                or scope.provider_id != row.provider
-                or hashlib.sha256(scope.discriminator.encode()).hexdigest() != fence.provider_scope_digest):
+        if (source is None or source.generation != fence.current_source_generation or provider_scope is None
+                or provider_scope.provider_id != row.provider
+                or hashlib.sha256(provider_scope.discriminator.encode()).hexdigest() != fence.provider_scope_digest):
             return ObservationExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
         item = ObservationExportRead(
             id=row.id, source_id=row.source_id, source_generation=row.source_generation, provider=row.provider,
@@ -216,10 +293,11 @@ async def validate_export_fences(session: AsyncSession, *, owner_id: int, record
             observation_id=row.id, source_id=row.source_id, accepted_source_generation=row.source_generation,
             provider=row.provider, provider_scope_discriminator=row.provider_scope_discriminator,
             external_id=row.external_id, document_id=row.document_id, document_version_id=row.document_version_id,
-        ), scope)
+        ), provider_scope, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         eligible = await sources.filter_export_eligible_sources(session, [SourceExportFence(
-            source_id=fence.source_id, generation=fence.current_source_generation,
-        )])
+            source_id=fence.source_id, workspace_id=scope.workspace_id,
+            generation=fence.current_source_generation,
+        )], scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         if (not row.is_current or row.accepted_at > snapshot_at or row.source_id not in eligible
                 or evidence is None or evidence.current_source_generation != fence.current_source_generation):
             return ObservationExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
@@ -607,9 +685,15 @@ async def _apply_ingestion_observation(
         raise RuntimeError("observation_preparation_insert_changed")
     return ObservationWriteResult(row.id, is_current, is_current), row
 
-def _cursor_fingerprint(query: ObservationQuery, scopes: tuple[ObservationScopeRead, ...]) -> str:
-    """Bind continuation cursors to exact normalized filters and half-open date bounds."""
+def _cursor_fingerprint(
+    query: ObservationQuery, scopes: tuple[ObservationScopeRead, ...], *, access_fence: AccessFence,
+) -> str:
+    """Bind continuation cursors to filters, source snapshots and admission revisions."""
     payload = {
+        "workspace": str(access_fence.workspace_id),
+        "actor": access_fence.user_id,
+        "membership_revision": access_fence.membership_revision,
+        "configuration_revision": access_fence.configuration_revision,
         "filters": query.model_dump(mode="json", exclude={"limit"}),
         "scopes": [
             [str(item.source_id), item.source_generation, item.provider, item.discriminator]
@@ -639,15 +723,20 @@ def _decode_cursor(cursor: str, fingerprint: str) -> tuple[datetime, UUID]:
 
 async def list_observations(
     session: AsyncSession, query: ObservationQuery, cursor: str | None = None,
+    *, scope: Scope, multi_workspace_enabled: bool,
 ) -> tuple[tuple[Observation, ...], str | None, bool, dict[UUID, int]]:
-    """Read only current-generation, current-provider-scope, current-evidence points under bounded scanning."""
+    """Read bounded current-evidence points after owner admission and workspace/source filters."""
+    access_fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     scopes: list[ObservationScopeRead] = []
     current_scopes: dict[UUID, object] = {}
     for source_id in sorted(query.source_ids, key=str):
-        source = await sources.get_connector_source(session, source_id)
+        source = await sources.get_connector_source(
+            session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
         snapshot = await connectors.get_current_provider_scope(
             session, source_id,
             source.generation if source is not None and source.status == "active" else -1,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
         if snapshot is None:
             raise HTTPException(status_code=404, detail="One or more sources are unavailable")
@@ -663,6 +752,7 @@ async def list_observations(
         Observation.provider_scope_discriminator == item.discriminator,
     ) for item in scopes)
     statement = select(Observation).where(
+        Observation.workspace_id == scope.workspace_id,
         or_(*source_scope_filters), Observation.is_current.is_(True),
         Observation.observed_at >= query.from_at, Observation.observed_at < query.to_at,
     )
@@ -678,7 +768,7 @@ async def list_observations(
     if query.regions:
         statement = statement.where(Observation.region.in_(query.regions))
     scopes_tuple = tuple(scopes)
-    fingerprint = _cursor_fingerprint(query, scopes_tuple)
+    fingerprint = _cursor_fingerprint(query, scopes_tuple, access_fence=access_fence)
     if cursor:
         stamp, row_id = _decode_cursor(cursor, fingerprint)
         statement = statement.where(tuple_(Observation.observed_at, Observation.id) < tuple_(stamp, row_id))
@@ -700,7 +790,10 @@ async def list_observations(
             external_id=row.external_id, document_id=row.document_id,
             document_version_id=row.document_version_id,
         ) for row in batch)
-        allowed = await documents.current_observation_evidence_versions(session, candidates, current_scopes)
+        allowed = await documents.current_observation_evidence_versions(
+            session, candidates, current_scopes, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
         for row in batch:
             if row.id in allowed:
                 page.append(row)
@@ -731,8 +824,9 @@ async def list_observations(
 
 async def list_geospatial_observations(
     session: AsyncSession, query: ObservationQuery, cursor: str | None = None,
+    *, scope: Scope, multi_workspace_enabled: bool,
 ) -> GeospatialObservationPage:
-    """Return at most one page of current Open-Meteo point evidence for valid selected sources.
+    """Return one bounded Open-Meteo page after owner admission and scoped source checks.
 
     Non-weather and inactive sources are counted as omitted rather than causing a
     broad query failure. The underlying query still applies the standard source,
@@ -740,13 +834,17 @@ async def list_geospatial_observations(
     """
     if not query.source_ids:
         raise ValueError("At least one map source is required")
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     eligible: list[UUID] = []
     omitted = 0
     for source_id in query.source_ids:
-        source = await sources.get_connector_source(session, source_id)
+        source = await sources.get_connector_source(
+            session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
         snapshot = await connectors.get_current_provider_scope(
             session, source_id,
             source.generation if source is not None and source.status == "active" else -1,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
         # Only the existing weather adapter declares point coordinates; market symbols have none.
         if snapshot is None or snapshot.provider_id != "open_meteo":
@@ -760,7 +858,9 @@ async def list_geospatial_observations(
     scoped_query = query.model_copy(update={
         "source_ids": eligible, "geospatial_only": True,
     })
-    rows, next_cursor, truncated, version_numbers = await list_observations(session, scoped_query, cursor)
+    rows, next_cursor, truncated, version_numbers = await list_observations(
+        session, scoped_query, cursor, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     version_numbers_by_observation = version_numbers
     items = [GeospatialObservationRead.model_validate({
         **{key: getattr(row, key) for key in GeospatialObservationRead.model_fields if hasattr(row, key)},
