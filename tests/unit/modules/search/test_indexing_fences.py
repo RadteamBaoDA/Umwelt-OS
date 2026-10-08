@@ -7,7 +7,7 @@ wrap, and the no-share rule (membership alone never reaches content, snippets or
 
 from types import SimpleNamespace
 from typing import Any, Self
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import HTTPException
@@ -385,11 +385,14 @@ async def test_denied_oldest_row_does_not_block_next(monkeypatch: pytest.MonkeyP
 # ---- SRCH-R1: cursor survives ARQ's per-job ctx copy; local state wins until a write syncs ------
 
 
+_STALE = UUID(int=0)  # below every random id: pre-fix code would re-read it
+
+
 class _StaleSetRedis:
     """Reads succeed with a frozen value, writes are rejected (e.g. OOM under noeviction)."""
 
     async def get(self, *_a: Any) -> bytes | None:
-        return None
+        return str(_STALE).encode()
 
     async def set(self, *_a: Any) -> None:
         raise RedisError("OOM")
@@ -435,7 +438,9 @@ async def test_cursor_advances_across_arq_ctx_copies(
     }
     for _ in range(2):  # ARQ: every job runs on a shallow copy of the worker ctx
         await indexing.index_pending_chunks.__wrapped__({**base})  # type: ignore[attr-defined]
-    assert afters[0] is None and afters[1] == ids[1]
+    assert afters[0] in (None, _STALE) and afters[1] == ids[1]
+    state = base["w2_cursor_state"]
+    assert isinstance(state, dict) and all(isinstance(v, str) for v in state.values())
 
 
 async def test_missing_cursor_state_is_not_created_on_demand(caplog: pytest.LogCaptureFixture) -> None:

@@ -347,21 +347,20 @@ async def create_generation_for_authority(
     )
 
 
-def _cursor_state(ctx: dict[str, object]) -> dict[str, object]:
+def _cursor_state(ctx: dict[str, object]) -> dict[str, str]:
     """Return the worker-installed cursor dict; ARQ copies ctx per job, so never create one here."""
     state = ctx.get("w2_cursor_state")
     if not isinstance(state, dict):
         logger.warning("w2_cursor_state missing from worker ctx; search cursors have no local fallback")
         return {}  # per-job throwaway
-    return cast(dict[str, object], state)
+    return cast(dict[str, str], state)
 
 
-# ponytail: local twin of the shared W2-N cursor helper (same "_unsynced" semantics); swap on composition.
-async def _read_cursor(redis: Redis, state: dict[str, object], name: str, key: str) -> UUID | None:
+# ponytail: local twin of the shared W2-N cursor helper (same "_unsynced:<name>" semantics); replaced by core.worker_cursors at composition.
+async def _read_cursor(redis: Redis, state: dict[str, str], name: str, key: str) -> UUID | None:
     """Read a keyset cursor; local state wins until a Redis write has succeeded again."""
-    unsynced = cast("set[str]", state.setdefault("_unsynced", set()))
-    raw: object = state.get(name)
-    if name not in unsynced:
+    raw: str | None = state.get(name)
+    if f"_unsynced:{name}" not in state:
         try:
             value = await redis.get(key)
             if value:
@@ -375,10 +374,9 @@ async def _read_cursor(redis: Redis, state: dict[str, object], name: str, key: s
 
 
 async def _write_cursor(
-    redis: Redis, state: dict[str, object], name: str, key: str, value: UUID | None,
+    redis: Redis, state: dict[str, str], name: str, key: str, value: UUID | None,
 ) -> None:
     """Persist a cursor locally always and to Redis best effort, tracking unsynced names."""
-    unsynced = cast("set[str]", state.setdefault("_unsynced", set()))
     if value is None:
         state.pop(name, None)
     else:
@@ -388,14 +386,14 @@ async def _write_cursor(
             await redis.delete(key)
         else:
             await redis.set(key, str(value))
-        unsynced.discard(name)
+        state.pop(f"_unsynced:{name}", None)
     except RedisError:
-        unsynced.add(name)
+        state[f"_unsynced:{name}"] = "1"
 
 
 async def _reconcile_automatic_generations(
     factory: async_sessionmaker[AsyncSession], settings: Settings, redis: Redis,
-    state: dict[str, object],
+    state: dict[str, str],
 ) -> None:
     """Create eligible per-workspace generations from bounded identity-only Documents discovery.
 
