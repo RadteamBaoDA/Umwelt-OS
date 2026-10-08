@@ -103,9 +103,13 @@ async def _telegram_call(
 
 
 async def validate_telegram_scope(
-    token: str, chat_ids: tuple[str, ...]
+    token: str, chat_ids: tuple[str, ...],
+    *, before_request: Callable[[], Awaitable[None]] | None = None,
 ) -> TelegramScopeValidation:
-    """Verify bot identity, no webhook, channel types, and administrator rights for all scopes."""
+    """Verify bot identity, no webhook, channel types, and administrator rights for all scopes.
+
+    ``before_request`` (owner fence) runs immediately before every Bot API send and aborts by raising.
+    """
     _validate_token(token)
     if not 1 <= len(chat_ids) <= 100 or len(set(chat_ids)) != len(chat_ids) or any(
         not _CHAT_ID.fullmatch(chat_id) for chat_id in chat_ids
@@ -115,22 +119,25 @@ async def validate_telegram_scope(
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(30), trust_env=False, follow_redirects=False, verify=True
         ) as client:
-            bot, _ = await _telegram_call(client, token, "getMe")
+            bot, _ = await _telegram_call(client, token, "getMe", before_request=before_request)
             bot_id = bot.get("id")
             if (
                 isinstance(bot_id, bool) or not isinstance(bot_id, int) or not 0 < bot_id < 10**20
                 or bot.get("is_bot") is not True
             ):
                 raise _TelegramAPIError("telegram_response_invalid")
-            webhook, _ = await _telegram_call(client, token, "getWebhookInfo")
+            webhook, _ = await _telegram_call(client, token, "getWebhookInfo", before_request=before_request)
             if webhook.get("url") != "":
                 raise _TelegramAPIError("telegram_webhook_configured")
             for chat_id in chat_ids:
-                chat, _ = await _telegram_call(client, token, "getChat", {"chat_id": chat_id})
+                chat, _ = await _telegram_call(
+                    client, token, "getChat", {"chat_id": chat_id}, before_request=before_request,
+                )
                 if chat.get("type") != "channel" or str(chat.get("id")) != chat_id:
                     raise _TelegramAPIError("telegram_scope_not_channel")
                 member, _ = await _telegram_call(
-                    client, token, "getChatMember", {"chat_id": chat_id, "user_id": bot_id}
+                    client, token, "getChatMember", {"chat_id": chat_id, "user_id": bot_id},
+                    before_request=before_request,
                 )
                 member_user = member.get("user")
                 if (
