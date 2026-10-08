@@ -170,6 +170,7 @@ async def test_create_run_stores_workspace_actor_and_original_epoch() -> None:
     )
     registry = MagicMock()
     registry.list_tools.return_value = [tool]
+    registry.hides_tool = None
     request = agents.AgentRunStart(prompt="hi", conversation_id=None, token_budget=None)
     now = datetime.now(UTC)
     with patch.object(access.workspaces, "lock_access_fence", AsyncMock(return_value=FENCE)) as lock, \

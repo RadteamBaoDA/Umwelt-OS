@@ -7,7 +7,7 @@ import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi.encoders import jsonable_encoder
 
@@ -55,6 +55,8 @@ class ToolRegistry:
         self._handlers: dict[str, ToolHandler] = {}
         self._fingerprints: dict[str, str] = {}
         self._semaphore = asyncio.Semaphore(max_concurrency)
+        # Set by the MCP dispatch adapter: (tool name, workspace) -> hidden. None means nothing is hidden.
+        self.hides_tool: Callable[[str, UUID], bool] | None = None
 
     def set_module_registry(self, module_registry: dict[str, Any]) -> None:
         """Replace trusted module lifecycle descriptors from server composition."""

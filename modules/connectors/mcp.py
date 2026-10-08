@@ -290,9 +290,9 @@ async def collect(
                     ) is not None
 
             read = await tools.read_collection_capability(
-                runtime, scope.actor_user_id, connection_id=config.connection_id, grant_id=call.grant_id,
+                runtime, connection_id=config.connection_id, grant_id=call.grant_id,
                 source_id=source_id, source_generation=source.generation, arguments=call.arguments,
-                authorize_extra=collector_current,
+                authorize_extra=collector_current, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
             )
             records.extend(normalize(read, call.arguments, collected_at))
         except McpCollectionError:

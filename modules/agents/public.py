@@ -572,7 +572,8 @@ async def create_run(
     owner_id = actor(scope)
     definitions = {
         item.name: item for item in registry.list_tools(allowed_tools=APPROVAL_WORKFLOW_TOOLS)
-        if (item.risk == ToolRisk.READ_ONLY and not item.confirmation_required
+        if not (registry.hides_tool and registry.hides_tool(item.name, scope.workspace_id))
+        and (item.risk == ToolRisk.READ_ONLY and not item.confirmation_required
             or item.name == "webhook.send" and item.risk == ToolRisk.EXTERNAL_WRITE
             and item.confirmation_required)
     }

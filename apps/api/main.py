@@ -95,7 +95,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     bundle = getattr(_app.state, "mcp_bundle", None)
                     if bundle is not None:
                         await stack.enter_async_context(bundle.server.session_manager.run())
-                        await _app.state.mcp_runtime.hydrate_connections(owner_id=1)
+                        await _app.state.mcp_runtime.hydrate_connections()
                     yield
                 finally:
                     admission = getattr(_app.state, "mcp_admission", None)

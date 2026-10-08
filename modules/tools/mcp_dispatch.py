@@ -100,6 +100,7 @@ class McpDispatchAdapter:
         self._revalidate_fence = revalidate_fence
         self._registered: dict[UUID, set[str]] = {}
         self._workspace_of: dict[UUID, UUID] = {}
+        registry.hides_tool = self.hides
 
     def register_selected_capabilities(
         self,

@@ -99,6 +99,7 @@ class TestAgentRunDispatch:
         )
         registry = MagicMock(spec=ToolRegistry)
         registry.list_tools.return_value = [tool_def]
+        registry.hides_tool = None
 
         request = AgentRunStart(prompt="Search docs", conversation_id=None, token_budget=None)
         res = await create_run(session, "auth_hash", request, registry, **CTX)

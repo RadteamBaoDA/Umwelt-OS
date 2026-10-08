@@ -11,7 +11,10 @@ from core.auth.dependencies import require_owner, require_owner_write
 from core.auth.models import AuthSession
 from core.database import get_session
 from core.realtime import commit_with_replay
-from core.workspaces.dependencies import require_workspace_read, require_workspace_write
+from core.workspaces.dependencies import (
+    require_default_workspace_read,
+    require_default_workspace_write,
+)
 from core.workspaces.schemas import WorkspaceContext
 from modules.agents import public
 from modules.agents.approvals import decision as resolve_decision
@@ -38,8 +41,8 @@ Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[AuthSession, Depends(require_owner)]
 OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]
 # Selected-workspace identity; owner role and the access fence are enforced by each Agents owner function.
-WorkspaceRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
-WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
+WorkspaceRead = Annotated[WorkspaceContext, Depends(require_default_workspace_read)]
+WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_default_workspace_write)]
 
 
 def _flag(request: Request) -> bool:
