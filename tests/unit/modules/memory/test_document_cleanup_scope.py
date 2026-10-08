@@ -1,6 +1,5 @@
 """Memory copied-evidence cleanup: owner admission, workspace-bound SQL and held-fence checks."""
 
-from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
@@ -20,8 +19,6 @@ from tests.unit.modules._cleanup_scope import (
     admitted,
     evidence,
 )
-
-JOB = InternalJobScope(workspace_id=WS, actor_user_id=7, membership_revision=2)
 
 
 async def test_document_page_member_denied_before_sql() -> None:
@@ -47,6 +44,7 @@ async def test_document_page_sql_is_workspace_and_actor_bound() -> None:
     assert progress.complete
     selects = session.selects()
     assert selects and all("workspace_id = " in text and "actor_user_id = " in text for text in selects)
+    session.assert_selects_bound(WS, 7)
 
 
 async def test_lock_export_privacy_requires_current_fence() -> None:
@@ -89,7 +87,4 @@ async def test_source_page_binds_fence_receipt_and_workspace() -> None:
     assert progress.complete
     selects = session.selects()
     assert selects and all("workspace_id = " in text and "actor_user_id = " in text for text in selects)
-
-
-def test_unused_imports_stay_referenced() -> None:
-    assert AsyncMock and patch and JOB
+    session.assert_selects_bound(WS, 7)

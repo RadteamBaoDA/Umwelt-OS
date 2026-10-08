@@ -36,10 +36,13 @@ class Recorder:
 
     def __init__(self) -> None:
         self.sql: list[str] = []
+        self.params: list[dict[str, object]] = []
 
     def _record(self, statement: object) -> str:
-        text = str(statement.compile(dialect=postgresql.dialect()))  # type: ignore[attr-defined]
+        compiled = statement.compile(dialect=postgresql.dialect())  # type: ignore[attr-defined]
+        text = str(compiled)
         self.sql.append(text)
+        self.params.append(dict(compiled.params))
         return text
 
     async def execute(self, statement: object, *_a: object, **_k: object) -> MagicMock:
@@ -61,3 +64,11 @@ class Recorder:
 
     def selects(self) -> list[str]:
         return [text for text in self.sql if text.lstrip().upper().startswith("SELECT")]
+
+    def assert_selects_bound(self, *values: object) -> None:
+        """Every SELECT binds each of ``values`` (workspace id, actor id) as a parameter."""
+        pairs = [(t, p) for t, p in zip(self.sql, self.params) if t.lstrip().upper().startswith("SELECT")]
+        assert pairs
+        for _text, params in pairs:
+            for value in values:
+                assert value in params.values(), (value, params)

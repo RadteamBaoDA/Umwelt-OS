@@ -1169,7 +1169,7 @@ async def purge_document_copied_evidence_page(
             ).with_for_update())
             marker = await session.scalar(select(AgentEvidenceCleanup).where(
                 AgentEvidenceCleanup.operation_id == evidence.operation_id,
-            AgentEvidenceCleanup.workspace_id == workspace_id,
+                AgentEvidenceCleanup.workspace_id == workspace_id,
                 AgentEvidenceCleanup.run_id == run_id,
             ).with_for_update().execution_options(populate_existing=True))
             if _agent_cleanup_marker_state(marker) != preflight.marker_state:
@@ -1195,7 +1195,7 @@ async def purge_document_copied_evidence_page(
             ).with_for_update())
             marker = await session.scalar(select(AgentEvidenceCleanup).where(
                 AgentEvidenceCleanup.operation_id == evidence.operation_id,
-            AgentEvidenceCleanup.workspace_id == workspace_id,
+                AgentEvidenceCleanup.workspace_id == workspace_id,
                 AgentEvidenceCleanup.run_id == run_id,
             ).with_for_update().execution_options(populate_existing=True))
             if _agent_cleanup_marker_state(marker) != preflight.marker_state:
@@ -1239,7 +1239,7 @@ async def purge_document_copied_evidence_page(
                 continue
             marker = await session.scalar(select(AgentEvidenceCleanup).where(
                 AgentEvidenceCleanup.operation_id == evidence.operation_id,
-            AgentEvidenceCleanup.workspace_id == workspace_id,
+                AgentEvidenceCleanup.workspace_id == workspace_id,
                 AgentEvidenceCleanup.run_id == run_id,
             ).with_for_update())
             if _agent_cleanup_marker_state(marker) != preflight.marker_state:
