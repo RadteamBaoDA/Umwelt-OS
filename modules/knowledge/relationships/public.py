@@ -181,7 +181,9 @@ async def _discover_support(
         )).all()
         endpoints = {identifier for row in endpoint_rows for identifier in row}
     history_ids: list[int] = []
-    if include_history and refs:
+    if len(set(refs)) > MAX_CLEANUP_SUPPORTS:
+        overflow = True
+    elif include_history and refs:
         pairs = _support_pairs(refs)
         after = 0
         # ponytail: JSON support scan; add a GIN index if retained history makes purge slow.
@@ -1479,8 +1481,8 @@ async def _remove_support(
 ) -> int:
     """Delete prepared evidence and remove unsupported derived relationships; never locks.
 
-    History is excluded from the closure comparison because ``purge_history_support`` runs first
-    and legitimately strips the rows that discovery matched.
+    Requires ``purge_history_support`` to have run in this transaction: any history row still
+    matching ``refs`` means the purge was skipped or raced, so cleanup fails.
     """
     _require_cleanup_fences(
         await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled),
@@ -1488,9 +1490,10 @@ async def _remove_support(
     )
     current = await _discover_support(
         session, refs=refs, source_id=closure.source_id, document_id=closure.document_id,
-        membership_ids=tuple(membership_ids), scope=scope, include_history=False,
+        membership_ids=tuple(membership_ids), scope=scope, include_history=True,
     )
-    if current.overflow or replace(current, history_ids=closure.history_ids) != closure:
+    if current.overflow or current.history_ids \
+            or replace(current, history_ids=closure.history_ids) != closure:
         raise RuntimeError("cleanup closure changed")
     if closure.evidence_ids:
         await session.execute(delete(RelationshipEvidence).where(

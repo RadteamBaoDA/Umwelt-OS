@@ -407,7 +407,10 @@ class TestPurgeAndCleanupBounds:
         session.execute.return_value = rows
         session.scalars.return_value = MagicMock(all=MagicMock(return_value=[]))
         closure = RelationshipSupportClosure(src, None, (), (), (), (), (), False)
-        with patch("modules.knowledge.relationships.public._admit", AsyncMock(return_value=fence)),                 pytest.raises(RuntimeError, match="cleanup closure changed"):
+        with (
+            patch("modules.knowledge.relationships.public._admit", AsyncMock(return_value=fence)),
+            pytest.raises(RuntimeError, match="cleanup closure changed"),
+        ):
             await purge_history_support(
                 session, closure, [(uuid4(), uuid4())], scope=scope, multi_workspace_enabled=False,
                 access_fence=fence, source_fence=source_fence)

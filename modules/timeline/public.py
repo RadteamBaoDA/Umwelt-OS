@@ -2021,10 +2021,14 @@ async def _remove_support(
         ))
     orphaned = list((await session.scalars(select(EventParticipant.id).where(
         EventParticipant.id.in_(closure.participant_ids), EventParticipant.origin == "derived",
+        EventParticipant.event_id.in_(select(Event.id).where(Event.workspace_id == workspace_id)),
         ~EventParticipant.id.in_(select(ParticipantEvidence.participant_id)),
     ))).all()) if closure.participant_ids else []
     if orphaned:
-        await session.execute(delete(EventParticipant).where(EventParticipant.id.in_(orphaned)))
+        await session.execute(delete(EventParticipant).where(
+            EventParticipant.id.in_(orphaned),
+            EventParticipant.event_id.in_(select(Event.id).where(Event.workspace_id == workspace_id)),
+        ))
     for event_id in closure.event_ids:
         event = await session.get(Event, event_id)
         if event is not None and event.workspace_id == workspace_id:

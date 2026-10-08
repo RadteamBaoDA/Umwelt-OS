@@ -81,6 +81,13 @@ def _flat(values: list[object]) -> list[object]:
     return [x for v in values for x in (v if isinstance(v, list) else [v])]
 
 
+def _assert_ordered_locks(rec: Rec) -> None:
+    import re
+    assert rec.stmts
+    for text in rec.texts():
+        assert "FOR UPDATE" in text and re.search(r"ORDER BY \w+\.(id|mapping_id).*FOR UPDATE", text, re.DOTALL), text
+
+
 def _tables(rec: Rec) -> list[str]:
     import re
     return [m.group(1) for text in rec.texts() if (m := re.search(r"FROM (\w+)", text))]
@@ -193,7 +200,7 @@ async def test_entities_prepare_locks_in_order() -> None:
     rec = Rec()
     other = uuid4()
     await entities.prepare_support_cleanup_in_uow(rec, closure, entity_ids=(other,), **HELD)
-    assert all("FOR UPDATE" in text for text in rec.texts())
+    _assert_ordered_locks(rec)
     assert _tables(rec) == [
         "entities", "entity_evidence_memberships", "entity_aliases",
         "entity_alias_evidence", "entity_field_evidence",
@@ -208,31 +215,92 @@ async def test_relationships_timeline_temporal_observations_prepare_in_order() -
         rec, relationships.RelationshipSupportClosure(SRC, None, (M1,), (M1,), (M2,), (), (3,), False),
         **HELD)
     assert _tables(rec) == ["relationships", "relationship_evidence", "relationship_snapshot_history"]
+    _assert_ordered_locks(rec)
     rec = Rec()
     await timeline.prepare_support_cleanup_in_uow(rec, await _timeline_closure(), **HELD)
     assert _tables(rec) == ["timeline_events", "timeline_event_evidence", "timeline_event_participants"]
+    _assert_ordered_locks(rec)
     rec = Rec()
     await temporal.prepare_tombstone_scope_in_uow(rec, await _temporal_closure(), **HELD)
-    assert _tables(rec) == ["temporal_mappings", "temporal_supports", "temporal_operations"]
+    assert _tables(rec) == ["temporal_operations", "temporal_mappings", "temporal_supports"]
+    _assert_ordered_locks(rec)
     rec = Rec()
     await observations.prepare_document_cleanup_in_uow(rec, await _observation_closure(), **HELD)
     assert _tables(rec) == ["observations"]
-    assert all("FOR UPDATE" in text for text in rec.texts())
+    _assert_ordered_locks(rec)
 
 
 @pytest.mark.asyncio
-async def test_prepare_rejects_overflowed_closure_and_stale_fence() -> None:
+async def test_prepare_rejects_overflowed_closure() -> None:
     closure = await timeline.support_cleanup_ids(
         Rec([(uuid4(), uuid4()) for _ in range(10_001)]), source_id=SRC, **KW)
     with pytest.raises(ValueError):
         await timeline.prepare_support_cleanup_in_uow(Rec(), closure, **HELD)
-    stale = {**HELD, "access_fence": AccessFence(WS, 1, 2, 6)}
+
+
+async def _fenced_calls():
+    ent, tl, tmp, obs = (await _entity_closure(), await _timeline_closure(),
+                         await _temporal_closure(), await _observation_closure())
+    rel = relationships.RelationshipSupportClosure(SRC, None, (M1,), (M1,), (M2,), (), (3,), False)
+    return {
+        "obs_prepare": lambda r, kw: observations.prepare_document_cleanup_in_uow(r, obs, **kw),
+        "ent_prepare": lambda r, kw: entities.prepare_support_cleanup_in_uow(r, ent, entity_ids=(), **kw),
+        "rel_prepare": lambda r, kw: relationships.prepare_support_cleanup_in_uow(r, rel, **kw),
+        "tl_prepare": lambda r, kw: timeline.prepare_support_cleanup_in_uow(r, tl, **kw),
+        "tmp_prepare": lambda r, kw: temporal.prepare_tombstone_scope_in_uow(r, tmp, **kw),
+        "ing_prepare": lambda r, kw: ingestion.prepare_document_materializations_in_uow(
+            r, DOC, source_id=SRC, **kw),
+        "obs_apply": lambda r, kw: observations.purge_source_in_uow(r, SRC, closure=obs, **kw),
+        "ent_apply": lambda r, kw: entities.remove_source_support(r, ent, **kw),
+        "rel_apply": lambda r, kw: relationships.remove_source_support(
+            r, rel, refs=[], membership_ids=[M1], **kw),
+        "tl_apply": lambda r, kw: timeline.remove_source_support(r, tl, **kw),
+        "tmp_apply": lambda r, kw: temporal.tombstone_scope_in_uow(r, tmp, **kw),
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", [
+    "obs_prepare", "ent_prepare", "rel_prepare", "tl_prepare", "tmp_prepare", "ing_prepare",
+    "obs_apply", "ent_apply", "rel_apply", "tl_apply", "tmp_apply",
+])
+@pytest.mark.parametrize("change", ["access", "source_id", "source_workspace"])
+async def test_stale_fence_rejected_before_any_sql(name: str, change: str) -> None:
+    call = (await _fenced_calls())[name]
+    if change == "access":
+        bad = {**HELD, "access_fence": AccessFence(WS, 1, 2, 6)}
+    elif change == "source_id":
+        bad = {**HELD, "source_fence": SRC_FENCE.model_copy(update={"id": uuid4()})}
+    else:
+        bad = {**HELD, "source_fence": SRC_FENCE.model_copy(update={"workspace_id": uuid4()})}
+    rec = Rec()
     with pytest.raises(HTTPException) as caught:
-        await observations.prepare_document_cleanup_in_uow(Rec(), await _observation_closure(), **stale)
-    assert caught.value.status_code == 409
-    wrong_source = {**HELD, "source_fence": SRC_FENCE.model_copy(update={"id": uuid4()})}
-    with pytest.raises(HTTPException):
-        await temporal.prepare_tombstone_scope_in_uow(Rec(), await _temporal_closure(), **wrong_source)
+        await call(rec, bad)
+    assert caught.value.status_code == 409 and rec.stmts == []
+
+
+@pytest.mark.asyncio
+async def test_entity_alias_overflow_sets_flag() -> None:
+    closure = await entities.support_cleanup_ids(
+        Rec([(M1, M2)], [], [], [(uuid4(), uuid4()) for _ in range(10_001)]), source_id=SRC, **KW)
+    assert closure.overflow
+
+
+@pytest.mark.asyncio
+async def test_relationship_refs_guard_sets_overflow() -> None:
+    refs = [(uuid4(), uuid4()) for _ in range(10_001)]
+    closure = await relationships.support_cleanup_ids(
+        Rec([], []), refs=refs, source_id=SRC, membership_ids=[], **KW)
+    assert closure.overflow
+
+
+@pytest.mark.asyncio
+async def test_temporal_discovery_filters_open_operation_statuses() -> None:
+    rec = Rec([M1], [(M1, M2, M2)], [M2])
+    await temporal.tombstone_cleanup_ids(rec, source_id=SRC, **KW)
+    text = rec.texts()[-1]
+    assert "temporal_operations.status IN" in text
+    assert set(temporal._OPEN_OPERATION_STATUSES) <= set(_flat(rec.params()))
 
 
 @pytest.mark.asyncio
@@ -240,6 +308,7 @@ async def test_ingestion_prepare_locks_and_limit() -> None:
     rec = Rec([uuid4(), uuid4()])
     await ingestion.prepare_document_materializations_in_uow(rec, DOC, source_id=SRC, **HELD)
     assert "FOR UPDATE" in rec.texts()[0] and "workspace_id" in rec.texts()[0]
+    _assert_ordered_locks(rec)
     with pytest.raises(DocumentCleanupPreparationLimitError) as caught:
         await ingestion.prepare_document_materializations_in_uow(
             Rec([uuid4() for _ in range(10_001)]), DOC, source_id=SRC, **HELD)
@@ -276,6 +345,20 @@ async def test_relationships_held_apply_no_locks_and_detects_change() -> None:
     with pytest.raises(RuntimeError, match="cleanup closure changed"):
         await relationships.remove_source_support(
             Rec([(M2, M2)], []), closure, refs=[], membership_ids=[M1], **HELD)
+
+
+@pytest.mark.asyncio
+async def test_relationships_remove_requires_history_purged_first() -> None:
+    refs = [(M1, M2)]
+    results = [[(M1, M2)], [(M1, M2)], [], []]
+    closure = await _relationship_closure(results, refs=refs)
+    # purge ran: history rediscovery empty -> apply succeeds
+    assert await relationships.remove_source_support(
+        Rec(*results), closure, refs=refs, membership_ids=[M1], **HELD) == 1
+    # purge skipped / late history row still matching refs -> refuse
+    with pytest.raises(RuntimeError, match="cleanup closure changed"):
+        await relationships.remove_source_support(
+            Rec([(M1, M2)], [(M1, M2)], [9], []), closure, refs=refs, membership_ids=[M1], **HELD)
 
 
 @pytest.mark.asyncio

@@ -2716,7 +2716,12 @@ async def _remove_entity_support(
     source_wide = closure.document_id is None
     if closure.alias_evidence_ids:
         await session.execute(
-            delete(EntityAliasEvidence).where(EntityAliasEvidence.id.in_(closure.alias_evidence_ids))
+            delete(EntityAliasEvidence).where(
+                EntityAliasEvidence.id.in_(closure.alias_evidence_ids),
+                EntityAliasEvidence.membership_id.in_(
+                    select(EntityEvidenceMembership.id).where(EntityEvidenceMembership.workspace_id == workspace_id)
+                ),
+            )
         )
     if closure.membership_ids:
         await session.execute(

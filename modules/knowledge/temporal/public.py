@@ -307,7 +307,7 @@ async def prepare_tombstone_scope_in_uow(
     session: AsyncSession, closure: TemporalCleanupClosure, *, scope: Scope,
     multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
 ) -> None:
-    """Lock mappings, then supports, then open operations of those mappings; no mutation."""
+    """Lock open operations, then mappings, then supports (worker order); no mutation."""
     _require_cleanup_fences(
         await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled),
         closure=closure, scope=scope, access_fence=access_fence, source_fence=source_fence,
@@ -315,6 +315,13 @@ async def prepare_tombstone_scope_in_uow(
     if closure.overflow:
         raise ValueError("Temporal cleanup exceeds its atomic limit")
     workspace_id = scope.workspace_id
+    # Worker order is partition -> operation -> mapping; cleanup (approved deviation) locks operations first.
+    if closure.operation_ids:
+        await session.scalars(
+            select(GraphOperation.id).where(
+                GraphOperation.workspace_id == workspace_id, GraphOperation.id.in_(closure.operation_ids),
+            ).order_by(GraphOperation.id).with_for_update()
+        )
     if closure.mapping_ids:
         await session.scalars(
             select(GraphMapping.id).where(
@@ -326,12 +333,6 @@ async def prepare_tombstone_scope_in_uow(
                 GraphSupport.workspace_id == workspace_id, GraphSupport.mapping_id.in_(closure.mapping_ids),
             ).order_by(GraphSupport.mapping_id, GraphSupport.document_version_id, GraphSupport.chunk_id)
             .with_for_update()
-        )
-    if closure.operation_ids:
-        await session.scalars(
-            select(GraphOperation.id).where(
-                GraphOperation.workspace_id == workspace_id, GraphOperation.id.in_(closure.operation_ids),
-            ).order_by(GraphOperation.id).with_for_update()
         )
 
 
