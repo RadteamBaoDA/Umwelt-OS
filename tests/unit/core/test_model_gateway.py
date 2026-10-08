@@ -59,6 +59,30 @@ def _policy(**overrides) -> RequestPolicy:
     return RequestPolicy(**{**values, **overrides})
 
 
+def _cap_json(alias: str = "fast", capability: str = "chat") -> str:
+    """Exact principal/config capability evidence for model "m"."""
+    now = datetime.now(UTC)
+    return json.dumps({
+        "workspace_id": str(WORKSPACE_ID), "actor_user_id": 7, "membership_revision": 3,
+        "alias": alias, "model": "m", "version": "1", "gateway_identity": GATEWAY_IDENTITY,
+        "configuration_revision": 1, "capability": capability, "result": "supported",
+        "checked_at": now.isoformat(), "expires_at": (now + timedelta(hours=1)).isoformat(),
+    })
+
+
+def _cap_get() -> AsyncMock:
+    """Redis ``get`` serving supported evidence for every alias/capability the gateway can ask about."""
+    from core.model_gateway.cache import capability_key
+
+    table = {
+        capability_key(alias, "m", "1", capability, GATEWAY_IDENTITY, workspace_id=WORKSPACE_ID, actor_user_id=7):
+            _cap_json(alias, capability)
+        for alias in ("fast", "reranker") for capability in
+        ("chat", "streaming", "embeddings", "structured", "tools", "rerank", "reranking")
+    }
+    return AsyncMock(side_effect=lambda key: table.get(key))
+
+
 def _gateway(redis, **overrides) -> ModelGateway:
     """Gateway bound to SCOPE with a no-op fresh-authorization callback."""
     values = {
@@ -331,9 +355,8 @@ class _LeaseRedis:
                 removed += 1
         return removed
 
-def _lease_gateway(redis: _LeaseRedis, timeout: float = 5.0) -> ModelGateway:
-    return ModelGateway(redis=redis, base_url="https://x/v1", api_key="k",  # type: ignore[arg-type]
-                        destination_id="d", timeout_seconds=timeout)
+def _lease_gateway(redis: _LeaseRedis, timeout: float = 5.0, **overrides: Any) -> ModelGateway:
+    return _gateway(redis, base_url="https://x/v1", api_key="k", destination_id="d", timeout_seconds=timeout, **overrides)
 
 
 class TestModelGatewayCapacityAndTimeouts:
@@ -420,13 +443,11 @@ class TestModelGatewayCapacityAndTimeouts:
     @pytest.mark.asyncio
     async def test_long_stream_not_cut_off_and_fences_run_per_attempt(self) -> None:
         redis = _LeaseRedis()
-        redis.get = AsyncMock(return_value=json.dumps({  # type: ignore[attr-defined]
-            "result": "supported", "gateway_identity": "legacy", "model": "m", "version": "1"}))
+        redis.get = _cap_get()
         before = AsyncMock()
         after = AsyncMock()
-        gw = _lease_gateway(redis, timeout=0.1)
-        gw.before_send = before
-        policy = RequestPolicy(reasoning_allowed=True, permitted_destinations=frozenset({"d"}))
+        gw = _lease_gateway(redis, timeout=0.1, before_send=before)
+        policy = _policy(reasoning_allowed=True, permitted_destinations=frozenset({"d"}))
         mapping = ModelMapping(model="m", version="1", destination="remote")
 
         class Chunk:
@@ -455,7 +476,7 @@ class TestModelGatewayCapacityAndTimeouts:
             yield client
 
         with patch("core.model_gateway.client.AsyncOpenAI", side_effect=fake_openai), \
-             patch.object(gw, "_http_client", return_value=MagicMock()):
+             patch.object(ModelGateway, "_http_client", return_value=MagicMock()):
             lines = [x async for x in gw.stream("fast", mapping, policy, [], after_send=after)]
         assert len(lines) == 6 and lines[-1] == "data: [DONE]"
         assert before.await_count == 2 and after.await_count == 2  # per attempt
@@ -534,10 +555,9 @@ class TestModelGatewayCapacityAndTimeouts:
     @staticmethod
     def _stream_fixture(create):  # type: ignore[no-untyped-def]
         redis = _LeaseRedis()
-        redis.get = AsyncMock(return_value=json.dumps({  # type: ignore[attr-defined]
-            "result": "supported", "gateway_identity": "legacy", "model": "m", "version": "1"}))
+        redis.get = _cap_get()
         gw = _lease_gateway(redis, timeout=0.1)
-        policy = RequestPolicy(reasoning_allowed=True, permitted_destinations=frozenset({"d"}))
+        policy = _policy(reasoning_allowed=True, permitted_destinations=frozenset({"d"}))
         mapping = ModelMapping(model="m", version="1", destination="remote")
         client = MagicMock()
         client.chat.completions.create = create
@@ -556,7 +576,7 @@ class TestModelGatewayCapacityAndTimeouts:
         redis, gw, policy, mapping, fake_openai = self._stream_fixture(create)
         after = AsyncMock()
         with patch("core.model_gateway.client.AsyncOpenAI", side_effect=fake_openai), \
-             patch.object(gw, "_http_client", return_value=MagicMock()), \
+             patch.object(ModelGateway, "_http_client", return_value=MagicMock()), \
              pytest.raises(ModelGatewayError, match="stream failed"):
             [x async for x in gw.stream("fast", mapping, policy, [], after_send=after)]
         assert after.await_count == 2  # both attempts released the fence
@@ -577,7 +597,7 @@ class TestModelGatewayCapacityAndTimeouts:
 
         redis, gw, policy, mapping, fake_openai = self._stream_fixture(create)
         with patch("core.model_gateway.client.AsyncOpenAI", side_effect=fake_openai), \
-             patch.object(gw, "_http_client", return_value=MagicMock()):
+             patch.object(ModelGateway, "_http_client", return_value=MagicMock()):
             async with aclosing(gw.stream("fast", mapping, policy, [])) as gen:
                 async for _line in gen:
                     assert len(redis.keys) == 1
@@ -659,16 +679,15 @@ class _SlowModelServer:
                                         "message": {"role": "assistant", "content": "hi"}}]}).encode()
 
 
-def _loopback_gateway(base_url: str, timeout: float = 5.0) -> ModelGateway:
+def _loopback_gateway(base_url: str, timeout: float = 5.0, **overrides: Any) -> ModelGateway:
     """Real gateway through approved_http_client; transport.py has no built-in loopback deny, so 127.0.0.0/8 is approved."""
     redis = _LeaseRedis()
-    redis.get = AsyncMock(return_value=json.dumps({  # type: ignore[attr-defined]
-        "result": "supported", "gateway_identity": "legacy", "model": "m", "version": "1"}))
-    return ModelGateway(redis=redis, base_url=base_url, api_key="k", destination_id="d",  # type: ignore[arg-type]
-                        timeout_seconds=timeout, approved_endpoint_cidrs=("127.0.0.0/8",))
+    redis.get = _cap_get()
+    return _gateway(redis, base_url=base_url, api_key="k", destination_id="d",
+                    timeout_seconds=timeout, approved_endpoint_cidrs=("127.0.0.0/8",), **overrides)
 
 
-_POLICY = RequestPolicy(reasoning_allowed=True, embeddings_allowed=True, permitted_destinations=frozenset({"d"}))
+_POLICY = _policy(reasoning_allowed=True, embeddings_allowed=True, permitted_destinations=frozenset({"d"}))
 _MAPPING = ModelMapping(model="m", version="1", destination="remote")
 _BIG = "x" * 200_000  # several socket writes' worth of body
 
@@ -757,8 +776,7 @@ class TestBodySentHook:
                 if len(server.headers_sent_at) < events.count("before"):  # this request's headers still pending
                     release.set()
 
-            gw = _loopback_gateway(server.base_url)
-            gw.before_send = before
+            gw = _loopback_gateway(server.base_url, before_send=before)
             await _call(gw, "chat", after_send)
         assert len(server.bodies) == 2
         # attempt 1: before, hook (pre-headers), finally; attempt 2: before (re-fence), hook, finally
@@ -844,7 +862,7 @@ class TestBodySentHook:
         spy = MagicMock(wraps=body_sent)
         gw = _loopback_gateway("https://x")
         with patch("core.model_gateway.client.AsyncOpenAI", side_effect=_fake_openai_with(create)), \
-             patch.object(gw, "_http_client", return_value=MagicMock()), \
+             patch.object(ModelGateway, "_http_client", return_value=MagicMock()), \
              patch.object(client_module, "body_sent", spy):
             if op == "chat":
                 await gw.chat("fast", _MAPPING, _POLICY, [])
@@ -875,7 +893,7 @@ class TestBodySentHook:
 
         gw = _loopback_gateway("https://x")
         with patch("core.model_gateway.client.AsyncOpenAI", side_effect=_fake_openai_with(create)), \
-             patch.object(gw, "_http_client", return_value=MagicMock()):
+             patch.object(ModelGateway, "_http_client", return_value=MagicMock()):
             await gw.chat("fast", _MAPPING, _POLICY, [], before_send=before, after_send=after)
         assert during == {"before": None, "create": after}
         assert body_sent.get() is None
@@ -928,7 +946,7 @@ class TestG1GatewayTimeouts:
             "stream": lambda: gw.stream("fast", _MAPPING, _POLICY, [], probe=True).__anext__(),
             "discover": lambda: gw.discover_models(),
         }
-        with patch("core.model_gateway.client.AsyncOpenAI", side_effect=fake_openai),              patch.object(gw, "_http_client", return_value=MagicMock()), pytest.raises(ModelGatewayError):
+        with patch("core.model_gateway.client.AsyncOpenAI", side_effect=fake_openai),              patch.object(ModelGateway, "_http_client", return_value=MagicMock()), pytest.raises(ModelGatewayError):
             await calls[op]()
         assert seen["timeout"].connect == 5.0
 
@@ -947,7 +965,7 @@ class TestG1GatewayTimeouts:
             async with gw._slot():
                 await asyncio.sleep(0.3)
 
-        with patch("core.model_gateway.client._SLOTS", 1),              patch("core.model_gateway.client._STREAM_LEASE_WAIT_SECONDS", 5.0),              patch("core.model_gateway.client.AsyncOpenAI", side_effect=fake_openai),              patch.object(gw, "_http_client", return_value=MagicMock()):
+        with patch("core.model_gateway.client._SLOTS", 1),              patch("core.model_gateway.client._STREAM_LEASE_WAIT_SECONDS", 5.0),              patch("core.model_gateway.client.AsyncOpenAI", side_effect=fake_openai),              patch.object(ModelGateway, "_http_client", return_value=MagicMock()):
             holder = asyncio.create_task(hold())
             await asyncio.sleep(0.05)
             with pytest.raises(ModelGatewayError, match="stop"):
@@ -964,7 +982,7 @@ class TestG1GatewayTimeouts:
         err.__cause__ = cause
         create = AsyncMock(side_effect=err)
         gw = _lease_gateway(_LeaseRedis())
-        with patch("core.model_gateway.client.AsyncOpenAI", side_effect=_fake_openai_with(create)),              patch.object(gw, "_http_client", return_value=MagicMock()),              pytest.raises(ModelGatewayError, match="network policy denied"):
+        with patch("core.model_gateway.client.AsyncOpenAI", side_effect=_fake_openai_with(create)),              patch.object(ModelGateway, "_http_client", return_value=MagicMock()),              pytest.raises(ModelGatewayError, match="network policy denied"):
             await gw.chat("fast", _MAPPING, _POLICY, [], probe=True)
         assert create.await_count == 1
 

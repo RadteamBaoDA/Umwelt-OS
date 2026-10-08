@@ -34,7 +34,7 @@ HEARTBEAT_INTERVAL_SECONDS = 15
 DB_READ_TIMEOUT_SECONDS = 3
 SEND_TIMEOUT_SECONDS = 2
 CLEANUP_TIMEOUT_SECONDS = 2
-MAX_STREAMS_PER_API_PROCESS = 4
+MAX_STREAMS_PER_API_PROCESS = 32  # D3: gated on a T8 rerun (no pool exhaustion / idle-in-transaction growth)
 _PRIVATE_HEADERS = {"Cache-Control": "private, no-store", "Vary": "Cookie, X-Workspace-ID"}
 
 
@@ -365,8 +365,10 @@ async def _read_replay_page(
                     or (not records and head.sequence > position.sequence)
                     or (records and len(records) < MAX_REPLAY_BATCH and records[-1].sequence != head.sequence)):
                 reason = "replay_gap"
-            messages = () if reason else tuple((ReplayCursor(epoch=row.epoch, sequence=row.sequence), _sse_record(row))
-                                               for row in records)
+            # One chunk per page: the stream does one guarded (fence-locked) send for the whole batch.
+            messages = (() if reason or not records else
+                        ((ReplayCursor(epoch=records[-1].epoch, sequence=records[-1].sequence),
+                          "".join(_sse_record(row) for row in records)),))
             return _RealtimePage(head=head, messages=messages, reason=reason)
     finally:
         await _cleanup_session(session)
