@@ -165,7 +165,7 @@ def _owner_patches(overflow: str | None = None):
     def owner(name):
         return AsyncMock(return_value=_empty_owner(overflow=overflow == name))
     return (
-        patch.object(public, "list_evidence_ref_keys", AsyncMock(return_value=([], False))),
+        patch.object(public, "_list_evidence_ref_keys", AsyncMock(return_value=([], False))),
         patch.object(observations, "observation_cleanup_ids", owner("observations")),
         patch.object(entities, "support_cleanup_ids", owner("entities")),
         patch.object(relationships, "support_cleanup_ids", owner("relationships")),
@@ -247,14 +247,17 @@ async def test_lock_phase_order_documents_children_uri_identity_then_owners() ->
 
     session.scalars, session.execute = scalars, execute
 
+    kwargs_seen: dict[str, dict] = {}
+
     def recorder(name):
-        return AsyncMock(side_effect=lambda *a, **k: calls.append(name))
+        return AsyncMock(side_effect=lambda *a, **k: calls.append(name) or kwargs_seen.__setitem__(name, k))
 
     ids = (uuid4(),)
+    union = (uuid4(), uuid4())
     closure = SimpleNamespace(
         source_id=SRC, document_id=None, document_ids=ids, version_ids=ids, chunk_ids=ids, provenance_ids=ids,
         identity_ids=ids, observations=object(), entities=object(), relationships=object(),
-        timeline=object(), temporal=object(), entity_union=(uuid4(),))
+        timeline=object(), temporal=object(), entity_union=union)
     with patch.object(observations, "prepare_document_cleanup_in_uow", recorder("O")), \
             patch.object(entities, "prepare_support_cleanup_in_uow", recorder("E")), \
             patch.object(relationships, "prepare_support_cleanup_in_uow", recorder("R")), \
@@ -264,6 +267,64 @@ async def test_lock_phase_order_documents_children_uri_identity_then_owners() ->
             session, closure, scope=SCOPE, flag=False, access_fence=FENCE, source_fence=SOURCE_FENCE)
     assert calls == ["documents", "document_versions", "document_chunks", "normalized_version_provenance",
                      "advisory", "normalized_document_identities", "O", "E", "R", "T", "G"]
+    assert kwargs_seen["E"]["entity_ids"] == union
+
+
+# --- composition rules (D2a-2 handoff) -------------------------------------------------------------------
+
+async def test_prepare_closure_passes_membership_ids_and_builds_entity_union() -> None:
+    from modules.knowledge.entities import public as entities
+    from modules.knowledge.relationships import public as relationships
+    from modules.knowledge.temporal import public as temporal
+    from modules.timeline import public as timeline
+
+    m1, e1, e2, e3 = uuid4(), uuid4(), uuid4(), uuid4()
+    refs = [(uuid4(), uuid4())]
+    rel = AsyncMock(return_value=_empty_owner(endpoint_entity_ids=(e2,)))
+    with patch.object(public, "_list_evidence_ref_keys", AsyncMock(return_value=(refs, False))),             patch.object(observations, "observation_cleanup_ids", AsyncMock(return_value=_empty_owner())),             patch.object(entities, "support_cleanup_ids", AsyncMock(
+                return_value=_empty_owner(membership_ids=(m1,), entity_ids=(e1,)))),             patch.object(relationships, "support_cleanup_ids", rel),             patch.object(timeline, "support_cleanup_ids", AsyncMock(
+                return_value=_empty_owner(participant_entity_ids=(e3,)))),             patch.object(temporal, "tombstone_cleanup_ids", AsyncMock(return_value=_empty_owner())):
+        closure = await public._prepare_cleanup_closure(
+            _closure_session(), source_id=SRC, document_id=None, scope=SCOPE, flag=False,
+            access_fence=FENCE, source_fence=SOURCE_FENCE)
+    assert rel.await_args.kwargs["membership_ids"] == (m1,)
+    assert rel.await_args.kwargs["refs"] == refs
+    assert closure.entity_union == tuple(sorted({e1, e2, e3}))
+
+
+@pytest.mark.parametrize("document_id", [None, DOC])
+async def test_apply_graph_cleanup_order_and_arguments(document_id) -> None:
+    from modules.knowledge.entities import public as entities
+    from modules.knowledge.relationships import public as relationships
+    from modules.knowledge.temporal import public as temporal
+    from modules.timeline import public as timeline
+
+    calls: list[str] = []
+    seen: dict[str, dict] = {}
+    drafts = [object()]
+
+    def rec(name, result=None):
+        def effect(*a, **k):
+            calls.append(name)
+            seen[name] = k
+            return result
+        return AsyncMock(side_effect=effect)
+
+    kind = "document" if document_id is not None else "source"
+    membership = (uuid4(),)
+    refs = ((uuid4(), uuid4()),)
+    closure = SimpleNamespace(
+        document_id=document_id, refs=refs, entities=SimpleNamespace(membership_ids=membership),
+        relationships=object(), timeline=object(), temporal=object())
+    history = rec("R_history")
+    with patch.object(temporal, "tombstone_scope_in_uow", rec("G_tombstone")),             patch.object(relationships, "purge_history_support", history),             patch.object(relationships, f"remove_{kind}_support", rec("R_remove")),             patch.object(entities, f"remove_{kind}_support", rec("E_remove")),             patch.object(timeline, f"remove_{kind}_support", rec("T_remove", drafts)):
+        result = await public._apply_graph_cleanup(
+            MagicMock(), closure, scope=SCOPE, flag=False, access_fence=FENCE, source_fence=SOURCE_FENCE)
+    assert calls == ["G_tombstone", "R_history", "R_remove", "E_remove", "T_remove"]
+    assert result is drafts
+    assert history.await_args.args[2] == list(refs)
+    assert seen["R_remove"]["refs"] == list(refs)
+    assert seen["R_remove"]["membership_ids"] is membership
 
 
 # --- delete_document ----------------------------------------------------------------------------------

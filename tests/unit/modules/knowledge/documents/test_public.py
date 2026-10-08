@@ -4,7 +4,7 @@ Tests cover:
 - Document extraction and ExtractionInputLimitError bounds validation
   (empty input, > 100 chunks, > 64,000 bytes, allowed_chunk_ids bounds).
 - Version hashing (content_hash SHA-256 calculation and determinism).
-- Chunking bounds and persistence (add_content_chunks, list_evidence_ref_keys bounds).
+- Chunking bounds and persistence (add_content_chunks, _list_evidence_ref_keys bounds).
 - Cursor serialization and decoding (_encode_provider_cursor, _decode_provider_cursor,
   _encode_news_projection_cursor, _decode_news_projection_cursor, version cursor roundtrips).
 - Document retention and observation validation (news_retained_observation_allowed,
@@ -31,12 +31,12 @@ from modules.knowledge.documents.public import (
     _decode_provider_cursor,
     _encode_news_projection_cursor,
     _encode_provider_cursor,
+    _list_evidence_ref_keys,
     add_content_chunks,
     content_hash,
     decode_version_cursor,
     delete_document,
     encode_version_cursor,
-    list_evidence_ref_keys,
     news_projection_scope_unavailable,
     news_retained_observation_allowed,
     read_extraction_input,
@@ -167,7 +167,7 @@ class TestVersionHashingAndExtractionLimits:
 
 
 class TestChunkingBounds:
-    """Tests for add_content_chunks and list_evidence_ref_keys bounds."""
+    """Tests for add_content_chunks and _list_evidence_ref_keys bounds."""
 
     @pytest.mark.asyncio
     async def test_add_content_chunks_creates_chunks(self) -> None:
@@ -200,31 +200,31 @@ class TestChunkingBounds:
 
     @pytest.mark.asyncio
     async def test_list_evidence_ref_keys_is_workspace_qualified(self) -> None:
-        """Verify list_evidence_ref_keys qualifies the Document root by workspace and Source."""
+        """Verify _list_evidence_ref_keys qualifies the Document root by workspace and Source."""
         session = AsyncMock()
         session.execute = AsyncMock(return_value=MagicMock(all=MagicMock(return_value=[])))
-        await list_evidence_ref_keys(session, source_id=uuid4(), scope=SCOPE_KW["scope"])
+        await _list_evidence_ref_keys(session, source_id=uuid4(), scope=SCOPE_KW["scope"])
         sql = str(session.execute.await_args.args[0].compile(dialect=postgresql.dialect()))
         assert "documents.workspace_id" in sql and "documents.source_id" in sql
 
     @pytest.mark.asyncio
     async def test_list_evidence_ref_keys_limit_bounds(self) -> None:
-        """Verify list_evidence_ref_keys rejects limit < 1 or limit > 10,000."""
+        """Verify _list_evidence_ref_keys rejects limit < 1 or limit > 10,000."""
         session = AsyncMock()
         with pytest.raises(ValueError, match="Specify a bounded limit"):
-            await list_evidence_ref_keys(session, source_id=uuid4(), limit=0, scope=SCOPE_KW["scope"])
+            await _list_evidence_ref_keys(session, source_id=uuid4(), limit=0, scope=SCOPE_KW["scope"])
 
         with pytest.raises(ValueError, match="Specify a bounded limit"):
-            await list_evidence_ref_keys(session, source_id=uuid4(), limit=10_001, scope=SCOPE_KW["scope"])
+            await _list_evidence_ref_keys(session, source_id=uuid4(), limit=10_001, scope=SCOPE_KW["scope"])
 
     @pytest.mark.asyncio
     async def test_list_evidence_ref_keys_reports_overflow_without_raising(self) -> None:
-        """Verify list_evidence_ref_keys returns the first limit keys and overflow=True."""
+        """Verify _list_evidence_ref_keys returns the first limit keys and overflow=True."""
         session = AsyncMock()
         rows = [(uuid4(), uuid4()) for _ in range(3)]
         session.execute = AsyncMock(return_value=MagicMock(all=MagicMock(return_value=rows)))
 
-        refs, overflow = await list_evidence_ref_keys(session, source_id=uuid4(), limit=2, scope=SCOPE_KW["scope"])
+        refs, overflow = await _list_evidence_ref_keys(session, source_id=uuid4(), limit=2, scope=SCOPE_KW["scope"])
         assert overflow is True and refs == rows[:2]
 
 

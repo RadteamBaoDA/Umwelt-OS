@@ -1803,7 +1803,7 @@ async def ensure_demo_article(
     return (1, 0, 0) if result.created_version else (0, 1, 0)
 
 
-async def list_evidence_ref_keys(
+async def _list_evidence_ref_keys(
     session: AsyncSession, *, scope: Scope, source_id: UUID, document_id: UUID | None = None,
     limit: int = 10_000,
 ) -> tuple[list[tuple[UUID, UUID]], bool]:
@@ -2149,6 +2149,7 @@ async def source_cleanup_progress(
         DocumentCleanupOperation.membership_revision.is_(None),
         DocumentCleanupOperation.configuration_revision.is_(None),
         and_(DocumentCleanupOperation.status != "succeeded", or_(
+            DocumentCleanupOperation.actor_user_id != fence.user_id,
             DocumentCleanupOperation.membership_revision != fence.membership_revision,
             DocumentCleanupOperation.configuration_revision != fence.configuration_revision,
         )),
@@ -3830,7 +3831,7 @@ async def _prepare_cleanup_closure(
         ))
     identity_ids, over_identities = await _bounded_ids(
         session, select(NormalizedDocumentIdentity.id).where(*identity_where).order_by(NormalizedDocumentIdentity.id))
-    refs, over_refs = await list_evidence_ref_keys(session, scope=scope, source_id=source_id, document_id=document_id)
+    refs, over_refs = await _list_evidence_ref_keys(session, scope=scope, source_id=source_id, document_id=document_id)
     if over_documents or over_versions or over_chunks or over_provenance or over_identities or over_refs:
         return DocumentCleanupPreparationLimitError("documents")
     closure_o = await observations.observation_cleanup_ids(
@@ -3886,13 +3887,20 @@ async def _lock_cleanup_closure(
         ).order_by(Document.id).with_for_update())
     if closure.version_ids:
         await session.scalars(select(DocumentVersion.id).where(
-            DocumentVersion.id.in_(closure.version_ids)).order_by(DocumentVersion.id).with_for_update())
+            DocumentVersion.id.in_(closure.version_ids),
+            DocumentVersion.document_id.in_(select(Document.id).where(Document.workspace_id == workspace_id)),
+        ).order_by(DocumentVersion.id).with_for_update())
     if closure.chunk_ids:
         await session.scalars(select(DocumentChunk.id).where(
-            DocumentChunk.id.in_(closure.chunk_ids)).order_by(DocumentChunk.id).with_for_update())
+            DocumentChunk.id.in_(closure.chunk_ids),
+            DocumentChunk.document_version_id.in_(select(DocumentVersion.id).join(
+                Document, Document.id == DocumentVersion.document_id).where(Document.workspace_id == workspace_id)),
+        ).order_by(DocumentChunk.id).with_for_update())
     if closure.provenance_ids:
         await session.scalars(select(NormalizedVersionProvenance.id).where(
             NormalizedVersionProvenance.id.in_(closure.provenance_ids),
+            NormalizedVersionProvenance.document_id.in_(
+                select(Document.id).where(Document.workspace_id == workspace_id)),
         ).order_by(NormalizedVersionProvenance.id).with_for_update())
     # Materialize and order identities in PostgreSQL; the lock calls do not emit URI values to Python.
     scoped_document = " AND id = :document_id" if closure.document_id is not None else ""
@@ -4198,6 +4206,9 @@ async def delete_source_documents_in_uow(
     locked early. The retained capture must equal the held fences. More than 10,000 Documents
     raises the exact atomic-limit ValueError and an owner overflow raises the preparation limit
     error, both before any effect. No lock is taken here; no filesystem or cross-owner I/O occurs.
+    The closure is rediscovered here (the early closure cannot be carried through the frozen
+    signature), so the owners' held-apply "closure changed" compare is against this late
+    rediscovery; equality with the early lock set relies on the held Source lock serializing writers.
     """
     from modules.knowledge.observations import public as observations
 
