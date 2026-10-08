@@ -401,12 +401,12 @@ async def _observation_source_proof(
     mutation; callers cannot substitute a newer generation or membership.
     """
     if not isinstance(access_fence, AccessFence) or not isinstance(source_fence, SourceFence):
-        raise RuntimeError("observation_preparation_fence_required")
+        raise RuntimeError("observation_preparation_fence_required")  # noqa: TRY004 - fence contract raises RuntimeError by design
     if (source_fence.id != source_id or source_fence.workspace_id != scope.workspace_id
             or access_fence.workspace_id != scope.workspace_id or source_fence.generation != source_generation
             or source_fence.status != "active"):
         raise RuntimeError("observation_preparation_header_changed")
-    current_access = await read_access_fence(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    current_access = await workspaces.read_access_fence(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if current_access != access_fence:
         raise RuntimeError("observation_preparation_access_changed")
     current_source = await sources.get_source_fence(
@@ -493,7 +493,7 @@ async def prepare_ingestion_observation_keys(
         _validate_observation_key(key[0])
     keys = tuple(dict.fromkeys(keys))
     if not isinstance(source_fence, SourceFence):
-        raise RuntimeError("observation_preparation_fence_required")
+        raise RuntimeError("observation_preparation_fence_required")  # noqa: TRY004 - fence contract raises RuntimeError by design
     if not await _observation_source_proof(
         session, source_id, source_fence.generation, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         access_fence=access_fence, source_fence=source_fence,
@@ -531,7 +531,7 @@ async def upsert_from_ingestion(
                                              multi_workspace_enabled=multi_workspace_enabled)
     if (source_fence is None or source_fence.status != "active" or source_fence.generation != source_generation):
         return None
-    access_fence = await read_access_fence(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    access_fence = await workspaces.read_access_fence(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     await documents.prepare_normalized_document_keys(session, source_id, (external_id,), scope=scope,
         multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence)
     preparation = await prepare_ingestion_observation_keys(

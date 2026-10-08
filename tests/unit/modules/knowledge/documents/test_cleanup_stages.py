@@ -7,6 +7,7 @@ from uuid import uuid4
 from sqlalchemy.dialects import postgresql
 
 from modules.knowledge.documents import public, worker
+from tests.unit.modules.knowledge.documents.conftest import SCOPE_KW
 
 
 class _Session:
@@ -73,13 +74,13 @@ async def test_aggregate_sql_checks_every_stage_and_the_cache_obligation() -> No
 async def test_retained_receipt_fallback_resolves_version_document_from_cleanup_evidence() -> None:
     document_id, version_id = uuid4(), uuid4()
     session = _Session(scalar=document_id)
-    assert await public.cleanup_evidence_version_document(session, version_id) == document_id
+    assert await public.cleanup_evidence_version_document(session, version_id, **SCOPE_KW) == document_id
     sql = _sql(session.statement)
     assert "document_cleanup_evidence_reference" in sql and "document_cleanup_operation" in sql
     assert "reference_kind" in sql and "FOR UPDATE" not in sql  # immutable receipt read, no lock
     params = session.statement.compile().params.values()
     assert version_id in params and "version" in params
-    assert await public.cleanup_evidence_version_document(_Session(scalar=None), version_id) is None
+    assert await public.cleanup_evidence_version_document(_Session(scalar=None), version_id, **SCOPE_KW) is None
 
 
 def _factory(operation):

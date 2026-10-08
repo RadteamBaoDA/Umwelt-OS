@@ -83,7 +83,7 @@ from modules.knowledge.documents.schemas import (
 )
 from modules.sources import public as sources
 from modules.sources.models import Source
-from modules.sources.schemas import SourceExportFence, SourceFence
+from modules.sources.schemas import ConnectorSource, SourceExportFence, SourceFence
 
 if TYPE_CHECKING:
     from modules.connectors.public import ProviderScopeSnapshot
@@ -105,10 +105,10 @@ async def observability_quality_summary(
 
 # Explicit re-exports consumed by other modules (mypy strict forbids implicit re-export).
 __all__ = [
-    "NormalizedDocumentValidationRejected",
+    "EvidenceReferenceRead",
     "NormalizedDocumentKeyState",
     "NormalizedDocumentPreparation",
-    "EvidenceReferenceRead",
+    "NormalizedDocumentValidationRejected",
     "ObservationExportEvidenceCandidate",
     "ProviderRecordMetadata",
     "TimelineExportEvidenceCandidate",
@@ -1843,7 +1843,7 @@ async def backfill_current_chunks(session: AsyncSession, limit: int = 2, *, mult
             scope = (await sources.resolve_source_job_scope(
                 session, hint.source_id, multi_workspace_enabled=multi_workspace_enabled,
             )) if hint else None
-            if scope is None:
+            if hint is None or scope is None:
                 await session.rollback()
                 _log.warning("chunk backfill skipped version %s: no admissible scope", version_id)
                 continue
@@ -2531,7 +2531,7 @@ async def _normalized_source_proof(
     session: AsyncSession, source_id: UUID, source_generation: int, *,
     scope: Scope, multi_workspace_enabled: bool,
     access_fence: AccessFence, source_fence: SourceFence,
-) -> sources.ConnectorSource:
+) -> ConnectorSource:
     """Freshly compare complete original access/Source fences without taking locks.
 
     Owner public reads enforce real owner/default-workspace admission and a bound
@@ -2540,7 +2540,7 @@ async def _normalized_source_proof(
     membership/epoch rebasing, mutation, commit or remote I/O.
     """
     if not isinstance(access_fence, AccessFence) or not isinstance(source_fence, SourceFence):
-        raise RuntimeError("normalized_preparation_fence_required")
+        raise RuntimeError("normalized_preparation_fence_required")  # noqa: TRY004 - fence contract raises RuntimeError by design
     current_access = await read_access_fence(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
@@ -2620,7 +2620,7 @@ async def prepare_normalized_document_keys(
         raise ValueError("Normalized preparation requires at most32 exact external keys")
     external_ids = tuple(dict.fromkeys(external_ids))
     if not isinstance(source_fence, SourceFence):
-        raise RuntimeError("normalized_preparation_fence_required")
+        raise RuntimeError("normalized_preparation_fence_required")  # noqa: TRY004 - fence contract raises RuntimeError by design
     await _normalized_source_proof(
         session, source_id, source_fence.generation, scope=scope,
         multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence,
@@ -2753,7 +2753,7 @@ async def upsert_normalized_document_in_uow(
 
 
 async def _apply_normalized_document(
-    session: AsyncSession, payload: NormalizedDocumentInput, source_projection: sources.ConnectorSource,
+    session: AsyncSession, payload: NormalizedDocumentInput, source_projection: ConnectorSource,
     document: Document | None, identity: NormalizedDocumentIdentity | None, workspace_id: UUID,
 ) -> tuple[NormalizedDocumentResult, Document | None, NormalizedDocumentIdentity | None]:
     """Share validation-first immutable revisions and provider ranking under held roots.
@@ -3166,7 +3166,7 @@ async def prepare_uploaded_document_in_uow(
     the later initializer; no token, registry, placeholder, mutation, event or commit exists.
     """
     if not isinstance(source_fence, SourceFence):
-        raise RuntimeError("upload_original_fence_required")
+        raise RuntimeError("upload_original_fence_required")  # noqa: TRY004 - fence contract raises RuntimeError by design
     await _normalized_source_proof(session, source_id, source_fence.generation, scope=scope,
         multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence)
     documents, identities = await _upload_document_state(session, source_id=source_id,
@@ -3205,7 +3205,7 @@ async def add_uploaded_document(
     return UUID without commit/event/I/O. Caller owns atomic publication and raw rollback.
     """
     if not isinstance(source_fence, SourceFence):
-        raise RuntimeError("upload_original_fence_required")
+        raise RuntimeError("upload_original_fence_required")  # noqa: TRY004 - fence contract raises RuntimeError by design
     await _normalized_source_proof(session, source_id, source_fence.generation, scope=scope,
         multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence)
     documents, identities = await _upload_document_state(session, source_id=source_id,
@@ -3244,7 +3244,7 @@ async def _extraction_document(
     missing/moved/deleted/raw-input mismatch returns None before mutation.
     """
     if not isinstance(source_fence, SourceFence):
-        raise RuntimeError("extraction_original_fence_required")
+        raise RuntimeError("extraction_original_fence_required")  # noqa: TRY004 - fence contract raises RuntimeError by design
     await _normalized_source_proof(
         session, source_id, source_fence.generation, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         access_fence=access_fence, source_fence=source_fence,
@@ -3478,7 +3478,7 @@ def _decode_document_owner_cursor(
         raise HTTPException(status_code=422, detail="Invalid document cursor") from exc
     if payload[3:5] != [fence.membership_revision, fence.configuration_revision]:
         raise HTTPException(status_code=409, detail="Document page context changed")
-    return cast(str, payload[6])
+    return str(payload[6])
 
 
 async def list_documents(
