@@ -30,12 +30,12 @@ _CURSOR_KEYS = frozenset({HIGHLIGHT_CURSOR_KEY, BRIEF_CURSOR_KEY})
 
 
 async def _read_workspace_cursor(ctx: dict[str, object], key: str) -> UUID | None:
-    """Read a fixed identity cursor through the shared forward-only cursor store."""
+    """Read a fixed identity cursor through the shared stale-write-guarded cursor store."""
     return await worker_cursors.read_cursor(ctx, key, _CURSOR_KEYS)
 
 
 async def _write_workspace_cursor(ctx: dict[str, object], key: str, cursor: UUID | None) -> None:
-    """Write a fixed identity cursor through the shared forward-only cursor store."""
+    """Write a fixed identity cursor through the shared stale-write-guarded cursor store."""
     await worker_cursors.write_cursor(ctx, key, cursor, _CURSOR_KEYS)
 
 

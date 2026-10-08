@@ -48,23 +48,27 @@ async def read_cursor(ctx: dict[str, object], key: str, allowed: Collection[str]
         raise KeyError(key)
     state = _state(ctx)
     _, cursor = _parse(state.get(key))
+    gen = state.get(f"_gen:{key}", "0")  # recorded before the await: a concurrent write must not be masked
     redis = cast(Redis | None, ctx.get("redis"))
     if redis is not None and f"_unsynced:{key}" not in state:
         try:
             remote = await redis.get(key)
             if remote is not None:
                 remote_ok, remote_cursor = _parse(remote)
-                if remote_ok:
+                if remote_ok and state.get(f"_gen:{key}", "0") == gen:  # else keep the newer local value
                     cursor = remote_cursor
         except Exception:  # noqa: BLE001 - best-effort cursor store
             _log.debug("cursor read failed", exc_info=True)
-    state[key] = str(cursor) if cursor is not None else ""
-    cast(dict[str, str], ctx.setdefault(_GENS, {}))[key] = state.get(f"_gen:{key}", "0")
+    if state.get(f"_gen:{key}", "0") != gen:
+        _, cursor = _parse(state.get(key))
+    else:
+        state[key] = str(cursor) if cursor is not None else ""
+    cast(dict[str, str], ctx.setdefault(_GENS, {}))[key] = gen
     return cursor
 
 
 async def write_cursor(ctx: dict[str, object], key: str, cursor: UUID | None, allowed: Collection[str]) -> None:
-    """Forward-only write: skipped when another job wrote this key after this job read it."""
+    """Stale-write guard: the write is skipped when another job wrote this key after this job read it."""
     if key not in allowed:
         raise KeyError(key)
     state = _state(ctx)

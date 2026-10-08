@@ -3569,7 +3569,9 @@ async def update_document(
     return document
 
 
-async def delete_document(session: AsyncSession, document_id: UUID) -> DocumentCleanupOperation | None:
+async def delete_document(
+    session: AsyncSession, document_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+) -> DocumentCleanupOperation | None:
     """Commit access revocation, detached evidence IDs, and durable asynchronous cleanup stages.
 
     Lock order is Source then Document then raw-URI identity then normalized identity and
@@ -3641,6 +3643,7 @@ async def delete_document(session: AsyncSession, document_id: UUID) -> DocumentC
         await ingestion.tombstone_document_materializations(session, document.id)
     timeline_drafts = await _remove_graph_support(
         session, document_id=document_id, replay_source_id=source_id,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
     result = await session.scalars(
         delete(Document)
@@ -3756,6 +3759,8 @@ async def delete_source_documents(
     source_id: UUID,
     *,
     source_purge_operation_id: UUID,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> list[ReplayDraft]:
     """Capture exact cleanup children before deleting source-owned canonical data.
 
@@ -3772,7 +3777,9 @@ async def delete_source_documents(
     await _capture_source_document_cleanup(session, source_id, source_purge_operation_id)
     from modules.knowledge.observations import public as observations
     await observations.purge_source_in_uow(session, source_id)
-    timeline_drafts = await _remove_graph_support(session, source_id=source_id)
+    timeline_drafts = await _remove_graph_support(
+        session, source_id=source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     await session.execute(
         delete(NormalizedDocumentIdentity).where(NormalizedDocumentIdentity.source_id == source_id)
     )
@@ -3782,7 +3789,7 @@ async def delete_source_documents(
 
 async def _remove_graph_support(
     session: AsyncSession, *, document_id: UUID | None = None, source_id: UUID | None = None,
-    replay_source_id: UUID | None = None,
+    replay_source_id: UUID | None = None, scope: Scope, multi_workspace_enabled: bool,
 ) -> list[ReplayDraft]:
     """Remove evidence-backed graph and timeline support in source/document → entities → relationships → events order.
 
@@ -3811,10 +3818,13 @@ async def _remove_graph_support(
     )
     all_entity_ids = sorted(set(entity_ids) | set(relationship_entity_ids) | set(timeline_entity_ids), key=str)
     # Lock entity rows before relationship rows consistently with correction transactions.
-    await entities.lock_entity_ids(session, all_entity_ids)
-    await relationships.lock_relationship_ids(session, relationship_ids)
+    await entities.lock_entity_ids(
+        session, all_entity_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await relationships.lock_relationship_ids(
+        session, relationship_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     # Keep the cross-module lock order stable: event locks follow all graph locks.
-    await timeline.lock_event_ids(session, timeline_event_ids)
+    await timeline.lock_event_ids(
+        session, timeline_event_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     # Capture detached graph cleanup before any evidence/source cascade; this helper
     # performs no provider work and shares the caller's canonical deletion commit.
     await temporal.tombstone_scope(session, document_id=document_id, source_id=source_id)

@@ -28,3 +28,21 @@ async def test_review_routes_pass_scope_user(route: object, method: str) -> None
     with patch.object(routes, "KnowledgeService", service):
         await route(uuid4(), MagicMock(), AsyncMock(), MagicMock(owner_id=999), request, SCOPE)  # type: ignore[operator]
     assert target.call_args.kwargs["actor_id"] == 7
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fn", ["assign_review_candidate", "resolve_relationship_review"])
+async def test_review_service_rejects_foreign_actor_before_any_read_or_write(fn: str) -> None:
+    """A mismatching actor_id is a 403 straight after admission; the session is never touched."""
+    from fastapi import HTTPException
+
+    from modules.knowledge.entities import public
+
+    session = AsyncMock()
+    with patch.object(public, "_admit", AsyncMock(return_value=MagicMock())), pytest.raises(HTTPException) as err:
+        await getattr(public, fn)(
+            session, uuid4(), MagicMock(), scope=SCOPE, multi_workspace_enabled=False, actor_id=999,
+        )
+    assert err.value.status_code == 403
+    for name in ("scalar", "scalars", "execute", "add", "flush", "commit"):
+        getattr(session, name).assert_not_called()

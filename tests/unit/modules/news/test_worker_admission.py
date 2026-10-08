@@ -93,7 +93,7 @@ async def test_recovery_locks_access_fence_before_checkpoint_read() -> None:
     owner = SimpleNamespace(user_id=1, membership_revision=2)
     ctx = {"session_factory": MagicMock(return_value=cm), "redis": None, "w2_cursor_state": {},
            "settings": SimpleNamespace(multi_workspace_enabled=True)}
-    with patch.object(worker.documents, "list_ready_document_workspace_ids", AsyncMock(return_value=[]), create=True), \
+    with patch.object(worker.documents, "list_ready_document_workspace_ids", AsyncMock(return_value=[])), \
          patch.object(worker.workspaces, "resolve_workspace_owner_context", AsyncMock(return_value=owner)), \
          patch.object(worker.workspaces, "read_access_fence", AsyncMock(return_value=FENCE)), \
          patch.object(worker.workspaces, "lock_access_fence", lock), \

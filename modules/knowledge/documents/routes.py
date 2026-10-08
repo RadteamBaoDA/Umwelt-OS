@@ -284,10 +284,13 @@ async def update_document(
 
 @router.delete("/{document_id}", status_code=202, response_model=DocumentDeletionRead)
 async def delete_document(
-    document_id: UUID, session: Session, _owner: OwnerWrite
+    document_id: UUID, session: Session, request: Request, scope: WorkspaceWrite
 ) -> DocumentDeletionRead:
     """Revoke document access immediately and return its durable cleanup receipt."""
-    operation = await public.delete_document(session, document_id)
+    await _lock_document_write_request(request, session, scope)
+    operation = await public.delete_document(
+        session, document_id, scope=scope,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
     if operation is None:
         raise HTTPException(status_code=404, detail="Document not found")
     return DocumentDeletionRead(

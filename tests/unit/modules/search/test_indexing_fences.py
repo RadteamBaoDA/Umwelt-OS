@@ -338,12 +338,12 @@ class _DownRedis:
 
 
 async def test_cursor_falls_back_to_local_state_when_redis_down() -> None:
-    state: dict[str, object] = {}
+    ctx: dict[str, object] = {"redis": _DownRedis(), "w2_cursor_state": {}}
     first = uuid4()
-    await indexing._write_cursor(_DownRedis(), state, "search_discovery", "k", first)  # type: ignore[arg-type]
-    assert await indexing._read_cursor(_DownRedis(), state, "search_discovery", "k") == first  # type: ignore[arg-type]
-    await indexing._write_cursor(_DownRedis(), state, "search_discovery", "k", None)  # type: ignore[arg-type]
-    assert await indexing._read_cursor(_DownRedis(), state, "search_discovery", "k") is None  # type: ignore[arg-type]
+    await indexing.write_cursor(ctx, indexing.AUTO_INDEX_CURSOR_KEY, first, indexing._CURSOR_KEYS)
+    assert await indexing.read_cursor(ctx, indexing.AUTO_INDEX_CURSOR_KEY, indexing._CURSOR_KEYS) == first
+    await indexing.write_cursor(ctx, indexing.AUTO_INDEX_CURSOR_KEY, None, indexing._CURSOR_KEYS)
+    assert await indexing.read_cursor(ctx, indexing.AUTO_INDEX_CURSOR_KEY, indexing._CURSOR_KEYS) is None
 
 
 async def test_denied_oldest_row_does_not_block_next(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -379,7 +379,7 @@ async def test_denied_oldest_row_does_not_block_next(monkeypatch: pytest.MonkeyP
     assert done == 4
     assert attempts == [denied[0], eligible[0]]
     # cursor advanced to the processed subject and survives Redis loss in the shared state.
-    assert ctx["w2_cursor_state"]["search_queued"] == str(eligible[1])  # type: ignore[index]
+    assert ctx["w2_cursor_state"][indexing.QUEUED_INDEX_CURSOR_KEY] == str(eligible[1])  # type: ignore[index]
 
 
 # ---- SRCH-R1: cursor survives ARQ's per-job ctx copy; local state wins until a write syncs ------
@@ -441,13 +441,6 @@ async def test_cursor_advances_across_arq_ctx_copies(
     assert afters[0] in (None, _STALE) and afters[1] == ids[1]
     state = base["w2_cursor_state"]
     assert isinstance(state, dict) and all(isinstance(v, str) for v in state.values())
-
-
-async def test_missing_cursor_state_is_not_created_on_demand(caplog: pytest.LogCaptureFixture) -> None:
-    ctx: dict[str, object] = {}
-    with caplog.at_level("WARNING"):
-        indexing._cursor_state(ctx)
-    assert "w2_cursor_state" not in ctx and "missing" in caplog.text
 
 
 # ---- SRCH-R2: distinguishable denial causes -----------------------------------------------

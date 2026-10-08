@@ -30,12 +30,12 @@ _CURSOR_KEYS = frozenset({RECOVERY_CURSOR_KEY, RECOVERY_INIT_CURSOR_KEY})
 
 
 async def _read_cursor(ctx: dict[str, object], key: str) -> UUID | None:
-    """Read a fixed recovery cursor through the shared forward-only cursor store."""
+    """Read a fixed recovery cursor through the shared stale-write-guarded cursor store."""
     return await worker_cursors.read_cursor(ctx, key, _CURSOR_KEYS)
 
 
 async def _write_cursor(ctx: dict[str, object], key: str, cursor: UUID | None) -> None:
-    """Write a fixed recovery cursor through the shared forward-only cursor store."""
+    """Write a fixed recovery cursor through the shared stale-write-guarded cursor store."""
     await worker_cursors.write_cursor(ctx, key, cursor, _CURSOR_KEYS)
 
 

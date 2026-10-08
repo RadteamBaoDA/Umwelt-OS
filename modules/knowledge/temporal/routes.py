@@ -41,7 +41,7 @@ def _flag(request: Request) -> bool:
 
 def _service(session: AsyncSession, request: Request, scope: WorkspaceContext) -> KnowledgeService:
     """Compose the scoped facade (frozen constructor): every delegated call carries scope and gate."""
-    return KnowledgeService(session, scope=scope, multi_workspace_enabled=_flag(request))  # type: ignore[call-arg]
+    return KnowledgeService(session, scope=scope, multi_workspace_enabled=_flag(request))
 
 
 @router.get("/api/v1/system/graph/status", response_model=list[GraphStatus])

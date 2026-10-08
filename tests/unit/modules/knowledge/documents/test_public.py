@@ -341,5 +341,5 @@ class TestRetentionAndDeletionValidation:
         session = AsyncMock()
         session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
 
-        deleted = await delete_document(session, document_id=uuid4())
+        deleted = await delete_document(session, document_id=uuid4(), scope=MagicMock(), multi_workspace_enabled=False)
         assert deleted is None

@@ -19,6 +19,7 @@ from core.model_gateway.client import ModelGateway, ModelGatewayError, PrivacyPo
 from core.model_gateway.policy import may_send
 from core.model_gateway.schemas import AIExecutionConfig, ModelMapping, RequestPolicy
 from core.realtime import commit_with_replay, make_index_change
+from core.worker_cursors import STATE_KEY, read_cursor, write_cursor
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
 from modules.knowledge.documents import public as documents
@@ -32,6 +33,7 @@ MAX_VECTOR_DIMENSIONS = 2000  # pgvector HNSW vector index limit.
 AUTO_INDEX_CURSOR_KEY = "search:auto:generation-cursor"
 ACTIVE_INDEX_CURSOR_KEY = "search:index:generation-cursor"
 QUEUED_INDEX_CURSOR_KEY = "search:index:queued-cursor"
+_CURSOR_KEYS = frozenset({AUTO_INDEX_CURSOR_KEY, ACTIVE_INDEX_CURSOR_KEY, QUEUED_INDEX_CURSOR_KEY})
 SCAN_PAGE = 20  # identities scanned per status class per invocation; bounds skip cost
 AUTO_INDEX_RETRY_DELAY = timedelta(minutes=15)
 logger = logging.getLogger(__name__)
@@ -347,53 +349,9 @@ async def create_generation_for_authority(
     )
 
 
-def _cursor_state(ctx: dict[str, object]) -> dict[str, str]:
-    """Return the worker-installed cursor dict; ARQ copies ctx per job, so never create one here."""
-    state = ctx.get("w2_cursor_state")
-    if not isinstance(state, dict):
-        logger.warning("w2_cursor_state missing from worker ctx; search cursors have no local fallback")
-        return {}  # per-job throwaway
-    return cast(dict[str, str], state)
-
-
-# ponytail: local twin of the shared W2-N cursor helper (same "_unsynced:<name>" semantics); replaced by core.worker_cursors at composition.
-async def _read_cursor(redis: Redis, state: dict[str, str], name: str, key: str) -> UUID | None:
-    """Read a keyset cursor; local state wins until a Redis write has succeeded again."""
-    raw: str | None = state.get(name)
-    if f"_unsynced:{name}" not in state:
-        try:
-            value = await redis.get(key)
-            if value:
-                raw = value.decode() if isinstance(value, bytes) else str(value)
-        except (RedisError, UnicodeDecodeError):
-            pass
-    try:
-        return UUID(str(raw)) if raw else None
-    except ValueError:
-        return None
-
-
-async def _write_cursor(
-    redis: Redis, state: dict[str, str], name: str, key: str, value: UUID | None,
-) -> None:
-    """Persist a cursor locally always and to Redis best effort, tracking unsynced names."""
-    if value is None:
-        state.pop(name, None)
-    else:
-        state[name] = str(value)
-    try:
-        if value is None:
-            await redis.delete(key)
-        else:
-            await redis.set(key, str(value))
-        state.pop(f"_unsynced:{name}", None)
-    except RedisError:
-        state[f"_unsynced:{name}"] = "1"
-
-
 async def _reconcile_automatic_generations(
     factory: async_sessionmaker[AsyncSession], settings: Settings, redis: Redis,
-    state: dict[str, str],
+    ctx: dict[str, object],
 ) -> None:
     """Create eligible per-workspace generations from bounded identity-only Documents discovery.
 
@@ -403,7 +361,7 @@ async def _reconcile_automatic_generations(
     retry. Unsupported or unconfigured work remains pending; this reconciliation never calls a
     provider or sends document content. The cursor survives Redis loss in worker-local state.
     """
-    after = await _read_cursor(redis, state, "search_discovery", AUTO_INDEX_CURSOR_KEY)
+    after = await read_cursor(ctx, AUTO_INDEX_CURSOR_KEY, _CURSOR_KEYS)
     async with factory() as session:
         workspace_ids = await documents.list_indexable_workspace_ids(session, after=after, limit=100)
         await session.rollback()
@@ -412,7 +370,7 @@ async def _reconcile_automatic_generations(
             workspace_ids = await documents.list_indexable_workspace_ids(session, limit=100)
             await session.rollback()
     if not workspace_ids:
-        await _write_cursor(redis, state, "search_discovery", AUTO_INDEX_CURSOR_KEY, None)
+        await write_cursor(ctx, AUTO_INDEX_CURSOR_KEY, None, _CURSOR_KEYS)
         return
 
     for workspace_id in workspace_ids:
@@ -451,7 +409,7 @@ async def _reconcile_automatic_generations(
                 continue
             raise
         finally:
-            await _write_cursor(redis, state, "search_discovery", AUTO_INDEX_CURSOR_KEY, workspace_id)
+            await write_cursor(ctx, AUTO_INDEX_CURSOR_KEY, workspace_id, _CURSOR_KEYS)
 
 
 async def _candidate_page(
@@ -487,19 +445,20 @@ async def index_pending_chunks(ctx: dict[str, object]) -> int:
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     redis = cast(Redis, ctx["redis"])
     settings = cast(Settings, ctx["settings"])
-    state = _cursor_state(ctx)
+    # ARQ copies ctx per job: without the worker-installed dict this is a per-job throwaway.
+    state = cast(dict[str, str], ctx.setdefault(STATE_KEY, {}))
     async with factory() as session:
         await documents.backfill_current_chunks(session, multi_workspace_enabled=settings.multi_workspace_enabled)
-    await _reconcile_automatic_generations(factory, settings, redis, state)
+    await _reconcile_automatic_generations(factory, settings, redis, ctx)
 
     classes = [
-        ("search_queued", QUEUED_INDEX_CURSOR_KEY, ("queued", "running")),
-        ("search_active", ACTIVE_INDEX_CURSOR_KEY, ("active",)),
+        (QUEUED_INDEX_CURSOR_KEY, ("queued", "running")),
+        (ACTIVE_INDEX_CURSOR_KEY, ("active",)),
     ]
     turn = 1 if state.get("search_class_turn") == "1" else 0
     state["search_class_turn"] = str(1 - turn)  # alternate which class goes first each invocation
-    for name, key, statuses in classes[turn:] + classes[:turn]:
-        after = await _read_cursor(redis, state, name, key)
+    for key, statuses in classes[turn:] + classes[:turn]:
+        after = await read_cursor(ctx, key, _CURSOR_KEYS)
         last: UUID | None = None
         done: int | None = None
         for generation_id, workspace_id in await _candidate_page(factory, statuses, after):
@@ -508,7 +467,7 @@ async def index_pending_chunks(ctx: dict[str, object]) -> int:
             if done is not None:
                 break
         if last is not None:
-            await _write_cursor(redis, state, name, key, last)
+            await write_cursor(ctx, key, last, _CURSOR_KEYS)
         if done is not None:
             return done
     return 0
