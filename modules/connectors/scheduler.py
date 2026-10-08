@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from core.config import Settings
 from core.workspaces.models import WorkspaceMembership
 from core.workspaces.schemas import InternalJobScope, Scope
-from modules.connectors import provisioning
+from modules.connectors import provider_terms, provisioning
 from modules.connectors import public as connectors
 from modules.connectors.collection_schemas import (
     CollectionAdmissionRead,
@@ -150,8 +150,11 @@ async def _open_request(
         .with_for_update().execution_options(populate_existing=True))
     if schedule is not None and schedule.blocked_error_code is not None:
         raise HTTPException(status_code=409, detail=f"Action required: {schedule.blocked_error_code}")
+    # Terms/eligibility gate for manual, scheduled and retry alike, before any queueing or network.
+    terms_revision = await provider_terms.require_terms_eligible(session, source)
     if active is not None and active.status == "queued" and (
-        active.source_generation != source.generation or active.connector_revision != row.desired_revision
+        active.terms_revision != terms_revision
+        or active.source_generation != source.generation or active.connector_revision != row.desired_revision
         or active.backend_revision != row.backend_revision or active.captured_backend != row.execution_backend
     ):
         active.status, active.error_code = "cancelled", "revision_changed"
@@ -176,7 +179,7 @@ async def _open_request(
         membership_revision=scope.membership_revision, trigger=trigger,
         source_generation=source.generation, connector_revision=row.desired_revision,
         backend_revision=row.backend_revision, captured_backend=row.execution_backend,
-        status="queued", attempt=0, available_at=now, enqueue_next_at=now,
+        status="queued", attempt=0, available_at=now, enqueue_next_at=now, terms_revision=terms_revision,
     )
     session.add(request)
     await session.flush()
@@ -245,7 +248,7 @@ async def _stale_reason(
     ):
         return "source_inactive"
     if not (
-        getattr(source, "generation") == request.source_generation
+        source.generation == request.source_generation
         and row.source_generation == request.source_generation
         and row.applied_revision == row.desired_revision == request.connector_revision
         and row.execution_backend == request.captured_backend
