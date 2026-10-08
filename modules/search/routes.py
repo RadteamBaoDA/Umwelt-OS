@@ -101,6 +101,7 @@ async def search(
     return await public.search(
         session, request.app.state.redis, request.app.state.settings, payload,
         scope=workspace, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        release_during_embed=True,
     )
 
 
