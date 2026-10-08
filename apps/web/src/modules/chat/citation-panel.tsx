@@ -121,7 +121,7 @@ export function CitationPanel({
                 <span className="font-semibold text-foreground line-clamp-1">
                   [{idx + 1}] {citation.title}
                 </span>
-                <div className="flex items-center gap-1.5 shrink-0">
+                <div className="flex items-center gap-2 shrink-0">
                   <Link
                     href={docHref}
                     className="inline-flex items-center gap-1 text-xs text-primary hover:underline font-medium"

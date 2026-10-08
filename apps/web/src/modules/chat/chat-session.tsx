@@ -63,7 +63,7 @@ const SELECTION_ERROR_KEYS: Record<string, string> = {
 function chatFailureKey(err: unknown, fallback: string): string {
   if (!(err instanceof ApiError)) return fallback;
   console.warn('Chat request failed', err.status, err.code, err.message);
-  if (err.code && SELECTION_ERROR_KEYS[err.code]) return SELECTION_ERROR_KEYS[err.code];
+  if (err.code && Object.hasOwn(SELECTION_ERROR_KEYS, err.code)) return SELECTION_ERROR_KEYS[err.code];
   if (err.status === 401) return 'sessionExpired';
   if (err.status === 409) return 'errorConflict';
   if (err.status >= 500) return 'errorService';
@@ -326,12 +326,12 @@ export function ChatSession({
           }).catch(() => undefined);
         }
       },
-      onError: (streamError) => {
+      onError: () => {
         if (!abortCtrl.signal.aborted && isCurrentView()) {
           setIsStreaming(false);
           setIsPending(false);
           setActiveResponseId(null);
-          setError(streamError.message || t('errorSending'));
+          setError(t('errorSending'));
         }
       },
     });
@@ -642,7 +642,7 @@ export function ChatSession({
           setIsStreaming(false);
           setActiveResponseId(null);
           // Selection failures are identified by the server's machine code (never by message text) and keep the draft.
-          const selectionFailure = selectionStage && selItems.length > 0 && err instanceof ApiError && !!err.code && err.code in SELECTION_ERROR_KEYS;
+          const selectionFailure = selectionStage && selItems.length > 0 && err instanceof ApiError && !!err.code && Object.hasOwn(SELECTION_ERROR_KEYS, err.code);
           if (selectionFailure) chatCtrl.setDraft(content);
           const errMsg = err instanceof LocalizedError
             ? err.message
