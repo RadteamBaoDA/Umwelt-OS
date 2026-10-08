@@ -1025,6 +1025,8 @@ class ReadyVersionRef:
     version_number: int
     created_at: datetime
     local_only: bool
+    raw_uri: str | None
+    mime_type: str | None
 
 
 @dataclass(frozen=True)
@@ -4029,6 +4031,7 @@ async def list_ready_version_refs(
         select(
             Document.id, Document.created_at, Source.id, Source.generation,
             DocumentVersion.id, DocumentVersion.version_number, Source.local_only,
+            Document.raw_uri, Document.mime_type,
         )
         .join(DocumentVersion, DocumentVersion.document_id == Document.id)
         .join(Source, Source.id == Document.source_id)
@@ -4053,8 +4056,9 @@ async def list_ready_version_refs(
     result = [ReadyVersionRef(
         document_id=document_id, document_version_id=version_id, source_id=source_id,
         source_generation=generation, version_number=version_number, created_at=created_at,
-        local_only=local_only,
-    ) for document_id, created_at, source_id, generation, version_id, version_number, local_only in rows]
+        local_only=local_only, raw_uri=raw_uri, mime_type=mime_type,
+    ) for (document_id, created_at, source_id, generation, version_id, version_number, local_only,
+           raw_uri, mime_type) in rows]
     next_cursor = (_encode_document_owner_cursor(
         encode_cursor(rows[-1][1], rows[-1][0]), kind="ready_versions",
         fence=access_fence, resource_id=None,
@@ -4071,6 +4075,7 @@ async def get_ready_version_ref(
         select(
             Document.id, Document.created_at, Source.id, Source.generation,
             DocumentVersion.id, DocumentVersion.version_number, Source.local_only,
+            Document.raw_uri, Document.mime_type,
         )
         .join(DocumentVersion, DocumentVersion.document_id == Document.id)
         .join(Source, Source.id == Document.source_id)
@@ -4086,11 +4091,12 @@ async def get_ready_version_ref(
     )).one_or_none()
     if row is None:
         return None
-    document_id, created_at, source_id, generation, actual_version_id, version_number, local_only = row
+    (document_id, created_at, source_id, generation, actual_version_id, version_number, local_only,
+     raw_uri, mime_type) = row
     return ReadyVersionRef(
         document_id=document_id, document_version_id=actual_version_id, source_id=source_id,
         source_generation=generation, version_number=version_number,
-        created_at=created_at, local_only=local_only,
+        created_at=created_at, local_only=local_only, raw_uri=raw_uri, mime_type=mime_type,
     )
 
 
