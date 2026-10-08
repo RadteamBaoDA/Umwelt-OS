@@ -3,7 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertCircle, Bell, Eye, Plus, RotateCw } from 'lucide-react';
 import { useTranslations } from 'next-intl';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -79,6 +79,8 @@ function RuleList({ def }: { def: GadgetDefinition }) {
   const [isNew, setIsNew] = useState(false);
   const [touched, setTouched] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [deleted, setDeleted] = useState(false);
+  const addRuleRef = useRef<HTMLButtonElement>(null);
   const rules = def.highlight_rules ?? [];
   const usage = useQuery({ queryKey: [...dashboardKeys.definition(def.id), 'usage'], queryFn: ({ signal }) => getGadgetDefinitionUsage(def.id, signal) });
   const usageNames = (usage.data ?? []).map((item) => item.name).join(', ');
@@ -89,13 +91,15 @@ function RuleList({ def }: { def: GadgetDefinition }) {
   const matches = useQuery({ queryKey: [...dashboardKeys.definition(def.id), 'highlights', def.revision], queryFn: () => evaluateGadgetHighlights(def.id) });
   const write = useMutation({
     mutationFn: (next: HighlightRule[]) => patchGadgetDefinition(def.id, { expected_revision: def.revision, highlight_rules: next }, session.csrfToken),
-    onSuccess: () => { setEditing(null); setDeleteId(null); setTouched(false); void client.invalidateQueries({ queryKey: dashboardKeys.definitions }); },
+    onSuccess: () => { setDeleted(deleteId !== null); setEditing(null); setDeleteId(null); setTouched(false); void client.invalidateQueries({ queryKey: dashboardKeys.definitions }); },
   });
   const keywords = editing ? parseKeywordList(editing.keywords) : [];
   const cooldownNumber = Number(editing?.cooldown ?? 0);
   const deliveryValid = Number.isInteger(cooldownNumber) && cooldownNumber >= 0 && cooldownNumber <= MAX_COOLDOWN
     && Boolean(editing?.quietStart) === Boolean(editing?.quietEnd) && (!editing?.quietStart || editing.quietStart !== editing.quietEnd);
-  const valid = (keywords.length >= 1 || (editing?.topicIds.length ?? 0) >= 1) && keywords.length <= 16 && (editing?.topicIds.length ?? 0) <= MAX_TOPICS && deliveryValid;
+  const keywordsValid = (keywords.length >= 1 || (editing?.topicIds.length ?? 0) >= 1) && keywords.length <= 16;
+  const topicsValid = (editing?.topicIds.length ?? 0) <= MAX_TOPICS;
+  const valid = keywordsValid && topicsValid && deliveryValid;
   /** Persists the edited rule, replacing an existing rule by id or appending a new one. */
   const saveRule = () => {
     setTouched(true);
@@ -104,7 +108,7 @@ function RuleList({ def }: { def: GadgetDefinition }) {
     write.mutate(isNew ? [...rules, rule] : rules.map((item) => (item.id === rule.id ? rule : item)));
   };
   const open = (rule: HighlightRule | null) => {
-    setTouched(false); write.reset(); preview.reset(); setIsNew(rule === null);
+    setTouched(false); setDeleted(false); write.reset(); preview.reset(); setIsNew(rule === null);
     const sourceModes: Record<string, SourceMode> = {};
     rule?.source_ids?.forEach((id) => { sourceModes[id] = 'only'; });
     rule?.exclude_source_ids?.forEach((id) => { sourceModes[id] = 'exclude'; });
@@ -113,8 +117,11 @@ function RuleList({ def }: { def: GadgetDefinition }) {
   return <div className="space-y-4">
     <div className="flex items-center justify-between gap-2">
       <h3 className="font-semibold">{t('rulesListLabel')}</h3>
-      <Button type="button" className="secondary" disabled={write.isPending} onClick={() => open(null)}><Plus className="size-4" aria-hidden="true" /> {t('addRule')}</Button>
+      <Button ref={addRuleRef} type="button" className="secondary" disabled={write.isPending} onClick={() => open(null)}><Plus className="size-4" aria-hidden="true" /> {t('addRule')}</Button>
     </div>
+    <p role="status" className="sr-only">{deleted ? t('ruleDeleted') : ''}</p>
+    {usage.isError && <p className="muted rounded-lg border border-border p-3" role="status">{t('ruleUsageError')}</p>}
+    {sources.isError && <p className="muted text-xs" role="status">{t('ruleSourcesError')}</p>}
     {usageNames && <p className="muted rounded-lg border border-border p-3" role="status">{t('usageWarn', { count: usage.data?.length ?? 0, names: usageNames })}</p>}
     {rules.length === 0 && !editing && <p className="muted">{t('noRules')}</p>}
     <ul aria-label={t('rulesListLabel')} className="space-y-2">{rules.map((rule) => <li key={rule.id} className="flex flex-wrap items-center gap-2 rounded-lg border border-border p-3">
@@ -127,8 +134,10 @@ function RuleList({ def }: { def: GadgetDefinition }) {
     {editing && <form className="space-y-3 rounded-lg border border-border p-4" aria-label={isNew ? t('ruleNew') : t('ruleTitle')} onSubmit={(event) => { event.preventDefault(); saveRule(); }}>
       <fieldset disabled={write.isPending} className="space-y-3">
         <h3 className="font-semibold">{isNew ? t('ruleNew') : t('ruleTitle')}</h3>
-        <label className="field"><span className="label">{t('ruleKeywords')}</span><Input value={editing.keywords} aria-invalid={touched && !valid} onChange={(event) => setEditing({ ...editing, keywords: event.target.value })} /><span className="muted text-xs">{t('ruleKeywordsHelp')}</span>{touched && !valid && <span className="error" role="alert">{t('ruleNeedsCondition')}</span>}</label>
+        <div className="field"><label htmlFor="rule-keywords" className="label">{t('ruleKeywords')}</label><Input id="rule-keywords" value={editing.keywords} aria-invalid={touched && !keywordsValid} aria-describedby={touched && !keywordsValid ? 'rule-keywords-help rule-keywords-error' : 'rule-keywords-help'} onChange={(event) => setEditing({ ...editing, keywords: event.target.value })} /><span id="rule-keywords-help" className="muted text-xs">{t('ruleKeywordsHelp')}</span>{touched && !keywordsValid && <span id="rule-keywords-error" className="error" role="alert">{t('ruleNeedsCondition')}</span>}</div>
         <fieldset className="field"><legend className="label">{t('ruleTopics')}</legend><span className="muted text-xs">{t('ruleTopicsHelp')}</span>
+          {topics.isPending && <span className="muted" role="status">{t('ruleTopicsLoading')}</span>}
+          {topics.isError && <span className="error" role="alert">{t('ruleTopicsError')} <Button type="button" className="secondary" onClick={() => topics.refetch()}>{t('retry')}</Button></span>}
           {topics.isSuccess && topics.data.length === 0 && editing.topicIds.length === 0 && <span className="muted">{t('ruleTopicsNone')}</span>}
           {topics.isSuccess && topics.data.map((topic) => <label key={topic.id} className="flex items-center gap-2"><Checkbox checked={editing.topicIds.includes(topic.id)} onCheckedChange={(checked) => setEditing({ ...editing, topicIds: checked === true ? [...editing.topicIds, topic.id] : editing.topicIds.filter((id) => id !== topic.id) })} /> {topic.name}</label>)}
           {topics.isSuccess && editing.topicIds.filter((id) => !topics.data.some((topic) => topic.id === id)).map((id) => <div key={id} className="flex items-center gap-2"><span className="muted min-w-0 flex-1">{t('ruleTopicUnavailable')}</span><Button type="button" className="secondary" onClick={() => setEditing({ ...editing, topicIds: editing.topicIds.filter((value) => value !== id) })}>{t('ruleTopicRemove')}</Button></div>)}
@@ -136,7 +145,7 @@ function RuleList({ def }: { def: GadgetDefinition }) {
         </fieldset>
         {(def.source_ids.length > 1 || Object.values(editing.sourceModes).some((mode) => mode !== 'any')) && <fieldset className="field"><legend className="label">{t('ruleSources')}</legend><span className="muted text-xs">{t('ruleSourcesHelp')}</span>
           {def.source_ids.map((id) => <div key={id} className="flex flex-wrap items-center gap-2"><span className="min-w-0 flex-1">{sourceName(id)}</span>
-            <Select value={editing.sourceModes[id] ?? 'any'} onValueChange={(value) => setEditing({ ...editing, sourceModes: { ...editing.sourceModes, [id]: value as SourceMode } })}><SelectTrigger aria-label={`${t('ruleSourceMode')}: ${sourceName(id)}`} className="w-40"><SelectValue /></SelectTrigger><SelectContent>{(Object.keys(sourceModeKeys) as SourceMode[]).map((mode) => <SelectItem key={mode} value={mode}>{t(sourceModeKeys[mode])}</SelectItem>)}</SelectContent></Select></div>)}
+            <Select value={editing.sourceModes[id] ?? 'any'} onValueChange={(value) => setEditing({ ...editing, sourceModes: { ...editing.sourceModes, [id]: value as SourceMode } })}><SelectTrigger aria-label={t('ruleSourceModeFor', { name: sourceName(id) })} className="w-40"><SelectValue /></SelectTrigger><SelectContent>{(Object.keys(sourceModeKeys) as SourceMode[]).map((mode) => <SelectItem key={mode} value={mode}>{t(sourceModeKeys[mode])}</SelectItem>)}</SelectContent></Select></div>)}
         </fieldset>}
         <label className="field max-w-xs"><span className="label">{t('severity')}</span>
           <Select value={editing.severity} onValueChange={(value) => setEditing({ ...editing, severity: value as Severity })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{(Object.keys(severityKeys) as Severity[]).map((item) => <SelectItem key={item} value={item}>{t(severityKeys[item])}</SelectItem>)}</SelectContent></Select></label>
@@ -175,7 +184,7 @@ function RuleList({ def }: { def: GadgetDefinition }) {
     </section>
     {write.error && !editing && <p className="error" role="alert">{t((highlightRuleErrorKey(write.error) ?? apiFailureKey(write.error) ?? 'saveFailed') as 'saveFailed')}</p>}
     <AlertDialog open={deleteId !== null} onOpenChange={(value) => { if (!value) setDeleteId(null); }}>
-      <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{t('deleteRuleTitle')}</AlertDialogTitle><AlertDialogDescription>{t('deleteRuleBody')}{usageNames && ` ${t('usageDelete', { names: usageNames })}`}</AlertDialogDescription></AlertDialogHeader>
+      <AlertDialogContent onCloseAutoFocus={(event) => { event.preventDefault(); addRuleRef.current?.focus(); }}><AlertDialogHeader><AlertDialogTitle>{t('deleteRuleTitle')}</AlertDialogTitle><AlertDialogDescription>{usageNames ? t('deleteRuleBodyUsed', { names: usageNames }) : t('deleteRuleBody')}</AlertDialogDescription></AlertDialogHeader>
         <AlertDialogFooter><AlertDialogCancel>{t('cancelRule')}</AlertDialogCancel><AlertDialogAction onClick={() => write.mutate(rules.filter((item) => item.id !== deleteId))}>{t('deleteRule')}</AlertDialogAction></AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
