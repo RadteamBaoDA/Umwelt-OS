@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 
 from core.workspaces.schemas import AccessFence
 
@@ -211,3 +211,17 @@ class OperationRead(BaseModel):
     memory_error_code: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class SourcePurgeJobIdentity(BaseModel):
+    """Exact retained purge authority tuple captured at operation creation; never raw URIs."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    operation_id: UUID
+    workspace_id: UUID
+    actor_user_id: StrictInt = Field(gt=0)
+    membership_revision: StrictInt = Field(gt=0)
+    configuration_revision: StrictInt = Field(gt=0)
+    source_id: UUID
+    source_generation: StrictInt = Field(gt=0)

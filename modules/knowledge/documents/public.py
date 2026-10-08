@@ -51,6 +51,8 @@ from modules.knowledge.documents.models import (
 )
 from modules.knowledge.documents.schemas import (
     PROVIDER_IDS,
+    DocumentCleanupJobIdentity,  # noqa: F401 - owner re-export used by D2a-3 readers
+    DocumentCleanupPreparationLimitError,  # noqa: F401 - re-export consumed by modules.sources.worker
     DocumentCreate,
     DocumentExportFence,
     DocumentExportFenceValidation,

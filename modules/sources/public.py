@@ -11,6 +11,7 @@ from uuid import UUID, uuid4
 
 from fastapi import HTTPException
 from sqlalchemy import ColumnElement, Integer, Select, and_, case, cast, desc, func, select, tuple_
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
@@ -35,6 +36,7 @@ from modules.sources.schemas import (
     SourceMetadataExportPage,
     SourceMetadataExportValidation,
     SourcePatch,
+    SourcePurgeJobIdentity,
     SourceRead,
 )
 
@@ -1344,6 +1346,7 @@ async def start_source_purge(
     operation = SourcePurgeOperation(
         workspace_id=scope.workspace_id, actor_user_id=scope.user_id,
         membership_revision=scope.membership_revision,
+        configuration_revision=access_fence.configuration_revision,
         source_id=source_id, generation=source.generation, raw_uris=[],
         pending_owner_codes=["documents"],
     )
@@ -1412,6 +1415,38 @@ async def list_source_purge_observer_ids(
     return tuple((await session.scalars(statement.order_by(SourcePurgeOperation.id).limit(limit))).all())
 
 
+async def discover_source_purge_observer_ids(
+    session: AsyncSession, *, workspace_id: UUID, source_id: UUID, after: UUID | None = None, limit: int = 100,
+) -> tuple[UUID, ...]:
+    """Identity-only keyset discovery of open purge operation IDs for one Source (IDs only).
+
+    Deliberately carries no membership/generation predicate or authority: a historical or
+    other-epoch operation is only a wakeup candidate; every ID is admitted by its own exact
+    resolver in a fresh session before any effect. No route exposes this.
+    """
+    if not 1 <= limit <= 100:
+        raise ValueError("Source observer page size must be between 1 and 100")
+    statement = select(SourcePurgeOperation.id).where(
+        SourcePurgeOperation.workspace_id == workspace_id, SourcePurgeOperation.source_id == source_id,
+        *_open_coverage_operations(),
+    )
+    if after is not None:
+        statement = statement.where(SourcePurgeOperation.id > after)
+    return tuple((await session.scalars(statement.order_by(SourcePurgeOperation.id).limit(limit))).all())
+
+
+def coverage_settled_exclusion() -> ColumnElement[bool]:
+    """Exclude a failed purge only when Memory is done AND every child coverage has settled."""
+    return ~and_(
+        SourcePurgeOperation.status == "failed",
+        SourcePurgeOperation.memory_status == "succeeded",
+        SourcePurgeOperation.memory_cache_pending.is_(False),
+        SourcePurgeOperation.pending_child_count.is_not(None),  # NULL = unsettled, never NULL-propagating
+        SourcePurgeOperation.pending_child_count == 0,
+        SourcePurgeOperation.pending_owner_codes == cast([], JSONB),
+    )
+
+
 async def pending_source_coverage_ids(
     session: AsyncSession, *, scope: InternalJobScope, multi_workspace_enabled: bool, after: UUID | None = None, limit: int = 100,
 ) -> tuple[UUID, ...]:
@@ -1421,16 +1456,11 @@ async def pending_source_coverage_ids(
     await _admit_source_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if not 1 <= limit <= 100:
         raise ValueError("Source coverage reconciliation page size must be between 1 and 100")
-    # A failed purge whose Memory stage is done is terminal for polling; it re-settles only through
-    # Documents/observer wakeups, which still select it via _open_coverage_operations.
+    # A failed purge stays eligible while any child coverage is unsettled (wakeups are not crash-safe).
     statement = select(SourcePurgeOperation.id).where(
         *_open_coverage_operations(),
         *_operation_scope(scope),
-        ~and_(
-            SourcePurgeOperation.status == "failed",
-            SourcePurgeOperation.memory_status == "succeeded",
-            SourcePurgeOperation.memory_cache_pending.is_(False),
-        ),
+        coverage_settled_exclusion(),
     )
     if after is not None:
         statement = statement.where(SourcePurgeOperation.id > after)
@@ -1708,32 +1738,56 @@ async def resolve_source_job_scope(
     return scope if current is not None else None
 
 
-async def read_source_purge_job_identity(
+async def read_source_purge_job_capture(
     session: AsyncSession, operation_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
-) -> InternalJobScope | None:
-    """Read one exact scoped retained purge identity without acquiring locks or live Source.
+) -> SourcePurgeJobIdentity | None:
+    """Read the exact captured purge authority tuple without locks, live Source or raw URIs.
 
-    Internal publication callers retain their ordered admission/domain transaction and compare
-    operation ID plus workspace/actor/membership/source/generation to the event payload. Current
-    caller admission and captured receipt membership must match; never upgrade an old job.
-    No URI, child cleanup ID, content or public status actor/epoch is exposed; no commit/I/O.
+    NULL (legacy) or stale configuration, a different membership epoch or an invalid tuple
+    returns None; the caller never upgrades an old job to the current epoch.
     """
-    await _admit_source_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    identity = (await session.execute(select(
-        SourcePurgeOperation.workspace_id, SourcePurgeOperation.actor_user_id,
-        SourcePurgeOperation.membership_revision, SourcePurgeOperation.source_id,
-        SourcePurgeOperation.generation,
+    fence = await _admit_source_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    row = (await session.execute(select(
+        SourcePurgeOperation.id, SourcePurgeOperation.workspace_id, SourcePurgeOperation.actor_user_id,
+        SourcePurgeOperation.membership_revision, SourcePurgeOperation.configuration_revision,
+        SourcePurgeOperation.source_id, SourcePurgeOperation.generation,
     ).where(
         SourcePurgeOperation.id == operation_id, *_operation_scope(scope),
         SourcePurgeOperation.membership_revision == scope.membership_revision,
     ))).one_or_none()
-    if identity is None:
+    if row is None or row.configuration_revision is None:
+        return None
+    try:
+        capture = SourcePurgeJobIdentity(
+            operation_id=row.id, workspace_id=row.workspace_id, actor_user_id=row.actor_user_id,
+            membership_revision=row.membership_revision, configuration_revision=row.configuration_revision,
+            source_id=row.source_id, source_generation=row.generation,
+        )
+    except ValueError:
+        return None
+    return capture if fence.configuration_revision == capture.configuration_revision else None
+
+
+async def read_source_purge_job_identity(
+    session: AsyncSession, operation_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+) -> InternalJobScope | None:
+    """Project the exact scoped retained purge capture to an InternalJobScope, nonlocking.
+
+    Internal publication callers retain their ordered admission/domain transaction and compare
+    operation ID plus workspace/actor/membership/source/generation to the event payload. Current
+    caller admission and the captured membership+configuration epoch must match; legacy NULL or
+    stale configuration returns None, never an upgraded job. No URI/content is exposed.
+    """
+    capture = await read_source_purge_job_capture(
+        session, operation_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if capture is None:
         return None
     try:
         return InternalJobScope(
-            workspace_id=identity.workspace_id, actor_user_id=identity.actor_user_id,
-            membership_revision=identity.membership_revision, source_id=identity.source_id,
-            source_generation=identity.generation,
+            workspace_id=capture.workspace_id, actor_user_id=capture.actor_user_id,
+            membership_revision=capture.membership_revision, source_id=capture.source_id,
+            source_generation=capture.source_generation,
         )
     except ValueError:
         return None
@@ -1742,37 +1796,43 @@ async def read_source_purge_job_identity(
 async def resolve_source_purge_job_scope(
     session: AsyncSession, operation_id: UUID, *, multi_workspace_enabled: bool,
 ) -> InternalJobScope | None:
-    """Admit one retained purge's exact durable actor/revision/source-generation identity.
+    """Admit one retained purge's exact durable actor/membership/configuration/source identity.
 
-    No live Source is required and no URI/content/child receipt is exposed. Invalid lineage
-    returns None; current permission loss propagates admission failure without rebasing the job.
-    Ordered auth/workspace/membership locks precede the nonlocking retained identity reread;
-    no domain lock is taken, so workers can subsequently acquire Source before receipt locks.
-    Worker and already-authorized operator status callers own transaction release/quarantine.
+    Identity-only discovery (no live Source); a NULL captured configuration returns None
+    before any authorize call. Ordered auth/workspace/membership locks precede the nonlocking
+    exact capture reread; an admitted fence that differs from the captured tuple is a stale job
+    (None, never rebased). Current permission loss propagates admission failure. No domain lock.
     """
-    columns = (
+    row = (await session.execute(select(
         SourcePurgeOperation.workspace_id, SourcePurgeOperation.actor_user_id,
-        SourcePurgeOperation.membership_revision, SourcePurgeOperation.source_id,
-        SourcePurgeOperation.generation,
-    )
-    identity = (await session.execute(select(*columns).where(
-        SourcePurgeOperation.id == operation_id,
-    ))).one_or_none()
-    if identity is None:
+        SourcePurgeOperation.membership_revision, SourcePurgeOperation.configuration_revision,
+        SourcePurgeOperation.source_id, SourcePurgeOperation.generation,
+    ).where(SourcePurgeOperation.id == operation_id))).one_or_none()
+    if row is None or row.configuration_revision is None:
         return None
     try:
         scope = InternalJobScope(
-            workspace_id=identity.workspace_id, actor_user_id=identity.actor_user_id,
-            membership_revision=identity.membership_revision, source_id=identity.source_id,
-            source_generation=identity.generation,
+            workspace_id=row.workspace_id, actor_user_id=row.actor_user_id,
+            membership_revision=row.membership_revision, source_id=row.source_id,
+            source_generation=row.generation,
+        )
+        expected = AccessFence(
+            workspace_id=row.workspace_id, user_id=row.actor_user_id,
+            membership_revision=row.membership_revision, configuration_revision=row.configuration_revision,
         )
     except ValueError:
         return None
-    await workspaces.authorize_internal_job(
+    fence = await workspaces.authorize_internal_job(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
-    current = (await session.execute(select(*columns).where(
-        SourcePurgeOperation.id == operation_id, *_operation_scope(scope),
-        SourcePurgeOperation.membership_revision == scope.membership_revision,
-    ))).one_or_none()
-    return scope if current is not None and current == identity else None
+    if fence != expected:
+        return None
+    capture = await read_source_purge_job_capture(
+        session, operation_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if capture is None or (capture.workspace_id, capture.actor_user_id, capture.membership_revision,
+                           capture.configuration_revision, capture.source_id, capture.source_generation) != (
+            row.workspace_id, row.actor_user_id, row.membership_revision, row.configuration_revision,
+            row.source_id, row.generation):
+        return None
+    return scope
