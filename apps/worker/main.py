@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import (
 from core.auth.models import AuthSession
 from core.config import Settings
 from core.heavy_work import HEAVY_JOB_MAX_TRIES
-from core.modules import register_modules, scheduled_job_owners
+from core.modules import effective_modules, register_modules, scheduled_job_owners
 from core.system.health import ARQ_WORKER_GENERATION_KEY, ARQ_WORKER_HEALTH_KEY
 from core.telemetry import install_log_redaction, instrument_job, set_process_role
 from modules.agents.worker import (
@@ -66,23 +66,24 @@ from modules.timeline.worker import (
 )
 
 _JOB_OWNERS = scheduled_job_owners(register_modules())
+_BUILD_AVAILABLE = frozenset(module_id for module_id, item in effective_modules(()).items() if item.enabled)
 
 
 def _gate_module_job(function: Callable[..., Any]) -> Callable[..., Any]:
-    """Refresh persisted module availability before dispatching a declared owner job."""
+    """Skip a declared owner job only when its module is not part of this build.
+
+    Availability is the static descriptor registry (with dependency closure); no database read
+    happens here. Per-workspace enablement belongs to each converted worker entrypoint, which
+    calls ``module_is_enabled`` under its own workspace scope and leaves durable work untouched.
+    """
     module_id = _JOB_OWNERS.get(function.__name__)
     if module_id is None:
         return function
 
     @wraps(function)
     async def guarded(ctx: dict[str, object], *args: Any, **kwargs: Any) -> Any:
-        """Leave durable queued work untouched while its owner module is disabled."""
-        factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
-        from modules.settings.public import read_module_availability
-
-        async with factory() as session:
-            lifecycle = await read_module_availability(session)
-        if not next((item.enabled for item in lifecycle.modules if item.id == module_id), False):
+        """Leave durable queued work untouched while its owner module is unavailable in this build."""
+        if module_id not in _BUILD_AVAILABLE:
             return None
         return await function(ctx, *args, **kwargs)
 
