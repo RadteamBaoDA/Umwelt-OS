@@ -37,7 +37,7 @@ export function FollowEntityButton({ entityId, name }: { entityId: string; name:
   if (topics.isError) return <p role="alert" className="text-xs text-destructive">{t('followLoadFailed')} <Button type="button" variant="outline" size="sm" onClick={() => { void topics.refetch(); }}>{t('retry')}</Button></p>;
   return <div className="flex flex-col items-start gap-1">
     <Button type="button" variant={following ? 'secondary' : 'outline'} aria-pressed={following}
-      aria-disabled={blocked}
+      aria-disabled={blocked && !following}
       aria-describedby={!name ? reasonId : undefined}
       onClick={() => { if (!blocked) follow.mutate(); }}>
       {following ? <Check aria-hidden="true" className="size-4" /> : <Plus aria-hidden="true" className="size-4" />}

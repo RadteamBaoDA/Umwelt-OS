@@ -86,6 +86,7 @@ function RuleList({ def, onRuleDeleted }: { def: GadgetDefinition; onRuleDeleted
   const [isNew, setIsNew] = useState(false);
   const [touched, setTouched] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const returnFocusRef = useRef<HTMLButtonElement | null>(null);
   const rules = def.highlight_rules ?? [];
   const usage = useQuery({ queryKey: [...dashboardKeys.definition(def.id), 'usage'], queryFn: ({ signal }) => getGadgetDefinitionUsage(def.id, signal) });
   const usageNames = (usage.data ?? []).map((item) => item.name).join(', ');
@@ -133,7 +134,7 @@ function RuleList({ def, onRuleDeleted }: { def: GadgetDefinition; onRuleDeleted
       <span className="muted text-xs">{t(severityKeys[rule.severity])}</span>
       <span className="muted inline-flex items-center gap-1 text-xs">{rule.notify && <Bell className="size-3" aria-hidden="true" />}{rule.notify ? t('notifyOn') : t('notifyOff')}</span>
       <Button type="button" className="secondary" disabled={write.isPending} onClick={() => open(rule)}>{t('editRule')}</Button>
-      <Button type="button" variant="destructive" aria-disabled={write.isPending} onClick={() => { if (!write.isPending) setDeleteId(rule.id); }}>{t('deleteRule')}</Button>
+      <Button type="button" variant="destructive" aria-disabled={write.isPending} onClick={(event) => { if (write.isPending) return; returnFocusRef.current = event.currentTarget; setDeleteId(rule.id); }}>{t('deleteRule')}</Button>
     </li>)}</ul>
     {editing && <form className="space-y-3 rounded-lg border border-border p-4" aria-label={isNew ? t('ruleNew') : t('ruleTitle')} onSubmit={(event) => { event.preventDefault(); saveRule(); }}>
       <fieldset disabled={write.isPending} className="space-y-3">
@@ -188,7 +189,7 @@ function RuleList({ def, onRuleDeleted }: { def: GadgetDefinition; onRuleDeleted
     </section>
     {write.error && !editing && <p className="error" role="alert">{t((highlightRuleErrorKey(write.error) ?? apiFailureKey(write.error) ?? 'saveFailed') as 'saveFailed')}</p>}
     <AlertDialog open={deleteId !== null} onOpenChange={(value) => { if (!value) setDeleteId(null); }}>
-      <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{t('deleteRuleTitle')}</AlertDialogTitle><AlertDialogDescription>{usageNames ? t('deleteRuleBodyUsed', { names: usageNames }) : t('deleteRuleBody')}</AlertDialogDescription></AlertDialogHeader>
+      <AlertDialogContent onCloseAutoFocus={(event) => { event.preventDefault(); returnFocusRef.current?.focus(); }}><AlertDialogHeader><AlertDialogTitle>{t('deleteRuleTitle')}</AlertDialogTitle><AlertDialogDescription>{usageNames ? t('deleteRuleBodyUsed', { names: usageNames }) : t('deleteRuleBody')}</AlertDialogDescription></AlertDialogHeader>
         <AlertDialogFooter><AlertDialogCancel>{t('cancelRule')}</AlertDialogCancel><AlertDialogAction onClick={() => { write.mutate(rules.filter((item) => item.id !== deleteId), { onSuccess: onRuleDeleted }); }}>{t('deleteRule')}</AlertDialogAction></AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
