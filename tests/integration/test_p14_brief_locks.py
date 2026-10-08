@@ -67,9 +67,12 @@ def _received(nonce: str) -> int:
     return int(_docker("exec", _service_container("fake-model"), "python", "-c", script, timeout=30))
 
 
-async def _wait_received(nonce: str, timeout: float = 30) -> None:
+async def _wait_received(nonce: str, generate: asyncio.Task[Response], timeout: float = 30) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        if generate.done():
+            early = generate.result()
+            raise AssertionError(f"generate finished before the model got the request: {early.status_code} {early.text}")
         if await asyncio.to_thread(_received, nonce):
             return
         await asyncio.sleep(0.2)
@@ -155,10 +158,10 @@ async def _start_slow_brief(client: AsyncClient, nonce: str) -> tuple[object, as
     })
     assert task.status_code == 201, task.text
     generate = asyncio.create_task(client.post(
-        "/api/v1/dashboard/briefs/generate",
+        "/api/v1/briefs/generate",
         json={"brief_date": day.isoformat(), "timezone": TZ, "force": True}, timeout=90,
     ))
-    await _wait_received(nonce)
+    await _wait_received(nonce, generate)
     return day, generate
 
 
