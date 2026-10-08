@@ -6,16 +6,18 @@ import json
 import math
 from collections.abc import AsyncIterator, Awaitable
 from contextlib import asynccontextmanager
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, cast, overload
 from uuid import UUID, uuid4, uuid5
 
 from arq import Retry
 from arq.connections import ArqRedis
+from fastapi import HTTPException
 from pydantic import TypeAdapter
 from redis.asyncio import Redis
-from sqlalchemy import func, select
+from redis.exceptions import RedisError
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
@@ -30,7 +32,7 @@ from core.model_gateway.client import ModelGateway, PrivacyPolicyDenied
 from core.model_gateway.schemas import ModelMapping, RequestPolicy
 from core.realtime import commit_with_replay
 from core.workspaces import public as workspaces
-from core.workspaces.schemas import InternalJobScope, Scope
+from core.workspaces.schemas import AccessFence, InternalJobScope, Scope
 from modules.knowledge.documents import public as documents
 from modules.knowledge.entities import public as entities
 from modules.knowledge.relationships import public as relationships
@@ -72,30 +74,123 @@ from modules.timeline import public as timeline
 
 LEASE_SECONDS = 180
 OWNER_BUDGET_SECONDS = 150
+RECOVERY_WORKSPACE_PAGE = 25
+RECOVERY_CURSOR_KEY = "temporal:graph-recovery:workspace-cursor"
+
+
+@dataclass(frozen=True, slots=True)
+class _Admission:
+    """ One invocation's original authority, carried through every short transaction and callback.
+
+    The scope and fence are captured once by admit_workspace before any claim or domain lock.
+    Every later session re-reads the fence without locking and requires exact equality; a
+    revoked or changed original aborts that subject (no ACK, no rebase onto fresh authority).
+    """
+
+    scope: InternalJobScope
+    multi: bool
+    fence: AccessFence
+
+
+async def _admit(session: AsyncSession, adm: _Admission) -> None:
+    """ Compare current workspace authority with the original invocation fence (nonlocking, 409 on drift).
+
+    Nonlocking on purpose: the outer job transaction may already hold the admission locks
+    (Sources.lock_source) while nested journal sessions run; a locking call here would
+    wait on its own invocation.
+    """
+    current = await workspaces.read_access_fence(session, scope=adm.scope, multi_workspace_enabled=adm.multi)
+    if current != adm.fence:
+        raise HTTPException(status_code=409, detail="Workspace authority changed")
+
+
+async def _commit(session: AsyncSession, adm: _Admission, drafts: list[Any] | tuple[Any, ...] = ()) -> None:
+    """ Commit domain rows (and optional replay drafts) only if the original fence still holds."""
+    await commit_with_replay(session, drafts, scope=adm.scope, multi_workspace_enabled=adm.multi,
+                             access_fence=adm.fence)
+
+
+async def _get(session: AsyncSession, model: Any, identity: UUID | int, adm: _Admission, *, lock: bool = False) -> Any:
+    """ Read one temporal root by ID inside the admitted workspace; a foreign ID is simply absent."""
+    query = select(model).where(model.id == identity, model.workspace_id == adm.scope.workspace_id)
+    if lock:
+        query = query.with_for_update().execution_options(populate_existing=True)
+    return await session.scalar(query)
+
+
+async def admit_workspace(
+    factory: async_sessionmaker[AsyncSession], settings: Settings, workspace_id: UUID,
+) -> _Admission | None:
+    """ Resolve the workspace's durable owner, lock admission FIRST and capture one original fence.
+
+    No other lock is taken before this fence. Returns None (skip, no mutation) when the owner
+    lineage, account/membership admission or the per-workspace knowledge.temporal module gate denies.
+    The locks are released before any claim, graph or model I/O; later effects only compare.
+    """
+    multi = bool(settings.multi_workspace_enabled)
+    async with factory() as session:
+        try:
+            owner = await workspaces.resolve_workspace_owner_context(
+                session, workspace_id, multi_workspace_enabled=multi,
+            )
+            if owner is None:
+                return None
+            scope = InternalJobScope(
+                workspace_id=workspace_id, actor_user_id=owner.user_id,
+                membership_revision=owner.membership_revision,
+            )
+            fence = await workspaces.authorize_internal_job(session, scope=scope, multi_workspace_enabled=multi)
+            enabled = await settings_public.module_is_enabled(
+                session, "knowledge.temporal", scope=scope, multi_workspace_enabled=multi,
+            )
+        except HTTPException as exc:
+            if exc.status_code in {401, 403, 404, 409}:
+                return None
+            raise
+        finally:
+            await session.rollback()
+    return _Admission(scope, multi, fence) if enabled else None
+
+
+async def _admit_job(
+    factory: async_sessionmaker[AsyncSession], settings: Settings, operation_id: UUID,
+) -> _Admission | None:
+    """ Admit one queued operation: validate its durable workspace/partition/mapping lineage, then the fence."""
+    async with factory() as session:
+        row = (await session.execute(select(
+            GraphOperation.workspace_id, GraphOperation.mapping_id, GraphOperation.partition_id,
+        ).where(GraphOperation.id == operation_id))).one_or_none()
+        lineage = await session.scalar(select(GraphMapping.id).join(
+            GraphPartition, GraphPartition.id == GraphMapping.partition_id,
+        ).where(
+            GraphMapping.id == row.mapping_id, GraphMapping.partition_id == row.partition_id,
+            GraphMapping.workspace_id == row.workspace_id, GraphPartition.workspace_id == row.workspace_id,
+        )) if row is not None else None
+        await session.rollback()
+    if row is None or lineage is None:
+        return None
+    return await admit_workspace(factory, settings, row.workspace_id)
 
 
 async def _dependency_fingerprint(session: AsyncSession, ctx: dict[str, object], graph_state: GraphState,
-                                    partition_id: UUID | None = None, *, scope: Scope,
-                                    multi_workspace_enabled: bool) -> str:
+                                    adm: _Admission, partition_id: UUID | None = None) -> str:
     """Hash nonsecret policy/model and graph configuration so blocked work retries only after an actual dependency change."""
     settings = cast(Settings, ctx["settings"])
     config = await settings_public.get_ai_execution_config(
-        session, settings, cast(Redis, ctx["redis"]), scope=scope,
+        session, settings, cast(Redis, ctx["redis"]), scope=adm.scope,
     )
     owner_state = []
     if partition_id is not None:
         rows = (await session.scalars(select(GraphMapping).where(
-            GraphMapping.workspace_id == scope.workspace_id, GraphMapping.partition_id == partition_id,
+            GraphMapping.workspace_id == adm.scope.workspace_id, GraphMapping.partition_id == partition_id,
         )
             .order_by(GraphMapping.id).limit(101))).all()
         owner_state = [[str(row.id), row.desired_revision, row.desired_digest, row.tombstoned,
             row.external_state, row.embedding_identity] for row in rows]
-        partition = await session.scalar(select(GraphPartition).where(
-            GraphPartition.id == partition_id, GraphPartition.workspace_id == scope.workspace_id,
-        ))
+        partition = await _get(session, GraphPartition, partition_id, adm)
         source = await sources.get_source_fence(
-            session, partition.source_id, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
+            session, partition.source_id, scope=adm.scope,
+            multi_workspace_enabled=adm.multi,
         ) if partition is not None else None
         owner_state.append([source.status, source.generation, source.local_only] if source else ["source_unavailable"])
     return public.digest([str(graph_state), owner_state, settings.graph_enabled, settings.graph_host, settings.graph_port,
@@ -105,7 +200,7 @@ async def _dependency_fingerprint(session: AsyncSession, ctx: dict[str, object],
         config.privacy.model_dump(mode="json"), config.endpoint_destination_id])
 
 
-async def _mark_dependents_for_rebuild(factory: async_sessionmaker[AsyncSession], operation: GraphOperation,
+async def _mark_dependents_for_rebuild(factory: async_sessionmaker[AsyncSession], adm: _Admission, operation: GraphOperation,
                                        mapping: GraphMapping, token: UUID, rows: list[GraphMapping],
                                        episode_ids: set[str], effects: set[tuple[str, str]]) -> tuple[UUID, ...]:
     """Commit every exact surviving projection dependency before destructive candidate/shared cleanup.
@@ -121,24 +216,30 @@ async def _mark_dependents_for_rebuild(factory: async_sessionmaker[AsyncSession]
         raise GraphOperationError("graph_rebuild_dependency_closure_unproved")
     mapping_ids = tuple(sorted({selected[episode_id] for episode_id in survivors}, key=str))
     async with factory() as journal:
-        partition = await journal.get(GraphPartition, mapping.partition_id, with_for_update=True)
-        current_operation = await journal.get(GraphOperation, operation.id, with_for_update=True)
+        await _admit(journal, adm)
+        partition = await _get(journal, GraphPartition, mapping.partition_id, adm, lock=True)
+        current_operation = await _get(journal, GraphOperation, operation.id, adm, lock=True)
         assert current_operation is not None
         assert partition is not None
         if partition.lease_token != token or current_operation.lease_owner != token:
             raise GraphOperationError("graph_rebuild_dependency_lease_lost")
         drafts = []
         for mapping_id in mapping_ids:
-            dependent = await journal.get(GraphMapping, mapping_id, with_for_update=True)
+            dependent = await _get(journal, GraphMapping, mapping_id, adm, lock=True)
             if dependent is None or dependent.partition_id != mapping.partition_id or dependent.tombstoned:
                 raise GraphOperationError("graph_rebuild_dependency_changed")
-            dependency = await journal.get(GraphRebuildDependency, (operation.id, mapping_id))
+            dependency = await journal.scalar(select(GraphRebuildDependency).where(
+                GraphRebuildDependency.workspace_id == adm.scope.workspace_id,
+                GraphRebuildDependency.operation_id == operation.id,
+                GraphRebuildDependency.mapping_id == mapping_id).with_for_update())
             if dependency is None:
-                journal.add(GraphRebuildDependency(operation_id=operation.id, mapping_id=mapping_id,
+                journal.add(GraphRebuildDependency(workspace_id=adm.scope.workspace_id,
+                    operation_id=operation.id, mapping_id=mapping_id,
                     source_generation=mapping.source_generation, effect_ids=[list(item) for item in sorted(effects)]))
                 # An explicit new attempt owns no copied receipts. Its ancestor
                 # cleanup will consume the original destructive proof below.
-                journal.add(GraphOperation(mapping_id=mapping_id, partition_id=mapping.partition_id, kind="upsert",
+                journal.add(GraphOperation(workspace_id=adm.scope.workspace_id, mapping_id=mapping_id,
+                    partition_id=mapping.partition_id, kind="upsert",
                     desired_revision=dependent.desired_revision, desired_digest=dependent.desired_digest,
                     next_attempt_at=datetime.now(UTC), replacement_created_at=datetime.now(UTC)))
             else:
@@ -147,19 +248,21 @@ async def _mark_dependents_for_rebuild(factory: async_sessionmaker[AsyncSession]
                     raise GraphOperationError("graph_rebuild_dependency_effects_over_bound")
             dependent.status, dependent.external_state = "pending", "unknown"
             dependent.error_code = "graph_dependent_rebuild_pending"
-            drafts.append(await public.graph_status_change(journal, mapping_id))
-        await commit_with_replay(journal, drafts)
+            drafts.append(await public.graph_status_change(journal, mapping_id, scope=adm.scope))
+        await _commit(journal, adm, drafts)
     return mapping_ids
 
 
-async def _authorize_scheduled_rebuild(factory: async_sessionmaker[AsyncSession], operation: GraphOperation,
+async def _authorize_scheduled_rebuild(factory: async_sessionmaker[AsyncSession], adm: _Admission, operation: GraphOperation,
                                        mapping: GraphMapping, mapping_ids: tuple[UUID, ...],
                                        effects: set[tuple[str, str]]) -> None:
     """Require committed original-operation links for every affected owner mapping and exact destructive effect."""
     if not mapping_ids:
         raise GraphOperationError("graph_rebuild_dependencies_missing")
     async with factory() as check:
+        await _admit(check, adm)
         dependencies = (await check.scalars(select(GraphRebuildDependency).where(
+            GraphRebuildDependency.workspace_id == adm.scope.workspace_id,
             GraphRebuildDependency.operation_id == operation.id,
             GraphRebuildDependency.mapping_id.in_(mapping_ids)))).all()
         if {row.mapping_id for row in dependencies} != set(mapping_ids) or any(
@@ -168,14 +271,15 @@ async def _authorize_scheduled_rebuild(factory: async_sessionmaker[AsyncSession]
             raise GraphOperationError("graph_rebuild_dependencies_uncommitted")
 
 
-async def _claim(factory: async_sessionmaker[AsyncSession], operation_id: UUID) -> UUID | None:
+async def _claim(factory: async_sessionmaker[AsyncSession], adm: _Admission, operation_id: UUID) -> UUID | None:
     """Claim partition then intent in one short transaction; expired uncertain writers never become new extraction."""
     async with factory() as session:
-        locator = await session.get(GraphOperation, operation_id)
+        await _admit(session, adm)
+        locator = await _get(session, GraphOperation, operation_id, adm)
         if locator is None:
             return None
-        partition = await session.get(GraphPartition, locator.partition_id, with_for_update=True)
-        operation = await session.get(GraphOperation, operation_id, with_for_update=True)
+        partition = await _get(session, GraphPartition, locator.partition_id, adm, lock=True)
+        operation = await _get(session, GraphOperation, operation_id, adm, lock=True)
         now = datetime.now(UTC)
         assert operation is not None
         if operation.status in {"succeeded", "failed"} or operation.next_attempt_at > now:
@@ -185,22 +289,22 @@ async def _claim(factory: async_sessionmaker[AsyncSession], operation_id: UUID) 
             return None
         if partition.uncertain_operation_id and partition.uncertain_operation_id != operation.id:
             return None
-        desired = await session.get(GraphMapping, operation.mapping_id, with_for_update=True)
+        desired = await _get(session, GraphMapping, operation.mapping_id, adm, lock=True)
         assert desired is not None
         if (desired.desired_revision != operation.desired_revision or desired.desired_digest != operation.desired_digest) and operation.dispatched_at is None:
             assert operation is not None
             operation.status, operation.error_code = "succeeded", "superseded_before_dispatch"
-            await session.commit()
+            await _commit(session, adm)
             return None
         if operation.attempts >= 5 and not partition.uncertain_operation_id:
             assert operation is not None
             operation.status, operation.error_code = "failed", "attempts_exhausted"
-            mapping = await session.get(GraphMapping, operation.mapping_id, with_for_update=True)
+            mapping = await _get(session, GraphMapping, operation.mapping_id, adm, lock=True)
             assert mapping is not None
             if mapping.desired_revision == operation.desired_revision and mapping.desired_digest == operation.desired_digest:
                 assert mapping is not None
                 mapping.status, mapping.error_code = "failed", "attempts_exhausted"
-            await commit_with_replay(session, [await public.graph_status_change(session, mapping.id)])
+            await _commit(session, adm, [await public.graph_status_change(session, mapping.id, scope=adm.scope)])
             return None
         token = uuid4()
         partition.lease_token, partition.lease_expires_at = token, now + timedelta(seconds=LEASE_SECONDS)
@@ -208,26 +312,16 @@ async def _claim(factory: async_sessionmaker[AsyncSession], operation_id: UUID) 
         assert operation is not None
         operation.status = "running"
         operation.attempts += 1
-        await session.commit()
+        await _commit(session, adm)
         return token
 
 
-async def _lease(
-    factory: async_sessionmaker[AsyncSession], operation_id: UUID, token: UUID, *,
-    scope: Scope, multi_workspace_enabled: bool,
-) -> None:
+async def _lease(factory: async_sessionmaker[AsyncSession], adm: _Admission, operation_id: UUID, token: UUID) -> None:
     """Recheck live exact partition/intent ownership; stale results cannot publish or authorize writes."""
     async with factory() as session:
-        await workspaces.read_access_fence(
-            session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        )
-        operation = await session.scalar(select(GraphOperation).where(
-            GraphOperation.id == operation_id, GraphOperation.workspace_id == scope.workspace_id,
-        ))
-        partition = await session.scalar(select(GraphPartition).where(
-            GraphPartition.id == operation.partition_id,
-            GraphPartition.workspace_id == scope.workspace_id,
-        )) if operation else None
+        await _admit(session, adm)
+        operation = await _get(session, GraphOperation, operation_id, adm)
+        partition = await _get(session, GraphPartition, operation.partition_id, adm) if operation else None
         now = datetime.now(UTC)
         if (operation is None or partition is None or operation.lease_owner != token
                 or partition.lease_token != token or operation.lease_expires_at is None
@@ -236,14 +330,14 @@ async def _lease(
             raise GraphOperationError("graph_partition_lease_lost")
 
 
-async def _receipts(session: AsyncSession, operation_id: UUID) -> tuple[GraphWriteReceipt, ...]:
+async def _receipts(session: AsyncSession, operation_id: UUID, adm: _Admission) -> tuple[GraphWriteReceipt, ...]:
     """Return actual immutable witnesses covering every distinct journal obligation; never truncate effects."""
-    receipts, _ = await _receipt_inventory(session, operation_id)
+    receipts, _ = await _receipt_inventory(session, operation_id, adm=adm)
     return receipts
 
 
 async def _receipt_inventory(session: AsyncSession, operation_id: UUID,
-                             prefix_count: int | None = None, *,
+                             prefix_count: int | None = None, *, adm: _Admission,
                              inspection: GraphReceiptInspection | None = None,
                              witness_sequences: tuple[int, ...] = ()) -> tuple[tuple[GraphWriteReceipt, ...], RecoveryReceiptAggregate | None]:
     """Page all original receipts and select bounded first/latest/current-matching witnesses per physical effect.
@@ -266,7 +360,9 @@ async def _receipt_inventory(session: AsyncSession, operation_id: UUID,
     current_facts = {item.fact_id: item.state_fingerprint for item in inspection.current_fact_states} if inspection else {}
     effects: list[set[str]] = [set(), set(), set(), set()]
     while prefix_count is None or cursor < prefix_count:
-        query = select(GraphReceipt).where(GraphReceipt.operation_id == operation_id, GraphReceipt.sequence >= cursor)
+        query = select(GraphReceipt).where(
+            GraphReceipt.workspace_id == adm.scope.workspace_id,
+            GraphReceipt.operation_id == operation_id, GraphReceipt.sequence >= cursor)
         if prefix_count is not None:
             query = query.where(GraphReceipt.sequence < prefix_count)
         rows = (await session.scalars(query.order_by(GraphReceipt.sequence).limit(100))).all()
@@ -342,30 +438,31 @@ async def _receipt_inventory(session: AsyncSession, operation_id: UUID,
     return tuple(receipt for _, receipt in entries), aggregate
 
 
-async def _record(factory: async_sessionmaker[AsyncSession], operation_id: UUID, token: UUID,
+async def _record(factory: async_sessionmaker[AsyncSession], adm: _Admission, operation_id: UUID, token: UUID,
                   receipt: GraphWriteReceipt) -> None:
     """Commit every no-text prewrite receipt independently while source/document locks remain held by its caller."""
-    await _lease(factory, operation_id, token)
+    await _lease(factory, adm, operation_id, token)
     async with factory() as session:
-        operation = await session.get(GraphOperation, operation_id, with_for_update=True)
+        await _admit(session, adm)
+        operation = await _get(session, GraphOperation, operation_id, adm, lock=True)
         assert operation is not None
-        mapping = await session.get(GraphMapping, operation.mapping_id)
+        mapping = await _get(session, GraphMapping, operation.mapping_id, adm)
         assert mapping is not None
         if (receipt.operation_id != operation.id or receipt.lease_token != operation.receipt_token
                 or receipt.mapping_revision != operation.desired_revision
                 or receipt.episode_id != mapping.episode_id or receipt.group_id != str(mapping.partition_id)):
             raise GraphOperationError("graph_receipt_not_owned")
         sequence = (await session.scalar(select(func.max(GraphReceipt.sequence)).where(
-            GraphReceipt.operation_id == operation.id)))
+            GraphReceipt.workspace_id == adm.scope.workspace_id, GraphReceipt.operation_id == operation.id)))
         # Adapter strips all seed/candidate text from receipts; reject accidental leakage
         # instead of relying on a subsequent purge to remove copied narrative fields.
         if any(binding.node_name is not None or binding.node_summary is not None for binding in receipt.canonical_bindings):
             raise GraphOperationError("graph_receipt_contains_seed_text")
         payload = TypeAdapter(GraphWriteReceipt).dump_python(receipt, mode="json")
-        session.add(GraphReceipt(operation_id=operation.id, sequence=0 if sequence is None else sequence + 1, payload=payload))
+        session.add(GraphReceipt(workspace_id=adm.scope.workspace_id, operation_id=operation.id, sequence=0 if sequence is None else sequence + 1, payload=payload))
         operation.phase = receipt.phase
         mapping.external_state = "unknown"
-        await session.commit()
+        await _commit(session, adm)
 
 
 async def _inventory(session: AsyncSession, mapping: GraphMapping) -> tuple[list[GraphMapping], list[GraphSupport]]:
@@ -430,21 +527,19 @@ async def _bindings(
     return tuple(result)
 
 
-async def _context(factory: async_sessionmaker[AsyncSession], session: AsyncSession, ctx: dict[str, object],
+async def _context(factory: async_sessionmaker[AsyncSession], adm: _Admission, session: AsyncSession, ctx: dict[str, object],
                    operation: GraphOperation, mapping: GraphMapping, token: UUID,
-                   *, cleanup: bool, scope: Scope, multi_workspace_enabled: bool) -> tuple[OperationAuthorization, ModelGateway, list[GraphMapping]]:
+                   *, cleanup: bool) -> tuple[OperationAuthorization, ModelGateway, list[GraphMapping]]:
     """Build real callbacks from owner contracts under sorted source/document fences; cleanup permits detached IDs only."""
-    access_fence = await workspaces.read_access_fence(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-    )
+    await _admit(session, adm)
     rows, supports = await _inventory(session, mapping)
     source = await sources.lock_source(
-        session, mapping.source_id, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=access_fence,
+        session, mapping.source_id, scope=adm.scope,
+        multi_workspace_enabled=adm.multi, expected_access_fence=adm.fence,
     )
     documents_ids = sorted({row.document_id for row in rows if not row.tombstoned}, key=str)
     await documents.lock_document_ids(
-        session, documents_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session, documents_ids, scope=adm.scope, multi_workspace_enabled=adm.multi,
     )
     live_support = [item for item in supports if not item.removed]
     if not cleanup and (source is None or source.status != "active" or source.generation != mapping.source_generation):
@@ -452,29 +547,29 @@ async def _context(factory: async_sessionmaker[AsyncSession], session: AsyncSess
     if live_support:
         refs = await documents.read_evidence_refs(
             session, [(item.document_version_id, item.chunk_id) for item in live_support],
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            scope=adm.scope, multi_workspace_enabled=adm.multi,
         )
         if {item.source_id for item in refs} != {mapping.source_id}:
             raise GraphOperationError("graph_support_source_changed")
     # Current canonical revisions remain current; mapping_revision identifies
     # the journal being recovered, which may predate a newer queued correction.
     bindings = tuple(replace(binding, mapping_revision=operation.desired_revision)
-        for binding in await _bindings(session, mapping, live_support, scope=scope,
-                                       multi_workspace_enabled=multi_workspace_enabled)) if live_support else ()
+        for binding in await _bindings(session, mapping, live_support, scope=adm.scope,
+                                       multi_workspace_enabled=adm.multi)) if live_support else ()
     await entities.lock_entity_ids(
         session, sorted({binding.canonical_entity_id for binding in bindings}, key=str),
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        scope=adm.scope, multi_workspace_enabled=adm.multi,
     )
     # Field support is re-read under canonical locks; owner edits cannot race
     # a source-proved seed between authorization and the external mutation.
     bindings = tuple(replace(binding, mapping_revision=operation.desired_revision)
-        for binding in await _bindings(session, mapping, live_support, scope=scope,
-                                       multi_workspace_enabled=multi_workspace_enabled)) if live_support else ()
+        for binding in await _bindings(session, mapping, live_support, scope=adm.scope,
+                                       multi_workspace_enabled=adm.multi)) if live_support else ()
     evidence = tuple(EvidenceIdentity(item.source_id, item.source_generation, item.document_id,
                                       item.document_version_id, item.chunk_id) for item in live_support)
     settings = cast(Settings, ctx["settings"])
     redis = cast(Redis, ctx["redis"])
-    config = await settings_public.get_ai_execution_config(session, settings, redis, scope=scope)
+    config = await settings_public.get_ai_execution_config(session, settings, redis, scope=adm.scope)
     embedding = config.aliases.get("embedding")
     if not cleanup:
         if embedding is None or settings.graph_embedding_dimensions is None:
@@ -483,26 +578,32 @@ async def _context(factory: async_sessionmaker[AsyncSession], session: AsyncSess
         if any(row.external_state != "absent" and row.embedding_identity and row.embedding_identity != identity for row in rows):
             raise GraphOperationError("graph_embedding_identity_changed_requires_rebuild")
         async with factory() as identity_session:
-            current = await identity_session.get(GraphMapping, mapping.id, with_for_update=True)
+            await _admit(identity_session, adm)
+            current = await _get(identity_session, GraphMapping, mapping.id, adm, lock=True)
             assert current is not None
             current.embedding_identity = identity
-            await identity_session.commit()
+            await _commit(identity_session, adm)
         mapping.embedding_identity = identity
     snapshot = public.digest([config.configuration_revision, config.gateway_identity,
                               {alias: value.model_dump(mode="json") for alias, value in config.aliases.items()},
                               config.privacy.model_dump(mode="json"), config.endpoint_destination_id])
+    # Policy and gateway are bound to the admitted job identity and the config revision read above.
+    bound: dict[str, Any] = {
+        "workspace_id": adm.scope.workspace_id, "actor_user_id": adm.scope.actor_user_id,
+        "membership_revision": adm.scope.membership_revision, "gateway_identity": config.gateway_identity,
+        "configuration_revision": config.configuration_revision,
+    }
     policy = RequestPolicy(reasoning_allowed=config.privacy.allow_remote_reasoning,
                            embeddings_allowed=config.privacy.allow_remote_embeddings,
                            local_only=source.local_only if source else True,
                            permitted_destinations=frozenset({config.endpoint_destination_id}) if config.endpoint_destination_id else frozenset(),
                            reasoning_destinations=frozenset(config.privacy.reasoning_destinations),
                            embedding_destinations=frozenset(config.privacy.embedding_destinations),
-                           configuration_revision=config.configuration_revision)
+                           **bound)
 
     async def validate_partition(mode: str, episode_id: str | None) -> None:
         """Recheck full owner inventory and current generation; only identifier cleanup may survive source deletion."""
-        await _lease(factory, operation.id, token, scope=scope,
-                     multi_workspace_enabled=multi_workspace_enabled)
+        await _lease(factory, adm, operation.id, token)
         current_rows, _current_support = await _inventory(session, mapping)
         if {(row.id, row.desired_revision, row.tombstoned) for row in current_rows} != {
             (row.id, row.desired_revision, row.tombstoned) for row in rows
@@ -516,7 +617,7 @@ async def _context(factory: async_sessionmaker[AsyncSession], session: AsyncSess
         if mode != "delete" and live_support:
             await documents.read_evidence_refs(
                 session, [(item.document_version_id, item.chunk_id) for item in live_support],
-                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                scope=adm.scope, multi_workspace_enabled=adm.multi,
             )
 
     async def authorize(capability: str) -> None:
@@ -525,7 +626,8 @@ async def _context(factory: async_sessionmaker[AsyncSession], session: AsyncSess
             raise PrivacyPolicyDenied("Identifier cleanup cannot invoke inference")
         await validate_partition("upsert", str(mapping.episode_id))
         async with factory() as check:
-            current = await settings_public.get_ai_execution_config(check, settings, redis, scope=scope)
+            await _admit(check, adm)
+            current = await settings_public.get_ai_execution_config(check, settings, redis, scope=adm.scope)
         fingerprint = public.digest([current.configuration_revision, current.gateway_identity,
                                      {alias: value.model_dump(mode="json") for alias, value in current.aliases.items()},
                                      current.privacy.model_dump(mode="json"), current.endpoint_destination_id])
@@ -554,10 +656,14 @@ async def _context(factory: async_sessionmaker[AsyncSession], session: AsyncSess
                                                entity_ids=(left.canonical_entity_id, right.canonical_entity_id), evidence=refs))
         return result
 
+    async def fence_check() -> None:
+        """ Before every gateway send: original fence equality plus the live partition/intent lease."""
+        await _lease(factory, adm, operation.id, token)
+
     @asynccontextmanager
     async def fence() -> AsyncIterator[None]:
         """Reuse the caller's held source/document transaction; no nested owner-lock acquisition during recovery."""
-        await _lease(factory, operation.id, token)
+        await _lease(factory, adm, operation.id, token)
         yield
 
     async def record(receipt: GraphWriteReceipt) -> None:
@@ -567,39 +673,42 @@ async def _context(factory: async_sessionmaker[AsyncSession], session: AsyncSess
             if len(identifiers) != 1:
                 raise GraphOperationError("graph_rebuild_absence_marker_invalid")
             await authorize_rebuild_absence(receipt.rebuild_absence_observed, identifiers[0])
-        await _record(factory, operation.id, token, receipt)
+        await _record(factory, adm, operation.id, token, receipt)
 
     active_dispatch: DispatchOwnership | None = None
 
     async def dispatch(ownership: DispatchOwnership) -> None:
         """Persist exact dedicated server/client command ownership before any graph send, rejecting reassignment during ambiguity."""
         nonlocal active_dispatch
-        await _lease(factory, operation.id, token)
+        await _lease(factory, adm, operation.id, token)
         async with factory() as journal:
-            current = await journal.get(GraphOperation, operation.id, with_for_update=True)
+            await _admit(journal, adm)
+            current = await _get(journal, GraphOperation, operation.id, adm, lock=True)
             assert current is not None
             if ownership.operation_id != current.id or ownership.group_id != str(mapping.partition_id):
                 raise GraphOperationError("graph_dispatch_not_owned")
             uncertain = await journal.scalar(select(GraphDispatch.id).where(
-                GraphDispatch.operation_id == current.id, GraphDispatch.completed_at.is_(None),
+                GraphDispatch.workspace_id == adm.scope.workspace_id, GraphDispatch.operation_id == current.id, GraphDispatch.completed_at.is_(None),
                 GraphDispatch.cessation_verified_at.is_(None)).limit(1))
             if uncertain is not None:
                 raise GraphOperationError("graph_previous_dispatch_not_ceased")
-            journal.add(GraphDispatch(operation_id=current.id, group_id=ownership.group_id,
+            journal.add(GraphDispatch(workspace_id=adm.scope.workspace_id, operation_id=current.id, group_id=ownership.group_id,
                 server_run_id=ownership.server_run_id, client_id=ownership.client_id, lease_owner=token))
             current.dispatch_server_run_id, current.dispatch_client_id = ownership.server_run_id, ownership.client_id
             current.dispatched_at = datetime.now(UTC)
             current.dispatch_deadline = datetime.now(UTC) + timedelta(seconds=120)
             current.cessation_verified_at, current.cessation_reason = None, None
-            await journal.commit()
+            await _commit(journal, adm)
             active_dispatch = ownership
 
     async def dispatch_completed(ownership: DispatchOwnership) -> None:
         """Record exact synchronous reply completion after transport closure; never infer canonical synchronization."""
         nonlocal active_dispatch
-        await _lease(factory, operation.id, token)
+        await _lease(factory, adm, operation.id, token)
         async with factory() as journal:
+            await _admit(journal, adm)
             row = await journal.scalar(select(GraphDispatch).where(
+                GraphDispatch.workspace_id == adm.scope.workspace_id,
                 GraphDispatch.operation_id == ownership.operation_id,
                 GraphDispatch.group_id == ownership.group_id,
                 GraphDispatch.server_run_id == ownership.server_run_id,
@@ -607,14 +716,16 @@ async def _context(factory: async_sessionmaker[AsyncSession], session: AsyncSess
             if row is None or row.lease_owner != token:
                 raise GraphOperationError("graph_dispatch_completion_not_owned")
             row.completed_at = datetime.now(UTC)
-            await journal.commit()
+            await _commit(journal, adm)
             active_dispatch = None
 
     async def authorize_cessation(ownership: DispatchOwnership) -> None:
         """Authorize exact journal-owned CLIENT KILL after exclusive local worker takeover; never accept arbitrary numeric IDs."""
-        await _lease(factory, operation.id, token)
+        await _lease(factory, adm, operation.id, token)
         async with factory() as check:
+            await _admit(check, adm)
             row = await check.scalar(select(GraphDispatch).where(
+                GraphDispatch.workspace_id == adm.scope.workspace_id,
                 GraphDispatch.operation_id == ownership.operation_id,
                 GraphDispatch.group_id == ownership.group_id,
                 GraphDispatch.server_run_id == ownership.server_run_id,
@@ -625,9 +736,10 @@ async def _context(factory: async_sessionmaker[AsyncSession], session: AsyncSess
 
     async def node_authorization(receipts: tuple[GraphWriteReceipt, ...], actions: tuple[CanonicalNodeRecoveryAction, ...]) -> None:
         """Prove current canonical seeds/manual preservation and exact owned aggregate before every node decision."""
-        await _recovery_authorization(factory, operation, mapping, token, receipts, active_dispatch)
+        await _recovery_authorization(factory, adm, operation, mapping, token, receipts, active_dispatch)
         current_bindings = tuple(replace(binding, mapping_revision=operation.desired_revision)
-            for binding in await _bindings(session, mapping, live_support)) if live_support else ()
+            for binding in await _bindings(session, mapping, live_support, scope=adm.scope,
+                                           multi_workspace_enabled=adm.multi)) if live_support else ()
         current_by_id = {item.graph_entity_uuid: item for item in current_bindings}
         for action in actions:
             current = current_by_id.get(action.graph_entity_uuid)
@@ -639,7 +751,7 @@ async def _context(factory: async_sessionmaker[AsyncSession], session: AsyncSess
                         not episodes <= {str(row.episode_id) for row in rows} or
                         any(link.relationship_type != "MENTIONS" and not link.episode_ids for link in action.expected_incident_links)):
                     raise GraphOperationError("graph_node_rebuild_support_unproved")
-                await _authorize_scheduled_rebuild(factory, operation, mapping, action.rebuild_mapping_ids,
+                await _authorize_scheduled_rebuild(factory, adm, operation, mapping, action.rebuild_mapping_ids,
                     {("node", action.graph_entity_uuid)} | {("fact" if link.relationship_type != "MENTIONS" else "mention", link.edge_id)
                         for link in action.expected_incident_links})
             elif action.action == "replace_from_current_support":
@@ -660,7 +772,7 @@ async def _context(factory: async_sessionmaker[AsyncSession], session: AsyncSess
 
     async def fact_authorization(receipts: tuple[GraphWriteReceipt, ...], actions: tuple[ExactFactRecoveryAction, ...]) -> None:
         """Require current exact surviving mapping support and canonical replacement proof, never certify old shared fields by subtraction."""
-        await _recovery_authorization(factory, operation, mapping, token, receipts, active_dispatch)
+        await _recovery_authorization(factory, adm, operation, mapping, token, receipts, active_dispatch)
         latest = {state.fact_id: state for receipt in receipts for state in receipt.intended_fact_support}
         for action in actions:
             support = latest.get(action.fact_id)
@@ -671,7 +783,7 @@ async def _context(factory: async_sessionmaker[AsyncSession], session: AsyncSess
                 expected_mappings = {row.id for row in rows if str(row.episode_id) in historical_support and not row.tombstoned}
                 if set(action.rebuild_mapping_ids) != expected_mappings:
                     raise GraphOperationError("graph_fact_rebuild_support_unproved")
-                await _authorize_scheduled_rebuild(factory, operation, mapping, action.rebuild_mapping_ids, {("fact", action.fact_id)})
+                await _authorize_scheduled_rebuild(factory, adm, operation, mapping, action.rebuild_mapping_ids, {("fact", action.fact_id)})
             elif action.action == "delete_unsupported":
                 if remaining:
                     terminal = {str(row.episode_id) for row in rows if row.tombstoned and row.external_state == "absent"
@@ -683,14 +795,15 @@ async def _context(factory: async_sessionmaker[AsyncSession], session: AsyncSess
             elif action.replacement is None or set(action.replacement.episode_ids) != remaining:
                 raise GraphOperationError("graph_fact_current_support_unproved")
             else:
-                await _validate_fact_replacement(session, mapping, bindings, rows, action)
+                await _validate_fact_replacement(session, adm, mapping, bindings, rows, action)
 
     async def authorize_aggregate(aggregate: RecoveryReceiptAggregate,
                                   receipts: tuple[GraphWriteReceipt, ...], mode: str) -> None:
         """Certify a complete immutable ledger prefix and actual witnesses without waiving graph state comparisons."""
-        await _lease(factory, operation.id, token)
+        await _lease(factory, adm, operation.id, token)
         async with factory() as check:
-            expected_receipts, expected_aggregate = await _receipt_inventory(check, operation.id, aggregate.ledger_count,
+            await _admit(check, adm)
+            expected_receipts, expected_aggregate = await _receipt_inventory(check, operation.id, aggregate.ledger_count, adm=adm,
                 witness_sequences=aggregate.witness_sequences)
         if (aggregate != expected_aggregate or receipts != expected_receipts
                 or aggregate.operation_id != operation.id or aggregate.lease_token != operation.receipt_token
@@ -699,26 +812,30 @@ async def _context(factory: async_sessionmaker[AsyncSession], session: AsyncSess
 
     async def authorize_rebuild_absence(kind: str, effect_id: str) -> None:
         """Consume an original destructive journal through a durable dependency only after exact graph absence is observed."""
-        await _lease(factory, operation.id, token)
+        await _lease(factory, adm, operation.id, token)
         async with factory() as check:
+            await _admit(check, adm)
             # Same-operation node cleanup can delete an incident fact before its
             # separate fact pass. It retains its own receipt identity throughout.
             source_ids = [operation.id]
             cursor = None
             while True:
-                query = select(GraphRebuildDependency).where(GraphRebuildDependency.mapping_id == mapping.id,
+                query = select(GraphRebuildDependency).where(
+                    GraphRebuildDependency.workspace_id == adm.scope.workspace_id,
+                    GraphRebuildDependency.mapping_id == mapping.id,
                     GraphRebuildDependency.source_generation == mapping.source_generation)
                 if cursor is not None:
                     query = query.where(GraphRebuildDependency.operation_id > cursor)
                 dependencies = (await check.scalars(query.order_by(GraphRebuildDependency.operation_id).limit(100))).all()
                 source_ids.extend(row.operation_id for row in dependencies if [kind, effect_id] in row.effect_ids)
                 for source_id in source_ids:
-                    source_operation = await check.get(GraphOperation, source_id)
+                    source_operation = await _get(check, GraphOperation, source_id, adm)
                     if source_operation is None or source_operation.partition_id != mapping.partition_id:
                         continue
                     if source_id != operation.id and source_operation.cleanup_completed_at is None:
                         continue
-                    unresolved = (await check.scalars(select(GraphDispatch).where(GraphDispatch.operation_id == source_id,
+                    unresolved = (await check.scalars(select(GraphDispatch).where(
+                        GraphDispatch.workspace_id == adm.scope.workspace_id, GraphDispatch.operation_id == source_id,
                         GraphDispatch.completed_at.is_(None), GraphDispatch.cessation_verified_at.is_(None)).limit(2))).all()
                     if any(source_id != operation.id or active_dispatch is None or row.lease_owner != token
                             or row.server_run_id != active_dispatch.server_run_id or row.client_id != active_dispatch.client_id
@@ -726,8 +843,9 @@ async def _context(factory: async_sessionmaker[AsyncSession], session: AsyncSess
                         continue
                     sequence = 0
                     while True:
-                        receipts = (await check.scalars(select(GraphReceipt).where(GraphReceipt.operation_id == source_id,
-                            GraphReceipt.sequence >= sequence).order_by(GraphReceipt.sequence).limit(100))).all()
+                        receipts = (await check.scalars(select(GraphReceipt).where(
+                            GraphReceipt.workspace_id == adm.scope.workspace_id,
+                            GraphReceipt.operation_id == source_id, GraphReceipt.sequence >= sequence).order_by(GraphReceipt.sequence).limit(100))).all()
                         for row in receipts:
                             receipt = TypeAdapter(GraphWriteReceipt).validate_python(row.payload)
                             if (receipt.phase != "cleanup_write_intent" or receipt.group_id != str(mapping.partition_id)
@@ -769,7 +887,7 @@ async def _context(factory: async_sessionmaker[AsyncSession], session: AsyncSess
                 # Empty ModelMapping is the gateway's actual disabled model
                 # contract; authorize rejects inference for this cleanup scope.
                 dimensions = mapping.embedding_identity.get("dimensions") if alias == "embedding" else None
-                return GraphModelPolicy(alias, ModelMapping(), RequestPolicy(), dimensions=dimensions)
+                return GraphModelPolicy(alias, ModelMapping(), RequestPolicy(**bound), dimensions=dimensions)
             raise GraphOperationError("graph_model_alias_unconfigured")
         dimensions = (mapping.embedding_identity.get("dimensions") or settings.graph_embedding_dimensions) if alias == "embedding" else None
         return GraphModelPolicy(alias, selected, policy, dimensions=dimensions)
@@ -777,7 +895,7 @@ async def _context(factory: async_sessionmaker[AsyncSession], session: AsyncSess
     graph_episode_ids = tuple(str(row.episode_id) for row in rows
                               if row.external_state != "absent" or row.id == mapping.id)
     history = tuple(str(row.episode_id) for row in rows if row.status == "synchronized" and not row.tombstoned)[:10]
-    receipt_history, receipt_aggregate = await _receipt_inventory(session, operation.id)
+    receipt_history, receipt_aggregate = await _receipt_inventory(session, operation.id, adm=adm)
     context = OperationAuthorization(
         group_id=str(mapping.partition_id), source_id=mapping.source_id,
         source_generation=mapping.source_generation, operation_id=operation.id, lease_token=operation.receipt_token,
@@ -796,20 +914,24 @@ async def _context(factory: async_sessionmaker[AsyncSession], session: AsyncSess
     )
     gateway = ModelGateway(redis, config.omniroute_base_url, config.omniroute_api_key,
                            config.endpoint_destination_id or "", timeout_seconds=min(config.request_timeout_seconds, 30),
-                           gateway_identity=config.gateway_identity, approved_endpoint_cidrs=config.endpoint_allowed_cidrs)
+                           scope=adm.scope, gateway_identity=config.gateway_identity,
+                           configuration_revision=config.configuration_revision, before_send=fence_check,
+                           approved_endpoint_cidrs=config.endpoint_allowed_cidrs)
     return context, gateway, rows
 
 
-async def _recovery_authorization(factory: async_sessionmaker[AsyncSession], operation: GraphOperation,
+async def _recovery_authorization(factory: async_sessionmaker[AsyncSession], adm: _Admission, operation: GraphOperation,
                                    mapping: GraphMapping, token: UUID, receipts: tuple[GraphWriteReceipt, ...],
                                    active_dispatch: DispatchOwnership | None = None) -> None:
     """Compare each supplied receipt with the complete committed ledger and require concrete prior dispatch cessation."""
-    await _lease(factory, operation.id, token)
+    await _lease(factory, adm, operation.id, token)
     async with factory() as check:
+        await _admit(check, adm)
         missing = list(receipts)
         sequence = 0
         while missing:
-            page = (await check.scalars(select(GraphReceipt).where(GraphReceipt.operation_id == operation.id,
+            page = (await check.scalars(select(GraphReceipt).where(
+                GraphReceipt.workspace_id == adm.scope.workspace_id, GraphReceipt.operation_id == operation.id,
                 GraphReceipt.sequence >= sequence).order_by(GraphReceipt.sequence).limit(100))).all()
             if not page:
                 break
@@ -817,7 +939,7 @@ async def _recovery_authorization(factory: async_sessionmaker[AsyncSession], ope
             missing = [receipt for receipt in missing if receipt not in originals]
             sequence = page[-1].sequence + 1
         unresolved = (await check.scalars(select(GraphDispatch).where(
-            GraphDispatch.operation_id == operation.id,
+            GraphDispatch.workspace_id == adm.scope.workspace_id, GraphDispatch.operation_id == operation.id,
             GraphDispatch.completed_at.is_(None), GraphDispatch.cessation_verified_at.is_(None)))).all()
         # Only the exact current scope may be live during its recovery callback;
         # an earlier ambiguous scope with the same task token still blocks.
@@ -830,7 +952,7 @@ async def _recovery_authorization(factory: async_sessionmaker[AsyncSession], ope
             raise GraphOperationError("graph_recovery_owner_proof_missing")
 
 
-async def _validate_fact_replacement(session: AsyncSession, mapping: GraphMapping,
+async def _validate_fact_replacement(session: AsyncSession, adm: _Admission, mapping: GraphMapping,
                                      bindings: tuple[CanonicalEntityBinding, ...], rows: list[GraphMapping],
                                      action: ExactFactRecoveryAction) -> None:
     """Authorize a fresh canonical relationship snapshot over exact mapped endpoints and survivor evidence."""
@@ -840,7 +962,7 @@ async def _validate_fact_replacement(session: AsyncSession, mapping: GraphMappin
         raise GraphOperationError("graph_candidate_fact_requires_current_owner_proof")
     snapshot = action.replacement
     assert snapshot is not None
-    relation = await _current_relationship_snapshot(session, left, right, snapshot.name)
+    relation = await _current_relationship_snapshot(session, adm, left, right, snapshot.name)
     version_ids = {row.document_version_id for row in rows if str(row.episode_id) in snapshot.episode_ids and not row.tombstoned}
     if not relation or not relation.relationship.evidence or any(
         UUID(str(item["document_version_id"])) not in version_ids for item in relation.supports
@@ -857,11 +979,14 @@ async def _validate_fact_replacement(session: AsyncSession, mapping: GraphMappin
         raise GraphOperationError("graph_fact_current_snapshot_unproved")
 
 
-async def _current_relationship_snapshot(session: AsyncSession, left: UUID, right: UUID, kind: str | None = None) -> relationships.RelationshipSnapshot | None:
+async def _current_relationship_snapshot(session: AsyncSession, adm: _Admission, left: UUID, right: UUID, kind: str | None = None) -> relationships.RelationshipSnapshot | None:
     """Page owner relationships and lock the one unambiguous exact canonical endpoint match; no name inference."""
     cursor, found = None, None
     while True:
-        page = await relationships.list_relationships(session, limit=100, cursor=cursor, entity_id=left)
+        page = await relationships.list_relationships(
+            session, limit=100, cursor=cursor, entity_id=left,
+            scope=adm.scope, multi_workspace_enabled=adm.multi,
+        )
         for relation in page.items:
             if relation.source_entity_id == left and relation.target_entity_id == right and (kind is None or relation.type == kind):
                 if found is not None:
@@ -872,11 +997,15 @@ async def _current_relationship_snapshot(session: AsyncSession, left: UUID, righ
         cursor = page.next_cursor
     if found is None:
         raise GraphOperationError("graph_fact_canonical_mapping_unavailable")
-    await relationships.lock_relationship_ids(session, [found])
-    return await relationships.get_relationship_snapshot(session, found)
+    await relationships.lock_relationship_ids(
+        session, [found], scope=adm.scope, multi_workspace_enabled=adm.multi,
+    )
+    return await relationships.get_relationship_snapshot(
+        session, found, scope=adm.scope, multi_workspace_enabled=adm.multi,
+    )
 
 
-async def _fresh_fact_action(factory: async_sessionmaker[AsyncSession], session: AsyncSession,
+async def _fresh_fact_action(factory: async_sessionmaker[AsyncSession], adm: _Admission, session: AsyncSession,
                               ctx: dict[str, object], operation: GraphOperation, mapping: GraphMapping, token: UUID,
                               context: OperationAuthorization, rows: list[GraphMapping], fact_id: str,
                               source_node_id: str, target_node_id: str, expected: str,
@@ -892,7 +1021,7 @@ async def _fresh_fact_action(factory: async_sessionmaker[AsyncSession], session:
     left, right = bindings.get(source_node_id), bindings.get(target_node_id)
     if left is None or right is None or not left.node_name or not right.node_name:
         raise GraphOperationError("graph_candidate_fact_requires_rebuild")
-    relation = await _current_relationship_snapshot(session, left.canonical_entity_id, right.canonical_entity_id)
+    relation = await _current_relationship_snapshot(session, adm, left.canonical_entity_id, right.canonical_entity_id)
     if relation is None or not relation.relationship.evidence:
         raise GraphOperationError("graph_fact_current_evidence_unproved")
     versions = {row.document_version_id for row in rows if str(row.episode_id) in survivors and not row.tombstoned}
@@ -910,23 +1039,29 @@ async def _fresh_fact_action(factory: async_sessionmaker[AsyncSession], session:
         raise GraphOperationError("graph_embedding_identity_changed_requires_rebuild")
     settings = cast(Settings, ctx["settings"])
     redis = cast(Redis, ctx["redis"])
-    config = await settings_public.get_ai_execution_config(session, settings, redis)
-    gateway = ModelGateway(redis, config.omniroute_base_url, config.omniroute_api_key,
-        config.endpoint_destination_id or "", timeout_seconds=min(config.request_timeout_seconds, 30),
-        gateway_identity=config.gateway_identity, approved_endpoint_cidrs=config.endpoint_allowed_cidrs)
-
+    config = await settings_public.get_ai_execution_config(session, settings, redis, scope=adm.scope)
     async def before_send() -> None:
         """Fence a fresh surviving-fact embedding against policy/model drift and deleted canonical evidence."""
-        await _lease(factory, operation.id, token)
-        current_source = await sources.get_source(session, mapping.source_id)
-        current_relation = await relationships.get_relationship_snapshot(session, relation.relationship.id)
+        await _lease(factory, adm, operation.id, token)
+        current_source = await sources.get_source(
+            session, mapping.source_id, scope=adm.scope, multi_workspace_enabled=adm.multi,
+        )
+        current_relation = await relationships.get_relationship_snapshot(
+            session, relation.relationship.id, scope=adm.scope, multi_workspace_enabled=adm.multi,
+        )
         async with factory() as check:
-            current_config = await settings_public.get_ai_execution_config(check, settings, redis)
+            await _admit(check, adm)
+            current_config = await settings_public.get_ai_execution_config(check, settings, redis, scope=adm.scope)
         if (current_source is None or current_source.status != "active" or current_source.generation != mapping.source_generation
                 or current_relation is None or current_relation.digest != relation.digest
                 or current_config.configuration_revision != config.configuration_revision
                 or current_config.aliases.get("embedding") != model.mapping):
             raise PrivacyPolicyDenied("Current surviving fact support or model policy changed")
+
+    gateway = ModelGateway(redis, config.omniroute_base_url, config.omniroute_api_key,
+        config.endpoint_destination_id or "", timeout_seconds=min(config.request_timeout_seconds, 30),
+        scope=adm.scope, gateway_identity=config.gateway_identity,
+        configuration_revision=config.configuration_revision, before_send=before_send, approved_endpoint_cidrs=config.endpoint_allowed_cidrs)
 
     raw = await gateway.embed(model.alias, model.mapping, model.policy, [value], before_send=before_send)
     data = raw.get("data") if isinstance(raw, dict) else None
@@ -945,22 +1080,23 @@ async def _fresh_fact_action(factory: async_sessionmaker[AsyncSession], session:
         "replace_from_current_support", replacement)
 
 
-async def _finish(factory: async_sessionmaker[AsyncSession], operation_id: UUID, token: UUID,
+async def _finish(factory: async_sessionmaker[AsyncSession], adm: _Admission, operation_id: UUID, token: UUID,
                    status: str, error_code: str | None, *, external_state: str | None = None,
                    retry_upsert: bool = False) -> None:
     """Finish only the current lease/revision; durable unknown blocks the partition until exact cessation/recovery."""
     async with factory() as session:
-        locator = await session.get(GraphOperation, operation_id)
+        await _admit(session, adm)
+        locator = await _get(session, GraphOperation, operation_id, adm)
         if locator is None:
             return
         # Match claim order: partition precedes intent and mapping. Reversing
         # these rows would deadlock recovery against a concurrent claimant.
-        partition = await session.get(GraphPartition, locator.partition_id, with_for_update=True)
-        operation = await session.get(GraphOperation, operation_id, with_for_update=True)
+        partition = await _get(session, GraphPartition, locator.partition_id, adm, lock=True)
+        operation = await _get(session, GraphOperation, operation_id, adm, lock=True)
         assert operation is not None
         if operation.lease_owner != token:
             return
-        mapping = await session.get(GraphMapping, operation.mapping_id, with_for_update=True)
+        mapping = await _get(session, GraphMapping, operation.mapping_id, adm, lock=True)
         assert mapping is not None
         current_revision = mapping.desired_revision == operation.desired_revision and mapping.desired_digest == operation.desired_digest
         operation.status, operation.error_code = status, error_code
@@ -1006,10 +1142,10 @@ async def _finish(factory: async_sessionmaker[AsyncSession], operation_id: UUID,
             assert mapping is not None
             mapping.status, mapping.applied_revision, mapping.applied_digest = "pending", 0, None
             await public._queue(session, mapping, "upsert")
-        await commit_with_replay(session, [await public.graph_status_change(session, mapping.id)])
+        await _commit(session, adm, [await public.graph_status_change(session, mapping.id, scope=adm.scope)])
 
 
-async def _publish_clean_projection(factory: async_sessionmaker[AsyncSession], operation: GraphOperation,
+async def _publish_clean_projection(factory: async_sessionmaker[AsyncSession], adm: _Admission, operation: GraphOperation,
                                      token: UUID) -> bool:
     """Publish proved absence for the current desired intent after every original mapping journal is cleaned.
 
@@ -1018,9 +1154,10 @@ async def _publish_clean_projection(factory: async_sessionmaker[AsyncSession], o
     without claiming canonical synchronization or releasing the worker lease.
     """
     async with factory() as session:
-        partition = await session.get(GraphPartition, operation.partition_id, with_for_update=True)
-        current = await session.get(GraphOperation, operation.id, with_for_update=True)
-        mapping = await session.get(GraphMapping, operation.mapping_id, with_for_update=True)
+        await _admit(session, adm)
+        partition = await _get(session, GraphPartition, operation.partition_id, adm, lock=True)
+        current = await _get(session, GraphOperation, operation.id, adm, lock=True)
+        mapping = await _get(session, GraphMapping, operation.mapping_id, adm, lock=True)
         assert current is not None
         assert partition is not None
         if partition.lease_token != token or current.lease_owner != token:
@@ -1029,7 +1166,7 @@ async def _publish_clean_projection(factory: async_sessionmaker[AsyncSession], o
         if mapping.desired_revision != operation.desired_revision or mapping.desired_digest != operation.desired_digest:
             return False
         mapping.external_state = "absent"
-        await commit_with_replay(session, [await public.graph_status_change(session, mapping.id)])
+        await _commit(session, adm, [await public.graph_status_change(session, mapping.id, scope=adm.scope)])
         return True
 
 
@@ -1063,40 +1200,54 @@ async def process_graph_operation(ctx: dict[str, object], operation_id_value: st
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     operation_id = UUID(operation_id_value)
     token = None
+    # Fence first: durable lineage + account/workspace/membership admission and the
+    # knowledge.temporal gate come before the capacity slot, the claim or any domain lock.
+    # A denied subject is skipped with no ACK, retry or rebase onto fresh authority.
+    adm = await _admit_job(factory, cast(Settings, ctx["settings"]), operation_id)
+    if adm is None:
+        return
     graph = TemporalGraph(GraphConfiguration.from_settings(cast(Settings, ctx["settings"])))
     try:
         async with heavy_job_slot(factory, timeout_seconds=OWNER_BUDGET_SECONDS):
             try:
-                token = await _claim(factory, operation_id)
+                token = await _claim(factory, adm, operation_id)
                 if token is None:
                     return
+                async with factory() as before_graph:
+                    # Compare the original again immediately before the first graph contact.
+                    await _admit(before_graph, adm)
                 state = await graph.initialize()
                 async with factory() as dependency:
-                    current = await dependency.get(GraphOperation, operation_id, with_for_update=True)
+                    await _admit(dependency, adm)
+                    current = await _get(dependency, GraphOperation, operation_id, adm, lock=True)
                     assert current is not None
-                    fingerprint = await _dependency_fingerprint(dependency, ctx, state, current.partition_id)
+                    fingerprint = await _dependency_fingerprint(dependency, ctx, state, adm, current.partition_id)
                     current.dependency_fingerprint = fingerprint
-                    await dependency.commit()
+                    await _commit(dependency, adm)
                 if state != GraphState.READY:
-                    await _finish(factory, operation_id, token, "blocked", "graph_" + str(state))
+                    await _finish(factory, adm, operation_id, token, "blocked", "graph_" + str(state))
                     return
                 async with factory() as session:
-                    operation = await session.get(GraphOperation, operation_id)
+                    await _admit(session, adm)
+                    operation = await _get(session, GraphOperation, operation_id, adm)
                     assert operation is not None
-                    mapping = await session.get(GraphMapping, operation.mapping_id)
+                    mapping = await _get(session, GraphMapping, operation.mapping_id, adm)
                     assert mapping is not None
                     ancestor = await session.scalar(select(GraphOperation.id).where(
+                        GraphOperation.workspace_id == adm.scope.workspace_id,
                         GraphOperation.mapping_id == mapping.id, GraphOperation.id != operation.id,
                         GraphOperation.cleanup_completed_at.is_(None),
-                        (select(GraphReceipt.id).where(GraphReceipt.operation_id == GraphOperation.id).exists())
+                        (select(GraphReceipt.id).where(GraphReceipt.workspace_id == adm.scope.workspace_id,
+                            GraphReceipt.operation_id == GraphOperation.id).exists())
                         | GraphOperation.dispatched_at.is_not(None)
                     ).order_by(GraphOperation.created_at.desc(), GraphOperation.id.desc()).limit(1))
                     # Establish cessation/absence before model identity checks. A
                     # cleaned old identity must not prevent a new model rebuild;
                     # inference receives a separate current-policy scope below.
-                    context, gateway, rows = await _context(factory, session, ctx, operation, mapping, token,
+                    context, gateway, rows = await _context(factory, adm, session, ctx, operation, mapping, token,
                                                            cleanup=True)
                     prior_dispatches = (await session.scalars(select(GraphDispatch).where(
+                        GraphDispatch.workspace_id == adm.scope.workspace_id,
                         GraphDispatch.operation_id == operation.id, GraphDispatch.completed_at.is_(None),
                         GraphDispatch.cessation_verified_at.is_(None)).order_by(GraphDispatch.id))).all()
                     for prior_dispatch in prior_dispatches:
@@ -1107,35 +1258,38 @@ async def process_graph_operation(ctx: dict[str, object], operation_id_value: st
                         if not await graph.verify_dispatch_cessation(previous, context):
                             raise GraphOperationUnknown("graph_prior_dispatch_still_unknown")
                         async with factory() as stopped:
+                            await _admit(stopped, adm)
                             assert operation is not None
-                            current = await stopped.get(GraphOperation, operation.id, with_for_update=True)
+                            current = await _get(stopped, GraphOperation, operation.id, adm, lock=True)
                             assert current is not None
                             current.cessation_verified_at = datetime.now(UTC)
                             current.cessation_reason = "owned_sync_client_killed"
-                            journal = await stopped.get(GraphDispatch, prior_dispatch.id, with_for_update=True)
+                            journal = await _get(stopped, GraphDispatch, prior_dispatch.id, adm, lock=True)
                             assert journal is not None
                             journal.cessation_verified_at = datetime.now(UTC)
                             journal.cessation_reason = "owned_sync_client_killed"
-                            await stopped.commit()
+                            await _commit(stopped, adm)
                     if context.receipt_history:
-                        await _recover(graph, factory, session, ctx, operation, mapping, token, context, rows)
+                        await _recover(graph, factory, adm, session, ctx, operation, mapping, token, context, rows)
                         return
                     if ancestor is not None:
-                        await _recover_ancestor(graph, factory, session, ctx, ancestor, operation, mapping, token)
+                        await _recover_ancestor(graph, factory, adm, session, ctx, ancestor, operation, mapping, token)
                         return
-                    if not await _publish_clean_projection(factory, operation, token):
+                    if not await _publish_clean_projection(factory, adm, operation, token):
                         assert operation is not None
-                        await _finish(factory, operation.id, token, "succeeded", None)
+                        await _finish(factory, adm, operation.id, token, "succeeded", None)
                         return
                     await session.refresh(mapping)
                     assert mapping is not None
                     if mapping.tombstoned:
                         assert operation is not None
-                        await _finish(factory, operation.id, token, "succeeded", None, external_state="absent")
+                        await _finish(factory, adm, operation.id, token, "succeeded", None, external_state="absent")
                         return
-                    context, gateway, rows = await _context(factory, session, ctx, operation, mapping, token, cleanup=False)
+                    context, gateway, rows = await _context(factory, adm, session, ctx, operation, mapping, token, cleanup=False)
                     assert mapping is not None
-                    data = await documents.read_extraction_input(session, mapping.document_version_id)
+                    data = await documents.read_extraction_input(
+                        session, mapping.document_version_id, scope=adm.scope, multi_workspace_enabled=adm.multi,
+                    )
                     if data is None:
                         raise GraphOperationError("graph_document_no_longer_ready")
                     content = "\n\n".join(chunk.content for chunk in data.chunks)
@@ -1148,38 +1302,49 @@ async def process_graph_operation(ctx: dict[str, object], operation_id_value: st
                         await graph.upsert_episode(request, context, gateway)
                     # The awaited synchronous command transport completed; publication still
                     # needs owner locks and revision checks after remote inference.
-                    await entities.lock_entity_ids(session, [binding.canonical_entity_id for binding in context.canonical_bindings])
-                    event_refs = await timeline.temporal_event_refs(session, [mapping.document_version_id])
-                    await timeline.lock_event_ids(session, sorted({item["event_id"] for item in event_refs}, key=str))
+                    await entities.lock_entity_ids(
+                        session, [binding.canonical_entity_id for binding in context.canonical_bindings],
+                        scope=adm.scope, multi_workspace_enabled=adm.multi)
+                    event_refs = await timeline.temporal_event_refs(
+                        session, [mapping.document_version_id], scope=adm.scope, multi_workspace_enabled=adm.multi)
+                    await timeline.lock_event_ids(
+                        session, sorted({item["event_id"] for item in event_refs}, key=str),
+                        scope=adm.scope, multi_workspace_enabled=adm.multi)
                     current_bindings = tuple(replace(binding, mapping_revision=operation.desired_revision)
                         for binding in await _bindings(session, mapping,
                             [item for item in await session.scalars(select(GraphSupport).where(
-                                GraphSupport.mapping_id == mapping.id, GraphSupport.removed.is_(False))) ]))
+                                GraphSupport.workspace_id == adm.scope.workspace_id,
+                                GraphSupport.mapping_id == mapping.id, GraphSupport.removed.is_(False))) ],
+                            scope=adm.scope, multi_workspace_enabled=adm.multi))
                     if current_bindings != context.canonical_bindings:
                         raise GraphOperationUnknown("graph_canonical_revision_changed_before_publication")
                     # Source/document/entity/event fences remain held while the
                     # independent projection transaction publishes its revision.
                     # Releasing them first lets a correction invalidate this result.
-                    await _finish(factory, operation.id, token, "succeeded", None, external_state="present")
+                    await _finish(factory, adm, operation.id, token, "succeeded", None, external_state="present")
             except (GraphOperationUnknown, asyncio.CancelledError, TimeoutError):
                 if token:
-                    await _join_local_cleanup(_finish(factory, operation_id, token, "reconcile_needed", "graph_outcome_unknown"))
+                    await _join_local_cleanup(_finish(factory, adm, operation_id, token, "reconcile_needed", "graph_outcome_unknown"))
             except (GraphOperationError, ValueError, LookupError, PrivacyPolicyDenied) as exc:
                 if token:
-                    await _join_local_cleanup(_finish(factory, operation_id, token, "blocked", str(exc) if str(exc).startswith("graph_") else "graph_owner_proof_unavailable"))
+                    await _join_local_cleanup(_finish(factory, adm, operation_id, token, "blocked", str(exc) if str(exc).startswith("graph_") else "graph_owner_proof_unavailable"))
             finally:
                 await _join_local_cleanup(graph.close())
     except HeavyWorkBusy as exc:
         raise Retry(defer=HEAVY_RETRY_DEFER_SECONDS) from exc
     except RemoteHeavyWorkBlocked as exc:
         raise Retry(defer=30) from exc
+    except HTTPException:
+        # Original workspace authority was revoked or changed: no further effect, ACK or rebase.
+        # The lease expires; legitimately admitted recovery handles any unknown outcome later.
+        return
     except HeavyLeaseLost:
         # The cancellation handler already fenced the graph outcome before its
         # awaited local cleanup; ownership loss itself is not remote cessation.
         return
 
 
-async def _recover(graph: TemporalGraph, factory: async_sessionmaker[AsyncSession], session: AsyncSession,
+async def _recover(graph: TemporalGraph, factory: async_sessionmaker[AsyncSession], adm: _Admission, session: AsyncSession,
                     ctx: dict[str, object], operation: GraphOperation, mapping: GraphMapping, token: UUID,
                     context: OperationAuthorization, rows: list[GraphMapping], *, cleanup_only: bool = False) -> None:
     """Inspect an original journal and recover typed effects under current owner fences.
@@ -1222,10 +1387,11 @@ async def _recover(graph: TemporalGraph, factory: async_sessionmaker[AsyncSessio
                 and all(link.relationship_type == "MENTIONS" and link.source_node_id == str(mapping.episode_id)
                     and link.target_node_id in intended_nodes for link in inspection.current_mention_links)):
             await context.validate_partition("upsert", str(mapping.episode_id))
-            await _finish(factory, operation.id, token, "succeeded", None, external_state="present")
+            await _finish(factory, adm, operation.id, token, "succeeded", None, external_state="present")
             return
     async with factory() as refresh:
-        receipts, aggregate = await _receipt_inventory(refresh, operation.id, inspection=inspection)
+        await _admit(refresh, adm)
+        receipts, aggregate = await _receipt_inventory(refresh, operation.id, adm=adm, inspection=inspection)
     context = replace(context, receipt_history=receipts, receipt_aggregate=aggregate)
     node_fingerprints = dict(inspection.current_entity_state_fingerprints)
     actual_actions = tuple(replace(action, expected_current_state_fingerprint=node_fingerprints.get(action.graph_entity_uuid),
@@ -1236,7 +1402,7 @@ async def _recover(graph: TemporalGraph, factory: async_sessionmaker[AsyncSessio
         episodes = {episode for link in action.expected_incident_links for episode in link.episode_ids}
         episodes.update(link.source_node_id for link in action.expected_incident_links if link.relationship_type == "MENTIONS")
         if action.action == "delete_orphan" and episodes - {str(mapping.episode_id)}:
-            dependencies = await _mark_dependents_for_rebuild(factory, operation, mapping, token, rows, episodes,
+            dependencies = await _mark_dependents_for_rebuild(factory, adm, operation, mapping, token, rows, episodes,
                 {("node", action.graph_entity_uuid)} | {("fact" if link.relationship_type != "MENTIONS" else "mention", link.edge_id)
                     for link in action.expected_incident_links})
             action = replace(action, action="delete_for_rebuild", rebuild_mapping_ids=dependencies)
@@ -1249,24 +1415,26 @@ async def _recover(graph: TemporalGraph, factory: async_sessionmaker[AsyncSessio
         async with graph.dispatch_session(context):
             node_outcome = await graph.reconcile_canonical_nodes(receipts, repaired_actions, context)
         if not node_outcome.converged or node_outcome.unresolved_ids:
-            await _finish(factory, operation.id, token, "reconcile_needed", "graph_node_recovery_pending")
+            await _finish(factory, adm, operation.id, token, "reconcile_needed", "graph_node_recovery_pending")
             return
     async with factory() as refresh:
-        receipts, aggregate = await _receipt_inventory(refresh, operation.id)
+        await _admit(refresh, adm)
+        receipts, aggregate = await _receipt_inventory(refresh, operation.id, adm=adm)
     context = replace(context, receipt_history=receipts, receipt_aggregate=aggregate, node_recovery_actions=actual_actions)
     # Node repair may remove an incident fact or change its fingerprint. Build
     # every subsequent fact action from a new exact readback of the new journal.
     async with graph.dispatch_session(context):
         inspection = await graph.inspect_write_receipt(receipts, context, actual_actions)
     async with factory() as refresh:
-        receipts, aggregate = await _receipt_inventory(refresh, operation.id, inspection=inspection)
+        await _admit(refresh, adm)
+        receipts, aggregate = await _receipt_inventory(refresh, operation.id, adm=adm, inspection=inspection)
     final_node_states = {identifier: fingerprint for receipt in receipts
         for identifier, fingerprint in receipt.intended_entity_state_fingerprints}
     inspected_nodes = dict(inspection.current_entity_state_fingerprints)
     if any(action.graph_entity_uuid not in final_node_states or
             inspected_nodes.get(action.graph_entity_uuid) != final_node_states[action.graph_entity_uuid]
             for action in repaired_actions):
-        await _finish(factory, operation.id, token, "reconcile_needed", "graph_node_final_readback_changed")
+        await _finish(factory, adm, operation.id, token, "reconcile_needed", "graph_node_final_readback_changed")
         return
     latest_support = {state.fact_id: state for receipt in receipts for state in receipt.intended_fact_support}
     current_facts = {state.fact_id: state for state in inspection.current_fact_states}
@@ -1291,14 +1459,14 @@ async def _recover(graph: TemporalGraph, factory: async_sessionmaker[AsyncSessio
                                                         expected, "delete_unsupported"))
         else:
             try:
-                fact_actions.append(await _fresh_fact_action(factory, session, ctx, operation, mapping, token,
+                fact_actions.append(await _fresh_fact_action(factory, adm, session, ctx, operation, mapping, token,
                     context, rows, fact_id, state.source_node_id, state.target_node_id, expected, remaining))
             except GraphOperationError as exc:
                 if str(exc) not in {"graph_candidate_fact_requires_rebuild", "graph_fact_canonical_mapping_unavailable",
                         "graph_fact_canonical_mapping_ambiguous", "graph_fact_current_support_unproved",
                         "graph_embedding_identity_changed_requires_rebuild"}:
                     raise
-                dependencies = await _mark_dependents_for_rebuild(factory, operation, mapping, token, rows, remaining,
+                dependencies = await _mark_dependents_for_rebuild(factory, adm, operation, mapping, token, rows, remaining,
                     {("fact", fact_id)})
                 fact_actions.append(ExactFactRecoveryAction(fact_id, state.source_node_id, state.target_node_id,
                     expected, "delete_for_rebuild", rebuild_mapping_ids=dependencies))
@@ -1309,10 +1477,11 @@ async def _recover(graph: TemporalGraph, factory: async_sessionmaker[AsyncSessio
         async with graph.dispatch_session(context):
             fact_outcome = await graph.reconcile_fact_recovery(applicable, tuple(fact_actions), context)
         if not fact_outcome.converged or fact_outcome.unresolved_ids:
-            await _finish(factory, operation.id, token, "reconcile_needed", "graph_fact_recovery_pending")
+            await _finish(factory, adm, operation.id, token, "reconcile_needed", "graph_fact_recovery_pending")
             return
         async with factory() as refresh:
-            history, aggregate = await _receipt_inventory(refresh, operation.id)
+            await _admit(refresh, adm)
+            history, aggregate = await _receipt_inventory(refresh, operation.id, adm=adm)
             context = replace(context, receipt_history=history, receipt_aggregate=aggregate)
     canonical_only = all(receipt.phase == "canonical_node_write_intent" or
         (receipt.phase == "cleanup_write_intent" and not receipt.prior_episode_state_fingerprint)
@@ -1324,25 +1493,26 @@ async def _recover(graph: TemporalGraph, factory: async_sessionmaker[AsyncSessio
             outcome = await graph.delete_episode(mapping.episode_id, context, True, True)
         succeeded, removed = outcome.outcome == "succeeded", outcome.removed
     if not succeeded:
-        await _finish(factory, operation.id, token, "reconcile_needed", "graph_current_recovery_pending",
+        await _finish(factory, adm, operation.id, token, "reconcile_needed", "graph_current_recovery_pending",
                       external_state="absent" if removed else "unknown")
         return
     async with factory() as journal:
-        op_row = await journal.get(GraphOperation, operation.id, with_for_update=True)
+        await _admit(journal, adm)
+        op_row = await _get(journal, GraphOperation, operation.id, adm, lock=True)
         assert op_row is not None
         op_row.cleanup_completed_at = datetime.now(UTC)
-        await journal.commit()
+        await _commit(journal, adm)
     if cleanup_only:
         return
     if mapping.tombstoned:
-        await _finish(factory, operation.id, token, "succeeded", None, external_state="absent")
+        await _finish(factory, adm, operation.id, token, "succeeded", None, external_state="absent")
     else:
         # Cleanup converged; retain stable episode UUID and queue the current desired
         # canonical state under a new attempt, keeping every prior receipt immutable.
-        await _finish(factory, operation.id, token, "succeeded", None, external_state="absent", retry_upsert=True)
+        await _finish(factory, adm, operation.id, token, "succeeded", None, external_state="absent", retry_upsert=True)
 
 
-async def _recover_ancestor(graph: TemporalGraph, factory: async_sessionmaker[AsyncSession], session: AsyncSession,
+async def _recover_ancestor(graph: TemporalGraph, factory: async_sessionmaker[AsyncSession], adm: _Admission, session: AsyncSession,
                             ctx: dict[str, object], ancestor_id: UUID, intent: GraphOperation,
                             mapping: GraphMapping, token: UUID) -> None:
     """Clean one original operation journal per job without copying its receipt identity into a newer intent.
@@ -1352,22 +1522,25 @@ async def _recover_ancestor(graph: TemporalGraph, factory: async_sessionmaker[As
     advances lifetime history across retries instead of loading it in memory.
     """
     async with factory() as claim:
-        partition = await claim.get(GraphPartition, mapping.partition_id, with_for_update=True)
-        ancestor = await claim.get(GraphOperation, ancestor_id, with_for_update=True)
+        await _admit(claim, adm)
+        partition = await _get(claim, GraphPartition, mapping.partition_id, adm, lock=True)
+        ancestor = await _get(claim, GraphOperation, ancestor_id, adm, lock=True)
         assert ancestor is not None
         assert partition is not None
         if partition.lease_token != token or ancestor.cleanup_completed_at is not None:
             return
         ancestor.lease_owner, ancestor.lease_expires_at = token, partition.lease_expires_at
-        await claim.commit()
+        await _commit(claim, adm)
     mapping_id, intent_id = mapping.id, intent.id
     session.expire_all()
-    fresh_ancestor = await session.get(GraphOperation, ancestor_id)
-    fresh_mapping = await session.get(GraphMapping, mapping_id)
+    await _admit(session, adm)
+    fresh_ancestor = await _get(session, GraphOperation, ancestor_id, adm)
+    fresh_mapping = await _get(session, GraphMapping, mapping_id, adm)
     assert fresh_ancestor is not None and fresh_mapping is not None
     ancestor, mapping = fresh_ancestor, fresh_mapping
-    context, _gateway, rows = await _context(factory, session, ctx, ancestor, mapping, token, cleanup=True)
-    prior = (await session.scalars(select(GraphDispatch).where(GraphDispatch.operation_id == ancestor_id,
+    context, _gateway, rows = await _context(factory, adm, session, ctx, ancestor, mapping, token, cleanup=True)
+    prior = (await session.scalars(select(GraphDispatch).where(
+        GraphDispatch.workspace_id == adm.scope.workspace_id, GraphDispatch.operation_id == ancestor_id,
         GraphDispatch.completed_at.is_(None), GraphDispatch.cessation_verified_at.is_(None)))).all()
     for dispatch in prior:
         assert ancestor is not None
@@ -1375,77 +1548,147 @@ async def _recover_ancestor(graph: TemporalGraph, factory: async_sessionmaker[As
         if not await graph.verify_dispatch_cessation(ownership, context):
             raise GraphOperationUnknown("graph_ancestor_dispatch_unknown")
         async with factory() as journal:
-            stopped = await journal.get(GraphDispatch, dispatch.id, with_for_update=True)
+            await _admit(journal, adm)
+            stopped = await _get(journal, GraphDispatch, dispatch.id, adm, lock=True)
             assert stopped is not None
             stopped.cessation_verified_at, stopped.cessation_reason = datetime.now(UTC), "owned_sync_client_killed"
-            await journal.commit()
+            await _commit(journal, adm)
     if context.receipt_history:
-        await _recover(graph, factory, session, ctx, ancestor, mapping, token, context, rows, cleanup_only=True)
+        await _recover(graph, factory, adm, session, ctx, ancestor, mapping, token, context, rows, cleanup_only=True)
     else:
         # Dispatch setup may create indexes, but every logical node/episode/fact
         # write awaits its durable prewrite receipt. No receipt plus exact prior
         # cessation proves this original actor owns no logical cleanup effects.
         async with factory() as journal:
+            await _admit(journal, adm)
             assert ancestor is not None
-            cleaned = await journal.get(GraphOperation, ancestor.id, with_for_update=True)
+            cleaned = await _get(journal, GraphOperation, ancestor.id, adm, lock=True)
             assert cleaned is not None
             cleaned.cleanup_completed_at = datetime.now(UTC)
-            await journal.commit()
+            await _commit(journal, adm)
     async with factory() as progress:
-        completed = await progress.get(GraphOperation, ancestor_id)
+        await _admit(progress, adm)
+        completed = await _get(progress, GraphOperation, ancestor_id, adm)
         assert completed is not None
         succeeded = completed.cleanup_completed_at is not None
     if not succeeded:
         raise GraphOperationUnknown("graph_ancestor_cleanup_pending")
-    await _finish(factory, intent_id, token, "reconcile_needed", "graph_ancestor_cleanup_continuation")
+    await _finish(factory, adm, intent_id, token, "reconcile_needed", "graph_ancestor_cleanup_continuation")
+
+
+async def _recovery_workspaces(redis: ArqRedis, factory: async_sessionmaker[AsyncSession]) -> list[UUID]:
+    """ Page workspaces that currently have due work, fairly, by a keyset cursor over workspace IDs.
+
+    Only identifiers are read, in a read transaction that is rolled back. A denied or disabled
+    workspace therefore costs one slot per page and cannot monopolize the oldest-first order.
+    If Redis cannot supply the cursor the scan simply restarts from the first workspace.
+    # ponytail: restart-from-first on Redis loss can re-visit denied head workspaces; page is bounded.
+    """
+    after: UUID | None = None
+    try:
+        raw = await redis.get(RECOVERY_CURSOR_KEY)
+        after = UUID(raw.decode() if isinstance(raw, bytes) else str(raw)) if raw else None
+    except (RedisError, ValueError, TypeError, OSError):
+        after = None
+    now = datetime.now(UTC)
+    due = or_(
+        and_(GraphOperation.status == "blocked", GraphOperation.next_attempt_at <= now),
+        and_(GraphOperation.status.in_(["pending", "reconcile_needed", "running"]),
+             GraphOperation.next_attempt_at <= now,
+             or_(GraphOperation.lease_expires_at.is_(None), GraphOperation.lease_expires_at <= now)),
+    )
+    candidates = select(GraphOperation.workspace_id.label("workspace_id")).where(due).union(
+        select(GraphReconcileRun.workspace_id.label("workspace_id")).where(
+            GraphReconcileRun.status.in_(["pending", "running"]))).subquery()
+    page: list[UUID] = []
+    for lower in ((after, None) if after is not None else (None,)):
+        async with factory() as session:
+            query = select(candidates.c.workspace_id).order_by(candidates.c.workspace_id).limit(RECOVERY_WORKSPACE_PAGE)
+            if lower is not None:
+                query = query.where(candidates.c.workspace_id > lower)
+            page = list((await session.scalars(query)).all())
+            await session.rollback()
+        if page:
+            break
+    try:
+        if page:
+            await redis.set(RECOVERY_CURSOR_KEY, str(page[-1]), ex=3600)
+        else:
+            await redis.delete(RECOVERY_CURSOR_KEY)
+    except (RedisError, OSError):
+        pass  # the next pass restarts from the first workspace
+    return page
 
 
 async def recover_graph_work(ctx: dict[str, object]) -> int:
-    """Page25 PostgreSQL due intents/runs; Redis loss does not delete work and startup never globally rebuilds."""
+    """ Recover due intents/runs one admitted workspace per transaction; Redis loss never deletes work.
+
+    Each workspace is admitted through the access fence before any lock, then handled in its own
+    short transactions (25 due rows). Denied, disabled or revoked workspaces are skipped without
+    mutation. The graph is probed only after a workspace with blocked work is admitted.
+    """
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     redis = cast(ArqRedis, ctx["redis"])
-    probe = TemporalGraph(GraphConfiguration.from_settings(cast(Settings, ctx["settings"])))
-    try:
-        dependency_state = await probe.initialize()
-    finally:
-        await probe.close()
-    async with factory() as session:
-        now = datetime.now(UTC)
-        blocked = (await session.scalars(select(GraphOperation.id).where(
-            GraphOperation.status == "blocked", GraphOperation.next_attempt_at <= now,
-        ).order_by(GraphOperation.next_attempt_at, GraphOperation.id).limit(25))).all()
-        for blocked_id in blocked:
-            # Retry admission uses the same row order as execution. Mapping is
-            # deliberately untouched; any uncertainty retains its exact ledger.
-            locator = await session.get(GraphOperation, blocked_id)
-            assert locator is not None
-            fingerprint = await _dependency_fingerprint(session, ctx, dependency_state, locator.partition_id)
-            if locator.dependency_fingerprint == fingerprint:
-                continue
-            partition = await session.get(GraphPartition, locator.partition_id, with_for_update=True)
-            operation = await session.get(GraphOperation, blocked_id, with_for_update=True)
-            assert operation is not None
-            assert partition is not None
-            if operation.status == "blocked" and (partition.lease_expires_at is None or partition.lease_expires_at <= now):
-                assert operation is not None
-                operation.status, operation.attempts = "pending", 0
-                operation.dependency_fingerprint = fingerprint
-                mapping = await session.get(GraphMapping, operation.mapping_id, with_for_update=True)
-                assert mapping is not None
-                if mapping.desired_revision == operation.desired_revision and mapping.desired_digest == operation.desired_digest:
-                    assert mapping is not None
-                    mapping.status, mapping.error_code = "pending", None
-                    await commit_with_replay(session, [await public.graph_status_change(session, mapping.id)])
-        operations = (await session.scalars(select(GraphOperation.id).where(
-            GraphOperation.status.in_(["pending", "reconcile_needed", "running"]),
-            GraphOperation.next_attempt_at <= now,
-            (GraphOperation.lease_expires_at.is_(None)) | (GraphOperation.lease_expires_at <= now),
-        ).order_by(GraphOperation.next_attempt_at, GraphOperation.id).limit(25))).all()
-        runs = (await session.scalars(select(GraphReconcileRun.id).where(GraphReconcileRun.status.in_(["pending", "running"]))
-                                      .order_by(GraphReconcileRun.created_at).limit(25).with_for_update(skip_locked=True))).all()
-        for run_id in runs:
-            await public.reconcile_slice(session, run_id)
-        await session.commit()
-    for operation_id in operations:
-        await redis.enqueue_job("process_graph_operation", str(operation_id), _job_id="graph:" + str(operation_id))
-    return len(operations)
+    settings = cast(Settings, ctx["settings"])
+    dependency_state: GraphState | None = None
+    enqueued = 0
+    for workspace_id in await _recovery_workspaces(redis, factory):
+        adm = await admit_workspace(factory, settings, workspace_id)
+        if adm is None:
+            continue
+        try:
+            now = datetime.now(UTC)
+            async with factory() as session:
+                await _admit(session, adm)
+                blocked = (await session.scalars(select(GraphOperation.id).where(
+                    GraphOperation.workspace_id == workspace_id,
+                    GraphOperation.status == "blocked", GraphOperation.next_attempt_at <= now,
+                ).order_by(GraphOperation.next_attempt_at, GraphOperation.id).limit(25))).all()
+                await session.rollback()
+            if blocked and dependency_state is None:
+                probe = TemporalGraph(GraphConfiguration.from_settings(settings))
+                try:
+                    dependency_state = await probe.initialize()
+                finally:
+                    await probe.close()
+            async with factory() as session:
+                await _admit(session, adm)
+                for blocked_id in blocked:
+                    # Retry admission uses the same row order as execution. Mapping is
+                    # deliberately untouched; any uncertainty retains its exact ledger.
+                    locator = await _get(session, GraphOperation, blocked_id, adm)
+                    assert locator is not None and dependency_state is not None
+                    fingerprint = await _dependency_fingerprint(session, ctx, dependency_state, adm, locator.partition_id)
+                    if locator.dependency_fingerprint == fingerprint:
+                        continue
+                    partition = await _get(session, GraphPartition, locator.partition_id, adm, lock=True)
+                    operation = await _get(session, GraphOperation, blocked_id, adm, lock=True)
+                    assert operation is not None
+                    assert partition is not None
+                    if operation.status == "blocked" and (partition.lease_expires_at is None or partition.lease_expires_at <= now):
+                        operation.status, operation.attempts = "pending", 0
+                        operation.dependency_fingerprint = fingerprint
+                        mapping = await _get(session, GraphMapping, operation.mapping_id, adm, lock=True)
+                        assert mapping is not None
+                        if mapping.desired_revision == operation.desired_revision and mapping.desired_digest == operation.desired_digest:
+                            mapping.status, mapping.error_code = "pending", None
+                            await _commit(session, adm, [await public.graph_status_change(session, mapping.id, scope=adm.scope)])
+                operations = (await session.scalars(select(GraphOperation.id).where(
+                    GraphOperation.workspace_id == workspace_id,
+                    GraphOperation.status.in_(["pending", "reconcile_needed", "running"]),
+                    GraphOperation.next_attempt_at <= now,
+                    (GraphOperation.lease_expires_at.is_(None)) | (GraphOperation.lease_expires_at <= now),
+                ).order_by(GraphOperation.next_attempt_at, GraphOperation.id).limit(25))).all()
+                runs = (await session.scalars(select(GraphReconcileRun.id).where(
+                    GraphReconcileRun.workspace_id == workspace_id,
+                    GraphReconcileRun.status.in_(["pending", "running"]))
+                    .order_by(GraphReconcileRun.created_at).limit(25).with_for_update(skip_locked=True))).all()
+                for run_id in runs:
+                    await public.reconcile_slice(session, run_id, scope=adm.scope, multi_workspace_enabled=adm.multi)
+                await _commit(session, adm)
+        except HTTPException:
+            continue  # authority changed mid-pass: skip this workspace, no rebase
+        for operation_id in operations:
+            await redis.enqueue_job("process_graph_operation", str(operation_id), _job_id="graph:" + str(operation_id))
+        enqueued += len(operations)
+    return enqueued
