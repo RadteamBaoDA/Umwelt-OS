@@ -64,6 +64,7 @@ class Settings(BaseSettings):
     github_webhook_receiver_revision: str = Field(default="1", min_length=1, max_length=64, validation_alias="GITHUB_WEBHOOK_RECEIVER_REVISION")
     omniroute_base_url: AnyHttpUrl | None = Field(default=None, repr=False)
     omniroute_api_key: SecretStr = SecretStr("")
+    model_gateway_slots: int = Field(default=24, ge=1, le=1000, validation_alias="MODEL_GATEWAY_SLOTS")
     omniroute_models: dict[str, str] = Field(default_factory=dict, repr=False)
     ai_credential_encryption_key: SecretStr = Field(
         default=SecretStr(""), validation_alias="AI_CREDENTIAL_ENCRYPTION_KEY", repr=False
