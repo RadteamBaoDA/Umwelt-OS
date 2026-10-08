@@ -3,6 +3,7 @@
 import base64
 import hashlib
 import json
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, cast
 from uuid import UUID
@@ -24,7 +25,7 @@ from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, Worksp
 from modules.knowledge.documents import public as documents
 from modules.knowledge.entities import public as entities
 from modules.sources import public as sources
-from modules.sources.schemas import SourceExportFence
+from modules.sources.schemas import SourceExportFence, SourceFence
 from modules.timeline.models import (
     Event,
     EventAudit,
@@ -1710,22 +1711,115 @@ async def temporal_event_refs(
             for event, evidence in rows]
 
 
-async def support_cleanup_ids(session: AsyncSession, *, document_id: UUID | None = None, source_id: UUID | None = None) -> tuple[list[UUID], list[UUID]]:
-    """Return participant entity and all affected event IDs for upfront lock closure.
+@dataclass(frozen=True)
+class TimelineSupportClosure:
+    """Workspace-qualified ID closure of timeline support for one Source or Document."""
+
+    source_id: UUID
+    document_id: UUID | None
+    event_ids: tuple[UUID, ...]
+    evidence_ids: tuple[UUID, ...]
+    participant_ids: tuple[UUID, ...]
+    participant_entity_ids: tuple[UUID, ...]
+    overflow: bool
+
+
+_CLEANUP_LIMIT = 10_000
+
+
+def _require_cleanup_fences(
+    actual: AccessFence, *, closure: TimelineSupportClosure, scope: Scope,
+    access_fence: AccessFence, source_fence: SourceFence,
+) -> None:
+    if (
+        actual != access_fence or source_fence.id != closure.source_id
+        or source_fence.workspace_id != scope.workspace_id
+    ):
+        raise HTTPException(status_code=409, detail="Cleanup authority changed")
+
+
+async def support_cleanup_ids(
+    session: AsyncSession, *, source_id: UUID, document_id: UUID | None = None,
+    scope: Scope, multi_workspace_enabled: bool,
+) -> TimelineSupportClosure:
+    """Discover (nonlocking, bounded, ID-only) the timeline support of one Source or Document.
 
     Cleanup uses one source-scoped collection invalidation, so event identities
     are not truncated to the realtime per-batch limit.
     """
-    statement = select(Event.id, EventParticipant.entity_id).join(EventEvidence, EventEvidence.event_id == Event.id).outerjoin(
-        EventParticipant, EventParticipant.event_id == Event.id)
-    if document_id is not None:
-        statement = statement.where(EventEvidence.document_id == document_id)
-    elif source_id is not None:
-        statement = statement.where(EventEvidence.source_id == source_id)
-    else:
-        raise ValueError("specify one cleanup scope")
-    rows = (await session.execute(statement)).all()
-    return sorted({entity_id for _, entity_id in rows if entity_id is not None}, key=str), sorted({event_id for event_id, _ in rows}, key=str)
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    workspace_id = scope.workspace_id
+    evidence_rows = list((await session.execute(
+        select(EventEvidence.id, EventEvidence.event_id).where(
+            EventEvidence.workspace_id == workspace_id,
+            EventEvidence.document_id == document_id if document_id is not None
+            else EventEvidence.source_id == source_id,
+        ).order_by(EventEvidence.id).limit(_CLEANUP_LIMIT + 1)
+    )).all())
+    overflow = len(evidence_rows) > _CLEANUP_LIMIT
+    evidence_rows = evidence_rows[:_CLEANUP_LIMIT]
+    evidence_ids = [row[0] for row in evidence_rows]
+    event_ids = sorted({row[1] for row in evidence_rows})
+    participant_ids: list[UUID] = []
+    entity_ids: set[UUID] = set()
+    if event_ids:
+        if evidence_ids:
+            participant_ids = list((await session.scalars(
+                select(EventParticipant.id)
+                .join(ParticipantEvidence, ParticipantEvidence.participant_id == EventParticipant.id)
+                .join(Event, Event.id == EventParticipant.event_id)
+                .where(
+                    Event.workspace_id == workspace_id,
+                    ParticipantEvidence.event_evidence_id.in_(evidence_ids),
+                ).distinct().order_by(EventParticipant.id).limit(_CLEANUP_LIMIT + 1)
+            )).all())
+            overflow |= len(participant_ids) > _CLEANUP_LIMIT
+            participant_ids = participant_ids[:_CLEANUP_LIMIT]
+        entity_rows = list((await session.scalars(
+            select(EventParticipant.entity_id)
+            .join(Event, Event.id == EventParticipant.event_id)
+            .where(Event.workspace_id == workspace_id, EventParticipant.event_id.in_(event_ids))
+            .distinct().order_by(EventParticipant.entity_id).limit(_CLEANUP_LIMIT + 1)
+        )).all())
+        overflow |= len(entity_rows) > _CLEANUP_LIMIT
+        entity_ids.update(entity_rows[:_CLEANUP_LIMIT])
+    return TimelineSupportClosure(
+        source_id=source_id, document_id=document_id, event_ids=tuple(event_ids),
+        evidence_ids=tuple(evidence_ids), participant_ids=tuple(sorted(participant_ids)),
+        participant_entity_ids=tuple(sorted(entity_ids)), overflow=overflow,
+    )
+
+
+async def prepare_support_cleanup_in_uow(
+    session: AsyncSession, closure: TimelineSupportClosure, *, scope: Scope,
+    multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+) -> None:
+    """Lock events, then evidence, then participants in UUID order; no mutation."""
+    _require_cleanup_fences(
+        await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled),
+        closure=closure, scope=scope, access_fence=access_fence, source_fence=source_fence,
+    )
+    if closure.overflow:
+        raise ValueError("Timeline support cleanup exceeds its atomic limit")
+    workspace_id = scope.workspace_id
+    if closure.event_ids:
+        await session.scalars(
+            select(Event.id).where(Event.workspace_id == workspace_id, Event.id.in_(closure.event_ids))
+            .order_by(Event.id).with_for_update()
+        )
+    if closure.evidence_ids:
+        await session.scalars(
+            select(EventEvidence.id).where(
+                EventEvidence.workspace_id == workspace_id, EventEvidence.id.in_(closure.evidence_ids),
+            ).order_by(EventEvidence.id).with_for_update()
+        )
+    if closure.participant_ids:
+        await session.scalars(
+            select(EventParticipant.id).where(
+                EventParticipant.event_id.in_(select(Event.id).where(Event.workspace_id == workspace_id)),
+                EventParticipant.id.in_(closure.participant_ids),
+            ).order_by(EventParticipant.id).with_for_update()
+        )
 
 
 async def correction_event_ids(
@@ -1879,59 +1973,80 @@ async def remove_entity_participants(
     return []
 
 
-async def remove_document_support(session: AsyncSession, *, document_id: UUID, source_id: UUID) -> list[ReplayDraft]:
-    """Remove one document's evidence and only participants whose exact support vanished; flush without commit."""
-    evidence_ids = list((await session.scalars(select(EventEvidence.id).where(EventEvidence.document_id == document_id))).all())
-    event_ids = list((await session.scalars(select(EventEvidence.event_id).where(EventEvidence.document_id == document_id))).all())
-    participant_ids = list((await session.scalars(select(EventParticipant.id).join(
-        ParticipantEvidence, ParticipantEvidence.participant_id == EventParticipant.id,
-    ).where(ParticipantEvidence.event_evidence_id.in_(evidence_ids)))).all()) if evidence_ids else []
-    await session.execute(delete(EventEvidence).where(EventEvidence.id.in_(evidence_ids)))
+async def remove_document_support(
+    session: AsyncSession, closure: TimelineSupportClosure, *, scope: Scope,
+    multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+) -> list[ReplayDraft]:
+    """Remove one document's prepared evidence and only participants whose exact support vanished."""
+    if closure.document_id is None:
+        raise ValueError("A document closure is required")
+    return await _remove_support(
+        session, closure, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence, source_fence=source_fence,
+    )
+
+
+async def remove_source_support(
+    session: AsyncSession, closure: TimelineSupportClosure, *, scope: Scope,
+    multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+) -> list[ReplayDraft]:
+    """Remove one Source's prepared support while preserving unrelated evidence and owner fields."""
+    if closure.document_id is not None:
+        raise ValueError("A Source-wide closure is required")
+    return await _remove_support(
+        session, closure, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence, source_fence=source_fence,
+    )
+
+
+async def _remove_support(
+    session: AsyncSession, closure: TimelineSupportClosure, *, scope: Scope,
+    multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+) -> list[ReplayDraft]:
+    """Held apply: rows were locked by ``prepare_support_cleanup_in_uow``; flush without commit."""
+    _require_cleanup_fences(
+        await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled),
+        closure=closure, scope=scope, access_fence=access_fence, source_fence=source_fence,
+    )
+    current = await support_cleanup_ids(
+        session, source_id=closure.source_id, document_id=closure.document_id,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if current.overflow or current != closure:
+        raise RuntimeError("cleanup closure changed")
+    workspace_id = scope.workspace_id
+    if closure.evidence_ids:
+        await session.execute(delete(EventEvidence).where(
+            EventEvidence.workspace_id == workspace_id, EventEvidence.id.in_(closure.evidence_ids),
+        ))
     orphaned = list((await session.scalars(select(EventParticipant.id).where(
-        EventParticipant.id.in_(participant_ids), EventParticipant.origin == "derived",
+        EventParticipant.id.in_(closure.participant_ids), EventParticipant.origin == "derived",
+        EventParticipant.event_id.in_(select(Event.id).where(Event.workspace_id == workspace_id)),
         ~EventParticipant.id.in_(select(ParticipantEvidence.participant_id)),
-    ))).all()) if participant_ids else []
+    ))).all()) if closure.participant_ids else []
     if orphaned:
-        await session.execute(delete(EventParticipant).where(EventParticipant.id.in_(orphaned)))
-    for event_id in sorted(set(event_ids), key=str):
-        event = await session.get(Event, event_id, with_for_update=True)
-        if event is not None:
+        await session.execute(delete(EventParticipant).where(
+            EventParticipant.id.in_(orphaned),
+            EventParticipant.event_id.in_(select(Event.id).where(Event.workspace_id == workspace_id)),
+        ))
+    for event_id in closure.event_ids:
+        event = await session.get(Event, event_id)
+        if event is not None and event.workspace_id == workspace_id:
             event.revision += 1
-    await _hide_unsupported(session, event_ids)
+    await _hide_unsupported(session, list(closure.event_ids), workspace_id=workspace_id)
     await session.flush()
-    return [make_timeline_collection_change(source_id=source_id)] if event_ids else []
+    return [make_timeline_collection_change(scope=scope, source_id=closure.source_id)] if closure.event_ids else []
 
 
-async def remove_source_support(session: AsyncSession, *, source_id: UUID) -> list[ReplayDraft]:
-    """Remove one source's support while preserving unrelated evidence and owner-authored event fields."""
-    event_ids = list((await session.scalars(select(EventEvidence.event_id).where(EventEvidence.source_id == source_id))).all())
-    evidence_ids = list((await session.scalars(select(EventEvidence.id).where(EventEvidence.source_id == source_id))).all())
-    participant_ids = list((await session.scalars(select(EventParticipant.id).join(
-        ParticipantEvidence, ParticipantEvidence.participant_id == EventParticipant.id,
-    ).where(ParticipantEvidence.event_evidence_id.in_(evidence_ids)))).all()) if evidence_ids else []
-    await session.execute(delete(EventEvidence).where(EventEvidence.id.in_(evidence_ids)))
-    orphaned = list((await session.scalars(select(EventParticipant.id).where(
-        EventParticipant.id.in_(participant_ids), EventParticipant.origin == "derived",
-        ~EventParticipant.id.in_(select(ParticipantEvidence.participant_id)),
-    ))).all()) if participant_ids else []
-    if orphaned:
-        await session.execute(delete(EventParticipant).where(EventParticipant.id.in_(orphaned)))
-    for event_id in sorted(set(event_ids), key=str):
-        event = await session.get(Event, event_id, with_for_update=True)
-        if event is not None:
-            event.revision += 1
-    await _hide_unsupported(session, event_ids)
-    await session.flush()
-    return [make_timeline_collection_change(source_id=source_id)] if event_ids else []
-
-
-async def _hide_unsupported(session: AsyncSession, event_ids: list[UUID]) -> None:
+async def _hide_unsupported(session: AsyncSession, event_ids: list[UUID], *, workspace_id: UUID) -> None:
     """Hide unsupported derived events and scrub every extracted field not explicitly owner-corrected."""
     for event_id in sorted(set(event_ids), key=str):
-        event = await session.get(Event, event_id, with_for_update=True)
-        if event is None or event.origin != "derived":
+        event = await session.get(Event, event_id)
+        if event is None or event.workspace_id != workspace_id or event.origin != "derived":
             continue
-        remaining = await session.scalar(select(EventEvidence.id).where(EventEvidence.event_id == event_id).limit(1))
+        remaining = await session.scalar(select(EventEvidence.id).where(
+            EventEvidence.workspace_id == workspace_id, EventEvidence.event_id == event_id,
+        ).limit(1))
         if remaining is None:
             owners = set(event.owner_fields)
             event.title = event.title if "title" in owners else "[unsupported derived event]"

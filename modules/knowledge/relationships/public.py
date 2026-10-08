@@ -2,6 +2,7 @@ import base64
 import binascii
 import json
 from copy import deepcopy
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from hashlib import sha256
 from typing import Any
@@ -57,7 +58,7 @@ from modules.knowledge.relationships.seed import (
     ensure_demo_relationships,  # re-export: used by documents seed
 )
 from modules.sources import public as sources
-from modules.sources.schemas import SourceExportFence
+from modules.sources.schemas import SourceExportFence, SourceFence
 
 
 def _actor(scope: Scope) -> int:
@@ -123,37 +124,124 @@ async def record_relationship_history(
     await session.flush()
 
 
-async def purge_history_support(session: AsyncSession, refs: list[tuple[UUID, UUID]]) -> None:
-    """Remove purged evidence from every retained history page without committing.
+def _support_pairs(refs: list[tuple[UUID, UUID]]) -> set[tuple[str, str]]:
+    return {(str(version), str(chunk)) for version, chunk in refs}
 
-    Caller holds deletion source/document fences before support cascades. Derived
-    fields sharing any removed support lose their entire state; owner-authored
+
+@dataclass(frozen=True)
+class RelationshipSupportClosure:
+    """Workspace-qualified ID closure of relationship support for one Source or Document."""
+
+    source_id: UUID
+    document_id: UUID | None
+    membership_ids: tuple[UUID, ...]
+    relationship_ids: tuple[UUID, ...]
+    evidence_ids: tuple[UUID, ...]
+    endpoint_entity_ids: tuple[UUID, ...]
+    history_ids: tuple[int, ...]
+    overflow: bool
+
+
+def _require_cleanup_fences(
+    actual: AccessFence, *, closure: RelationshipSupportClosure, scope: Scope,
+    access_fence: AccessFence, source_fence: SourceFence,
+) -> None:
+    if (
+        actual != access_fence or source_fence.id != closure.source_id
+        or source_fence.workspace_id != scope.workspace_id
+    ):
+        raise HTTPException(status_code=409, detail="Cleanup authority changed")
+
+
+async def _discover_support(
+    session: AsyncSession, *, refs: list[tuple[UUID, UUID]], source_id: UUID,
+    document_id: UUID | None, membership_ids: tuple[UUID, ...], scope: Scope, include_history: bool,
+) -> RelationshipSupportClosure:
+    """Nonlocking ID-only discovery; ``include_history`` False leaves history IDs empty."""
+    match = or_(
+        RelationshipEvidence.document_id == document_id if document_id else RelationshipEvidence.source_id == source_id,
+        tuple_(RelationshipEvidence.document_version_id, RelationshipEvidence.chunk_id).in_(refs) if refs else false(),
+        RelationshipEvidence.source_membership_id.in_(membership_ids) if membership_ids else false(),
+        RelationshipEvidence.target_membership_id.in_(membership_ids) if membership_ids else false(),
+    )
+    rows = list((await session.execute(
+        select(RelationshipEvidence.id, RelationshipEvidence.relationship_id)
+        .where(_evidence_scope(scope), match)
+        .order_by(RelationshipEvidence.id).limit(MAX_CLEANUP_SUPPORTS + 1)
+    )).all())
+    overflow = len(rows) > MAX_CLEANUP_SUPPORTS
+    rows = rows[:MAX_CLEANUP_SUPPORTS]
+    relationship_ids = sorted({row[1] for row in rows})
+    endpoints: set[UUID] = set()
+    if relationship_ids:
+        endpoint_rows = (await session.execute(
+            select(Relationship.source_entity_id, Relationship.target_entity_id).where(
+                Relationship.workspace_id == scope.workspace_id, Relationship.id.in_(relationship_ids),
+            )
+        )).all()
+        endpoints = {identifier for row in endpoint_rows for identifier in row}
+    history_ids: list[int] = []
+    if len(set(refs)) > MAX_CLEANUP_SUPPORTS:
+        overflow = True
+    elif include_history and refs:
+        pairs = _support_pairs(refs)
+        after = 0
+        # ponytail: JSON support scan; add a GIN index if retained history makes purge slow.
+        while len(history_ids) <= MAX_CLEANUP_SUPPORTS:
+            page = list((await session.scalars(select(RelationshipSnapshotHistory.id).where(
+                RelationshipSnapshotHistory.workspace_id == scope.workspace_id,
+                RelationshipSnapshotHistory.id > after,
+                or_(*[RelationshipSnapshotHistory.support.contains([{
+                    "document_version_id": version, "chunk_id": chunk,
+                }]) for version, chunk in sorted(pairs)]),
+            ).order_by(RelationshipSnapshotHistory.id).limit(100))).all())
+            if not page:
+                break
+            history_ids.extend(page)
+            after = page[-1]
+        if len(history_ids) > MAX_CLEANUP_SUPPORTS:
+            overflow = True
+            history_ids = history_ids[:MAX_CLEANUP_SUPPORTS]
+    return RelationshipSupportClosure(
+        source_id=source_id, document_id=document_id, membership_ids=tuple(sorted(membership_ids)),
+        relationship_ids=tuple(relationship_ids), evidence_ids=tuple(row[0] for row in rows),
+        endpoint_entity_ids=tuple(sorted(endpoints)), history_ids=tuple(history_ids), overflow=overflow,
+    )
+
+
+async def purge_history_support(
+    session: AsyncSession, closure: RelationshipSupportClosure, refs: list[tuple[UUID, UUID]], *,
+    scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+) -> None:
+    """Remove purged evidence from the prepared retained-history rows without committing.
+
+    History rows were found by bounded discovery and locked by ``prepare_support_cleanup_in_uow``.
+    Derived fields sharing any removed support lose their entire state; owner-authored
     fields survive without removed citations. Identifier-only support remains.
     """
-    if len(set(refs)) > MAX_CLEANUP_SUPPORTS:
-        raise ValueError("Historical support purge exceeds atomic bound")
-    pairs = {(str(version), str(chunk)) for version, chunk in refs}
-    if not pairs:
-        return
-    after = 0
-    # ponytail: JSON support scan; add a GIN index if retained history makes purge slow.
-    while True:
-        rows = list((await session.scalars(select(RelationshipSnapshotHistory).where(
-            RelationshipSnapshotHistory.id > after,
-            or_(*[RelationshipSnapshotHistory.support.contains([{
-                "document_version_id": version, "chunk_id": chunk,
-            }]) for version, chunk in pairs]),
-        ).order_by(RelationshipSnapshotHistory.id).limit(100).with_for_update())).all())
-        if not rows:
-            break
+    _require_cleanup_fences(
+        await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled),
+        closure=closure, scope=scope, access_fence=access_fence, source_fence=source_fence,
+    )
+    current = await _discover_support(
+        session, refs=refs, source_id=closure.source_id, document_id=closure.document_id,
+        membership_ids=closure.membership_ids, scope=scope, include_history=True,
+    )
+    if current.overflow or current != closure:
+        raise RuntimeError("cleanup closure changed")
+    pairs = _support_pairs(refs)
+    for offset in range(0, len(closure.history_ids), 100):
+        rows = (await session.scalars(select(RelationshipSnapshotHistory).where(
+            RelationshipSnapshotHistory.workspace_id == scope.workspace_id,
+            RelationshipSnapshotHistory.id.in_(closure.history_ids[offset:offset + 100]),
+        ).order_by(RelationshipSnapshotHistory.id))).all()
         for row in rows:
             row.support = [item for item in row.support if (
                 str(item.get("document_version_id")), str(item.get("chunk_id")),
             ) not in pairs]
             if row.state.get("origin") != "owner":
                 row.state = {}  # Past derived text cannot survive evidence purge.
-        after = rows[-1].id
-        await session.flush()
+    await session.flush()
 
 
 async def _schedule_relationship_change(
@@ -923,31 +1011,48 @@ async def remove_relationship(
 
 
 async def support_cleanup_ids(
-    session: AsyncSession, *, refs: list[tuple[UUID, UUID]], document_id: UUID | None = None,
-    source_id: UUID | None = None, membership_ids: list[UUID] | None = None,
-) -> tuple[list[UUID], list[UUID]]:
-    """Resolve bounded relationships and endpoint entities affected by support cleanup."""
-    if (document_id is None) == (source_id is None):
-        raise ValueError("Specify one document or source")
-    statement = select(RelationshipEvidence.relationship_id).where(
-        or_(
-            RelationshipEvidence.document_id == document_id if document_id else RelationshipEvidence.source_id == source_id,
-            tuple_(RelationshipEvidence.document_version_id, RelationshipEvidence.chunk_id).in_(refs) if refs else false(),
-            RelationshipEvidence.source_membership_id.in_(membership_ids) if membership_ids else false(),
-            RelationshipEvidence.target_membership_id.in_(membership_ids) if membership_ids else false(),
-        )
+    session: AsyncSession, *, refs: list[tuple[UUID, UUID]], source_id: UUID,
+    document_id: UUID | None = None, membership_ids: list[UUID] | tuple[UUID, ...],
+    scope: Scope, multi_workspace_enabled: bool,
+) -> RelationshipSupportClosure:
+    """Discover (nonlocking, ID-only) relationship support, endpoints and retained history."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    return await _discover_support(
+        session, refs=refs, source_id=source_id, document_id=document_id,
+        membership_ids=tuple(membership_ids), scope=scope, include_history=True,
     )
-    relation_ids = sorted(set((await session.scalars(statement.limit(MAX_CLEANUP_SUPPORTS + 1))).all()), key=str)
-    if len(relation_ids) > MAX_CLEANUP_SUPPORTS:
+
+
+async def prepare_support_cleanup_in_uow(
+    session: AsyncSession, closure: RelationshipSupportClosure, *, scope: Scope,
+    multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+) -> None:
+    """Lock relationships, then evidence, then retained history rows in order; no mutation."""
+    _require_cleanup_fences(
+        await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled),
+        closure=closure, scope=scope, access_fence=access_fence, source_fence=source_fence,
+    )
+    if closure.overflow:
         raise ValueError("Relationship support cleanup exceeds its atomic limit")
-    if not relation_ids:
-        return [], []
-    rows = (await session.execute(
-        select(Relationship.source_entity_id, Relationship.target_entity_id)
-        .where(Relationship.id.in_(relation_ids))
-    )).all()
-    entity_ids = sorted({identifier for row in rows for identifier in row}, key=str)
-    return relation_ids, entity_ids
+    if closure.relationship_ids:
+        await session.scalars(
+            select(Relationship.id).where(
+                Relationship.workspace_id == scope.workspace_id, Relationship.id.in_(closure.relationship_ids),
+            ).order_by(Relationship.id).with_for_update()
+        )
+    if closure.evidence_ids:
+        await session.scalars(
+            select(RelationshipEvidence.id).where(
+                _evidence_scope(scope), RelationshipEvidence.id.in_(closure.evidence_ids),
+            ).order_by(RelationshipEvidence.id).with_for_update()
+        )
+    if closure.history_ids:
+        await session.scalars(
+            select(RelationshipSnapshotHistory.id).where(
+                RelationshipSnapshotHistory.workspace_id == scope.workspace_id,
+                RelationshipSnapshotHistory.id.in_(closure.history_ids),
+            ).order_by(RelationshipSnapshotHistory.id).with_for_update()
+        )
 
 
 async def lock_relationship_ids(
@@ -1342,47 +1447,73 @@ async def _refresh_derived_confidence(
 
 
 async def remove_document_support(
-    session: AsyncSession, *, document_id: UUID, refs: list[tuple[UUID, UUID]], membership_ids: list[UUID]
+    session: AsyncSession, closure: RelationshipSupportClosure, *, refs: list[tuple[UUID, UUID]],
+    membership_ids: list[UUID] | tuple[UUID, ...], scope: Scope, multi_workspace_enabled: bool,
+    access_fence: AccessFence, source_fence: SourceFence,
 ) -> int:
-    """Remove evidence rows scoped to a document and refresh affected derived edges."""
-    return await _remove_support(session, document_id=document_id, refs=refs, membership_ids=membership_ids)
+    """Remove prepared evidence rows scoped to a document and refresh affected derived edges."""
+    if closure.document_id is None:
+        raise ValueError("A document closure is required")
+    return await _remove_support(
+        session, closure, refs=refs, membership_ids=membership_ids, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence,
+    )
 
 
 async def remove_source_support(
-    session: AsyncSession, *, source_id: UUID, refs: list[tuple[UUID, UUID]], membership_ids: list[UUID]
+    session: AsyncSession, closure: RelationshipSupportClosure, *, refs: list[tuple[UUID, UUID]],
+    membership_ids: list[UUID] | tuple[UUID, ...], scope: Scope, multi_workspace_enabled: bool,
+    access_fence: AccessFence, source_fence: SourceFence,
 ) -> int:
-    """Remove evidence rows scoped to a source and refresh affected derived edges."""
-    return await _remove_support(session, source_id=source_id, refs=refs, membership_ids=membership_ids)
+    """Remove prepared evidence rows scoped to a Source and refresh affected derived edges."""
+    if closure.document_id is not None:
+        raise ValueError("A Source-wide closure is required")
+    return await _remove_support(
+        session, closure, refs=refs, membership_ids=membership_ids, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence,
+    )
 
 
 async def _remove_support(
-    session: AsyncSession, *, refs: list[tuple[UUID, UUID]], membership_ids: list[UUID],
-    document_id: UUID | None = None, source_id: UUID | None = None,
+    session: AsyncSession, closure: RelationshipSupportClosure, *, refs: list[tuple[UUID, UUID]],
+    membership_ids: list[UUID] | tuple[UUID, ...], scope: Scope, multi_workspace_enabled: bool,
+    access_fence: AccessFence, source_fence: SourceFence,
 ) -> int:
-    """Delete bounded matching evidence and remove unsupported derived relationships."""
-    statement = select(RelationshipEvidence).where(or_(
-        RelationshipEvidence.document_id == document_id if document_id else RelationshipEvidence.source_id == source_id,
-        tuple_(RelationshipEvidence.document_version_id, RelationshipEvidence.chunk_id).in_(refs) if refs else false(),
-        RelationshipEvidence.source_membership_id.in_(membership_ids) if membership_ids else false(),
-        RelationshipEvidence.target_membership_id.in_(membership_ids) if membership_ids else false(),
-    )).limit(MAX_CLEANUP_SUPPORTS + 1)
-    rows = list((await session.scalars(statement)).all())
-    if len(rows) > MAX_CLEANUP_SUPPORTS:
-        raise ValueError("Relationship support cleanup exceeds its atomic limit")
-    affected = sorted({row.relationship_id for row in rows}, key=str)
-    await session.execute(delete(RelationshipEvidence).where(RelationshipEvidence.id.in_([row.id for row in rows])))
-    for relationship_id in affected:
+    """Delete prepared evidence and remove unsupported derived relationships; never locks.
+
+    Requires ``purge_history_support`` to have run in this transaction: any history row still
+    matching ``refs`` means the purge was skipped or raced, so cleanup fails.
+    """
+    _require_cleanup_fences(
+        await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled),
+        closure=closure, scope=scope, access_fence=access_fence, source_fence=source_fence,
+    )
+    current = await _discover_support(
+        session, refs=refs, source_id=closure.source_id, document_id=closure.document_id,
+        membership_ids=tuple(membership_ids), scope=scope, include_history=True,
+    )
+    if current.overflow or current.history_ids \
+            or replace(current, history_ids=closure.history_ids) != closure:
+        raise RuntimeError("cleanup closure changed")
+    if closure.evidence_ids:
+        await session.execute(delete(RelationshipEvidence).where(
+            _evidence_scope(scope), RelationshipEvidence.id.in_(closure.evidence_ids),
+        ))
+    for relationship_id in closure.relationship_ids:
         relationship = await session.get(Relationship, relationship_id)
-        if relationship is None or relationship.origin != "derived":
+        if relationship is None or relationship.workspace_id != scope.workspace_id \
+                or relationship.origin != "derived":
             continue
         remaining = list((await session.scalars(
-            select(RelationshipEvidence).where(RelationshipEvidence.relationship_id == relationship_id)
+            select(RelationshipEvidence).where(
+                _evidence_scope(scope), RelationshipEvidence.relationship_id == relationship_id,
+            )
         )).all())
         if not remaining:
             await session.delete(relationship)
         else:
             relationship.confidence = max(row.confidence for row in remaining)
-    return len(rows)
+    return len(closure.evidence_ids)
 
 
 RELATIONSHIP_EXPORT_PAGE_MAX_BYTES = 16_777_216

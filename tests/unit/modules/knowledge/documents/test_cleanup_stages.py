@@ -1,5 +1,6 @@
 """Unit tests for Documents cleanup aggregates, retained-receipt fallback and Memory cache retry."""
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -7,7 +8,7 @@ from uuid import uuid4
 from sqlalchemy.dialects import postgresql
 
 from modules.knowledge.documents import public, worker
-from tests.unit.modules.knowledge.documents._scope import SCOPE_KW
+from tests.unit.modules.knowledge.documents._scope import FENCE, SCOPE, SCOPE_KW
 
 
 class _Session:
@@ -31,7 +32,7 @@ def _sql(statement) -> str:
 
 async def _progress(row, *, capture_recorded=True):
     return await public.source_cleanup_progress(
-        _Session(row=row), uuid4(), source_id=uuid4(), capture_recorded=capture_recorded,
+        _Session(row=row), uuid4(), source_id=uuid4(), capture_recorded=capture_recorded, **SCOPE_KW,
     )
 
 
@@ -62,7 +63,7 @@ async def test_aggregate_incomplete_until_capture_recorded_and_names_owners() ->
 
 async def test_aggregate_sql_checks_every_stage_and_the_cache_obligation() -> None:
     session = _Session(row=_CLEAN)
-    await public.source_cleanup_progress(session, uuid4(), source_id=uuid4(), capture_recorded=True)
+    await public.source_cleanup_progress(session, uuid4(), source_id=uuid4(), capture_recorded=True, **SCOPE_KW)
     sql = _sql(session.statement)
     for column in (
         "raw_status", "chat_status", "memory_status", "agent_status", "materialization_status",
@@ -93,37 +94,57 @@ def _factory(operation):
     return MagicMock(return_value=context), session
 
 
+def _attempt(progress=("p",)):
+    identity = SimpleNamespace(operation_id=uuid4(), workspace_id=SCOPE.workspace_id, actor_user_id=1)
+    admitted = SimpleNamespace(
+        identity=identity, event_id=uuid4(), scope=SCOPE, original=FENCE, dispatched_at=datetime.now(UTC),
+    )
+    return worker._Attempt(admitted=admitted, progress=progress, post_progress=progress, evict=True), admitted
+
+
 async def test_cache_eviction_failure_keeps_marker_for_retry() -> None:
     factory, session = _factory(SimpleNamespace(memory_cache_pending=True))
+    attempt, _ = _attempt()
     with patch.object(worker, "invalidate_memory_cache", AsyncMock(side_effect=RuntimeError("redis"))):
-        await worker._evict_memory_cache_after_commit(factory, MagicMock(), uuid4(), uuid4())
+        await worker._evict_memory_cache_after_commit(factory, MagicMock(), False, attempt)
     factory.assert_not_called()  # marker untouched, nothing committed
     session.commit.assert_not_called()
 
 
 async def test_cache_eviction_success_clears_marker_wakes_source_and_reschedules_event() -> None:
     operation = SimpleNamespace(memory_cache_pending=True)
-    factory, session = _factory(operation)
-    event_id = uuid4()
-    with patch.object(worker, "invalidate_memory_cache", AsyncMock()), \
-            patch.object(worker, "lock_export_privacy", AsyncMock()), \
-            patch.object(worker, "_source_cleanup_progress_key", return_value="memory-cache"), \
-            patch.object(worker.documents, "publish_source_cleanup_wakeup", AsyncMock()) as wake, \
-            patch.object(worker.ingestion, "set_event_delivery", AsyncMock()) as deliver:
-        await worker._evict_memory_cache_after_commit(factory, MagicMock(), uuid4(), event_id)
+    factory, _ = _factory(operation)
+    attempt, admitted = _attempt()
+    redis = MagicMock()
+    with patch.object(worker, "invalidate_memory_cache", AsyncMock()) as invalidate, \
+            patch.object(worker, "_admit_cleanup", AsyncMock(return_value=admitted)) as admit, \
+            patch.object(worker, "lock_export_privacy_in_uow", AsyncMock()), \
+            patch.object(worker, "_attempt_progress_snapshot", return_value=("p",)), \
+            patch.object(worker, "_hint") as hint, \
+            patch.object(worker, "_settle", AsyncMock(return_value=True)) as settle, \
+            patch.object(worker, "_commit", AsyncMock()) as commit, \
+            patch.object(worker, "_publish_wakeups", AsyncMock()) as wakeups:
+        await worker._evict_memory_cache_after_commit(factory, redis, False, attempt)
+    assert invalidate.await_args.kwargs["scope"] == SCOPE
+    assert admit.await_args.kwargs["status"] == "pending"  # re-admitted under the original authority
     assert operation.memory_cache_pending is False
-    wake.assert_awaited_once()
+    hint.assert_called_once()
+    wakeups.assert_awaited_once()
     # Never delivered here: the main path must re-settle the aggregate first.
-    assert deliver.await_args.args[1:3] == (event_id, "pending")
-    assert deliver.await_args.kwargs["next_attempt_at"] is not None
-    session.commit.assert_awaited_once()
+    assert settle.await_args.args[2] == "pending"
+    assert settle.await_args.kwargs["expected_status"] == "pending"
+    assert settle.await_args.kwargs["next_attempt_at"] is not None
+    commit.assert_awaited_once()
 
 
-async def test_cache_eviction_already_cleared_is_a_noop_rollback() -> None:
-    factory, session = _factory(SimpleNamespace(memory_cache_pending=False))
+async def test_cache_eviction_changed_progress_is_a_noop_rollback() -> None:
+    factory, session = _factory(SimpleNamespace(memory_cache_pending=True))
+    attempt, admitted = _attempt()
     with patch.object(worker, "invalidate_memory_cache", AsyncMock()), \
-            patch.object(worker, "lock_export_privacy", AsyncMock()), \
-            patch.object(worker.ingestion, "set_event_delivery", AsyncMock()) as deliver:
-        await worker._evict_memory_cache_after_commit(factory, MagicMock(), uuid4(), uuid4())
-    deliver.assert_not_awaited()
+            patch.object(worker, "_admit_cleanup", AsyncMock(return_value=admitted)), \
+            patch.object(worker, "lock_export_privacy_in_uow", AsyncMock()), \
+            patch.object(worker, "_attempt_progress_snapshot", return_value=("moved",)), \
+            patch.object(worker, "_settle", AsyncMock()) as settle:
+        await worker._evict_memory_cache_after_commit(factory, MagicMock(), False, attempt)
+    settle.assert_not_awaited()
     session.rollback.assert_awaited_once()

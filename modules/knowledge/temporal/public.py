@@ -3,10 +3,12 @@
 import base64
 import hashlib
 import json
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
+from fastapi import HTTPException
 from sqlalchemy import ColumnElement, Uuid, and_, case, func, literal, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,6 +37,7 @@ from modules.knowledge.temporal.schemas import (
     ReconcileStatus,
 )
 from modules.sources import public as sources
+from modules.sources.schemas import SourceFence
 
 
 def _actor(scope: Scope) -> int:
@@ -44,8 +47,6 @@ def _actor(scope: Scope) -> int:
 
 async def _admit(session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool) -> AccessFence:
     """Require current owner workspace access before Temporal owner queries or writes; return the admitted fence."""
-    from fastapi import HTTPException
-
     if isinstance(scope, WorkspaceContext) and scope.role != "owner":
         raise HTTPException(status_code=403, detail="Workspace owner required")
     return await workspaces.read_access_fence(
@@ -235,19 +236,133 @@ async def schedule_canonical_change(session: AsyncSession, *, kind: str, canonic
     await session.flush()
 
 
-async def tombstone_scope(session: AsyncSession, *, document_id: UUID | None = None,
-                          source_id: UUID | None = None) -> None:
-    """Capture exact detached cleanup identity before source/document cascades; never call Graphiti here."""
-    if (document_id is None) == (source_id is None):
-        raise ValueError("Choose one temporal cleanup scope")
-    condition = GraphMapping.document_id == document_id if document_id else GraphMapping.source_id == source_id
-    mappings = (await session.scalars(select(GraphMapping).where(condition).order_by(GraphMapping.id).with_for_update())).all()
+@dataclass(frozen=True)
+class TemporalCleanupClosure:
+    """Workspace-qualified ID closure of graph mappings and their unsettled operations."""
+
+    source_id: UUID
+    document_id: UUID | None
+    mapping_ids: tuple[UUID, ...]
+    support_ids: tuple[tuple[UUID, UUID, UUID], ...]  # (mapping_id, document_version_id, chunk_id)
+    operation_ids: tuple[UUID, ...]
+    overflow: bool
+
+
+_CLEANUP_LIMIT = 10_000
+_OPEN_OPERATION_STATUSES = ("pending", "running", "blocked", "reconcile_needed")
+
+
+def _require_cleanup_fences(
+    actual: AccessFence, *, closure: TemporalCleanupClosure, scope: Scope,
+    access_fence: AccessFence, source_fence: SourceFence,
+) -> None:
+    if (
+        actual != access_fence or source_fence.id != closure.source_id
+        or source_fence.workspace_id != scope.workspace_id
+    ):
+        raise HTTPException(status_code=409, detail="Cleanup authority changed")
+
+
+async def tombstone_cleanup_ids(
+    session: AsyncSession, *, source_id: UUID, document_id: UUID | None = None,
+    scope: Scope, multi_workspace_enabled: bool,
+) -> TemporalCleanupClosure:
+    """Discover (nonlocking, ID-only) the graph mappings, supports and open operations to tombstone."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    workspace_id = scope.workspace_id
+    where = [GraphMapping.workspace_id == workspace_id, GraphMapping.source_id == source_id]
+    if document_id is not None:
+        where.append(GraphMapping.document_id == document_id)
+    mapping_ids = list((await session.scalars(
+        select(GraphMapping.id).where(*where).order_by(GraphMapping.id).limit(_CLEANUP_LIMIT + 1)
+    )).all())
+    overflow = len(mapping_ids) > _CLEANUP_LIMIT
+    mapping_ids = mapping_ids[:_CLEANUP_LIMIT]
+    support_ids: list[tuple[UUID, UUID, UUID]] = []
+    operation_ids: list[UUID] = []
+    if mapping_ids:
+        support_rows = list((await session.execute(
+            select(GraphSupport.mapping_id, GraphSupport.document_version_id, GraphSupport.chunk_id).where(
+                GraphSupport.workspace_id == workspace_id, GraphSupport.mapping_id.in_(mapping_ids),
+            ).order_by(GraphSupport.mapping_id, GraphSupport.document_version_id, GraphSupport.chunk_id)
+            .limit(_CLEANUP_LIMIT + 1)
+        )).all())
+        overflow |= len(support_rows) > _CLEANUP_LIMIT
+        support_ids = [(row[0], row[1], row[2]) for row in support_rows[:_CLEANUP_LIMIT]]
+        operation_ids = list((await session.scalars(
+            select(GraphOperation.id).where(
+                GraphOperation.workspace_id == workspace_id, GraphOperation.mapping_id.in_(mapping_ids),
+                GraphOperation.status.in_(_OPEN_OPERATION_STATUSES),
+            ).order_by(GraphOperation.id).limit(_CLEANUP_LIMIT + 1)
+        )).all())
+        overflow |= len(operation_ids) > _CLEANUP_LIMIT
+        operation_ids = operation_ids[:_CLEANUP_LIMIT]
+    return TemporalCleanupClosure(
+        source_id=source_id, document_id=document_id, mapping_ids=tuple(mapping_ids),
+        support_ids=tuple(support_ids), operation_ids=tuple(operation_ids), overflow=overflow,
+    )
+
+
+async def prepare_tombstone_scope_in_uow(
+    session: AsyncSession, closure: TemporalCleanupClosure, *, scope: Scope,
+    multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+) -> None:
+    """Lock open operations, then mappings, then supports (worker order); no mutation."""
+    _require_cleanup_fences(
+        await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled),
+        closure=closure, scope=scope, access_fence=access_fence, source_fence=source_fence,
+    )
+    if closure.overflow:
+        raise ValueError("Temporal cleanup exceeds its atomic limit")
+    workspace_id = scope.workspace_id
+    # Worker order is partition -> operation -> mapping; cleanup (approved deviation) locks operations first.
+    if closure.operation_ids:
+        await session.scalars(
+            select(GraphOperation.id).where(
+                GraphOperation.workspace_id == workspace_id, GraphOperation.id.in_(closure.operation_ids),
+            ).order_by(GraphOperation.id).with_for_update()
+        )
+    if closure.mapping_ids:
+        await session.scalars(
+            select(GraphMapping.id).where(
+                GraphMapping.workspace_id == workspace_id, GraphMapping.id.in_(closure.mapping_ids),
+            ).order_by(GraphMapping.id).with_for_update()
+        )
+        await session.execute(
+            select(GraphSupport.mapping_id).where(
+                GraphSupport.workspace_id == workspace_id, GraphSupport.mapping_id.in_(closure.mapping_ids),
+            ).order_by(GraphSupport.mapping_id, GraphSupport.document_version_id, GraphSupport.chunk_id)
+            .with_for_update()
+        )
+
+
+async def tombstone_scope_in_uow(
+    session: AsyncSession, closure: TemporalCleanupClosure, *, scope: Scope,
+    multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+) -> None:
+    """Capture exact detached cleanup identity before cascades; never locks or calls Graphiti."""
+    _require_cleanup_fences(
+        await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled),
+        closure=closure, scope=scope, access_fence=access_fence, source_fence=source_fence,
+    )
+    current = await tombstone_cleanup_ids(
+        session, source_id=closure.source_id, document_id=closure.document_id,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if current.overflow or current != closure:
+        raise RuntimeError("cleanup closure changed")
+    workspace_id = scope.workspace_id
+    mappings = (await session.scalars(select(GraphMapping).where(
+        GraphMapping.workspace_id == workspace_id, GraphMapping.id.in_(closure.mapping_ids),
+    ).order_by(GraphMapping.id))).all() if closure.mapping_ids else []
     for mapping in mappings:
         mapping.tombstoned, mapping.status = True, "tombstoned"
         mapping.desired_revision += 1
         mapping.canonical_state = {}  # Purge former derived identities without removing the exact cleanup ledger.
         mapping.desired_digest = digest([str(mapping.id), "deleted", mapping.desired_revision])
-        supports = (await session.scalars(select(GraphSupport).where(GraphSupport.mapping_id == mapping.id))).all()
+        supports = (await session.scalars(select(GraphSupport).where(
+            GraphSupport.workspace_id == workspace_id, GraphSupport.mapping_id == mapping.id,
+        ))).all()
         for item in supports:
             item.removed = True
         await _queue(session, mapping, "delete")

@@ -3,7 +3,15 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictInt,
+    field_validator,
+    model_validator,
+)
 
 MAX_CONTENT_BYTES = 1_048_576
 MAX_METADATA_BYTES = 65_536
@@ -794,3 +802,32 @@ class DocumentList(BaseModel):
     """Return a bounded document page and its optional continuation cursor."""
     items: list[DocumentRead]
     next_cursor: str | None
+
+
+class DocumentCleanupJobIdentity(BaseModel):
+    """Exact retained Document cleanup authority tuple; all epochs are captured at creation."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    operation_id: UUID
+    workspace_id: UUID
+    actor_user_id: StrictInt = Field(gt=0)
+    membership_revision: StrictInt = Field(gt=0)
+    configuration_revision: StrictInt = Field(gt=0)
+    source_id: UUID
+    source_generation: StrictInt = Field(gt=0)
+    document_id: UUID
+
+
+class DocumentCleanupPreparationLimitError(Exception):
+    """A cleanup closure owner exceeded its atomic bound; the message is the owner code only."""
+
+    OWNER_CODES = frozenset({
+        "documents", "observations", "entities", "relationships", "timeline", "temporal", "ingestion",
+    })
+
+    def __init__(self, owner_code: str) -> None:
+        if owner_code not in self.OWNER_CODES:
+            raise ValueError("Unknown cleanup owner code")
+        super().__init__(owner_code)
+        self.owner_code = owner_code

@@ -389,20 +389,48 @@ class TestPlanValidations:
 
 
 class TestPurgeAndCleanupBounds:
-    """Tests for purge_history_support bounds."""
+    """Tests for purge_history_support bounds (discovery is bounded; held apply never scans)."""
 
     @pytest.mark.asyncio
-    async def test_purge_history_support_bounds(self) -> None:
-        """Verify purge_history_support raises ValueError if refs exceed MAX_CLEANUP_SUPPORTS."""
-        session = AsyncMock()
-        oversized_refs = [(uuid4(), uuid4()) for _ in range(MAX_CLEANUP_SUPPORTS + 1)]
+    async def test_purge_history_support_rejects_overflowed_discovery(self) -> None:
+        """An overflowed rediscovery aborts the held apply instead of truncating."""
+        from core.workspaces.schemas import AccessFence
+        from modules.knowledge.relationships.public import RelationshipSupportClosure
+        from modules.sources.schemas import SourceFence
 
-        with pytest.raises(ValueError, match="Historical support purge exceeds atomic bound"):
-            await purge_history_support(session, oversized_refs)
+        ws, src = uuid4(), uuid4()
+        scope = WorkspaceContext(user_id=1, workspace_id=ws, role="owner", membership_revision=1)
+        fence = AccessFence(ws, 1, 1, 1)
+        source_fence = SourceFence(id=src, workspace_id=ws, status="purging", generation=1, local_only=False)
+        rows = MagicMock(all=MagicMock(return_value=[(uuid4(), uuid4()) for _ in range(MAX_CLEANUP_SUPPORTS + 1)]))
+        session = AsyncMock()
+        session.execute.return_value = rows
+        session.scalars.return_value = MagicMock(all=MagicMock(return_value=[]))
+        closure = RelationshipSupportClosure(src, None, (), (), (), (), (), False)
+        with (
+            patch("modules.knowledge.relationships.public._admit", AsyncMock(return_value=fence)),
+            pytest.raises(RuntimeError, match="cleanup closure changed"),
+        ):
+            await purge_history_support(
+                session, closure, [(uuid4(), uuid4())], scope=scope, multi_workspace_enabled=False,
+                access_fence=fence, source_fence=source_fence)
 
     @pytest.mark.asyncio
     async def test_purge_history_support_empty_returns_early(self) -> None:
-        """Verify purge_history_support with empty refs returns immediately without querying."""
+        """Empty refs perform no history scan or row fetch."""
+        from core.workspaces.schemas import AccessFence
+        from modules.knowledge.relationships.public import RelationshipSupportClosure
+        from modules.sources.schemas import SourceFence
+
+        ws, src = uuid4(), uuid4()
+        scope = WorkspaceContext(user_id=1, workspace_id=ws, role="owner", membership_revision=1)
+        fence = AccessFence(ws, 1, 1, 1)
+        source_fence = SourceFence(id=src, workspace_id=ws, status="purging", generation=1, local_only=False)
         session = AsyncMock()
-        await purge_history_support(session, [])
+        session.execute.return_value = MagicMock(all=MagicMock(return_value=[]))
+        closure = RelationshipSupportClosure(src, None, (), (), (), (), (), False)
+        with patch("modules.knowledge.relationships.public._admit", AsyncMock(return_value=fence)):
+            await purge_history_support(
+                session, closure, [], scope=scope, multi_workspace_enabled=False,
+                access_fence=fence, source_fence=source_fence)
         session.scalars.assert_not_called()

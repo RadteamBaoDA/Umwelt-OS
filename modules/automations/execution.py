@@ -518,19 +518,22 @@ async def _run_evidence_current(
 
 async def _legacy_event_matches_cleanup(
     session: AsyncSession, event_id: UUID, *, document_id: UUID, source_id: UUID,
-    version_ids: tuple[UUID, ...],
+    version_ids: tuple[UUID, ...], scope: Scope, multi_workspace_enabled: bool,
 ) -> Any | None:
     """Use Ingestion's strict outbox resolver to classify one pre-sidecar event against a receipt."""
     from modules.ingestion import public as ingestion
 
     proof = await ingestion.resolve_ready_event_provenance(
         session, event_id, document_id=document_id, source_id=source_id,
-        accepted_version_ids=version_ids,
+        accepted_version_ids=version_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
     return proof
 
 
-async def _event_belongs_elsewhere(session: AsyncSession, event_key: str | None, *, document_id: UUID) -> bool:
+async def _event_belongs_elsewhere(
+    session: AsyncSession, event_key: str | None, *, document_id: UUID, scope: Scope,
+    multi_workspace_enabled: bool,
+) -> bool:
     """True only when a strict canonical ready event provably resolves to a different Document."""
     from modules.ingestion import public as ingestion
 
@@ -541,14 +544,17 @@ async def _event_belongs_elsewhere(session: AsyncSession, event_key: str | None,
     if str(event_id) != event_key:
         return False
     # Retained-receipt fallback: an event of an already-deleted other Document is still foreign, not unresolved.
-    proof = await ingestion.resolve_ready_event_provenance(session, event_id, allow_retained_receipt=True)
+    proof = await ingestion.resolve_ready_event_provenance(
+        session, event_id, allow_retained_receipt=True, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
     return proof is not None and proof.document_id != document_id
 
 
 async def scrub_document_triggers(
     session: AsyncSession, *, operation_id: UUID, document_id: UUID, source_id: UUID,
     version_ids: tuple[UUID, ...], final_reference_page: bool = False,
-    after: UUID | None = None, limit: int = 100,
+    after: UUID | None = None, limit: int = 100, scope: Scope, multi_workspace_enabled: bool,
 ) -> AutomationCleanupProgress:
     """Scrub one stable keyset page of exact new-document inbox copies without committing.
 
@@ -558,7 +564,11 @@ async def scrub_document_triggers(
     """
     if not 1 <= limit <= 100 or len(version_ids) > 100:
         raise ValueError("Automation trigger cleanup exceeds its page bound")
-    statement = select(AutomationTrigger).where(AutomationTrigger.trigger_type == "new_document")
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    statement = select(AutomationTrigger).where(
+        AutomationTrigger.workspace_id == scope.workspace_id, AutomationTrigger.owner_id == _actor(scope),
+        AutomationTrigger.trigger_type == "new_document",
+    )
     if after is not None:
         statement = statement.where(AutomationTrigger.id > after)
     rows = list((await session.scalars(
@@ -581,6 +591,7 @@ async def scrub_document_triggers(
                 event_id = UUID(event.event_key)
                 proof = await _legacy_event_matches_cleanup(
                     session, event_id, document_id=document_id, source_id=source_id, version_ids=version_ids,
+                    scope=scope, multi_workspace_enabled=multi_workspace_enabled,
                 ) if str(event_id) == event.event_key else None
             except (ValueError, TypeError):
                 proof = None
@@ -591,6 +602,7 @@ async def scrub_document_triggers(
                 if str(event_id) == event.event_key:
                     proof = await _legacy_event_matches_cleanup(
                         session, event_id, document_id=document_id, source_id=source_id, version_ids=version_ids,
+                    scope=scope, multi_workspace_enabled=multi_workspace_enabled,
                     )
                     matched = proof is not None
                     proven_version = proof.document_version_id if proof is not None else None
@@ -602,7 +614,8 @@ async def scrub_document_triggers(
             if event.document_id is not None and event.document_id != document_id:
                 continue
             if (event.document_id is None and event.document_version_id is None
-                    and await _event_belongs_elsewhere(session, event.event_key, document_id=document_id)):
+                    and await _event_belongs_elsewhere(session, event.event_key, document_id=document_id,
+                        scope=scope, multi_workspace_enabled=multi_workspace_enabled)):
                 continue
             (unavailable if final_reference_page else provisional).append(event.id)
             continue
@@ -622,7 +635,7 @@ async def scrub_document_triggers(
 async def scrub_document_runs(
     session: AsyncSession, *, operation_id: UUID, document_id: UUID, source_id: UUID,
     version_ids: tuple[UUID, ...], final_reference_page: bool = False,
-    after: UUID | None = None, limit: int = 100,
+    after: UUID | None = None, limit: int = 100, scope: Scope, multi_workspace_enabled: bool,
 ) -> AutomationCleanupProgress:
     """Scrub one bounded exact run-payload page while retaining action results and effect uncertainty.
 
@@ -630,7 +643,11 @@ async def scrub_document_runs(
     """
     if not 1 <= limit <= 100 or len(version_ids) > 100:
         raise ValueError("Automation run cleanup exceeds its page bound")
-    statement = select(AutomationRun).where(AutomationRun.trigger_type == "new_document")
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    statement = select(AutomationRun).where(
+        AutomationRun.workspace_id == scope.workspace_id, AutomationRun.owner_id == _actor(scope),
+        AutomationRun.trigger_type == "new_document",
+    )
     if after is not None:
         statement = statement.where(AutomationRun.id > after)
     rows = list((await session.scalars(
@@ -656,6 +673,7 @@ async def scrub_document_runs(
                 event_id = UUID(run.trigger_event_id or "")
                 proof = await _legacy_event_matches_cleanup(
                     session, event_id, document_id=document_id, source_id=source_id, version_ids=version_ids,
+                    scope=scope, multi_workspace_enabled=multi_workspace_enabled,
                 ) if str(event_id) == run.trigger_event_id and run.trigger_key == f"event:{event_id}" else None
             except (ValueError, TypeError):
                 proof = None
@@ -681,6 +699,7 @@ async def scrub_document_runs(
             if event_id is not None and run.trigger_key == f"event:{event_id}" and run.trigger_event_id == str(event_id):
                 proof = await _legacy_event_matches_cleanup(
                     session, event_id, document_id=document_id, source_id=source_id, version_ids=version_ids,
+                    scope=scope, multi_workspace_enabled=multi_workspace_enabled,
                 )
                 matched = proof is not None
                 proven_version = proof.document_version_id if proof is not None else None
@@ -688,7 +707,8 @@ async def scrub_document_runs(
             continue
         if (not matched and run.document_id is None and run.document_version_id is None
                 and event_id is not None
-                and await _event_belongs_elsewhere(session, str(event_id), document_id=document_id)):
+                and await _event_belongs_elsewhere(session, str(event_id), document_id=document_id,
+                        scope=scope, multi_workspace_enabled=multi_workspace_enabled)):
             continue
         contradictory = (
             run.document_id == document_id and run.document_version_id is not None

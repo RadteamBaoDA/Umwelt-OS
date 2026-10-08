@@ -14,6 +14,7 @@ def _scope() -> DocumentCleanupEvidenceScope:
     return DocumentCleanupEvidenceScope(
         operation_id=uuid4(), source_id=uuid4(), document_id=uuid4(),
         references=(DocumentCleanupEvidenceIdentity(version, chunk, "chunk"),), next_cursor=None,
+        workspace_id=uuid4(), actor_user_id=1,
     )
 
 

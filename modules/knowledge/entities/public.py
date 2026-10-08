@@ -5,6 +5,7 @@ import binascii
 import json
 import math
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import TYPE_CHECKING, Any, Literal
@@ -69,7 +70,7 @@ from modules.knowledge.entities.seed import (
     ensure_demo_entities,  # re-export: used by documents seed
 )
 from modules.sources import public as sources
-from modules.sources.schemas import SourceExportFence
+from modules.sources.schemas import SourceExportFence, SourceFence
 
 
 def _actor(scope: Scope) -> int:
@@ -2501,26 +2502,154 @@ async def delete_entity(
     )
 
 
+@dataclass(frozen=True)
+class EntitySupportClosure:
+    """Workspace-qualified ID closure of entity support for one Source or Document."""
+
+    source_id: UUID
+    document_id: UUID | None
+    membership_ids: tuple[UUID, ...]
+    alias_ids: tuple[UUID, ...]
+    alias_evidence_ids: tuple[UUID, ...]
+    field_evidence_ids: tuple[UUID, ...]
+    entity_ids: tuple[UUID, ...]
+    overflow: bool
+
+
+_CLEANUP_LIMIT = 10_000
+
+
+def _require_cleanup_fences(
+    actual: AccessFence, *, source_id: UUID, scope: Scope,
+    access_fence: AccessFence, source_fence: SourceFence,
+) -> None:
+    if (
+        actual != access_fence or source_fence.id != source_id
+        or source_fence.workspace_id != scope.workspace_id
+    ):
+        raise HTTPException(status_code=409, detail="Cleanup authority changed")
+
+
 async def support_cleanup_ids(
-    session: AsyncSession, *, document_id: UUID | None = None, source_id: UUID | None = None
-) -> tuple[list[UUID], list[UUID]]:
-    """Return bounded membership and entity lock IDs for one document/source cleanup."""
-    if (document_id is None) == (source_id is None):
-        raise ValueError("Specify one document or source")
-    statement = select(EntityEvidenceMembership.id, EntityEvidenceMembership.entity_id)
-    statement = statement.where(
-        EntityEvidenceMembership.document_id == document_id
-        if document_id is not None else EntityEvidenceMembership.source_id == source_id
-    ).order_by(EntityEvidenceMembership.entity_id, EntityEvidenceMembership.id).limit(10_001)
-    rows = list((await session.execute(statement)).all())
-    if len(rows) > 10_000:
-        raise ValueError("Entity support cleanup exceeds its atomic limit")
-    entity_ids = {entity_id for _, entity_id in rows}
-    if source_id is not None:
-        entity_ids.update((await session.scalars(
-            select(EntityAlias.entity_id).where(EntityAlias.source_id == source_id).distinct()
+    session: AsyncSession, *, source_id: UUID, document_id: UUID | None = None,
+    scope: Scope, multi_workspace_enabled: bool,
+) -> EntitySupportClosure:
+    """Discover (nonlocking, ID-only) the entity support rows of one Source or Document."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    workspace_id = scope.workspace_id
+    overflow = False
+    member_where = [
+        EntityEvidenceMembership.workspace_id == workspace_id,
+        EntityEvidenceMembership.source_id == source_id,
+    ]
+    if document_id is not None:
+        member_where.append(EntityEvidenceMembership.document_id == document_id)
+    members = list((await session.execute(
+        select(EntityEvidenceMembership.id, EntityEvidenceMembership.entity_id)
+        .where(*member_where).order_by(EntityEvidenceMembership.id).limit(_CLEANUP_LIMIT + 1)
+    )).all())
+    overflow |= len(members) > _CLEANUP_LIMIT
+    members = members[:_CLEANUP_LIMIT]
+    membership_ids = [row[0] for row in members]
+    entity_ids = {row[1] for row in members}
+    alias_ids: set[UUID] = set()
+    alias_evidence_ids: list[UUID] = []
+    field_evidence_ids: list[UUID] = []
+    if membership_ids:
+        alias_support = list((await session.execute(
+            select(EntityAliasEvidence.id, EntityAliasEvidence.alias_id)
+            .join(EntityEvidenceMembership, EntityEvidenceMembership.id == EntityAliasEvidence.membership_id)
+            .where(
+                EntityEvidenceMembership.workspace_id == workspace_id,
+                EntityAliasEvidence.membership_id.in_(membership_ids),
+            ).order_by(EntityAliasEvidence.id).limit(_CLEANUP_LIMIT + 1)
         )).all())
-    return [membership_id for membership_id, _ in rows], sorted(entity_ids, key=str)
+        overflow |= len(alias_support) > _CLEANUP_LIMIT
+        alias_support = alias_support[:_CLEANUP_LIMIT]
+        alias_evidence_ids = [row[0] for row in alias_support]
+        alias_ids.update(row[1] for row in alias_support)
+        field_evidence_ids = list((await session.scalars(
+            select(EntityFieldEvidence.id)
+            .join(EntityEvidenceMembership, EntityEvidenceMembership.id == EntityFieldEvidence.membership_id)
+            .where(
+                EntityEvidenceMembership.workspace_id == workspace_id,
+                EntityFieldEvidence.membership_id.in_(membership_ids),
+            ).order_by(EntityFieldEvidence.id).limit(_CLEANUP_LIMIT + 1)
+        )).all())
+        overflow |= len(field_evidence_ids) > _CLEANUP_LIMIT
+        field_evidence_ids = field_evidence_ids[:_CLEANUP_LIMIT]
+    alias_clauses = [EntityAlias.source_id == source_id] if document_id is None else []
+    if alias_ids:
+        alias_clauses.append(EntityAlias.id.in_(alias_ids))
+    if alias_clauses:
+        aliases = list((await session.execute(
+            select(EntityAlias.id, EntityAlias.entity_id)
+            .join(Entity, Entity.id == EntityAlias.entity_id)
+            .where(Entity.workspace_id == workspace_id, or_(*alias_clauses))
+            .order_by(EntityAlias.id).limit(_CLEANUP_LIMIT + 1)
+        )).all())
+        overflow |= len(aliases) > _CLEANUP_LIMIT
+        for alias_id, alias_entity_id in aliases[:_CLEANUP_LIMIT]:
+            alias_ids.add(alias_id)
+            entity_ids.add(alias_entity_id)
+    return EntitySupportClosure(
+        source_id=source_id, document_id=document_id,
+        membership_ids=tuple(sorted(membership_ids)), alias_ids=tuple(sorted(alias_ids)),
+        alias_evidence_ids=tuple(sorted(alias_evidence_ids)),
+        field_evidence_ids=tuple(sorted(field_evidence_ids)),
+        entity_ids=tuple(sorted(entity_ids)), overflow=overflow,
+    )
+
+
+async def prepare_support_cleanup_in_uow(
+    session: AsyncSession, closure: EntitySupportClosure, *, entity_ids: tuple[UUID, ...],
+    scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+) -> None:
+    """Lock the combined entity union, then support children, in UUID order; no mutation."""
+    _require_cleanup_fences(
+        await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled),
+        source_id=closure.source_id, scope=scope, access_fence=access_fence, source_fence=source_fence,
+    )
+    if closure.overflow:
+        raise ValueError("Entity support cleanup exceeds its atomic limit")
+    workspace_id = scope.workspace_id
+    locked_entities = sorted(set(entity_ids) | set(closure.entity_ids))
+    workspace_entities = select(Entity.id).where(Entity.workspace_id == workspace_id)
+    workspace_memberships = select(EntityEvidenceMembership.id).where(
+        EntityEvidenceMembership.workspace_id == workspace_id,
+    )
+    if locked_entities:
+        await session.scalars(
+            select(Entity.id).where(Entity.workspace_id == workspace_id, Entity.id.in_(locked_entities))
+            .order_by(Entity.id).with_for_update()
+        )
+    if closure.membership_ids:
+        await session.scalars(
+            select(EntityEvidenceMembership.id).where(
+                EntityEvidenceMembership.workspace_id == workspace_id,
+                EntityEvidenceMembership.id.in_(closure.membership_ids),
+            ).order_by(EntityEvidenceMembership.id).with_for_update()
+        )
+    if closure.alias_ids:
+        await session.scalars(
+            select(EntityAlias.id).where(
+                EntityAlias.entity_id.in_(workspace_entities), EntityAlias.id.in_(closure.alias_ids),
+            ).order_by(EntityAlias.id).with_for_update()
+        )
+    if closure.alias_evidence_ids:
+        await session.scalars(
+            select(EntityAliasEvidence.id).where(
+                EntityAliasEvidence.membership_id.in_(workspace_memberships),
+                EntityAliasEvidence.id.in_(closure.alias_evidence_ids),
+            ).order_by(EntityAliasEvidence.id).with_for_update()
+        )
+    if closure.field_evidence_ids:
+        await session.scalars(
+            select(EntityFieldEvidence.id).where(
+                EntityFieldEvidence.membership_id.in_(workspace_memberships),
+                EntityFieldEvidence.id.in_(closure.field_evidence_ids),
+            ).order_by(EntityFieldEvidence.id).with_for_update()
+        )
 
 
 async def lock_entity_ids(
@@ -2539,63 +2668,73 @@ async def lock_entity_ids(
         )
 
 
-async def remove_document_support(session: AsyncSession, document_id: UUID) -> int:
-    """Remove evidence memberships and unsupported derived fields for one document."""
-    return await _remove_entity_support(session, document_id=document_id)
+async def remove_document_support(
+    session: AsyncSession, closure: EntitySupportClosure, *, scope: Scope,
+    multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+) -> int:
+    """Remove prepared evidence memberships and unsupported derived fields for one document."""
+    if closure.document_id is None:
+        raise ValueError("A document closure is required")
+    return await _remove_entity_support(
+        session, closure, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence, source_fence=source_fence,
+    )
 
 
-async def remove_source_support(session: AsyncSession, source_id: UUID) -> int:
-    """Remove evidence memberships and unsupported derived fields for one source."""
-    return await _remove_entity_support(session, source_id=source_id)
+async def remove_source_support(
+    session: AsyncSession, closure: EntitySupportClosure, *, scope: Scope,
+    multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+) -> int:
+    """Remove prepared evidence memberships and unsupported derived fields for one Source."""
+    if closure.document_id is not None:
+        raise ValueError("A Source-wide closure is required")
+    return await _remove_entity_support(
+        session, closure, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence, source_fence=source_fence,
+    )
 
 
 async def _remove_entity_support(
-    session: AsyncSession, *, document_id: UUID | None = None, source_id: UUID | None = None
+    session: AsyncSession, closure: EntitySupportClosure, *, scope: Scope,
+    multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
 ) -> int:
-    """Delete scoped evidence and aliases, preserving owner aliases and supported values."""
-    if (document_id is None) == (source_id is None):
-        raise ValueError("Specify one document or source")
-    membership_query = select(EntityEvidenceMembership).where(
-        EntityEvidenceMembership.document_id == document_id
-        if document_id is not None else EntityEvidenceMembership.source_id == source_id
-    ).order_by(EntityEvidenceMembership.entity_id, EntityEvidenceMembership.id).limit(10_001)
-    memberships = list((await session.scalars(membership_query)).all())
-    if len(memberships) > 10_000:
-        raise ValueError("Entity support cleanup exceeds its atomic limit")
-    membership_ids = [item.id for item in memberships]
-    entity_ids = {item.entity_id for item in memberships}
-    alias_ids: set[UUID] = set()
-    if membership_ids:
-        alias_supports = list((await session.execute(
-            select(EntityAliasEvidence.id, EntityAliasEvidence.alias_id)
-            .where(EntityAliasEvidence.membership_id.in_(membership_ids))
-            .order_by(EntityAliasEvidence.id)
-            .limit(10_001)
-        )).all())
-        if len(alias_supports) > 10_000:
-            raise ValueError("Entity alias support cleanup exceeds its atomic limit")
-        alias_ids.update(alias_id for _, alias_id in alias_supports)
+    """Delete prepared evidence and aliases, preserving owner aliases and supported values.
+
+    Rows were locked by ``prepare_support_cleanup_in_uow``; this never locks.
+    """
+    _require_cleanup_fences(
+        await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled),
+        source_id=closure.source_id, scope=scope, access_fence=access_fence, source_fence=source_fence,
+    )
+    current = await support_cleanup_ids(
+        session, source_id=closure.source_id, document_id=closure.document_id,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if current.overflow or current != closure:
+        raise RuntimeError("cleanup closure changed")
+    workspace_id = scope.workspace_id
+    source_wide = closure.document_id is None
+    if closure.alias_evidence_ids:
         await session.execute(
             delete(EntityAliasEvidence).where(
-                EntityAliasEvidence.id.in_([support_id for support_id, _ in alias_supports])
+                EntityAliasEvidence.id.in_(closure.alias_evidence_ids),
+                EntityAliasEvidence.membership_id.in_(
+                    select(EntityEvidenceMembership.id).where(EntityEvidenceMembership.workspace_id == workspace_id)
+                ),
             )
         )
+    if closure.membership_ids:
         await session.execute(
-            delete(EntityEvidenceMembership).where(EntityEvidenceMembership.id.in_(membership_ids))
+            delete(EntityEvidenceMembership).where(
+                EntityEvidenceMembership.workspace_id == workspace_id,
+                EntityEvidenceMembership.id.in_(closure.membership_ids),
+            )
         )
-    if source_id is not None:
-        sourced = list((await session.scalars(
-            select(EntityAlias).where(EntityAlias.source_id == source_id).order_by(EntityAlias.id).limit(10_001)
-        )).all())
-        if len(sourced) > 10_000:
-            raise ValueError("Entity alias cleanup exceeds its atomic limit")
-        alias_ids.update(item.id for item in sourced)
-        entity_ids.update(item.entity_id for item in sourced)
-    for alias_id in sorted(alias_ids, key=str):
+    for alias_id in closure.alias_ids:
         alias = await session.get(EntityAlias, alias_id)
         if alias is None:
             continue
-        if source_id is not None and alias.source_id == source_id:
+        if source_wide and alias.source_id == closure.source_id:
             alias.source_id = None
         remaining_confidence = await session.scalar(
             select(func.max(EntityAliasEvidence.confidence))
@@ -2606,6 +2745,7 @@ async def _remove_entity_support(
             .where(
                 EntityAliasEvidence.alias_id == alias.id,
                 EntityEvidenceMembership.entity_id == alias.entity_id,
+                EntityEvidenceMembership.workspace_id == workspace_id,
             )
         )
         if alias.origin == "owner":
@@ -2616,15 +2756,17 @@ async def _remove_entity_support(
         # Origin-less legacy aliases carry no proof of owner authorship. Forget
         # them with their final exact support instead of upgrading their status.
         await session.delete(alias)
-    await _clear_unsupported_derived_fields(session, entity_ids)
-    return len(membership_ids)
+    await _clear_unsupported_derived_fields(session, set(closure.entity_ids), workspace_id=workspace_id)
+    return len(closure.membership_ids)
 
 
-async def _clear_unsupported_derived_fields(session: AsyncSession, entity_ids: set[UUID]) -> None:
+async def _clear_unsupported_derived_fields(
+    session: AsyncSession, entity_ids: set[UUID], *, workspace_id: UUID,
+) -> None:
     """Clear non-owner entity fields whose exact current evidence support was removed."""
-    for entity_id in entity_ids:
+    for entity_id in sorted(entity_ids):
         entity = await session.get(Entity, entity_id)
-        if entity is not None:
+        if entity is not None and entity.workspace_id == workspace_id:
             changed = False
             # Unknown legacy provenance is not proof that a non-owner value is safe to retain.
             if entity.name_origin != "owner" and entity.name is not None:
@@ -2640,6 +2782,7 @@ async def _clear_unsupported_derived_fields(session: AsyncSession, entity_ids: s
                         EntityFieldEvidence.field_name == "name",
                         EntityFieldEvidence.value_hash == name_hash,
                         EntityEvidenceMembership.entity_id == entity_id,
+                        EntityEvidenceMembership.workspace_id == workspace_id,
                     ).limit(1)
                 ) is not None
                 if not name_supported:
@@ -2664,6 +2807,7 @@ async def _clear_unsupported_derived_fields(session: AsyncSession, entity_ids: s
                         EntityFieldEvidence.field_name == "description",
                         EntityFieldEvidence.value_hash == description_hash,
                         EntityEvidenceMembership.entity_id == entity_id,
+                        EntityEvidenceMembership.workspace_id == workspace_id,
                     ).limit(1)
                 ) is not None
                 if not description_supported:

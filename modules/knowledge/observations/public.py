@@ -872,16 +872,122 @@ async def list_geospatial_observations(
     )
 
 
-async def purge_source_in_uow(session: AsyncSession, source_id: UUID) -> None:
-    """Remove every derived observation revision in the source's existing deletion transaction."""
-    await session.execute(update(Observation).where(Observation.source_id == source_id).values(is_current=False))
-    await session.execute(
-        cast(Table, Observation.__table__).delete().where(Observation.source_id == source_id)
+@dataclass(frozen=True)
+class ObservationCleanupClosure:
+    """Workspace-qualified Observation IDs deleted with one Source or Document."""
+
+    source_id: UUID
+    document_id: UUID | None
+    observation_ids: tuple[UUID, ...]
+    overflow: bool
+
+
+_CLEANUP_LIMIT = 10_000
+
+
+def _require_cleanup_fences(
+    actual: AccessFence, *, closure: ObservationCleanupClosure, scope: Scope,
+    access_fence: AccessFence, source_fence: SourceFence,
+) -> None:
+    if (
+        actual != access_fence or source_fence.id != closure.source_id
+        or source_fence.workspace_id != scope.workspace_id
+    ):
+        raise HTTPException(status_code=409, detail="Cleanup authority changed")
+
+
+async def observation_cleanup_ids(
+    session: AsyncSession, *, source_id: UUID, document_id: UUID | None = None,
+    scope: Scope, multi_workspace_enabled: bool,
+) -> ObservationCleanupClosure:
+    """Discover (nonlocking, ID-only) the Observations removed with a Source or Document."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    where = [Observation.workspace_id == scope.workspace_id, Observation.source_id == source_id]
+    if document_id is not None:
+        where.append(Observation.document_id == document_id)
+    ids = list((await session.scalars(
+        select(Observation.id).where(*where).order_by(Observation.id).limit(_CLEANUP_LIMIT + 1)
+    )).all())
+    return ObservationCleanupClosure(
+        source_id=source_id, document_id=document_id,
+        observation_ids=tuple(ids[:_CLEANUP_LIMIT]), overflow=len(ids) > _CLEANUP_LIMIT,
     )
 
 
-async def purge_document_in_uow(session: AsyncSession, document_id: UUID) -> None:
-    """Remove evidence-supported measurement revisions before their document is deleted."""
-    await session.execute(
-        cast(Table, Observation.__table__).delete().where(Observation.document_id == document_id)
+async def prepare_document_cleanup_in_uow(
+    session: AsyncSession, closure: ObservationCleanupClosure, *, scope: Scope,
+    multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+) -> None:
+    """Lock the discovered Observation rows in UUID order; no mutation."""
+    _require_cleanup_fences(
+        await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled),
+        closure=closure, scope=scope, access_fence=access_fence, source_fence=source_fence,
     )
+    if closure.overflow:
+        raise ValueError("Observation cleanup exceeds its atomic limit")
+    if closure.observation_ids:
+        await session.scalars(
+            select(Observation.id).where(
+                Observation.workspace_id == scope.workspace_id, Observation.id.in_(closure.observation_ids),
+            ).order_by(Observation.id).with_for_update()
+        )
+
+
+async def _held_observation_ids(
+    session: AsyncSession, closure: ObservationCleanupClosure, *, scope: Scope,
+    multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+) -> tuple[UUID, ...]:
+    _require_cleanup_fences(
+        await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled),
+        closure=closure, scope=scope, access_fence=access_fence, source_fence=source_fence,
+    )
+    current = await observation_cleanup_ids(
+        session, source_id=closure.source_id, document_id=closure.document_id,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if current.overflow or current != closure:
+        raise RuntimeError("cleanup closure changed")
+    return closure.observation_ids
+
+
+async def purge_source_in_uow(
+    session: AsyncSession, source_id: UUID, *, closure: ObservationCleanupClosure, scope: Scope,
+    multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+) -> None:
+    """Remove every prepared observation revision in the Source's deletion transaction; never locks."""
+    if closure.document_id is not None or closure.source_id != source_id:
+        raise ValueError("A Source-wide closure for this Source is required")
+    ids = await _held_observation_ids(
+        session, closure, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence, source_fence=source_fence,
+    )
+    if ids:
+        await session.execute(
+            update(Observation).where(
+                Observation.workspace_id == scope.workspace_id, Observation.id.in_(ids),
+            ).values(is_current=False)
+        )
+        await session.execute(
+            cast(Table, Observation.__table__).delete().where(
+                Observation.workspace_id == scope.workspace_id, Observation.id.in_(ids),
+            )
+        )
+
+
+async def purge_document_in_uow(
+    session: AsyncSession, document_id: UUID, *, source_id: UUID, closure: ObservationCleanupClosure,
+    scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+) -> None:
+    """Remove prepared evidence-supported measurement revisions before their document is deleted."""
+    if closure.document_id != document_id or closure.source_id != source_id:
+        raise ValueError("A closure for this Document is required")
+    ids = await _held_observation_ids(
+        session, closure, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence, source_fence=source_fence,
+    )
+    if ids:
+        await session.execute(
+            cast(Table, Observation.__table__).delete().where(
+                Observation.workspace_id == scope.workspace_id, Observation.id.in_(ids),
+            )
+        )

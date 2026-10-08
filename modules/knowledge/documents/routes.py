@@ -19,6 +19,7 @@ from modules.knowledge.documents.models import Document
 from modules.knowledge.documents.schemas import (
     CitationTargetRead,
     ContentUpdate,
+    DocumentCleanupPreparationLimitError,
     DocumentCreate,
     DocumentDeletionRead,
     DocumentList,
@@ -288,9 +289,13 @@ async def delete_document(
 ) -> DocumentDeletionRead:
     """Revoke document access immediately and return its durable cleanup receipt."""
     await _lock_document_write_request(request, session, scope)
-    operation = await public.delete_document(
-        session, document_id, scope=scope,
-        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
+    try:
+        operation = await public.delete_document(
+            session, document_id, scope=scope,
+            multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
+    except DocumentCleanupPreparationLimitError as exc:
+        # The session dependency rolls the whole transaction back; nothing was mutated.
+        raise HTTPException(status_code=409, detail="document_cleanup_dependency_limit_exceeded") from exc
     if operation is None:
         raise HTTPException(status_code=404, detail="Document not found")
     return DocumentDeletionRead(
@@ -325,12 +330,17 @@ async def delete_document(
 
 @router.get("/deletion-operations/{operation_id}", response_model=DocumentDeletionRead)
 async def get_deletion_operation(
-    operation_id: UUID, session: Session, _owner: OwnerRead,
+    operation_id: UUID, session: Session, request: Request, scope: WorkspaceRead,
 ) -> DocumentDeletionRead:
-    """Return owner-only durable status for a previously accepted document deletion."""
-    operation = await public.get_document_cleanup_operation(session, operation_id)
+    """Return owner-only durable status; a receipt whose authority is missing/stale reports action-required."""
+    _require_document_route_owner(scope)
+    flag = request.app.state.settings.multi_workspace_enabled
+    operation = await public.get_document_cleanup_operation(
+        session, operation_id, scope=scope, multi_workspace_enabled=flag)
     if operation is None:
         raise HTTPException(status_code=404, detail="Document cleanup operation not found")
+    authority_error = await public.cleanup_authority_error(
+        session, operation, scope=scope, multi_workspace_enabled=flag)
     return DocumentDeletionRead(
         operation_id=operation.id,
         status=operation.status,
@@ -356,7 +366,7 @@ async def get_deletion_operation(
         brief_error_code=operation.brief_error_code,
         brief_unresolved_count=operation.brief_unresolved_count,
         immediate_access_revoked=True,
-        error_code=operation.error_code,
+        error_code=authority_error or operation.error_code,
         copied_error_code=operation.copied_error_code,
     )
 
