@@ -13,6 +13,7 @@ from uuid import uuid4
 
 import pytest
 
+from core.workspaces.schemas import AccessFence, InternalJobScope
 from modules.agents.handoff import (
     HANDOFF_EXCLUDED_TOOLS,
     HANDOFF_TARGETS,
@@ -26,6 +27,10 @@ from modules.agents.harness import (
     StrictJsonSerializer,
     run_specialist_handoff,
 )
+
+WORKSPACE_ID = uuid4()
+SCOPE = InternalJobScope(workspace_id=WORKSPACE_ID, actor_user_id=1, membership_revision=1)
+ORIGINAL_FENCE = AccessFence(workspace_id=WORKSPACE_ID, user_id=1, membership_revision=1, configuration_revision=1)
 
 
 class TestStrictJsonSerializer:
@@ -186,7 +191,8 @@ class TestBudgetExhaustionAndLoopBounds:
         """Verify remaining active seconds calculation."""
         context = HarnessContext(
             run_id=uuid4(),
-            owner_id=1,
+            scope=SCOPE,
+            original_fence=ORIGINAL_FENCE,
             claim_generation=1,
             session_factory=MagicMock(),
             engine=MagicMock(),
@@ -210,7 +216,8 @@ class TestBudgetExhaustionAndLoopBounds:
         """When cumulative active seconds exceed MAX_ACTIVE_SECONDS (300), remaining is 0."""
         context = HarnessContext(
             run_id=uuid4(),
-            owner_id=1,
+            scope=SCOPE,
+            original_fence=ORIGINAL_FENCE,
             claim_generation=1,
             session_factory=MagicMock(),
             engine=MagicMock(),

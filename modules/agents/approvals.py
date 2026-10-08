@@ -10,7 +10,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.public import revalidate_owner_session
+from core.realtime import commit_with_replay
 from core.tools.schemas import ToolDefinition, ToolExecutionPrincipal, compute_argument_hash
+from core.workspaces.schemas import AccessFence, InternalJobScope, Scope
+from modules.agents.access import actor, admit
 from modules.agents.models import AgentApproval, AgentEffect, AgentRun, AgentToolCall
 
 SessionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
@@ -37,35 +40,47 @@ async def create_pending_approval(
     destination_revision: str,
     source_fences: dict[str, object],
     expiry_hours: int,
+    scope: InternalJobScope,
+    original_fence: AccessFence,
+    multi_workspace_enabled: bool,
 ) -> AgentApproval:
     """Create or reuse only the exact approval bound to a claimed durable tool slot.
 
     The run lock serializes retries before the unique `(run_id, ordinal)` constraint. The saved
     operation binds registered contract, canonical arguments, source evidence, session and profile.
+    The run's original access fence is locked and compared first (Recipe J); the approval row
+    carries the run's workspace and the commit is validated by that same fence.
     """
     action_id = action_identity(run_id, ordinal)
     argument_hash = compute_argument_hash(arguments)
     now = datetime.now(UTC)
     async with session_factory() as session:
+        fence = await admit(
+            session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            lock=True, expected=original_fence,
+        )
         if not await revalidate_owner_session(session, auth_session_hash, owner_id):
             raise HTTPException(status_code=401, detail="Owner session expired")
         from modules.chat.public import has_live_agent_run_link
         if not await has_live_agent_run_link(session, run_id, owner_id, auth_session_hash):
             raise HTTPException(status_code=409, detail="A live Chat link is required for approval")
-        run = await session.scalar(select(AgentRun).where(AgentRun.id == run_id).with_for_update())
+        run = await session.scalar(select(AgentRun).where(
+            AgentRun.id == run_id, AgentRun.workspace_id == scope.workspace_id,
+        ).with_for_update())
         if (run is None or run.owner_id != owner_id or run.status != "running" or run.cancel_requested
                 or run.evidence_revoked
                 or run.claim_generation != claim_generation or run.auth_session_hash != auth_session_hash):
             raise HTTPException(status_code=409, detail="Agent action is no longer current")
         row = await session.scalar(select(AgentApproval).where(
             AgentApproval.run_id == run_id, AgentApproval.ordinal == ordinal,
+            AgentApproval.workspace_id == scope.workspace_id,
         ).with_for_update())
         if (not await revalidate_owner_session(session, auth_session_hash, owner_id)
                 or not await has_live_agent_run_link(session, run_id, owner_id, auth_session_hash)):
             raise HTTPException(status_code=409, detail="Owner session or Chat link is no longer live")
         if row is None:
             row = AgentApproval(
-                id=uuid4(), action_id=action_id,
+                id=uuid4(), action_id=action_id, workspace_id=scope.workspace_id,
                 run_id=run_id, owner_id=owner_id, auth_session_hash=auth_session_hash,
                 ordinal=ordinal, tool_name=definition.name, tool_version=definition.version,
                 schema_fingerprint=definition.schema_fingerprint, arguments=arguments,
@@ -80,7 +95,9 @@ async def create_pending_approval(
               or row.destination_id != destination_id or row.destination_revision != destination_revision
               or row.source_fences != source_fences):
             raise HTTPException(status_code=409, detail="Tool slot no longer matches its approval")
-        await session.commit()
+        await commit_with_replay(
+            session, (), scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+        )
         await session.refresh(row)
         session.expunge(row)
         return row
@@ -98,12 +115,28 @@ async def verify_approved_action(
     arguments: dict[str, object],
     destination_id: str,
     destination_revision: str,
+    scope: InternalJobScope,
+    original_fence: AccessFence,
+    multi_workspace_enabled: bool,
 ) -> bool:
-    """Re-read approved action, effect reservation, run claim and original session before dispatch."""
+    """Re-read approved action, effect reservation, run claim, original session and workspace epoch before dispatch."""
     async with session_factory() as session:
-        row = await session.scalar(select(AgentApproval).where(AgentApproval.action_id == action_id))
-        run = await session.scalar(select(AgentRun).where(AgentRun.id == run_id))
-        effect = await session.scalar(select(AgentEffect).where(AgentEffect.action_id == action_id))
+        try:
+            if await admit(
+                session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            ) != original_fence:
+                return False
+        except HTTPException:
+            return False
+        row = await session.scalar(select(AgentApproval).where(
+            AgentApproval.action_id == action_id, AgentApproval.workspace_id == scope.workspace_id,
+        ))
+        run = await session.scalar(select(AgentRun).where(
+            AgentRun.id == run_id, AgentRun.workspace_id == scope.workspace_id,
+        ))
+        effect = await session.scalar(select(AgentEffect).where(
+            AgentEffect.action_id == action_id, AgentEffect.workspace_id == scope.workspace_id,
+        ))
         if (row is None or run is None or effect is None or row.run_id != run_id  # noqa: SIM103  # style-only rewrite skipped to avoid touching control flow
                 or row.owner_id != owner_id or row.auth_session_hash != auth_session_hash
                 or run.owner_id != owner_id or run.auth_session_hash != auth_session_hash
@@ -143,22 +176,36 @@ async def reserve_effect_before_send(
     arguments: dict[str, object],
     destination_id: str,
     destination_revision: str,
+    scope: InternalJobScope,
+    original_fence: AccessFence,
+    multi_workspace_enabled: bool,
 ) -> bool:
     """Commit the one-send tombstone under run→approval→effect locks after rechecking session and Chat fences.
 
-    Revalidate the original session before locks and again after all three locks, immediately before
-    changing the durable state. The webhook transport separately checks source/profile fences after DNS.
+    The run's original access fence is locked and compared before any row lock; a changed epoch
+    denies the send. Revalidate the original session before locks and again after all three locks,
+    immediately before changing the durable state. The webhook transport separately checks
+    source/profile fences after DNS.
     """
     async with session_factory() as session:
+        try:
+            fence = await admit(
+                session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                lock=True, expected=original_fence,
+            )
+        except HTTPException:
+            return False
         # Do the latest auth query before row locks; a second send fence occurs after DNS resolution.
         if not await revalidate_owner_session(session, auth_session_hash, owner_id):
             return False
-        run = await session.scalar(select(AgentRun).where(AgentRun.id == run_id).with_for_update())
+        run = await session.scalar(select(AgentRun).where(
+            AgentRun.id == run_id, AgentRun.workspace_id == scope.workspace_id,
+        ).with_for_update())
         approval = await session.scalar(select(AgentApproval).where(
-            AgentApproval.action_id == action_id,
+            AgentApproval.action_id == action_id, AgentApproval.workspace_id == scope.workspace_id,
         ).with_for_update())
         effect = await session.scalar(select(AgentEffect).where(
-            AgentEffect.action_id == action_id,
+            AgentEffect.action_id == action_id, AgentEffect.workspace_id == scope.workspace_id,
         ).with_for_update())
         now = datetime.now(UTC)
         if (run is None or approval is None or effect is None or run.owner_id != owner_id
@@ -179,7 +226,9 @@ async def reserve_effect_before_send(
                 or not await has_live_agent_run_link(session, run_id, owner_id, auth_session_hash)):
             return False
         effect.state = "in_flight"
-        await session.commit()
+        await commit_with_replay(
+            session, (), scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+        )
         return True
 
 
@@ -273,17 +322,26 @@ async def decision(
     *,
     session_factory: SessionFactory,
     approval_id: UUID,
-    owner_id: int,
     auth_session_hash: str,
     approve: bool,
     expiry_hours: int,
     destination_revision: str,
     definition: ToolDefinition | None,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> tuple[AgentApproval, AgentRun]:
-    """Resolve one exact owner decision under run→approval→effect locks and queue its bounded continuation."""
+    """Resolve one exact owner decision under run→approval→effect locks and queue its bounded continuation.
+
+    The workspace access fence is locked before every other lock and validates each commit; members
+    are denied before any query. The approval, run and effect must belong to ``scope``'s workspace.
+    """
+    fence = await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    owner_id = actor(scope)
     if not await revalidate_owner_session(session, auth_session_hash, owner_id):
         raise HTTPException(status_code=401, detail="Owner session expired")
-    candidate = await session.scalar(select(AgentApproval).where(AgentApproval.id == approval_id))
+    candidate = await session.scalar(select(AgentApproval).where(
+        AgentApproval.id == approval_id, AgentApproval.workspace_id == scope.workspace_id,
+    ))
     if candidate is None or candidate.owner_id != owner_id or candidate.auth_session_hash != auth_session_hash:
         raise HTTPException(status_code=404, detail="Approval not found")
     from modules.chat.public import has_live_agent_run_link
@@ -295,26 +353,38 @@ async def decision(
     from modules.tools.public import revalidate_native_output_fences
 
     principal = ToolExecutionPrincipal(
-        actor_id=f"owner:{owner_id}", is_owner=True, allowed_tools=frozenset({candidate.tool_name}),
+        actor_id=f"owner:{owner_id}", scope=scope, is_owner=True,
+        allowed_tools=frozenset({candidate.tool_name}),
         owner_all_sources=True, destinations=frozenset(), capabilities=frozenset({"source.read"}),
     )
     try:
         fences_current = await revalidate_native_output_fences(
             session_factory,
             _restore_fences(candidate.source_fences), principal, destination_kind="remote",
+            multi_workspace_enabled=multi_workspace_enabled,
         )
     except (TypeError, ValueError, KeyError):
         fences_current = False
     if not fences_current:
-        return await _cancel_stale_action(session, candidate, "source_permissions_changed")
+        return await _cancel_stale_action(
+            session, candidate, "source_permissions_changed",
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+        )
     if candidate.destination_revision != destination_revision:
-        return await _cancel_stale_action(session, candidate, "webhook_profile_changed")
-    run = await session.scalar(select(AgentRun).where(AgentRun.id == candidate.run_id).with_for_update())
-    row = await session.scalar(select(AgentApproval).where(AgentApproval.id == approval_id).with_for_update())
+        return await _cancel_stale_action(
+            session, candidate, "webhook_profile_changed",
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+        )
+    run = await session.scalar(select(AgentRun).where(
+        AgentRun.id == candidate.run_id, AgentRun.workspace_id == scope.workspace_id,
+    ).with_for_update())
+    row = await session.scalar(select(AgentApproval).where(
+        AgentApproval.id == approval_id, AgentApproval.workspace_id == scope.workspace_id,
+    ).with_for_update())
     effect = None
     if approve:
         effect = await session.scalar(select(AgentEffect).where(
-            AgentEffect.action_id == candidate.action_id,
+            AgentEffect.action_id == candidate.action_id, AgentEffect.workspace_id == scope.workspace_id,
         ).with_for_update())
     if run is None or row is None or run.cancel_requested or run.evidence_revoked or run.status == "cancelled":
         raise HTTPException(status_code=409, detail="Agent run is no longer active")
@@ -336,7 +406,9 @@ async def decision(
         await _resume_denied(session, run, row, "approval_expired")
         run.status, run.dispatch_generation = "queued", run.dispatch_generation + 1
         run.updated_at = datetime.now(UTC)
-        await session.commit()
+        await commit_with_replay(
+            session, (), scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+        )
         await session.refresh(row)
         await session.refresh(run)
         return row, run
@@ -348,13 +420,16 @@ async def decision(
         await _resume_denied(session, run, row, "tool_contract_changed")
         run.status, run.dispatch_generation = "queued", run.dispatch_generation + 1
         run.updated_at = datetime.now(UTC)
-        await session.commit()
+        await commit_with_replay(
+            session, (), scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+        )
         await session.refresh(row)
         await session.refresh(run)
         return row, run
     if approve:
         if effect is None:
             effect = AgentEffect(
+                workspace_id=scope.workspace_id, actor_user_id=owner_id,
                 action_id=row.action_id, run_id=run.id, provider_key=str(row.action_id),
                 profile_alias=row.destination_id, profile_revision=row.destination_revision,
                 payload=row.arguments, payload_hash=row.argument_hash, state="reserved",
@@ -363,7 +438,9 @@ async def decision(
         elif effect.state != "reserved" or effect.payload_hash != row.argument_hash:
             row.status = "requires_review"
             row.resolved_at = datetime.now(UTC)
-            await session.commit()
+            await commit_with_replay(
+            session, (), scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+        )
             return row, run
         row.status = "approved"
         row.resolved_at = datetime.now(UTC)
@@ -377,7 +454,9 @@ async def decision(
     run.activities = [*run.activities[-63:], {
         "kind": "status", "status": "queued", "created_at": datetime.now(UTC).isoformat(),
     }]
-    await session.commit()
+    await commit_with_replay(
+            session, (), scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+        )
     await session.refresh(row)
     await session.refresh(run)
     return row, run
@@ -394,13 +473,14 @@ async def _resume_denied(session: AsyncSession, run: AgentRun, row: AgentApprova
 
 async def _cancel_stale_action(
     session: AsyncSession, candidate: AgentApproval, code: str,
+    *, scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
 ) -> tuple[AgentApproval, AgentRun]:
     """Resolve a stale pending action as a bounded denial while preserving its immutable audit hash."""
     run = await session.scalar(select(AgentRun).where(
-        AgentRun.id == candidate.run_id,
+        AgentRun.id == candidate.run_id, AgentRun.workspace_id == scope.workspace_id,
     ).with_for_update())
     row = await session.scalar(select(AgentApproval).where(
-        AgentApproval.id == candidate.id,
+        AgentApproval.id == candidate.id, AgentApproval.workspace_id == scope.workspace_id,
     ).with_for_update())
     from modules.chat.public import has_live_agent_run_link
     if (not await revalidate_owner_session(session, candidate.auth_session_hash, candidate.owner_id)
@@ -418,23 +498,33 @@ async def _cancel_stale_action(
     run.status = "queued"
     run.dispatch_generation += 1
     run.updated_at = datetime.now(UTC)
-    await session.commit()
+    await commit_with_replay(
+        session, (), scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+    )
     await session.refresh(row)
     await session.refresh(run)
     return row, run
 
 
 async def expire_pending_approvals(session_factory: SessionFactory, limit: int = 25) -> int:
-    """Expire a bounded page of waiting actions and enqueue their safe denied tool result."""
+    """Expire a bounded page of waiting actions and enqueue their safe denied tool result.
+
+    Expiry only ever denies (it grants nothing and reads no content), so it runs without workspace
+    admission and stays possible after access is revoked; each row's own workspace binds its locks.
+    """
     async with session_factory() as session:
         candidates = list((await session.execute(select(
-            AgentApproval.id, AgentApproval.run_id,
+            AgentApproval.id, AgentApproval.run_id, AgentApproval.workspace_id,
         ).where(AgentApproval.status == "pending", AgentApproval.expires_at <= datetime.now(UTC))
           .order_by(AgentApproval.expires_at).limit(limit))).all())
         expired = 0
-        for approval_id, run_id in candidates:
-            run = await session.scalar(select(AgentRun).where(AgentRun.id == run_id).with_for_update())
-            row = await session.scalar(select(AgentApproval).where(AgentApproval.id == approval_id).with_for_update())
+        for approval_id, run_id, workspace_id in candidates:
+            run = await session.scalar(select(AgentRun).where(
+                AgentRun.id == run_id, AgentRun.workspace_id == workspace_id,
+            ).with_for_update())
+            row = await session.scalar(select(AgentApproval).where(
+                AgentApproval.id == approval_id, AgentApproval.workspace_id == workspace_id,
+            ).with_for_update())
             if run is None or row is None or row.status != "pending" or row.expires_at > datetime.now(UTC):
                 continue
             row.status, row.resolved_at = "expired", datetime.now(UTC)

@@ -24,6 +24,11 @@ def _sql(statement: object) -> str:
     return str(statement.compile(dialect=postgresql.dialect()))  # type: ignore[attr-defined]
 
 
+def _where(statement_sql: str) -> str:
+    """Return only the predicate part so a selected column cannot satisfy a scope assertion."""
+    return statement_sql.split("WHERE", 1)[1]
+
+
 def test_service_methods_require_scope_and_flag_keywords() -> None:
     """C-2: the KnowledgeService facade calls these forms exactly."""
     for name in ("get_memories", "get_active_memory_context"):
@@ -80,9 +85,9 @@ async def test_get_memories_filters_workspace_before_limit() -> None:
             patch.object(public, "lock_export_privacy", AsyncMock()):
         await MemoryService(session).get_memories(limit=5, **CTX)
     admit.assert_awaited_once()
-    sql = seen[0]
-    assert "memories.workspace_id" in sql
-    assert sql.index("memories.workspace_id") < sql.index("LIMIT")
+    where = _where(seen[0])
+    assert "memories.workspace_id = " in where
+    assert where.index("memories.workspace_id = ") < where.index("LIMIT")
 
 
 def test_export_scope_is_workspace_bound() -> None:
@@ -115,7 +120,7 @@ async def test_read_export_privacy_is_scoped_and_admitted() -> None:
         result = await public.read_export_privacy(session, **CTX)
     admit.assert_awaited_once()
     assert result.persisted is False
-    assert "memory_privacy_settings.workspace_id" in captured[0]
+    assert "memory_privacy_settings.workspace_id = " in _where(captured[0])
     with pytest.raises(HTTPException):
         await public.read_export_privacy(session, **{**CTX, "scope": MEMBER})
 

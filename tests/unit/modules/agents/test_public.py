@@ -18,6 +18,7 @@ import pytest
 from fastapi import HTTPException
 
 from core.tools import ToolDefinition, ToolRegistry, ToolRisk
+from core.workspaces.schemas import AccessFence, InternalJobScope, WorkspaceContext
 from modules.agents.models import (
     AgentProfile,
     AgentRun,
@@ -42,6 +43,19 @@ from modules.agents.schemas import (
     ProfileRunStart,
 )
 
+WS = uuid4()
+SCOPE = WorkspaceContext(user_id=1, workspace_id=WS, role="owner", membership_revision=1)
+FENCE = AccessFence(workspace_id=WS, user_id=1, membership_revision=1, configuration_revision=1)
+CTX = {"scope": SCOPE, "multi_workspace_enabled": False}
+EPOCH = {"workspace_id": WS, "membership_revision": 1, "configuration_revision": 1}
+
+
+@pytest.fixture(autouse=True)
+def _admitted():
+    """Admission and fenced commits are covered in test_scope.py; here they succeed."""
+    with patch("modules.agents.access.workspaces.read_access_fence", AsyncMock(return_value=FENCE)),             patch("modules.agents.access.workspaces.lock_access_fence", AsyncMock(return_value=FENCE)),             patch("modules.agents.public.commit_with_replay", AsyncMock()) as commit:
+        yield commit
+
 
 class TestAgentRunDispatch:
     """Tests for run dispatch, tool filtering, and idempotency handling."""
@@ -54,12 +68,12 @@ class TestAgentRunDispatch:
         request = AgentRunStart(prompt="Hello", conversation_id=None, token_budget=None)
 
         with pytest.raises(HTTPException) as exc_info:
-            await create_run(session, "session_hash", request, registry)
+            await create_run(session, "session_hash", request, registry, **CTX)
         assert exc_info.value.status_code == 503
         assert "Agent tools are unavailable" in exc_info.value.detail
 
     @pytest.mark.asyncio
-    async def test_create_run_success(self) -> None:
+    async def test_create_run_success(self, _admitted) -> None:
         """create_run filters tools to allowed read-only tools, saves queued run, and returns AgentRunRead."""
         session = AsyncMock()
 
@@ -87,11 +101,11 @@ class TestAgentRunDispatch:
         registry.list_tools.return_value = [tool_def]
 
         request = AgentRunStart(prompt="Search docs", conversation_id=None, token_budget=None)
-        res = await create_run(session, "auth_hash", request, registry)
+        res = await create_run(session, "auth_hash", request, registry, **CTX)
 
         assert isinstance(res, AgentRunRead)
         assert res.status == "queued"
-        session.commit.assert_called_once()
+        _admitted.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_create_profile_run_rejects_token_budget(self) -> None:
@@ -108,8 +122,8 @@ class TestAgentRunDispatch:
 
         with pytest.raises(HTTPException) as exc_info:
             await create_profile_run_in_uow(
-                session, owner_id=1, auth_session_hash="hash", profile_id="supervisor",
-                request=request, registry=registry, config=None,
+                session, auth_session_hash="hash", profile_id="supervisor",
+                request=request, registry=registry, config=None, **CTX,
             )
         assert exc_info.value.status_code == 422
         assert "token_budget_unavailable" in exc_info.value.detail
@@ -139,8 +153,8 @@ class TestAgentRunDispatch:
 
         with pytest.raises(HTTPException) as exc_info:
             await create_profile_run_in_uow(
-                session, owner_id=1, auth_session_hash="hash", profile_id="supervisor",
-                request=request, registry=registry, config=None,
+                session, auth_session_hash="hash", profile_id="supervisor",
+                request=request, registry=registry, config=None, **CTX,
             )
         assert exc_info.value.status_code == 409
         assert "Client request ID was already used" in exc_info.value.detail
@@ -150,14 +164,14 @@ class TestStepLifecycleAndManagement:
     """Tests for run lifecycle, cancellation, and deletion."""
 
     @pytest.mark.asyncio
-    async def test_request_cancel_success(self) -> None:
+    async def test_request_cancel_success(self, _admitted) -> None:
         """request_cancel marks cancel_requested on a running agent run and returns AgentRunRead."""
         session = AsyncMock()
         run_id = uuid4()
         now = datetime.now(UTC)
         run = AgentRun(
             id=run_id,
-            owner_id=1,
+            owner_id=1, **EPOCH,
             agent_id="assistant",
             status="running",
             cancel_requested=False,
@@ -179,11 +193,11 @@ class TestStepLifecycleAndManagement:
         scalars_mock.all.return_value = []
         session.scalars.return_value = scalars_mock
 
-        with patch("modules.agents.public.publish_agent_activity_safely", return_value=None):
-            result = await request_cancel(session, run_id, MagicMock())
+        with patch("modules.agents.public.publish_agent_activity_safely", return_value=None),                 patch("modules.agents.public.purge_browser_results_in_uow", AsyncMock()):
+            result = await request_cancel(session, run_id, MagicMock(), **CTX)
             assert isinstance(result, AgentRunRead)
             assert run.cancel_requested is True
-            session.commit.assert_called_once()
+            _admitted.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_purge_agent_runs_deletes_rows(self) -> None:
@@ -203,7 +217,7 @@ class TestStepLifecycleAndManagement:
         session.scalars.return_value = scalars_mock
 
         with patch("modules.agents.public.purge_browser_results_in_uow", return_value=None):
-            deleted_count = await purge_agent_runs(session, [r1.id, r2.id], owner_id=1)
+            deleted_count = await purge_agent_runs(session, [r1.id, r2.id], **CTX)
             assert deleted_count == 2
             assert r1.cancel_requested is True
             assert r2.cancel_requested is True
@@ -245,16 +259,25 @@ class TestToolAuthorizationAndEvidenceFences:
     def test_result_principal_construction_all_sources(self) -> None:
         """_result_principal creates ToolExecutionPrincipal with owner_all_sources=True when profile_snapshot is None."""
         run = AgentRun(
-            owner_id=1,
+            owner_id=1, **EPOCH,
             allowed_tools=["knowledge.search", "webhook.send"],
             profile_snapshot=None,
         )
-        principal = _result_principal(run)
-        assert principal is not None
-        assert principal.is_owner is True
-        assert principal.owner_all_sources is True
-        assert "source.read" in principal.capabilities
-        assert "webhook.send" in principal.capabilities
+        with patch("modules.agents.public.ToolExecutionPrincipal") as principal_cls:
+            principal = _result_principal(run)
+        assert principal is principal_cls.return_value
+        kwargs = principal_cls.call_args.kwargs
+        assert kwargs["is_owner"] is True
+        assert kwargs["owner_all_sources"] is True
+        assert "source.read" in kwargs["capabilities"]
+        assert "webhook.send" in kwargs["capabilities"]
+        # Recipe J: the scope is rebuilt from the durable original epoch, never the live one.
+        assert kwargs["scope"] == InternalJobScope(workspace_id=WS, actor_user_id=1, membership_revision=1)
+
+    def test_result_principal_quarantines_legacy_null_epoch(self) -> None:
+        """A run without a captured original epoch gets no principal, so its answer stays suppressed."""
+        run = AgentRun(owner_id=1, workspace_id=WS, allowed_tools=["knowledge.search"], profile_snapshot=None)
+        assert _result_principal(run) is None
 
     def test_result_principal_fails_closed_on_oversized_sources(self) -> None:
         """_result_principal returns None if source_ids list exceeds 32 sources."""
@@ -331,7 +354,7 @@ class TestToolAuthorizationAndEvidenceFences:
 
         with patch("modules.agents.public.revalidate_native_output_fences", return_value=False):
             mock_factory = MagicMock()
-            result = await _read_current_result(run, mock_factory)
+            result = await _read_current_result(run, mock_factory, multi_workspace_enabled=False)
             assert result.answer is None  # Suppressed!
             assert result.status == "succeeded"
 
@@ -350,7 +373,7 @@ class TestBrowserBudgetTrackingAndAuthority:
 
         run = AgentRun(
             id=run_id,
-            owner_id=1,
+            owner_id=1, **EPOCH,
             status="running",
             browser_jobs=2,  # Limit reached!
             browser_pages=1,
@@ -369,15 +392,14 @@ class TestBrowserBudgetTrackingAndAuthority:
             status="started",
         )
 
-        session.scalar.side_effect = [run, tool_call]
-        session.get.return_value = MagicMock(spec=AgentProfile)
+        session.scalar.side_effect = [run, MagicMock(spec=AgentProfile), tool_call]
 
         with patch("modules.agents.public._browser_profile_current", return_value=True), \
              patch("modules.chat.public.live_agent_conversation_id", return_value=uuid4()):  # noqa: SIM117  # style-only; nested with kept
             with pytest.raises(PermissionError, match="Browser run budget is exhausted"):
                 await reserve_browser_run_budget_in_uow(
-                    session, owner_id=1, run_id=run_id, claim_generation=1,
-                    tool_slot=1, args_digest=args_digest, requested_pages=2,
+                    session, run_id=run_id, claim_generation=1,
+                    tool_slot=1, args_digest=args_digest, requested_pages=2, **CTX,
                 )
 
     @pytest.mark.asyncio
@@ -391,7 +413,7 @@ class TestBrowserBudgetTrackingAndAuthority:
 
         run = AgentRun(
             id=run_id,
-            owner_id=1,
+            owner_id=1, **EPOCH,
             status="running",
             browser_jobs=1,
             browser_pages=5,  # 5 + 2 = 7 > 6 limit!
@@ -410,15 +432,14 @@ class TestBrowserBudgetTrackingAndAuthority:
             status="started",
         )
 
-        session.scalar.side_effect = [run, tool_call]
-        session.get.return_value = MagicMock(spec=AgentProfile)
+        session.scalar.side_effect = [run, MagicMock(spec=AgentProfile), tool_call]
 
         with patch("modules.agents.public._browser_profile_current", return_value=True), \
              patch("modules.chat.public.live_agent_conversation_id", return_value=uuid4()):  # noqa: SIM117  # style-only; nested with kept
             with pytest.raises(PermissionError, match="Browser run budget is exhausted"):
                 await reserve_browser_run_budget_in_uow(
-                    session, owner_id=1, run_id=run_id, claim_generation=1,
-                    tool_slot=1, args_digest=args_digest, requested_pages=2,
+                    session, run_id=run_id, claim_generation=1,
+                    tool_slot=1, args_digest=args_digest, requested_pages=2, **CTX,
                 )
 
     @pytest.mark.asyncio
@@ -432,7 +453,7 @@ class TestBrowserBudgetTrackingAndAuthority:
 
         run = AgentRun(
             id=run_id,
-            owner_id=1,
+            owner_id=1, **EPOCH,
             status="running",
             browser_jobs=0,
             browser_pages=0,
@@ -452,15 +473,14 @@ class TestBrowserBudgetTrackingAndAuthority:
             status="started",
         )
 
-        session.scalar.side_effect = [run, tool_call]
-        session.get.return_value = MagicMock(spec=AgentProfile)
+        session.scalar.side_effect = [run, MagicMock(spec=AgentProfile), tool_call]
 
         with patch("modules.agents.public._browser_profile_current", return_value=True), \
              patch("modules.chat.public.live_agent_conversation_id", return_value=uuid4()):  # noqa: SIM117  # style-only; nested with kept
             with pytest.raises(PermissionError, match="Browser run active-time budget is exhausted"):
                 await reserve_browser_run_budget_in_uow(
-                    session, owner_id=1, run_id=run_id, claim_generation=1,
-                    tool_slot=1, args_digest=args_digest, requested_pages=1,
+                    session, run_id=run_id, claim_generation=1,
+                    tool_slot=1, args_digest=args_digest, requested_pages=1, **CTX,
                 )
 
     @pytest.mark.asyncio
@@ -487,7 +507,7 @@ class TestBrowserBudgetTrackingAndAuthority:
 
         run = AgentRun(
             id=run_id,
-            owner_id=1,
+            owner_id=1, **EPOCH,
             status="running",
             cancel_requested=True,
             claim_generation=1,
@@ -496,5 +516,5 @@ class TestBrowserBudgetTrackingAndAuthority:
         )
         session.scalar.return_value = run
 
-        res = await revalidate_browser_run_authority(session, auth)
+        res = await revalidate_browser_run_authority(session, auth, **CTX)
         assert res is False
