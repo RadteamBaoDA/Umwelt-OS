@@ -1292,15 +1292,28 @@ async def _generate_brief(
                 return "dropped"
             schedule = await dashboard.read_schedule(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
             day = datetime.now(UTC).astimezone(ZoneInfo(schedule.timezone)).date()
+            run_id = run.id
+
+            async def evidence_guard(guarded: AsyncSession) -> bool:
+                """Re-take the trigger-evidence fence before the brief's own locks (egress and publish)."""
+                fresh = await guarded.scalar(select(AutomationRun).where(
+                    AutomationRun.workspace_id == scope.workspace_id, AutomationRun.owner_id == _actor(scope),
+                    AutomationRun.id == run_id).execution_options(populate_existing=True))
+                return fresh is not None and await _run_evidence_current(
+                    guarded, fresh, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
+
             brief = await dashboard.generate_brief(
                 session, day, schedule.timezone, scope=scope, multi_workspace_enabled=multi_workspace_enabled, settings=cast(Settings, ctx["settings"]),
-                redis=cast(Redis, ctx["redis"]), force=False)
+                redis=cast(Redis, ctx["redis"]), force=False, publish_guard=evidence_guard)
         await _mark(
             factory, run.id, row.ordinal, "succeeded", None, f"brief:{getattr(brief, 'id', 'daily')}", scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         return "succeeded"
     except dashboard.BriefEmpty:
         await _mark(factory, run.id, row.ordinal, "succeeded", None, "brief:empty", scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         return "succeeded"
+    except dashboard.BriefEvidenceRevoked:  # purge landed mid-call: drop like the step-start check, any attempt
+        await _mark(factory, run.id, row.ordinal, "skipped", "document_evidence_unavailable", scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        return "dropped"
     except dashboard.BriefUnavailable:
         return await _transient(factory, run.id, row.ordinal, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
