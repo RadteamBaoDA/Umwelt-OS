@@ -401,6 +401,8 @@ async def search(
                 if release_during_embed:
                     await session.commit()
 
+            if release_during_embed:
+                await session.commit()
             response = await gateway(config, redis, recheck_send, scope=scope).embed("embedding", mapping, policy, [request.query])
             values, returned_model = embedding_values(response, generation.dimensions)
             if returned_model != generation.response_model_id:

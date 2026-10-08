@@ -7,9 +7,13 @@ from uuid import uuid4
 import pytest
 
 from core.tools.schemas import ToolExecutionPrincipal
+from core.workspaces import public as workspaces
+from core.workspaces.schemas import WorkspaceContext
 from modules.search import public
 from modules.search.schemas import SearchRequest
 from modules.tools import builtins
+
+_SCOPE = WorkspaceContext(user_id=1, workspace_id=uuid4(), role="owner", membership_revision=1)
 
 
 class _Session:
@@ -37,7 +41,7 @@ def _setup(monkeypatch: pytest.MonkeyPatch, log: list[str], *, revision_changes:
     policy = SimpleNamespace(embeddings_allowed=True)
     calls = {"n": 0}
 
-    async def configured(*_a: Any) -> Any:
+    async def configured(*_a: Any, **_k: Any) -> Any:
         calls["n"] += 1
         log.append("config")
         cfg = config
@@ -54,19 +58,23 @@ def _setup(monkeypatch: pytest.MonkeyPatch, log: list[str], *, revision_changes:
             log.append("embed")
             return object()
 
-    async def lexical(*_a: Any) -> list[Any]:
+    async def lexical(*_a: Any, **_k: Any) -> list[Any]:
         return []
 
-    async def vector(*_a: Any) -> list[Any]:
+    async def vector(*_a: Any, **_k: Any) -> list[Any]:
         log.append("vector")
         return []
 
-    async def revalidate(*_a: Any) -> set[Any]:
+    async def revalidate(*_a: Any, **_k: Any) -> set[Any]:
         return set()
 
+    async def fence(*_a: Any, **_k: Any) -> int:
+        return 1
+
+    monkeypatch.setattr(workspaces, "read_access_fence", fence)
     monkeypatch.setattr(public, "configured_embedding", configured)
     monkeypatch.setattr(public, "may_send", lambda *_a: True)
-    monkeypatch.setattr(public, "gateway", lambda _c, _r, recheck: _Gateway(recheck))
+    monkeypatch.setattr(public, "gateway", lambda _c, _r, recheck, **_k: _Gateway(recheck))
     monkeypatch.setattr(public, "embedding_values", lambda *_a: ([0.1, 0.2], "m"))
     monkeypatch.setattr(public, "_lexical_ids", lexical)
     monkeypatch.setattr(public, "_vector_ids", vector)
@@ -75,7 +83,9 @@ def _setup(monkeypatch: pytest.MonkeyPatch, log: list[str], *, revision_changes:
 
 async def _run(log: list[str], **kwargs: Any) -> Any:
     request = SearchRequest(query="q", mode="hybrid")
-    return await public.search(_Session(log), None, None, request, **kwargs)  # type: ignore[arg-type]
+    return await public.search(
+        _Session(log), None, None, request, scope=_SCOPE, multi_workspace_enabled=False, **kwargs,  # type: ignore[arg-type]
+    )
 
 
 async def test_flag_off_keeps_old_sequence(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -129,7 +139,7 @@ async def test_hydration_and_revalidation_still_filter_after_commit(monkeypatch:
         async def execute(self, *_a: Any, **_k: Any) -> Any:
             return _Result()
 
-    async def vector(*_a: Any) -> list[Any]:
+    async def vector(*_a: Any, **_k: Any) -> list[Any]:
         return [chunk_id]
 
     for revalidated, expected in ((set(), 0), ({chunk_id}, 1)):
@@ -137,13 +147,14 @@ async def test_hydration_and_revalidation_still_filter_after_commit(monkeypatch:
         _setup(monkeypatch, log)
         monkeypatch.setattr(public, "_vector_ids", vector)
 
-        async def revalidate(*_a: Any, keep: set[Any] = revalidated) -> set[Any]:
+        async def revalidate(*_a: Any, keep: set[Any] = revalidated, **_k: Any) -> set[Any]:
             return keep
 
         monkeypatch.setattr(public, "_revalidate_tool_result_fences", revalidate)
         request = SearchRequest(query="q", mode="hybrid")
         result = await public.search(
             _HydratingSession(log), None, None, request, release_during_embed=True,  # type: ignore[arg-type]
+            scope=_SCOPE, multi_workspace_enabled=False,
         )
         assert len(result.items) == expected
         assert "embed" in log
@@ -159,8 +170,8 @@ async def test_route_passes_flag(monkeypatch: pytest.MonkeyPatch) -> None:
         return "ok"
 
     monkeypatch.setattr(public, "search", recorder)
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(redis=None, settings=None)))
-    out = await routes.search(SearchRequest(query="q"), request, object(), object())  # type: ignore[arg-type]
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(redis=None, settings=SimpleNamespace(multi_workspace_enabled=False))))
+    out: Any = await routes.search(SearchRequest(query="q"), request, object(), object(), _SCOPE)  # type: ignore[arg-type]
     assert out == "ok" and seen["release_during_embed"] is True
 
 
@@ -195,9 +206,9 @@ async def test_tool_handler_flag_follows_session_ownership(
     monkeypatch.setattr(public, "search", recorder)
     context: dict[str, Any] = {
         "principal": ToolExecutionPrincipal(
-            actor_id="a", is_owner=True, source_ids=frozenset({str(source_id)}),
+            actor_id="a", scope=_SCOPE, is_owner=True, source_ids=frozenset({str(source_id)}),
         ),
-        "destination_kind": "local", "session_factory": _Factory(), "redis": None, "settings": None,
+        "destination_kind": "local", "session_factory": _Factory(), "redis": None, "settings": SimpleNamespace(multi_workspace_enabled=False),
     }
     if not own_session:
         context["session"] = object()
