@@ -416,8 +416,10 @@ async def run_response_generation(
     except asyncio.CancelledError:
         # Cancelled around the claim commit: the run may be `streaming` with nothing published. Hand it back
         # now (no-op unless it is `streaming`) instead of waiting RECOVER_STREAMING_AFTER.
-        with contextlib.suppress(Exception):
+        try:
             await asyncio.wait_for(_release_on_shutdown(response_id, session_factory, None), SHUTDOWN_RELEASE_TIMEOUT)
+        except Exception as exc:  # noqa: BLE001  # boundary: recovery is the safety net
+            logger.warning("Chat run claim-cancel release failed for %s (%s)", response_id, type(exc).__name__)
         raise
     claimed_at = time.monotonic()
 
@@ -1076,8 +1078,8 @@ async def _fail_expired_pending(response_id: UUID, session_factory: async_sessio
         run = await session.scalar(select(ResponseRun).where(
             ResponseRun.id == response_id,
         ).with_for_update().execution_options(populate_existing=True))
-        if run is None or run.status != "pending":
-            return
+        if run is None or run.status != "pending" or run.updated_at >= datetime.now(UTC) - RECOVER_PENDING_MAX_AGE:
+            return  # released back to pending (fresh updated_at) between select and lock: re-enqueue instead
         run.status = "failed"
         run.error_code = "TimeoutError"
         run.error_message = "chat worker unavailable"

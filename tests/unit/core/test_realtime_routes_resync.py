@@ -63,35 +63,32 @@ def test_permit_response_disconnect_spec_2_3_does_not_cancel_db_rollback() -> No
             return self
 
         async def __aexit__(self, *exc: object) -> None:
-            await asyncio.sleep(0.01)  # rollback await: raises CancelledError if the task group cancelled us
+            await asyncio.sleep(0.01)  # rollback await: CancelledError here if a task group cancelled us
             events.append("rollback-ok")
 
     async def run() -> int:
         sem = asyncio.Semaphore(1)
         await sem.acquire()
+        gone = asyncio.Event()
 
-        deadline = asyncio.get_running_loop().time() + 0.05
-
-        async def receive():
-            # is_disconnected() polls with an already-cancelled scope: only a ready message gets through
-            if asyncio.get_running_loop().time() < deadline:
-                await asyncio.sleep(3600)
+        async def receive():  # uvicorn httptools: blocks until disconnect, then returns it at once
+            await gone.wait()
             return {"type": "http.disconnect"}
 
         scope = {"type": "http", "asgi": {"spec_version": "2.3"}}
         request = Request(scope, receive)
 
         async def body():
-            async with _Session():
-                while not await request.is_disconnected():
-                    await asyncio.sleep(0.02)  # DB await inside the transaction
+            while not await request.is_disconnected():
+                async with _Session():
+                    await asyncio.sleep(0.2)  # DB await in flight when the disconnect lands
                     yield ": ping"
 
         async def send(_message):
             return None
 
-        response = realtime_routes._PermitResponse(body(), asyncio.Event(), sem)
-        await response(scope, receive, send)
+        asyncio.get_running_loop().call_later(0.05, gone.set)
+        await realtime_routes._PermitResponse(body(), asyncio.Event(), sem)(scope, receive, send)
         return sem._value
 
     assert asyncio.run(run()) == 1

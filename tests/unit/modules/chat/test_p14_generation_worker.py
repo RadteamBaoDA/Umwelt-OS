@@ -3,7 +3,7 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -356,7 +356,10 @@ async def test_recover_fails_expired_pending_instead_of_requeueing(monkeypatch: 
     session = MagicMock()
     session.scalars = AsyncMock(side_effect=[[], [old_id]])
     session.execute = AsyncMock(return_value=SimpleNamespace(all=list))
-    run = SimpleNamespace(status="pending", conversation_id=uuid4())
+    run = SimpleNamespace(
+        status="pending", conversation_id=uuid4(),
+        updated_at=datetime.now(UTC) - worker.RECOVER_PENDING_MAX_AGE - timedelta(seconds=1),
+    )
     session.scalar = AsyncMock(side_effect=[run, object(), run, 0])
     session.add = MagicMock()
     session.commit = AsyncMock()
@@ -433,3 +436,17 @@ async def test_recover_pending_age_uses_updated_at() -> None:
     await worker.recover_chat_runs({"session_factory": _factory(session), "redis": SimpleNamespace()})
     # pending (re-enqueue) and expired queries bound the max age by updated_at (refreshed on release-to-pending)
     assert all("chat_response_runs.updated_at" in s for s in stmts[:2])
+
+
+async def test_fail_expired_pending_skips_run_released_to_pending_before_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+    # listed as expired, then claimed and released back to pending (fresh updated_at) before the row lock
+    run = SimpleNamespace(status="pending", conversation_id=uuid4(), updated_at=datetime.now(UTC))
+    session = MagicMock()
+    session.scalar = AsyncMock(side_effect=[run, object(), run])
+    session.add = MagicMock()
+    session.commit = AsyncMock()
+    monkeypatch.setattr(worker, "lock_export_privacy", AsyncMock())
+    await worker._fail_expired_pending(uuid4(), _factory(session))
+    assert run.status == "pending"
+    session.add.assert_not_called()
+    session.commit.assert_not_awaited()
