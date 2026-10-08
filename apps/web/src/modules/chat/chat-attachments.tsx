@@ -179,6 +179,18 @@ export function withAttachments(context: ChatContext | null, items: Item[]): Cha
 export function ChatAttachmentBar({ state, disabled }: { state: ReturnType<typeof useChatAttachments>; disabled?: boolean }) {
   const t = useTranslations('chat');
   const inputRef = React.useRef<HTMLInputElement>(null);
+  const attachRef = React.useRef<HTMLButtonElement>(null);
+  const rootRef = React.useRef<HTMLDivElement>(null);
+  const [removedNote, setRemovedNote] = React.useState('');
+  /** Removes an entry, announces it, and moves focus to a neighbouring remove button (or Attach) so it never falls to <body>. */
+  const removeEntry = (key: string, name: string, idx: number) => {
+    state.remove(key);
+    setRemovedNote(t('attachmentRemoved', { name }));
+    setTimeout(() => {
+      const btns = rootRef.current?.querySelectorAll<HTMLButtonElement>('button[data-attachment-remove]');
+      (btns && btns.length ? btns[Math.min(idx, btns.length - 1)] : attachRef.current)?.focus();
+    }, 0);
+  };
   const statusText = (e: AttachmentEntry) => {
     if (e.state === 'rejected') return e.error ?? t('attachmentUploadFailed');
     if (e.state === 'uploading') return t('attachmentUploading');
@@ -191,7 +203,7 @@ export function ChatAttachmentBar({ state, disabled }: { state: ReturnType<typeo
     ? t('attachmentDropped', { max: MAX_ATTACHMENTS })
     : state.entries.length ? t('attachmentNote', { max: MAX_ATTACHMENTS }) : '';
   return (
-    <div className="flex flex-col gap-1.5 px-1">
+    <div ref={rootRef} className="flex flex-col gap-2 px-1">
       <div className="flex flex-wrap items-center gap-2">
         <input
           ref={inputRef}
@@ -203,7 +215,7 @@ export function ChatAttachmentBar({ state, disabled }: { state: ReturnType<typeo
           aria-hidden="true"
           onChange={(e) => { state.add(Array.from(e.target.files ?? [])); e.target.value = ''; }}
         />
-        <Button type="button" variant="outline" size="sm" className="min-h-11" disabled={disabled || state.full} onClick={() => inputRef.current?.click()}>
+        <Button ref={attachRef} type="button" variant="outline" size="sm" className="min-h-11" disabled={disabled || state.full} onClick={() => inputRef.current?.click()}>
           <PaperclipIcon className="size-3.5" aria-hidden="true" />{t('attach')}
         </Button>
         <div className="flex items-center gap-2">
@@ -216,26 +228,27 @@ export function ChatAttachmentBar({ state, disabled }: { state: ReturnType<typeo
           />
           <Label htmlFor="chat-attachment-share" className="text-xs text-foreground">{t('attachmentShareToggle')}</Label>
         </div>
-        {state.entries.map((e) => {
+        {state.entries.map((e, idx) => {
           const problem = e.state === 'rejected' || e.state === 'failed' || e.state === 'too_large';
           return (
-            <span key={e.key} className={`inline-flex min-h-8 max-w-full items-center gap-1.5 rounded-full border bg-background py-0.5 pl-2.5 pr-0 text-xs ${problem ? 'border-destructive' : 'border-border'}`}>
+            <span key={e.key} className={`inline-flex min-h-8 max-w-full items-center gap-1 rounded-full border bg-background py-1 pl-2 pr-0 text-xs ${problem ? 'border-destructive' : 'border-border'}`}>
               {e.doc?.local_only && e.state === 'ready'
                 ? <LockIcon className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />
                 : <FileTextIcon className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />}
               <span className="truncate text-foreground">{e.name}</span>
               <span className={problem ? 'text-destructive' : 'text-muted-foreground'}>· {statusText(e)}</span>
               {/* 44px hit area; the negative margin keeps the chip's visual height. */}
-              <Button type="button" variant="ghost" size="icon" className="-my-1.5 rounded-full text-muted-foreground" onClick={() => state.remove(e.key)} title={t('attachmentRemove', { name: e.name })} aria-label={t('attachmentRemove', { name: e.name })}>
+              <Button type="button" variant="ghost" size="icon" className="-my-1.5 rounded-full text-muted-foreground" data-attachment-remove onClick={() => removeEntry(e.key, e.name, idx)} title={t('attachmentRemove', { name: e.name })} aria-label={t('attachmentRemove', { name: e.name })}>
                 <XIcon className="size-3.5" aria-hidden="true" />
               </Button>
             </span>
           );
         })}
       </div>
-      <p id="chat-attachment-share-help" className="text-[11px] text-muted-foreground">{t('attachmentShareHelp')}</p>
+      <p id="chat-attachment-share-help" className="text-xs text-muted-foreground">{t('attachmentShareHelp')}</p>
       <div className="flex flex-wrap items-center gap-2">
-        <p id={ATTACHMENT_STATUS_ID} role="status" aria-live="polite" className="text-[11px] text-muted-foreground">
+        <span role="status" className="sr-only">{removedNote}</span>
+        <p id={ATTACHMENT_STATUS_ID} role="status" aria-live="polite" className="text-xs text-muted-foreground">
           {state.sendBlock ?? note}
         </p>
         {state.showReattach && (

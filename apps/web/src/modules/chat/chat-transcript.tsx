@@ -17,17 +17,17 @@ import { formatDateTime } from '@/core/i18n';
 const KNOWN_REASONS = ['not_configured', 'query_too_long', 'empty_query', 'local_only_context', 'daily_limit', 'timeout', 'provider_error', 'network_denied', 'run_inactive'];
 
 /** Announced notice for a requested web search that was skipped or unavailable; renders nothing otherwise. */
-function WebSearchNotice({ outcome, live = false }: { outcome?: WebSearchOutcome | null; live?: boolean }) {
+function WebSearchNotice({ outcome }: { outcome?: WebSearchOutcome | null }) {
   const t = useTranslations('chat');
   if (outcome?.status === 'used' && outcome.reason === 'no_results') {
-    return <p role={live ? 'status' : undefined} data-testid="web-search-notice" className="mt-1 text-[11px] text-muted-foreground">{t('webNoResults')}</p>;
+    return <p data-testid="web-search-notice" className="mt-1 text-xs text-muted-foreground">{t('webNoResults')}</p>;
   }
   if (!outcome || (outcome.status !== 'unavailable' && outcome.status !== 'skipped')) return null;
   const reason = outcome.reason && KNOWN_REASONS.includes(outcome.reason) ? t(`webReason_${outcome.reason}`) : t('webReason_unknown');
   const title = outcome.status === 'skipped' ? t('webSkipped') : t('webUnavailable');
   return (
-    <p role={live ? 'status' : undefined} data-testid="web-search-notice" className={`mt-1 text-[11px] ${outcome.status === 'unavailable' ? 'text-destructive' : 'text-muted-foreground'}`}>
-      {title} {reason}
+    <p data-testid="web-search-notice" className={`mt-1 text-xs ${outcome.status === 'unavailable' ? 'text-destructive' : 'text-muted-foreground'}`}>
+      {t('webNotice', { title, reason })}
     </p>
   );
 }
@@ -36,9 +36,9 @@ function WebSearchNotice({ outcome, live = false }: { outcome?: WebSearchOutcome
 function CitationChips({ citations }: { citations: Citation[] }) {
   const t = useTranslations('chat');
   return (
-    <ol aria-label={t('sourceLinks')} className="mt-1 flex flex-wrap gap-1.5 border-t border-border pt-2 text-[11px]">
+    <ol aria-label={t('sourceLinks')} className="mt-1 flex flex-wrap gap-2 border-t border-border pt-2 text-xs">
       {citations.map((citation, index) => {
-        const chipClass = 'inline-flex min-h-8 max-w-[14rem] items-center gap-1 rounded-md border border-border px-2 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
+        const chipClass = 'inline-flex min-h-11 max-w-[14rem] items-center gap-1 rounded-md border border-border px-2 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
         if (citation.sourceType === 'web') {
           const href = safeHttpUrl(citation.url);
           return (
@@ -207,7 +207,7 @@ export function ChatTranscript({
                   : 'bg-surface border border-border text-foreground rounded-tl-xs'
               }`}
             >
-              <div className="flex items-center justify-between gap-4 text-[11px] text-muted-foreground mb-0.5">
+              <div className="flex items-center justify-between gap-4 text-xs text-muted-foreground mb-0.5">
                 <span className="font-semibold">
                   {isUser ? t('userSpeaker') : msg.model_identity || t('assistantFallback')}
                 </span>
@@ -215,7 +215,7 @@ export function ChatTranscript({
               </div>
 
               {relationshipLabel && (
-                <p className="text-[11px] text-muted-foreground" aria-label={relationshipLabel}>
+                <p className="text-xs text-muted-foreground" aria-label={relationshipLabel}>
                   {relationshipLabel}
                 </p>
               )}
@@ -226,19 +226,19 @@ export function ChatTranscript({
                 {mode === 'full' && <button
                   type="button"
                   onClick={() => void copyMessage(msg.id, msg.content)}
-                  className="inline-flex min-h-8 items-center gap-1 rounded-md px-2 text-[11px] text-muted-foreground hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="inline-flex min-h-8 items-center gap-1 rounded-md px-2 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   aria-label={t('copyMessage')}
                 >
                   {copiedMessageId === msg.id ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
                   <span>{copiedMessageId === msg.id ? t('copiedMessage') : t('copyMessage')}</span>
                 </button>}
                 {mode === 'full' && failedMessageId === msg.id && (
-                  <span role="status" className="text-[11px] text-destructive">{t('copyFailed')}</span>
+                  <span role="status" className="text-xs text-destructive">{t('copyFailed')}</span>
                 )}
                 {canEdit && (
                   <Button
                     type="button"
-                    className="secondary inline-flex min-h-8 items-center gap-1 px-2 text-[11px]"
+                    className="secondary inline-flex min-h-8 items-center gap-1 px-2 text-xs"
                     onClick={() => onEditMessage?.(msg)}
                     aria-label={t('editPrompt')}
                   >
@@ -249,7 +249,7 @@ export function ChatTranscript({
                 {canRegenerate && (
                   <Button
                     type="button"
-                    className="secondary inline-flex min-h-8 items-center gap-1 px-2 text-[11px]"
+                    className="secondary inline-flex min-h-8 items-center gap-1 px-2 text-xs"
                     onClick={() => onRegenerateMessage?.(msg)}
                     aria-label={t('regenerateAnswer')}
                   >
@@ -287,7 +287,7 @@ export function ChatTranscript({
           </div>
 
           <div className="flex flex-col gap-1 p-3.5 rounded-2xl shadow-xs bg-surface border border-border text-foreground rounded-tl-xs">
-            <div className="flex items-center gap-2 text-[11px] text-muted-foreground mb-0.5">
+            <div className="flex items-center gap-2 text-xs text-muted-foreground mb-0.5">
               <span className="font-semibold">{t('assistantFallback')}</span>
               <span className="inline-flex items-center gap-1 text-[10px] text-primary">
                 <span className="size-1.5 rounded-full bg-primary animate-pulse" />
@@ -297,7 +297,8 @@ export function ChatTranscript({
 
             <ChatMarkdown content={streamingText || ''} />
 
-            {mode === 'full' && <WebSearchNotice outcome={streamingWebSearch} live />}
+            {/* Always-mounted live region so the notice text change is announced. */}
+            <div role="status">{mode === 'full' && <WebSearchNotice outcome={streamingWebSearch} />}</div>
             {mode === 'full' && streamingCitations && streamingCitations.length > 0 && (
               <CitationPanel citations={streamingCitations} variant="inline" />
             )}
@@ -319,7 +320,7 @@ export function ChatTranscript({
             <button
               type="button"
               onClick={onRetry}
-              className="min-h-8 rounded bg-destructive px-2 py-1 text-[11px] font-medium text-destructive-foreground hover:opacity-90"
+              className="min-h-8 rounded bg-destructive px-2 py-1 text-xs font-medium text-destructive-foreground hover:opacity-90"
             >
               {t('retry')}
             </button>

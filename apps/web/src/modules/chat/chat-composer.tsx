@@ -152,7 +152,7 @@ export function ChatComposer({
           )}
         </div>
       </div>
-      <div className="flex flex-wrap items-center justify-between gap-x-3 px-1 text-[11px] text-muted-foreground">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 px-1 text-xs text-muted-foreground">
         <span>{modelLabel ? t('modelLine', { model: modelLabel }) : t('modelNotReported')}{sourcesCount > 0 ? ` · ${t('sourcesCount', { count: sourcesCount })}` : ''}</span>
         <span className="hidden sm:inline">Enter ↵ · Shift+Enter</span>
       </div>
@@ -168,12 +168,12 @@ export function ChatComposer({
             />
             <Label htmlFor="chat-web-search" className="text-xs text-foreground">{t('webSearchToggle')}</Label>
           </div>
-          <p id="chat-web-search-help" className="text-[11px] text-muted-foreground">
+          <p id="chat-web-search-help" className="text-xs text-muted-foreground">
             {!webSearch.available ? t('webSearchDisabledHelp') : webSearch.profileBlocked ? t('webSearchProfileHelp') : webSearch.enabled ? t('webSearchEnabledHelp', { provider: webSearch.provider ?? '' }) : t('webSearchIdleHelp')}
           </p>
         </div>
       )}
-      {showCapabilityNote && <p className="px-1 text-[11px] text-muted-foreground">{t('composerNote')}</p>}
+      {showCapabilityNote && <p className="px-1 text-xs text-muted-foreground">{t('composerNote')}</p>}
     </div>
   );
 }

@@ -21,8 +21,8 @@ import {
 } from '@/modules/chat/api';
 import { ChatComposer } from './chat-composer';
 import { ChatTranscript } from './chat-transcript';
-import { ChatContextBar, MAX_ITEMS } from './chat-context-bar';
-import { ATTACHMENT_STATUS_ID, ChatAttachmentBar, SELECTION_LOCAL_ONLY, useChatAttachments, withAttachments } from './chat-attachments';
+import { ChatContextBar, MAX_ITEMS, stripItemTitles } from './chat-context-bar';
+import { ATTACHMENT_STATUS_ID, ChatAttachmentBar, useChatAttachments, withAttachments } from './chat-attachments';
 import { ConversationAgentActivity } from '@/modules/agents/conversation-agent-activity';
 import {
   PendingMessageMutationConflictError,
@@ -44,6 +44,34 @@ const runStatusKeys: Record<string, 'agentRunQueued' | 'agentRunRunning' | 'agen
   queued: 'agentRunQueued', running: 'agentRunRunning', waiting_approval: 'agentRunWaitingApproval',
   succeeded: 'agentRunSucceeded', failed: 'agentRunFailed', cancelled: 'agentRunCancelled',
 };
+
+/** Error whose message is already localized for the user (safe to display verbatim). */
+class LocalizedError extends Error {}
+
+/** Server machine codes for selection failures mapped to their localized catalog keys. */
+const SELECTION_ERROR_KEYS: Record<string, string> = {
+  selection_local_only: 'contextSelectionLocalOnly',
+  selection_unavailable: 'contextSelectionUnavailable',
+  selection_too_large: 'contextSelectionTooLarge',
+  selection_invalid: 'contextSelectionTooLarge',
+};
+
+/**
+ * Maps a chat failure to a `chat` catalog key. Server `detail` text is English-only and never shown:
+ * selection codes win, then HTTP status class, then the caller's fallback. The raw error goes to the console.
+ */
+function chatFailureKey(err: unknown, fallback: string): string {
+  if (!(err instanceof ApiError)) return fallback;
+  console.warn('Chat request failed', err.status, err.code, err.message);
+  if (err.code && SELECTION_ERROR_KEYS[err.code]) return SELECTION_ERROR_KEYS[err.code];
+  if (err.status === 401) return 'sessionExpired';
+  if (err.status === 409) return 'errorConflict';
+  if (err.status >= 500) return 'errorService';
+  return fallback;
+}
+
+/** Display names for known web-search providers; anything else uses the neutral `webSearchProviderGeneric` copy. */
+const WEB_SEARCH_PROVIDER_LABELS: Record<string, string> = { brave: 'Brave', tavily: 'Tavily' };
 
 export interface ChatSessionProps {
   /** Target conversation ID to render, or null/undefined for a fresh unsaved thread. */
@@ -322,7 +350,7 @@ export function ChatSession({
         setIsStreaming(false);
         setIsPending(false);
         setActiveResponseId(null);
-        setError(streamError instanceof Error ? streamError.message : t('errorSending'));
+        setError(t(chatFailureKey(streamError, 'errorSending')));
       }
       throw streamError;
     } finally {
@@ -432,9 +460,7 @@ export function ChatSession({
         setIsPending(false);
         setError(mutationError instanceof PendingMessageMutationConflictError
           ? t('retryOriginalRevisionFirst')
-          : mutationError instanceof ApiError && mutationError.code === SELECTION_LOCAL_ONLY
-            ? t('contextSelectionLocalOnly')
-            : mutationError instanceof Error ? mutationError.message : t('revisionFailed'));
+          : t(chatFailureKey(mutationError, 'revisionFailed')));
       }
     }
   }, [chatCtrl, conversationId, isPending, isStreaming, messages, mode, queryClient, session.csrfToken, streamResponseRun, t, webSearchUsable, webSearchOn]);
@@ -495,21 +521,21 @@ export function ChatSession({
         : null;
 
       // Ready Chat attachments join the U3 selection mechanism; the composer blocks Send while any are not ready.
-      const sendContext = mode === 'full' ? withAttachments(chatCtrl.context, attachments.items) : chatCtrl.context;
+      const sendContext = stripItemTitles(mode === 'full' ? withAttachments(chatCtrl.context, attachments.items) : chatCtrl.context);
       const selItems = sendContext?.kind === 'selection' ? sendContext.items ?? [] : [];
       let selectionStage = false; // true only while the selection precheck / sendMessage can fail
       try {
         // Pre-validate the server's 1..32 distinct-document limit before the draft is cleared.
         if (selItems.length > MAX_ITEMS || new Set(selItems.map((i) => i.documentId)).size !== selItems.length) {
           selectionStage = true;
-          throw new ApiError(422, 'selection limit');
+          throw new ApiError(422, 'selection limit', { code: 'selection_too_large' });
         }
         const selected = mode === 'full' && selectedProfileId !== 'assistant'
           ? profiles.data?.find((profile) => profile.id === selectedProfileId)
           : undefined;
         if (mode === 'full' && selectedProfileId !== 'assistant' && !retryEnvelope &&
             (!selected || !selected.enabled || selected.capability === 'unavailable')) {
-          throw new Error(tAgents('agentUnavailable'));
+          throw new LocalizedError(tAgents('agentUnavailable'));
         }
         // If no active conversation exists, create one first with initial title from message excerpt
         if (!targetId) {
@@ -543,7 +569,7 @@ export function ChatSession({
 
         if (mode === 'full' && (selectedProfileId !== 'assistant' || retryEnvelope)) {
           const profile = selected;
-          if (!retryEnvelope && !profile) throw new Error(tAgents('agentUnavailable'));
+          if (!retryEnvelope && !profile) throw new LocalizedError(tAgents('agentUnavailable'));
           const envelope: PendingSpecialistRun = retryEnvelope ?? {
             prompt: content,
             profileId: profile!.id,
@@ -615,14 +641,16 @@ export function ChatSession({
           setIsPending(false);
           setIsStreaming(false);
           setActiveResponseId(null);
-          const selectionFailure = selectionStage && selItems.length > 0 && err instanceof ApiError && (err.status === 409 || err.status === 422) && /\bselect/i.test(err.message);
-          // Server detail strings are English-only, so selection failures get localized copy and keep the draft.
+          // Selection failures are identified by the server's machine code (never by message text) and keep the draft.
+          const selectionFailure = selectionStage && selItems.length > 0 && err instanceof ApiError && !!err.code && err.code in SELECTION_ERROR_KEYS;
           if (selectionFailure) chatCtrl.setDraft(content);
-          const errMsg = selectionFailure
-            ? t(err.status === 422 ? 'contextSelectionTooLarge' : err.code === SELECTION_LOCAL_ONLY ? 'contextSelectionLocalOnly' : 'contextSelectionUnavailable')
-            : attemptedProfileRun?.prompt === content
-              ? tAgents('agentStartFailed')
-              : err instanceof Error ? err.message : t('errorSending');
+          const errMsg = err instanceof LocalizedError
+            ? err.message
+            : selectionFailure
+              ? t(chatFailureKey(err, 'errorSending'))
+              : attemptedProfileRun?.prompt === content
+                ? tAgents('agentStartFailed')
+                : t(chatFailureKey(err, 'errorSending'));
           setError(errMsg);
         }
       }
@@ -632,7 +660,6 @@ export function ChatSession({
       chatCtrl,
       onConversationCreated,
       queryClient,
-      refetchDetail,
       session.csrfToken,
       t,
       mode,
@@ -645,6 +672,7 @@ export function ChatSession({
       webSearchUsable,
       webSearchOn,
       attachments,
+      pendingProfileRun,
     ],
   );
 
@@ -820,7 +848,7 @@ export function ChatSession({
           />
         ) : undefined}
         sendBlockedBy={mode === 'full' && attachments.sendBlock ? ATTACHMENT_STATUS_ID : null}
-        webSearch={mode === 'full' && WEB_SEARCH_SEND_ENABLED ? { available: webSearchAvailable, provider: aiSettings.data?.web_search_provider === 'brave' ? 'Brave' : 'Tavily', profileBlocked: webSearchProfileBlocked, enabled: webSearchOn, onChange: setWebSearchOn } : undefined}
+        webSearch={mode === 'full' && WEB_SEARCH_SEND_ENABLED ? { available: webSearchAvailable, provider: WEB_SEARCH_PROVIDER_LABELS[aiSettings.data?.web_search_provider ?? ''] ?? t('webSearchProviderGeneric'), profileBlocked: webSearchProfileBlocked, enabled: webSearchOn, onChange: setWebSearchOn } : undefined}
       />
     </div>
   );
