@@ -235,6 +235,11 @@ async def purge_unpinned_conversations(session: AsyncSession, owner_id: int) -> 
         cursor = conversation_ids[-1]
 
 
+def _selection_detail(code: str, message: str) -> dict[str, _Any]:
+    """Build the machine-coded ``HTTPException`` detail (``core/errors.py`` envelope) for selection/context failures."""
+    return {"code": code, "message": message, "details": {}}
+
+
 async def resolve_gadget_context(session: AsyncSession, context: dict[str, _Any] | None) -> dict[str, _Any]:
     """Normalize exact gadget selections to JSON-safe refs and owner-derived source fences.
 
@@ -255,14 +260,14 @@ async def resolve_gadget_context(session: AsyncSession, context: dict[str, _Any]
 
     raw_items = context.get("items")
     if not isinstance(raw_items, list) or not 1 <= len(raw_items) <= 32:
-        raise HTTPException(status_code=422, detail="Selection must contain 1 to 32 document versions")
+        raise HTTPException(status_code=422, detail=_selection_detail("selection_invalid", "Selection must contain 1 to 32 document versions"))
     selections: list[SelectedDocumentVersion] = []
     try:
         selections = [SelectedDocumentVersion.model_validate(item) for item in raw_items]
     except Exception as exc:
-        raise HTTPException(status_code=422, detail="Selection references are invalid") from exc
+        raise HTTPException(status_code=422, detail=_selection_detail("selection_invalid", "Selection references are invalid")) from exc
     if len({item.document_id for item in selections}) != len(selections):
-        raise HTTPException(status_code=422, detail="Selection contains duplicate documents")
+        raise HTTPException(status_code=422, detail=_selection_detail("selection_invalid", "Selection contains duplicate documents"))
 
     sources: list[UUID] = []
     refs: list[dict[str, str]] = []
@@ -275,7 +280,7 @@ async def resolve_gadget_context(session: AsyncSession, context: dict[str, _Any]
             projection is None or projection.source_id != item.source_id
             or projection.document_version_id != item.document_version_id
         ):
-            raise HTTPException(status_code=409, detail="A selected document version is stale or unavailable")
+            raise HTTPException(status_code=409, detail=_selection_detail("selection_unavailable", "A selected document version is stale or unavailable"))
         fence = GadgetDocumentSelectionFence(
             document_id=projection.document_id,
             document_version_id=projection.document_version_id,
@@ -287,7 +292,7 @@ async def resolve_gadget_context(session: AsyncSession, context: dict[str, _Any]
             scope_discriminator=projection.scope_discriminator,
         )
         if not await documents_public.validate_gadget_document_selection_fences(session, (fence,)):
-            raise HTTPException(status_code=409, detail="A selected document source scope is stale")
+            raise HTTPException(status_code=409, detail=_selection_detail("selection_unavailable", "A selected document source scope is stale"))
         selection_fences.append(fence)
         if item.chunk_id is not None:
             chunks = await documents_public.read_chat_evidence_chunks(
@@ -295,18 +300,21 @@ async def resolve_gadget_context(session: AsyncSession, context: dict[str, _Any]
                 require_current_version=True, selection_fences=(fence,),
             )
             if not chunks or chunks[0].document_id != item.document_id or chunks[0].source_id != item.source_id:
-                raise HTTPException(status_code=409, detail="A selected evidence chunk is unavailable")
+                raise HTTPException(status_code=409, detail=_selection_detail("selection_unavailable", "A selected evidence chunk is unavailable"))
             # The exact chunk may be beyond the bounded projection slice; preserve its validated ID.
             chunk_ids = [item.chunk_id]
         else:
             if projection.chunks_truncated:
                 raise HTTPException(
                     status_code=422,
-                    detail="Select a specific evidence chunk for documents above the context limit",
+                    detail=_selection_detail(
+                        "selection_too_large",
+                        "Select a specific evidence chunk for documents above the context limit",
+                    ),
                 )
             chunk_ids = [chunk.id for chunk in projection.chunks]
         if not chunk_ids:
-            raise HTTPException(status_code=409, detail="A selected document has no available evidence chunks")
+            raise HTTPException(status_code=409, detail=_selection_detail("selection_unavailable", "A selected document has no available evidence chunks"))
         for chunk_id in chunk_ids:
             refs.append({
                 "document_version_id": str(projection.document_version_id),
@@ -317,7 +325,7 @@ async def resolve_gadget_context(session: AsyncSession, context: dict[str, _Any]
         if item.source_id not in sources:
             sources.append(item.source_id)
         if len(refs) > 100:
-            raise HTTPException(status_code=422, detail="Selection exceeds the evidence limit")
+            raise HTTPException(status_code=422, detail=_selection_detail("selection_too_large", "Selection exceeds the evidence limit"))
 
     return {
         "source_scope": [str(source_id) for source_id in sources],
@@ -356,7 +364,7 @@ async def reject_unsendable_selection(session: AsyncSession, resolved: dict[str,
             attachments += 1
         local_only = local_only or bool(fence.get("local_only")) or (source is not None and source.local_only)
     if attachments > MAX_CHAT_ATTACHMENTS_PER_MESSAGE:
-        raise HTTPException(status_code=422, detail="Selection exceeds the per-message attachment limit")
+        raise HTTPException(status_code=422, detail=_selection_detail("selection_too_large", "Selection exceeds the per-message attachment limit"))
     if local_only:
         raise HTTPException(status_code=409, detail={
             "code": CHAT_SELECTION_LOCAL_ONLY,
