@@ -107,7 +107,7 @@ def env(monkeypatch: pytest.MonkeyPatch) -> _Env:
         session.tx = True
         world.log.append("lock")
         if world.purged:
-            raise briefs.BriefUnavailable("A cited source is no longer eligible")
+            raise briefs.BriefUnavailable("A source sent to the model is no longer eligible")
 
     async def config(session: _Session, *_args: object) -> SimpleNamespace:
         session.tx = True
@@ -203,6 +203,20 @@ async def test_mid_call_purge_or_local_only_flip_discards_the_output(env: _Env, 
         await _generate(env)
     assert env.committed == [] and "commit" not in env.log and "notify" not in env.log
     assert not env.session.in_transaction()
+
+
+async def test_purge_of_uncited_sent_source_discards_the_output(env: _Env) -> None:
+    task = {"kind": "tasks", "id": str(uuid4()), "title": "Task", "detail": "", "source_ids": [],
+            "_lineage_status": "independent", "_fact_hash": "b" * 64, "_supports": []}
+    env.facts = [task, _fact()]  # the model cites only [1] (the task); the story's Source is still sent
+
+    def mutate(_attempt: int) -> None:
+        env.purged = True
+
+    env.on_wait = mutate
+    with pytest.raises(briefs.BriefUnavailable):
+        await _generate(env)
+    assert env.committed == [] and "commit" not in env.log and "notify" not in env.log
 
 
 async def test_fingerprint_mismatch_at_before_send_aborts_without_egress(env: _Env) -> None:

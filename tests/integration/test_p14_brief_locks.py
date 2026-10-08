@@ -17,6 +17,7 @@ import json
 import os
 import shutil
 import time
+from urllib.parse import quote
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
@@ -62,14 +63,17 @@ def _received(nonce: str) -> int:
     """Count chat bodies the fake model has fully read whose prompt carries ``nonce``."""
     script = (
         "import json,urllib.request;print(json.load(urllib.request.urlopen("
-        f"'http://127.0.0.1:8000/_fake/received?contains={nonce}'))['count'])"
+        f"'http://127.0.0.1:8000/_fake/received?contains={quote(nonce)}'))['count'])"
     )
     return int(_docker("exec", _service_container("fake-model"), "python", "-c", script, timeout=30))
 
 
-async def _wait_received(nonce: str, timeout: float = 30) -> None:
+async def _wait_received(nonce: str, generate: asyncio.Task[Response], timeout: float = 30) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        if generate.done():
+            early = generate.result()
+            raise AssertionError(f"generate finished before the model got the request: {early.status_code} {early.text}")
         if await asyncio.to_thread(_received, nonce):
             return
         await asyncio.sleep(0.2)
@@ -84,6 +88,10 @@ async def _seed_supported_story(client: AsyncClient, engine: AsyncEngine, nonce:
     created = await client.post("/api/v1/sources", json={"type": "manual", "name": f"p14 brief {nonce}"})
     created.raise_for_status()
     source_id = UUID(created.json()["id"])
+    # Manual sources are created local_only (sources/public.py create_source); the brief never sends
+    # local-only facts, so clear it or the story is not a prompt dependency at all.
+    async with engine.begin() as connection:
+        await connection.execute(text("UPDATE sources SET local_only = false WHERE id = :id"), {"id": source_id})
     document = await client.post("/api/v1/documents", json={
         "source_id": str(source_id), "title": f"Brief story {nonce}",
         "content": f"Fictional story body {nonce}.", "external_id": f"p14-brief-{nonce}",
@@ -155,10 +163,10 @@ async def _start_slow_brief(client: AsyncClient, nonce: str) -> tuple[object, as
     })
     assert task.status_code == 201, task.text
     generate = asyncio.create_task(client.post(
-        "/api/v1/dashboard/briefs/generate",
+        "/api/v1/briefs/generate",
         json={"brief_date": day.isoformat(), "timezone": TZ, "force": True}, timeout=90,
     ))
-    await _wait_received(nonce)
+    await _wait_received(f"Brief story {nonce}", generate)
     return day, generate
 
 
@@ -198,7 +206,7 @@ async def test_slow_brief_holds_no_lock_and_a_mid_call_purge_publishes_no_revisi
 
     response = await generate
     assert response.status_code == 503, response.text
-    assert json.loads(response.text)["detail"]["code"] == "model_unavailable"
+    assert json.loads(response.text)["error"]["code"] == "model_unavailable"
     assert await _revisions(committed_engine, day) == before
 
 

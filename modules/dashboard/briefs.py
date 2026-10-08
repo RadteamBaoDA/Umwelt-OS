@@ -239,7 +239,7 @@ async def _lock_fact_dependencies(
     )
     fences = {sid: await sources.lock_source(session, sid) for sid in source_ids}
     if any(f is None or f.status != "active" or f.local_only for f in fences.values()):
-        raise BriefUnavailable("A cited source is no longer eligible")
+        raise BriefUnavailable("A source sent to the model is no longer eligible")
     locked = await documents.lock_document_ids(session, sorted(document_ids, key=str))
     if set(locked) != document_ids:
         raise BriefUnavailable("A cited document is no longer retained")
