@@ -9,6 +9,7 @@ from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from core import worker_cursors
 from core.config import Settings
 from core.realtime import commit_with_replay
 from core.workspaces import public as workspaces
@@ -24,64 +25,18 @@ BRIEF_CURSOR_KEY = "dashboard:briefs:workspace-cursor"
 
 
 _log = logging.getLogger(__name__)
-CURSOR_STATE_KEY = "w2_cursor_state"
+CURSOR_STATE_KEY = worker_cursors.STATE_KEY
 _CURSOR_KEYS = frozenset({HIGHLIGHT_CURSOR_KEY, BRIEF_CURSOR_KEY})
-_UNSYNCED = "unsynced"
-
-
-def _cursor_state(ctx: dict[str, object]) -> dict[str, object]:
-    """Return the startup-installed shared cursor object (ARQ copies ``ctx`` per job, not this dict)."""
-    return cast(dict[str, object], ctx[CURSOR_STATE_KEY])
 
 
 async def _read_workspace_cursor(ctx: dict[str, object], key: str) -> UUID | None:
-    """Read one fixed identity cursor from Redis, falling back to the shared startup state.
-
-    A cursor whose last Redis write failed is kept in the shared state and wins over the stale
-    remote value until a write succeeds again.
-    """
-    if key not in _CURSOR_KEYS:
-        raise KeyError(key)
-    state = _cursor_state(ctx)
-    raw = state.get(key)
-    redis = cast(Redis | None, ctx.get("redis"))
-    unsynced = cast(set[str], state.setdefault(_UNSYNCED, set()))
-    if redis is not None and key not in unsynced:
-        try:
-            remote = await redis.get(key)
-            if remote is not None:
-                raw = remote
-        except Exception:  # noqa: BLE001 - best-effort cursor store
-            _log.debug("cursor read failed", exc_info=True)
-    if isinstance(raw, bytes):
-        raw = raw.decode("ascii", errors="ignore")
-    try:
-        cursor = UUID(raw) if isinstance(raw, str) and raw else None
-    except ValueError:
-        cursor = None
-    state[key] = str(cursor) if cursor is not None else ""
-    return cursor
+    """Read a fixed identity cursor through the shared forward-only cursor store."""
+    return await worker_cursors.read_cursor(ctx, key, _CURSOR_KEYS)
 
 
 async def _write_workspace_cursor(ctx: dict[str, object], key: str, cursor: UUID | None) -> None:
-    """Persist one fixed identity cursor in the shared state and opportunistically in Redis."""
-    if key not in _CURSOR_KEYS:
-        raise KeyError(key)
-    state = _cursor_state(ctx)
-    state[key] = str(cursor) if cursor is not None else ""
-    unsynced = cast(set[str], state.setdefault(_UNSYNCED, set()))
-    redis = cast(Redis | None, ctx.get("redis"))
-    if redis is None:
-        return
-    try:
-        if cursor is None:
-            await redis.delete(key)
-        else:
-            await redis.set(key, str(cursor))
-        unsynced.discard(key)
-    except Exception:  # noqa: BLE001 - shared startup state retains progress
-        _log.debug("cursor write failed", exc_info=True)
-        unsynced.add(key)
+    """Write a fixed identity cursor through the shared forward-only cursor store."""
+    await worker_cursors.write_cursor(ctx, key, cursor, _CURSOR_KEYS)
 
 
 async def run_scheduled_highlights(ctx: dict[str, object]) -> int:

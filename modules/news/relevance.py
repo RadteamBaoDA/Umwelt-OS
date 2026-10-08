@@ -5,8 +5,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from core.workspaces.schemas import Scope
 
+from core.workspaces.schemas import Scope
 from modules.goals import public as goals
 from modules.goals.schemas import GoalFilter
 from modules.news import topics

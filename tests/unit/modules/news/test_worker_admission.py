@@ -73,3 +73,54 @@ async def test_cursor_rejects_unknown_key_and_bad_uuid() -> None:
     with pytest.raises(KeyError):
         await worker._read_cursor(ctx, "other")
     assert await worker._read_cursor(ctx, worker.RECOVERY_INIT_CURSOR_KEY) is None
+
+
+@pytest.mark.asyncio
+async def test_recovery_locks_access_fence_before_checkpoint_read() -> None:
+    """N-R3: the recovery loop takes the fence with expected= before touching the checkpoint."""
+    order: list[str] = []
+    session = AsyncMock()
+    session.scalars = AsyncMock(return_value=SimpleNamespace(all=lambda: [WS]))
+
+    async def _scalar(*_a: object, **_k: object) -> None:
+        order.append("checkpoint")
+
+    session.scalar.side_effect = _scalar
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=session)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    lock = AsyncMock(side_effect=lambda *_a, **k: order.append("lock") or k["expected"])
+    owner = SimpleNamespace(user_id=1, membership_revision=2)
+    ctx = {"session_factory": MagicMock(return_value=cm), "redis": None, "w2_cursor_state": {},
+           "settings": SimpleNamespace(multi_workspace_enabled=True)}
+    with patch.object(worker.documents, "list_ready_document_workspace_ids", AsyncMock(return_value=[]), create=True), \
+         patch.object(worker.workspaces, "resolve_workspace_owner_context", AsyncMock(return_value=owner)), \
+         patch.object(worker.workspaces, "read_access_fence", AsyncMock(return_value=FENCE)), \
+         patch.object(worker.workspaces, "lock_access_fence", lock), \
+         patch.object(worker.settings_public, "module_is_enabled", AsyncMock(return_value=True)):
+        await worker.recover_news_work(ctx)
+    assert lock.await_args.kwargs["expected"] == FENCE
+    assert order == ["lock", "checkpoint"]
+
+
+@pytest.mark.asyncio
+async def test_cursor_is_forward_only_and_malformed_remote_keeps_local() -> None:
+    """N-R4: an older overlapping job cannot overwrite a newer cursor; bad Redis data keeps local."""
+    redis = AsyncMock()
+    redis.get.return_value = None
+    state: dict[str, str] = {}
+    older, newer = {"redis": redis, "w2_cursor_state": state}, {"redis": redis, "w2_cursor_state": state}
+    key = worker.RECOVERY_CURSOR_KEY
+    await worker._read_cursor(older, key)
+    await worker._read_cursor(newer, key)
+    a, b = uuid4(), uuid4()
+    await worker._write_cursor(newer, key, b)
+    await worker._write_cursor(older, key, a)  # stale: must be skipped
+    assert state[key] == str(b)
+    await worker._write_cursor(newer, key, a)  # same job may keep advancing
+    assert state[key] == str(a)
+    redis.get.return_value = b"not-a-uuid"
+    assert await worker._read_cursor({"redis": redis, "w2_cursor_state": state}, key) == a
+    redis.set.side_effect = RuntimeError("down")
+    await worker._write_cursor(newer, key, b)
+    assert state[f"_unsynced:{key}"] == "1" and all(isinstance(v, str) for v in state.values())

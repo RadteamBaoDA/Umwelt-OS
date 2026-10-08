@@ -5,8 +5,8 @@ from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from core.workspaces.schemas import Scope
 
+from core.workspaces.schemas import Scope
 from modules.knowledge.documents import public as documents
 from modules.news.models import NewsObservation
 from modules.news.schemas import TrendFilter, TrendPage, TrendRead

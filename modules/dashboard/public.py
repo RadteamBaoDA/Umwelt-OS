@@ -660,6 +660,14 @@ def _decode_owner_export_cursor(
         raise HTTPException(status_code=422, detail="Owner export cursor is invalid") from exc
 
 
+def _dashboard_export_scope(owner_id: int, snapshot_at: datetime, workspace_id: UUID) -> tuple[ColumnElement[bool], ...]:
+    """Select workspace-local parent dashboard revisions that existed unchanged at the cutoff."""
+    return (
+        Dashboard.workspace_id == workspace_id, Dashboard.owner_id == owner_id,
+        Dashboard.created_at <= snapshot_at, Dashboard.updated_at <= snapshot_at,
+    )
+
+
 def _definition_export_scope(owner_id: int, snapshot_at: datetime, workspace_id: UUID) -> tuple[ColumnElement[bool], ...]:
     """Select the complete set of saved owner definitions created by the cutoff."""
     return (

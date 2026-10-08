@@ -8,8 +8,8 @@ from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from core.workspaces.schemas import Scope
 
+from core.workspaces.schemas import Scope
 from modules.dashboard import briefs
 from modules.dashboard.daily_schemas import DailyContext, DailyWidget, DayRelation
 from modules.goals import public as goals
@@ -117,6 +117,7 @@ async def build_daily_widgets(
     Widget queries retain their existing per-owner bounds and evidence/privacy filters. The result
     contains current task/goal/news/timeline projections, never a historical state snapshot.
     """
+    await briefs._admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     selected_relation = relation or relation_to_today(day, timezone)
     return [
         await _tasks_widget(session, day, timezone, scope=scope, multi_workspace_enabled=multi_workspace_enabled),
@@ -134,6 +135,7 @@ async def build_daily_context(
     Retained brief history is presentation data; callers needing only fact support should use
     ``build_daily_widgets`` so malformed saved citations cannot prevent independent current reads.
     """
+    await briefs._admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     relation = relation_to_today(day, timezone)
     widgets = await build_daily_widgets(session, day, timezone, scope=scope, multi_workspace_enabled=multi_workspace_enabled, relation=relation)
     now = datetime.now(UTC)

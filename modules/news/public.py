@@ -13,8 +13,8 @@ to the document-seed coordinator.
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from core.workspaces.schemas import Scope
 
+from core.workspaces.schemas import Scope
 from modules.news.correlation import build_correlations
 from modules.news.relevance import score_relevance
 from modules.news.schemas import (

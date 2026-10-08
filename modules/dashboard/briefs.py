@@ -887,7 +887,6 @@ async def run_due_brief(
     historical days. A short Redis cooldown stops a model outage from being retried every minute.
     """
     await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    actor = _actor(scope)
     schedule = await read_schedule(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if not schedule.enabled:
         return None

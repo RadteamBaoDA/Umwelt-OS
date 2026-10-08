@@ -5,10 +5,10 @@ from typing import cast
 from uuid import UUID
 
 from fastapi import HTTPException
-from redis.asyncio import Redis
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from core import worker_cursors
 from core.config import Settings
 from core.realtime import commit_with_replay
 from core.workspaces import public as workspaces
@@ -25,56 +25,18 @@ RECOVERY_INIT_CURSOR_KEY = "news:recovery:initialization-cursor"
 
 
 _log = logging.getLogger(__name__)
-CURSOR_STATE_KEY = "w2_cursor_state"
+CURSOR_STATE_KEY = worker_cursors.STATE_KEY
 _CURSOR_KEYS = frozenset({RECOVERY_CURSOR_KEY, RECOVERY_INIT_CURSOR_KEY})
-_UNSYNCED = "unsynced"
 
 
 async def _read_cursor(ctx: dict[str, object], key: str) -> UUID | None:
-    """Read a fixed cursor from Redis, falling back to the startup-installed shared state.
-
-    ARQ copies ``ctx`` per job, so progress lives in the shared ``w2_cursor_state`` object. A
-    cursor whose last Redis write failed wins over the stale remote value until a write succeeds.
-    """
-    if key not in _CURSOR_KEYS:
-        raise KeyError(key)
-    state = cast(dict[str, object], ctx[CURSOR_STATE_KEY])
-    unsynced = cast(set[str], state.setdefault(_UNSYNCED, set()))
-    raw = state.get(key)
-    if key not in unsynced:
-        try:
-            remote = await cast(Redis, ctx["redis"]).get(key)
-            if remote is not None:
-                raw = remote
-        except Exception:  # noqa: BLE001 - best-effort cursor store
-            _log.debug("cursor read failed", exc_info=True)
-    if isinstance(raw, bytes):
-        raw = raw.decode("ascii", errors="ignore")
-    try:
-        cursor = UUID(raw) if isinstance(raw, str) and raw else None
-    except ValueError:
-        cursor = None
-    state[key] = str(cursor) if cursor is not None else ""
-    return cursor
+    """Read a fixed recovery cursor through the shared forward-only cursor store."""
+    return await worker_cursors.read_cursor(ctx, key, _CURSOR_KEYS)
 
 
 async def _write_cursor(ctx: dict[str, object], key: str, cursor: UUID | None) -> None:
-    """Persist a fixed cursor to the shared state and opportunistically to Redis."""
-    if key not in _CURSOR_KEYS:
-        raise KeyError(key)
-    state = cast(dict[str, object], ctx[CURSOR_STATE_KEY])
-    unsynced = cast(set[str], state.setdefault(_UNSYNCED, set()))
-    state[key] = str(cursor) if cursor is not None else ""
-    redis = cast(Redis, ctx["redis"])
-    try:
-        if cursor is None:
-            await redis.delete(key)
-        else:
-            await redis.set(key, str(cursor))
-        unsynced.discard(key)
-    except Exception:  # noqa: BLE001 - best-effort cursor store
-        _log.debug("cursor write failed", exc_info=True)
-        unsynced.add(key)
+    """Write a fixed recovery cursor through the shared forward-only cursor store."""
+    await worker_cursors.write_cursor(ctx, key, cursor, _CURSOR_KEYS)
 
 
 async def _ensure_recovery_checkpoint(session: AsyncSession, workspace_id: UUID) -> None:
@@ -350,6 +312,8 @@ async def recover_news_work(ctx: dict[str, object]) -> int:
                 if not await settings_public.module_is_enabled(session, "news", scope=scope,
                         multi_workspace_enabled=flag):
                     continue
+                access_fence = await workspaces.lock_access_fence(session, scope=scope,
+                    expected=access_fence, multi_workspace_enabled=flag)
                 checkpoint = await session.scalar(select(NewsRecoveryCheckpoint).where(
                     NewsRecoveryCheckpoint.workspace_id == workspace_id,
                 ))
