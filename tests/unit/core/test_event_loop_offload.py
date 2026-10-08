@@ -26,6 +26,7 @@ from core.heavy_work import to_thread_joined
 from modules.connectors.providers import feed_catalog
 from modules.export import routes as export_routes
 from modules.ingestion import worker
+from modules.ingestion.parsers import ParsedDocument
 from modules.knowledge.documents import public as documents_public
 
 GOLDEN_TEXTS = [
@@ -291,11 +292,14 @@ async def test_to_thread_joined_returns_and_raises() -> None:
         await to_thread_joined(boom)
 
 
-def test_parsed_text_cap_at_and_over_limit() -> None:
-    worker._check_parsed_text("a" * 10, 10)
-    with pytest.raises(worker.ParsedTextTooLarge) as info:
-        worker._check_parsed_text("a" * 11, 10)
-    assert worker._failure_code(info.value) == "parsed_text_too_large"
+def test_parsed_text_cap_truncates_over_limit() -> None:
+    fits = ParsedDocument("a" * 10, {}, [])
+    assert worker._cap_parsed_text(fits, 10) is fits
+    over = ParsedDocument("a" * 11, {"k": 1}, ["w"])
+    capped = worker._cap_parsed_text(over, 10)
+    assert capped.text == "a" * 10
+    assert capped.warnings == ["w", "parsed_text_truncated"]
+    assert capped.metadata == {"k": 1, "truncated_from_chars": 11, "kept_chars": 10}
     assert worker._failure_code(TimeoutError()) == "parser_timeout"
     assert worker._failure_code(RuntimeError()) == "parse_failed"
     assert Settings().parsed_text_max_chars == 10 * 1024 * 1024

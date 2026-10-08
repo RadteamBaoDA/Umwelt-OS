@@ -353,6 +353,7 @@ async def test_chat_completion_persists_message_with_citations(monkeypatch: pyte
     failed.assert_not_awaited()  # pre-fix: `.answer` on a str raised AttributeError and failed the run
     message = next(obj for obj in added if isinstance(obj, Message))
     assert "The guidelines say so [1]." in message.content
+    json.dumps(message.citations)  # JSONB-serialisable (UUIDs must be strings)
     assert [c["chunk_id"] for c in message.citations] == [str(item.chunk_id)]
     done = next(obj for obj in added if isinstance(obj, StreamEvent) and obj.event_type == "message.done")
     assert done.data["status"] == "completed" and done.data["citations"] == message.citations

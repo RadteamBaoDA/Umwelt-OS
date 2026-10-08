@@ -46,3 +46,18 @@ def test_rule_delivery_migration_adds_and_drops_rule_last_notified() -> None:
     )
     assert down.returncode == 0, down.stderr
     assert "DROP COLUMN rule_last_notified" in down.stdout
+
+
+def test_realtime_replay_check_allows_every_emitted_event_type() -> None:
+    from core.realtime import DashboardChanged, IngestionChanged, KnowledgeChanged, SourceChanged
+
+    result = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head", "--sql"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    final = result.stdout.rsplit("ADD CONSTRAINT ck_realtime_replay_event_type", 1)[1].split(";")[0]
+    for model in (SourceChanged, IngestionChanged, KnowledgeChanged, DashboardChanged):
+        assert model.model_fields["type"].default in final

@@ -7,7 +7,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "r15_document_language_backfill"
-down_revision: str | Sequence[str] | None = "p12_evidence_version_index"
+down_revision: str | Sequence[str] | None = "p14_realtime_dashboard_event"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
