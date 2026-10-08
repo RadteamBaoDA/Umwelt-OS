@@ -3498,6 +3498,16 @@ async def _extraction_document(
         session, source_id, source_fence.generation, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         access_fence=access_fence, source_fence=source_fence,
     )
+    if expected_raw_uri is None:
+        # Raw-less (API/manual content) document: no original input to prove; the stored
+        # version content is authoritative. Still bound to exact workspace/Source/Document.
+        if expected_mime_type is not None and (type(expected_mime_type) is not str or not 1 <= len(expected_mime_type) <= 255):
+            raise RuntimeError("extraction_original_input_required")
+        return await session.scalar(select(Document).where(
+            Document.id == document_id, Document.source_id == source_id, Document.workspace_id == scope.workspace_id,
+            Document.raw_uri.is_(None),
+            Document.mime_type.is_(None) if expected_mime_type is None else Document.mime_type == expected_mime_type,
+        ).execution_options(populate_existing=True))
     if (type(expected_raw_uri) is not str or not expected_raw_uri
             or type(expected_mime_type) is not str or not 1 <= len(expected_mime_type) <= 255):
         raise RuntimeError("extraction_original_input_required")
@@ -3515,7 +3525,7 @@ async def _extraction_document(
 async def lock_document_for_extraction(
     session: AsyncSession, document_id: UUID, source_id: UUID, *,
     scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
-    expected_raw_uri: str, expected_mime_type: str,
+    expected_raw_uri: str | None, expected_mime_type: str | None,
 ) -> bool:
     """Prepare singleton parser Document then URI lifecycle before any Ingestion roots.
 
@@ -3533,11 +3543,13 @@ async def lock_document_for_extraction(
         return False
     document = await session.scalar(select(Document).where(
         Document.id == document_id, Document.source_id == source_id, Document.workspace_id == scope.workspace_id,
-        Document.raw_uri == expected_raw_uri, Document.mime_type == expected_mime_type,
+        Document.raw_uri.is_(None) if expected_raw_uri is None else Document.raw_uri == expected_raw_uri,
+        Document.mime_type.is_(None) if expected_mime_type is None else Document.mime_type == expected_mime_type,
     ).with_for_update().execution_options(populate_existing=True))
     if document is None:
         return False
-    await lock_raw_uri_identity(session, expected_raw_uri)
+    if expected_raw_uri is not None:
+        await lock_raw_uri_identity(session, expected_raw_uri)
     return await _extraction_document(
         session, document_id, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         access_fence=access_fence, source_fence=source_fence,

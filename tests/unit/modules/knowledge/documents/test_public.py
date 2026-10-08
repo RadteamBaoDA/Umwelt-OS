@@ -338,3 +338,36 @@ class TestRetentionAndDeletionValidation:
 
         deleted = await delete_document(session, document_id=uuid4(), **SCOPE_KW)
         assert deleted is None
+
+
+class TestRawlessExtractionLock:
+    """Raw-less (API/manual) documents skip the original-input proof; uploads stay strict."""
+
+    @staticmethod
+    async def _lock(session, raw_uri, mime):
+        from modules.knowledge.documents.public import lock_document_for_extraction
+        from tests.unit.modules.knowledge.documents._scope import FENCE
+        with patch("modules.knowledge.documents.public._normalized_source_proof", AsyncMock()), \
+             patch("modules.knowledge.documents.public.lock_raw_uri_identity", AsyncMock()) as uri_lock, \
+             patch("modules.knowledge.documents.public.SourceFence", MagicMock):
+            ok = await lock_document_for_extraction(
+                session, uuid4(), uuid4(), access_fence=FENCE, source_fence=MagicMock(generation=1),
+                expected_raw_uri=raw_uri, expected_mime_type=mime, **SCOPE_KW,
+            )
+        return ok, uri_lock
+
+    @pytest.mark.asyncio
+    async def test_rawless_document_locks_without_uri_identity(self) -> None:
+        session = AsyncMock()
+        session.scalar = AsyncMock(return_value=MagicMock())
+        ok, uri_lock = await self._lock(session, None, None)
+        assert ok is True
+        uri_lock.assert_not_awaited()
+        sql = str(session.scalar.await_args_list[0].args[0].compile(dialect=postgresql.dialect()))
+        assert "raw_uri IS NULL" in sql
+
+    @pytest.mark.asyncio
+    async def test_raw_document_without_mime_still_rejected(self) -> None:
+        session = AsyncMock()
+        with pytest.raises(RuntimeError, match="extraction_original_input_required"):
+            await self._lock(session, "s3://x/raw", None)
