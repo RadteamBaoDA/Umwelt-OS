@@ -19,19 +19,22 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { getSourceImpact } from './api';
 
 // Backend counts saturate at 1000; show that as "1000+".
-const shown = (n: number) => (n >= 1000 ? '1000+' : String(n));
+const numberFormat = new Intl.NumberFormat();
+const shown = (n: number) => (n >= 1000 ? '1000+' : numberFormat.format(n));
 
 /**
  * Confirms disconnecting a source with explicit consequence copy for keeping or deleting collected data.
  * Archived sources can only be purged. Impact counts load when the dialog opens; if the call fails the generic text is shown.
  */
-export function DisconnectDialog({ sourceId, name, archived, disabled, trigger, onConfirm }: {
+export function DisconnectDialog({ sourceId, name, archived, disabled, trigger, onConfirm, onCloseAutoFocus }: {
   sourceId: string;
   name: string;
   archived: boolean;
   disabled?: boolean;
   trigger: ReactNode;
   onConfirm: (deleteData: boolean) => void;
+  /** Lets the owner redirect focus when the trigger is busy or unmounted after the action. */
+  onCloseAutoFocus?: (event: Event) => void;
 }) {
   const t = useTranslations('sources');
   const [choice, setChoice] = useState<'keep' | 'delete'>(archived ? 'delete' : 'keep');
@@ -39,9 +42,9 @@ export function DisconnectDialog({ sourceId, name, archived, disabled, trigger, 
   const deleting = choice === 'delete';
   const queryClient = useQueryClient();
   const impact = useQuery({ queryKey: ['sources', sourceId, 'impact'], queryFn: ({ signal }) => getSourceImpact(sourceId, signal), enabled: open, retry: false });
-  return <AlertDialog onOpenChange={(next) => { setOpen(next); if (!next) void queryClient.cancelQueries({ queryKey: ['sources', sourceId, 'impact'] }); if (next) setChoice(archived ? 'delete' : 'keep'); }}>
-    <AlertDialogTrigger asChild disabled={disabled}>{trigger}</AlertDialogTrigger>
-    <AlertDialogContent>
+  return <AlertDialog open={open} onOpenChange={(next) => { if (next && disabled) return; setOpen(next); if (!next) void queryClient.cancelQueries({ queryKey: ['sources', sourceId, 'impact'] }); if (next) setChoice(archived ? 'delete' : 'keep'); }}>
+    <AlertDialogTrigger asChild>{trigger}</AlertDialogTrigger>
+    <AlertDialogContent onCloseAutoFocus={onCloseAutoFocus}>
       <AlertDialogHeader>
         <AlertDialogTitle>{t(archived ? 'disconnectDeleteTitle' : 'disconnectTitle', { name })}</AlertDialogTitle>
         <AlertDialogDescription>{t('disconnectIntro')}</AlertDialogDescription>
@@ -56,7 +59,7 @@ export function DisconnectDialog({ sourceId, name, archived, disabled, trigger, 
           <Label htmlFor="disconnect-delete" className="grid gap-1"><strong>{t('disconnectDelete')}</strong><span className="muted">{t('disconnectDeleteConsequence')}</span></Label>
         </div>
       </RadioGroup>
-      <p className="muted" aria-live="polite">{impact.data ? t('disconnectImpact', { documents: shown(impact.data.document_count), gadgets: shown(impact.data.gadget_definition_count), placements: shown(impact.data.gadget_placement_count), chats: shown(impact.data.conversation_count) }) : impact.isFetching ? '' : t('disconnectImpactUnknown')}</p>
+      <p className="muted" role="status">{impact.data ? t('disconnectImpact', { documents: shown(impact.data.document_count), gadgets: shown(impact.data.gadget_definition_count), placements: shown(impact.data.gadget_placement_count), chats: shown(impact.data.conversation_count) }) : impact.isFetching ? t('disconnectImpactLoading') : t('disconnectImpactUnknown')}</p>
       <AlertDialogFooter>
         <AlertDialogCancel>{t('cancel')}</AlertDialogCancel>
         <AlertDialogAction className={deleting ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90' : undefined} onClick={() => onConfirm(deleting)}>

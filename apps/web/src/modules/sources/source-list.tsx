@@ -159,6 +159,7 @@ function SourceEntry({
   });
   const { busy, error, toggleStatus, disconnect } = useSourceActions({ source, activation: activation.data, onResumed: onEdit, onChanged, onPurgeStarted });
 
+  const nameCellRef = useRef<HTMLTableCellElement>(null);
   const editedHere = editingId === source.id;
   const rowState = sourceRowState(source, activation.data);
   const chipKey: Record<SourceRowState, 'statusActive' | 'statusPaused' | 'statusArchived' | 'stateSavedNotActive' | 'stateError' | 'stateReconnect'> = {
@@ -169,7 +170,7 @@ function SourceEntry({
   const mobileLabel = (key: 'colSchedule' | 'colCollected' | 'colIndexed') => <span className="muted mr-1 min-[721px]:hidden">{t(key)}:</span>;
   return <>
     <tr className="border-b border-border max-[720px]:mb-3 max-[720px]:block max-[720px]:rounded-lg max-[720px]:border max-[720px]:p-3">
-      <th scope="row" className={`${cell} font-normal`}>
+      <th scope="row" ref={nameCellRef} tabIndex={-1} className={`${cell} font-normal outline-none`}>
         <strong>{source.name}</strong>
         <p className="muted">{providerLabel(source.provider, t) ?? source.type}</p>
         {(source.collection_error_code || source.processing_error_code) && <p className="error">{t('collectionError')}: {source.collection_error_code ?? t('noError')} · {t('processingError')}: {source.processing_error_code ?? t('noError')}</p>}
@@ -188,7 +189,8 @@ function SourceEntry({
           {connector && source.status === 'active' && activation.data?.state === 'active' && <Button className="secondary" disabled={collect.isPending || busy} onClick={() => collect.mutate()}>{collect.isPending ? t('collecting') : t('collectNow')}</Button>}
           {!editedHere && source.status !== 'archived' && <Button className="secondary" disabled={busy} onClick={toggleStatus}>{busy ? t(source.status === 'paused' ? 'resuming' : 'pausing') : t(source.status === 'paused' ? 'resume' : 'pause')}</Button>}
           {!editedHere && !purged && <DisconnectDialog sourceId={source.id} name={source.name} archived={source.status === 'archived'} disabled={busy} onConfirm={(deleteData) => void disconnect(deleteData)}
-            trigger={<Button className="secondary" disabled={busy}>{busy ? t('disconnecting') : t(source.status === 'archived' ? 'disconnectDelete' : 'disconnectAction')}</Button>} />}
+            onCloseAutoFocus={(event) => { event.preventDefault(); nameCellRef.current?.focus(); }}
+            trigger={<Button className="secondary" aria-disabled={busy}>{busy ? t('disconnecting') : t(source.status === 'archived' ? 'disconnectDelete' : 'disconnectAction')}</Button>} />}
           {connector && <Button className="secondary" aria-expanded={historyOpen} onClick={() => setHistoryOpen((open) => !open)}>{t(historyOpen ? 'hideHistory' : 'showHistory')}</Button>}
         </div>
       </td>
