@@ -22,7 +22,7 @@ from core.model_gateway.policy import may_send
 from core.model_gateway.schemas import AIExecutionConfig, ModelMapping, RequestPolicy
 from core.tools.schemas import ToolDestination, ToolOutputFence
 from core.workspaces import public as workspaces
-from core.workspaces.schemas import Scope, WorkspaceContext
+from core.workspaces.schemas import AccessFence, Scope, WorkspaceContext
 from modules.goals.schemas import GoalFilter, GoalPage
 from modules.knowledge.documents.models import Document, DocumentChunk, DocumentVersion
 from modules.search.indexing import configured_embedding, embedding_values, gateway
@@ -43,11 +43,11 @@ MAX_RANKED_CANDIDATES = MAX_CANDIDATES * 2
 FALLBACK_WARNING = "Semantic search unavailable"
 
 
-async def _admit(session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool) -> None:
+async def _admit(session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool) -> AccessFence:
     """Admit owner-only Search access before workspace candidates or generation rows are read."""
     if isinstance(scope, WorkspaceContext) and scope.role != "owner":
         raise HTTPException(status_code=403, detail="Workspace owner required")
-    await workspaces.read_access_fence(
+    return await workspaces.read_access_fence(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
 
@@ -350,7 +350,7 @@ async def search(
         raise ValueError("Search source fence exceeds its supported bound")
     if destination != ToolDestination.LOCAL and not source_generation_fences:
         raise ValueError("Remote search requires current source-generation fences")
-    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    admitted_fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     offset = _offset(request, destination, source_generation_fences)
     lexical = await _lexical_ids(
         session, request, destination, source_generation_fences, workspace_id=scope.workspace_id,
@@ -374,6 +374,10 @@ async def search(
                 raise ValueError("No permitted active embedding generation")
             async def recheck_send() -> None:
                 """Reload gateway and privacy state immediately before embedding the query."""
+                if await workspaces.read_access_fence(
+                    session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                ) != admitted_fence:
+                    raise PrivacyPolicyDenied("Search embedding denied: workspace access changed")
                 latest, latest_mapping, latest_policy = await configured_embedding(
                     session, settings, redis, scope=scope,
                 )

@@ -1,4 +1,5 @@
 import json
+import logging
 import math
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -33,6 +34,7 @@ ACTIVE_INDEX_CURSOR_KEY = "search:index:generation-cursor"
 QUEUED_INDEX_CURSOR_KEY = "search:index:queued-cursor"
 SCAN_PAGE = 20  # identities scanned per status class per invocation; bounds skip cost
 AUTO_INDEX_RETRY_DELAY = timedelta(minutes=15)
+logger = logging.getLogger(__name__)
 
 
 def _actor(scope: Scope) -> int:
@@ -224,7 +226,7 @@ def eligible_chunks(*, workspace_id: UUID) -> Select[UUID, str, UUID]:
         .join(Source, Source.id == Document.source_id)
         .where(
             Document.current_version == DocumentVersion.version_number,
-            Document.workspace_id == workspace_id,
+            Document.workspace_id == workspace_id, Source.workspace_id == workspace_id,
             Document.extraction_status.in_(("ready", "succeeded")),
             Source.status == "active", Source.local_only.is_(False),
         )
@@ -345,29 +347,38 @@ async def create_generation_for_authority(
     )
 
 
-def _cursor_state(ctx: dict[str, object]) -> dict[str, str]:
-    """Return the shared worker cursor-state dict, creating a local one if the worker lacks it."""
-    return cast(dict[str, str], ctx.setdefault("w2_cursor_state", {}))
+def _cursor_state(ctx: dict[str, object]) -> dict[str, object]:
+    """Return the worker-installed cursor dict; ARQ copies ctx per job, so never create one here."""
+    state = ctx.get("w2_cursor_state")
+    if not isinstance(state, dict):
+        logger.warning("w2_cursor_state missing from worker ctx; search cursors have no local fallback")
+        return {}  # per-job throwaway
+    return cast(dict[str, object], state)
 
 
-async def _read_cursor(redis: Redis, state: dict[str, str], name: str, key: str) -> UUID | None:
-    """Read a keyset cursor from Redis, falling back to worker-local state when Redis fails."""
+# ponytail: local twin of the shared W2-N cursor helper (same "_unsynced" semantics); swap on composition.
+async def _read_cursor(redis: Redis, state: dict[str, object], name: str, key: str) -> UUID | None:
+    """Read a keyset cursor; local state wins until a Redis write has succeeded again."""
+    unsynced = cast("set[str]", state.setdefault("_unsynced", set()))
+    raw: object = state.get(name)
+    if name not in unsynced:
+        try:
+            value = await redis.get(key)
+            if value:
+                raw = value.decode() if isinstance(value, bytes) else str(value)
+        except (RedisError, UnicodeDecodeError):
+            pass
     try:
-        raw = await redis.get(key)
-        if raw:
-            return UUID(raw.decode() if isinstance(raw, bytes) else str(raw))
-    except (RedisError, ValueError, UnicodeDecodeError):
-        pass
-    try:
-        return UUID(state[name]) if name in state else None
+        return UUID(str(raw)) if raw else None
     except ValueError:
         return None
 
 
 async def _write_cursor(
-    redis: Redis, state: dict[str, str], name: str, key: str, value: UUID | None,
+    redis: Redis, state: dict[str, object], name: str, key: str, value: UUID | None,
 ) -> None:
-    """Persist a cursor locally always and to Redis best effort (Redis is only an optimization)."""
+    """Persist a cursor locally always and to Redis best effort, tracking unsynced names."""
+    unsynced = cast("set[str]", state.setdefault("_unsynced", set()))
     if value is None:
         state.pop(name, None)
     else:
@@ -377,13 +388,14 @@ async def _write_cursor(
             await redis.delete(key)
         else:
             await redis.set(key, str(value))
+        unsynced.discard(name)
     except RedisError:
-        pass
+        unsynced.add(name)
 
 
 async def _reconcile_automatic_generations(
     factory: async_sessionmaker[AsyncSession], settings: Settings, redis: Redis,
-    state: dict[str, str],
+    state: dict[str, object],
 ) -> None:
     """Create eligible per-workspace generations from bounded identity-only Documents discovery.
 
@@ -482,10 +494,13 @@ async def index_pending_chunks(ctx: dict[str, object]) -> int:
         await documents.backfill_current_chunks(session, multi_workspace_enabled=settings.multi_workspace_enabled)
     await _reconcile_automatic_generations(factory, settings, redis, state)
 
-    for name, key, statuses in (
+    classes = [
         ("search_queued", QUEUED_INDEX_CURSOR_KEY, ("queued", "running")),
         ("search_active", ACTIVE_INDEX_CURSOR_KEY, ("active",)),
-    ):
+    ]
+    turn = 1 if state.get("search_class_turn") == "1" else 0
+    state["search_class_turn"] = str(1 - turn)  # alternate which class goes first each invocation
+    for name, key, statuses in classes[turn:] + classes[:turn]:
         after = await _read_cursor(redis, state, name, key)
         last: UUID | None = None
         done: int | None = None
@@ -499,6 +514,10 @@ async def index_pending_chunks(ctx: dict[str, object]) -> int:
         if done is not None:
             return done
     return 0
+
+
+class _SourceStale(Exception):  # control-flow signal: Source/chunk moved before the send
+    """The Source or chunk is no longer eligible; the pending item should be dropped."""
 
 
 class _AuthorityChanged(Exception):  # control-flow signal, not an error condition
@@ -533,6 +552,17 @@ async def _recheck_prepared(
         session, source_id, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
         expected_access_fence=fence,
     )
+    if lock:  # publication: lock the Document (after Source) so a concurrent re-version serializes
+        document_id = await session.scalar(
+            select(DocumentVersion.document_id).join(
+                DocumentChunk, DocumentChunk.document_version_id == DocumentVersion.id,
+            ).where(DocumentChunk.id == chunk_id)
+        )
+        if document_id is not None:
+            await documents.lock_document_ids(
+                session, [document_id], scope=scope,
+                multi_workspace_enabled=settings.multi_workspace_enabled,
+            )
     current = await session.scalar(
         select(DocumentChunk.content)
         .join(DocumentVersion, DocumentVersion.id == DocumentChunk.document_version_id)
@@ -589,7 +619,7 @@ async def _index_generation(
         generation = await session.scalar(select(IndexGeneration).where(
             IndexGeneration.id == generation_id, IndexGeneration.workspace_id == workspace_id,
         ))
-        if generation is None or not original.policy.embeddings_allowed:
+        if generation is None or not original.permitted():
             await session.rollback()
             return None
         mapping, config = original.mapping, original.config
@@ -610,6 +640,7 @@ async def _index_generation(
         await session.rollback()
 
     completed = 0
+    idle = False
     for _ in range(2):
         async with factory() as session:
             try:
@@ -644,6 +675,10 @@ async def _index_generation(
                 ).where((SearchIndexItem.id.is_(None)) | (SearchIndexItem.status == "pending"))
                 .order_by(DocumentChunk.id).limit(1)
             )).first()
+            if row is None and generation.status != "running":
+                await session.rollback()
+                idle = True  # nothing pending: let the page scan move on
+                break
             if row is None:
                 if generation.status == "running":
                     await session.execute(text(
@@ -654,7 +689,7 @@ async def _index_generation(
                         "JOIN documents d ON d.id = v.document_id "
                         "JOIN sources s ON s.id = d.source_id "
                         "WHERE c.id = i.chunk_id AND v.version_number = d.current_version "
-                        "AND d.workspace_id = :workspace_id "
+                        "AND d.workspace_id = :workspace_id AND s.workspace_id = :workspace_id "
                         "AND d.extraction_status IN ('ready', 'succeeded') "
                         "AND s.status = 'active' AND s.local_only = false)"
                     ), {"generation_id": generation_id, "workspace_id": str(workspace_id)})
@@ -674,6 +709,7 @@ async def _index_generation(
                     multi_workspace_enabled=settings.multi_workspace_enabled, access_fence=access_fence,
                 )
                 break
+            assert row is not None
             chunk_id, content, source_id = row
             item = await session.scalar(select(SearchIndexItem).where(
                 SearchIndexItem.generation_id == generation_id, SearchIndexItem.chunk_id == chunk_id,
@@ -719,7 +755,7 @@ async def _index_generation(
                     finally:
                         await check.rollback()
                     if not still_live:
-                        raise PrivacyPolicyDenied("Embedding source changed before send")
+                        raise PrivacyPolicyDenied("Embedding source changed before send") from _SourceStale()
 
             response = await gateway(config, redis, recheck_send, scope=scope).embed(
                 "embedding", mapping, original.policy, [content],
@@ -782,12 +818,25 @@ async def _index_generation(
             if exc.status_code in {401, 403, 404, 409}:
                 break
             raise
+        except PrivacyPolicyDenied as exc:
+            if isinstance(exc.__cause__, _AuthorityChanged):
+                break  # leave pending for a fresh invocation
+            if isinstance(exc.__cause__, _SourceStale):
+                await _drop_pending_item(
+                    factory, scope=scope, settings=settings, original=original,
+                    item_id=item_id, generation_id=generation_id, workspace_id=workspace_id,
+                )
+                continue
+            await _fail_item(
+                factory, scope=scope, settings=settings, original=original,
+                item_id=item_id, workspace_id=workspace_id,
+            )
         except (ModelGatewayError, RedisError, ValueError):
             await _fail_item(
                 factory, scope=scope, settings=settings, original=original,
                 item_id=item_id, workspace_id=workspace_id,
             )
-    return completed
+    return None if idle and completed == 0 else completed
 
 
 async def _drop_pending_item(
