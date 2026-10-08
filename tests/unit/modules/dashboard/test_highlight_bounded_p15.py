@@ -29,9 +29,11 @@ def test_matching_cost_is_bounded_and_caps_apply() -> None:
     compiled = compile_rules(rules, terms)
     assert all(len(c.terms) <= MAX_TERMS_PER_RULE for c in compiled)
     assert sum(len(c.terms) for c in compiled) <= MAX_TERMS_PER_DEFINITION
+    assert all(c.terms and c.truncated > 0 for c in compiled)
     rng = random.Random(1)
-    words = [f"w{rng.randrange(5000)}" for _ in range(300)]
-    texts = [" ".join(words[i : i + 300]) for i in range(200)]
+    # Every excerpt passes the substring filter but fails the word-boundary regex (term1xy contains term1x).
+    words = [f"term{rng.randrange(16)}xy" for _ in range(300)]
+    texts = [(" ".join(words[i : i + 300]) + " w" * 1000)[:2000] for i in range(200)]
     started = time.perf_counter()
     for text in texts:
         match_compiled(text, compiled)
@@ -39,12 +41,12 @@ def test_matching_cost_is_bounded_and_caps_apply() -> None:
 
 
 def test_results_identical_to_legacy_per_term_matcher() -> None:
-    keywords = ["new york", "york", "Rates", "C++", "fed", "ß", "inflation", "AI"]
+    keywords = ["new york", "york", "Rates", "C++", "fed", "ß", "inflation", "AI", "istanbul", "İzmir", "ısparta"]
     rule = _rule(keywords)
     legacy = [re.compile(rf"\b{re.escape(k)}\b", re.IGNORECASE) for k in keywords]
     samples = [
         "The Fed held rates in New York.", "inflation, AI and C++ everywhere", "yorkshire is not york",
-        "STRASSE ß", "nothing here", "RATES rates Rates", "",
+        "STRASSE ß", "nothing here", "RATES rates Rates", "", "İSTANBUL", "ıstanbul", "IZMIR", "izmir", "ISPARTA",
     ]
     (compiled,) = compile_rules([rule])
     for text in samples:

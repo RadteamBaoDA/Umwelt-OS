@@ -52,6 +52,14 @@ class CompiledRule:
     unresolved: int
     folded: tuple[str, ...] = ()
     gate: re.Pattern[str] | None = None
+    truncated: int = 0
+
+
+_TURKISH_I = {0x130: "i", 0x131: "i"}  # re.IGNORECASE equates İ/ı with i; casefold alone does not
+
+
+def _fold(value: str) -> str:
+    return value.translate(_TURKISH_I).casefold()
 
 
 def compile_rules(
@@ -59,7 +67,7 @@ def compile_rules(
 ) -> list[CompiledRule]:
     """Resolve topic terms and compile each rule's patterns once; topics absent from the map are unresolved."""
     compiled: list[CompiledRule] = []
-    budget = MAX_TERMS_PER_DEFINITION
+    per_rule = min(MAX_TERMS_PER_RULE, MAX_TERMS_PER_DEFINITION // max(1, len(rules)))
     for rule in rules:
         terms = list(rule.keywords)
         unresolved = 0
@@ -68,15 +76,15 @@ def compile_rules(
                 terms.extend(topic_terms[topic_id])
             else:
                 unresolved += 1
-        distinct = tuple(dict.fromkeys(terms))[:min(MAX_TERMS_PER_RULE, budget)]
-        budget -= len(distinct)
+        unique = tuple(dict.fromkeys(terms))
+        distinct = unique[:per_rule]
         gate = re.compile(
             "|".join(rf"\b{re.escape(term)}\b" for term in sorted(distinct, key=len, reverse=True)), re.IGNORECASE,
         ) if distinct else None
         compiled.append(CompiledRule(
             rule, distinct,
             tuple(re.compile(rf"\b{re.escape(term)}\b", re.IGNORECASE) for term in distinct), unresolved,
-            tuple(term.casefold() for term in distinct), gate,
+            tuple(_fold(term) for term in distinct), gate, len(unique) - len(distinct),
         ))
     return compiled
 
@@ -87,7 +95,7 @@ def match_compiled(
     """Match text against pre-compiled rules; results are ordered critical first."""
     if not text or not compiled:
         return []
-    folded_text = text.casefold()
+    folded_text = _fold(text)
     matches: list[HighlightMatch] = []
     for item in compiled:
         rule = item.rule
@@ -108,6 +116,8 @@ def match_compiled(
             reason = f"Matched {len(matched_words)} keyword(s): {', '.join(matched_words)}"
             if item.unresolved:
                 reason += f" ({item.unresolved} topic(s) unavailable)"
+            if item.truncated:
+                reason += f" ({item.truncated} topic term(s) not checked)"
             matches.append(HighlightMatch(
                 rule_id=rule.id, matched_keywords=tuple(matched_words), severity=rule.severity,
                 notify=rule.notify, reason=reason,
