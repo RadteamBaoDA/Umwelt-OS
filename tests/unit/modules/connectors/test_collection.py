@@ -275,7 +275,14 @@ async def test_rss_truncation_is_reported_so_the_cursor_cannot_advance():
 
     stats: dict[str, bool] = {}
     out = await n8n.read_rss("https://a.example/feed", None, fetch=fetch_many, stats=stats)
-    assert len(out["records"]) == 500 and stats == {"truncated": True}
+    assert len(out["records"]) == 500 and stats == {"truncated": True}  # mid-page: no exact continuation
+
+    async def fetch_pages(url):
+        return feed(250, "https://a.example/feed?p=2") if "p=2" not in url else feed(250, "https://a.example/feed?p=3")
+
+    stats = {}
+    out = await n8n.read_rss("https://a.example/feed", None, fetch=fetch_pages, stats=stats)
+    assert len(out["records"]) == 500 and stats == {"resume_url": "https://a.example/feed?p=3"}
 
     async def fetch_small(url):
         return feed(3)
@@ -283,3 +290,111 @@ async def test_rss_truncation_is_reported_so_the_cursor_cannot_advance():
     stats = {}
     out = await n8n.read_rss("https://a.example/feed", None, fetch=fetch_small, stats=stats)
     assert len(out["records"]) == 3 and stats == {}
+
+
+# ---------------------------------------------------------------- C3b: continuation, validators, 304
+
+def _rec(i):
+    return {"provider_id": str(i), "content": "c", "observed_at": datetime.now(UTC).isoformat(), "version": None, "metadata": {}}
+
+
+def _capture(monkeypatch):
+    got = {}
+
+    async def accept(run, records, before, after, update=None):
+        got.update(records=records, before=before, after=after, update=update)
+
+    monkeypatch.setattr(collection, "_accept_generic", accept)
+    return got
+
+
+@pytest.mark.asyncio
+async def test_partial_walk_commits_a_checkpoint_and_leaves_the_cursor(monkeypatch):
+    got = _capture(monkeypatch)
+    state = collection.CollectionState(cursor="2026-01-01T00:00:00+00:00")
+    walk = collection.Walk([_rec(1), _rec(2)], "https://a.example/p3", "2026-02-01T00:00:00+00:00", '"e"', None)
+    await collection._accept_walk(SimpleNamespace(attempt=attempt()), state, walk, None)
+    assert got["before"] == got["after"] == state.cursor  # no skip: cursor only moves when the walk is complete
+    update = got["update"]
+    assert update.coverage == "partial" and not update.update_validators
+    cp = rest.Checkpoint.decode(update.continuation_state, revision=2, cursor=state.cursor, origin_url=None)
+    assert cp.url == "https://a.example/p3" and cp.max_time == "2026-02-01T00:00:00+00:00"
+    assert cp.ids == [rest.id_hash("1"), rest.id_hash("2")]
+
+
+@pytest.mark.asyncio
+async def test_complete_walk_advances_cursor_clears_checkpoint_and_stores_validators(monkeypatch):
+    got = _capture(monkeypatch)
+    state = collection.CollectionState(cursor="2026-01-01T00:00:00+00:00")
+    walk = collection.Walk([_rec(1)], None, "2026-02-01T00:00:00+00:00", '"e2"', "lm")
+    await collection._accept_walk(SimpleNamespace(attempt=attempt()), state, walk, None)
+    update = got["update"]
+    assert got["after"] == "2026-02-01T00:00:00+00:00" and update.coverage == "complete"
+    assert update.continuation_state is None and update.update_validators and update.etag == '"e2"'
+
+
+@pytest.mark.asyncio
+async def test_final_empty_segment_still_earns_the_cursor_through_the_no_change_path(monkeypatch):
+    got = _capture(monkeypatch)
+    state = collection.CollectionState(cursor="2026-01-01T00:00:00+00:00")
+    walk = collection.Walk([], None, "2026-02-01T00:00:00+00:00", None, None)
+    await collection._accept_walk(SimpleNamespace(attempt=attempt()), state, walk, None)
+    assert got["records"] == [] and got["update"].cursor_after == "2026-02-01T00:00:00+00:00"
+
+
+@pytest.mark.asyncio
+async def test_not_modified_is_a_receipted_no_change_without_cursor_or_validator_changes(monkeypatch):
+    got = _capture(monkeypatch)
+    state = collection.CollectionState(cursor="c", etag='"e"', validators_revision=2)
+    await collection._accept_walk(SimpleNamespace(attempt=attempt()), state, collection.Walk([], None, None, None, None, True), None)
+    update = got["update"]
+    assert got["records"] == [] and got["after"] == "c"
+    assert not update.update_validators and update.cursor_after is None and update.continuation_state is None
+
+
+def test_conditional_headers_need_validators_stored_under_the_current_revision():
+    state = collection.CollectionState(etag='"e"', last_modified="lm", validators_revision=2)
+    assert collection._conditional(state, 2) == {"If-None-Match": '"e"', "If-Modified-Since": "lm"}
+    assert collection._conditional(state, 3) is None  # reconfigured: validators are not trusted
+    assert collection._conditional(collection.CollectionState(), 2) is None
+
+
+def _rest_harness(monkeypatch, state, pages):
+    sent = []
+    got = _capture(monkeypatch)
+
+    async def get_state(run):
+        return state
+
+    async def fetch(url, **kwargs):
+        sent.append((url, kwargs.get("headers")))
+        return pages.pop(0)
+
+    monkeypatch.setattr(collection, "_state", get_state)
+    from modules.connectors import registry
+
+    monkeypatch.setattr(registry, "configuration", lambda source: SimpleNamespace(
+        url="https://a.example/items", feed_url="https://a.example/feed", items_path="items", id_field="id",
+        title_field=None, content_field=None, updated_field=None))
+    run = SimpleNamespace(attempt=attempt(), gate=SimpleNamespace(fetch_bytes=fetch))
+    return run, sent, got
+
+
+@pytest.mark.asyncio
+async def test_rest_sends_stored_validators_and_a_304_settles_no_change(monkeypatch):
+    state = collection.CollectionState(cursor="c", etag='"e"', validators_revision=2)
+    run, sent, got = _rest_harness(monkeypatch, state, [rest.Fetched(None)])
+    await collection._run_rest(run)
+    assert sent == [("https://a.example/items", {"If-None-Match": '"e"'})]
+    assert got["records"] == [] and got["update"].update_validators is False
+
+
+@pytest.mark.asyncio
+async def test_rest_resumes_from_checkpoint_without_conditional_headers(monkeypatch):
+    cp = rest.Checkpoint(url="https://a.example/items?p=2", revision=2, cursor="c", ids=[rest.id_hash("1")])
+    state = collection.CollectionState(cursor="c", etag='"e"', validators_revision=2, continuation_state=cp.encode())
+    body = rest.Fetched(b'{"items": [{"id": 1}, {"id": 2}]}')
+    run, sent, got = _rest_harness(monkeypatch, state, [body])
+    await collection._run_rest(run)
+    assert sent == [("https://a.example/items?p=2", None)]
+    assert [r["provider_id"] for r in got["records"]] == ["2"]  # boundary record 1 not delivered twice

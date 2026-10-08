@@ -35,7 +35,13 @@ from modules.connectors.models import ConnectorCollectionRequest, ConnectorProvi
 from modules.connectors.provider_specs import get_provider_spec
 from modules.connectors.providers import rest
 from modules.ingestion import public as ingestion
-from modules.ingestion.schemas import IngestionRecord, NativeCollectionBatch, ReceiveBatch
+from modules.ingestion.schemas import (
+    CollectionState,
+    CollectionStateUpdate,
+    IngestionRecord,
+    NativeCollectionBatch,
+    ReceiveBatch,
+)
 from modules.sources import public as sources
 from modules.sources.schemas import ConnectorSource, SourceFence
 
@@ -298,7 +304,10 @@ def _records(raw: list[dict[str, Any]]) -> list[IngestionRecord]:
     return [IngestionRecord.model_validate({**item, "collected_at": collected_at}) for item in raw]
 
 
-async def _accept_generic(run: Run, records: list[dict[str, Any]], cursor_before: str | None, cursor_after: str | None) -> None:
+async def _accept_generic(
+    run: Run, records: list[dict[str, Any]], cursor_before: str | None, cursor_after: str | None,
+    update: CollectionStateUpdate | None = None,
+) -> None:
     """Hand a generic collection to the ingestion owner; empty means a no-change settlement."""
     a = run.attempt
     async with run.factory() as session:
@@ -307,22 +316,74 @@ async def _accept_generic(run: Run, records: list[dict[str, Any]], cursor_before
             await ingestion.accept_collection_no_changes(
                 session, source_id=a.source.id, source_generation=a.source.generation,
                 connector_revision=a.connector_revision, request_ref=a.ref, scope=a.scope,
-                multi_workspace_enabled=a.multi)
+                multi_workspace_enabled=a.multi, state_update=update)
             return
         batch = ReceiveBatch(
             source_id=a.source.id, source_generation=a.source.generation, connector_revision=a.connector_revision,
             batch_key=f"connector-request:{a.ref.request_id}", cursor_before=cursor_before, cursor_after=cursor_after,
             records=_records(records))
         await ingestion.receive_connector_batch(
-            session, batch, None, scope=a.scope, multi_workspace_enabled=a.multi, request_ref=a.ref)
+            session, batch, None, scope=a.scope, multi_workspace_enabled=a.multi, request_ref=a.ref,
+            state_update=update)
 
 
-async def _cursor(run: Run) -> str | None:
+async def _state(run: Run) -> CollectionState:
     a = run.attempt
     async with run.factory() as session:
-        cursor = await ingestion.get_source_cursor(session, a.source.id, scope=a.scope, multi_workspace_enabled=a.multi)
+        state = await ingestion.get_collection_state(
+            session, a.source.id, scope=a.scope, multi_workspace_enabled=a.multi)
         await session.rollback()
-    return cursor
+    return state
+
+
+def _conditional(state: CollectionState, revision: int) -> dict[str, str] | None:
+    """Validators for a fresh walk; only trusted when stored under the same connector revision."""
+    if state.validators_revision != revision:
+        return None
+    headers = {}
+    if state.etag:
+        headers["If-None-Match"] = state.etag
+    if state.last_modified:
+        headers["If-Modified-Since"] = state.last_modified
+    return headers or None
+
+
+@dataclass
+class Walk:
+    """Outcome of one bounded walk, independent of REST/RSS."""
+
+    records: list[dict[str, Any]]
+    next_url: str | None  # set => partial: a cap stopped the walk at a page boundary
+    max_time: str | None
+    etag: str | None
+    last_modified: str | None
+    not_modified: bool = False
+
+
+async def _accept_walk(run: Run, state: CollectionState, walk: Walk, resume: rest.Checkpoint | None) -> None:
+    """Commit a walk: complete => cursor + validators advance; partial => checkpoint only.
+
+    The checkpoint, validators, cursor, batch, receipt, request outcome and slot release share the
+    ingestion owner's single commit, so a crash replays from the previous checkpoint exactly.
+    """
+    cursor = state.cursor
+    if walk.not_modified:  # 304: cursor, validators and last-good observations stay untouched
+        await _accept_generic(run, [], cursor, cursor, CollectionStateUpdate(continuation_state=None))
+        return
+    if walk.next_url is None:
+        cursor_after = walk.max_time or cursor
+        update = CollectionStateUpdate(
+            continuation_state=None, update_validators=True, etag=walk.etag, last_modified=walk.last_modified,
+            cursor_after=cursor_after if cursor_after != cursor else None)
+        await _accept_generic(run, walk.records, cursor, cursor_after, update)
+        return
+    checkpoint = rest.Checkpoint(
+        url=walk.next_url, revision=run.attempt.connector_revision, cursor=cursor, max_time=walk.max_time,
+        etag=walk.etag, last_modified=walk.last_modified,
+        ids=[rest.id_hash(str(r["provider_id"])) for r in walk.records] or (resume.ids if resume else []))
+    await _accept_generic(
+        run, walk.records, cursor, cursor,
+        CollectionStateUpdate(continuation_state=checkpoint.encode(), coverage="partial"))
 
 
 async def _run_rest(run: Run) -> None:
@@ -332,9 +393,19 @@ async def _run_rest(run: Run) -> None:
     if a.authenticated:
         raise rest.ProviderHttpError(401)  # credential only exists as an opaque n8n id: owner re-entry required
     config = configuration(a.source)
-    cursor = await _cursor(run)
-    collected = await rest.collect_rest(config, cursor, fetch=run.gate.fetch_bytes)
-    await _accept_generic(run, collected.records, cursor, collected.cursor_after)
+    state = await _state(run)
+    resume = rest.Checkpoint.decode(
+        state.continuation_state, revision=a.connector_revision, cursor=state.cursor, origin_url=str(config.url))
+    collected = await rest.collect_rest(
+        config, state.cursor, fetch=run.gate.fetch_bytes, resume=resume,
+        conditional=None if resume else _conditional(state, a.connector_revision))
+    await _accept_walk(run, state, Walk(
+        collected.records, collected.continuation_url, collected.max_time, collected.etag,
+        collected.last_modified, collected.not_modified), resume)
+
+
+class _NotModified(Exception):  # control-flow signal for HTTP 304
+    """The first feed page answered 304."""
 
 
 async def _run_rss(run: Run) -> None:
@@ -343,19 +414,46 @@ async def _run_rss(run: Run) -> None:
 
     a = run.attempt
     config = configuration(a.source)
-    cursor = await _cursor(run)
-    stats: dict[str, bool] = {}
+    state = await _state(run)
+    resume = rest.Checkpoint.decode(
+        state.continuation_state, revision=a.connector_revision, cursor=state.cursor, origin_url=None)
+    conditional = None if resume else _conditional(state, a.connector_revision)
+    stats: dict[str, Any] = {}
+    first: dict[str, Any] = {"pending": True}
 
     async def fetch(url: str) -> bytes:
-        fetched = await run.gate.fetch_bytes(url, headers={
-            "Accept": "application/atom+xml, application/rss+xml, application/xml, text/xml"})
-        return fetched.body or b""
+        headers = {"Accept": "application/atom+xml, application/rss+xml, application/xml, text/xml"}
+        is_first, first["pending"] = first["pending"], False
+        if is_first and conditional:
+            headers.update(conditional)
+        fetched = await run.gate.fetch_bytes(url, headers=headers)
+        if is_first and resume is None:
+            first["etag"], first["lm"] = fetched.etag, fetched.last_modified
+        if fetched.body is None:
+            raise _NotModified
+        return fetched.body
 
-    result = await read_rss(str(config.feed_url), cursor, fetch=fetch, stats=stats)
+    try:
+        result = await read_rss(resume.url if resume else str(config.feed_url), state.cursor, fetch=fetch, stats=stats)
+    except _NotModified:
+        await _accept_walk(run, state, Walk([], None, None, None, None, not_modified=True), resume)
+        return
     if stats.get("truncated"):
-        raise rest.CollectionIncomplete
-    records = list(result["records"])  # type: ignore[call-overload]
-    await _accept_generic(run, records, cursor, result["cursor_after"])  # type: ignore[arg-type]
+        raise rest.CollectionIncomplete  # unread items remain inside a page: no exact continuation exists
+    skip = set(resume.ids) if resume else set()
+    seen: set[str] = set()
+    records = []
+    for record in result["records"]:  # type: ignore[attr-defined]
+        identifier = str(record["provider_id"])
+        if rest.id_hash(identifier) in skip or identifier in seen:
+            continue
+        seen.add(identifier)
+        records.append(record)
+    newest = str(result["cursor_after"]) if result["cursor_after"] is not None else None
+    max_time = rest.later(resume.max_time if resume else None, newest if newest != state.cursor else None)
+    await _accept_walk(run, state, Walk(
+        records, stats.get("resume_url"), max_time,
+        resume.etag if resume else first.get("etag"), resume.last_modified if resume else first.get("lm")), resume)
 
 
 # ---------------------------------------------------------------- simple native providers

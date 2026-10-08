@@ -12,6 +12,7 @@ import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from hashlib import sha256
 from ipaddress import ip_address
 from socket import getaddrinfo
 from typing import Any
@@ -165,14 +166,83 @@ def _parse_time(raw: Any) -> datetime | None:
     return (parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)).astimezone(UTC)
 
 
+MAX_CHECKPOINT_BYTES = 32_768
+MAX_CHECKPOINT_IDS = MAX_RECORDS
+
+
+@dataclass
+class Checkpoint:
+    """Exact continuation of an unfinished page walk, committed with the last accepted segment.
+
+    ``cursor`` pins the source cursor the walk started under (it does not move until the walk
+    finishes), ``max_time`` carries the newest record time seen so far, ``etag``/``last_modified``
+    are the first page's validators, and ``ids`` are hashes of the last accepted batch's record ids
+    so a feed that shifted between runs does not re-deliver the boundary records.
+    """
+
+    url: str
+    revision: int
+    cursor: str | None
+    max_time: str | None = None
+    etag: str | None = None
+    last_modified: str | None = None
+    ids: list[str] = field(default_factory=list)
+
+    def encode(self) -> str:
+        """Serialize to a bounded JSON string."""
+        text = json.dumps({"v": 1, "url": self.url, "rev": self.revision, "cur": self.cursor, "max": self.max_time,
+                           "etag": self.etag, "lm": self.last_modified, "ids": self.ids[:MAX_CHECKPOINT_IDS]},
+                          separators=(",", ":"))
+        if len(text.encode()) > MAX_CHECKPOINT_BYTES:
+            raise CollectionIncomplete  # cannot represent the continuation exactly
+        return text
+
+    @classmethod
+    def decode(cls, raw: str | None, *, revision: int, cursor: str | None, origin_url: str | None) -> "Checkpoint | None":
+        """Return the checkpoint only when it still matches revision, cursor and origin; else None."""
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw)
+            cp = cls(url=str(data["url"]), revision=int(data["rev"]), cursor=data["cur"], max_time=data.get("max"),
+                     etag=data.get("etag"), last_modified=data.get("lm"), ids=[str(i) for i in data.get("ids", [])])
+        except (ValueError, KeyError, TypeError):
+            return None
+        if cp.revision != revision or cp.cursor != cursor or (origin_url is not None and _origin(cp.url) != _origin(origin_url)):
+            return None
+        return cp
+
+
+def id_hash(identifier: str) -> str:
+    """Short stable hash of a record id for the checkpoint's boundary-dedupe set."""
+    return sha256(identifier.encode()).hexdigest()[:16]
+
+
+def later(a: str | None, b: str | None) -> str | None:
+    """Return the later of two ISO instants (parsed, so fractional seconds order correctly)."""
+    ta, tb = _parse_time(a), _parse_time(b)
+    if ta is None or tb is None:
+        return a if tb is None else b
+    return (a if ta >= tb else b)
+
+
 @dataclass
 class RestCollection:
-    """Mapped records plus the cursor that is only valid when the walk was complete."""
+    """Mapped records plus where the walk stopped.
+
+    ``continuation_url`` is set when a cap stopped the walk at a page boundary with more data; the
+    cursor is then unchanged and the caller commits a checkpoint instead of advancing.
+    """
 
     records: list[dict[str, Any]] = field(default_factory=list)
     cursor_after: str | None = None
     pages: int = 0
     transport_bytes: int = 0
+    not_modified: bool = False
+    continuation_url: str | None = None
+    max_time: str | None = None
+    etag: str | None = None
+    last_modified: str | None = None
 
 
 def map_page(payload: Any, config: Any, floor: datetime | None) -> list[tuple[dict[str, Any], datetime | None]]:
@@ -210,45 +280,77 @@ def map_page(payload: Any, config: Any, floor: datetime | None) -> list[tuple[di
 
 
 async def collect_rest(
-    config: Any, cursor: str | None, *, fetch: Callable[[str], Awaitable[Fetched]],
+    config: Any, cursor: str | None, *, fetch: Callable[..., Awaitable[Fetched]],
+    conditional: dict[str, str] | None = None, resume: Checkpoint | None = None,
 ) -> RestCollection:
-    """Walk ``next_url`` pages (same origin only) and map them; incomplete walks raise.
+    """Walk ``next_url`` pages (same origin only) and map them.
 
     ``fetch`` is the caller's gated transport (one debited/fenced physical send per call).
-    Returns an empty record list when nothing is new; the caller then settles ``no_changes``.
+    ``conditional`` (If-None-Match / If-Modified-Since) is sent on the first page of a fresh walk
+    only; a 304 there returns ``not_modified``. ``resume`` restarts at a committed checkpoint.
+    A page, record, byte or transport cap that stops the walk at a page boundary with more data
+    yields ``continuation_url`` (exact, nothing skipped); a first segment that cannot fit even one
+    page raises ``CollectionIncomplete``.
     """
-    start = str(config.url)
-    origin = _origin(start)
+    start = resume.url if resume is not None else str(config.url)
+    origin = _origin(str(config.url))
+    if _origin(start) != origin:
+        raise UnsafeDestination("cross_origin_pagination")
     floor = overlap_floor(cursor)
+    skip = {h for h in (resume.ids if resume is not None else [])}
     seen: set[str] = set()
-    result = RestCollection()
-    times: list[datetime] = []
+    seen_ids: set[str] = set()
+    result = RestCollection(
+        max_time=resume.max_time if resume is not None else None,
+        etag=resume.etag if resume is not None else None,
+        last_modified=resume.last_modified if resume is not None else None)
     batch_bytes = 0
     url: str | None = start
     while url is not None:
         if url in seen:
             raise UnsafeDestination("pagination_loop")
         if result.pages >= MAX_PAGES:
-            raise CollectionIncomplete  # more pages exist beyond the cap
+            result.continuation_url = url  # page cap at a boundary: resume here next run
+            break
         seen.add(url)
-        fetched = await fetch(url)
+        first = result.pages == 0
+        send_conditional = first and resume is None and bool(conditional)
+        fetched = await (fetch(url, headers=conditional) if send_conditional else fetch(url))
         result.pages += 1
         if fetched.body is None:
+            if send_conditional:
+                result.not_modified = True
             break
-        result.transport_bytes += len(fetched.body)
-        if result.transport_bytes > MAX_TRANSPORT_BYTES:
-            raise CollectionIncomplete
+        if first and resume is None:
+            result.etag, result.last_modified = fetched.etag, fetched.last_modified
+        page_bytes = len(fetched.body)
         try:
             payload = json.loads(fetched.body)
         except (UnicodeDecodeError, ValueError) as exc:
             raise RestSchemaChanged("response_not_json") from exc
+        page: list[tuple[dict[str, Any], datetime | None]] = []
+        page_size = 0
         for record, moment in map_page(payload, config, floor):
+            identifier = str(record["provider_id"])
+            if id_hash(identifier) in skip or identifier in seen_ids:
+                continue
+            seen_ids.add(identifier)
+            page.append((record, moment))
+            page_size += len(json.dumps(record, ensure_ascii=False))
+        if (
+            result.transport_bytes + page_bytes > MAX_TRANSPORT_BYTES
+            or len(result.records) + len(page) > MAX_RECORDS or batch_bytes + page_size > MAX_BATCH_BYTES
+        ):
+            if not result.records:
+                raise CollectionIncomplete  # one page alone exceeds the batch bounds: no safe slice
+            result.continuation_url = url  # this page is re-fetched in full next run
+            break
+        result.transport_bytes += page_bytes
+        batch_bytes += page_size
+        for record, moment in page:
             result.records.append(record)
-            batch_bytes += len(json.dumps(record, ensure_ascii=False))
             if moment is not None:
-                times.append(moment)
-        if len(result.records) > MAX_RECORDS or batch_bytes > MAX_BATCH_BYTES:
-            raise CollectionIncomplete
+                result.max_time = later(result.max_time, moment.isoformat())
         next_url = payload.get("next_url") if isinstance(payload, dict) else None
         if next_url in (None, ""):
             url = None
@@ -258,12 +360,25 @@ async def collect_rest(
         url = urljoin(url, next_url)
         if _origin(url) != origin:
             raise UnsafeDestination("cross_origin_pagination")
-    result.cursor_after = max(times).isoformat() if times else cursor
+    result.cursor_after = cursor if result.continuation_url is not None or result.not_modified else (
+        result.max_time or cursor)
     return result
 
 
 __all__ = [
-    "MAX_PAGES", "MAX_RECORDS", "CollectionIncomplete", "Fetched", "ProviderHttpError",
-    "RestCollection", "RestSchemaChanged", "UnsafeDestination", "collect_rest", "fetch_bounded", "map_page",
+    "MAX_PAGES",
+    "MAX_RECORDS",
+    "Checkpoint",
+    "CollectionIncomplete",
+    "Fetched",
+    "ProviderHttpError",
+    "RestCollection",
+    "RestSchemaChanged",
+    "UnsafeDestination",
+    "collect_rest",
+    "fetch_bounded",
+    "id_hash",
+    "later",
+    "map_page",
     "resolve_public",
 ]

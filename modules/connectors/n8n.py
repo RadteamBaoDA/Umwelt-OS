@@ -280,14 +280,15 @@ def workflow_matches(expected: dict[str, Any], actual: dict[str, Any]) -> bool:
 
 async def read_rss(
     url: str, cursor: str | None, *, fetch: Callable[[str], Awaitable[bytes]] | None = None,
-    stats: dict[str, bool] | None = None,
+    stats: dict[str, Any] | None = None,
 ) -> dict[str, object]:
     """Fetch bounded RSS/Atom pages with URL checks, overlap filtering, and normalized records.
 
     ``fetch`` (native collection) replaces the built-in client with the caller's pinned, gated
-    transport that returns one body per call. ``stats["truncated"]`` is set when a page/record
-    cap stopped the walk while a continuation link still existed, so the caller can refuse to
-    advance the cursor instead of silently skipping the remainder.
+    transport that returns one body per call. ``stats["resume_url"]`` is set when a page/record cap
+    stopped the walk at a page boundary with a continuation link left (exact continuation), and
+    ``stats["truncated"]`` when unread items remain inside a page (no exact continuation exists),
+    so the caller never advances the cursor over unread data.
     """
     from modules.connectors.registry import normalize
 
@@ -398,12 +399,12 @@ async def read_rss(
             )
             current_url = urljoin(current_url, next_link) if next_link else None
             if len(records) >= 500:
-                if stats is not None and (current_url is not None or len(records) > 500):
-                    stats["truncated"] = True
+                if stats is not None and current_url is not None and "truncated" not in stats:
+                    stats["resume_url"] = current_url  # record cap met exactly at a page boundary: exact continuation
                 break
         else:
             if stats is not None and current_url is not None and current_url not in visited:
-                stats["truncated"] = True  # ten-page cap reached with a continuation link left
+                stats["resume_url"] = current_url  # ten-page cap reached at a boundary with a link left
     return {
         "cursor_before": cursor,
         "cursor_after": max(cursor_times, default=cursor),
