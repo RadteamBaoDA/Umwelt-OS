@@ -387,3 +387,49 @@ async def test_stream_iterator_closed_and_cancel_check_throttled(monkeypatch: py
     assert closed == [True]
     # 50 instantaneous lines: the throttle allows no per-line check (only claim/flush checks remain)
     assert checks.await_count <= 3  # type: ignore[attr-defined]
+
+
+async def test_early_stop_closes_gateway_stream(monkeypatch: pytest.MonkeyPatch) -> None:
+    gen = _Gen(monkeypatch, [])
+    closed: list[bool] = []
+
+    async def stream(**_k: Any) -> AsyncIterator[str]:
+        try:
+            started.append(True)
+            while True:  # never exhausts: only aclosing can run the finally
+                await asyncio.sleep(0.3)
+                yield "data: " + json.dumps({"choices": [{"delta": {"content": "x"}}]})
+        finally:
+            closed.append(True)
+
+    monkeypatch.setattr(worker, "ModelGateway", lambda **kw: SimpleNamespace(stream=stream))
+    started: list[bool] = []
+    monkeypatch.setattr(worker, "is_run_cancelled", AsyncMock(side_effect=lambda *a, **k: bool(started)))
+    monkeypatch.setattr(worker, "_mark_cancelled", AsyncMock())
+    await gen.run()
+    assert closed == [True]
+
+
+async def test_cancel_during_claim_commit_releases_and_reraises(monkeypatch: pytest.MonkeyPatch) -> None:
+    gen = _Gen(monkeypatch, [])
+    gen.session.commit = AsyncMock(side_effect=asyncio.CancelledError)
+    release = AsyncMock()
+    monkeypatch.setattr(worker, "_release_on_shutdown", release)
+    with pytest.raises(asyncio.CancelledError):
+        await gen.run()
+    release.assert_awaited_once()
+
+
+async def test_recover_pending_age_uses_updated_at() -> None:
+    stmts: list[str] = []
+    session = MagicMock()
+
+    async def scalars(stmt: Any) -> list[Any]:
+        stmts.append(str(stmt))
+        return []
+
+    session.scalars = scalars
+    session.execute = AsyncMock(return_value=SimpleNamespace(all=list))
+    await worker.recover_chat_runs({"session_factory": _factory(session), "redis": SimpleNamespace()})
+    # pending (re-enqueue) and expired queries bound the max age by updated_at (refreshed on release-to-pending)
+    assert all("chat_response_runs.updated_at" in s for s in stmts[:2])

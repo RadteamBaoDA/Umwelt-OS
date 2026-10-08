@@ -576,7 +576,7 @@ def _wait_for_api_ready(compose: Compose, timeout_seconds: int = 180) -> None:
                 "exec", "-T", "api", "python", "-c",
                 "import urllib.request; opener=urllib.request.build_opener("
                 "urllib.request.ProxyHandler({})); opener.open("
-                "'http://127.0.0.1:8000/api/v1/system/ready', timeout=2)",
+                "'http://127.0.0.1:8000/api/v1/system/ready', timeout=4)",
             )
             return
         except BackupHostError:
@@ -672,6 +672,9 @@ def _write_restore_override(path: Path, archived_env: Path) -> None:
         "    env_file: !override\n"
         f"      - {env_path}\n"
         "  worker:\n"
+        "    env_file: !override\n"
+        f"      - {env_path}\n"
+        "  chat-worker:\n"
         "    env_file: !override\n"
         f"      - {env_path}\n"
         "networks:\n"

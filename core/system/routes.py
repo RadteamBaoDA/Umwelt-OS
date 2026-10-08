@@ -12,13 +12,13 @@ from core.auth.models import AuthSession
 from core.auth.routes import get_auth_redis
 from core.database import get_session
 from core.system.health import system_health
-
-# Readiness covers pool checkout under load; the compose healthcheck allows 5 s, so stay below it.
-READY_TIMEOUT_SECONDS = 3.0
 from modules.sources.public import read_source_purge_operation
 from modules.sources.schemas import OperationRead
 
 router = APIRouter(prefix="/api/v1/system", tags=["system"])
+
+# Readiness covers pool checkout under load; the compose healthcheck allows 5 s, so stay below it.
+READY_TIMEOUT_SECONDS = 3.0
 
 
 @router.get("/health")

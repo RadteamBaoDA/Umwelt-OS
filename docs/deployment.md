@@ -9,7 +9,7 @@ The web port binds to loopback by default. For remote access, terminate HTTPS at
 | Variable | Default | Effect |
 |---|---|---|
 | `DB_POOL_SIZE` / `DB_MAX_OVERFLOW` | `10` / `10` | API SQLAlchemy pool per process (pool timeout 5 s, recycle 1800 s). Size total connections across API processes, workers and admin below PostgreSQL `max_connections`. |
-| `DB_STATEMENT_TIMEOUT_MS` | `60000` | API and chat-worker `statement_timeout` (also bounds lock waits). `0` disables. The main worker never sets a statement timeout. The chat-worker also uses `DB_POOL_SIZE` / `DB_MAX_OVERFLOW`; keep them at least 15 connections in total (`max_jobs=15`). |
+| `DB_STATEMENT_TIMEOUT_MS` | `60000` | API and chat-worker `statement_timeout` (also bounds lock waits). `0` disables. The main worker never sets a statement timeout. The chat-worker pool is fixed at 10 + 10 (not affected by `DB_POOL_SIZE` / `DB_MAX_OVERFLOW`). |
 | `DB_IDLE_TX_TIMEOUT_MS` | `240000` | `idle_in_transaction_session_timeout` for API and worker connections; a backstop above the longest legitimate send-fence hold. `0` disables. |
 | `MAX_REQUEST_BODY_BYTES` | `5242880` | Request body cap returning 413; `POST /api/v1/documents/upload` allows `UPLOAD_MAX_BYTES` plus 1 MiB. |
 | `WEB_CONCURRENCY` | `2` (image `ENV`) | API process count. Above 1 (also `UVICORN_WORKERS` > 1) the API refuses to start unless `CSRF_SIGNING_SECRET` is set, so every process signs sessions with the same secret. |
@@ -47,7 +47,7 @@ Only then set `AUTH_TRUST_FORWARDED_FOR=true` to get a separate bucket per clien
 
 ## Deploys and in-flight chats
 
-arq cancels running jobs on SIGTERM; `stop_grace_period` only covers shutdown hooks. On SIGTERM (compose `stop_grace_period` is 30 s) a chat run that has published nothing returns to `pending` and is re-enqueued within about 15-30 s. A run that has already published content is failed immediately, and the owner can resend. A run killed without the hook (SIGKILL or OOM) is failed by `recover_chat_runs` after `RECOVER_STREAMING_AFTER` (660 s). Pending runs older than 15 minutes (for example after a long chat-worker outage) are failed instead of re-enqueued. Main-worker jobs are retried automatically.
+arq cancels running jobs on SIGTERM; `stop_grace_period` only covers shutdown hooks. On SIGTERM (compose `stop_grace_period` is 30 s) a chat run that has published nothing returns to `pending` and is re-enqueued within about 15-30 s. A run that has already published content is failed immediately, and the owner can resend. A run killed without the hook (SIGKILL or OOM) is failed by `recover_chat_runs` after `RECOVER_STREAMING_AFTER` (660 s). Pending runs not updated for 15 minutes (for example after a long chat-worker outage) are failed instead of re-enqueued. Main-worker jobs are retried automatically.
 
 ## Known ceilings
 

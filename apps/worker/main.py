@@ -177,6 +177,9 @@ async def startup(ctx: dict[str, object]) -> None:
         raise
 
 
+CHAT_DB_POOL = (10, 10)  # fixed (pool_size, max_overflow); counted as 20 in docs/deployment.md and .env.example
+
+
 async def chat_startup(ctx: dict[str, object]) -> None:
     """Minimal chat-worker startup: bounded DB pool only (no agent registry, no worker-generation key)."""
     settings = Settings()
@@ -185,8 +188,8 @@ async def chat_startup(ctx: dict[str, object]) -> None:
     set_process_role("chat-worker")
     engine, factory = make_session_factory(
         settings.database_url,
-        pool_size=settings.db_pool_size,
-        max_overflow=settings.db_max_overflow,
+        pool_size=CHAT_DB_POOL[0],
+        max_overflow=CHAT_DB_POOL[1],
         statement_timeout_ms=settings.db_statement_timeout_ms,
         idle_tx_timeout_ms=settings.db_idle_tx_timeout_ms,
     )

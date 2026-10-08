@@ -50,7 +50,7 @@ CHAT_QUEUE = "arq:chat"
 CHAT_JOB_TIMEOUT = 600  # arq job_timeout for ChatWorkerSettings (single source)
 SHUTDOWN_TIMEOUT_MARGIN = 30.0
 RECOVER_PENDING_AFTER = timedelta(seconds=15)
-RECOVER_PENDING_MAX_AGE = timedelta(minutes=15)  # older pending runs fail instead of re-enqueueing forever
+RECOVER_PENDING_MAX_AGE = timedelta(minutes=15)  # (measured from updated_at) pending runs fail instead of re-enqueueing forever
 CANCEL_CHECK_INTERVAL = 0.25  # per-line Redis cancel check throttle; flushes always check
 RECOVER_STREAMING_AFTER = timedelta(seconds=660)  # arq job_timeout 600 s plus margin
 EPHEMERAL_TTL = timedelta(hours=24)
@@ -382,36 +382,43 @@ async def run_response_generation(
     seq = 0
 
     # 1. Claim run atomically
-    async with session_factory() as session:
-        result = await session.execute(
-            update(ResponseRun)
-            .where(ResponseRun.id == response_id, ResponseRun.status == "pending")
-            .values(status="streaming")
-            .returning(
-                ResponseRun.conversation_id, ResponseRun.user_message_id,
-                ResponseRun.retrieval_context, ResponseRun.ephemeral,
+    try:
+        async with session_factory() as session:
+            result = await session.execute(
+                update(ResponseRun)
+                .where(ResponseRun.id == response_id, ResponseRun.status == "pending")
+                .values(status="streaming")
+                .returning(
+                    ResponseRun.conversation_id, ResponseRun.user_message_id,
+                    ResponseRun.retrieval_context, ResponseRun.ephemeral,
+                )
             )
-        )
-        claimed = result.fetchone()
-        if claimed is None:
-            # Run was already claimed or cancelled before start
-            return
+            claimed = result.fetchone()
+            if claimed is None:
+                # Run was already claimed or cancelled before start
+                return
 
-        conversation_id, user_message_id, raw_context_req, run_ephemeral = cast(
-            "tuple[UUID, UUID, dict[str, Any] | None, bool]", tuple(claimed),
-        )
-        seq += 1
-        event_id = make_event_id(response_id, seq)
-        session.add(
-            StreamEvent(
-                response_id=response_id,
-                seq=seq,
-                event_type="status",
-                event_id=event_id,
-                data={"status": "streaming"},
+            conversation_id, user_message_id, raw_context_req, run_ephemeral = cast(
+                "tuple[UUID, UUID, dict[str, Any] | None, bool]", tuple(claimed),
             )
-        )
-        await session.commit()
+            seq += 1
+            event_id = make_event_id(response_id, seq)
+            session.add(
+                StreamEvent(
+                    response_id=response_id,
+                    seq=seq,
+                    event_type="status",
+                    event_id=event_id,
+                    data={"status": "streaming"},
+                )
+            )
+            await session.commit()
+    except asyncio.CancelledError:
+        # Cancelled around the claim commit: the run may be `streaming` with nothing published. Hand it back
+        # now (no-op unless it is `streaming`) instead of waiting RECOVER_STREAMING_AFTER.
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(_release_on_shutdown(response_id, session_factory, None), SHUTDOWN_RELEASE_TIMEOUT)
+        raise
     claimed_at = time.monotonic()
 
     # 2. Retrieve user message and grounding context
@@ -1089,7 +1096,8 @@ async def recover_chat_runs(ctx: dict[str, object]) -> dict[str, int]:
 
     Re-enqueue is safe: the pending->streaming claim is atomic and the arq job id is fixed. Abandoned
     runs go through `_mark_failed`, which keeps the privacy -> conversation -> run lock order and the
-    privacy-redaction fallback.
+    privacy-redaction fallback. Pending runs untouched for RECOVER_PENDING_MAX_AGE (by `updated_at`, which
+    a release-to-pending refreshes) are failed instead of re-enqueued.
     """
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     redis = cast(Any, ctx["redis"])
@@ -1100,13 +1108,13 @@ async def recover_chat_runs(ctx: dict[str, object]) -> dict[str, int]:
             .where(
                 ResponseRun.status == "pending",
                 ResponseRun.created_at < now - RECOVER_PENDING_AFTER,
-                ResponseRun.created_at >= now - RECOVER_PENDING_MAX_AGE,
+                ResponseRun.updated_at >= now - RECOVER_PENDING_MAX_AGE,
             )
             .order_by(ResponseRun.created_at).limit(50)
         ))
         expired = list(await session.scalars(
             select(ResponseRun.id)
-            .where(ResponseRun.status == "pending", ResponseRun.created_at < now - RECOVER_PENDING_MAX_AGE)
+            .where(ResponseRun.status == "pending", ResponseRun.updated_at < now - RECOVER_PENDING_MAX_AGE)
             .order_by(ResponseRun.created_at).limit(50)
         ))
         last_event = (

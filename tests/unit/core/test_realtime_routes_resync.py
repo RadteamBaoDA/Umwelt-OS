@@ -51,37 +51,48 @@ def test_stale_epoch_cursor_first_frame_is_epoch_changed_resync(monkeypatch) -> 
     }
 
 
-def test_permit_response_closes_body_iterator_shielded_on_cancelled_scope() -> None:
-    import anyio
+def test_permit_response_disconnect_spec_2_3_does_not_cancel_db_rollback() -> None:
+    from typing import Self
 
-    done: list[bool] = []
+    from starlette.requests import Request
 
-    class _Body:
-        def __aiter__(self):
+    events: list[str] = []
+
+    class _Session:
+        async def __aenter__(self) -> Self:
             return self
 
-        async def __anext__(self):
-            raise StopAsyncIteration
+        async def __aexit__(self, *exc: object) -> None:
+            await asyncio.sleep(0.01)  # rollback await: raises CancelledError if the task group cancelled us
+            events.append("rollback-ok")
 
-        async def aclose(self) -> None:
-            await asyncio.sleep(0)  # a cancelled scope would raise here without the shield
-            done.append(True)
-
-    async def run() -> None:
+    async def run() -> int:
         sem = asyncio.Semaphore(1)
         await sem.acquire()
-        response = realtime_routes._PermitResponse(_Body(), asyncio.Event(), sem)  # type: ignore[arg-type]
+
+        deadline = asyncio.get_running_loop().time() + 0.05
 
         async def receive():
+            # is_disconnected() polls with an already-cancelled scope: only a ready message gets through
+            if asyncio.get_running_loop().time() < deadline:
+                await asyncio.sleep(3600)
             return {"type": "http.disconnect"}
+
+        scope = {"type": "http", "asgi": {"spec_version": "2.3"}}
+        request = Request(scope, receive)
+
+        async def body():
+            async with _Session():
+                while not await request.is_disconnected():
+                    await asyncio.sleep(0.02)  # DB await inside the transaction
+                    yield ": ping"
 
         async def send(_message):
             return None
 
-        with anyio.CancelScope() as scope:
-            scope.cancel()
-            await response({"type": "http", "asgi": {"spec_version": "2.4"}}, receive, send)
-        assert sem._value == 1  # permit released
+        response = realtime_routes._PermitResponse(body(), asyncio.Event(), sem)
+        await response(scope, receive, send)
+        return sem._value
 
-    asyncio.run(run())
-    assert done == [True]
+    assert asyncio.run(run()) == 1
+    assert events == ["rollback-ok"]
