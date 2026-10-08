@@ -1,5 +1,6 @@
 import asyncio
 import os
+import time
 
 import pytest
 from httpx import AsyncClient
@@ -102,6 +103,8 @@ async def test_password_change_concurrent_with_login_leaves_consistent_state() -
 
     async with AsyncClient(base_url=base_url) as owner, AsyncClient(base_url=base_url) as racer:
         rotated_csrf: str | None = None
+        # The login throttle is a fixed per-minute window; start a fresh one so the unthrottled racer login really races.
+        await asyncio.sleep(60 - time.time() % 60 + 0.5)
         try:
             csrf = (await login(owner, old)).json()["csrfToken"]
             change, raced = await asyncio.gather(
