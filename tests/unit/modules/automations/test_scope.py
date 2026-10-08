@@ -471,3 +471,41 @@ async def test_start_agent_http_errors_retry_5xx_and_reject_4xx(status: int, mar
         assert result == "retry" and not mark.called
     else:
         assert result == "failed" and mark.call_args.args[3:5] == ("failed", mark_code)
+
+
+@pytest.mark.asyncio
+async def test_start_agent_locks_fence_before_run_and_sources_and_drift_is_transient() -> None:
+    order: list[str] = []
+    snapshot, drifted = object(), object()
+
+    def build(locked_fence: object):
+        async def admit(session: object, *, lock: bool = False, **_: object) -> object:
+            order.append("fence_lock" if lock else "admit")
+            return locked_fence if lock else snapshot
+
+        async def locked_run(*_: object) -> object:
+            order.append("run_lock")
+            return SimpleNamespace(id=uuid4(), automation_id=uuid4())
+
+        async def evidence(*_: object, **__: object) -> bool:
+            order.append("sources")
+            return False  # stop after the lock-order prefix
+
+        return admit, locked_run, evidence
+
+    ctx = {"session_factory": _factory(AsyncMock()), "agent_tool_registry": MagicMock(), "settings": MagicMock(), "redis": MagicMock()}
+    run = SimpleNamespace(id=uuid4())
+    for fence, expect in ((snapshot, ["admit", "config", "fence_lock", "run_lock", "sources"]), (drifted, ["admit", "config", "fence_lock"])):
+        order.clear()
+        admit, locked_run, evidence = build(fence)
+
+        async def config(*_: object, **__: object) -> object:
+            order.append("config")
+            return MagicMock()
+
+        mark, retry = AsyncMock(), AsyncMock(return_value="retry")
+        with patch.object(execution, "_admit", admit), patch.object(execution, "_locked_run", locked_run),                 patch.object(execution, "_run_evidence_current", evidence),                 patch.object(execution.settings_public, "get_ai_execution_config", config),                 patch.object(execution, "_mark", mark), patch.object(execution, "_transient", retry):
+            result = await execution._start_agent(ctx, run, 0, {"type": "run_agent"}, "hash", "rule", **SC)  # type: ignore[arg-type]
+        assert order == expect
+        assert result == ("dropped" if fence is snapshot else "retry")
+        assert retry.called is (fence is drifted)

@@ -7,6 +7,7 @@ ToolPolicy evaluation, and bounded async ToolRegistry dispatch.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
@@ -281,6 +282,20 @@ class TestToolRegistryAsync:
         # Filtering with allowed_tools subset
         filtered = registry.list_tools(allowed_tools=frozenset(["other.tool"]))
         assert len(filtered) == 0
+
+    def test_list_tools_per_call_modules_override(self, test_module_registry: dict[str, Any]) -> None:
+        """A per-call modules map replaces the shared registry state for that call only."""
+        registry = ToolRegistry(module_registry=test_module_registry)
+
+        async def dummy_handler(args: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+            return {}
+
+        registry.register_tool(ToolDefinition(name="mod.disabled", module="disabled_module"), dummy_handler)
+        assert registry.list_tools() == []
+        override = dict(test_module_registry)
+        override["disabled_module"] = SimpleNamespace(enabled=True, dependencies=())
+        assert [t.name for t in registry.list_tools(modules=override)] == ["mod.disabled"]
+        assert registry.list_tools() == []
 
     @pytest.fixture(autouse=True)
     def mock_refresh_module_registry(

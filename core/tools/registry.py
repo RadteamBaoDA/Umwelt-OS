@@ -90,12 +90,17 @@ class ToolRegistry:
         definition = self._tools.get(name)
         return definition.model_copy(deep=True) if definition and (version is None or version == definition.version) else None
 
-    def list_tools(self, allowed_tools: frozenset[str] | None = None) -> list[ToolDefinition]:
-        """Return defensive copies of enabled contracts intersected with optional server grants."""
+    def list_tools(
+        self, allowed_tools: frozenset[str] | None = None, *, modules: Mapping[str, Any] | None = None,
+    ) -> list[ToolDefinition]:
+        """Return defensive copies of enabled contracts intersected with optional server grants.
+
+        ``modules`` is a per-call lifecycle map; None uses the registry's shared module state.
+        """
         # ponytail: catalog reads process-wide module state set by settings/agents; invocation is authoritative.
         return sorted(
             (item.model_copy(deep=True) for item in self._tools.values()
-             if (allowed_tools is None or item.name in allowed_tools) and self._module_enabled(item.module)),
+             if (allowed_tools is None or item.name in allowed_tools) and self._module_enabled(item.module, modules)),
             key=lambda item: item.name,
         )
 

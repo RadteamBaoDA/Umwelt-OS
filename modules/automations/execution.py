@@ -1329,7 +1329,14 @@ async def _start_agent(
     try:
         async with factory() as session:
             # Config resolution may reach Redis/settings I/O, so admission is non-locking here.
-            fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+            snapshot = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+            config = await settings_public.get_ai_execution_config(
+                session, cast(Settings, ctx["settings"]), cast(Redis, ctx["redis"]), scope=scope)
+            # Lock order: admission fence first (same as other writers), then run, then Source locks.
+            fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+            if fence != snapshot:
+                await session.rollback()
+                return await _transient(factory, run.id, ordinal, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
             current_run = await _locked_run(session, run.id, scope)
             if current_run is None or not await _run_evidence_current(session, current_run, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence):
                 await session.rollback()
@@ -1341,8 +1348,6 @@ async def _start_agent(
                     factory, run.id, ordinal, status="approved", session_hash=session_hash, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
                 )
                 return "paused"
-            config = await settings_public.get_ai_execution_config(
-                session, cast(Settings, ctx["settings"]), cast(Redis, ctx["redis"]), scope=scope)
             profile_id = spec["profile_id"]
             revision = await agents.current_profile_revision(
                 session, profile_id, registry, config, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
