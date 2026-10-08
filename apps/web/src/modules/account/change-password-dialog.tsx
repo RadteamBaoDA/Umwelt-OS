@@ -41,7 +41,7 @@ export function ChangePasswordDialog({ open, csrfToken, closeLabel, onOpenChange
   const ready = current !== '' && next.length >= 12 && confirm === next;
   const failure = change.error instanceof ApiError && change.error.status === 429
     ? 'passwordTooMany'
-    : change.error instanceof ApiError && change.error.status === 403 && change.error.message === 'Password is incorrect'
+    : change.error instanceof ApiError && change.error.code === 'password_incorrect'
       ? 'passwordIncorrect'
       : change.error ? (apiFailureKey(change.error) ?? 'requestFailed') : null;
   const submit = (event: FormEvent) => { event.preventDefault(); if (ready && !change.isPending) change.mutate(); };
@@ -55,7 +55,7 @@ export function ChangePasswordDialog({ open, csrfToken, closeLabel, onOpenChange
         <div className="field"><Label htmlFor="cp-new">{t('newPassword')}</Label><Input id="cp-new" type="password" autoComplete="new-password" aria-invalid={tooShort} aria-describedby="cp-new-help" value={next} onChange={(event) => setNext(event.target.value)} /><span id="cp-new-help" aria-live="polite" className={tooShort ? 'error' : 'muted'}>{t('newPasswordHelp')}</span></div>
         <div className="field"><Label htmlFor="cp-confirm">{t('confirmNewPassword')}</Label><Input id="cp-confirm" type="password" autoComplete="new-password" aria-invalid={mismatch} aria-describedby={mismatch ? 'cp-confirm-error' : undefined} value={confirm} onChange={(event) => setConfirm(event.target.value)} />{mismatch && <span id="cp-confirm-error" className="error" role="alert">{t('passwordMismatch')}</span>}</div>
         {failure && <p className="error" role="alert">{t(failure)}</p>}
-        {change.isSuccess && <p className="muted" role="status">{t('passwordChanged')}</p>}
+        <p className="muted" role="status">{change.isSuccess ? t('passwordChanged') : ''}</p>
         <DialogFooter><Button type="submit" disabled={!ready || change.isPending}>{change.isPending ? t('changingPassword') : t('changePassword')}</Button></DialogFooter>
       </form>
     </DialogContent>

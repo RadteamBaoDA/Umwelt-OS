@@ -51,6 +51,8 @@ from core.database import get_session
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 logger = logging.getLogger("bbd.auth")
+# Machine code lets the client branch without parsing English text.
+_PASSWORD_INCORRECT = {"message": "Password is incorrect", "code": "password_incorrect"}
 
 
 def _is_owner_conflict(exc: IntegrityError) -> bool:
@@ -376,7 +378,7 @@ async def reauthenticate(
         request, session, auth_session, csrf_token
     )
     if owner is None or not await asyncio.to_thread(verify_password, owner.password_hash, body.password):
-        raise HTTPException(status_code=403, detail="Password is incorrect")
+        raise HTTPException(status_code=403, detail=_PASSWORD_INCORRECT)
     auth_session.reauthenticated_at = datetime.now(UTC)
     await session.commit()
 
@@ -397,7 +399,7 @@ async def change_password(
     await _allow_attempt(request, redis, "reauthenticate")
     owner, auth_session = await _lock_owner_session(request, session, auth_session, csrf_token)
     if not await asyncio.to_thread(verify_password, owner.password_hash, body.currentPassword):
-        raise HTTPException(status_code=403, detail="Password is incorrect")
+        raise HTTPException(status_code=403, detail=_PASSWORD_INCORRECT)
     if await asyncio.to_thread(verify_password, owner.password_hash, body.newPassword):
         raise HTTPException(status_code=422, detail="New password must differ from the current password")
     owner.password_hash = await asyncio.to_thread(hash_password, body.newPassword)
