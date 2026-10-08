@@ -64,6 +64,7 @@ from modules.ingestion.schemas import (
     classify_telegram_probe,
 )
 from modules.knowledge.documents import public as documents
+from modules.knowledge.documents.schemas import DocumentCleanupPreparationLimitError
 from modules.sources import public as sources
 from modules.sources.schemas import ConnectorSource, SourceFence
 
@@ -743,12 +744,35 @@ async def schedule_normalization(
     return stage
 
 
+async def prepare_document_materializations_in_uow(
+    session: AsyncSession, document_id: UUID, *, source_id: UUID, scope: Scope,
+    multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+) -> None:
+    """Lock the Document's materializations in id order before ``tombstone_document_materializations``.
+
+    Individual-delete path only, so an oversized set raises before any mutation. The Document
+    owner holds admission, Source and earlier owner locks; this commits nothing.
+    """
+    actual = await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if (actual != access_fence or source_fence.id != source_id
+            or source_fence.workspace_id != scope.workspace_id):
+        raise HTTPException(status_code=409, detail="Cleanup authority changed")
+    ids = list((await session.scalars(
+        select(ObservationNormalization.id)
+        .where(ObservationNormalization.document_id == document_id, *_materialization_scope(scope))
+        .order_by(ObservationNormalization.id).limit(10_001).with_for_update(of=ObservationNormalization)
+    )).all())
+    if len(ids) > 10_000:
+        raise DocumentCleanupPreparationLimitError("ingestion")
+
+
 async def tombstone_document_materializations(session: AsyncSession, document_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
 ) -> None:
     """Tombstone materializations through exact retained run/stage/batch/workspace lineage.
 
     The Document owner holds earlier admission/Source/deletion locks. No earlier lock
-    acquisition or commit occurs; nullable document/version IDs retain owner scope.
+    acquisition or commit occurs; nullable document/version IDs retain owner scope. Rows were
+    locked by prepare_document_materializations_in_uow.
     """
     await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     await session.execute(

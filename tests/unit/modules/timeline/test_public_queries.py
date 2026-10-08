@@ -295,13 +295,14 @@ class TestEntityAndSourceLinkage:
         """_hide_unsupported soft-deletes derived events that have no surviving evidence."""
         session = AsyncMock()
         event_id = uuid4()
-        unsupported_event = Event(id=event_id, origin="derived", owner_fields=[], deleted_at=None)
+        workspace_id = uuid4()
+        unsupported_event = Event(id=event_id, workspace_id=workspace_id, origin="derived", owner_fields=[], deleted_at=None)
 
         session.get.return_value = unsupported_event
         session.scalar.return_value = None  # No remaining evidence
 
         with patch("modules.timeline.public._schedule_temporal_event", return_value=None):
-            await _hide_unsupported(session, [event_id])
+            await _hide_unsupported(session, [event_id], workspace_id=workspace_id)
             assert unsupported_event.deleted_at is not None
             assert unsupported_event.title == "[unsupported derived event]"
             assert unsupported_event.type == "unsupported_derived_event"
