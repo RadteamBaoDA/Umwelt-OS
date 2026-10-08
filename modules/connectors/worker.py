@@ -2,6 +2,7 @@ import asyncio
 import copy
 import logging
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from typing import Any, cast
 from uuid import UUID, uuid4
 
@@ -466,22 +467,17 @@ async def _delete_credential(
     if claimed is None:
         await session.rollback()
         return False
-    settle = {
-        "scope": scope, "fence": fence, "multi_workspace_enabled": multi_workspace_enabled, "original": claimed,
-    }
+    settle = partial(
+        _settle_credential_delete, session, source_id, slot, original=claimed, scope=scope, fence=fence,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
     target = claimed.get("target_id")
     if not isinstance(target, str):
-        return await _settle_credential_delete(
-            session, source_id, slot, outcome="known_rejection",
-            error_code="credential_delete_target_missing", **settle,  # type: ignore[arg-type]
-        )
+        return await settle(outcome="known_rejection", error_code="credential_delete_target_missing")
     try:
         await client.delete(target)
     except asyncio.CancelledError:
-        await _settle_credential_delete(
-            session, source_id, slot, outcome="unknown",
-            error_code="credential_delete_outcome_unknown", **settle,  # type: ignore[arg-type]
-        )
+        await settle(outcome="unknown", error_code="credential_delete_outcome_unknown")
         raise
     except Exception as exc:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
         rejected = (
@@ -489,14 +485,11 @@ async def _delete_credential(
             and 400 <= exc.response.status_code < 500
             and exc.response.status_code != 408
         )
-        return await _settle_credential_delete(
-            session, source_id, slot, outcome="known_rejection" if rejected else "unknown",
+        return await settle(
+            outcome="known_rejection" if rejected else "unknown",
             error_code="credential_delete_rejected" if rejected else "credential_delete_outcome_unknown",
-            **settle,  # type: ignore[arg-type]
         )
-    return await _settle_credential_delete(
-        session, source_id, slot, outcome="known_success", error_code=None, **settle,  # type: ignore[arg-type]
-    )
+    return await settle(outcome="known_success", error_code=None)
 
 
 async def _resume_activation(
