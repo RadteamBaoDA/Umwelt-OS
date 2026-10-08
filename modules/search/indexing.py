@@ -166,7 +166,7 @@ async def index_pending_chunks(ctx: dict[str, object]) -> int:
     redis = cast(Redis, ctx["redis"])
     settings = cast(Settings, ctx["settings"])
     async with factory() as session:
-        await backfill_current_chunks(session)
+        await backfill_current_chunks(session, multi_workspace_enabled=settings.multi_workspace_enabled)
     async with factory() as session:
         generation = await session.scalar(
             select(IndexGeneration)

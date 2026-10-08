@@ -2038,9 +2038,11 @@ async def drive_credential_operation(
     slot: str,
     client: Any,
     encryption_key: str,
-    *, scope: Scope, multi_workspace_enabled: bool,
+    *, scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
 ) -> bool:
     """Dispatch current credentials; settle exact effects with original access/envelope CAS.
+
+    ``access_fence`` is the caller's original captured fence; current access must still equal it.
 
     Provider I/O holds no SQL locks. Later Source/config retains known remote IDs or unknown
     recovery material for reconciliation and cannot publish stale activation. Original
@@ -2054,7 +2056,7 @@ async def drive_credential_operation(
         decrypt_credential_input,
     )
 
-    access_fence = await _connector_access(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await _connector_access(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
     row = await get_managed_credential(session, source_id, slot, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if row is None or row.operation_id is None:
         return False

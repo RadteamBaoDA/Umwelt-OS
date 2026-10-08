@@ -4,12 +4,13 @@ import asyncio
 import json
 import re
 import time
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from urllib.parse import parse_qs, quote, unquote, urljoin, urlsplit
 
 import httpx
 
-from modules.connectors.providers.feed_catalog import _plain_text, _retry_deadline, _selected_hash
+from modules.connectors.providers.feed_catalog import _plain_text, _retry_deadline, _selected_hash, send_fence_trace
 from modules.connectors.public import ConnectorConfig, ProviderCollectionPage, ProviderRateLimited
 from modules.ingestion.schemas import IngestionRecord
 from modules.knowledge.documents.public import ProviderRecordMetadata
@@ -73,15 +74,21 @@ def _release_canonical(
 
 
 async def _get_page(
-    url: str, byte_limit: int, timeout_seconds: float
+    url: str, byte_limit: int, timeout_seconds: float, before_request: Callable[[], Awaitable[None]],
 ) -> tuple[list[object], str | None, int]:
-    """Fetch one public releases page without following redirects or reading unbounded JSON."""
+    """Fetch one public releases page without following redirects or reading unbounded JSON.
+
+    ``before_request`` runs immediately before every page send and aborts it by raising.
+    """
     try:
         async with asyncio.timeout(timeout_seconds):
             async with httpx.AsyncClient(  # noqa: SIM117  # style-only rewrite skipped to avoid touching control flow
                 timeout=httpx.Timeout(timeout_seconds), trust_env=False, follow_redirects=False, verify=True
             ) as client:
-                async with client.stream("GET", url, headers=_API_HEADERS) as response:
+                await before_request()
+                async with client.stream(
+                    "GET", url, headers=_API_HEADERS, extensions={"trace": send_fence_trace(before_request)},
+                ) as response:
                     now = datetime.now(UTC)
                     if response.status_code == 429 or (
                         response.status_code == 403
@@ -106,7 +113,7 @@ async def _get_page(
 
 
 async def collect_github_releases(
-    source: ConnectorSource, *, collected_at: datetime
+    source: ConnectorSource, *, collected_at: datetime, before_request: Callable[[], Awaitable[None]],
 ) -> ProviderCollectionPage:
     """Collect at most five validated REST pages of public releases, preserving only metadata and body text."""
     if collected_at.tzinfo is None or collected_at.utcoffset() is None:
@@ -134,7 +141,7 @@ async def collect_github_releases(
         seen_pages.add(page)
         try:
             values, link, page_bytes = await _get_page(
-                url, _MAX_TOTAL_BYTES - total_bytes, min(30.0, remaining)
+                url, _MAX_TOTAL_BYTES - total_bytes, min(30.0, remaining), before_request
             )
         except ProviderRateLimited as exc:
             return ProviderCollectionPage(

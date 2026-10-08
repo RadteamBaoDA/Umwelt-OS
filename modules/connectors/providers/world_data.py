@@ -10,15 +10,17 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 import httpx
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import Settings
+from core.workspaces.schemas import AccessFence, Scope
 from modules.connectors.credentials import decrypt_credential_input, secret_fingerprint
-from modules.connectors.models import ConnectorProvisioning, ConnectorWorldCredential
+from modules.connectors.models import ConnectorWorldCredential
 from modules.connectors.providers.feed_catalog import _retry_deadline
 from modules.connectors.public import ConnectorConfig, ProviderCollectionPage, ProviderRateLimited
 from modules.ingestion.schemas import IngestionRecord
-from modules.sources.schemas import ConnectorSource
+from modules.sources.schemas import ConnectorSource, SourceFence
 
 _MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 _WEATHER_VARIABLES = {
@@ -29,31 +31,56 @@ _WEATHER_VARIABLES = {
 }
 
 
-async def get_alpha_vantage_key(session: AsyncSession, source: ConnectorSource, settings: Settings) -> tuple[str, UUID] | None:
-    """Decrypt a key only while source and connector revision fences still match."""
-    credential = await session.get(ConnectorWorldCredential, source.id)
-    provisioning = await session.get(ConnectorProvisioning, source.id)
-    if (
-        credential is None or provisioning is None or source.provider != "alpha_vantage"
-        or credential.provider != "alpha_vantage" or credential.source_generation != source.generation
-        or credential.configuration_revision != provisioning.desired_revision
-        or provisioning.source_generation != source.generation
-    ):
-        return None
-    key = settings.connector_credential_encryption_key.get_secret_value()
-    request, binding = decrypt_credential_input(
-        key, credential.encrypted_key, source_id=source.id,
-        slot="native:alpha_vantage", operation_id=credential.operation_id,
-    )
-    api_key = request.get("api_key")
-    if (
-        not isinstance(api_key, str) or binding.get("provider") != "alpha_vantage"
-        or binding.get("source_generation") != source.generation
-        or binding.get("configuration_revision") != provisioning.desired_revision
-        or binding.get("fingerprint") != secret_fingerprint(key, api_key)
-    ):
-        raise ValueError("alpha_vantage_credentials_unavailable")
-    return api_key, credential.operation_id
+async def get_alpha_vantage_key(
+    session: AsyncSession, source: ConnectorSource, settings: Settings,
+    *, scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+) -> tuple[str, UUID] | None:
+    """Capture the Alpha operation under owner locks, then decrypt; always release SQL before returning.
+
+    Locks admission/Source/provisioning/slots (original access fence), then the world credential
+    row, in the same order as the native send fence. The operation id is read from the locked
+    row before any decrypt, and the transaction is rolled back so no SQL is held across Redis or HTTP.
+    """
+    from modules.connectors import provisioning
+
+    try:
+        current_source, provisioned, _slots = await provisioning.lock_connector(
+            session, source.id, provisioning._ALL_CREDENTIAL_SLOTS, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=access_fence,
+        )
+        if current_source != source_fence or provisioned is None or source.provider != "alpha_vantage":
+            return None
+        revision = provisioned.desired_revision
+        if not await provisioning.require_collection_fence(
+            session, source, source.generation, revision,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        ):
+            return None
+        credential = await session.scalar(select(ConnectorWorldCredential).where(
+            ConnectorWorldCredential.source_id == source.id,
+        ).with_for_update().execution_options(populate_existing=True))
+        if (
+            credential is None or credential.provider != "alpha_vantage"
+            or credential.source_generation != source.generation
+            or credential.configuration_revision != revision
+        ):
+            return None
+        operation_id, encrypted_key = credential.operation_id, credential.encrypted_key
+        key = settings.connector_credential_encryption_key.get_secret_value()
+        request, binding = decrypt_credential_input(
+            key, encrypted_key, source_id=source.id, slot="native:alpha_vantage", operation_id=operation_id,
+        )
+        api_key = request.get("api_key")
+        if (
+            not isinstance(api_key, str) or binding.get("provider") != "alpha_vantage"
+            or binding.get("source_generation") != source.generation
+            or binding.get("configuration_revision") != revision
+            or binding.get("fingerprint") != secret_fingerprint(key, api_key)
+        ):
+            raise ValueError("alpha_vantage_credentials_unavailable")
+        return api_key, operation_id
+    finally:
+        await session.rollback()
 
 
 async def reserve_alpha_vantage_daily_calls(
@@ -287,12 +314,15 @@ def _weather_records(
 
 async def collect_world_data(
     source: ConnectorSource, *, collected_at: datetime, settings: Settings, session: AsyncSession,
-    redis: object, before_request: Callable[[UUID | None], Awaitable[None]],
+    redis: object, scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
+    source_fence: SourceFence, before_request: Callable[[UUID | None], Awaitable[None]],
 ) -> ProviderCollectionPage:
     """Fetch one leased provider scope and stamp matching typed record/page coverage.
 
     Preserve the fixed-host request fences and conservative Alpha credential
     budget. Returned measurements use provider semantics without invented clocks.
+    The scope/fence kwargs are the original native-fetch authority for the Alpha key capture;
+    ``before_request`` runs before every physical send (Alpha passes its captured operation id).
     """
     if collected_at.tzinfo is None or collected_at.utcoffset() is None:
         raise ValueError("collected_at must be timezone-aware")
@@ -315,7 +345,10 @@ async def collect_world_data(
         return ProviderCollectionPage(records=tuple(weather_records), coverage=coverage)
     if source.provider != "alpha_vantage":
         raise ValueError("provider_scope_invalid")
-    credential = await get_alpha_vantage_key(session, source, settings)
+    credential = await get_alpha_vantage_key(
+        session, source, settings, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence, source_fence=source_fence,
+    )
     if credential is None:
         raise ValueError("alpha_vantage_credentials_required")
     key, operation_id = credential

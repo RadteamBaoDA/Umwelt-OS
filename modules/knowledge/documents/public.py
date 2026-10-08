@@ -2,6 +2,7 @@ import base64
 import binascii
 import hashlib
 import json
+import logging
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -87,6 +88,8 @@ from modules.sources.schemas import SourceExportFence, SourceFence
 
 if TYPE_CHECKING:
     from modules.connectors.public import ProviderScopeSnapshot
+
+_log = logging.getLogger(__name__)
 
 
 async def observability_quality_summary(session: AsyncSession) -> dict[str, int]:
@@ -1704,9 +1707,15 @@ async def add_content_chunks(session: AsyncSession, version: DocumentVersion) ->
     return len(drafts)
 
 
-async def backfill_current_chunks(session: AsyncSession, limit: int = 2) -> int:
-    """Fill legacy manual revisions created before chunking was enabled."""
-    versions = list((await session.scalars(
+async def backfill_current_chunks(session: AsyncSession, limit: int = 2, *, multi_workspace_enabled: bool) -> int:
+    """Fill legacy manual revisions created before chunking was enabled.
+
+    System path: each version's Source resolves its own internal job scope, then admission,
+    Source and Document locks are taken in order and held through publish and commit. One
+    transaction per version, so no two workspaces' locks are ever held together. A version
+    whose lineage is denied or stale is skipped; nothing is rebased onto another actor.
+    """
+    candidates = [(row.id, row.document_id, row.version_number) for row in (await session.scalars(
         select(DocumentVersion)
         .join(Document, Document.id == DocumentVersion.document_id)
         .join(Source, Source.id == Document.source_id)
@@ -1717,24 +1726,54 @@ async def backfill_current_chunks(session: AsyncSession, limit: int = 2) -> int:
             DocumentVersion.content != "",
             ~select(DocumentChunk.id).where(DocumentChunk.document_version_id == DocumentVersion.id).exists(),
         )
-        .order_by(DocumentVersion.id).limit(limit)
-    )).all())
-    for version in versions:
-        hint = await session.get(Document, version.document_id)
-        source = await sources.lock_source(session, hint.source_id) if hint else None
-        document = await session.scalar(
-            select(Document).where(Document.id == version.document_id).with_for_update()
-        )
-        if (
-            source is None or source.status != "active" or document is None
-            or document.current_version != version.version_number
-        ):
-            continue
-        if await add_content_chunks(session, version):
-            await _publish_document_ready(session, document, version)
-    if versions:
-        await session.commit()
-    return len(versions)
+        .order_by(DocumentVersion.id).limit(limit * 10)  # bounded window so denied lineages cannot starve others
+    )).all()]
+    await session.rollback()
+    done = 0
+    for version_id, document_id, version_number in candidates:
+        if done >= limit:
+            break
+        try:
+            hint = await session.get(Document, document_id)
+            scope = (await sources.resolve_source_job_scope(
+                session, hint.source_id, multi_workspace_enabled=multi_workspace_enabled,
+            )) if hint else None
+            if scope is None:
+                await session.rollback()
+                _log.warning("chunk backfill skipped version %s: no admissible scope", version_id)
+                continue
+            access_fence = await read_access_fence(
+                session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
+            source = await sources.lock_source(
+                session, hint.source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                expected_access_fence=access_fence,
+            )
+            document = await session.scalar(
+                select(Document).where(Document.id == document_id,
+                                       Document.workspace_id == scope.workspace_id).with_for_update()
+            )
+            version = await session.get(DocumentVersion, version_id)
+            if (
+                source is None or source.status != "active" or document is None or version is None
+                or document.current_version != version_number or version.version_number != version_number
+            ):
+                await session.rollback()
+                _log.warning("chunk backfill skipped version %s: stale lineage", version_id)
+                continue
+            if await add_content_chunks(session, version):
+                await _publish_document_ready(
+                    session, document, version, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                    access_fence=access_fence, source_fence=source,
+                )
+            await session.commit()
+            done += 1
+        except HTTPException as exc:
+            await session.rollback()
+            if exc.status_code not in {401, 403, 404, 409}:
+                raise
+            _log.warning("chunk backfill skipped version %s: HTTP %s", version_id, exc.status_code)
+    return done
 
 
 async def raw_uris(session: AsyncSession, source_id: UUID | None = None) -> set[str]:
@@ -3838,7 +3877,7 @@ async def _publish_document_ready(
     Manual writers hold exact Source/Document and original access proof; current pointer
     already selects this immutable version. Ingestion owns the scoped eight-field event
     enrichment. No foreign Source ORM, parent lock reacquisition, commit or external I/O.
-    Legacy backfill caller remains staged until it prepares the same mandatory proof.
+    The legacy backfill caller prepares the same mandatory proof per version.
     """
     await _publish_extraction_ready(session, document, version, scope=scope,
         multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence)

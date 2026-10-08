@@ -1,15 +1,24 @@
 <!-- production-readiness-status:start -->
-## Production readiness / free data / translation — live status (2026-10-07 22:10)
+## Production readiness / free data / translation — live status (2026-10-08 11:20)
 
-Plan `docs/superpowers/plans/2026-10-07-production-readiness-master.md`; ledger `D:/Project/Umwelt-OS-free-data-pilot/.superpowers/sdd/2026-10-07-production-readiness-master/progress.md`. Controller Opus 5.5, implementers Sonnet 5.5, reviewers Opus 5.5. develop `466d8ff` = partial W1/W2 checkpoint.
+Plan `docs/superpowers/plans/2026-10-07-production-readiness-master.md`; ledger `D:/Project/Umwelt-OS-free-data-pilot/.superpowers/sdd/2026-10-07-production-readiness-master/progress.md`. Opus 5.5 review/plan, Sonnet 5.5 implementation. Code/build stage only — no tests/validation run yet.
 
 | Task | State |
 | --- | --- |
 | W1, C1 | source/build accepted (in develop) |
-| W2 | in progress — D1 accepted; S3b-r1 `b50c418` accepted (provider P1s → S3d `d8a92f6` in review); backfill caller `25a688f` in review; **~307 unconverted caller sites / ~50 files found (runtime TypeError on develop paths)** → Opus slicing ruling active; D2 pending |
-| C2 | **merged to develop** — scheduler/admission/request contract + p14_collection (`4057f5e`, review r1 `a86e018`); Opus review clean; gate: import smoke, alembic single head, API image build. Routes/n8n template admission → C4; executor/receipts → C3; quota → P1 |
-| W3–W5, C3–C5, P1–P4, T1–T4 | pending |
+| C2 | **merged** `4de3da7` — scheduler/admission/request contract + `p14_collection`; Opus review clean after 1 fix round |
+| W2 S3b-r1 | **merged** (`b50c418`) — Connector callers on held-owner contracts; Opus Spec PASS |
+| W2 S3d | **merged** (`d8a92f6`) — provider fetchers honor `before_request`/fences, Alpha capture before decrypt, `drive_credential_operation` original access fence (CRITICAL impact, single caller updated); Opus PASS |
+| W2 D1 | accepted (Opus Spec/Quality PASS) |
+| W2 D3 backfill | **merged** (`25a688f`, fix `31d3efe`) — search backfill scoped per version; Opus clean after 1 fix round |
+| develop import fix | `BigInteger` import in documents/models.py — app import was broken at `466d8ff` |
+| W2 domain conversion | **open** — Opus ruling `W2-domain-conversion-ruling.md`: 402 static bad call sites / 48 files + ~96 ORM inserts missing `workspace_id`; 7 parallel slices (S-callers, D-readers, K-graph, N-news/dashboard, P-private, T-tools, O-operator) ready to dispatch |
+| W2 D2 | pending (ruling ready); document delete/cleanup + Source purge stay broken until D2a/D2b |
+| C3, P1 | dispatched then killed by API session limit (no edits); re-dispatch pending |
+| W3–W5, C4–C5, P2–P4, T1–T4 | pending |
 | V1–V5 | pending (no validation run) |
+
+Known: develop runtime still TypeErrors on unconverted W2 caller paths (dashboard, entities, timeline, news, automations, chat, …) until the domain slices land. P14/P15 integration branches are not part of develop.
 <!-- production-readiness-status:end -->
 
 <!-- current-implementation-snapshot:start -->

@@ -227,7 +227,7 @@ async def drive_activation(
             await session.rollback()
             progressed = await provisioning.drive_credential_operation(
                 session, source_id, pending[0], credentials, encryption_key,
-                multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled, scope=scope, access_fence=access_fence,
             )
             if progressed:
                 continue
