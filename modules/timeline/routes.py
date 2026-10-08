@@ -98,7 +98,7 @@ async def create_event(payload: EventCreate, session: Session, owner: OwnerWrite
     """Create a manual event under the session-bound owner write and CSRF contract."""
     response.headers["Cache-Control"] = "no-store"
     try:
-        return await public.create_event(session, payload, actor_id=owner.owner_id, scope=scope,
+        return await public.create_event(session, payload, scope=scope,
                                          multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -112,7 +112,7 @@ async def update_event(event_id: UUID, payload: EventPatch, session: Session,
     """Apply a revision-fenced event correction and map stale revisions to conflict."""
     response.headers["Cache-Control"] = "no-store"
     try:
-        result = await public.update_event(session, event_id, payload, actor_id=owner.owner_id, scope=scope,
+        result = await public.update_event(session, event_id, payload, scope=scope,
                                            multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
     except ValueError as exc:
         status = 409 if "stale" in str(exc) else 422
@@ -131,7 +131,7 @@ async def delete_event(event_id: UUID, session: Session, owner: OwnerWrite, scop
     response.headers["Cache-Control"] = "no-store"
     try:
         deleted = await public.delete_event(session, event_id, expected_revision=expected_revision,
-                                            reason=reason, actor_id=owner.owner_id, scope=scope,
+                                            reason=reason, scope=scope,
                                             multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
     except ValueError as exc:
         status = 409 if "stale" in str(exc) else 422

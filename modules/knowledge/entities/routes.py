@@ -98,7 +98,7 @@ async def assign_review_candidate(
     try:
         return await KnowledgeService(
             session, scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
-        ).assign_review_candidate(candidate_id, payload, actor_id=owner.owner_id)
+        ).assign_review_candidate(candidate_id, payload, actor_id=scope.user_id)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -114,7 +114,7 @@ async def resolve_relationship_review(
     try:
         return await KnowledgeService(
             session, scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
-        ).resolve_relationship_review(candidate_id, payload, actor_id=owner.owner_id)
+        ).resolve_relationship_review(candidate_id, payload, actor_id=scope.user_id)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

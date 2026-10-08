@@ -571,7 +571,7 @@ async def list_relationships(
     if entity_id is not None:
         entity_id = await entities.resolve_canonical_entity_id(
             session, entity_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    filters = [str(entity_id) if entity_id else None, valid_at.isoformat() if valid_at else None,
+    filters = [str(scope.workspace_id), str(entity_id) if entity_id else None, valid_at.isoformat() if valid_at else None,
                include_unknown_validity, knowledge_as_of.isoformat() if knowledge_as_of else None]
     fingerprint = sha256(json.dumps(filters, separators=(",", ":")).encode()).hexdigest()
     if knowledge_as_of is not None:
@@ -1052,8 +1052,10 @@ async def list_correction_relationship_refs(
     """Read a bounded incident edge/support snapshot in one workspace for correction planning.
 
     The calling correction transaction already holds owner admission; this read adds no
-    authorization of its own and only restricts rows to the scoped workspace.
+    authorization of its own beyond the role-only owner guard, and restricts rows to the scoped workspace.
     """
+    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
     ids = sorted(set(entity_ids), key=str)
     if len(ids) > 100:
         raise ValueError("Correction entity closure exceeds its atomic limit")
@@ -1387,26 +1389,26 @@ RELATIONSHIP_EXPORT_PAGE_MAX_BYTES = 16_777_216
 
 
 def _encode_relationship_export_cursor(
-    owner_id: int, snapshot_at: datetime, position_at: datetime, position_id: UUID,
+    owner_id: int, workspace_id: UUID, snapshot_at: datetime, position_at: datetime, position_id: UUID,
 ) -> str:
     """Encode a canonical relationship cursor bound to owner and fixed snapshot."""
-    raw = json.dumps({"v": 1, "owner": owner_id, "kind": "relationships",
+    raw = json.dumps({"v": 1, "owner": owner_id, "workspace": str(workspace_id), "kind": "relationships",
                       "snapshot": snapshot_at.astimezone(UTC).isoformat(),
                       "at": position_at.astimezone(UTC).isoformat(), "id": str(position_id)},
                      sort_keys=True, separators=(",", ":")).encode()
     return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
 
-def _decode_relationship_export_cursor(cursor: str, owner_id: int) -> tuple[datetime, datetime, UUID]:
+def _decode_relationship_export_cursor(cursor: str, owner_id: int, workspace_id: UUID) -> tuple[datetime, datetime, UUID]:
     """Reject malformed, overlong, future, or cross-owner relationship cursors."""
     try:
         if not cursor or len(cursor) > 1024 or "=" in cursor:
             raise ValueError
         raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
         value = json.loads(raw)
-        if not isinstance(value, dict) or set(value) != {"v", "owner", "kind", "snapshot", "at", "id"}:
+        if not isinstance(value, dict) or set(value) != {"v", "owner", "workspace", "kind", "snapshot", "at", "id"}:
             raise ValueError
-        if value["v"] != 1 or value["owner"] != owner_id or value["kind"] != "relationships":
+        if value["v"] != 1 or value["owner"] != owner_id or value["workspace"] != str(workspace_id) or value["kind"] != "relationships":
             raise ValueError
         snapshot_at, position_at = datetime.fromisoformat(value["snapshot"]), datetime.fromisoformat(value["at"])
         if any(item.tzinfo is None or item.utcoffset() is None for item in (snapshot_at, position_at)):
@@ -1415,7 +1417,7 @@ def _decode_relationship_export_cursor(cursor: str, owner_id: int) -> tuple[date
         if snapshot_at > datetime.now(UTC):
             raise ValueError
         position_id = UUID(value["id"])
-        if _encode_relationship_export_cursor(owner_id, snapshot_at, position_at, position_id) != cursor:
+        if _encode_relationship_export_cursor(owner_id, workspace_id, snapshot_at, position_at, position_id) != cursor:
             raise ValueError
         return snapshot_at, position_at, position_id
     except (ValueError, TypeError, KeyError, UnicodeDecodeError, binascii.Error, json.JSONDecodeError) as exc:
@@ -1483,7 +1485,7 @@ async def export_page(
     if cursor is None:
         snapshot_at, position = datetime.now(UTC), None
     else:
-        snapshot_at, position_at, position_id = _decode_relationship_export_cursor(cursor, owner_id)
+        snapshot_at, position_at, position_id = _decode_relationship_export_cursor(cursor, owner_id, scope.workspace_id)
         position = (position_at, position_id)
     snapshot_count = await _relationship_export_count(session, snapshot_at, scope=scope)
     statement = _relationship_export_statement(snapshot_at, scope=scope)
@@ -1535,7 +1537,7 @@ async def export_page(
                            for source_id, generation in sorted(generations.items(), key=lambda pair: str(pair[0]))],
             evidence_digest=digest,
         ))
-    next_cursor = (_encode_relationship_export_cursor(owner_id, snapshot_at, items[-1].created_at, items[-1].id)
+    next_cursor = (_encode_relationship_export_cursor(owner_id, scope.workspace_id, snapshot_at, items[-1].created_at, items[-1].id)
                    if has_more and items else None)
     return RelationshipExportPage(
         owner_id=owner_id, record_kind="relationships", snapshot_at=snapshot_at,

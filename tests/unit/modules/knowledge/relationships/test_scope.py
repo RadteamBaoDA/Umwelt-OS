@@ -125,3 +125,23 @@ async def test_demo_seed_is_workspace_local_and_links_seeded_entities(scope: Wor
     relationship = next(item for item in added if isinstance(item, Relationship))
     assert relationship.workspace_id == OWNER.workspace_id
     assert {relationship.source_entity_id, relationship.target_entity_id} == entity_ids
+
+
+def test_export_cursor_is_bound_to_workspace() -> None:
+    """A cursor minted in one workspace is rejected in another even for the same owner."""
+    from datetime import UTC, datetime, timedelta
+    at = datetime.now(UTC) - timedelta(minutes=1)
+    cursor = public._encode_relationship_export_cursor(7, OWNER.workspace_id, at, at, uuid4())
+    public._decode_relationship_export_cursor(cursor, 7, OWNER.workspace_id)
+    with pytest.raises(ValueError):
+        public._decode_relationship_export_cursor(cursor, 7, uuid4())
+
+
+@pytest.mark.asyncio
+async def test_correction_relationship_refs_deny_member_before_query() -> None:
+    """The public correction read applies the role-only owner guard without any I/O."""
+    session = AsyncMock()
+    with pytest.raises(HTTPException) as caught:
+        await public.list_correction_relationship_refs(session, [uuid4()], scope=MEMBER)
+    assert caught.value.status_code == 403
+    session.scalars.assert_not_called()

@@ -159,6 +159,8 @@ async def process_timeline_extraction_work(ctx: dict[str, object], work_id_value
         if scope is None or not await settings_public.module_is_enabled(
             session, "knowledge.timeline", scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         ):
+            # ponytail: untouched work is re-claimed every sweep while the module is disabled;
+            # upgrade = ack+requeue on module enable.
             await session.rollback()  # unavailable lineage or disabled module: leave durable work untouched
             return
         work = await timeline.claim_extraction_work(

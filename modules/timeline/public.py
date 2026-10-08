@@ -92,29 +92,29 @@ class _TimelineExportIneligible(Exception):
     """An otherwise persisted derived event has no currently exportable evidence."""
 
 
-def _encode_timeline_export_cursor(owner_id: int, snapshot_at: datetime, position_at: datetime, position_id: UUID) -> str:
+def _encode_timeline_export_cursor(owner_id: int, workspace_id: UUID, snapshot_at: datetime, position_at: datetime, position_id: UUID) -> str:
     """Bind a keyset position to its current owner and immutable snapshot cutoff."""
-    value = {"v": 1, "owner": owner_id, "kind": "events", "snapshot": snapshot_at.astimezone(UTC).isoformat(),
+    value = {"v": 1, "owner": owner_id, "workspace": str(workspace_id), "kind": "events", "snapshot": snapshot_at.astimezone(UTC).isoformat(),
              "at": position_at.astimezone(UTC).isoformat(), "id": str(position_id)}
     return base64.urlsafe_b64encode(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).decode().rstrip("=")
 
 
-def _decode_timeline_export_cursor(cursor: str, owner_id: int) -> tuple[datetime, datetime, UUID]:
+def _decode_timeline_export_cursor(cursor: str, owner_id: int, workspace_id: UUID) -> tuple[datetime, datetime, UUID]:
     """Reject malformed, noncanonical, future or cross-owner timeline cursors."""
     try:
         if not cursor or len(cursor) > 1024 or "=" in cursor:
             raise ValueError
         value = json.loads(base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True))
-        if not isinstance(value, dict) or set(value) != {"v", "owner", "kind", "snapshot", "at", "id"}:
+        if not isinstance(value, dict) or set(value) != {"v", "owner", "workspace", "kind", "snapshot", "at", "id"}:
             raise ValueError
-        if value["v"] != 1 or value["owner"] != owner_id or value["kind"] != "events":
+        if value["v"] != 1 or value["owner"] != owner_id or value["workspace"] != str(workspace_id) or value["kind"] != "events":
             raise ValueError
         snapshot, position = datetime.fromisoformat(value["snapshot"]), datetime.fromisoformat(value["at"])
         if any(item.tzinfo is None or item.utcoffset() is None for item in (snapshot, position)):
             raise ValueError
         snapshot, position = snapshot.astimezone(UTC), position.astimezone(UTC)
         row_id = UUID(value["id"])
-        if snapshot > datetime.now(UTC) or _encode_timeline_export_cursor(owner_id, snapshot, position, row_id) != cursor:
+        if snapshot > datetime.now(UTC) or _encode_timeline_export_cursor(owner_id, workspace_id, snapshot, position, row_id) != cursor:
             raise ValueError
         return snapshot, position, row_id
     except (ValueError, TypeError, KeyError, UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -245,7 +245,7 @@ async def export_page(session: AsyncSession, *, owner_id: int, record_kind: str,
     if cursor is None:
         snapshot, position = datetime.now(UTC), None
     else:
-        snapshot, position_at, position_id = _decode_timeline_export_cursor(cursor, owner_id)
+        snapshot, position_at, position_id = _decode_timeline_export_cursor(cursor, owner_id, scope.workspace_id)
         position = (position_at, position_id)
     count = await _timeline_export_count(
         session, snapshot, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
@@ -278,7 +278,7 @@ async def export_page(session: AsyncSession, *, owner_id: int, record_kind: str,
             record_digest=hashlib.sha256(_timeline_export_json(item.model_dump(mode="json"))).hexdigest(),
             evidence_digest=evidence_digest, participant_digest=participant_digest, source_fences=source_fences,
         ))
-    next_cursor = (_encode_timeline_export_cursor(owner_id, snapshot, *last_examined)
+    next_cursor = (_encode_timeline_export_cursor(owner_id, scope.workspace_id, snapshot, *last_examined)
                    if more and last_examined is not None else None)
     payload_bytes = len(_timeline_export_json([item.model_dump(mode="json") for item in items]))
     return TimelineExportPage(owner_id=owner_id, record_kind="events", snapshot_at=snapshot,
@@ -844,7 +844,7 @@ async def _remove_unsupported_derived_participants(
 
 
 async def create_event(
-    session: AsyncSession, payload: EventCreate, *, actor_id: int, scope: Scope,
+    session: AsyncSession, payload: EventCreate, *, scope: Scope,
     multi_workspace_enabled: bool,
 ) -> EventRead:
     """Create a manual event and flush its exact evidence, participants, and replay atomically.
@@ -891,7 +891,7 @@ async def create_event(
 
 
 async def update_event(
-    session: AsyncSession, event_id: UUID, payload: EventPatch, *, actor_id: int, scope: Scope,
+    session: AsyncSession, event_id: UUID, payload: EventPatch, *, scope: Scope,
     multi_workspace_enabled: bool,
 ) -> EventRead | None:
     """Apply a revision-fenced owner correction after locking its immutable support closure.
@@ -1032,7 +1032,7 @@ async def update_event(
         raise ValueError("event correction contains no changes")
     event.revision += 1
     event.updated_at = datetime.now(UTC)
-    session.add(EventAudit(workspace_id=scope.workspace_id, event_id=event.id, actor_id=actor_id, reason=payload.reason,
+    session.add(EventAudit(workspace_id=scope.workspace_id, event_id=event.id, actor_id=_actor(scope), reason=payload.reason,
         prior_revision=prior, resulting_revision=event.revision, changed_json=changed))
     await _schedule_temporal_event(session, event, list(changed), scope=scope,
                                    multi_workspace_enabled=multi_workspace_enabled)
@@ -1051,7 +1051,7 @@ def _normalize_optional_instant(value: Any) -> Any:
 
 
 async def delete_event(
-    session: AsyncSession, event_id: UUID, *, expected_revision: int, reason: str, actor_id: int,
+    session: AsyncSession, event_id: UUID, *, expected_revision: int, reason: str,
     scope: Scope, multi_workspace_enabled: bool,
 ) -> bool:
     """Tombstone a revision-fenced event and suppress its exact derived proposal before replay commit."""
@@ -1075,7 +1075,7 @@ async def delete_event(
     prior = event.revision
     event.deleted_at = datetime.now(UTC)
     event.revision += 1
-    session.add(EventAudit(workspace_id=scope.workspace_id, event_id=event.id, actor_id=actor_id, reason=reason,
+    session.add(EventAudit(workspace_id=scope.workspace_id, event_id=event.id, actor_id=_actor(scope), reason=reason,
         prior_revision=prior, resulting_revision=event.revision, changed_json={"deleted": True}))
     await _schedule_temporal_event(session, event, ["deleted"], deleted=True, scope=scope,
                                    multi_workspace_enabled=multi_workspace_enabled)
@@ -1733,8 +1733,10 @@ async def correction_event_ids(
 ) -> list[UUID]:
     """Capture bounded event rows containing participants before correction locks are taken.
 
-    The correction transaction already holds owner admission; this read only restricts rows to the workspace.
+    The correction transaction already holds owner admission; this read adds only the role guard and workspace scope.
     """
+    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
     if not entity_ids:
         return []
     ids = list((await session.scalars(select(EventParticipant.event_id).join(

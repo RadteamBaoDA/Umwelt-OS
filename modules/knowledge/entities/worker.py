@@ -169,6 +169,8 @@ async def process_document_ready(ctx: dict[str, object], event_id: str) -> None:
         if scope is None or not await settings_public.module_is_enabled(
             session, "knowledge.entities", scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         ):
+            # ponytail: unacked ready event is re-dispatched every DISPATCH_STALE_AFTER while the module is disabled;
+            # upgrade = ack+requeue the events from the module-enable path.
             return  # unavailable lineage or disabled module: leave the event unacknowledged
         fence = await workspaces.read_access_fence(
             session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,

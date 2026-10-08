@@ -123,3 +123,43 @@ async def test_disabled_module_leaves_work_untouched() -> None:
         await worker.process_timeline_extraction_work.__wrapped__(ctx, str(uuid4()))
     gate.assert_awaited_once()
     claim.assert_not_called()
+
+
+OTHER = WorkspaceContext(user_id=7, workspace_id=uuid4(), role="owner", membership_revision=1)
+
+
+def test_export_cursor_is_bound_to_workspace() -> None:
+    """A cursor minted in one workspace is rejected in another even for the same owner."""
+    from datetime import UTC, datetime, timedelta
+    at = datetime.now(UTC) - timedelta(minutes=1)
+    cursor = public._encode_timeline_export_cursor(7, OWNER.workspace_id, at, at, uuid4())
+    public._decode_timeline_export_cursor(cursor, 7, OWNER.workspace_id)
+    with pytest.raises(ValueError):
+        public._decode_timeline_export_cursor(cursor, 7, OTHER.workspace_id)
+
+
+@pytest.mark.asyncio
+async def test_correction_event_ids_denies_member_before_query() -> None:
+    """The public correction read applies the role-only owner guard without any I/O."""
+    session = AsyncMock()
+    with pytest.raises(HTTPException) as caught:
+        await public.correction_event_ids(session, [uuid4()], scope=MEMBER)
+    assert caught.value.status_code == 403
+    session.scalars.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_event_routes_do_not_pass_route_actor() -> None:
+    """Event audit actor derives from the scope, so routes no longer forward an owner id."""
+    from modules.timeline import routes
+    owner = MagicMock(owner_id=999)
+    request = MagicMock()
+    request.app.state.settings.multi_workspace_enabled = False
+    for name, call in (
+        ("create_event", lambda: routes.create_event(MagicMock(), AsyncMock(), owner, OWNER, request, MagicMock())),
+        ("update_event", lambda: routes.update_event(uuid4(), MagicMock(), AsyncMock(), owner, OWNER, request, MagicMock())),
+        ("delete_event", lambda: routes.delete_event(uuid4(), AsyncMock(), owner, OWNER, request, MagicMock(), 1, "r")),
+    ):
+        with patch.object(routes.public, name, AsyncMock(return_value=True)) as target:
+            await call()
+        assert "actor_id" not in target.call_args.kwargs
