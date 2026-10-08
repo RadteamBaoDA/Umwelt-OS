@@ -1643,6 +1643,27 @@ from modules.dashboard.briefs import (
 from modules.dashboard.context import build_daily_context
 from modules.dashboard.daily_schemas import BriefRead, DailyContext
 
+
+async def count_source_gadgets(
+    session: AsyncSession, owner_id: int, source_id: UUID, cap: int = 1000,
+) -> tuple[int, int]:
+    """Return owner-scoped (definition, distinct instance) counts that select a source, saturating at ``cap``."""
+    selects = GadgetDefinition.source_ids.contains([str(source_id)])
+    definitions = (
+        select(GadgetDefinition.id)
+        .where(GadgetDefinition.owner_id == owner_id, selects).limit(cap).subquery()
+    )
+    placements = (
+        select(GadgetInstance.id)
+        .join(GadgetDefinition, GadgetDefinition.id == GadgetInstance.definition_id)
+        .where(GadgetDefinition.owner_id == owner_id, selects).limit(cap).subquery()
+    )
+    return (
+        int(await session.scalar(select(func.count()).select_from(definitions)) or 0),
+        int(await session.scalar(select(func.count()).select_from(placements)) or 0),
+    )
+
+
 __all__ = [
     "BriefEmpty",
     "BriefEvidenceRevoked",
@@ -1653,6 +1674,7 @@ __all__ = [
     "build_daily_context",
     "claim_brief_slot",
     "clean_document_brief_evidence",
+    "count_source_gadgets",
     "generate_brief",
     "latest_brief",
     "legacy_brief_coverage",
@@ -1661,3 +1683,4 @@ __all__ = [
     "read_slot_owner",
     "release_brief_slot",
 ]
+

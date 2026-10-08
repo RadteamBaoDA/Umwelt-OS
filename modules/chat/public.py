@@ -20,6 +20,7 @@ from sqlalchemy import func as _func
 from sqlalchemy import or_ as _or
 from sqlalchemy import select as _select
 from sqlalchemy import tuple_ as _tuple
+from sqlalchemy import union as _union
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.models import Owner as _Owner
@@ -149,6 +150,7 @@ __all__ = [
     "WebCitation",
     "authorize_agent_run_access",
     "build_context",
+    "count_source_conversations",
     "delete_conversation",
     "ensure_demo_conversation",
     "ensure_grounded_answer",
@@ -1638,3 +1640,19 @@ async def purge_document_copied_evidence_page(
     return CopiedEvidenceCleanupProgress(
         next_cursor=None, complete=True, rows_examined=examined, rows_changed=changed,
     )
+
+
+async def count_source_conversations(session: AsyncSession, source_id: UUID, cap: int = 1000) -> int:
+    """Return an owner-UI-only count of conversations citing a source, saturating at ``cap``."""
+    key = str(source_id)
+    # ponytail: seq scan over chat_messages; add GIN(citations jsonb_path_ops) if dialog open gets slow
+    cites = _or(
+        Message.citations.contains([{"source_id": key}]),  # worker writes the alias key
+        Message.citations.contains([{"sourceId": key}]),  # older rows
+    )
+    ids = _union(
+        _select(Message.conversation_id).where(cites),
+        _select(ResponseRun.conversation_id).where(ResponseRun.retrieval_context["source_scope"].contains([key])),
+    ).subquery()
+    capped = _select(ids.c.conversation_id).limit(cap).subquery()
+    return int(await session.scalar(_select(_func.count()).select_from(capped)) or 0)

@@ -986,3 +986,32 @@ async def _reconcile_github_hint_lifecycle(
     await connectors.reconcile_github_source_hints_lifecycle(
         session, source_id=source.id, source_generation=source.generation, active=active,
     )
+
+
+@dataclass(frozen=True)
+class SourceImpact:
+    """Owner-UI-only counts of what a disconnect/purge would touch; each saturates at 1000."""
+
+    document_count: int
+    gadget_definition_count: int
+    gadget_placement_count: int
+    conversation_count: int
+
+
+async def get_source_impact(session: AsyncSession, owner_id: int, source_id: UUID) -> SourceImpact | None:
+    """Count dependents of a source through owner public APIs; None when absent, 409 when purge-pending."""
+    if await session.get(Source, source_id) is None:
+        return None
+    if await session.scalar(export_eligible_source_ids().where(Source.id == source_id)) is None:
+        raise HTTPException(status_code=409, detail="Source purge is pending")
+    from modules.chat import public as chat
+    from modules.dashboard import public as dashboard
+    from modules.knowledge.documents import public as documents
+
+    definitions, placements = await dashboard.count_source_gadgets(session, owner_id, source_id)
+    return SourceImpact(
+        document_count=await documents.count_source_documents(session, source_id),
+        gadget_definition_count=definitions,
+        gadget_placement_count=placements,
+        conversation_count=await chat.count_source_conversations(session, source_id),
+    )

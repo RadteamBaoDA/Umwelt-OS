@@ -161,8 +161,8 @@ function SourceEntry({
 
   const editedHere = editingId === source.id;
   const rowState = sourceRowState(source, activation.data);
-  const chipKey: Record<SourceRowState, 'statusActive' | 'statusPaused' | 'statusArchived' | 'stateSavedNotActive' | 'stateError'> = {
-    active: 'statusActive', paused: 'statusPaused', archived: 'statusArchived', savedNotActive: 'stateSavedNotActive', error: 'stateError',
+  const chipKey: Record<SourceRowState, 'statusActive' | 'statusPaused' | 'statusArchived' | 'stateSavedNotActive' | 'stateError' | 'stateReconnect'> = {
+    active: 'statusActive', paused: 'statusPaused', archived: 'statusArchived', savedNotActive: 'stateSavedNotActive', error: 'stateError', reconnect: 'stateReconnect',
   };
   const hasDetail = Boolean(collectResult || operationId || (historyOpen && connector) || error || collect.error || activation.isError);
   const cell = 'px-3 py-3 align-top text-sm max-[720px]:block max-[720px]:px-0 max-[720px]:py-1';
@@ -187,7 +187,7 @@ function SourceEntry({
           {connector && source.status !== 'archived' && <Button className="secondary" onClick={() => onEdit(source)}>{t('configure')}</Button>}
           {connector && source.status === 'active' && activation.data?.state === 'active' && <Button className="secondary" disabled={collect.isPending || busy} onClick={() => collect.mutate()}>{collect.isPending ? t('collecting') : t('collectNow')}</Button>}
           {!editedHere && source.status !== 'archived' && <Button className="secondary" disabled={busy} onClick={toggleStatus}>{busy ? t(source.status === 'paused' ? 'resuming' : 'pausing') : t(source.status === 'paused' ? 'resume' : 'pause')}</Button>}
-          {!editedHere && !purged && <DisconnectDialog name={source.name} archived={source.status === 'archived'} disabled={busy} onConfirm={(deleteData) => void disconnect(deleteData)}
+          {!editedHere && !purged && <DisconnectDialog sourceId={source.id} name={source.name} archived={source.status === 'archived'} disabled={busy} onConfirm={(deleteData) => void disconnect(deleteData)}
             trigger={<Button className="secondary" disabled={busy}>{busy ? t('disconnecting') : t(source.status === 'archived' ? 'disconnectDelete' : 'disconnectAction')}</Button>} />}
           {connector && <Button className="secondary" aria-expanded={historyOpen} onClick={() => setHistoryOpen((open) => !open)}>{t(historyOpen ? 'hideHistory' : 'showHistory')}</Button>}
         </div>
