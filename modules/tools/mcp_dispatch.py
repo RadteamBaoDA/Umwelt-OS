@@ -99,6 +99,7 @@ class McpDispatchAdapter:
         self._resolve_fence = resolve_fence
         self._revalidate_fence = revalidate_fence
         self._registered: dict[UUID, set[str]] = {}
+        self._workspace_of: dict[UUID, UUID] = {}
 
     def register_selected_capabilities(
         self,
@@ -147,12 +148,24 @@ class McpDispatchAdapter:
                 self._registry.unregister_tool(name)
             raise
         self._registered[connection.id] = registered
+        self._workspace_of[connection.id] = workspace_id
         return tuple(sorted(registered))
 
     def unregister_connection(self, connection_id: UUID) -> None:
         """Remove native handlers for one connection while durable fences protect already-running calls."""
+        self._workspace_of.pop(connection_id, None)
         for name in self._registered.pop(connection_id, set()):
             self._registry.unregister_tool(name)
+
+    def hides(self, name: str, workspace_id: UUID) -> bool:
+        """True when ``name`` is an MCP tool owned by another workspace (or unknown); native tools are never hidden."""
+        parts = name.split(".")
+        if len(parts) != 3 or parts[0] != "mcp":
+            return False
+        try:
+            return self._workspace_of.get(UUID(hex=parts[1])) != workspace_id
+        except ValueError:
+            return True
 
     def _build_definition(
         self,

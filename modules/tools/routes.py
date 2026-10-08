@@ -46,11 +46,19 @@ class ToolInvocation(BaseModel):
     arguments: dict[str, Any]
 
 
+def _visible_tools(request: Request, workspace_id: UUID) -> list[Any]:
+    """Registry is process-global; drop other workspaces' MCP descriptors."""
+    runtime = getattr(request.app.state, "mcp_runtime", None)
+    items = request.app.state.tool_registry.list_tools()
+    if runtime is None:
+        return [item for item in items if not item.name.startswith("mcp.")]
+    return [item for item in items if not runtime.dispatch.hides(item.name, workspace_id)]
+
+
 @router.get("")
 async def list_tools(request: Request, _owner: OwnerRead, _scope: WorkspaceRead) -> dict[str, Any]:
     """Return enabled registered tool contracts to the authenticated owner."""
-    registry = request.app.state.tool_registry
-    return {"items": [item.model_dump(mode="json") for item in registry.list_tools()]}
+    return {"items": [item.model_dump(mode="json") for item in _visible_tools(request, _scope.workspace_id)]}
 
 
 @router.post("/invoke")
@@ -87,7 +95,7 @@ async def invoke_tool(
         raise HTTPException(status_code=422, detail="Invalid tool invocation") from exc
     registry = request.app.state.tool_registry
     name = payload.name
-    allowed = frozenset(item.name for item in registry.list_tools())
+    allowed = frozenset(item.name for item in _visible_tools(request, scope.workspace_id))
     owner_id, owner_token_hash = owner.owner_id, owner.token_hash
     principal = ToolExecutionPrincipal(
         actor_id=f"owner:{scope.user_id}", scope=scope, is_owner=True, allowed_tools=allowed,

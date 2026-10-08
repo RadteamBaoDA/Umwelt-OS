@@ -170,6 +170,9 @@ async def draft_check_route(connection_id: UUID, request: Request, session: Sess
     persisting an unauthorized draft outcome.
     """
     token_hash = owner.token_hash
+    await repository.admit(
+        session, scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+    )
     await session.rollback()
     management_revalidator = partial(
         _revalidate_management_owner, request.app.state.session_factory, token_hash, scope,
@@ -198,6 +201,9 @@ async def discover_route(connection_id: UUID, request: Request, session: Session
     the shared SDK client retains no request identity. Revocation or expiry aborts before persistence.
     """
     token_hash = owner.token_hash
+    await repository.admit(
+        session, scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+    )
     await session.rollback()
     management_revalidator = partial(
         _revalidate_management_owner, request.app.state.session_factory, token_hash, scope,

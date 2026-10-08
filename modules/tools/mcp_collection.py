@@ -59,6 +59,7 @@ async def read_collection_capability(
     if fence.purpose != "collection" or fence.source_ids != (source_id,):
         raise mcp_repository.McpConflict("Grant is not a collection grant for this source")
     async with runtime.session_factory() as session:
+        await runtime._admit(session, scope)
         selection = await mcp_repository.get_current_selection(session, connection_id, scope=scope)
     if selection is None:
         raise mcp_repository.McpUnavailable("MCP discovery is unavailable")
@@ -82,6 +83,7 @@ async def read_collection_capability(
             return False
         try:
             async with runtime.session_factory() as session:
+                await runtime._admit(session, scope)
                 if not await mcp_repository.revalidate_capability_fence(session, fence, scope=scope):
                     return False
                 current = await mcp_repository.get_current_selection(session, connection_id, scope=scope)

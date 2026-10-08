@@ -1,5 +1,6 @@
 """Compose owner-scoped MCP transport callbacks with the native registry."""
 
+import logging
 from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager
 from typing import Literal
@@ -71,6 +72,9 @@ def derive_mcp_public_endpoint(settings: Settings) -> tuple[str, str, str]:
     if len(audience) > 255:
         raise ValueError("MCP public audience exceeds its persisted length limit")
     return audience, authority, origin
+
+
+logger = logging.getLogger(__name__)
 
 
 class McpRuntime:
@@ -591,14 +595,18 @@ class McpRuntime:
                 .order_by(McpConnection.workspace_id, McpConnection.owner_id).limit(100)
             )).all()
         for workspace_id, row_owner_id in pairs:
-            async with self.session_factory() as session:
-                owner = await workspaces.resolve_workspace_owner_context(
-                    session, workspace_id, multi_workspace_enabled=flag,
-                )
-                if owner is None or owner.user_id != row_owner_id:
-                    continue
-                scope = InternalJobScope(workspace_id, owner.user_id, owner.membership_revision)
-                await self._admit(session, scope)
-                connections = await mcp_repository.list_runtime_connections(session, scope=scope)
-            for connection in connections:
-                await self.refresh_connection(scope, connection.id)
+            try:
+                async with self.session_factory() as session:
+                    owner = await workspaces.resolve_workspace_owner_context(
+                        session, workspace_id, multi_workspace_enabled=flag,
+                    )
+                    if owner is None or owner.user_id != row_owner_id:
+                        continue
+                    scope = InternalJobScope(workspace_id, owner.user_id, owner.membership_revision)
+                    await self._admit(session, scope)
+                    connections = await mcp_repository.list_runtime_connections(session, scope=scope)
+                for connection in connections:
+                    await self.refresh_connection(scope, connection.id)
+            except (HTTPException, mcp_repository.McpConflict, mcp_repository.McpNotFound,
+                    mcp_repository.McpUnavailable, SQLAlchemyError) as exc:
+                logger.warning("MCP hydrate skipped a workspace (%s)", type(exc).__name__)
