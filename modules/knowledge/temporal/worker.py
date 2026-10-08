@@ -1207,6 +1207,7 @@ async def process_graph_operation(ctx: dict[str, object], operation_id_value: st
     if adm is None:
         return
     graph = TemporalGraph(GraphConfiguration.from_settings(cast(Settings, ctx["settings"])))
+    interrupted: BaseException | None = None
     try:
         async with heavy_job_slot(factory, timeout_seconds=OWNER_BUDGET_SECONDS):
             try:
@@ -1322,7 +1323,9 @@ async def process_graph_operation(ctx: dict[str, object], operation_id_value: st
                     # independent projection transaction publishes its revision.
                     # Releasing them first lets a correction invalidate this result.
                     await _finish(factory, adm, operation.id, token, "succeeded", None, external_state="present")
-            except (GraphOperationUnknown, asyncio.CancelledError, TimeoutError):
+            except (GraphOperationUnknown, asyncio.CancelledError, TimeoutError) as exc:
+                if isinstance(exc, (asyncio.CancelledError, TimeoutError)):
+                    interrupted = exc
                 if token:
                     await _join_local_cleanup(_finish(factory, adm, operation_id, token, "reconcile_needed", "graph_outcome_unknown"))
             except (GraphOperationError, ValueError, LookupError, PrivacyPolicyDenied) as exc:
@@ -1335,6 +1338,9 @@ async def process_graph_operation(ctx: dict[str, object], operation_id_value: st
     except RemoteHeavyWorkBlocked as exc:
         raise Retry(defer=30) from exc
     except HTTPException:
+        # A drift raised while handling cancellation must not turn the cancel into a normal completion.
+        if interrupted is not None:
+            raise interrupted from None
         # Original workspace authority was revoked or changed: no further effect, ACK or rebase.
         # The lease expires; legitimately admitted recovery handles any unknown outcome later.
         return

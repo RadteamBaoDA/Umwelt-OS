@@ -1,5 +1,6 @@
 """Documents routes pass the workspace scope/flag to converted owners (no DB, no HTTP)."""
 
+import dataclasses
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
@@ -54,16 +55,15 @@ async def test_citation_target_route_passes_scope_and_denies_members() -> None:
     assert exc.value.status_code == 404  # reader ran, found nothing
     assert reader.await_args.kwargs["scope"] == SCOPE
     assert reader.await_args.kwargs["multi_workspace_enabled"] is False
-    member = SCOPE.model_copy(update={"role": "member"}) if hasattr(SCOPE, "model_copy") else None
-    if member is not None:
-        reader.reset_mock()
-        with patch.object(routes.public, "read_chat_evidence_chunks", reader), pytest.raises(HTTPException) as denied:
-            await routes.get_citation_target(
-                uuid4(), session=object(), request=REQUEST, _owner=OWNER, workspace=member,
-                document_version_id=uuid4(), chunk_id=uuid4(),
-            )
-        assert denied.value.status_code == 403
-        reader.assert_not_awaited()
+    member = dataclasses.replace(SCOPE, role="member")
+    reader.reset_mock()
+    with patch.object(routes.public, "read_chat_evidence_chunks", reader), pytest.raises(HTTPException) as denied:
+        await routes.get_citation_target(
+            uuid4(), session=object(), request=REQUEST, _owner=OWNER, workspace=member,
+            document_version_id=uuid4(), chunk_id=uuid4(),
+        )
+    assert denied.value.status_code == 403
+    reader.assert_not_awaited()
 
 
 @pytest.mark.asyncio

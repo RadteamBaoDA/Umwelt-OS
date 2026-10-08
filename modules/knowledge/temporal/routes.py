@@ -61,6 +61,8 @@ async def reconcile(payload: ReconcileRequest, session: Session, _owner: OwnerWr
                     request: Request, response: Response) -> dict[str, UUID]:
     """Commit one strictly selected durable run under owner Origin/session-CSRF authorization; never rebuild in HTTP."""
     response.headers["Cache-Control"] = "no-store"
+    if workspace.role != "owner":  # deny before taking any admission lock
+        raise HTTPException(status_code=403, detail="Workspace owner required")
     # Admission locks (account, workspace, membership) precede every domain lock and the fenced commit.
     fence = await lock_access_fence(session, scope=workspace, multi_workspace_enabled=_flag(request),
                                     auth_sessions=(authenticated_session_ref(request),))

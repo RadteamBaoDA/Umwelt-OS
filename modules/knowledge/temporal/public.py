@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.realtime import KnowledgeChanged, make_knowledge_change
 from core.workspaces import public as workspaces
-from core.workspaces.schemas import Scope, WorkspaceContext
+from core.workspaces.schemas import AccessFence, Scope, WorkspaceContext
 from modules.knowledge.documents import public as documents
 from modules.knowledge.entities import public as entities
 from modules.knowledge.temporal.models import (
@@ -42,13 +42,13 @@ def _actor(scope: Scope) -> int:
     return scope.user_id if isinstance(scope, WorkspaceContext) else scope.actor_user_id
 
 
-async def _admit(session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool) -> None:
-    """Require current owner workspace access before Temporal owner queries or writes."""
+async def _admit(session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool) -> AccessFence:
+    """Require current owner workspace access before Temporal owner queries or writes; return the admitted fence."""
     from fastapi import HTTPException
 
     if isinstance(scope, WorkspaceContext) and scope.role != "owner":
         raise HTTPException(status_code=403, detail="Workspace owner required")
-    await workspaces.read_access_fence(
+    return await workspaces.read_access_fence(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
 
@@ -541,11 +541,12 @@ async def find_changes(session: AsyncSession, *, kind: str | None = None, canoni
     """Page recorded owner mutations and currently retained citations; never fabricate prior snapshots."""
     if not 1 <= limit <= 100 or any(value is not None and value.tzinfo is None for value in (observed_from, observed_to)):
         raise ValueError("Invalid change bounds")
-    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    # The cursor binds workspace, actor and membership revision: a token minted for another
-    # workspace/actor, or before a role/membership change, is rejected rather than rebased.
-    fingerprint = digest([kind, canonical_id, observed_from, observed_to,
-                          str(scope.workspace_id), _actor(scope), scope.membership_revision])
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    # The cursor binds the admitted fence (workspace, actor, membership and configuration
+    # revisions): a token minted for another workspace/actor or before a role/membership/
+    # configuration change is rejected rather than rebased.
+    fingerprint = digest([kind, canonical_id, observed_from, observed_to, str(fence.workspace_id), fence.user_id,
+                          fence.membership_revision, fence.configuration_revision])
     filters = [GraphChange.workspace_id == scope.workspace_id, GraphChange.id > _after(cursor, fingerprint)]
     if kind:
         filters.append(GraphChange.kind == kind)

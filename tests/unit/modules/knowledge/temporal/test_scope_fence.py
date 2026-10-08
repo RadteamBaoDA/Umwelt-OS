@@ -1,5 +1,6 @@
 """Workspace scope, original-fence and cursor contracts for Temporal (no DB)."""
 
+import asyncio
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -10,7 +11,7 @@ from fastapi import HTTPException
 from sqlalchemy.dialects import postgresql
 
 from core.workspaces.schemas import AccessFence, InternalJobScope, WorkspaceContext
-from modules.knowledge.temporal import public, worker
+from modules.knowledge.temporal import public, routes, worker
 from modules.knowledge.temporal.schemas import ReconcileRequest
 from tests.unit.modules.knowledge.temporal.conftest import FENCE, JOB, MEMBER, OWNER, WORKSPACE_ID
 
@@ -47,7 +48,8 @@ def _adm() -> worker._Admission:
 ])
 async def test_member_is_denied_before_any_query(call) -> None:
     session = _session()
-    with patch("modules.knowledge.temporal.public.workspaces.read_access_fence", AsyncMock(return_value=FENCE)),             pytest.raises(HTTPException) as denied:
+    with patch("modules.knowledge.temporal.public.workspaces.read_access_fence", AsyncMock(return_value=FENCE)), \
+            pytest.raises(HTTPException) as denied:
         await call(session)
     assert denied.value.status_code == 403
     for name in ("execute", "scalar", "scalars", "get"):
@@ -64,13 +66,23 @@ async def test_find_changes_query_is_workspace_scoped(admitted_owner) -> None:
 
 # ---- cursors bind workspace, actor and revision ------------------------------------------------
 
-def _cursor_for(scope: WorkspaceContext | InternalJobScope) -> str:
+@pytest.fixture
+def owner_fence():
+    """Admit OWNER with a fence built from OWNER itself (independent of conftest module identity)."""
+    fence = AccessFence(workspace_id=OWNER.workspace_id, user_id=OWNER.user_id,
+                        membership_revision=OWNER.membership_revision, configuration_revision=1)
+    with patch("modules.knowledge.temporal.public.workspaces.read_access_fence", AsyncMock(return_value=fence)):
+        yield
+
+
+def _cursor_for(scope: WorkspaceContext | InternalJobScope, configuration_revision: int = 1) -> str:
     actor = scope.user_id if isinstance(scope, WorkspaceContext) else scope.actor_user_id
-    fingerprint = public.digest([None, None, None, None, str(scope.workspace_id), actor, scope.membership_revision])
+    fingerprint = public.digest([None, None, None, None, str(scope.workspace_id), actor,
+                                 scope.membership_revision, configuration_revision])
     return public._cursor(7, fingerprint)
 
 
-async def test_cursor_round_trips_for_the_same_workspace_actor_and_revision(admitted_owner) -> None:
+async def test_cursor_round_trips_for_the_same_workspace_actor_and_revision(owner_fence) -> None:
     session = _session()
     session.scalars = AsyncMock(return_value=MagicMock(all=list))
     page = await public.find_changes(session, scope=OWNER, cursor=_cursor_for(OWNER), **KW)
@@ -90,12 +102,21 @@ async def test_cursor_from_another_workspace_actor_or_revision_is_rejected(other
     session.scalars.assert_not_awaited()
 
 
+async def test_cursor_from_another_configuration_revision_is_rejected(owner_fence) -> None:
+    session = _session()
+    session.scalars = AsyncMock(return_value=MagicMock(all=list))
+    with pytest.raises(ValueError, match="Invalid temporal cursor"):
+        await public.find_changes(session, scope=OWNER, cursor=_cursor_for(OWNER, configuration_revision=2), **KW)
+    session.scalars.assert_not_awaited()
+
+
 # ---- the original fence is compared before every effect ----------------------------------------
 
 async def test_changed_original_fence_is_rejected_before_the_effect() -> None:
     drifted = AccessFence(workspace_id=WORKSPACE_ID, user_id=1, membership_revision=1, configuration_revision=2)
     session = _session()
-    with patch.object(worker.workspaces, "read_access_fence", AsyncMock(return_value=drifted)),             pytest.raises(HTTPException) as stale:
+    with patch.object(worker.workspaces, "read_access_fence", AsyncMock(return_value=drifted)), \
+            pytest.raises(HTTPException) as stale:
         await worker._finish(_factory(session), _adm(), uuid4(), uuid4(), "succeeded", None)
     assert stale.value.status_code == 409
     session.commit.assert_not_awaited()
@@ -220,3 +241,115 @@ async def test_recovery_admits_each_workspace_separately_and_skips_denied() -> N
         assert await worker.recover_graph_work(ctx) == 0
     assert seen == [first, second]
     assert commit.await_count == 1  # only the admitted workspace opens a mutation transaction
+
+
+# ---- cancellation coinciding with fence drift stays a cancellation -----------------------------
+
+async def test_cancellation_with_fence_drift_reraises_the_cancellation() -> None:
+    @asynccontextmanager
+    async def slot(*_args, **_kwargs):
+        yield
+
+    graph = MagicMock(close=AsyncMock(), initialize=AsyncMock(side_effect=asyncio.CancelledError()))
+    ctx = {"session_factory": _factory(_session()), "settings": SimpleNamespace()}
+    with patch.object(worker, "_admit_job", AsyncMock(return_value=_adm())), \
+            patch.object(worker, "_claim", AsyncMock(return_value=uuid4())), \
+            patch.object(worker, "_admit", AsyncMock()), \
+            patch.object(worker, "_finish", AsyncMock(side_effect=HTTPException(status_code=409))), \
+            patch.object(worker, "heavy_job_slot", slot), \
+            patch.object(worker, "TemporalGraph", MagicMock(return_value=graph)), \
+            patch.object(worker.GraphConfiguration, "from_settings", MagicMock()), \
+            pytest.raises(asyncio.CancelledError):
+        await worker.process_graph_operation(ctx, str(uuid4()))
+
+
+async def test_plain_fence_drift_is_still_a_silent_skip() -> None:
+    @asynccontextmanager
+    async def slot(*_args, **_kwargs):
+        yield
+
+    graph = MagicMock(close=AsyncMock())
+    ctx = {"session_factory": _factory(_session()), "settings": SimpleNamespace()}
+    with patch.object(worker, "_admit_job", AsyncMock(return_value=_adm())), \
+            patch.object(worker, "_claim", AsyncMock(side_effect=HTTPException(status_code=409))), \
+            patch.object(worker, "heavy_job_slot", slot), \
+            patch.object(worker, "TemporalGraph", MagicMock(return_value=graph)), \
+            patch.object(worker.GraphConfiguration, "from_settings", MagicMock()):
+        assert await worker.process_graph_operation(ctx, str(uuid4())) is None
+
+
+# ---- reconcile route: owner check, then access-fence lock, then fenced commit -------------------
+
+def _request() -> SimpleNamespace:
+    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+        settings=SimpleNamespace(multi_workspace_enabled=False))))
+
+
+async def test_reconcile_route_locks_fence_then_commits_with_it() -> None:
+    order: list[str] = []
+    run_id = uuid4()
+
+    async def lock(*_a, **_k):
+        order.append("lock")
+        return FENCE
+
+    async def request_reconcile(*_a, **_k):
+        order.append("request")
+        return run_id
+
+    async def commit(*_a, **kwargs):
+        order.append("commit")
+        assert kwargs["access_fence"] == FENCE
+
+    with patch.object(routes, "lock_access_fence", lock), \
+            patch.object(routes, "authenticated_session_ref", MagicMock(return_value="ref")), \
+            patch.object(routes.public, "request_reconcile", request_reconcile), \
+            patch.object(routes, "commit_with_replay", commit):
+        result = await routes.reconcile(
+            ReconcileRequest(source_id=uuid4()), MagicMock(), None, OWNER, _request(), MagicMock(headers={}))
+    assert order == ["lock", "request", "commit"]
+    assert result == {"run_id": run_id}
+
+
+async def test_reconcile_route_denies_member_before_taking_the_lock() -> None:
+    lock = AsyncMock()
+    with patch.object(routes, "lock_access_fence", lock), pytest.raises(HTTPException) as denied:
+        await routes.reconcile(
+            ReconcileRequest(source_id=uuid4()), MagicMock(), None, MEMBER, _request(), MagicMock(headers={}))
+    assert denied.value.status_code == 403
+    lock.assert_not_awaited()
+
+
+# ---- recovery workspace paging: keyset and wrap-around -----------------------------------------
+
+def _recovery_session(*pages: list) -> MagicMock:
+    session = _session()
+    session.scalars = AsyncMock(side_effect=[MagicMock(all=lambda page=page: page) for page in pages])
+    return session
+
+
+async def test_recovery_workspaces_pages_after_the_stored_cursor() -> None:
+    after, ids = uuid4(), [uuid4(), uuid4()]
+    session = _recovery_session(ids)
+    redis = MagicMock(get=AsyncMock(return_value=str(after).encode()), set=AsyncMock(), delete=AsyncMock())
+    assert await worker._recovery_workspaces(redis, _factory(session)) == ids  # type: ignore[arg-type]
+    sql = str(session.scalars.await_args.args[0].compile(dialect=postgresql.dialect()))
+    assert "workspace_id >" in sql
+    assert redis.set.await_args.args[:2] == (worker.RECOVERY_CURSOR_KEY, str(ids[-1]))
+
+
+async def test_recovery_workspaces_wraps_to_the_start_when_the_tail_is_empty() -> None:
+    first = uuid4()
+    session = _recovery_session([], [first])
+    redis = MagicMock(get=AsyncMock(return_value=str(uuid4())), set=AsyncMock(), delete=AsyncMock())
+    assert await worker._recovery_workspaces(redis, _factory(session)) == [first]  # type: ignore[arg-type]
+    assert session.scalars.await_count == 2
+    sql = str(session.scalars.await_args.args[0].compile(dialect=postgresql.dialect()))
+    assert "workspace_id >" not in sql
+
+
+async def test_recovery_workspaces_clears_the_cursor_when_nothing_is_due() -> None:
+    session = _recovery_session([], [])
+    redis = MagicMock(get=AsyncMock(return_value=str(uuid4())), set=AsyncMock(), delete=AsyncMock())
+    assert await worker._recovery_workspaces(redis, _factory(session)) == []  # type: ignore[arg-type]
+    redis.delete.assert_awaited_once_with(worker.RECOVERY_CURSOR_KEY)
