@@ -21,7 +21,7 @@ from collections.abc import Sequence
 from uuid import UUID, uuid4
 
 import sqlalchemy as sa
-from alembic import op
+from alembic import context, op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "p14_workspace_scope"
@@ -2408,8 +2408,10 @@ def upgrade() -> None:
     """
     tables = sorted(set(SCOPED_TABLES) | set(INHERITED_PATHS) | {'owner', 'workspaces', 'workspace_memberships'})
     op.execute(sa.text('LOCK TABLE ' + ', '.join(f'"{table}"' for table in tables) + ' IN ACCESS EXCLUSIVE MODE'))
-    _w2_empty_replay()
-    _w2_validate_live()
+    offline = context.is_offline_mode()  # --sql has no bind; data proofs run online only
+    if not offline:
+        _w2_empty_replay()
+        _w2_validate_live()
     for table, columns in SCOPED_COLUMNS:
         for column in columns:
             column_type = (postgresql.UUID(as_uuid=True) if column == 'workspace_id'
@@ -2426,8 +2428,9 @@ def upgrade() -> None:
             '(membership_revision IS NOT NULL AND configuration_revision IS NOT NULL '
             'AND membership_revision > 0 AND configuration_revision > 0)',
         )
-    _w2_backfill()
-    _w2_validate_lineage()
+    if not offline:
+        _w2_backfill()
+        _w2_validate_lineage()
     for table, columns in SCOPED_COLUMNS:
         for column in columns:
             op.alter_column(table, column, nullable=False)
