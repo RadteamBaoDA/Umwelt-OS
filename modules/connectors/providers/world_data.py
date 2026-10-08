@@ -17,7 +17,15 @@ from core.config import Settings
 from core.workspaces.schemas import AccessFence, Scope
 from modules.connectors.credentials import decrypt_credential_input, secret_fingerprint
 from modules.connectors.models import ConnectorWorldCredential
+from modules.connectors.providers.crypto import CRYPTO_ADAPTERS
+from modules.connectors.providers.disasters import DISASTER_ADAPTERS
 from modules.connectors.providers.feed_catalog import _retry_deadline
+from modules.connectors.providers.macro import (
+    MACRO_ADAPTERS,
+    ProviderPayloadError,
+    PureAdapter,
+    decode_json,
+)
 from modules.connectors.public import ConnectorConfig, ProviderCollectionPage, ProviderRateLimited
 from modules.ingestion.schemas import IngestionRecord
 from modules.sources.schemas import ConnectorSource, SourceFence
@@ -365,3 +373,19 @@ async def collect_world_data(
         }, before_request=lambda: before_request(operation_id))
         records.extend(_market_records(source, config, payload, collected_at))
     return ProviderCollectionPage(records=tuple(records), coverage="returned_snapshot", credential_operation_id=operation_id)
+
+
+PURE_ADAPTERS: dict[str, PureAdapter] = {**MACRO_ADAPTERS, **CRYPTO_ADAPTERS, **DISASTER_ADAPTERS}
+
+
+def map_pure_provider_body(provider: str, body: bytes, collected_at: datetime) -> list[IngestionRecord]:
+    """Decode (bounded, Decimal-aware) and map one fetched body for a P3 provider; no I/O.
+
+    The execution controller owns fetch, quota debit, terms checks and settlement; incomplete or
+    error bodies raise ``ProviderPayloadError`` (``kind`` says how to react) instead of returning
+    an empty series.
+    """
+    adapter = PURE_ADAPTERS.get(provider)
+    if adapter is None:
+        raise ProviderPayloadError("provider_scope_invalid")
+    return adapter.mapper(body if adapter.binary else decode_json(body), collected_at)
