@@ -1271,6 +1271,6 @@ async def recover_chat_runs(ctx: dict[str, object]) -> dict[str, int]:
             )) or 0
         await _mark_failed(
             cast(UUID, stale_id), factory, seq, fence, TimeoutError("generation abandoned"),
-            scope=await _scope_for_run(factory, stale_workspace, stale_actor),
+            scope=await _scope_for_run(factory, cast(UUID, stale_workspace), cast(int, stale_actor)),
         )
     return {"requeued": len(pending_ids), "failed": len(stale) + len(expired)}

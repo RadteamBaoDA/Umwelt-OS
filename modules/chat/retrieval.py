@@ -115,7 +115,7 @@ async def _apply_configured_reranking(
     try:
         scope_kw = await _scope_kwargs(session, scope)
         config = await settings_public.get_ai_execution_config(
-            session, settings, redis, scope=scope_kw["scope"],  # type: ignore[arg-type]
+            session, settings, redis, scope=scope_kw["scope"],
         )
         rerank_mapping = config.aliases.get("reranker")
         if not rerank_mapping or not rerank_mapping.model.strip():
@@ -195,7 +195,7 @@ async def _apply_configured_reranking(
             api_key=config.omniroute_api_key,
             destination_id=destination_id,
             timeout_seconds=config.request_timeout_seconds,
-            scope=scope_kw["scope"],  # type: ignore[arg-type]
+            scope=scope_kw["scope"],
             gateway_identity=config.gateway_identity,
             configuration_revision=config.configuration_revision,
             before_send=before_rerank_send,

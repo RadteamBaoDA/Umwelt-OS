@@ -754,7 +754,9 @@ async def read_memory_export_origin(
     if not history_enabled:
         return None
     now = _datetime.now(_UTC)
-    conversation_scope = _chat_export_scope(now, now)
+    from modules.chat.scope import owner_default_scope
+
+    conversation_scope = _chat_export_scope(now, now, (await owner_default_scope(session, owner_id)).workspace_id)
     row = (await session.execute(
         _select(
             Conversation.id.label("conversation_id"),
@@ -815,9 +817,12 @@ async def _chat_export_privacy(
     return privacy.store_conversation_history, persisted, updated_at
 
 
-def _chat_export_scope(snapshot_at: _datetime, now: _datetime) -> tuple[ColumnElement[bool], ...]:
-    """Filter to retained, non-automation conversation history unchanged at the cutoff."""
+def _chat_export_scope(
+    snapshot_at: _datetime, now: _datetime, workspace_id: UUID,
+) -> tuple[ColumnElement[bool], ...]:
+    """Filter to the workspace's retained, non-automation conversation history unchanged at the cutoff."""
     return (
+        Conversation.workspace_id == workspace_id,
         Conversation.created_at <= snapshot_at,
         Conversation.updated_at <= snapshot_at,
         Conversation.ephemeral.is_(False),
@@ -826,10 +831,12 @@ def _chat_export_scope(snapshot_at: _datetime, now: _datetime) -> tuple[ColumnEl
     )
 
 
-async def _chat_export_count(session: AsyncSession, record_kind: str, snapshot_at: _datetime) -> int:
-    """Count current owner-visible rows at a fixed export cutoff."""
+async def _chat_export_count(
+    session: AsyncSession, record_kind: str, snapshot_at: _datetime, workspace_id: UUID,
+) -> int:
+    """Count current owner-visible rows of one workspace at a fixed export cutoff."""
     now = _datetime.now(_UTC)
-    scope = _chat_export_scope(snapshot_at, now)
+    scope = _chat_export_scope(snapshot_at, now, workspace_id)
     if record_kind == "conversations":
         statement = _select(_func.count()).select_from(Conversation).where(*scope)
     else:
@@ -929,9 +936,9 @@ async def export_page(
             next_cursor=None, available=False, omission_reason="conversation_history_disabled",
             privacy_persisted=privacy_persisted, privacy_updated_at=privacy_updated_at, history_enabled=False,
         )
-    snapshot_count = await _chat_export_count(session, record_kind, snapshot_at)
+    snapshot_count = await _chat_export_count(session, record_kind, snapshot_at, scope.workspace_id)
     now = _datetime.now(_UTC)
-    row_scope = _chat_export_scope(snapshot_at, now)
+    row_scope = _chat_export_scope(snapshot_at, now, scope.workspace_id)
     items: list[ChatExportConversationRead | ChatExportMessageRead] = []
     fences: list[ChatExportFence] = []
     has_more = False
@@ -1146,7 +1153,7 @@ async def validate_export_fences(
             valid=False, reason="privacy_changed", observed_snapshot_count=0,
             privacy_persisted=current_privacy_persisted, privacy_updated_at=current_privacy_updated_at,
         )
-    observed_count = await _chat_export_count(session, record_kind, snapshot_at)
+    observed_count = await _chat_export_count(session, record_kind, snapshot_at, scope.workspace_id)
     if observed_count != expected_snapshot_count:
         return ChatExportFenceValidation(
             valid=False, reason="snapshot_count_changed", observed_snapshot_count=observed_count,
@@ -1158,7 +1165,7 @@ async def validate_export_fences(
         conversation = (await session.execute(
             _select(Conversation.created_at, Conversation.updated_at, Conversation.ephemeral,
                     Conversation.expires_at, Conversation.context_kind)
-            .where(Conversation.id == fence.conversation_id)
+            .where(Conversation.id == fence.conversation_id, Conversation.workspace_id == scope.workspace_id)
         )).one_or_none()
         if conversation is None or (
             conversation.created_at != fence.conversation_created_at
