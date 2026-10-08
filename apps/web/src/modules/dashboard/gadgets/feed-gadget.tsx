@@ -124,8 +124,8 @@ export function FeedGadget(props: FeedGadgetProps) {
           {t('feedTabStories')}
         </TabsTrigger>
       </TabsList>
-      <TabsContent value="items" className="mt-0 min-h-0 flex-1 overflow-hidden"><FeedStream {...props} /></TabsContent>
-      <TabsContent value="stories" className="mt-0 min-h-0 flex-1 overflow-hidden"><NewsFeed instance={props.instance} /></TabsContent>
+      <TabsContent value="items" forceMount className="mt-0 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden"><FeedStream {...props} /></TabsContent>
+      <TabsContent value="stories" forceMount className="mt-0 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden"><NewsFeed instance={props.instance} /></TabsContent>
     </Tabs>
   );
 }
@@ -186,6 +186,7 @@ function FeedStream({
   const [hiddenIds, setHiddenIds] = useState<ReadonlySet<string>>(new Set());
   const [lastHidden, setLastHidden] = useState<SelectedTelegramIdentity[]>([]);
   const [undoFailed, setUndoFailed] = useState(false);
+  const [hideFailed, setHideFailed] = useState(false);
   const focusTarget = useRef<'undo' | 'root' | null>(null);
   const autoFetches = useRef({ scope: '', count: 0 });
   const undoRef = useRef<HTMLButtonElement>(null);
@@ -224,6 +225,7 @@ function FeedStream({
       if (change.dismissed === undefined || !change.item) return;
       const { item } = change;
       if (change.dismissed) {
+        setHideFailed(true);
         setHiddenIds((current) => { const next = new Set(current); next.delete(item.documentVersionId); return next; });
       } else {
         // Undo failed: the server still has it hidden, so restore the hidden state and offer a retry.
@@ -242,6 +244,7 @@ function FeedStream({
     });
     setLastHidden(hidden ? items : []);
     setUndoFailed(false);
+    setHideFailed(false);
     focusTarget.current = hidden ? 'undo' : 'root';
     items.forEach((item) => interactionMutation.mutate({ id: item.documentId, versionNumber: item.versionNumber, item, dismissed: hidden }));
   };
@@ -318,35 +321,33 @@ function FeedStream({
       {/* Top action bar */}
       <div className="flex items-center justify-between border-b border-border pb-2 text-xs">
         <div className="flex items-center gap-2">
-          <button
+          <Button
             type="button"
+            variant={onlyUnread ? 'default' : 'ghost'}
+            size="sm"
+            aria-pressed={onlyUnread}
             onClick={() => setOnlyUnread((prev) => !prev)}
-            className={`px-2 py-0.5 rounded font-medium transition-colors ${
-              onlyUnread
-                ? 'bg-primary text-primary-foreground font-semibold'
-                : 'text-muted-foreground hover:text-foreground'
-            }`}
           >
             {onlyUnread ? t('unreadOnly') : t('allFeedItems')} ({feedItems.length})
-          </button>
+          </Button>
           {unreadCount > 0 && (
-            <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-primary/20 text-primary">
+            <span className="px-2 rounded-full text-xs font-bold bg-primary/20 text-primary">
             {t('unreadCount', { count: unreadCount })}
             </span>
           )}
         </div>
 
         <div className="flex items-center gap-1">
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="icon"
             onClick={() => docsQuery.refetch()}
             disabled={docsQuery.isFetching}
-            className="p-1 rounded text-muted-foreground hover:text-foreground transition-colors"
-            title="Refresh feed"
-            aria-label="Refresh feed stream"
+            aria-label={t('feedRefresh')}
           >
-            <RotateCw className={`w-3.5 h-3.5 ${docsQuery.isFetching ? 'animate-spin' : ''}`} />
-          </button>
+            <RotateCw className={`w-3.5 h-3.5 ${docsQuery.isFetching ? 'animate-spin' : ''}`} aria-hidden="true" />
+          </Button>
         </div>
       </div>
 
@@ -396,7 +397,7 @@ function FeedStream({
           </SelectContent>
         </Select>
       </div>
-      {filtering && <p className="text-[11px] text-muted-foreground">{t('feedFiltersNote')}</p>}
+      {filtering && <p className="text-xs text-muted-foreground">{t('feedFiltersNote')}</p>}
 
       {selectedTelegramItems.length > 0 && (
         <div role="group" aria-label={t('feedBulkBar')} className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-background p-2 text-xs">
@@ -455,6 +456,7 @@ function FeedStream({
           >{undoFailed ? t('feedUndoRetry') : t('feedUndo')}</Button>
         )}
       </div>
+      {hideFailed && <p role="alert" className="text-xs text-destructive">{t('feedHideError')}</p>}
       {undoFailed && <p role="alert" className="text-xs text-destructive">{t('feedUndoError')}</p>}
 
       {staleTelegramSelections.length > 0 && (
@@ -479,7 +481,7 @@ function FeedStream({
         <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-muted-foreground">
           <Newspaper className="w-8 h-8 mb-2 opacity-50" />
             <p className="text-xs font-semibold text-foreground mb-1">{t('feedEmptyTitle')}</p>
-          <p className="text-[11px] max-w-xs text-muted-foreground">
+          <p className="text-xs max-w-xs text-muted-foreground">
             {needle || sourceFilter !== 'all'
               ? t('feedNoMatch')
               : serverFiltered
@@ -512,7 +514,7 @@ function FeedStream({
                 }`}
               >
                 <div className="flex items-start justify-between gap-2">
-                  <div className="flex items-center gap-1.5 min-w-0">
+                  <div className="flex items-center gap-2 min-w-0">
                     <span className="p-1 rounded bg-muted/30 text-primary shrink-0">
                       {getFeedSourceIcon(item.sourceType)}
                     </span>
@@ -526,20 +528,20 @@ function FeedStream({
                   </div>
 
                   {!isRead && (
-                    <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-primary/20 text-primary uppercase tracking-wider shrink-0">
+                    <span className="px-2 rounded text-xs font-bold bg-primary/20 text-primary uppercase tracking-wider shrink-0">
                       {t('unreadBadge')}
                     </span>
                   )}
                 </div>
 
                 {isTelegram && (item.channelLabel || item.messageId) && (
-                  <p className="text-[10px] text-muted-foreground">
+                  <p className="text-xs text-muted-foreground">
                     {[item.channelLabel, item.messageId ? t('telegramMessageId', { id: item.messageId }) : null].filter(Boolean).join(' · ')}
                   </p>
                 )}
 
                 {item.documentVersionId && item.sourceId && (
-                  <label className="inline-flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                  <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
                     <input
                       type="checkbox"
                       aria-label={t('selectRecord', { title: item.title })}
@@ -564,13 +566,13 @@ function FeedStream({
                 )}
 
                 {item.excerpt && (
-                  <p className="text-[11px] text-muted-foreground line-clamp-2 leading-relaxed">
+                  <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">
                     {item.excerpt}
                   </p>
                 )}
 
                 {isTelegram && item.media && item.media.length > 0 && (
-                  <ul aria-label={t('telegramMedia')} className="space-y-1 text-[10px] text-muted-foreground">
+                  <ul aria-label={t('telegramMedia')} className="space-y-1 text-xs text-muted-foreground">
                     {item.media.map((media, index) => (
                       <li key={`${media.kind}:${index}`}>
                         {t('telegramMediaPlaceholder', { kind: t(`telegramMediaKind_${media.kind}`), count: media.count })}
@@ -581,7 +583,7 @@ function FeedStream({
                 )}
 
                 {/* Footer metadata & actions */}
-                <div className="flex items-center justify-between text-[10px] text-muted-foreground pt-1 border-t border-border/40">
+                <div className="flex items-center justify-between text-xs text-muted-foreground pt-1 border-t border-border/40">
                   {isTelegram ? (
                     <div className="space-y-0.5">
                       {item.publishedAt && <p>{t('telegramPublishedAt', { time: formatDateTime(item.publishedAt, display.locale, display.timezone) })}</p>}
@@ -596,29 +598,31 @@ function FeedStream({
                         type="button"
                         variant="ghost"
                         size="sm"
-                        className="h-6 px-1.5 text-[10px]"
+                        className="h-6 px-2 text-xs"
                         onClick={() => openDrawer({ context: { kind: 'selection', items: [{
                           sourceId: item.sourceId!, documentId: item.id,
                           documentVersionId: item.documentVersionId!,
                         }] } })}
                       >{t('askAboutMessage')}</Button>
                     )}
-                    {item.versionNumber !== undefined && <button
+                    {item.versionNumber !== undefined && <Button
                       type="button"
+                      variant="ghost"
+                      size="sm"
                       disabled={interactionMutation.isPending}
                       onClick={() => interactionMutation.mutate({ id: item.id, versionNumber: item.versionNumber!, read: !item.read })}
-                      className="hover:text-foreground font-medium transition-colors"
                     >
                       {isRead ? t('markUnread') : t('markRead')}
-                    </button>}
-                    {item.versionNumber !== undefined && <button
+                    </Button>}
+                    {item.versionNumber !== undefined && <Button
                       type="button"
+                      variant="ghost"
+                      size="icon"
                       disabled={interactionMutation.isPending}
                       onClick={() => interactionMutation.mutate({ id: item.id, versionNumber: item.versionNumber!, bookmarked: !item.bookmarked })}
                       aria-pressed={!!item.bookmarked}
-                      className="hover:text-foreground"
-                      title={item.bookmarked ? t('removeBookmark') : t('bookmark')}
-                    ><Bookmark className="h-3.5 w-3.5" fill={item.bookmarked ? 'currentColor' : 'none'} /></button>}
+                      aria-label={item.bookmarked ? t('removeBookmark') : t('bookmark')}
+                    ><Bookmark className="h-3.5 w-3.5" fill={item.bookmarked ? 'currentColor' : 'none'} aria-hidden="true" /></Button>}
 
                     {safeHttpUrl(item.url) && (
                       <a
@@ -660,7 +664,7 @@ function FeedStream({
         >{docsQuery.isFetchingNextPage ? t('feedLoadingMore') : t('feedLoadMore')}</Button>
       )}
       {!initialItems?.length && !docsQuery.hasNextPage && !docsQuery.isError && feedItems.length > 0 && (
-        <p className="text-center text-[11px] text-muted-foreground">{t('feedEndOfList')}</p>
+        <p className="text-center text-xs text-muted-foreground">{t('feedEndOfList')}</p>
       )}
     </div>
   );
