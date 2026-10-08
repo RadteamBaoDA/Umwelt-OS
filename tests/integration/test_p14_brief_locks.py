@@ -206,7 +206,7 @@ async def test_slow_brief_holds_no_lock_and_a_mid_call_purge_publishes_no_revisi
 
     response = await generate
     assert response.status_code == 503, response.text
-    assert json.loads(response.text)["detail"]["code"] == "model_unavailable"
+    assert json.loads(response.text)["error"]["code"] == "model_unavailable"
     assert await _revisions(committed_engine, day) == before
 
 
