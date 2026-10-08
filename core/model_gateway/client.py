@@ -37,6 +37,12 @@ _ACQUIRE = "for i, k in ipairs(KEYS) do if redis.call('set', k, ARGV[1], 'NX', '
 _RELEASE = "local n = 0 for _, k in ipairs(KEYS) do if redis.call('get', k) == ARGV[1] then n = n + redis.call('del', k) end end return n"
 
 
+def _raise_if_policy_denied(exc: BaseException) -> None:
+    """The SDK wraps transport errors as APIConnectionError; surface a network-policy denial without retrying."""
+    if isinstance(exc.__cause__, EndpointNetworkPolicyError):
+        raise ModelGatewayError("Model gateway network policy denied the destination") from exc
+
+
 class ModelGatewayError(RuntimeError):
     """Base exception for unavailable, rejected, or invalid model gateway operations."""
 
@@ -218,6 +224,7 @@ class ModelGateway:
                             if after_send is not None:
                                 await after_send()
                     except (APITimeoutError, APIConnectionError) as exc:
+                        _raise_if_policy_denied(exc)
                         if attempt == 0:
                             continue
                         raise ModelGatewayError("Model gateway request failed") from exc
@@ -229,8 +236,6 @@ class ModelGateway:
                         if exc.status_code in {400, 404, 405, 422}:
                             raise CapabilityUnsupported("The configured gateway rejected this capability") from exc
                         raise ModelGatewayError(f"Model gateway returned HTTP {exc.status_code}") from exc
-                    except EndpointNetworkPolicyError as exc:
-                        raise ModelGatewayError("Model gateway network policy denied the destination") from exc
                     if hasattr(response, "model_dump"):
                         return response.model_dump(mode="json", exclude_none=True)
                     if isinstance(response, dict):
@@ -264,9 +269,8 @@ class ModelGateway:
                 try:
                     page = await client.models.list()
                 except (APIConnectionError, APITimeoutError, APIStatusError) as exc:
+                    _raise_if_policy_denied(exc)
                     raise ModelGatewayError("Model gateway discovery failed") from exc
-                except EndpointNetworkPolicyError as exc:
-                    raise ModelGatewayError("Model gateway network policy denied the destination") from exc
                 model_ids: list[str] = [item.id for item in page.data if isinstance(item.id, str) and item.id]
                 return model_ids
 
@@ -387,6 +391,7 @@ class ModelGateway:
                         yield "data: [DONE]"
                         return
                     except (APITimeoutError, APIConnectionError, TimeoutError) as exc:
+                        _raise_if_policy_denied(exc)
                         if attempt == 1 or emitted:
                             raise ModelGatewayError("Model gateway stream failed") from exc
                     except RedisError as exc:
@@ -399,8 +404,6 @@ class ModelGateway:
                         if exc.status_code in {400, 404, 405, 422}:
                             raise CapabilityUnsupported("The configured gateway rejected streaming") from exc
                         raise ModelGatewayError(f"Model gateway returned HTTP {exc.status_code}") from exc
-                    except EndpointNetworkPolicyError as exc:
-                        raise ModelGatewayError("Model gateway network policy denied the destination") from exc
 
     async def embed(
         self, alias: str, mapping: ModelMapping | None, policy: RequestPolicy,

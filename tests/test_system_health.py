@@ -44,6 +44,7 @@ async def test_system_health_times_out_stalled_dependency_probes(monkeypatch) ->
     assert result["components"]["postgres"]["status"] == "unavailable"
     assert result["components"]["redis"]["status"] == "unavailable"
     assert result["components"]["worker"]["status"] == "unavailable"
+    assert result["components"]["chat_worker"]["status"] == "unavailable"
 
 
 @pytest.mark.asyncio
@@ -90,6 +91,27 @@ async def test_missing_chat_worker_heartbeat_degrades_health() -> None:
     assert result["components"]["worker"]["status"] == "healthy"
     assert result["components"]["chat_worker"]["status"] == "unavailable"
     assert result["overall"] == "degraded"
+
+
+@pytest.mark.asyncio
+async def test_present_chat_worker_heartbeat_is_healthy() -> None:
+    class FakeRedis:
+        async def ping(self):
+            return True
+
+        async def get(self, _key):
+            return b"1"
+
+        async def info(self, _section):
+            return {}
+
+    class OkSession:
+        async def execute(self, _statement):
+            return None
+
+    result = await system_health(cast(AsyncSession, OkSession()), cast(Redis, FakeRedis()), Settings())
+    assert result["components"]["chat_worker"]["status"] == "healthy"
+    assert result["overall"] == "healthy"
 
 
 def test_ready_timeout_exceeds_health_probe_and_fits_compose_healthcheck() -> None:
