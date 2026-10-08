@@ -4,7 +4,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
 import anyio
@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.requests import ClientDisconnect
 from starlette.types import Message, Receive, Scope as ASGIScope, Send
 
 from core.auth.dependencies import require_account
@@ -304,6 +305,34 @@ class _RealtimePage:
     reason: str | None
 
 
+class _PermitResponse(StreamingResponse):
+    """Streaming response that frees the stream permit if the generator never started (failed send, early error)."""
+
+    def __init__(self, content: AsyncIterator[str], started: asyncio.Event, semaphore: asyncio.Semaphore, **kwargs: Any) -> None:
+        super().__init__(content, **kwargs)
+        self._started = started
+        self._semaphore = semaphore
+
+    async def __call__(self, scope: ASGIScope, receive: Receive, send: Send) -> None:
+        try:
+            # No listen_for_disconnect task group (Starlette spec < 2.4): its scope cancel would land inside the
+            # body generator mid-DB-await and cancel the session rollback. Both generators poll
+            # request.is_disconnected(), so they exit at a clean point; uvicorn's send is a no-op after disconnect.
+            await self.stream_response(send)
+        except OSError:
+            raise ClientDisconnect() from None  # spec 2.4 servers raise on send once the client is gone
+        finally:
+            # Starlette never closes body_iterator; close it here so the generator's finally (permit
+            # release, rollback) runs now, not at GC. Shielded + bounded for servers that cancel the task.
+            aclose = getattr(self.body_iterator, "aclose", None)
+            if aclose is not None:
+                with anyio.CancelScope(shield=True), anyio.move_on_after(2):
+                    await aclose()
+            if not self._started.is_set():
+                self._started.set()  # idempotent guard against double release
+                self._semaphore.release()
+
+
 async def _read_replay_page(
     request: Request, *, workspace: WorkspaceContext, fence: AccessFence,
     auth_session: AccountSessionRef, position: ReplayCursor,
@@ -368,6 +397,8 @@ async def stream_events(
         raise HTTPException(status_code=400, detail="Replay cursor is ahead of the current stream")
     initial_reason = ("epoch_changed" if initial.epoch != head.epoch
                       else "cursor_expired" if initial.sequence < head.floor_sequence - 1 else None)
+
+    started = asyncio.Event()
 
     async def body() -> AsyncIterator[str]:
         """Yield detached same-stream events/resync or15s heartbeat; no SQL transaction survives a yield."""

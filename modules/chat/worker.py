@@ -1,15 +1,18 @@
 """Background generation worker and ARQ task handler for chat model generation."""
 
 import asyncio
+import contextlib
 import json
 import logging
+import time
+from collections.abc import AsyncGenerator
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from redis.asyncio import Redis
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
@@ -43,8 +46,17 @@ from modules.settings import public as settings_public
 logger = logging.getLogger(__name__)
 
 CANCEL_KEY_PREFIX = "chat:cancel:"
-STREAM_BATCH_FLUSH = 1
+STREAM_FLUSH_SECONDS = 0.1
+STREAM_FLUSH_CHARS = 256
+CHAT_QUEUE = "arq:chat"
+CHAT_JOB_TIMEOUT = 600  # arq job_timeout for ChatWorkerSettings (single source)
+SHUTDOWN_TIMEOUT_MARGIN = 30.0
+RECOVER_PENDING_AFTER = timedelta(seconds=15)
+RECOVER_PENDING_MAX_AGE = timedelta(minutes=15)  # (measured from updated_at) pending runs fail instead of re-enqueueing forever
+CANCEL_CHECK_INTERVAL = 0.25  # per-line Redis cancel check throttle; flushes always check
+RECOVER_STREAMING_AFTER = timedelta(seconds=660)  # arq job_timeout 600 s plus margin
 EPHEMERAL_TTL = timedelta(hours=24)
+SHUTDOWN_RELEASE_TIMEOUT = 5.0  # compose stop_grace_period is 30 s; arq awaits the job task before closing
 
 
 class PrivacyFenceChanged(RuntimeError):
@@ -388,36 +400,46 @@ async def run_response_generation(
     seq = 0
 
     # 1. Claim run atomically
-    async with session_factory() as session:
-        result = await session.execute(
-            update(ResponseRun)
-            .where(ResponseRun.id == response_id, ResponseRun.status == "pending")
-            .values(status="streaming")
-            .returning(
-                ResponseRun.conversation_id, ResponseRun.user_message_id,
-                ResponseRun.retrieval_context, ResponseRun.ephemeral,
+    try:
+        async with session_factory() as session:
+            result = await session.execute(
+                update(ResponseRun)
+                .where(ResponseRun.id == response_id, ResponseRun.status == "pending")
+                .values(status="streaming")
+                .returning(
+                    ResponseRun.conversation_id, ResponseRun.user_message_id,
+                    ResponseRun.retrieval_context, ResponseRun.ephemeral,
+                )
             )
-        )
-        claimed = result.fetchone()
-        if claimed is None:
-            # Run was already claimed or cancelled before start
-            return
+            claimed = result.fetchone()
+            if claimed is None:
+                # Run was already claimed or cancelled before start
+                return
 
-        conversation_id, user_message_id, raw_context_req, run_ephemeral = cast(
-            "tuple[UUID, UUID, dict[str, Any] | None, bool]", tuple(claimed),
-        )
-        seq += 1
-        event_id = make_event_id(response_id, seq)
-        session.add(
-            StreamEvent(
-                response_id=response_id,
-                seq=seq,
-                event_type="status",
-                event_id=event_id,
-                data={"status": "streaming"},
+            conversation_id, user_message_id, raw_context_req, run_ephemeral = cast(
+                "tuple[UUID, UUID, dict[str, Any] | None, bool]", tuple(claimed),
             )
-        )
-        await session.commit()
+            seq += 1
+            event_id = make_event_id(response_id, seq)
+            session.add(
+                StreamEvent(
+                    response_id=response_id,
+                    seq=seq,
+                    event_type="status",
+                    event_id=event_id,
+                    data={"status": "streaming"},
+                )
+            )
+            await session.commit()
+    except asyncio.CancelledError:
+        # Cancelled around the claim commit: the run may be `streaming` with nothing published. Hand it back
+        # now (no-op unless it is `streaming`) instead of waiting RECOVER_STREAMING_AFTER.
+        try:
+            await asyncio.wait_for(_release_on_shutdown(response_id, session_factory, None), SHUTDOWN_RELEASE_TIMEOUT)
+        except Exception as exc:  # noqa: BLE001  # boundary: recovery is the safety net
+            logger.warning("Chat run claim-cancel release failed for %s (%s)", response_id, type(exc).__name__)
+        raise
+    claimed_at = time.monotonic()
 
     # 2. Retrieve user message and grounding context
     accumulated_text = ""
@@ -641,56 +663,86 @@ async def run_response_generation(
                 after_send=after_send_attempt,
             )
 
-        # 4. Stream tokens through ModelGateway; recheck all current evidence before each publication.
-        async for raw_line in stream_iter:
-            if await is_run_cancelled(response_id, redis):
-                await _mark_cancelled(response_id, session_factory, seq, privacy_fence)
-                return
+        # 4. Stream tokens through ModelGateway. Deltas are buffered in worker memory (never published)
+        # and flushed at most every STREAM_FLUSH_SECONDS or STREAM_FLUSH_CHARS; each flush is one locked,
+        # revalidated transaction in the same lock order as before (privacy -> conversation -> run -> evidence).
+        loop = asyncio.get_running_loop()
+        pending = ""
+        last_flush = float("-inf")
 
-            line = raw_line.strip()
-            if not line or line == "data: [DONE]":
-                continue
-            if line.startswith("data: "):
-                payload_str = line[6:]
-                try:
-                    chunk_obj = json.loads(payload_str)
-                    choices = chunk_obj.get("choices", [])
-                    if choices and isinstance(choices, list):
-                        delta = choices[0].get("delta", {})
-                        content_delta = delta.get("content", "")
-                        if content_delta:
-                            async with session_factory() as session:
-                                _, live_run = await _lock_live_response(
-                                    session, response_id, conversation_id, privacy_fence,
+        async def _flush_pending() -> bool | None:
+            """Publish the buffer; None means the run was cancelled/redacted and the buffer was dropped."""
+            nonlocal pending, accumulated_text, seq, last_flush
+            if not pending:
+                return True
+            async with session_factory() as session:
+                _, live_run = await _lock_live_response(
+                    session, response_id, conversation_id, privacy_fence,
+                )
+                if await is_run_cancelled(response_id, redis):
+                    pending = ""
+                    await _cancel_response_locked(session, live_run, seq)
+                    await session.commit()
+                    return None
+                if answer_context.evidence:
+                    fences_ok, _fence_reasons = await revalidate_context_fence(
+                        session, answer_context, destination="remote",
+                        require_current_versions=answer_request.selected_only,
+                        lock_evidence=True,
+                    )
+                    if not fences_ok:
+                        pending = ""
+                        await _privacy_cancel_locked(session, live_run, seq)
+                        await session.commit()
+                        return None
+                seq = await _next_event_seq(session, response_id, seq)
+                session.add(
+                    StreamEvent(
+                        response_id=response_id,
+                        seq=seq,
+                        event_type="message.delta",
+                        event_id=make_event_id(response_id, seq),
+                        data={"text": pending},
+                    )
+                )
+                await session.commit()
+            accumulated_text += pending
+            pending = ""
+            last_flush = loop.time()
+            return True
+
+        last_cancel_check = loop.time()
+        async with contextlib.aclosing(cast("AsyncGenerator[str, None]", stream_iter)) as lines:
+            async for raw_line in lines:
+                if loop.time() - last_cancel_check >= CANCEL_CHECK_INTERVAL:
+                    last_cancel_check = loop.time()
+                    if await is_run_cancelled(response_id, redis):
+                        await _mark_cancelled(response_id, session_factory, seq, privacy_fence)
+                        return
+
+                line = raw_line.strip()
+                if not line or line == "data: [DONE]":
+                    continue
+                if line.startswith("data: "):
+                    payload_str = line[6:]
+                    try:
+                        chunk_obj = json.loads(payload_str)
+                        choices = chunk_obj.get("choices", [])
+                        if choices and isinstance(choices, list):
+                            delta = choices[0].get("delta", {})
+                            content_delta = delta.get("content", "")
+                            if content_delta:
+                                pending += content_delta
+                                due = len(pending) >= STREAM_FLUSH_CHARS or (
+                                    loop.time() - last_flush >= STREAM_FLUSH_SECONDS
                                 )
-                                if await is_run_cancelled(response_id, redis):
-                                    await _cancel_response_locked(session, live_run, seq)
-                                    await session.commit()
+                                if due and await _flush_pending() is None:
                                     return
-                                if answer_context.evidence:
-                                    fences_ok, _fence_reasons = await revalidate_context_fence(
-                                        session, answer_context, destination="remote",
-                                        require_current_versions=answer_request.selected_only,
-                                        lock_evidence=True,
-                                    )
-                                    if not fences_ok:
-                                        await _privacy_cancel_locked(session, live_run, seq)
-                                        await session.commit()
-                                        return
-                                accumulated_text += content_delta
-                                seq = await _next_event_seq(session, response_id, seq)
-                                session.add(
-                                    StreamEvent(
-                                        response_id=response_id,
-                                        seq=seq,
-                                        event_type="message.delta",
-                                        event_id=make_event_id(response_id, seq),
-                                        data={"text": content_delta},
-                                    )
-                                )
-                                await session.commit()
-                except (json.JSONDecodeError, AttributeError):
-                    pass
+                    except (json.JSONDecodeError, AttributeError):
+                        pass
+
+        if await _flush_pending() is None:
+            return
 
         # 5. Complete generation and citation validation
         # PRODUCTION FIX: ensure_grounded_answer() returns a plain str, so `.answer`/`.citations`
@@ -723,7 +775,7 @@ async def run_response_generation(
             if (key := _evidence_key(n)) in kept
         }
         final_answer = renumber_citation_markers(validated.answer, number_map, len(answer_context.evidence))
-        valid_citations = [c.model_dump(by_alias=True) for c in validated.citations]
+        valid_citations = [c.model_dump(mode="json", by_alias=True) for c in validated.citations]
 
         async with session_factory() as session:
             _, live_run = await _lock_live_response(session, response_id, conversation_id, privacy_fence)
@@ -806,9 +858,61 @@ async def run_response_generation(
         await _mark_privacy_cancelled(response_id, session_factory, seq)
     except ResponseNoLongerActive:
         return
+    except asyncio.CancelledError:
+        # arq cancels in-flight jobs on SIGTERM/deploy. Make the run recoverable now instead of after
+        # RECOVER_STREAMING_AFTER; bounded, never raises, and the cancellation still propagates.
+        # arq's job_timeout cancels the same way; near the timeout it is not a shutdown, so fail (no retry loop).
+        timed_out = time.monotonic() - claimed_at >= CHAT_JOB_TIMEOUT - SHUTDOWN_TIMEOUT_MARGIN
+        try:
+            await asyncio.wait_for(
+                _release_on_shutdown(response_id, session_factory, privacy_fence, timed_out),
+                SHUTDOWN_RELEASE_TIMEOUT,
+            )
+        except Exception as exc:  # noqa: BLE001  # boundary: recovery's abandonment threshold is the safety net
+            logger.warning("Chat run shutdown release failed for %s (%s)", response_id, type(exc).__name__)
+        raise
     except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
         logger.error("Response generation failed for run %s: %s", response_id, type(exc).__name__)
         await _mark_failed(response_id, session_factory, seq, privacy_fence, exc)
+
+
+async def _release_on_shutdown(
+    response_id: UUID, session_factory: async_sessionmaker[AsyncSession], expected_fence: object, timed_out: bool = False,
+) -> None:
+    """Worker is stopping: hand a streaming run back as pending, or fail it truthfully if content was published.
+
+    Same privacy -> conversation -> run lock order as `_mark_failed`. With no delta/citation published the
+    client saw nothing but the `streaming` status, so the run returns to `pending` (its events are dropped so
+    the re-claim can reuse seq 1) and `recover_chat_runs` re-enqueues it; otherwise it fails like an
+    abandoned run.
+    """
+    async with session_factory() as session:
+        await lock_export_privacy(session)
+        run_hint = await session.scalar(select(ResponseRun).where(ResponseRun.id == response_id))
+        if run_hint is None:
+            return
+        await session.scalar(select(Conversation).where(
+            Conversation.id == run_hint.conversation_id,
+        ).with_for_update().execution_options(populate_existing=True))
+        run = await session.scalar(select(ResponseRun).where(
+            ResponseRun.id == response_id,
+        ).with_for_update().execution_options(populate_existing=True))
+        if run is None or run.status != "streaming":
+            return
+        published = await session.scalar(select(StreamEvent.id).where(
+            StreamEvent.response_id == response_id,
+            StreamEvent.event_type.in_(("message.delta", "message.citations")),
+        ).limit(1))
+        if published is None and not timed_out:
+            await session.execute(delete(StreamEvent).where(StreamEvent.response_id == response_id))
+            run.status = "pending"
+            await session.commit()
+            return
+        seq = await session.scalar(select(func.coalesce(func.max(StreamEvent.seq), 0)).where(
+            StreamEvent.response_id == response_id,
+        )) or 0
+        await session.rollback()
+    await _mark_failed(response_id, session_factory, seq, expected_fence, TimeoutError("generation timed out" if timed_out else "chat worker shutting down"))
 
 
 async def _privacy_cancel_locked(session: AsyncSession, run: ResponseRun, current_seq: int = 0) -> int:
@@ -990,3 +1094,91 @@ async def process_chat_response(ctx: dict[str, object], response_id: str) -> Non
     session_factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     redis = cast(Redis, ctx.get("redis"))
     await run_response_generation(UUID(response_id), session_factory, settings, redis)
+
+
+async def _fail_expired_pending(response_id: UUID, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    """Fail a run that never started (nothing published); privacy -> conversation -> run lock order."""
+    async with session_factory() as session:
+        await lock_export_privacy(session)
+        hint = await session.scalar(select(ResponseRun).where(ResponseRun.id == response_id))
+        if hint is None:
+            return
+        await session.scalar(select(Conversation).where(
+            Conversation.id == hint.conversation_id,
+        ).with_for_update().execution_options(populate_existing=True))
+        run = await session.scalar(select(ResponseRun).where(
+            ResponseRun.id == response_id,
+        ).with_for_update().execution_options(populate_existing=True))
+        if run is None or run.status != "pending" or run.updated_at >= datetime.now(UTC) - RECOVER_PENDING_MAX_AGE:
+            return  # released back to pending (fresh updated_at) between select and lock: re-enqueue instead
+        run.status = "failed"
+        run.error_code = "TimeoutError"
+        run.error_message = "chat worker unavailable"
+        run.completed_at = func.now()
+        seq = await _next_event_seq(session, response_id, 0)
+        session.add(StreamEvent(
+            response_id=response_id, seq=seq, event_type="status",
+            event_id=make_event_id(response_id, seq),
+            data={"status": "failed", "error": "chat worker unavailable"},
+        ))
+        await session.commit()
+
+
+async def recover_chat_runs(ctx: dict[str, object]) -> dict[str, int]:
+    """Re-enqueue stuck pending runs and fail streaming runs whose generator is gone.
+
+    Re-enqueue is safe: the pending->streaming claim is atomic and the arq job id is fixed. Abandoned
+    runs go through `_mark_failed`, which keeps the privacy -> conversation -> run lock order and the
+    privacy-redaction fallback. Pending runs untouched for RECOVER_PENDING_MAX_AGE (by `updated_at`, which
+    a release-to-pending refreshes) are failed instead of re-enqueued.
+    """
+    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    redis = cast(Any, ctx["redis"])
+    now = datetime.now(UTC)
+    async with factory() as session:
+        pending_ids = list(await session.scalars(
+            select(ResponseRun.id)
+            .where(
+                ResponseRun.status == "pending",
+                ResponseRun.created_at < now - RECOVER_PENDING_AFTER,
+                ResponseRun.updated_at >= now - RECOVER_PENDING_MAX_AGE,
+            )
+            .order_by(ResponseRun.created_at).limit(50)
+        ))
+        expired = list(await session.scalars(
+            select(ResponseRun.id)
+            .where(ResponseRun.status == "pending", ResponseRun.updated_at < now - RECOVER_PENDING_MAX_AGE)
+            .order_by(ResponseRun.created_at).limit(50)
+        ))
+        last_event = (
+            select(func.max(StreamEvent.created_at))
+            .where(StreamEvent.response_id == ResponseRun.id).scalar_subquery()
+        )
+        cutoff = now - RECOVER_STREAMING_AFTER
+        stale = (await session.execute(
+            select(ResponseRun.id, ResponseRun.retrieval_context)
+            .where(
+                ResponseRun.status == "streaming",
+                ResponseRun.updated_at < cutoff,
+                func.coalesce(last_event, ResponseRun.updated_at) < cutoff,
+            )
+            .order_by(ResponseRun.updated_at).limit(50)
+        )).all()
+    for expired_id in expired:
+        await _fail_expired_pending(expired_id, factory)
+    for run_id in pending_ids:
+        try:
+            await redis.enqueue_job(
+                "process_chat_response", str(run_id),
+                _job_id=f"chat-response:{run_id}", _queue_name=CHAT_QUEUE,
+            )
+        except Exception as exc:  # noqa: BLE001  # boundary: next poll retries
+            logger.warning("Chat run re-enqueue failed for %s (%s)", run_id, type(exc).__name__)
+    for stale_id, context in stale:
+        fence = context.get("_chat_privacy_fence") if isinstance(context, dict) else None
+        async with factory() as session:
+            seq = await session.scalar(select(func.coalesce(func.max(StreamEvent.seq), 0)).where(
+                StreamEvent.response_id == stale_id,
+            )) or 0
+        await _mark_failed(cast(UUID, stale_id), factory, seq, fence, TimeoutError("generation abandoned"))
+    return {"requeued": len(pending_ids), "failed": len(stale) + len(expired)}

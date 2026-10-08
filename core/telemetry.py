@@ -22,6 +22,7 @@ import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any, TypeVar
 
 from pydantic import BaseModel, Field
@@ -128,6 +129,41 @@ def redact_mapping(value: Any, _depth: int = 0) -> Any:
     return value
 
 
+# Exact-type Decimal passes un-frozen so %d/%.2f keep working; its str/repr hold a digit coefficient only
+# (repr is "Decimal('...')"). Matching by exact type keeps a subclass with a custom __str__ out.
+_EXACT_NUMERIC_TYPES = (Decimal,)
+
+
+def _freeze_arg(item: Any) -> Any:
+    """Freeze one log arg by value so a handler's later __str__/__repr__ cannot emit unchecked text."""
+    if type(item) in (int, float, bool, type(None), *_EXACT_NUMERIC_TYPES):
+        return item
+    if isinstance(item, int):  # int subclass (IntEnum...): drop its own __str__, keep %d/%s rendering
+        return int.__int__(item)
+    if isinstance(item, float):
+        return float.__float__(item)
+    return redact_text(item) if isinstance(item, str) else redact_text(str(redact_mapping(item)))
+
+
+def _stable_record(record: logging.LogRecord, redacted: str) -> tuple[str, Any]:
+    """Return (msg, args) whose rendering holds no secret yet keeps the positional shape formatters unpack.
+
+    uvicorn's AccessFormatter needs the 5-tuple, so mask every str arg at once: masking one at a time can
+    hide the context (e.g. ``cookie=``) that makes a neighbouring arg a secret. Fall back to the fully
+    collapsed string with no args only when even that rendering is not redaction-stable.
+    """
+    args = record.args
+    if isinstance(record.msg, str) and isinstance(args, tuple):
+        trial = tuple(_MASK if isinstance(item, str) else item for item in args)
+        try:
+            text = record.msg % trial
+        except (TypeError, ValueError):
+            return redacted, None
+        if redact_text(text) == text:
+            return record.msg, trial
+    return redacted, None
+
+
 def install_log_redaction() -> None:
     """Scrub messages, extra fields, exception text and trace IDs before handlers see records."""
     if getattr(logging.Logger.makeRecord, "_bbd_redacting", False):
@@ -143,10 +179,15 @@ def install_log_redaction() -> None:
             if isinstance(record.msg, Mapping):
                 record.msg = redact_mapping(record.msg)
             if isinstance(record.args, Mapping):
-                record.args = redact_mapping(record.args)
+                record.args = {k: _freeze_arg(v) for k, v in redact_mapping(record.args).items()}
             elif isinstance(record.args, tuple):
-                record.args = tuple(redact_mapping(item) for item in record.args)
-            record.msg, record.args = redact_text(record.getMessage()), None
+                # Redact by value: freeze non-primitives to their redacted str so a later __str__/__repr__
+                # call by a handler can never emit text that was not checked here.
+                record.args = tuple(_freeze_arg(item) for item in record.args)
+            message = record.getMessage()
+            redacted = redact_text(message)
+            if redacted != message or not isinstance(record.msg, str):
+                record.msg, record.args = _stable_record(record, redacted)
         except Exception:  # noqa: BLE001 - formatting faults must not fail the caller
             record.msg, record.args = "[unformattable log message]", None
         # Keep each field name attached so secret/content key rules apply at the record boundary.

@@ -21,7 +21,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _p12_revisions() -> tuple[str, list[str]]:
-    """Return (head, P12 revision ids) and the pre-P12 parent, derived from the migration scripts."""
+    """Return the pre-P12 parent and P12 revision ids (newest first), skipping any later revisions."""
     script = ScriptDirectory.from_config(Config(str(REPOSITORY_ROOT / "alembic.ini")))
     head = script.get_current_head()
     assert head is not None

@@ -21,11 +21,18 @@ class Settings(BaseSettings):
     graph_password: SecretStr = Field(default=SecretStr(""), validation_alias="GRAPH_PASSWORD", repr=False)
     graph_database: str = Field(default="bbd_temporal", validation_alias="GRAPH_DATABASE")
     graph_embedding_dimensions: int | None = Field(default=None, ge=1, le=4096, validation_alias="GRAPH_EMBEDDING_DIMENSIONS")
+    db_pool_size: int = Field(default=10, ge=1, le=100, validation_alias="DB_POOL_SIZE")
+    db_max_overflow: int = Field(default=10, ge=0, le=100, validation_alias="DB_MAX_OVERFLOW")
+    db_statement_timeout_ms: int = Field(default=60_000, ge=0, validation_alias="DB_STATEMENT_TIMEOUT_MS")
+    db_idle_tx_timeout_ms: int = Field(default=240_000, ge=0, validation_alias="DB_IDLE_TX_TIMEOUT_MS")
+    max_request_body_bytes: int = Field(default=5 * 1024 * 1024, gt=0, validation_alias="MAX_REQUEST_BODY_BYTES")
     data_dir: Path = Path("/data")
     upload_max_bytes: int = Field(default=25 * 1024 * 1024, gt=0, le=1024 * 1024 * 1024)
     parser_timeout_seconds: int = Field(default=120, gt=0, le=3600)
     docx_expanded_max_bytes: int = Field(default=100 * 1024 * 1024, gt=0)
     pdf_page_max: int = Field(default=500, gt=0)
+    # 10 MiB of text chunks in ~1 s and ~0.3 GiB; the 100 MiB docx bound would need ~3 GiB on an 8 GiB host.
+    parsed_text_max_chars: int = Field(default=10 * 1024 * 1024, gt=0)
     storage_orphan_grace_seconds: int = Field(default=3600, gt=0)
     browser_service_url: AnyHttpUrl = AnyHttpUrl("http://browser:8001")
     browser_shared_token: SecretStr = SecretStr("")
@@ -43,6 +50,9 @@ class Settings(BaseSettings):
     secure_cookies: bool = False
     setup_token: SecretStr = SecretStr("")
     csrf_signing_secret: SecretStr = SecretStr("")
+    # Key the per-IP auth limiter on the rightmost X-Forwarded-For entry. Enable only behind a front proxy that
+    # OVERWRITES the header with the real client address; otherwise clients can spoof it and dodge the per-IP limit.
+    auth_trust_forwarded_for: bool = Field(default=False, validation_alias="AUTH_TRUST_FORWARDED_FOR")
     session_lifetime_hours: int = Field(default=24, gt=0, le=720)
     # Enable only after W4 scope review and V1 security validation; legacy/operator access stays bootstrap-only.
     multi_workspace_enabled: bool = Field(default=False, validation_alias="BBD_MULTI_WORKSPACE_ENABLED")
@@ -56,6 +66,7 @@ class Settings(BaseSettings):
     github_webhook_receiver_revision: str = Field(default="1", min_length=1, max_length=64, validation_alias="GITHUB_WEBHOOK_RECEIVER_REVISION")
     omniroute_base_url: AnyHttpUrl | None = Field(default=None, repr=False)
     omniroute_api_key: SecretStr = SecretStr("")
+    model_gateway_slots: int = Field(default=24, ge=1, le=1000, validation_alias="MODEL_GATEWAY_SLOTS")
     omniroute_models: dict[str, str] = Field(default_factory=dict, repr=False)
     ai_credential_encryption_key: SecretStr = Field(
         default=SecretStr(""), validation_alias="AI_CREDENTIAL_ENCRYPTION_KEY", repr=False

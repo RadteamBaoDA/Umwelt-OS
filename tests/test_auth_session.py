@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 
 from apps.api.main import create_app
@@ -94,6 +95,9 @@ class MemoryRedis:
 
     async def get(self, _key):
         return None
+
+    async def info(self, _section):
+        return {"used_memory": 1024, "maxmemory": 268435456}
 
     def incr(self, key):
         self.keys.append(key)
@@ -251,3 +255,59 @@ async def test_login_rate_limit_rejects_the_sixth_attempt() -> None:
         )
     assert limited.status_code == 429
     assert limited.headers["retry-after"]
+
+
+async def _session_fixture():
+    store = MemoryAuthStore()
+    token = "concurrent-session-token"
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    store.sessions[token_hash] = AuthSession(
+        token_hash=token_hash, owner_id=1, csrf_hash="stale", expires_at=datetime.now(UTC) + timedelta(hours=1)
+    )
+    app = create_app(Settings(public_origin="http://localhost:3000", csrf_signing_secret="test-csrf-signing-secret"))
+
+    async def session_override():
+        yield MemorySession(store)
+
+    app.dependency_overrides[get_session] = session_override
+    app.dependency_overrides[get_auth_redis] = lambda: MemoryRedis()
+    app.state.session_factory = lambda: MemorySession(store)
+    return app, token
+
+
+@pytest.mark.asyncio
+async def test_session_reads_with_current_csrf_do_not_409_under_concurrency(monkeypatch) -> None:
+    app, token = await _session_fixture()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://localhost:3000") as client:
+        client.cookies.set("bbd_session", token)
+        first = await client.get("/api/v1/auth/session")  # rotates; sets the current CSRF cookie
+        assert first.status_code == 200, first.text
+
+        async def busy(*_args, **_kwargs):
+            raise HTTPException(status_code=409, detail="busy")
+
+        monkeypatch.setattr(auth_routes, "_lock_owner_session", busy)
+        results = await asyncio.gather(*(client.get("/api/v1/auth/session") for _ in range(10)))
+    assert [r.status_code for r in results] == [200] * 10
+    assert {r.json()["csrfToken"] for r in results} == {first.json()["csrfToken"]}
+
+
+@pytest.mark.asyncio
+async def test_csrf_rotation_retries_busy_owner_lock_then_succeeds(monkeypatch) -> None:
+    app, token = await _session_fixture()
+    real = auth_routes._lock_owner_session
+    calls = 0
+
+    async def flaky(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls <= 2:
+            raise HTTPException(status_code=409, detail="busy")
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(auth_routes, "_lock_owner_session", flaky)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://localhost:3000") as client:
+        client.cookies.set("bbd_session", token)
+        response = await client.get("/api/v1/auth/session")
+    assert response.status_code == 200
+    assert calls == 3

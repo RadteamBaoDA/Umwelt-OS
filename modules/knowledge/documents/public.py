@@ -34,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.chunking import chunk_text
 from core.events import DomainEvent
+from core.heavy_work import to_thread_joined
 from core.pagination import decode_cursor, encode_cursor
 from core.realtime import ReplayDraft, commit_with_replay, make_knowledge_change
 from core.tools.schemas import ToolDestination, ToolOutputFence
@@ -1838,7 +1839,7 @@ async def _list_evidence_ref_keys(
 async def add_content_chunks(session: AsyncSession, version: DocumentVersion) -> int:
     """Chunk a version's content, add its searchable rows, and return their count."""
     await session.flush()
-    drafts = chunk_text(version.content)
+    drafts = await to_thread_joined(chunk_text, version.content)
     for index, draft in enumerate(drafts):
         session.add(DocumentChunk(
             document_version_id=version.id, chunk_index=index, content=draft.content,

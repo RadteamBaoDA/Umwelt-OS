@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import BinaryIO
 from uuid import UUID
 
 from fastapi import UploadFile
@@ -20,6 +22,16 @@ def storage_path(root: Path, relative_path: str) -> Path:
     if not path.is_relative_to(base):
         raise ValueError("Invalid storage path")
     return path
+
+
+def _write_block(temporary: BinaryIO, digest: hashlib._Hash, block: bytes) -> None:
+    temporary.write(block)
+    digest.update(block)
+
+
+def _sync(temporary: BinaryIO) -> None:
+    temporary.flush()
+    os.fsync(temporary.fileno())
 
 
 async def save_upload(
@@ -52,10 +64,8 @@ async def save_upload(
                 size += len(block)
                 if size > max_bytes:
                     raise ValueError("Upload exceeds the configured size limit")
-                temporary.write(block)
-                digest.update(block)
-            temporary.flush()
-            os.fsync(temporary.fileno())
+                await asyncio.to_thread(_write_block, temporary, digest, block)
+            await asyncio.to_thread(_sync, temporary)
         if size == 0:
             raise ValueError("Uploaded file is empty")
         if storage_path(root, relative.as_posix()) != destination or any(

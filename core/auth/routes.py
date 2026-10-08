@@ -95,6 +95,9 @@ async def _allow_attempt(request: Request, redis: Redis, action: str) -> None:
     """Atomically increment per-address and global minute counters; reject Redis outages or exceeded limits."""
     minute = int(time.time() // 60)
     address = request.client.host if request.client else "unknown"
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if getattr(request.app.state.settings, "auth_trust_forwarded_for", False) is True and forwarded.strip():
+        address = forwarded.rsplit(",", 1)[-1].strip()  # rightmost hop: the one our trusted proxy wrote
     keys = (f"auth:{action}:ip:{_hash(address)}:{minute}", f"auth:{action}:all:{minute}")
     try:
         pipeline = redis.pipeline(transaction=True)
@@ -149,7 +152,7 @@ async def create_owner(
         raise HTTPException(status_code=403, detail="CSRF token is invalid")
 
     try:
-        await provision_bootstrap_account_in_uow(session, hash_password(body.password))
+        await provision_bootstrap_account_in_uow(session, await asyncio.to_thread(hash_password, body.password))
         await session.commit()
     except IntegrityError as exc:
         await session.rollback()
@@ -197,15 +200,17 @@ async def login(
         try:
             email = normalize_account_email(body.identifier)
         except ValueError:
-            verify_login_password(None, body.password)
+            await asyncio.to_thread(verify_login_password, None, body.password)
             raise HTTPException(status_code=401, detail="Email or password is incorrect") from None
         account_id = await session.scalar(select(Owner.id).where(Owner.email == email))
     try:
         owner = await _lock_owner(session, account_id) if account_id is not None else None
     except HTTPException:
-        verify_login_password(None, body.password)
+        await asyncio.to_thread(verify_login_password, None, body.password)
         raise HTTPException(status_code=401, detail="Email or password is incorrect") from None
-    password_matches = verify_login_password(owner.password_hash if owner else None, body.password)
+    password_matches = await asyncio.to_thread(
+        verify_login_password, owner.password_hash if owner else None, body.password,
+    )
     if owner is None or not password_matches or await get_active_account(
         session, owner.id, multi_workspace_enabled=settings.multi_workspace_enabled,
     ) is None:
@@ -323,6 +328,27 @@ async def _lock_owner_session(
     return owner, auth_session
 
 
+async def _lock_owner_session_retrying(
+    request: Request, session: AsyncSession, stale_session: AuthSession, attempts: int = 5
+) -> tuple[Owner, AuthSession]:
+    """Take the owner/session locks for CSRF rotation, briefly retrying NOWAIT contention.
+
+    Rotation is idempotent for the caller, so concurrent tabs wait a few tens of milliseconds for
+    each other instead of surfacing a 409. Still 409 if the locks stay busy after ``attempts``.
+    """
+    # rollback expires loaded rows; keep the two identifiers the lock helpers read on a detached copy.
+    ids = AuthSession(token_hash=stale_session.token_hash, owner_id=stale_session.owner_id)
+    for attempt in range(attempts):
+        try:
+            return await _lock_owner_session(request, session, ids, None, check_csrf=False)
+        except HTTPException as exc:
+            if exc.status_code != 409 or attempt == attempts - 1:
+                raise
+            await session.rollback()  # a failed NOWAIT aborts the transaction
+            await asyncio.sleep(0.02 * (attempt + 1))
+    raise AssertionError("unreachable")
+
+
 async def _lock_identity_for_owner(
     session: AsyncSession, owner_id: int
 ) -> GoogleIdentity | None:
@@ -392,7 +418,7 @@ async def reauthenticate(
     owner, auth_session = await _lock_owner_session(
         request, session, auth_session, csrf_token
     )
-    if owner is None or not verify_password(owner.password_hash, body.password):
+    if owner is None or not await asyncio.to_thread(verify_password, owner.password_hash, body.password):
         raise HTTPException(status_code=403, detail="Password is incorrect")
     auth_session.reauthenticated_at = datetime.now(UTC)
     await session.commit()
@@ -720,21 +746,13 @@ async def auth_session(
         request.state.backup_activity = receipt
         # Persist admission before locking the owner/session rows for rotation.
         await session.commit()
-    _owner, row = await _lock_owner_session(
-        request, session, row, None, check_csrf=False
-    )
-    csrf_is_current = bool(
-        existing_token and _valid_csrf(existing_cookie, existing_token, settings)
-        and hmac.compare_digest(row.csrf_hash, _hash(existing_token))
-    )
-    if not csrf_is_current and getattr(request.state, "backup_activity", None) is None:
-        # A competing rotation changed the state after the initial read. Retry admission
-        # rather than taking the earlier backup lock while holding account/session locks.
-        raise HTTPException(status_code=409, detail="Authentication state changed; retry the request")
     if csrf_is_current:
+        # Read-only: _current_session already validated existence and expiry, and nothing is written,
+        # so no NOWAIT owner/session lock is needed (concurrent tabs must not 409 on a plain read).
         assert existing_token is not None
         csrf_token = existing_token
     else:
+        _owner, row = await _lock_owner_session_retrying(request, session, row)
         csrf_token, csrf_cookie = _new_csrf(settings)
         row.csrf_hash = _hash(csrf_token)
         await session.commit()

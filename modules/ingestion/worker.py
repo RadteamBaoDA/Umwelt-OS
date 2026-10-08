@@ -5,7 +5,7 @@ import hashlib
 import json
 import logging
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from typing import cast
@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from core.chunking import chunk_text
 from core.config import Settings
 from core.events import DomainEvent
-from core.heavy_work import bounded_heavy_work
+from core.heavy_work import bounded_heavy_work, to_thread_joined
 from core.realtime import (
     ReplayDraft,
     commit_with_replay,
@@ -48,7 +48,7 @@ from modules.ingestion.models import (
     SourceIngestionState,
     SourceObservation,
 )
-from modules.ingestion.parsers import parse_file_bounded
+from modules.ingestion.parsers import ParsedDocument, parse_file_bounded
 from modules.ingestion.schemas import EventDelivery, IngestionRecord
 from modules.knowledge.documents import public as documents
 from modules.knowledge.documents.schemas import NormalizedDocumentInput
@@ -1458,7 +1458,8 @@ async def process_uploaded_file(ctx: dict[str, object], event_id: str) -> None:
         # The row/URI proof and original dispatch were captured before closing the session.
         parsed = await parse_file_bounded(storage_path(settings.data_dir, raw_uri), mime_type,
             settings.parser_timeout_seconds, settings.docx_expanded_max_bytes, settings.pdf_page_max)
-        drafts = chunk_text(parsed.text)
+        parsed = _cap_parsed_text(parsed, settings.parsed_text_max_chars)
+        drafts = await to_thread_joined(chunk_text, parsed.text)
         extraction_status = "needs_ocr" if parsed.warnings and not parsed.text else "succeeded"
         async with factory() as session:
             work = await _lock_worker_event(session, identifier, multi_workspace_enabled=enabled,
@@ -1494,7 +1495,7 @@ async def process_uploaded_file(ctx: dict[str, object], event_id: str) -> None:
                                            event_types=("document.file.uploaded",), expected=claim)
             if work is None:
                 return
-            code = "parser_timeout" if isinstance(exc, TimeoutError) else "parse_failed"
+            code = _failure_code(exc)
             work.stage.status = "failed"
             work.stage.error_code = code
             work.stage.lease_expires_at = None
@@ -1514,6 +1515,26 @@ async def process_uploaded_file(ctx: dict[str, object], event_id: str) -> None:
             await _commit_ingestion_change(session, work.run, work.stage, tuple(extras), scope=work.scope,
                 multi_workspace_enabled=enabled, access_fence=work.access_fence)
             count("ingestion_documents_total", outcome="failed")
+
+
+def _cap_parsed_text(parsed: ParsedDocument, limit: int) -> ParsedDocument:
+    """Bound chunking input: keep the first `limit` chars and record the truncation as a document warning."""
+    text = parsed.text
+    if len(text) <= limit:
+        return parsed
+    logger.warning("Parsed text truncated to %s of %s chars", limit, len(text))
+    return replace(
+        parsed,
+        text=text[:limit],
+        warnings=[*parsed.warnings, "parsed_text_truncated"],
+        metadata={**parsed.metadata, "truncated_from_chars": len(text), "kept_chars": limit},
+    )
+
+
+def _failure_code(exc: Exception) -> str:
+    if isinstance(exc, TimeoutError):
+        return "parser_timeout"
+    return "parse_failed"
 
 
 async def cleanup_storage_orphans(ctx: dict[str, object]) -> int:
@@ -1543,7 +1564,9 @@ async def cleanup_storage_orphans(ctx: dict[str, object]) -> int:
             referenced = await documents.raw_uris(
                 session, instance_operator=True, multi_workspace_enabled=enabled,
             )
-        return cleanup_orphaned_files(settings.data_dir, referenced, settings.storage_orphan_grace_seconds)
+        return await asyncio.to_thread(
+            cleanup_orphaned_files, settings.data_dir, referenced, settings.storage_orphan_grace_seconds,
+        )
     finally:
         async with factory() as session:
             await finish_activity(session, activity)

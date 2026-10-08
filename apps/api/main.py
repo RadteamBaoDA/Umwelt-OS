@@ -1,18 +1,21 @@
 import asyncio
+import os
 import secrets
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 
+from arq.connections import ArqRedis
 from fastapi import FastAPI
-from redis.asyncio import Redis
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from starlette.middleware.sessions import SessionMiddleware
 
 from core.auth.routes import router as auth_router
 from core.workspaces.routes import router as workspaces_router
+from core.body_limit import BodyLimitMiddleware
 from core.config import Settings
+from core.database import make_session_factory
 from core.errors import install_error_handling
 from core.modules import register_modules
+from core.realtime_routes import MAX_STREAMS_PER_API_PROCESS
 from core.realtime_routes import router as realtime_router
 from core.system.routes import router as system_router
 from core.telemetry import install_log_redaction
@@ -24,6 +27,7 @@ from modules.automations.routes import webhook_router as automation_webhook_rout
 from modules.automations.tools import register_automation_tools
 from modules.backup.middleware import BackupActivityMiddleware
 from modules.backup.routes import router as backup_router
+from modules.chat.routes import MAX_CHAT_STREAMS_PER_API_PROCESS
 from modules.chat.routes import router as chat_router
 from modules.connectors.github.routes import router as github_oauth_router
 from modules.connectors.provisioning_routes import router as connector_provisioning_router
@@ -79,8 +83,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         exit; Redis and SQLAlchemy disposal run even when startup hydration fails.
     """
     app_settings = settings or Settings()
-    engine = create_async_engine(app_settings.database_url, pool_pre_ping=True, pool_size=5, max_overflow=0)
-    redis = Redis.from_url(app_settings.redis_url, decode_responses=True)
+    csrf_secret = app_settings.csrf_signing_secret.get_secret_value()
+    worker_counts = []
+    for name in ("WEB_CONCURRENCY", "UVICORN_WORKERS"):  # uvicorn honours both (click auto_envvar_prefix)
+        workers_raw = os.getenv(name, "1").strip() or "1"
+        if not workers_raw.isdigit():
+            raise RuntimeError(f"{name} must be a positive integer, got {workers_raw!r}")
+        worker_counts.append(int(workers_raw))
+    if not csrf_secret and max(worker_counts) > 1:
+        raise RuntimeError("CSRF_SIGNING_SECRET is required when WEB_CONCURRENCY or UVICORN_WORKERS > 1 (each worker would sign with a different secret)")
+    engine, session_factory = make_session_factory(
+        app_settings.database_url,
+        pool_size=app_settings.db_pool_size,
+        max_overflow=app_settings.db_max_overflow,
+        statement_timeout_ms=app_settings.db_statement_timeout_ms,
+        idle_tx_timeout_ms=app_settings.db_idle_tx_timeout_ms,
+    )
+    # ArqRedis subclasses Redis, so existing callers work and enqueue_job exists for chat/agent dispatch.
+    redis = ArqRedis.from_url(
+        app_settings.redis_url,
+        decode_responses=True,
+        socket_timeout=5,
+        socket_connect_timeout=2,
+        health_check_interval=30,
+        max_connections=100,
+    )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -109,21 +136,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="BBD-OS", lifespan=lifespan)
     app.state.settings = app_settings
-    app.state.session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    app.state.realtime_connections = asyncio.Semaphore(4)
+    app.state.session_factory = session_factory
+    app.state.realtime_connections = asyncio.Semaphore(MAX_STREAMS_PER_API_PROCESS)
+    app.state.chat_streams = asyncio.Semaphore(MAX_CHAT_STREAMS_PER_API_PROCESS)
     app.state.redis = redis
     app.add_middleware(
         SessionMiddleware,
-        secret_key=(
-            app_settings.csrf_signing_secret.get_secret_value()
-            or secrets.token_urlsafe(32)
-        ),
+        secret_key=csrf_secret or secrets.token_urlsafe(32),
         https_only=app_settings.secure_cookies,
         same_site="lax",
     )
     install_log_redaction()
     install_error_handling(app)
     app.add_middleware(BackupActivityMiddleware)
+    app.add_middleware(
+        BodyLimitMiddleware,
+        default_limit=app_settings.max_request_body_bytes,
+        upload_limit=app_settings.upload_max_bytes + 1024 * 1024,
+    )
     app.include_router(auth_router)
     app.include_router(workspaces_router)
     app.include_router(backup_router)

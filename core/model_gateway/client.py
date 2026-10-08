@@ -1,10 +1,11 @@
 import asyncio
 import json
 import logging
+import random
 import secrets
 import time
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
-from contextlib import aclosing, asynccontextmanager
+from contextlib import AbstractAsyncContextManager, aclosing, asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -12,17 +13,37 @@ from typing import Any, cast
 import httpx
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI
 from redis.asyncio import Redis
+from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import RedisError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
+from core.config import Settings
 from core.model_gateway.cache import capability_key
 from core.model_gateway.policy import may_send
 from core.model_gateway.schemas import CapabilityResult, ModelMapping, RequestPolicy
 from core.workspaces.schemas import InternalJobScope, Scope, WorkspaceContext
-from core.model_gateway.transport import EndpointNetworkPolicyError, approved_http_client
+from core.model_gateway.transport import EndpointNetworkPolicyError, approved_http_client, body_sent
 from core.telemetry import record_model_call
 
 _LEASE_PREFIX = "bbd:model-gateway:slot:"
-_RELEASE = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end"
+_SLOTS = Settings().model_gateway_slots  # MODEL_GATEWAY_SLOTS, read once per process
+_LEASE_WAIT_SECONDS = 10.0
+# A stream holds its slot for the whole generation, so it queues longer than short calls (no DB locks held while waiting).
+_STREAM_LEASE_WAIT_SECONDS = 120.0
+_CONNECT_TIMEOUT_SECONDS = 5.0
+_LEASE_TTL_SECONDS = 60
+_LEASE_REFRESH_SECONDS = 20.0
+_REFRESH = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('pexpire', KEYS[1], ARGV[2]) else return 0 end"
+# One round trip per poll: take the first free slot (owner token, PX TTL) or return -1.
+_ACQUIRE = "for i, k in ipairs(KEYS) do if redis.call('set', k, ARGV[1], 'NX', 'PX', ARGV[2]) then return i - 1 end end return -1"
+# Token-checked; one key (normal release) or all slots (sweep after an acquire cut short mid-flight).
+_RELEASE = "local n = 0 for _, k in ipairs(KEYS) do if redis.call('get', k) == ARGV[1] then n = n + redis.call('del', k) end end return n"
+
+
+def _raise_if_policy_denied(exc: BaseException) -> None:
+    """The SDK wraps transport errors as APIConnectionError; surface a network-policy denial without retrying."""
+    if isinstance(exc.__cause__, EndpointNetworkPolicyError):
+        raise ModelGatewayError("Model gateway network policy denied the destination") from exc
 
 
 class ModelGatewayError(RuntimeError):
@@ -106,35 +127,73 @@ class ModelGateway:
         except EndpointNetworkPolicyError as exc:
             raise ModelGatewayError("Model gateway network policy is unavailable") from exc
 
+    async def _keep_lease(self, key: str, token: str) -> None:
+        """Extend the lease TTL while the call runs; only our token is refreshed."""
+        while True:
+            await asyncio.sleep(_LEASE_REFRESH_SECONDS)
+            try:
+                await cast("Awaitable[Any]", self.redis.eval(_REFRESH, 1, key, token, str(_LEASE_TTL_SECONDS * 1000)))
+            except RedisError:
+                pass
+
+    def _slot(self) -> AbstractAsyncContextManager[None]:
+        """Lease a gateway slot with the default (short) acquisition wait."""
+        return self._lease(_LEASE_WAIT_SECONDS)
+
+    def _timeout(self) -> httpx.Timeout:
+        """Overall timeout with a short connect bound so a silent-drop host fails fast."""
+        return httpx.Timeout(self.timeout_seconds, connect=min(_CONNECT_TIMEOUT_SECONDS, self.timeout_seconds))
+
     @asynccontextmanager
-    async def _slot(self) -> AsyncIterator[None]:
-        """Acquire one of two Redis-backed gateway leases within the timeout and release only the matching lease token."""
+    async def _lease(self, wait_seconds: float) -> AsyncIterator[None]:
+        """Acquire one of the Redis-backed gateway leases (bounded wait), hold it with a refreshed TTL, release only our token.
+
+        The timeout bounds lease acquisition only; the body runs outside it.
+        """
         token = secrets.token_urlsafe(18)
+        keys = [f"{_LEASE_PREFIX}{slot}" for slot in range(_SLOTS)]
         key = None
+        attempted = False
+        refresher: asyncio.Task[None] | None = None
         try:
-            async with asyncio.timeout(self.timeout_seconds):
-                while key is None:
-                    for slot in range(2):
-                        candidate = f"{_LEASE_PREFIX}{slot}"
-                        if await self.redis.set(candidate, token, nx=True, ex=int(self.timeout_seconds) + 10):
-                            key = candidate
-                            break
-                    if key is None:
-                        await asyncio.sleep(0.05)
-                yield
-        except (RedisError, TimeoutError) as exc:
-            raise ModelGatewayError("Model capacity is unavailable") from exc
+            try:
+                async with asyncio.timeout(wait_seconds):
+                    while key is None:
+                        attempted = True
+                        try:
+                            slot = int(await cast("Awaitable[Any]", self.redis.eval(
+                                _ACQUIRE, len(keys), *keys, token, str(_LEASE_TTL_SECONDS * 1000))))
+                        except (RedisConnectionError, RedisTimeoutError):
+                            slot = -1  # transient (e.g. pool exhausted): retry until the lease deadline
+                        if slot >= 0:
+                            key = keys[slot]
+                        else:
+                            await asyncio.sleep(0.1 + random.uniform(0, 0.05))
+            except (RedisError, TimeoutError) as exc:
+                raise ModelGatewayError("Model capacity is unavailable") from exc
+            refresher = asyncio.create_task(self._keep_lease(key, token))
+            yield
         finally:
-            if key is not None:
+            if refresher is not None:
+                refresher.cancel()
+            # An acquire cut short mid-flight may still have been applied server-side: sweep all slots by token.
+            held = [key] if key is not None else keys if attempted else []
+            if held:
                 try:
-                    await cast("Awaitable[Any]", self.redis.eval(_RELEASE, 1, key, token))
+                    await asyncio.shield(cast("Awaitable[Any]", self.redis.eval(_RELEASE, len(held), *held, token)))
                 except RedisError:
                     pass
 
     async def _with_slot[T](self, call: Callable[[], Awaitable[T]]) -> T:
-        """Run one async gateway operation while holding a bounded-capacity lease."""
+        """Run one non-stream gateway operation under a lease with a total deadline (lease wait excluded)."""
         async with self._slot():
-            return await call()
+            try:
+                async with asyncio.timeout(self.timeout_seconds):
+                    return await call()
+            except TimeoutError as exc:
+                raise ModelGatewayError("Model gateway request timed out") from exc
+            except RedisError as exc:
+                raise ModelGatewayError("Model gateway request failed") from exc
 
     async def _request(
         self,
@@ -163,7 +222,7 @@ class ModelGateway:
             async with AsyncOpenAI(
                 base_url=base_url,
                 api_key=self.api_key or "not-configured",
-                timeout=self.timeout_seconds,
+                timeout=self._timeout(),
                 max_retries=0,
                 http_client=self._http_client(base_url),
             ) as client:
@@ -176,19 +235,26 @@ class ModelGateway:
                             await before_send()
                         if not self._policy_matches(policy) or not may_send(policy, alias, mapping, self.destination_id, bool(self.api_key), capability):
                             raise PrivacyPolicyDenied("Model request denied by privacy policy")
+                        # Gated (P2-3): with no after_send the ContextVar is never touched, so the
+                        # transport sends request.stream unwrapped exactly as before.
+                        hook = body_sent.set(after_send) if after_send is not None else None
                         try:
                             if path == "chat/completions":
                                 response = await client.chat.completions.create(**body)
                             elif path == "embeddings":
                                 response = await client.embeddings.create(**body)
                             elif path == "rerank":
-                                response = await client.post("/rerank", cast_to=dict, body=body)
+                                response = await client.post("/rerank", cast_to=dict[str, Any], body=body)
                             else:
                                 raise ModelGatewayError("Unsupported model gateway operation")
                         finally:
+                            if hook is not None:
+                                body_sent.reset(hook)
+                            # Fallback release (connect/write failure, timeout); after_send is idempotent.
                             if after_send is not None:
                                 await after_send()
                     except (APITimeoutError, APIConnectionError) as exc:
+                        _raise_if_policy_denied(exc)
                         if attempt == 0:
                             continue
                         raise ModelGatewayError("Model gateway request failed") from exc
@@ -200,8 +266,6 @@ class ModelGateway:
                         if exc.status_code in {400, 404, 405, 422}:
                             raise CapabilityUnsupported("The configured gateway rejected this capability") from exc
                         raise ModelGatewayError(f"Model gateway returned HTTP {exc.status_code}") from exc
-                    except EndpointNetworkPolicyError as exc:
-                        raise ModelGatewayError("Model gateway network policy denied the destination") from exc
                     if hasattr(response, "model_dump"):
                         return response.model_dump(mode="json", exclude_none=True)
                     if isinstance(response, dict):
@@ -229,14 +293,13 @@ class ModelGateway:
             """Call the configured model-list endpoint and return valid model IDs; map SDK and network failures to the gateway error."""
             await self.before_send()
             async with AsyncOpenAI(base_url=base_url, api_key=self.api_key,
-                                   timeout=self.timeout_seconds, max_retries=0,
+                                   timeout=self._timeout(), max_retries=0,
                                    http_client=self._http_client(base_url)) as client:
                 try:
                     page = await client.models.list()
                 except (APIConnectionError, APITimeoutError, APIStatusError) as exc:
+                    _raise_if_policy_denied(exc)
                     raise ModelGatewayError("Model gateway discovery failed") from exc
-                except EndpointNetworkPolicyError as exc:
-                    raise ModelGatewayError("Model gateway network policy denied the destination") from exc
                 model_ids: list[str] = [item.id for item in page.data if isinstance(item.id, str) and item.id]
                 return model_ids
 
@@ -247,8 +310,13 @@ class ModelGateway:
         messages: list[dict[str, Any]], probe: bool = False, *,
         max_tokens: int | None = None, temperature: float | None = None,
         before_send: Callable[[], Awaitable[None]] | None = None,
+        after_send: Callable[[], Awaitable[None]] | None = None,
     ) -> Any:
-        """Send bounded chat requests under gateway policy and optional per-attempt authorization."""
+        """Send bounded chat requests under gateway policy and optional per-attempt authorization.
+
+        ``after_send`` (idempotent) runs once the request body is handed to the transport and again
+        after each attempt, so callers can release send fences before the response arrives.
+        """
         if max_tokens is not None and not 1 <= max_tokens <= 8192:
             raise ValueError("max_tokens must be between 1 and 8192")
         if temperature is not None and not 0 <= temperature <= 2:
@@ -259,7 +327,7 @@ class ModelGateway:
         if temperature is not None:
             payload["temperature"] = temperature
         return await self._request(
-            alias, mapping, policy, "chat", "chat/completions", payload, probe, before_send
+            alias, mapping, policy, "chat", "chat/completions", payload, probe, before_send, after_send
         )
 
     async def stream(
@@ -270,8 +338,9 @@ class ModelGateway:
     ) -> AsyncIterator[str]:
         """Stream with telemetry and fresh authorization before each request opening.
 
-        Every before_send closes its short SQL transaction before provider I/O. after_send
-        performs optional operation cleanup, never a network-spanning SQL-lock release.
+        Every before_send closes its short SQL transaction before provider I/O. ``after_send``
+        (idempotent) runs as soon as the request body is handed to the transport and again when
+        request creation succeeds or fails; it performs optional operation cleanup or send-fence release.
         Telemetry is observational; errors and cancellation propagate, and missing usage stays null.
         """
         started = time.perf_counter()
@@ -307,12 +376,12 @@ class ModelGateway:
             raise PrivacyPolicyDenied("Model request denied by privacy policy")
         if not probe and not await self._capability_supported(alias, mapping, policy, "streaming"):
             raise ModelGatewayError("Streaming capability has not been verified")
-        async with self._slot():
+        async with self._lease(_STREAM_LEASE_WAIT_SECONDS):
             base_url = self.base_url if self.base_url.endswith("/v1") else f"{self.base_url}/v1"
             async with AsyncOpenAI(
                 base_url=base_url,
                 api_key=self.api_key or "not-configured",
-                timeout=self.timeout_seconds,
+                timeout=self._timeout(),
                 max_retries=0,
                 http_client=self._http_client(base_url),
             ) as client:
@@ -324,13 +393,21 @@ class ModelGateway:
                             await before_send()
                         if not self._policy_matches(policy) or not may_send(policy, alias, mapping, self.destination_id, bool(self.api_key), "streaming"):
                             raise PrivacyPolicyDenied("Model request denied by privacy policy")
+                        # I6/T7: the transport releases the send fence once the body is handed to
+                        # transport.write; publication is re-fenced per flush (T3). Gated (P2-3).
+                        # Keep set/reset free of any `yield` (P3-2): reset fails across a context switch.
+                        hook = body_sent.set(after_send) if after_send is not None else None
                         try:
-                            stream = await client.chat.completions.create(
-                                model=mapping.model,
-                                messages=cast("Any", messages),  # OpenAI param TypedDicts; built by prompt layer
-                                stream=True,
-                            )
+                            # Bound header/first-byte wait.
+                            async with asyncio.timeout(self.timeout_seconds):
+                                stream = await client.chat.completions.create(
+                                    model=mapping.model,
+                                    messages=cast("Any", messages),  # OpenAI param TypedDicts; built by prompt layer
+                                    stream=True,
+                                )
                         finally:
+                            if hook is not None:
+                                body_sent.reset(hook)
                             if after_send is not None:
                                 await after_send()
                         async for chunk in stream:
@@ -338,9 +415,12 @@ class ModelGateway:
                             yield f"data: {json.dumps(chunk.model_dump(mode='json', exclude_none=True))}"
                         yield "data: [DONE]"
                         return
-                    except (APITimeoutError, APIConnectionError) as exc:
+                    except (APITimeoutError, APIConnectionError, TimeoutError) as exc:
+                        _raise_if_policy_denied(exc)
                         if attempt == 1 or emitted:
                             raise ModelGatewayError("Model gateway stream failed") from exc
+                    except RedisError as exc:
+                        raise ModelGatewayError("Model gateway request failed") from exc
                     except APIStatusError as exc:
                         if exc.status_code in {408, 425, 429} or exc.status_code >= 500:  # noqa: SIM102  # style-only rewrite skipped to avoid touching control flow
                             if attempt == 0:
@@ -349,8 +429,6 @@ class ModelGateway:
                         if exc.status_code in {400, 404, 405, 422}:
                             raise CapabilityUnsupported("The configured gateway rejected streaming") from exc
                         raise ModelGatewayError(f"Model gateway returned HTTP {exc.status_code}") from exc
-                    except EndpointNetworkPolicyError as exc:
-                        raise ModelGatewayError("Model gateway network policy denied the destination") from exc
 
     async def embed(
         self, alias: str, mapping: ModelMapping | None, policy: RequestPolicy,

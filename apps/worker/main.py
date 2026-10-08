@@ -14,11 +14,11 @@ from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
-    create_async_engine,
 )
 
 from core.auth.models import AuthSession
 from core.config import Settings
+from core.database import make_session_factory
 from core.heavy_work import HEAVY_JOB_MAX_TRIES
 from core.modules import effective_modules, register_modules, scheduled_job_owners
 from core.system.health import ARQ_WORKER_GENERATION_KEY, ARQ_WORKER_HEALTH_KEY
@@ -29,7 +29,13 @@ from modules.agents.worker import (
     reconcile_agent_dispatch,
 )
 from modules.automations.worker import process_automation_run, reconcile_automation_runs
-from modules.chat.worker import process_chat_response, purge_expired_chat_runs
+from modules.chat.worker import (
+    CHAT_JOB_TIMEOUT,
+    CHAT_QUEUE,
+    process_chat_response,
+    purge_expired_chat_runs,
+    recover_chat_runs,
+)
 from modules.connectors.scheduler import dispatch_due_collections
 from modules.connectors.worker import process_collection_request, reconcile_connectors
 from modules.dashboard.worker import run_scheduled_brief, run_scheduled_highlights
@@ -157,8 +163,14 @@ async def startup(ctx: dict[str, object]) -> None:
     ctx["w2_cursor_state"] = {}  # dict[str,str] shared across ARQ ctx copies; see core/worker_cursors.py for key namespaces (_gen:/_unsynced:)
     install_log_redaction()
     set_process_role("worker")
-    engine = create_async_engine(settings.database_url, pool_pre_ping=True, pool_size=WorkerSettings.max_jobs + 1)
-    ctx["session_factory"] = async_sessionmaker(engine, expire_on_commit=False)
+    engine, factory = make_session_factory(
+        settings.database_url,
+        pool_size=WorkerSettings.max_jobs + 1,
+        max_overflow=10,
+        statement_timeout_ms=0,
+        idle_tx_timeout_ms=settings.db_idle_tx_timeout_ms,
+    )
+    ctx["session_factory"] = factory
     ctx["db_engine"] = engine
     try:
         registry, admission, runtime = await compose_agent_registry(
@@ -172,6 +184,26 @@ async def startup(ctx: dict[str, object]) -> None:
     except Exception:
         await engine.dispose()
         raise
+
+
+CHAT_DB_POOL = (10, 10)  # fixed (pool_size, max_overflow); counted as 20 in docs/deployment.md and .env.example
+
+
+async def chat_startup(ctx: dict[str, object]) -> None:
+    """Minimal chat-worker startup: bounded DB pool only (no agent registry, no worker-generation key)."""
+    settings = Settings()
+    ctx["settings"] = settings
+    install_log_redaction()
+    set_process_role("chat-worker")
+    engine, factory = make_session_factory(
+        settings.database_url,
+        pool_size=CHAT_DB_POOL[0],
+        max_overflow=CHAT_DB_POOL[1],
+        statement_timeout_ms=settings.db_statement_timeout_ms,
+        idle_tx_timeout_ms=settings.db_idle_tx_timeout_ms,
+    )
+    ctx["session_factory"] = factory
+    ctx["db_engine"] = engine
 
 
 async def shutdown(ctx: dict[str, object]) -> None:
@@ -215,7 +247,7 @@ class WorkerSettings:
         instrument_job(process_document_ready, success_return_outcome="returned"),
         instrument_job(process_entity_extraction_work),
         instrument_job(process_timeline_extraction_work), instrument_job(process_graph_operation),
-        instrument_job(process_news_document_ready), instrument_job(process_chat_response), purge_expired_chat_runs,
+        instrument_job(process_news_document_ready), purge_expired_chat_runs,
         instrument_job(process_agent_run, run_id_kind="agent_run_id"), instrument_job(process_automation_run),
     ]
     functions = [_gate_module_job(function) for function in functions]
@@ -255,8 +287,8 @@ class WorkerSettings:
     # processes by `core.heavy_work.heavy_job_slot` and retries on contention, so extra slots only
     # let light jobs (cron polls, cleanup stages, chat/agent/model calls bounded by ModelGateway's
     # own slots) run beside a long job instead of queueing behind it. Heavy jobs that lose the slot
-    # retry under HEAVY_JOB_MAX_TRIES. Four keeps the DB pool bounded (pool_size = max_jobs + 1).
-    max_jobs = 4
+    # retry under HEAVY_JOB_MAX_TRIES. Six keeps the DB pool bounded (pool_size = max_jobs + 1).
+    max_jobs = 6
     max_tries = 5
     # The graph owner budget is 150 seconds; ARQ must leave time for durable
     # uncertainty publication and cancellation before the 180-second lease ends.
@@ -264,4 +296,24 @@ class WorkerSettings:
     health_check_key = ARQ_WORKER_HEALTH_KEY
     health_check_interval = 15
     on_startup = startup
+    on_shutdown = shutdown
+
+
+class ChatWorkerSettings:
+    """Dedicated arq worker for chat generation, isolated from the main worker's cron and heavy jobs."""
+    # keep_result=0 (worker-level too: arq finish_failed_job ignores the per-function value): neither a
+    # gated return nor an interrupted/failed job may block the fixed job id, or recovery could not re-enqueue.
+    keep_result = 0
+    functions: ClassVar[list[Any]] = [
+        _arq_func(_gate_backup_job(_gate_module_job(instrument_job(process_chat_response))), keep_result=0),
+    ]
+    cron_jobs: ClassVar[list[object]] = [cron(recover_chat_runs, second={0, 15, 30, 45})]
+    redis_settings = RedisSettings.from_dsn(Settings().redis_url)
+    queue_name = CHAT_QUEUE
+    max_jobs = 15  # keeps 5 of the shared 10+10 DB pool free for cron/rerank sessions (pool_timeout 5 s)
+    job_timeout = CHAT_JOB_TIMEOUT
+    max_tries = 1
+    health_check_key = "arq:chat:health-check"
+    health_check_interval = 15
+    on_startup = chat_startup
     on_shutdown = shutdown

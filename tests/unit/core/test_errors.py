@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, Field
 
@@ -97,6 +97,75 @@ class TestRequestIdAndCacheControl:
         resp = client.get("/public/ping")
         assert resp.status_code == 200
         assert resp.headers.get("Cache-Control") is None
+
+
+class TestRequestContextMiddleware:
+    """P14-T4: the pure-ASGI RequestContextMiddleware keeps metrics, streaming headers, trace and websockets."""
+
+    def _app(self) -> FastAPI:
+        from fastapi.responses import StreamingResponse
+
+        from core.telemetry import current_trace
+
+        app = create_test_app()
+
+        @app.get("/api/v1/items/{item_id}")
+        def get_item(item_id: str) -> dict[str, str | None]:
+            return {"item": item_id, "trace": current_trace().request_id}
+
+        @app.get("/api/v1/sse")
+        def sse() -> StreamingResponse:
+            async def body() -> Any:
+                yield ""
+                yield "data: x\n\n"
+
+            return StreamingResponse(
+                body(), media_type="text/event-stream",
+                headers={"Cache-Control": "private, no-store, no-transform"},
+            )
+
+        @app.websocket("/ws")
+        async def ws(socket: WebSocket) -> None:
+            await socket.accept()
+            await socket.send_text("hello")
+            await socket.close()
+
+        return app
+
+    def test_metrics_use_route_template_and_status_class(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from core import errors
+
+        counted: list[dict[str, Any]] = []
+        observed: list[dict[str, Any]] = []
+        monkeypatch.setattr(errors, "count", lambda name, **labels: counted.append({"name": name, **labels}))
+        monkeypatch.setattr(errors, "observe_ms", lambda name, _start, **labels: observed.append({"name": name, **labels}))
+        client = TestClient(self._app(), raise_server_exceptions=False)
+
+        assert client.get("/api/v1/items/abc-123").status_code == 200
+        assert client.get("/api/v1/crash").status_code == 500
+        assert client.get("/nope").status_code == 404
+
+        assert counted == [
+            {"name": "api_requests_total", "method": "GET", "route": "/api/v1/items/{item_id}", "status_class": "2xx"},
+            {"name": "api_requests_total", "method": "GET", "route": "/api/v1/crash", "status_class": "5xx"},
+            {"name": "api_requests_total", "method": "GET", "route": "unmatched", "status_class": "4xx"},
+        ]
+        assert [o["route"] for o in observed] == ["/api/v1/items/{item_id}", "/api/v1/crash", "unmatched"]
+        assert all(o["name"] == "api_request_ms" for o in observed)
+
+    def test_trace_is_bound_to_the_request_id_inside_the_handler(self) -> None:
+        resp = TestClient(self._app()).get("/api/v1/items/x")
+        assert resp.json()["trace"] == resp.headers["X-Request-ID"]
+
+    def test_streaming_response_gets_request_id_and_keeps_stricter_cache_control(self) -> None:
+        resp = TestClient(self._app()).get("/api/v1/sse")
+        assert resp.status_code == 200 and resp.text == "data: x\n\n"
+        assert len(resp.headers["X-Request-ID"]) > 10
+        assert resp.headers["Cache-Control"] == "private, no-store, no-transform"
+
+    def test_websocket_passes_through(self) -> None:
+        with TestClient(self._app()).websocket_connect("/ws") as socket:
+            assert socket.receive_text() == "hello"
 
 
 class TestHttpExceptionHandler:

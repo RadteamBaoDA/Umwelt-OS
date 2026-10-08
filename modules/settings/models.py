@@ -184,6 +184,7 @@ async def legacy_aliases(redis: Redis | None, settings: Settings, *, scope: Scop
     configured = {name: ModelMapping(model=model, destination="remote") for name, model in settings.omniroute_models.items() if name in ALIASES}
     if redis is not None and actor == 1:
         for alias, value in (await cast("Awaitable[dict[Any, Any]]", redis.hgetall(_MAPPINGS))).items():
+            alias = alias.decode() if isinstance(alias, bytes) else alias
             try:
                 if alias in ALIASES:
                     configured[alias] = ModelMapping.model_validate_json(value)

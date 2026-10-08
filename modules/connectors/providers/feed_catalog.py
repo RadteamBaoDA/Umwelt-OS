@@ -448,7 +448,7 @@ async def collect_provider_feed(
                 body = await _read_feed(url, before_request)
         except ProviderRateLimited as exc:
             return ProviderCollectionPage(records=(), coverage="returned_snapshot", next_eligible_at=exc.next_eligible_at)
-        return _records_from_feed(source, body, collected_at)
+        return await asyncio.to_thread(_records_from_feed, source, body, collected_at)
     if source.provider != "arxiv":
         raise ValueError("provider_scope_invalid")
     async with asyncio.timeout(60):
@@ -470,4 +470,4 @@ async def collect_provider_feed(
                     body = await _read_feed(url, before_request)
                 except ProviderRateLimited as exc:
                     return ProviderCollectionPage(records=(), coverage="returned_snapshot", next_eligible_at=exc.next_eligible_at)
-        return _records_from_feed(source, body, collected_at)
+        return await asyncio.to_thread(_records_from_feed, source, body, collected_at)

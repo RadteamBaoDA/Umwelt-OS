@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import logging
 import sys
 from pathlib import Path
 from typing import Any
@@ -240,3 +241,145 @@ class TestAsyncSpansAndTiming:
             assert entry["sum_ms"] >= 15.0
         finally:
             telemetry.registry = initial_reg
+
+
+class TestRedactedRecordsStayFormattable:
+    """Redaction must not strip record.args: uvicorn's AccessFormatter unpacks it per request."""
+
+    def _record(self, msg: str, args: tuple[Any, ...]) -> logging.LogRecord:
+        telemetry.install_log_redaction()
+        return logging.getLogger("uvicorn.access").makeRecord(
+            "uvicorn.access", logging.INFO, __file__, 1, msg, args, None
+        )
+
+    def test_uvicorn_access_formatter_formats_redacted_record(self) -> None:
+        from uvicorn.logging import AccessFormatter
+
+        record = self._record(
+            '%s - "%s %s HTTP/%s" %d',
+            ("127.0.0.1:1", "GET", "/api?token=sk-live-abcdef1234567890abcdef", "1.1", 200),
+        )
+        out = AccessFormatter("%(client_addr)s - %(request_line)s %(status_code)s", use_colors=False).format(record)
+        assert "GET" in out and "200" in out
+        assert "sk-live-abcdef1234567890abcdef" not in out
+
+    def test_secret_spanning_template_and_args_is_still_redacted(self) -> None:
+        record = self._record("Authorization: Bearer %s", ("abcdefghijklmnop1234567890",))
+        assert "abcdefghijklmnop1234567890" not in record.getMessage()
+        assert "abcdefghijklmnop1234567890" not in logging.Formatter("%(message)s").format(record)
+
+    def test_plain_record_keeps_args_for_any_formatter(self) -> None:
+        record = self._record("hello %s", ("world",))
+        assert record.args == ("world",)
+        assert logging.Formatter("%(message)s").format(record) == "hello world"
+
+
+class TestRedactionStableRecords:
+    """Collapse-triggering paths must stay formattable by uvicorn's real config; args are frozen by value."""
+
+    def _record(self, msg: str, args: tuple[Any, ...]) -> logging.LogRecord:
+        telemetry.install_log_redaction()
+        return logging.getLogger("uvicorn.access").makeRecord(
+            "uvicorn.access", logging.INFO, __file__, 1, msg, args, None
+        )
+
+    def test_cookie_path_formats_with_real_uvicorn_config(self) -> None:
+        from uvicorn.config import LOGGING_CONFIG
+        from uvicorn.logging import AccessFormatter
+
+        record = self._record(
+            '%s - "%s %s HTTP/%s" %d',
+            ("127.0.0.1:1", "GET", "/?cookie=SECRET&authorization=Bearer x", "1.1", 200),
+        )
+        cfg = LOGGING_CONFIG["formatters"]["access"]
+        out = AccessFormatter(cfg["fmt"], use_colors=False).format(record)
+        assert "200" in out  # still formattable; every str field of a secret-bearing line is masked
+        assert "SECRET" not in out and "Bearer x" not in out
+        assert "SECRET" not in record.getMessage()
+
+    def test_secret_split_across_args_is_not_leaked(self) -> None:
+        # Each arg is clean alone; only the joined line reveals the secret. Masking one arg at a time
+        # would hide "cookie=" and let SECRETVALUE through.
+        from uvicorn.config import LOGGING_CONFIG
+        from uvicorn.logging import AccessFormatter
+
+        record = self._record('%s - "%s %s HTTP/%s" %d', ("127.0.0.1:1", "cookie=", "SECRETVALUE", "1.1", 200))
+        out = AccessFormatter(LOGGING_CONFIG["formatters"]["access"]["fmt"], use_colors=False).format(record)
+        assert "SECRETVALUE" not in out
+        assert "SECRETVALUE" not in record.getMessage()
+
+    def test_decimal_args_stay_formattable(self) -> None:
+        from decimal import Decimal
+
+        record = self._record("amount %.2f count %d", (Decimal("12.345"), Decimal(3)))
+        assert record.getMessage() == "amount 12.35 count 3"
+
+    def test_fraction_arg_is_frozen(self) -> None:
+        from fractions import Fraction
+
+        record = self._record("ratio %s", (Fraction(1, 3),))
+        assert isinstance(record.args, tuple) and isinstance(record.args[0], str)
+        assert record.getMessage() == "ratio 1/3"
+
+    def test_int_and_float_subclass_own_str_never_runs(self) -> None:
+        class Evil(int):
+            calls = 0
+
+            def __str__(self) -> str:
+                Evil.calls += 1
+                return "ok" if Evil.calls == 1 else "api_key=sk-abcdefghijklmnop1234"
+
+            __repr__ = __str__
+
+        class EvilF(float):
+            def __str__(self) -> str:
+                return "api_key=sk-abcdefghijklmnop1234"
+
+        record = self._record("a %s b %d c %.1f d %s", (Evil(1), Evil(2), EvilF(1.5), EvilF(2.5)))
+        out = logging.Formatter("%(message)s").format(record)
+        assert "sk-abcdefghijklmnop1234" not in out
+        assert logging.Formatter("%(message)s").format(record) == out
+        assert out == "a 1 b 2 c 1.5 d 2.5"
+
+    def test_mapping_args_are_frozen_by_value(self) -> None:
+        class Evil(int):
+            calls = 0
+
+            def __str__(self) -> str:
+                Evil.calls += 1
+                return "ok" if Evil.calls == 1 else "api_key=sk-abcdefghijklmnop1234"
+
+            __repr__ = __str__
+
+        record = self._record("%(a)s %(a)d", ({"a": Evil(1)},))
+        out = logging.Formatter("%(message)s").format(record)
+        assert "sk-abcdefghijklmnop1234" not in out
+        assert logging.Formatter("%(message)s").format(record) == out
+        assert out == "1 1"
+
+    def test_mapping_float_arg_still_formats(self) -> None:
+        record = self._record("%(b).1f %(n)s", ({"b": 1.25, "n": {"x": 1}},))
+        assert record.getMessage() == "1.2 {'x': 1}"
+
+    def test_decimal_subclass_with_custom_str_is_still_frozen(self) -> None:
+        from decimal import Decimal
+
+        class Sneaky(Decimal):
+            def __str__(self) -> str:
+                return "api_key=sk-abcdefghijklmnop1234"
+
+        record = self._record("v %s", (Sneaky("1"),))
+        assert "sk-abcdefghijklmnop1234" not in logging.Formatter("%(message)s").format(record)
+
+    def test_non_str_args_are_frozen_by_value(self) -> None:
+        class Odd:
+            def __str__(self) -> str:
+                return "fine"
+
+            def __repr__(self) -> str:
+                return "token=SECRETVALUE123456"
+
+        record = self._record("obj %s", (Odd(),))
+        rendered = logging.Formatter("%(message)s").format(record)
+        assert "SECRETVALUE123456" not in rendered
+        assert "SECRETVALUE123456" not in repr(record.args)

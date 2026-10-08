@@ -40,3 +40,47 @@ def test_stale_epoch_cursor_first_frame_is_epoch_changed_resync(monkeypatch) -> 
         "reason": "epoch_changed",
         "snapshot_cursor": ReplayCursor(epoch=head.epoch, sequence=7).encode(),
     }
+
+
+def test_permit_response_disconnect_spec_2_3_does_not_cancel_db_rollback() -> None:
+    from typing import Self
+
+    from starlette.requests import Request
+
+    events: list[str] = []
+
+    class _Session:
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *exc: object) -> None:
+            await asyncio.sleep(0.01)  # rollback await: CancelledError here if a task group cancelled us
+            events.append("rollback-ok")
+
+    async def run() -> int:
+        sem = asyncio.Semaphore(1)
+        await sem.acquire()
+        gone = asyncio.Event()
+
+        async def receive():  # uvicorn httptools: blocks until disconnect, then returns it at once
+            await gone.wait()
+            return {"type": "http.disconnect"}
+
+        scope = {"type": "http", "asgi": {"spec_version": "2.3"}}
+        request = Request(scope, receive)
+
+        async def body():
+            while not await request.is_disconnected():
+                async with _Session():
+                    await asyncio.sleep(0.2)  # DB await in flight when the disconnect lands
+                    yield ": ping"
+
+        async def send(_message):
+            return None
+
+        asyncio.get_running_loop().call_later(0.05, gone.set)
+        await realtime_routes._PermitResponse(body(), asyncio.Event(), sem)(scope, receive, send)
+        return sem._value
+
+    assert asyncio.run(run()) == 1
+    assert events == ["rollback-ok"]

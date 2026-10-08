@@ -335,6 +335,7 @@ async def search(
     source_generation_fences: dict[UUID, int] | None = None,
     scope: Scope, multi_workspace_enabled: bool,
     before_embedding_send: Callable[[AIExecutionConfig, ModelMapping | None, RequestPolicy, dict[UUID, int]], Awaitable[None]] | None = None,
+    release_during_embed: bool = False,
 ) -> SearchResponse:
     """Retrieve current evidence only within an admitted owner workspace and destination policy.
 
@@ -345,6 +346,11 @@ async def search(
     When supplied, ``before_embedding_send`` runs after the existing embedding privacy/revision
     recheck on every gateway attempt and receives the fresh config, mapping, policy, and original
     pre-await source generations; its authorization or cancellation exceptions propagate.
+    ``release_during_embed`` commits the read-only transaction before the embedding call and at
+    the end of every send recheck so the pooled connection is not idle in transaction during the
+    network wait. Only callers whose session holds no row/advisory locks or pending writes may set it.
+    The session must also use ``expire_on_commit=False``: ``generation`` and ``config`` are read after
+    the commits, and an expired ORM object would lazy-load (``MissingGreenlet``) under asyncio.
     """
     if source_generation_fences is not None and len(source_generation_fences) > 100:
         raise ValueError("Search source fence exceeds its supported bound")
@@ -392,6 +398,8 @@ async def search(
                     await before_embedding_send(
                         latest, latest_mapping, latest_policy, dict(source_generation_fences or {}),
                     )
+                if release_during_embed:
+                    await session.commit()
 
             response = await gateway(config, redis, recheck_send, scope=scope).embed("embedding", mapping, policy, [request.query])
             values, returned_model = embedding_values(response, generation.dimensions)

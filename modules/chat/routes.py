@@ -63,6 +63,7 @@ OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]
 _TOKEN_RE = re.compile(r"^[0-9a-f]{64}$")
 DB_READ_TIMEOUT = 3.0
 STREAM_POLL_INTERVAL = 0.1
+MAX_CHAT_STREAMS_PER_API_PROCESS = 64  # M0 import shim (P14 value); A2 wires the chat_streams permit
 HEARTBEAT_INTERVAL = 15.0
 EPHEMERAL_TTL = timedelta(hours=24)
 

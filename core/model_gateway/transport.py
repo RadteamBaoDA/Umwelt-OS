@@ -2,10 +2,21 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import logging
 import socket
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from contextvars import ContextVar
 
 import httpx
+
+logger = logging.getLogger(__name__)
+
+# The send fence holds the privacy lock through resolution, so DNS must fail fast.
+DNS_TIMEOUT_SECONDS = 5.0
+
+# Set by the gateway around one SDK call only when the caller passed ``after_send``; read by
+# ApprovedEndpointTransport in the caller's task (httpx/httpcore never hop tasks).
+body_sent: ContextVar[Callable[[], Awaitable[None]] | None] = ContextVar("body_sent", default=None)
 
 
 class EndpointNetworkPolicyError(RuntimeError):
@@ -37,6 +48,36 @@ def _address(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
     return address
 
 
+class _NotifyOnEnd(httpx.AsyncByteStream):
+    """Yield the request body unchanged, then await ``callback`` once when it is exhausted.
+
+    httpcore's HTTP/1.1 path awaits ``network_stream.write`` for each chunk before pulling the next,
+    so exhaustion means the last body byte was handed to the transport (``transport.write``) and
+    response headers have not been read yet. Only valid for HTTP/1.1 (``approved_http_client``).
+    """
+
+    def __init__(self, inner: httpx.AsyncByteStream, callback: Callable[[], Awaitable[None]]) -> None:
+        self._inner = inner
+        self._callback: Callable[[], Awaitable[None]] | None = callback
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        async for chunk in self._inner:
+            yield chunk
+        callback, self._callback = self._callback, None
+        if callback is not None:
+            try:
+                await callback()
+            except Exception as exc:  # noqa: BLE001  # P2-2: must never raise into httpcore
+                # Never raise into httpcore: the SDK would map it to APIConnectionError and retry,
+                # re-sending the body. The caller's idempotent ``after_send`` fallback runs again; lock release
+                # relies on the session's close/connection invalidation, not on that retry.
+                # Type only: messages can carry SQL parameters or prompt text.
+                logger.warning("Model request body-sent callback failed (%s)", type(exc).__name__)
+
+    async def aclose(self) -> None:
+        await self._inner.aclose()
+
+
 class ApprovedEndpointTransport(httpx.AsyncBaseTransport):
     """Pin one approved HTTP origin to checked IPs without losing Host or TLS SNI."""
 
@@ -63,14 +104,17 @@ class ApprovedEndpointTransport(httpx.AsyncBaseTransport):
             addresses = [_address(request_host)]
         else:
             try:
-                answers = await asyncio.get_running_loop().getaddrinfo(
-                    request_host,
-                    self._port,
-                    family=socket.AF_UNSPEC,
-                    type=socket.SOCK_STREAM,
-                    proto=socket.IPPROTO_TCP,
+                answers = await asyncio.wait_for(
+                    asyncio.get_running_loop().getaddrinfo(
+                        request_host,
+                        self._port,
+                        family=socket.AF_UNSPEC,
+                        type=socket.SOCK_STREAM,
+                        proto=socket.IPPROTO_TCP,
+                    ),
+                    DNS_TIMEOUT_SECONDS,
                 )
-            except OSError as exc:
+            except (OSError, TimeoutError) as exc:
                 raise EndpointNetworkPolicyError("Gateway address resolution failed") from exc
             addresses = []
             for answer in answers:
@@ -96,11 +140,15 @@ class ApprovedEndpointTransport(httpx.AsyncBaseTransport):
             extensions["sni_hostname"] = self._host
         else:
             extensions.pop("sni_hostname", None)
+        callback = body_sent.get()
+        stream = request.stream
+        if callback is not None and isinstance(stream, httpx.AsyncByteStream):
+            stream = _NotifyOnEnd(stream, callback)
         pinned_request = httpx.Request(
             method=request.method,
             url=request.url.copy_with(host=str(selected)),
             headers=headers,
-            stream=request.stream,
+            stream=stream,
             extensions=extensions,
         )
         return await self._delegate.handle_async_request(pinned_request)
@@ -122,6 +170,7 @@ def _is_ip(host: str) -> bool:
 def approved_http_client(base_url: str, approved_cidrs: Sequence[str]) -> httpx.AsyncClient:
     """Create a no-proxy, no-redirect HTTP client using the approved-address transport."""
     origin = httpx.URL(base_url)
+    # HTTP/1.1 only: _NotifyOnEnd relies on httpcore's HTTP/1.1 write-then-pull body loop.
     delegate = httpx.AsyncHTTPTransport(
         verify=True,
         trust_env=False,

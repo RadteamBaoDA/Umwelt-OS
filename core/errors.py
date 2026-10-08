@@ -6,6 +6,7 @@ from uuid import uuid4
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import DBAPIError
 from starlette.datastructures import MutableHeaders
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -13,7 +14,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from core.telemetry import bind_trace, count, observe_ms
 
 logger = logging.getLogger("bbd.api")
-
+_TIMEOUT_SQLSTATES = {"57014", "55P03"}
 
 def _record_request_start(scope: Scope, started: float, status: int) -> None:
     """Record response-start latency/status or a pre-start failure, using bounded route labels.
@@ -126,6 +127,26 @@ def install_error_handling(app: FastAPI) -> None:
                     "code": "VALIDATION_ERROR",
                     "message": "Request validation failed",
                     "details": details,
+                    "requestId": getattr(request.state, "request_id", ""),
+                }
+            },
+        )
+
+    @app.exception_handler(DBAPIError)
+    async def database_error(request: Request, exc: DBAPIError) -> JSONResponse:
+        """Map only statement/lock timeouts (SQLSTATE 57014/55P03, e.g. privacy-lock waits) to retryable 503; others stay 500."""
+        orig = exc.orig
+        code = getattr(orig, "sqlstate", None) or getattr(getattr(orig, "__cause__", None), "sqlstate", None)
+        if code not in _TIMEOUT_SQLSTATES:
+            return await internal_error(request, exc)
+        return JSONResponse(
+            status_code=503,
+            headers={"Retry-After": "5"},
+            content={
+                "error": {
+                    "code": "TEMPORARILY_UNAVAILABLE",
+                    "message": "The service is busy; retry shortly",
+                    "details": {},
                     "requestId": getattr(request.state, "request_id", ""),
                 }
             },
