@@ -38,6 +38,8 @@ from modules.chat.schemas import (
     SendMessageRequest,
     SendMessageResponse,
 )
+from modules.chat.scope import owner_default_scope
+from modules.chat.scope import read_owner_export_privacy as read_export_privacy
 from modules.chat.stream import format_sse_event, parse_event_id
 from modules.chat.worker import (
     CANCEL_KEY_PREFIX,
@@ -47,7 +49,7 @@ from modules.chat.worker import (
     _require_privacy_fence,
     run_response_generation,
 )
-from modules.memory.public import lock_export_privacy, read_export_privacy
+from modules.memory.public import lock_export_privacy
 from modules.settings.public import module_dependency
 
 logger = logging.getLogger(__name__)
@@ -298,7 +300,10 @@ async def create_conversation(
     await lock_export_privacy(session)
     privacy = await read_export_privacy(session)
     is_ephemeral = not privacy.store_conversation_history
+    scope = await owner_default_scope(session)
     conv = Conversation(
+        workspace_id=scope.workspace_id,
+        actor_user_id=scope.user_id,
         title=title,
         context_kind=payload.context_kind,
         context_resource_id=payload.context_resource_id,
@@ -592,6 +597,8 @@ async def send_message(
 
     resolved_context = await chat_public.resolve_gadget_context(session, payload.context)
     response_run = ResponseRun(
+        workspace_id=conv.workspace_id,
+        actor_user_id=conv.actor_user_id,
         conversation_id=conversation_id,
         user_message_id=user_msg.id,
         client_request_id=payload.client_request_id,
@@ -746,6 +753,8 @@ async def mutate_message(
     session.add(user_message)
     await session.flush()
     response_run = ResponseRun(
+        workspace_id=conversation.workspace_id,
+        actor_user_id=conversation.actor_user_id,
         conversation_id=conversation_id,
         user_message_id=user_message.id,
         client_request_id=payload.client_request_id,

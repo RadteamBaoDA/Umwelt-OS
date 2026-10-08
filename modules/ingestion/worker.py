@@ -765,6 +765,16 @@ async def _fail_ingestion_stage(
             multi_workspace_enabled=multi_workspace_enabled, access_fence=work.access_fence)
 
 
+async def _ingestion_enabled(session: AsyncSession, work: WorkerState, enabled: bool) -> bool:
+    """Per-workspace module gate after admission; disabled leaves the durable event untouched."""
+    from modules.settings.public import module_is_enabled
+
+    if await module_is_enabled(session, "ingestion", scope=work.scope, multi_workspace_enabled=enabled):
+        return True
+    await session.rollback()
+    return False
+
+
 @timed("ingestion_stage_ms", stage="collect")
 async def process_ingestion_event(ctx: dict[str, object], event_id: str) -> None:
     """Commit one original scoped stage lease, release SQL for work and CAS before settlement.
@@ -782,7 +792,7 @@ async def process_ingestion_event(ctx: dict[str, object], event_id: str) -> None
     event_types = ("ingestion.stage.requested", "connector.crawl.requested")
     async with factory() as session:
         work = await _lock_worker_event(session, identifier, multi_workspace_enabled=enabled, event_types=event_types)
-        if work is None:
+        if work is None or not await _ingestion_enabled(session, work, enabled):
             return
         run, stage, event, state = work.run, work.stage, work.event, work.state
         now = datetime.now(UTC)
@@ -921,7 +931,7 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
         async with factory() as session:
             work = await _lock_worker_event(session, identifier, multi_workspace_enabled=enabled,
                                            event_types=("ingestion.normalize.requested",))
-            if work is None:
+            if work is None or not await _ingestion_enabled(session, work, enabled):
                 return
             claim = _capture_worker_claim(work)
             source, source_projection = work.source, work.projection
@@ -1416,7 +1426,7 @@ async def process_uploaded_file(ctx: dict[str, object], event_id: str) -> None:
     async with factory() as session:
         work = await _lock_worker_event(session, identifier, multi_workspace_enabled=enabled,
                                        event_types=("document.file.uploaded",))
-        if work is None:
+        if work is None or not await _ingestion_enabled(session, work, enabled):
             return
         run, stage, event = work.run, work.stage, work.event
         source_id = work.source.id
@@ -1520,6 +1530,9 @@ async def cleanup_storage_orphans(ctx: dict[str, object]) -> int:
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     settings = cast(Settings, ctx["settings"])
     enabled = _worker_flag(ctx)
+    if enabled:
+        # ponytail: multiworkspace orphan sweep disabled until O instance-operator admission exists (ruling §6)
+        return 0
     async with factory() as session:
         if await get_active_account(session, 1, multi_workspace_enabled=enabled) is None:
             return 0
@@ -1527,7 +1540,9 @@ async def cleanup_storage_orphans(ctx: dict[str, object]) -> int:
         await session.commit()
     try:
         async with factory() as session:
-            referenced = await documents.raw_uris(session, instance_operator=True)
+            referenced = await documents.raw_uris(
+                session, instance_operator=True, multi_workspace_enabled=enabled,
+            )
         return cleanup_orphaned_files(settings.data_dir, referenced, settings.storage_orphan_grace_seconds)
     finally:
         async with factory() as session:

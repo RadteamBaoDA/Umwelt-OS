@@ -137,6 +137,27 @@ async def list_workspaces(session: AsyncSession, user_id: int) -> list[Workspace
     return [_workspace_read(workspace, membership) for workspace, membership in rows]
 
 
+async def list_workspace_job_candidate_ids(
+    session: AsyncSession, *, after: UUID | None = None, limit: int = 100,
+) -> tuple[UUID, ...]:
+    """Return one ordered identity page, with positive limits capped at 100 and UUID keyset cursor.
+
+    This identity-only projection reads no account, membership, settings, credentials or
+    domain content and performs no admission, locking, mutation or commit. Candidate IDs
+    convey no scheduling permission; the worker must resolve and admit each workspace owner
+    through the existing Workspace APIs before any effect.
+    """
+    if type(limit) is not int or limit <= 0:
+        raise ValueError("Workspace candidate page limit must be a positive integer")
+    if after is not None and not isinstance(after, UUID):
+        raise ValueError("Workspace candidate cursor must be a UUID")
+    query = select(Workspace.id)
+    if after is not None:
+        query = query.where(Workspace.id > after)
+    rows = await session.scalars(query.order_by(Workspace.id).limit(min(limit, 100)))
+    return tuple(rows)
+
+
 async def _owner_management_read(session: AsyncSession, workspace_id: UUID, user_id: int) -> None:
     """Require actual owner membership; missing/invisible 404 and member-only 403."""
     scope = await resolve_workspace_context(session, user_id, workspace_id)

@@ -3,12 +3,14 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.dependencies import require_owner, require_owner_write
 from core.auth.models import AuthSession
 from core.database import get_session
+from core.workspaces.dependencies import require_workspace_read, require_workspace_write
+from core.workspaces.schemas import WorkspaceContext
 from modules.settings.public import module_dependency
 from modules.timeline import public
 from modules.timeline.schemas import (
@@ -24,10 +26,12 @@ router = APIRouter(tags=["timeline"], dependencies=[Depends(module_dependency("k
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[AuthSession, Depends(require_owner)]
 OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]
+WorkspaceRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
+WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 
 
 @router.get("/api/v1/events", response_model=EventPage)
-async def list_events(session: Session, _owner: OwnerRead, response: Response,
+async def list_events(session: Session, _owner: OwnerRead, scope: WorkspaceRead, request: Request, response: Response,
                       limit: Annotated[int, Query(ge=1, le=100)] = 50,
                       cursor: Annotated[str | None, Query(max_length=1024)] = None,
                       source_id: UUID | None = None) -> EventPage:
@@ -35,33 +39,38 @@ async def list_events(session: Session, _owner: OwnerRead, response: Response,
     if response is not None:
         response.headers["Cache-Control"] = "no-store"
     try:
-        return await public.list_events(session, limit=limit, cursor=cursor, source_id=source_id)
+        return await public.list_events(session, limit=limit, cursor=cursor, source_id=source_id,
+                                        scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/api/v1/events/{event_id}", response_model=EventRead)
-async def get_event(event_id: UUID, session: Session, _owner: OwnerRead, response: Response) -> EventRead:
+async def get_event(event_id: UUID, session: Session, _owner: OwnerRead, scope: WorkspaceRead,
+                    request: Request, response: Response) -> EventRead:
     """Return one owner event and mark its potentially sensitive provenance response no-store."""
     response.headers["Cache-Control"] = "no-store"
-    event = await public.get_event(session, event_id)
+    event = await public.get_event(session, event_id, scope=scope,
+                                   multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
     if event is None:
         raise HTTPException(status_code=404, detail="Event not found")
     return event
 
 
 @router.get("/api/v1/events/{event_id}/evidence")
-async def list_evidence(event_id: UUID, session: Session, _owner: OwnerRead, response: Response) -> dict[str, object]:
+async def list_evidence(event_id: UUID, session: Session, _owner: OwnerRead, scope: WorkspaceRead,
+                        request: Request, response: Response) -> dict[str, object]:
     """Return exact evidence references for one visible event without caching source metadata."""
     response.headers["Cache-Control"] = "no-store"
-    evidence = await public.list_event_evidence(session, event_id)
+    evidence = await public.list_event_evidence(session, event_id, scope=scope,
+                                                multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
     if evidence is None:
         raise HTTPException(status_code=404, detail="Event not found")
     return {"items": evidence}
 
 
 @router.get("/api/v1/timeline", response_model=TimelinePage)
-async def list_timeline(session: Session, _owner: OwnerRead, response: Response,
+async def list_timeline(session: Session, _owner: OwnerRead, scope: WorkspaceRead, request: Request, response: Response,
                         date_from: str | None = None, date_to: str | None = None,
                         timezone: str = "Asia/Ho_Chi_Minh", source_id: UUID | None = None,
                         entity_id: UUID | None = None,
@@ -77,17 +86,20 @@ async def list_timeline(session: Session, _owner: OwnerRead, response: Response,
             "source_id": source_id, "entity_id": entity_id, "type": type_filter,
             "precision": precision,
         })
-        return await public.list_timeline(session, query, limit=limit, cursor=cursor)
+        return await public.list_timeline(session, query, limit=limit, cursor=cursor, scope=scope,
+                                          multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/api/v1/events", response_model=EventRead, status_code=201)
-async def create_event(payload: EventCreate, session: Session, owner: OwnerWrite, response: Response) -> EventRead:
+async def create_event(payload: EventCreate, session: Session, owner: OwnerWrite, scope: WorkspaceWrite,
+                       request: Request, response: Response) -> EventRead:
     """Create a manual event under the session-bound owner write and CSRF contract."""
     response.headers["Cache-Control"] = "no-store"
     try:
-        return await public.create_event(session, payload, actor_id=owner.owner_id)
+        return await public.create_event(session, payload, scope=scope,
+                                         multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -96,11 +108,12 @@ async def create_event(payload: EventCreate, session: Session, owner: OwnerWrite
 
 @router.patch("/api/v1/events/{event_id}", response_model=EventRead)
 async def update_event(event_id: UUID, payload: EventPatch, session: Session,
-                       owner: OwnerWrite, response: Response) -> EventRead:
+                       owner: OwnerWrite, scope: WorkspaceWrite, request: Request, response: Response) -> EventRead:
     """Apply a revision-fenced event correction and map stale revisions to conflict."""
     response.headers["Cache-Control"] = "no-store"
     try:
-        result = await public.update_event(session, event_id, payload, actor_id=owner.owner_id)
+        result = await public.update_event(session, event_id, payload, scope=scope,
+                                           multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
     except ValueError as exc:
         status = 409 if "stale" in str(exc) else 422
         raise HTTPException(status_code=status, detail=str(exc)) from exc
@@ -110,14 +123,16 @@ async def update_event(event_id: UUID, payload: EventPatch, session: Session,
 
 
 @router.delete("/api/v1/events/{event_id}", status_code=204)
-async def delete_event(event_id: UUID, session: Session, owner: OwnerWrite, response: Response,
+async def delete_event(event_id: UUID, session: Session, owner: OwnerWrite, scope: WorkspaceWrite,
+                       request: Request, response: Response,
                        expected_revision: Annotated[int, Query(ge=1)],
                        reason: Annotated[str, Query(min_length=1, max_length=300)] = "owner_delete") -> Response:
     """Tombstone a revision-fenced owner event and retain exact derived suppression identity."""
     response.headers["Cache-Control"] = "no-store"
     try:
         deleted = await public.delete_event(session, event_id, expected_revision=expected_revision,
-                                            reason=reason, actor_id=owner.owner_id)
+                                            reason=reason, scope=scope,
+                                            multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
     except ValueError as exc:
         status = 409 if "stale" in str(exc) else 422
         raise HTTPException(status_code=status, detail=str(exc)) from exc

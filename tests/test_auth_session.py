@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -13,11 +14,20 @@ from core.auth.routes import get_auth_redis
 from core.auth.service import hash_password
 from core.config import Settings
 from core.database import get_session
+from core.workspaces.models import Workspace, WorkspaceMembership
 
 
 class MemoryAuthStore:
     def __init__(self) -> None:
-        self.owner = Owner(id=1, password_hash=hash_password("test-owner-password-42"))
+        workspace_id = uuid4()
+        self.owner = Owner(
+            id=1, password_hash=hash_password("test-owner-password-42"),
+            account_state="active", default_workspace_id=workspace_id,
+        )
+        self.workspace_row = (
+            Workspace(id=workspace_id, name="Default", owner_user_id=1),
+            WorkspaceMembership(workspace_id=workspace_id, user_id=1, owner_user_id=1, role="owner", revision=1),
+        )
         self.sessions: dict[str, AuthSession] = {}
         self.pending = None
         self.lock = asyncio.Lock()
@@ -61,7 +71,8 @@ class MemorySession:
                 self.store.sessions[self.pending.token_hash] = self.pending
 
     async def execute(self, _statement, _params=None):
-        return object()
+        # resolve_workspace_context reads the (workspace, membership) row via .one_or_none()
+        return SimpleNamespace(one_or_none=lambda: self.store.workspace_row)
 
     async def delete(self, value) -> None:
         self.store.sessions.pop(value.token_hash, None)
@@ -224,6 +235,7 @@ async def test_login_rate_limit_rejects_the_sixth_attempt() -> None:
 
     app.dependency_overrides[get_session] = session_override
     app.dependency_overrides[get_auth_redis] = lambda: redis
+    app.state.session_factory = lambda: MemorySession(store)  # backup middleware finalizes outside DI
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://localhost:3000"
     ) as client:

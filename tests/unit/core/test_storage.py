@@ -18,6 +18,8 @@ from starlette.datastructures import Headers, UploadFile
 
 from core.storage import cleanup_orphaned_files, save_upload, storage_path
 
+WORKSPACE_ID = uuid4()
+
 
 class TestStoragePathSecurity:
     """Test suite for path resolution and traversal security."""
@@ -76,9 +78,10 @@ class TestSaveUpload:
             document_id=doc_id,
             suffix=suffix,
             max_bytes=1024 * 1024,
+            workspace_id=WORKSPACE_ID,
         )
 
-        assert rel_path == f"documents/{doc_id}/{doc_id}.pdf"
+        assert rel_path == f"workspaces/{WORKSPACE_ID}/documents/{doc_id}/{doc_id}.pdf"
         assert size == len(content)
         assert sha256_hash == expected_sha256
 
@@ -111,6 +114,7 @@ class TestSaveUpload:
             document_id=doc_id,
             suffix=".bin",
             max_bytes=5 * 1024 * 1024,
+            workspace_id=WORKSPACE_ID,
         )
 
         assert size == len(full_content)
@@ -133,10 +137,11 @@ class TestSaveUpload:
                 document_id=doc_id,
                 suffix=".txt",
                 max_bytes=1024,
+                workspace_id=WORKSPACE_ID,
             )
 
         # Destination must not exist
-        dest = root / f"documents/{doc_id}/{doc_id}.txt"
+        dest = root / f"workspaces/{WORKSPACE_ID}/documents/{doc_id}/{doc_id}.txt"
         assert not dest.exists()
 
     @pytest.mark.asyncio
@@ -156,10 +161,11 @@ class TestSaveUpload:
                 document_id=doc_id,
                 suffix=".txt",
                 max_bytes=1000,
+                workspace_id=WORKSPACE_ID,
             )
 
         # Ensure no orphan temp files remain
-        parent_dir = root / "documents" / str(doc_id)
+        parent_dir = root / "workspaces" / str(WORKSPACE_ID) / "documents" / str(doc_id)
         if parent_dir.exists():
             temp_files = list(parent_dir.glob(".upload-*"))
             assert len(temp_files) == 0
@@ -190,9 +196,10 @@ class TestSaveUpload:
                 document_id=doc_id,
                 suffix=".txt",
                 max_bytes=1024 * 1024,
+                workspace_id=WORKSPACE_ID,
             )
 
-        parent_dir = root / "documents" / str(doc_id)
+        parent_dir = root / "workspaces" / str(WORKSPACE_ID) / "documents" / str(doc_id)
         if parent_dir.exists():
             assert len(list(parent_dir.glob(".upload-*"))) == 0
 
@@ -210,16 +217,17 @@ class TestCleanupOrphanedFiles:
     ) -> None:
         """cleanup_orphaned_files removes only unreferenced files older than the grace period."""
         root = tmp_path / "storage"
-        doc_dir_1 = root / "documents" / "doc1"
-        doc_dir_2 = root / "documents" / "doc2"
-        doc_dir_3 = root / "documents" / "doc3"
+        ids = [str(uuid4()) for _ in range(3)]  # only UUID document directories are cleanup candidates
+        doc_dir_1 = root / "documents" / ids[0]
+        doc_dir_2 = root / "documents" / ids[1]
+        doc_dir_3 = root / "documents" / ids[2]
         doc_dir_1.mkdir(parents=True)
         doc_dir_2.mkdir(parents=True)
         doc_dir_3.mkdir(parents=True)
 
-        file_old_unref = doc_dir_1 / "doc1.txt"
-        file_old_ref = doc_dir_2 / "doc2.txt"
-        file_new_unref = doc_dir_3 / "doc3.txt"
+        file_old_unref = doc_dir_1 / f"{ids[0]}.txt"
+        file_old_ref = doc_dir_2 / f"{ids[1]}.txt"
+        file_new_unref = doc_dir_3 / f"{ids[2]}.txt"
 
         file_old_unref.write_text("old unreferenced")
         file_old_ref.write_text("old referenced")
@@ -230,7 +238,7 @@ class TestCleanupOrphanedFiles:
         os.utime(file_old_unref, (past_time, past_time))
         os.utime(file_old_ref, (past_time, past_time))
 
-        referenced = {"documents/doc2/doc2.txt"}
+        referenced = {f"documents/{ids[1]}/{ids[1]}.txt"}
         deleted_count = cleanup_orphaned_files(root, referenced, grace_seconds=60)
 
         assert deleted_count == 1

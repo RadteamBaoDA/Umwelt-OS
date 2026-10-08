@@ -15,6 +15,7 @@ from uuid import uuid4
 import pytest
 
 from core.tools.schemas import ToolExecutionPrincipal
+from core.workspaces.schemas import WorkspaceContext
 from modules.tools.mcp_admission import McpAdmission, McpInboundLease
 from modules.tools.mcp_auth import (
     InboundMcpGuard,
@@ -30,6 +31,7 @@ def dummy_principal() -> InboundPrincipal:
     """Return a mock InboundPrincipal for testing."""
     return InboundPrincipal(
         client_id=uuid4(),
+        workspace_id=uuid4(),
         owner_id=1,
         audience="https://example.com/api/v1/mcp/",
         revision=1,
@@ -51,6 +53,7 @@ def dummy_tool_execution_principal() -> ToolExecutionPrincipal:
     """Return a mock ToolExecutionPrincipal for testing."""
     return ToolExecutionPrincipal(
         actor_id="mcp-client:test",
+        scope=WorkspaceContext(user_id=1, workspace_id=uuid4(), role="owner", membership_revision=1),
         is_owner=False,
         allowed_tools=frozenset({"test_tool"}),
         source_ids=frozenset(),

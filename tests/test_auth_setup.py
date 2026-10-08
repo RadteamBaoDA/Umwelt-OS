@@ -37,6 +37,9 @@ class MemorySession:
     def add(self, value) -> None:
         self.pending = value
 
+    async def flush(self) -> None:
+        return None
+
     async def commit(self) -> None:
         async with self.store.lock:
             if self.store.owner_exists or self.store.other_unique_conflict:

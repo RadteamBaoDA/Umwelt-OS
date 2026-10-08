@@ -23,14 +23,18 @@ from pydantic import SecretStr
 
 from core.model_gateway.client import ModelGateway
 from core.model_gateway.schemas import AIExecutionConfig, ModelMapping, PrivacySettings
+from core.workspaces.schemas import InternalJobScope, WorkspaceContext
 from modules.chat.schemas import AnswerContext, AnswerContextRequest, EvidenceItem
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
+OWNER = WorkspaceContext(user_id=1, workspace_id=uuid4(), role="owner", membership_revision=1)
 
 
 def _config(**overrides: Any) -> AIExecutionConfig:
     values: dict[str, Any] = {
-        "configuration_revision": 1, "gateway_identity": "gw", "endpoint_destination_id": "omniroute",
+        "workspace_id": OWNER.workspace_id, "actor_user_id": 1, "membership_revision": 1,
+        "access_configuration_revision": 1, "configuration_revision": 1, "gateway_identity": "a" * 64,
+        "endpoint_destination_id": "omniroute",
         "omniroute_base_url": "http://localhost:8000", "omniroute_api_key": "key",
         "omniroute_credential_configured": True,
         "aliases": {"reranker": ModelMapping(model="rr", destination="remote")},
@@ -80,27 +84,30 @@ async def test_agent_browser_scope_reads_local_only_from_source_fence(monkeypatc
     origin, prefix = connectors._agent_browser_scope_url("https://example.com/docs")
     scope_hash = connectors._scope_hash(source_id, 3, 7, origin, prefix)
     monkeypatch.setattr(sources, "get_connector_source", AsyncMock(
-        return_value=SimpleNamespace(status="active", type="web", generation=3)))
+        return_value=SimpleNamespace(status="active", type="web", generation=3, workspace_id=OWNER.workspace_id)))
     monkeypatch.setattr(connectors, "get_connector_configuration", AsyncMock(
         return_value=SimpleNamespace(expected_revision=7, configuration={"url": "https://example.com/docs"})))
     row = SimpleNamespace(owner_id=1, source_generation=3, connector_revision=7, scope_hash=scope_hash,
                           origin=origin, path_prefix=prefix, grant_revision=2, enabled=True)
     session = MagicMock()
-    session.get = AsyncMock(return_value=row)
+    session.scalar = AsyncMock(return_value=row)
     fence = AsyncMock(return_value=SimpleNamespace(local_only=True))
     monkeypatch.setattr(sources, "get_source_fence", fence)
 
-    scope = await connectors.resolve_agent_browser_scope(session, 1, source_id)
+    scope = await connectors.resolve_agent_browser_scope(
+        session, 1, source_id, scope=OWNER, multi_workspace_enabled=False)
     assert scope is not None
     assert scope.local_only is True
     assert scope.enabled is False  # a local-only source never exposes the browser grant
 
     fence.return_value = SimpleNamespace(local_only=False)
-    scope = await connectors.resolve_agent_browser_scope(session, 1, source_id)
+    scope = await connectors.resolve_agent_browser_scope(
+        session, 1, source_id, scope=OWNER, multi_workspace_enabled=False)
     assert scope is not None and scope.local_only is False and scope.enabled is True
 
     fence.return_value = None
-    assert await connectors.resolve_agent_browser_scope(session, 1, source_id) is None
+    assert await connectors.resolve_agent_browser_scope(
+        session, 1, source_id, scope=OWNER, multi_workspace_enabled=False) is None
 
 
 async def test_world_credential_provider_is_read_from_connector_projection(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -109,18 +116,21 @@ async def test_world_credential_provider_is_read_from_connector_projection(monke
 
     source = SimpleNamespace(id=uuid4(), status="active", generation=1)  # SourceFence-like: no provider
     monkeypatch.setattr(sources, "lock_source", AsyncMock(return_value=source))
+    monkeypatch.setattr(routes, "_owner_access", AsyncMock())
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+        settings=SimpleNamespace(multi_workspace_enabled=False))))
     session = MagicMock()
     session.get = AsyncMock(return_value=None)  # no provisioning row: stops right after the provider check
     payload = routes.WorldProviderCredentialPut(expected_generation=1, expected_connector_revision=1, api_key="k")
 
     monkeypatch.setattr(sources, "get_connector_source", AsyncMock(return_value=SimpleNamespace(provider="open_meteo")))
     with pytest.raises(HTTPException) as wrong:
-        await routes.save_world_provider_credential(source.id, payload, MagicMock(), session, MagicMock())
+        await routes.save_world_provider_credential(source.id, payload, request, session, OWNER)
     assert wrong.value.detail == "Alpha Vantage source generation changed"
 
     monkeypatch.setattr(sources, "get_connector_source", AsyncMock(return_value=SimpleNamespace(provider="alpha_vantage")))
     with pytest.raises(HTTPException) as right:
-        await routes.save_world_provider_credential(source.id, payload, MagicMock(), session, MagicMock())
+        await routes.save_world_provider_credential(source.id, payload, request, session, OWNER)
     assert right.value.detail == "Connector configuration revision changed"  # got past the provider check
 
 
@@ -146,8 +156,10 @@ async def test_revoke_github_grant_sends_delete_with_json_body(monkeypatch: pyte
 # -------------------------------------------------------------------- system
 
 
-async def test_system_operation_route_returns_full_operation_read() -> None:
+async def test_system_operation_route_returns_full_operation_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    from core.system import routes as system_routes
     from core.system.routes import get_operation
+    from modules.sources.schemas import OperationRead
 
     row = SimpleNamespace(
         id=uuid4(), source_id=uuid4(), status="running", error_code=None, documents_status="queued",
@@ -155,15 +167,27 @@ async def test_system_operation_route_returns_full_operation_read() -> None:
         memory_status="queued", memory_error_code=None, created_at=NOW, updated_at=NOW,
     )
     session = MagicMock()
-    session.scalar = AsyncMock(return_value=row)
-    result = await get_operation(row.id, session, MagicMock())
+    session.rollback = AsyncMock()
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+        settings=SimpleNamespace(multi_workspace_enabled=False))))
+    job_scope = InternalJobScope(workspace_id=OWNER.workspace_id, actor_user_id=1, membership_revision=1,
+                                 source_id=row.source_id, source_generation=1)
+    read = OperationRead(
+        workspace_id=OWNER.workspace_id, operation_id=row.id, source_id=row.source_id, status=row.status,
+        error_code=None, documents_status=row.documents_status, pending_child_count=2, failed_child_count=0,
+        pending_owner_codes=row.pending_owner_codes, memory_status=row.memory_status, memory_error_code=None,
+        created_at=NOW, updated_at=NOW,
+    )
+    monkeypatch.setattr(system_routes, "resolve_source_purge_job_scope", AsyncMock(return_value=job_scope))
+    monkeypatch.setattr(system_routes, "read_source_purge_operation", AsyncMock(return_value=read))
+    result = await get_operation(request, row.id, session, MagicMock())
     assert result.operation_id == row.id
     assert result.documents_status == "queued" and result.memory_status == "queued"
     assert result.pending_owner_codes == ["documents"]
 
-    session.scalar = AsyncMock(return_value=None)
+    monkeypatch.setattr(system_routes, "resolve_source_purge_job_scope", AsyncMock(return_value=None))
     with pytest.raises(HTTPException) as missing:
-        await get_operation(uuid4(), session, MagicMock())
+        await get_operation(request, uuid4(), session, MagicMock())
     assert missing.value.status_code == 404
 
 
@@ -181,13 +205,15 @@ async def test_goal_export_page_yields_goal_reads(monkeypatch: pytest.MonkeyPatc
         progress=0.0, manual_progress=False, status="active", milestones=[], entity_ids=[],
         revision=1, created_at=NOW, updated_at=NOW,
     )
+    monkeypatch.setattr(goals, "_admit", AsyncMock())
     monkeypatch.setattr(goals, "_goal_export_read", AsyncMock(return_value=read))
     session = MagicMock()
     session.scalar = AsyncMock(return_value=1)
     session.scalars = AsyncMock(return_value=SimpleNamespace(all=lambda: [row]))
     session.execute = AsyncMock(side_effect=AssertionError("export must read ORM rows via scalars()"))
 
-    page = await goals.export_page(session, owner_id=1, record_kind="goals", limit=10)
+    page = await goals.export_page(
+        session, owner_id=1, record_kind="goals", limit=10, scope=OWNER, multi_workspace_enabled=False)
     assert [item.id for item in page.items] == [goal_id]
     assert page.fences[0].id == goal_id and page.snapshot_count == 1
 
@@ -204,6 +230,8 @@ async def test_build_context_projects_neighbors_from_nested_neighbor_read(monkey
         relationship=SimpleNamespace(id=rel_id, type="depends_on"),
         entity=SimpleNamespace(id=other_id, name="Beta"),
     )
+    monkeypatch.setattr(retrieval, "owner_scope_kwargs", AsyncMock(
+        return_value={"scope": OWNER, "multi_workspace_enabled": False}))
     monkeypatch.setattr(retrieval.entities_public, "resolve_canonical_entity_id", AsyncMock(return_value=entity_id))
     monkeypatch.setattr(retrieval.entities_public, "get_entity", AsyncMock(return_value=entity))
     monkeypatch.setattr(retrieval.entities_public, "list_entity_evidence", AsyncMock(return_value=None))
@@ -231,6 +259,8 @@ def _rerank_env(monkeypatch: pytest.MonkeyPatch, current_rows: list[Any] | None,
     from modules.chat import retrieval
 
     state: dict[str, Any] = {"gateways": [], "sent": False, "lock_calls": []}
+    monkeypatch.setattr(retrieval, "owner_scope_kwargs", AsyncMock(
+        return_value={"scope": OWNER, "multi_workspace_enabled": False}))
     monkeypatch.setattr(retrieval.settings_public, "get_ai_execution_config", AsyncMock(return_value=_config()))
 
     async def lock(session: Any, refs: list[Any], **kwargs: Any) -> list[Any]:
@@ -270,7 +300,8 @@ async def test_rerank_applies_and_revalidates_evidence_before_send(monkeypatch: 
     assert status == "applied" and warnings == []
     assert reordered == [items[1], items[0]]
     # before_send ran: exact chunks were locked against active sources, then the lock session was released
-    assert state["lock_calls"] == [{"require_active_source": True}]
+    assert state["lock_calls"] == [
+        {"require_active_source": True, "scope": OWNER, "multi_workspace_enabled": False}]
     send_session.close.assert_awaited_once()
     # constructor receives the redis client and destination (the pre-fix call raised TypeError)
     gateway = state["gateways"][0]
@@ -341,6 +372,7 @@ async def test_chat_completion_persists_message_with_citations(monkeypatch: pyte
     monkeypatch.setattr(worker, "revalidate_context_fence", AsyncMock(return_value=(True, [])))
     monkeypatch.setattr(worker, "_next_event_seq", AsyncMock(side_effect=lambda *a, **k: next(seq)))
     monkeypatch.setattr(worker, "build_context", AsyncMock(return_value=context))
+    monkeypatch.setattr("modules.chat.scope.owner_default_scope", AsyncMock(return_value=OWNER))
     monkeypatch.setattr(worker.settings_public, "get_ai_execution_config", AsyncMock(return_value=_config(aliases={})))
     monkeypatch.setattr(worker, "ModelGateway", lambda **kw: SimpleNamespace(stream=stream))
     failed = AsyncMock()
@@ -398,6 +430,7 @@ async def test_chat_completion_uncited_answer_emits_no_citations(monkeypatch: py
     monkeypatch.setattr(worker, "revalidate_context_fence", AsyncMock(return_value=(True, [])))
     monkeypatch.setattr(worker, "_next_event_seq", AsyncMock(side_effect=lambda *a, **k: next(seq)))
     monkeypatch.setattr(worker, "build_context", AsyncMock(return_value=context))
+    monkeypatch.setattr("modules.chat.scope.owner_default_scope", AsyncMock(return_value=OWNER))
     monkeypatch.setattr(worker.settings_public, "get_ai_execution_config", AsyncMock(return_value=_config(aliases={})))
     monkeypatch.setattr(worker, "ModelGateway", lambda **kw: SimpleNamespace(stream=stream))
     monkeypatch.setattr(worker, "_mark_failed", AsyncMock())
@@ -446,6 +479,7 @@ async def _run_chat_with_answer(
     monkeypatch.setattr(worker, "revalidate_context_fence", AsyncMock(return_value=(True, [])))
     monkeypatch.setattr(worker, "_next_event_seq", AsyncMock(side_effect=lambda *a, **k: next(seq)))
     monkeypatch.setattr(worker, "build_context", AsyncMock(return_value=context))
+    monkeypatch.setattr("modules.chat.scope.owner_default_scope", AsyncMock(return_value=OWNER))
     monkeypatch.setattr(worker.settings_public, "get_ai_execution_config", AsyncMock(return_value=_config(aliases={})))
     monkeypatch.setattr(worker, "ModelGateway", lambda **kw: SimpleNamespace(stream=stream))
     monkeypatch.setattr(worker, "_mark_failed", AsyncMock())
@@ -481,7 +515,8 @@ async def test_brief_story_support_missing_story_is_incomplete_not_error(monkeyp
 
     monkeypatch.setattr(news, "get_story", AsyncMock(return_value=None))
     result = await news.brief_story_support(
-        MagicMock(), 1, uuid4(), expected_title="T", expected_source_ids=[str(uuid4())],
+        MagicMock(), uuid4(), expected_title="T", expected_source_ids=[str(uuid4())],
+        scope=OWNER, multi_workspace_enabled=False,
     )
     assert result.complete is False and result.evidence == []
 
@@ -504,7 +539,14 @@ async def test_notification_emit_returns_false_when_evidence_source_purged(monke
     session.execute = AsyncMock(side_effect=AssertionError("must not insert for a purged source"))
     evidence = NotificationEvidence(document_id=document_id, document_version_id=version_id)
 
-    assert await notifications.emit(session, 1, payload, evidence=evidence) is False
+    from core.workspaces.schemas import WorkspaceContext
+
+    scope = WorkspaceContext(user_id=1, workspace_id=uuid4(), role="owner", membership_revision=1)
+    monkeypatch.setattr(notifications.workspaces, "read_access_fence", AsyncMock(return_value=MagicMock()))
+
+    assert await notifications.emit(
+        session, payload, evidence=evidence, scope=scope, multi_workspace_enabled=False,
+    ) is False
 
 
 async def test_timeline_dependency_snapshot_cold_capability_cache_is_unsupported() -> None:
@@ -513,20 +555,44 @@ async def test_timeline_dependency_snapshot_cold_capability_cache_is_unsupported
     config = _config(aliases={ALIAS: ModelMapping(model="m", destination="remote")})
     redis = MagicMock()
     redis.get = AsyncMock(return_value=None)  # capability cache miss: the normal cold-start case
-    fingerprint, supported = await _dependency_snapshot(config, redis)
+    fingerprint, supported = await _dependency_snapshot(config, redis, scope=OWNER)
     assert supported is False and len(fingerprint) == 64
 
 
-def _recovery_session() -> MagicMock:
+async def test_entity_dependency_snapshot_builds_actor_scoped_capability_key() -> None:
+    from modules.knowledge.entities.worker import EXTRACTION_ALIAS, _dependency_snapshot
+
+    config = _config(aliases={EXTRACTION_ALIAS: ModelMapping(model="m", destination="remote")})
+    redis = MagicMock()
+    redis.get = AsyncMock(return_value=None)
+    fingerprint, supported = await _dependency_snapshot(config, redis, scope=OWNER)
+    assert supported is False and len(fingerprint) == 64
+    assert f":u:{config.actor_user_id}:" in redis.get.await_args.args[0]  # key is actor-namespaced
+
+
+def _recovery_session(workspace_id: Any) -> MagicMock:
     session = MagicMock()
     session.commit = AsyncMock()
+    session.rollback = AsyncMock()
+    session.scalars = AsyncMock(return_value=SimpleNamespace(all=lambda: [workspace_id]))
     return session
+
+
+def _recovery_setup(monkeypatch: pytest.MonkeyPatch, worker: Any) -> tuple[Any, InternalJobScope]:
+    ws = uuid4()
+    scope = InternalJobScope(workspace_id=ws, actor_user_id=1, membership_revision=1)
+    monkeypatch.setattr(worker, "_workspace_job_scope", AsyncMock(return_value=scope))
+    monkeypatch.setattr(worker.settings_public, "module_is_enabled", AsyncMock(return_value=True))
+    monkeypatch.setattr(worker.documents, "list_ready_document_workspace_ids", AsyncMock(return_value=()))
+    return ws, scope
 
 
 async def test_timeline_recovery_defers_blocked_work_when_version_no_longer_ready(monkeypatch: pytest.MonkeyPatch) -> None:
     from modules.timeline import worker
 
     blocked_id = uuid4()
+    ws, scope = _recovery_setup(monkeypatch, worker)
+    monkeypatch.setattr(worker.workspaces, "read_access_fence", AsyncMock())
     monkeypatch.setattr(worker.documents, "list_ready_version_refs", AsyncMock(return_value=([], None)))
     monkeypatch.setattr(worker.documents, "get_ready_version_ref", AsyncMock(return_value=None))
     monkeypatch.setattr(worker.timeline, "list_blocked_extraction_work", AsyncMock(
@@ -539,16 +605,19 @@ async def test_timeline_recovery_defers_blocked_work_when_version_no_longer_read
     redis.delete = AsyncMock()
 
     count = await worker.recover_timeline_extraction_work(
-        {"session_factory": _factory(_recovery_session()), "redis": redis, "settings": MagicMock()})
+        {"session_factory": _factory(_recovery_session(ws)), "redis": redis,
+         "settings": MagicMock(multi_workspace_enabled=False)})
     assert count == 0
     defer.assert_awaited_once()
     assert defer.await_args.args[1:] == (blocked_id, "fp")
+    assert defer.await_args.kwargs["scope"] is scope
 
 
 async def test_entity_recovery_defers_blocked_work_when_version_no_longer_ready(monkeypatch: pytest.MonkeyPatch) -> None:
     from modules.knowledge.entities import worker
 
     blocked_id = uuid4()
+    ws, scope = _recovery_setup(monkeypatch, worker)
     monkeypatch.setattr(worker.documents, "list_ready_version_refs", AsyncMock(return_value=([], None)))
     monkeypatch.setattr(worker.documents, "get_ready_version_ref", AsyncMock(return_value=None))
     monkeypatch.setattr(worker.entities, "list_blocked_extraction_work", AsyncMock(
@@ -563,9 +632,11 @@ async def test_entity_recovery_defers_blocked_work_when_version_no_longer_ready(
     redis.delete = AsyncMock()
 
     await worker.recover_entity_extraction_work(
-        {"session_factory": _factory(_recovery_session()), "redis": redis, "settings": MagicMock()})
+        {"session_factory": _factory(_recovery_session(ws)), "redis": redis,
+         "settings": MagicMock(multi_workspace_enabled=False)})
     defer.assert_awaited_once()
     assert defer.await_args.args[1:] == (blocked_id, "fp")
+    assert defer.await_args.kwargs["scope"] is scope
 
 
 
@@ -578,3 +649,22 @@ def test_mcp_endpoint_cidrs_subnet_check_per_ip_version() -> None:
     for bad in ("8.8.8.0/24", "2001:db8::/32", "0.0.0.0/0"):
         with pytest.raises(ValueError, match="bounded private or loopback"):
             validate({origin: (bad,)})
+
+
+@pytest.mark.parametrize("module", ["modules.timeline.worker", "modules.knowledge.entities.worker"])
+async def test_recovery_visits_ready_workspace_without_work_rows_and_is_bounded(
+    monkeypatch: pytest.MonkeyPatch, module: str,
+) -> None:
+    import importlib
+
+    worker = importlib.import_module(module)
+    ready_ws = uuid4()
+    session = MagicMock()
+    session.rollback = AsyncMock()
+    session.scalars = AsyncMock(return_value=SimpleNamespace(all=list))  # no work rows at all
+    ready = AsyncMock(return_value=(ready_ws,))
+    monkeypatch.setattr(worker.documents, "list_ready_document_workspace_ids", ready)
+    ctx: dict[str, Any] = {}
+    assert await worker._recovery_workspace_ids(ctx, _factory(session)) == [ready_ws]
+    assert ready.await_args.kwargs["limit"] <= 100
+    assert "LIMIT" in str(session.scalars.await_args.args[0]).upper()

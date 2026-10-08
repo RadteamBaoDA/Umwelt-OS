@@ -1,5 +1,7 @@
 """Unit tests for ingestion dispatcher, status transitions, retry backoff, and cursor CAS logic."""
 
+import asyncio
+from collections import namedtuple
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID, uuid4
@@ -8,6 +10,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
+from core.workspaces.schemas import AccessFence, WorkspaceContext
 from modules.ingestion import dispatcher, public
 from modules.ingestion.models import (
     EventOutbox,
@@ -19,6 +22,8 @@ from modules.ingestion.worker import (
     ConnectorRetryError,
     _retry_after_seconds,
 )
+
+SCOPE = WorkspaceContext(user_id=7, workspace_id=uuid4(), role="owner", membership_revision=3)
 
 
 def _make_outbox_event(
@@ -47,80 +52,103 @@ def _make_outbox_event(
 class TestDispatcherWork:
     """Test outbox query filtering, Redis job enqueuing, and status transitions."""
 
+    @staticmethod
+    def _ctx(events: list[EventOutbox], redis: AsyncMock) -> dict:
+        """First session lists identities; each later per-identity session claims the next event."""
+        Identity = namedtuple("Identity", "id status dispatched_at created_at")
+        claims = list(events)
+        sessions = 0
+
+        def enter(*_args):
+            nonlocal sessions
+            sessions += 1
+            session = AsyncMock()
+            if sessions == 1:
+                listing = MagicMock()
+                listing.all.return_value = [Identity(e.id, e.status, e.dispatched_at, e.created_at) for e in events]
+                session.execute.return_value = listing
+            else:
+                session.scalar.side_effect = lambda *_a, **_k: claims.pop(0)
+            return session
+
+        factory = MagicMock()
+        factory.return_value.__aenter__.side_effect = enter
+        return {
+            "session_factory": factory, "redis": redis,
+            "settings": MagicMock(multi_workspace_enabled=False),
+            dispatcher.DISPATCH_SCAN_STATE: {"cursor": None, "lock": asyncio.Lock()},
+        }
+
     @pytest.mark.asyncio
     async def test_dispatch_pending_work_enqueues_and_updates_status(self) -> None:
         now = datetime.now(UTC)
         ev1 = _make_outbox_event(event_type="document.file.uploaded", status="pending")
         ev2 = _make_outbox_event(event_type="connector.crawl.requested", status="pending")
-
-        session = AsyncMock()
-        mock_scalars = MagicMock()
-        mock_scalars.all.return_value = [ev1, ev2]
-        session.scalars.return_value = mock_scalars
-
         redis = AsyncMock()
-        factory = MagicMock()
-        factory.return_value.__aenter__.return_value = session
+        ctx = self._ctx([ev1, ev2], redis)
+        scope = MagicMock(workspace_id=uuid4(), actor_user_id=7, membership_revision=3, source_id=None)
 
-        ctx = {"session_factory": factory, "redis": redis}
-        count = await dispatcher.dispatch_pending_work(ctx)
+        with (
+            patch.object(dispatcher, "admit_write", AsyncMock()),
+            patch.object(dispatcher.public, "resolve_ingestion_event_scope", AsyncMock(return_value=scope)),
+            patch.object(dispatcher, "read_access_fence", AsyncMock()),
+            patch.object(dispatcher, "valid_event_envelope", return_value=True),
+        ):
+            count = await dispatcher.dispatch_pending_work(ctx)
 
         assert count == 2
-        assert ev1.status == "queued"
-        assert ev1.dispatched_at is not None
-        assert ev2.status == "queued"
-        assert ev2.dispatched_at is not None
-
-        # Verify Redis enqueued jobs
+        assert ev1.status == "queued" and ev1.dispatched_at is not None
+        assert ev2.status == "queued" and ev2.dispatched_at is not None
         assert redis.enqueue_job.await_count == 2
-        calls = redis.enqueue_job.await_args_list
-        call1_args, call1_kwargs = calls[0]
-        assert call1_args[0] == "process_uploaded_file"
-        assert call1_args[1] == str(ev1.id)
-        assert call1_kwargs["_job_id"] == f"ingestion:{ev1.id}"
-        assert abs((call1_kwargs["_defer_until"] - now).total_seconds()) < 5
-
-        call2_args, call2_kwargs = calls[1]
-        assert call2_args[0] == "process_ingestion_event"
-        assert call2_args[1] == str(ev2.id)
-        assert call2_kwargs["_job_id"] == f"ingestion:{ev2.id}"
-
-        session.commit.assert_awaited_once()
+        (name1, id1), kw1 = redis.enqueue_job.await_args_list[0]
+        (name2, id2), kw2 = redis.enqueue_job.await_args_list[1]
+        assert (name1, id1) == ("process_uploaded_file", str(ev1.id))
+        assert (name2, id2) == ("process_ingestion_event", str(ev2.id))
+        assert kw1["_job_id"] == f"ingestion:{ev1.id}:{ev1.dispatched_at.isoformat()}"
+        assert kw2["_job_id"] == f"ingestion:{ev2.id}:{ev2.dispatched_at.isoformat()}"
+        assert abs((kw1["_defer_until"] - now).total_seconds()) < 5
 
     @pytest.mark.asyncio
-    async def test_dispatch_pending_work_no_events_does_not_commit(self) -> None:
-        session = AsyncMock()
-        mock_scalars = MagicMock()
-        mock_scalars.all.return_value = []
-        session.scalars.return_value = mock_scalars
-
+    async def test_dispatch_pending_work_no_events_does_not_enqueue(self) -> None:
         redis = AsyncMock()
-        factory = MagicMock()
-        factory.return_value.__aenter__.return_value = session
-
-        ctx = {"session_factory": factory, "redis": redis}
+        ctx = self._ctx([], redis)
         count = await dispatcher.dispatch_pending_work(ctx)
 
         assert count == 0
         redis.enqueue_job.assert_not_awaited()
-        session.commit.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_dispatch_pending_work_requires_shared_scan_state(self) -> None:
+        ctx = self._ctx([], AsyncMock())
+        del ctx[dispatcher.DISPATCH_SCAN_STATE]
+        with pytest.raises(TypeError, match="shared ingestion dispatch scheduling state"):
+            await dispatcher.dispatch_pending_work(ctx)
 
     @pytest.mark.asyncio
     async def test_mark_event_delivered(self) -> None:
         event = _make_outbox_event(status="queued")
         session = AsyncMock()
-        session.get.return_value = event
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = event.id
+        session.execute.return_value = result
 
-        await dispatcher.mark_event_delivered(session, event.id)
-        assert event.status == "delivered"
-        session.commit.assert_awaited_once()
+        with patch.object(public, "_admit_ingestion_scope", AsyncMock()):
+            assert await dispatcher.mark_event_delivered(
+                session, event.id, scope=SCOPE, multi_workspace_enabled=False,
+            ) is True
+        session.commit.assert_not_awaited()  # flush-only owner seam; the caller commits
 
     @pytest.mark.asyncio
     async def test_mark_event_delivered_missing_event(self) -> None:
         session = AsyncMock()
-        session.get.return_value = None
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = None
+        session.execute.return_value = result
 
-        await dispatcher.mark_event_delivered(session, uuid4())
+        with patch.object(public, "_admit_ingestion_scope", AsyncMock()):
+            assert await dispatcher.mark_event_delivered(
+                session, uuid4(), scope=SCOPE, multi_workspace_enabled=False,
+            ) is False
         session.commit.assert_not_awaited()
 
 
@@ -168,7 +196,7 @@ class TestBatchAndRunStatusTransitions:
 
     @pytest.mark.asyncio
     async def test_retry_run_active_stage_rejected(self) -> None:
-        from modules.sources.schemas import SourceFence
+        from modules.sources.schemas import SourceFence, SourceFenceSet
 
         session = AsyncMock()
         run_id = uuid4()
@@ -177,9 +205,13 @@ class TestBatchAndRunStatusTransitions:
         st1 = IngestionStage(run_id=run_id, stage_key="receive", status="succeeded")
         st2 = IngestionStage(run_id=run_id, stage_key="normalize", status="running")  # Active!
 
-        fence = SourceFence(id=source_id, status="active", generation=1, local_only=False)
+        fence = SourceFence(id=source_id, workspace_id=uuid4(), status="active", generation=1, local_only=False)
 
-        with patch("modules.ingestion.public.sources.lock_source", new_callable=AsyncMock, return_value=fence):
+        locked = SourceFenceSet(fences=(fence,), access_fence=AccessFence(SCOPE.workspace_id, 7, 3, 5))
+        with (
+            patch("modules.ingestion.public._admit_ingestion_scope", AsyncMock()),
+            patch("modules.ingestion.public.sources.lock_source_set", AsyncMock(return_value=locked)),
+        ):
             session.get.side_effect = lambda model, ident, **kwargs: run if model == IngestionRun else None
             session.scalar.return_value = run
             mock_stages = MagicMock()
@@ -187,7 +219,7 @@ class TestBatchAndRunStatusTransitions:
             session.scalars.return_value = mock_stages
 
             with pytest.raises(HTTPException) as exc_info:
-                await public.retry_run(session, run_id, "normalize")
+                await public.retry_run(session, run_id, "normalize", scope=SCOPE, multi_workspace_enabled=False)
             assert exc_info.value.status_code == 409
             assert exc_info.value.detail == "Ingestion run still has an active stage"
 

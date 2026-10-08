@@ -89,9 +89,18 @@ def _to_read(meta: RunMeta) -> RunRead:
                    duration_ms=duration, usage=usage, trace=trace)
 
 
-async def list_runs(session: AsyncSession, *, limit: int = 50, kind: RunKind | None = None) -> RunsRead:
-    """Return the newest ``limit`` runs across modules via each owner's public ``list_run_meta`` (metadata only)."""
-    sources = {"ingestion": ingestion.list_run_meta, "agent": agents.list_run_meta,
+async def list_runs(
+    session: AsyncSession, *, limit: int = 50, kind: RunKind | None = None, instance_operator: bool,
+) -> RunsRead:
+    """Return the newest ``limit`` runs across modules via each owner's public ``list_run_meta`` (metadata only).
+
+    ``instance_operator`` must be True only from a real ``require_owner`` route; only Ingestion's
+    instance aggregate takes it, other kinds keep their owner contracts and gain no invented scope.
+    """
+    async def ingestion_runs(s: AsyncSession, n: int) -> list[RunMeta]:
+        return await ingestion.list_run_meta(s, n, instance_operator=instance_operator)
+
+    sources = {"ingestion": ingestion_runs, "agent": agents.list_run_meta,
                "automation": automations.list_run_meta, "chat": chat.list_run_meta}
     metas: list[RunMeta] = []
     for name, fetch in sources.items():
@@ -101,10 +110,17 @@ async def list_runs(session: AsyncSession, *, limit: int = 50, kind: RunKind | N
     return RunsRead(items=items[:limit], limit=limit)
 
 
-async def get_run_by_id(session: AsyncSession, kind: RunKind, run_id: UUID) -> RunRead | None:
-    """Read one safe owner-provided run projection independently of the recent list window."""
-    sources = {"ingestion": ingestion, "agent": agents, "automation": automations, "chat": chat}
-    meta = await sources[kind].get_run_meta_by_id(session, run_id)
+async def get_run_by_id(
+    session: AsyncSession, kind: RunKind, run_id: UUID, *, instance_operator: bool,
+) -> RunRead | None:
+    """Read one safe owner-provided run projection independently of the recent list window.
+
+    Explicit per-kind dispatch: only Ingestion receives ``instance_operator``.
+    """
+    if kind == "ingestion":
+        meta = await ingestion.get_run_meta_by_id(session, run_id, instance_operator=instance_operator)
+    else:
+        meta = await {"agent": agents, "automation": automations, "chat": chat}[kind].get_run_meta_by_id(session, run_id)
     return _to_read(meta) if meta is not None else None
 
 

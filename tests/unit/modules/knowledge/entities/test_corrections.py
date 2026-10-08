@@ -22,6 +22,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from core.workspaces.schemas import WorkspaceContext
 from modules.knowledge.entities.corrections import (
     CorrectionConflictError,
     _Closure,
@@ -123,6 +124,21 @@ def _make_sample_relationship_ref(
         supports=[],
     )
 
+
+SCOPE = WorkspaceContext(user_id=1, workspace_id=uuid4(), role="owner", membership_revision=1)
+KW = {"scope": SCOPE, "multi_workspace_enabled": False}
+
+
+@pytest.fixture(autouse=True)
+def _admitted() -> object:
+    """Admission is covered elsewhere; these tests exercise correction logic past it."""
+    admitted = AsyncMock(return_value=MagicMock())
+    with (
+        patch("modules.knowledge.entities.corrections._admit", admitted),
+        patch("modules.knowledge.entities.public._admit", admitted),
+        patch("modules.knowledge.relationships.public._admit", admitted),
+    ):
+        yield
 
 class TestCorrectionConflictAndClosures:
     """Tests for CorrectionConflictError and closure data containers."""
@@ -428,7 +444,7 @@ class TestPreviewsAndExecution:
         same_id = uuid4()
         payload = EntityMergeRequest(into_id=same_id, expected_revision=1, expected_into_revision=1, reason="test")
 
-        preview = await preview_merge(session, same_id, payload)
+        preview = await preview_merge(session, same_id, payload, **KW)
         assert isinstance(preview, EntityCorrectionPreview)
         assert preview.operation == "merge"
         assert len(preview.conflicts) == 1
@@ -448,7 +464,7 @@ class TestPreviewsAndExecution:
             patch("modules.knowledge.entities.public.resolve_canonical_entity_id", AsyncMock(return_value=ent_id)),
             patch("modules.knowledge.entities.corrections._discover", side_effect=_conflict("mock_err", "Mock error")),
         ):
-            preview = await preview_split(session, ent_id, payload)
+            preview = await preview_split(session, ent_id, payload, **KW)
 
         assert preview.operation == "split"
         assert len(preview.conflicts) == 1
@@ -462,7 +478,7 @@ class TestPreviewsAndExecution:
         payload = EntityMergeRequest(into_id=same_id, expected_revision=1, expected_into_revision=1, reason="test")
 
         with pytest.raises(CorrectionConflictError) as exc_info:
-            await merge_entity(session, same_id, payload, actor_id=42)
+            await merge_entity(session, same_id, payload, **KW)
         assert exc_info.value.conflict.code == "self_merge"
 
     @pytest.mark.asyncio
@@ -475,7 +491,7 @@ class TestPreviewsAndExecution:
 
         with patch("modules.knowledge.entities.public.resolve_canonical_entity_id", AsyncMock(side_effect=[uuid4(), tgt_id])):
             with pytest.raises(CorrectionConflictError) as exc_info:
-                await merge_entity(session, src_id, payload, actor_id=42)
+                await merge_entity(session, src_id, payload, **KW)
             assert exc_info.value.conflict.code == "redirected_entity"
 
     @pytest.mark.asyncio
@@ -510,7 +526,7 @@ class TestPreviewsAndExecution:
             patch("modules.timeline.public.apply_entity_merge", AsyncMock(return_value=[])),
             patch("modules.timeline.public.revise_corrected_events", AsyncMock(return_value=[])),
         ):
-            result = await merge_entity(session, src.id, payload, actor_id=10)
+            result = await merge_entity(session, src.id, payload, **KW)
 
         assert isinstance(result, EntityCorrectionResult)
         assert result.operation == "merge"
@@ -555,7 +571,7 @@ class TestPreviewsAndExecution:
             patch("modules.timeline.public.revise_corrected_events", AsyncMock(return_value=[])),
             patch("modules.knowledge.relationships.public.apply_entity_split", AsyncMock(return_value=[])),
         ):
-            result = await split_entity(session, src.id, payload, actor_id=10)
+            result = await split_entity(session, src.id, payload, **KW)
 
         assert isinstance(result, EntityCorrectionResult)
         assert result.operation == "split"
@@ -599,7 +615,7 @@ class TestPreviewsAndExecution:
             patch("modules.knowledge.entities.public.record_owner_action", AsyncMock()),
             patch("modules.knowledge.relationships.public.remove_entity_closure", AsyncMock(return_value=[])),
         ):
-            result = await suppress_candidates(session, ent.id, payload, actor_id=10)
+            result = await suppress_candidates(session, ent.id, payload, **KW)
 
         assert isinstance(result, EntityCorrectionResult)
         assert result.operation == "suppress"

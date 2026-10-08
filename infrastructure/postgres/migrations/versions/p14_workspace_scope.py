@@ -21,7 +21,7 @@ from collections.abc import Sequence
 from uuid import UUID, uuid4
 
 import sqlalchemy as sa
-from alembic import op
+from alembic import context, op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "p14_workspace_scope"
@@ -2039,7 +2039,7 @@ OLD_FOREIGN_KEYS = (('agent_approvals', 'agent_approvals_run_id_fkey', 'agent_ru
   ['id'],
   'CASCADE'),
  ('document_cleanup_evidence_references',
-  'document_cleanup_evidence_references_operation_id_fkey',
+  'fk_document_cleanup_evidence_operation',
   'document_cleanup_operations',
   ['operation_id'],
   ['id'],
@@ -2408,8 +2408,20 @@ def upgrade() -> None:
     """
     tables = sorted(set(SCOPED_TABLES) | set(INHERITED_PATHS) | {'owner', 'workspaces', 'workspace_memberships'})
     op.execute(sa.text('LOCK TABLE ' + ', '.join(f'"{table}"' for table in tables) + ' IN ACCESS EXCLUSIVE MODE'))
-    _w2_empty_replay()
-    _w2_validate_live()
+    offline = context.is_offline_mode()  # --sql has no bind; data proofs run online only
+    if offline:
+        # --sql cannot prove data: emit the empty-database replay removal as plain SQL and make the
+        # script fail loudly (never silently skip the backfill) when run against a populated database.
+        op.execute(sa.text(
+            "DO $$ BEGIN IF EXISTS (SELECT 1 FROM owner) OR EXISTS (SELECT 1 FROM workspaces) THEN "
+            "RAISE EXCEPTION 'p14_workspace_scope offline script requires an empty database'; "
+            "END IF; END $$"))
+        op.execute(sa.text(
+            "DELETE FROM realtime_replay_head WHERE id = 1 AND sequence = 0 AND floor_sequence = 1 "
+            "AND NOT EXISTS (SELECT 1 FROM owner)"))
+    else:
+        _w2_empty_replay()
+        _w2_validate_live()
     for table, columns in SCOPED_COLUMNS:
         for column in columns:
             column_type = (postgresql.UUID(as_uuid=True) if column == 'workspace_id'
@@ -2426,8 +2438,9 @@ def upgrade() -> None:
             '(membership_revision IS NOT NULL AND configuration_revision IS NOT NULL '
             'AND membership_revision > 0 AND configuration_revision > 0)',
         )
-    _w2_backfill()
-    _w2_validate_lineage()
+    if not offline:
+        _w2_backfill()
+        _w2_validate_lineage()
     for table, columns in SCOPED_COLUMNS:
         for column in columns:
             op.alter_column(table, column, nullable=False)
@@ -2526,6 +2539,8 @@ def downgrade() -> None:
     Restore the old replay kinds only after refusing dashboard history. Remove original
     Agent/browser epoch checks before their nullable columns; never synthesize authority.
     """
+    if context.is_offline_mode():
+        raise RuntimeError('p14_workspace_scope downgrade needs data proofs; run it online, not with --sql')
     tables = sorted(set(SCOPED_TABLES) | set(INHERITED_PATHS) | {'owner', 'workspaces', 'workspace_memberships'})
     op.execute(sa.text('LOCK TABLE ' + ', '.join(f'"{table}"' for table in tables) + ' IN ACCESS EXCLUSIVE MODE'))
     _w2_downgrade_guard()

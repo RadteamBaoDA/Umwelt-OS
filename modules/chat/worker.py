@@ -13,7 +13,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
-from core.model_gateway.client import ModelGateway
+from core.model_gateway.client import ModelGateway, PrivacyPolicyDenied
 from core.model_gateway.schemas import RequestPolicy
 from modules.chat.citations import (
     parse_citation_markers,
@@ -34,8 +34,10 @@ from modules.chat.retrieval import (
     revalidate_context_fence,
 )
 from modules.chat.schemas import AnswerContextRequest, Citation
+from modules.chat.scope import ensure_ai_config_unchanged
+from modules.chat.scope import read_owner_export_privacy as read_export_privacy
 from modules.chat.stream import make_event_id
-from modules.memory.public import lock_export_privacy, read_export_privacy
+from modules.memory.public import lock_export_privacy
 from modules.settings import public as settings_public
 
 logger = logging.getLogger(__name__)
@@ -283,9 +285,25 @@ async def purge_expired_chat_runs(ctx: dict[str, object]) -> int:
                     or not link.ephemeral or link.expires_at is None or link.expires_at > now):
                 continue
 
+            from core.workspaces.public import resolve_workspace_owner_context
+            from core.workspaces.schemas import InternalJobScope
             from modules.agents.public import purge_agent_runs
+            from modules.chat.scope import multi_workspace_enabled
 
-            await purge_agent_runs(session, [link.agent_run_id], owner_id=link.owner_id)
+            flag = multi_workspace_enabled()
+            owner_ctx = await resolve_workspace_owner_context(
+                session, link.workspace_id, multi_workspace_enabled=flag,
+            )
+            if owner_ctx is None:
+                continue
+            await purge_agent_runs(
+                session, [link.agent_run_id],
+                scope=InternalJobScope(
+                    workspace_id=link.workspace_id, actor_user_id=link.owner_id,
+                    membership_revision=owner_ctx.membership_revision,
+                ),
+                multi_workspace_enabled=flag,
+            )
             # The parent lock serializes supported Chat link writers; refresh and lock only after
             # Agent locks, matching conversation deletion's parent-before-Agent lock ordering.
             current_link = await session.scalar(select(AgentActivityLink).where(
@@ -504,11 +522,19 @@ async def run_response_generation(
 
         # 3. ModelGateway configuration and streaming
         async with session_factory() as session:
-            ai_config = await settings_public.get_ai_execution_config(session, settings, redis)
+            from modules.chat.scope import owner_default_scope
+
+            owner_scope = await owner_default_scope(session)
+            ai_config = await settings_public.get_ai_execution_config(
+                session, settings, redis, scope=owner_scope,
+            )
             alias = ai_config.chat_alias or "reasoning-large"
             mapping = ai_config.aliases.get(alias)
 
             policy = RequestPolicy(
+                workspace_id=ai_config.workspace_id, actor_user_id=ai_config.actor_user_id,
+                membership_revision=ai_config.membership_revision,
+                gateway_identity=ai_config.gateway_identity,
                 reasoning_allowed=ai_config.privacy.allow_remote_reasoning,
                 embeddings_allowed=ai_config.privacy.allow_remote_embeddings,
                 web_search_allowed=ai_config.privacy.allow_remote_web_search,
@@ -538,6 +564,9 @@ async def run_response_generation(
                 """Fence consent, live Chat rows, and every exact evidence reference before each attempt."""
                 nonlocal send_attempt_session
                 await release_send_attempt_session()
+                await ensure_ai_config_unchanged(
+                    session_factory, settings, redis, owner_scope, ai_config, alias, mapping,
+                )
                 send_attempt_session = session_factory()
                 try:
                     # This transaction is held only until ModelGateway opens/abandons this request.
@@ -574,7 +603,9 @@ async def run_response_generation(
                 api_key=credential,
                 destination_id=destination,
                 timeout_seconds=float(ai_config.request_timeout_seconds),
+                scope=owner_scope,
                 gateway_identity=ai_config.gateway_identity,
+                configuration_revision=ai_config.configuration_revision,
                 before_send=before_send_attempt,
                 approved_endpoint_cidrs=tuple(settings.ai_allowed_endpoint_cidrs),
             )
@@ -770,7 +801,7 @@ async def run_response_generation(
             )
             await session.commit()
 
-    except PrivacyFenceChanged:
+    except (PrivacyFenceChanged, PrivacyPolicyDenied):
         logger.info("Privacy fence cancelled chat response %s", response_id)
         await _mark_privacy_cancelled(response_id, session_factory, seq)
     except ResponseNoLongerActive:

@@ -8,10 +8,13 @@ from datetime import UTC, datetime
 from typing import cast as typing_cast
 from uuid import UUID, uuid4
 
+from fastapi import HTTPException
 from sqlalchemy import Text, bindparam, cast, func, or_, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.workspaces import public as workspaces
+from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
 from modules.tools.mcp_credentials import (
     decrypt_connection_credential,
     encrypt_connection_credential,
@@ -52,6 +55,31 @@ class McpNotFound(Exception):
 
 class McpUnavailable(Exception):
     """Raised when requested network behavior has no implemented real transport owner."""
+
+
+def _actor(scope: Scope) -> int:
+    return scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
+
+
+def _require_owner(scope: Scope) -> None:
+    if not isinstance(scope, (WorkspaceContext, InternalJobScope)):
+        raise TypeError("An explicit workspace scope is required")
+    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
+
+
+async def admit(
+    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool, lock: bool = False,
+    expected: AccessFence | None = None,
+) -> AccessFence:
+    """Owner admission; a member is denied before any session await. Shared by MCP runtime and routes."""
+    _require_owner(scope)
+    if type(multi_workspace_enabled) is not bool:
+        raise TypeError("The configured multi-workspace feature flag must be a boolean")
+    if lock:
+        return await workspaces.lock_access_fence(
+            session, scope=scope, expected=expected, multi_workspace_enabled=multi_workspace_enabled)
+    return await workspaces.read_access_fence(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
 
 
 def to_connection_read(row: McpConnection) -> ConnectionRead:
@@ -109,9 +137,12 @@ def to_inbound_read(row: McpInboundClient) -> InboundClientRead:
     )
 
 
-async def get_connection(session: AsyncSession, owner_id: int, connection_id: UUID, *, lock: bool = False) -> McpConnection:
+async def get_connection(session: AsyncSession, connection_id: UUID, *, scope: Scope, lock: bool = False) -> McpConnection:
     """Load one connection constrained by the authenticated owner, optionally acquiring its row lock."""
-    statement = select(McpConnection).where(McpConnection.id == connection_id, McpConnection.owner_id == owner_id)
+    _require_owner(scope)
+    statement = select(McpConnection).where(
+        McpConnection.id == connection_id, McpConnection.workspace_id == scope.workspace_id,
+        McpConnection.owner_id == _actor(scope))
     if lock:
         statement = statement.with_for_update()
     statement = statement.execution_options(populate_existing=True)
@@ -121,27 +152,28 @@ async def get_connection(session: AsyncSession, owner_id: int, connection_id: UU
     return row
 
 
-async def list_connections(session: AsyncSession, owner_id: int) -> tuple[ConnectionRead, ...]:
+async def list_connections(session: AsyncSession, *, scope: Scope) -> tuple[ConnectionRead, ...]:
     """Return at most 100 credential-free owner connections, newest first.
 
     The owner predicate is applied before the 101-ID sentinel query; rejecting that sentinel
     prevents an over-capacity catalog from being hydrated into ORM objects. Disabled rows count.
     The caller owns the read transaction and any rollback after a conflict.
     """
+    _require_owner(scope)
     ids = (await session.scalars(select(McpConnection.id).where(
-        McpConnection.owner_id == owner_id,
+        McpConnection.workspace_id == scope.workspace_id, McpConnection.owner_id == _actor(scope),
     ).order_by(McpConnection.updated_at.desc(), McpConnection.id).limit(101))).all()
     if len(ids) > 100:
         raise McpConflict("MCP supports at most 100 connections")
     rows = []
     for connection_id in ids:
-        rows.append(await get_connection(session, owner_id, connection_id))
+        rows.append(await get_connection(session, connection_id, scope=scope))
     return tuple(to_connection_read(row) for row in rows)
 
 
 async def save_connection(
-    session: AsyncSession, owner_id: int, connection_id: UUID | None,
-    expected_revision: int, draft: ConnectionDraft, *, encryption_key: str,
+    session: AsyncSession, connection_id: UUID | None,
+    expected_revision: int, draft: ConnectionDraft, *, scope: Scope, encryption_key: str,
     deployment_profile_hash: str | None = None,
 ) -> ConnectionRead:
     """Create or revise an owner row using a server-selected stdio identity and safe credential state.
@@ -154,6 +186,8 @@ async def save_connection(
     the validated manifest hash; stdio cannot retain bearer material, and every update bumps the
     revision, disables the row, clears the successful-check hash and leaves old discoveries/grants stale.
     """
+    _require_owner(scope)
+    owner_id = _actor(scope)  # credential AAD stays owner-based
     if draft.transport.value == "stdio":
         if (deployment_profile_hash is None or len(deployment_profile_hash) != 64
                 or any(char not in "0123456789abcdef" for char in deployment_profile_hash)):
@@ -168,17 +202,18 @@ async def save_connection(
         if not await session.scalar(select(func.pg_try_advisory_xact_lock(1296257091, owner_id))):
             raise McpConflict("MCP connection catalog is busy; retry")
         owner_connection_ids = (await session.scalars(select(McpConnection.id).where(
+            McpConnection.workspace_id == scope.workspace_id,
             McpConnection.owner_id == owner_id).limit(100))).all()
         if len(owner_connection_ids) >= 100:
             raise McpConflict("MCP supports at most 100 connections")
-        row = McpConnection(id=uuid4(), owner_id=owner_id, name=draft.name,
+        row = McpConnection(id=uuid4(), workspace_id=scope.workspace_id, owner_id=owner_id, name=draft.name,
                             transport=draft.transport.value, endpoint=draft.endpoint,
                             deployment_profile_id=draft.deployment_profile_id,
                             deployment_profile_hash=deployment_profile_hash,
                             revision=1, credential_revision=1, updated_at=now)
         session.add(row)
     else:
-        row = await get_connection(session, owner_id, connection_id, lock=True)
+        row = await get_connection(session, connection_id, scope=scope, lock=True)
         if row.revision != expected_revision:
             raise McpConflict("Connection revision conflict")
         row.revision += 1
@@ -225,7 +260,7 @@ async def save_connection(
     return to_connection_read(row)
 
 
-async def set_connection_enabled(session: AsyncSession, owner_id: int, connection_id: UUID, expected_revision: int, enabled: bool) -> ConnectionRead:
+async def set_connection_enabled(session: AsyncSession, connection_id: UUID, expected_revision: int, enabled: bool, *, scope: Scope) -> ConnectionRead:
     """Flush enable state only for one matching check/discovery/grant identity chain.
 
     Stdio requires the successful check, latest discovery and a live grant to share the connection's
@@ -233,7 +268,7 @@ async def set_connection_enabled(session: AsyncSession, owner_id: int, connectio
     check identity so previously reviewed discovery/grants cannot authorize a later enable.
     The caller owns the transaction and commit.
     """
-    row = await get_connection(session, owner_id, connection_id, lock=True)
+    row = await get_connection(session, connection_id, scope=scope, lock=True)
     if row.revision != expected_revision:
         raise McpConflict("Connection revision conflict")
     if enabled:
@@ -246,6 +281,7 @@ async def set_connection_enabled(session: AsyncSession, owner_id: int, connectio
         elif row.deployment_profile_hash is not None or row.draft_check_profile_hash is not None:
             raise ValueError("HTTP connection has an invalid deployment profile identity")
         discovery = await session.scalar(select(McpDiscovery).where(
+            McpDiscovery.workspace_id == scope.workspace_id,
             McpDiscovery.connection_id == connection_id,
             McpDiscovery.connection_revision == row.revision,
         ).order_by(McpDiscovery.created_at.desc(), McpDiscovery.id).limit(1)
@@ -257,6 +293,7 @@ async def set_connection_enabled(session: AsyncSession, owner_id: int, connectio
         active_grant = await session.scalar(select(McpCapabilityGrant.id).join(
             McpCapability, McpCapability.id == McpCapabilityGrant.capability_id
         ).where(
+            McpCapabilityGrant.workspace_id == scope.workspace_id,
             McpCapabilityGrant.connection_id == connection_id,
             McpCapabilityGrant.reviewed_connection_revision == row.revision,
             McpCapabilityGrant.revoked_at.is_(None),
@@ -281,7 +318,7 @@ async def set_connection_enabled(session: AsyncSession, owner_id: int, connectio
 
 
 async def record_draft_check(
-    session: AsyncSession, owner_id: int, connection_id: UUID, expected_revision: int, *,
+    session: AsyncSession, connection_id: UUID, expected_revision: int, *, scope: Scope,
     result_code: str, captured_profile_hash: str | None = None,
 ) -> ConnectionRead:
     """Persist a real completed outcome only for the captured revision and exact transport identity.
@@ -292,7 +329,7 @@ async def record_draft_check(
     """
     if result_code not in {"connected", "unavailable", "protocol_error", "auth_error", "timeout"}:
         raise ValueError("Unsupported draft check result")
-    row = await get_connection(session, owner_id, connection_id, lock=True)
+    row = await get_connection(session, connection_id, scope=scope, lock=True)
     if row.revision != expected_revision:
         raise McpConflict("Connection revision conflict")
     if row.transport == "stdio":
@@ -308,14 +345,14 @@ async def record_draft_check(
     return to_connection_read(row)
 
 
-async def persist_discovery(session: AsyncSession, owner_id: int, connection_id: UUID, payload: DiscoveryPersist) -> DiscoveryRead:
+async def persist_discovery(session: AsyncSession, connection_id: UUID, payload: DiscoveryPersist, *, scope: Scope) -> DiscoveryRead:
     """Store validated descriptors only for the current revision and successful profile identity.
 
     The caller supplies the hash captured from its deployment resolver, never from an owner grant
     choice. This transaction locks the connection, compares profile identity, validates descriptor
     fingerprints and measures PostgreSQL JSONB sizes before inserts.
     """
-    connection = await get_connection(session, owner_id, connection_id, lock=True)
+    connection = await get_connection(session, connection_id, scope=scope, lock=True)
     if connection.revision != payload.connection_revision:
         raise McpConflict("Connection changed during discovery")
     if payload.deployment_profile_hash != connection.deployment_profile_hash:
@@ -356,7 +393,7 @@ async def persist_discovery(session: AsyncSession, owner_id: int, connection_id:
     if ((largest_descriptor_bytes or 0) > 65_536 or
             (rendered_array_bytes or 0) > 1_000_000):
         raise ValueError("Discovery exceeds PostgreSQL JSONB storage byte limits")
-    row = McpDiscovery(id=uuid4(), connection_id=connection_id,
+    row = McpDiscovery(id=uuid4(), workspace_id=scope.workspace_id, connection_id=connection_id,
                        connection_revision=connection.revision,
                        negotiated_protocol=payload.protocol,
                        server_info=payload.server_info,
@@ -377,10 +414,11 @@ async def persist_discovery(session: AsyncSession, owner_id: int, connection_id:
     return to_discovery_read(row, items)
 
 
-async def get_discovery(session: AsyncSession, owner_id: int, connection_id: UUID, discovery_id: UUID) -> DiscoveryRead:
+async def get_discovery(session: AsyncSession, connection_id: UUID, discovery_id: UUID, *, scope: Scope) -> DiscoveryRead:
     """Read an immutable discovery only through its owner-scoped parent connection."""
-    connection = await get_connection(session, owner_id, connection_id)
+    connection = await get_connection(session, connection_id, scope=scope)
     row = await session.scalar(select(McpDiscovery).where(
+        McpDiscovery.workspace_id == scope.workspace_id,
         McpDiscovery.id == discovery_id, McpDiscovery.connection_id == connection.id))
     if row is None:
         raise McpNotFound("MCP discovery not found")
@@ -389,17 +427,18 @@ async def get_discovery(session: AsyncSession, owner_id: int, connection_id: UUI
     return to_discovery_read(row, list(items))
 
 
-async def replace_connection_grants(session: AsyncSession, owner_id: int, connection_id: UUID, expected_revision: int, discovery_id: UUID, selections: tuple[GrantChoice, ...]) -> tuple[GrantRead, ...]:
+async def replace_connection_grants(session: AsyncSession, connection_id: UUID, expected_revision: int, discovery_id: UUID, selections: tuple[GrantChoice, ...], *, scope: Scope) -> tuple[GrantRead, ...]:
     """Atomically replace exact descriptor grants and copy the selected discovery's profile hash.
 
     The connection row is locked before the current discovery and capability checks; for stdio the
     connection, successful check and selected discovery hashes must agree. The owner cannot supply
     the grant profile identity. Disabling or revision changes leave old grants stale.
     """
-    connection = await get_connection(session, owner_id, connection_id, lock=True)
+    connection = await get_connection(session, connection_id, scope=scope, lock=True)
     if connection.revision != expected_revision:
         raise McpConflict("Connection revision changed")
     discovery = await session.scalar(select(McpDiscovery).where(
+        McpDiscovery.workspace_id == scope.workspace_id,
         McpDiscovery.id == discovery_id, McpDiscovery.connection_id == connection_id,
         McpDiscovery.connection_revision == connection.revision).execution_options(populate_existing=True))
     if discovery is None:
@@ -425,6 +464,7 @@ async def replace_connection_grants(session: AsyncSession, owner_id: int, connec
         raise McpConflict("Selection does not match exact discovered descriptors")
     now = datetime.now(UTC)
     old = (await session.scalars(select(McpCapabilityGrant).where(
+        McpCapabilityGrant.workspace_id == scope.workspace_id,
         McpCapabilityGrant.connection_id == connection_id,
         McpCapabilityGrant.revoked_at.is_(None)).with_for_update()
         .execution_options(populate_existing=True))).all()
@@ -434,7 +474,8 @@ async def replace_connection_grants(session: AsyncSession, owner_id: int, connec
     added = []
     for choice in selections:
         added.append(McpCapabilityGrant(
-            id=uuid4(), connection_id=connection_id, capability_id=choice.capability_id,
+            id=uuid4(), workspace_id=scope.workspace_id, connection_id=connection_id,
+            capability_id=choice.capability_id,
             descriptor_hash=choice.descriptor_hash, reviewed_connection_revision=connection.revision,
             reviewed_profile_hash=discovery.deployment_profile_hash,
             grant_revision=1, purpose=choice.purpose, risk=choice.risk.value,
@@ -445,10 +486,11 @@ async def replace_connection_grants(session: AsyncSession, owner_id: int, connec
     return tuple(to_grant_read(item) for item in added)
 
 
-async def list_connection_grants(session: AsyncSession, owner_id: int, connection_id: UUID) -> tuple[GrantRead, ...]:
+async def list_connection_grants(session: AsyncSession, connection_id: UUID, *, scope: Scope) -> tuple[GrantRead, ...]:
     """Return owner-scoped grant metadata, including revoked rows for audit visibility."""
-    await get_connection(session, owner_id, connection_id)
+    await get_connection(session, connection_id, scope=scope)
     rows = (await session.scalars(select(McpCapabilityGrant).where(
+        McpCapabilityGrant.workspace_id == scope.workspace_id,
         McpCapabilityGrant.connection_id == connection_id).order_by(McpCapabilityGrant.reviewed_at.desc()))).all()
     return tuple(to_grant_read(row) for row in rows)
 
@@ -483,10 +525,11 @@ def to_execution_fence(connection: McpConnection, discovery: McpDiscovery, capab
         limits={"response_bytes": 262144, "argument_bytes": 64000})
 
 
-async def resolve_capability_fence(session: AsyncSession, owner_id: int, connection_id: UUID, grant_id: UUID, destination_id: str) -> ExecutionFence:
+async def resolve_capability_fence(session: AsyncSession, connection_id: UUID, grant_id: UUID, destination_id: str, *, scope: Scope) -> ExecutionFence:
     """Resolve fresh grant state in connection-then-grant lock order; caller must end its transaction before remote I/O."""
-    connection = await get_connection(session, owner_id, connection_id, lock=True)
+    connection = await get_connection(session, connection_id, scope=scope, lock=True)
     grant = await session.scalar(select(McpCapabilityGrant).where(
+        McpCapabilityGrant.workspace_id == scope.workspace_id,
         McpCapabilityGrant.id == grant_id, McpCapabilityGrant.connection_id == connection.id).with_for_update()
         .execution_options(populate_existing=True))
     if grant is None:
@@ -494,6 +537,7 @@ async def resolve_capability_fence(session: AsyncSession, owner_id: int, connect
     capability = await session.scalar(select(McpCapability).where(
         McpCapability.id == grant.capability_id).execution_options(populate_existing=True))
     discovery = await session.scalar(select(McpDiscovery).where(
+        McpDiscovery.workspace_id == scope.workspace_id,
         McpDiscovery.id == capability.discovery_id, McpDiscovery.connection_id == connection.id
     ).execution_options(populate_existing=True)) if capability else None
     if capability is None or discovery is None:
@@ -501,13 +545,14 @@ async def resolve_capability_fence(session: AsyncSession, owner_id: int, connect
     return to_execution_fence(connection, discovery, capability, grant, destination_id)
 
 
-async def revalidate_capability_fence(session: AsyncSession, owner_id: int, fence: ExecutionFence, *, lock: bool = False) -> bool:
+async def revalidate_capability_fence(session: AsyncSession, fence: ExecutionFence, *, scope: Scope, lock: bool = False) -> bool:
     """Refresh persisted revisions and scope in the caller transaction; false means discard and transaction must end before I/O."""
     try:
-        connection = await get_connection(session, owner_id, fence.connection_id, lock=lock)
+        connection = await get_connection(session, fence.connection_id, scope=scope, lock=lock)
     except McpNotFound:
         return False
     grant = await session.scalar(select(McpCapabilityGrant).where(
+        McpCapabilityGrant.workspace_id == scope.workspace_id,
         McpCapabilityGrant.id == fence.grant_id, McpCapabilityGrant.connection_id == connection.id
     ).execution_options(populate_existing=True))
     if grant is None:
@@ -515,6 +560,7 @@ async def revalidate_capability_fence(session: AsyncSession, owner_id: int, fenc
     capability = await session.scalar(select(McpCapability).where(
         McpCapability.id == grant.capability_id).execution_options(populate_existing=True))
     discovery = await session.scalar(select(McpDiscovery).where(
+        McpDiscovery.workspace_id == scope.workspace_id,
         McpDiscovery.id == fence.discovery_id, McpDiscovery.connection_id == connection.id
     ).execution_options(populate_existing=True))
     if capability is None or discovery is None:
@@ -526,11 +572,12 @@ async def revalidate_capability_fence(session: AsyncSession, owner_id: int, fenc
     return current == fence
 
 
-async def create_inbound_client(session: AsyncSession, owner_id: int, data: InboundClientCreate) -> InboundClientIssued:
+async def create_inbound_client(session: AsyncSession, data: InboundClientCreate, *, scope: Scope) -> InboundClientIssued:
     """Persist only a digest and return a fresh high-entropy token once in the issuance DTO."""
+    _require_owner(scope)
     raw, digest, prefix = issue_inbound_token()
     row = McpInboundClient(
-        id=uuid4(), owner_id=owner_id, name=data.name, token_hash=digest,
+        id=uuid4(), workspace_id=scope.workspace_id, owner_id=_actor(scope), name=data.name, token_hash=digest,
         token_prefix=prefix, audience=data.audience,
         bindings=[binding.model_dump(mode="json") for binding in data.tool_bindings],
         source_ids=[str(value) for value in data.source_ids],
@@ -540,10 +587,12 @@ async def create_inbound_client(session: AsyncSession, owner_id: int, data: Inbo
     return InboundClientIssued(client=to_inbound_read(row), token=raw)
 
 
-async def rotate_inbound_client(session: AsyncSession, owner_id: int, client_id: UUID, expected_revision: int) -> InboundClientIssued:
+async def rotate_inbound_client(session: AsyncSession, client_id: UUID, expected_revision: int, *, scope: Scope) -> InboundClientIssued:
     """Refresh and lock the expected owner identity, then stage old-token revocation and replacement issuance together."""
+    _require_owner(scope)
     old = await session.scalar(select(McpInboundClient).where(
-        McpInboundClient.id == client_id, McpInboundClient.owner_id == owner_id).with_for_update()
+        McpInboundClient.id == client_id, McpInboundClient.workspace_id == scope.workspace_id,
+        McpInboundClient.owner_id == _actor(scope)).with_for_update()
         .execution_options(populate_existing=True))
     if old is None:
         raise McpNotFound("Inbound MCP client not found")
@@ -553,7 +602,7 @@ async def rotate_inbound_client(session: AsyncSession, owner_id: int, client_id:
     old.revoked_at = datetime.now(UTC)
     old.revision += 1
     replacement = McpInboundClient(
-        id=uuid4(), owner_id=owner_id, name=old.name, token_hash=digest,
+        id=uuid4(), workspace_id=scope.workspace_id, owner_id=_actor(scope), name=old.name, token_hash=digest,
         token_prefix=prefix, audience=old.audience, bindings=old.bindings,
         source_ids=old.source_ids, capabilities=old.capabilities,
         expires_at=old.expires_at, revision=1)
@@ -562,17 +611,21 @@ async def rotate_inbound_client(session: AsyncSession, owner_id: int, client_id:
     return InboundClientIssued(client=to_inbound_read(replacement), token=raw)
 
 
-async def list_inbound_clients(session: AsyncSession, owner_id: int) -> tuple[InboundClientRead, ...]:
+async def list_inbound_clients(session: AsyncSession, *, scope: Scope) -> tuple[InboundClientRead, ...]:
     """Return metadata for every inbound client belonging to the authenticated owner."""
+    _require_owner(scope)
     rows = (await session.scalars(select(McpInboundClient).where(
-        McpInboundClient.owner_id == owner_id).order_by(McpInboundClient.created_at.desc()))).all()
+        McpInboundClient.workspace_id == scope.workspace_id,
+        McpInboundClient.owner_id == _actor(scope)).order_by(McpInboundClient.created_at.desc()))).all()
     return tuple(to_inbound_read(row) for row in rows)
 
 
-async def revoke_inbound_client(session: AsyncSession, owner_id: int, client_id: UUID) -> InboundClientRead:
+async def revoke_inbound_client(session: AsyncSession, client_id: UUID, *, scope: Scope) -> InboundClientRead:
     """Stage revocation and a revision increment in the caller transaction, which the owner route commits before returning."""
+    _require_owner(scope)
     row = await session.scalar(select(McpInboundClient).where(
-        McpInboundClient.id == client_id, McpInboundClient.owner_id == owner_id).with_for_update()
+        McpInboundClient.id == client_id, McpInboundClient.workspace_id == scope.workspace_id,
+        McpInboundClient.owner_id == _actor(scope)).with_for_update()
         .execution_options(populate_existing=True))
     if row is None:
         raise McpNotFound("Inbound MCP client not found")
@@ -595,7 +648,7 @@ async def verify_inbound_client(session: AsyncSession, raw: str, audience: str) 
     if row.audience != audience or row.revoked_at is not None or row.expires_at <= datetime.now(UTC):
         raise McpNotFound("Inbound MCP client is invalid")
     return InboundPrincipal(
-        client_id=row.id, owner_id=row.owner_id, audience=row.audience,
+        client_id=row.id, workspace_id=row.workspace_id, owner_id=row.owner_id, audience=row.audience,
         revision=row.revision,
         bindings=tuple(InboundBinding.model_validate(item) for item in row.bindings),
         source_ids=tuple(UUID(value) for value in row.source_ids),
@@ -606,9 +659,10 @@ async def revalidate_inbound_principal(session: AsyncSession, expected: InboundP
     """Refresh the owner-scoped client row and require its complete detached identity to remain exact."""
     row = await session.scalar(select(McpInboundClient).where(
         McpInboundClient.id == expected.client_id,
+        McpInboundClient.workspace_id == expected.workspace_id,
         McpInboundClient.owner_id == expected.owner_id,
     ).execution_options(populate_existing=True))
-    if row is None or row.owner_id != expected.owner_id:
+    if row is None or row.owner_id != expected.owner_id or row.workspace_id != expected.workspace_id:
         return False
     expiry = row.expires_at
     if (not isinstance(expiry, datetime) or expiry.tzinfo is None or expiry.utcoffset() is None or
@@ -617,7 +671,7 @@ async def revalidate_inbound_principal(session: AsyncSession, expected: InboundP
     try:
         read = to_inbound_read(row)
         current = InboundPrincipal(
-            client_id=read.id, owner_id=row.owner_id, audience=read.audience,
+            client_id=read.id, workspace_id=row.workspace_id, owner_id=row.owner_id, audience=read.audience,
             revision=read.revision, bindings=read.bindings, source_ids=read.source_ids,
             capabilities=read.capabilities, destination_id=f"mcp-client:{read.id}",
         )
@@ -628,14 +682,15 @@ async def revalidate_inbound_principal(session: AsyncSession, expected: InboundP
 
 
 async def load_transport_connection(
-    session: AsyncSession, owner_id: int, connection_id: UUID, *, encryption_key: str,
+    session: AsyncSession, connection_id: UUID, *, scope: Scope, encryption_key: str,
 ) -> tuple[ConnectionRead, str | None]:
     """Return detached owner metadata and decrypt only HTTP bearer credentials inside the transport owner.
 
     Stdio denies either bearer mode or retained ciphertext, including legacy rows, before any
     credential decryption. The fresh session closes before transport resolution or launch.
     """
-    row = await get_connection(session, owner_id, connection_id)
+    row = await get_connection(session, connection_id, scope=scope)
+    owner_id = _actor(scope)  # credential AAD stays owner-based
     if row.transport == "stdio" and (row.auth_method != "none" or row.encrypted_credential is not None):
         raise McpUnavailable("MCP stdio connection cannot use bearer credentials")
     credential = None
@@ -650,11 +705,12 @@ async def load_transport_connection(
 
 
 async def get_current_selection(
-    session: AsyncSession, owner_id: int, connection_id: UUID,
+    session: AsyncSession, connection_id: UUID, *, scope: Scope,
 ) -> tuple[ConnectionRead, DiscoveryRead, tuple[GrantRead, ...]] | None:
     """Resolve the newest current-revision discovery and its live grants as detached owner data."""
-    connection = await get_connection(session, owner_id, connection_id)
+    connection = await get_connection(session, connection_id, scope=scope)
     discovery = await session.scalar(select(McpDiscovery).where(
+        McpDiscovery.workspace_id == scope.workspace_id,
         McpDiscovery.connection_id == connection.id,
         McpDiscovery.connection_revision == connection.revision,
     ).order_by(McpDiscovery.created_at.desc(), McpDiscovery.id).limit(1)
@@ -677,6 +733,7 @@ async def get_current_selection(
     grants = (await session.scalars(select(McpCapabilityGrant).join(
         McpCapability, McpCapability.id == McpCapabilityGrant.capability_id,
     ).where(
+        McpCapabilityGrant.workspace_id == scope.workspace_id,
         McpCapabilityGrant.connection_id == connection.id,
         McpCapabilityGrant.reviewed_connection_revision == connection.revision,
         McpCapabilityGrant.revoked_at.is_(None),
@@ -693,26 +750,29 @@ async def get_current_selection(
 
 
 async def get_inbound_client_read(
-    session: AsyncSession, owner_id: int, client_id: UUID,
+    session: AsyncSession, client_id: UUID, *, scope: Scope,
 ) -> InboundClientRead:
     """Read one fresh inbound client through the authenticated owner's identity boundary."""
+    _require_owner(scope)
     row = await session.scalar(select(McpInboundClient).where(
-        McpInboundClient.id == client_id, McpInboundClient.owner_id == owner_id,
+        McpInboundClient.id == client_id, McpInboundClient.workspace_id == scope.workspace_id,
+        McpInboundClient.owner_id == _actor(scope),
     ).execution_options(populate_existing=True))
     if row is None:
         raise McpNotFound("Inbound MCP client not found")
     return to_inbound_read(row)
 
 
-async def list_runtime_connections(session: AsyncSession, owner_id: int) -> tuple[ConnectionRead, ...]:
+async def list_runtime_connections(session: AsyncSession, *, scope: Scope) -> tuple[ConnectionRead, ...]:
     """Bound owner connection discovery before sequential refresh/hydration and reject catalogs above 100."""
+    _require_owner(scope)
     ids = (await session.scalars(select(McpConnection.id).where(
-        McpConnection.owner_id == owner_id,
+        McpConnection.workspace_id == scope.workspace_id, McpConnection.owner_id == _actor(scope),
     ).order_by(McpConnection.updated_at.desc(), McpConnection.id).limit(101))).all()
     if len(ids) > 100:
         raise McpConflict("MCP runtime supports at most 100 connections")
     # The capped ID projection avoids an unbounded ORM load; refresh each row before detaching it.
     rows = []
     for connection_id in ids:
-        rows.append(to_connection_read(await get_connection(session, owner_id, connection_id)))
+        rows.append(to_connection_read(await get_connection(session, connection_id, scope=scope)))
     return tuple(rows)

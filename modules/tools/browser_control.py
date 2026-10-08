@@ -12,15 +12,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import Settings
+from core.realtime import commit_with_replay
 from core.remote_heavy import (
     cleanup_proof_after_ack,
     clear_remote_heavy_in_uow,
     get_remote_heavy_guard,
     register_remote_heavy_in_uow,
 )
+from core.workspaces.schemas import AccessFence, InternalJobScope
 from modules.agents.public import BrowserRunAuthorization, revalidate_browser_run_authority
 from modules.connectors import public as connectors
-from modules.tools.browser_public import browser_capability_verified
+from modules.tools.browser_public import _job_authority, browser_capability_verified
 from modules.tools.models import BrowserReadJob
 
 # Guard lifetime: longer than any service job (bounded at 47 s or less) but inside the
@@ -84,15 +86,30 @@ def _target_in_scope(value: str | None, origin: str, path_prefix: str) -> bool:
 
 
 async def _current_authority(
-    session: AsyncSession, job: BrowserReadJob
-) -> tuple[bool, connectors.AgentBrowserScope | None]:
-    """Check original run/session/profile/Chat and source grant in this short callback transaction."""
+    session: AsyncSession, job: BrowserReadJob, *, multi_workspace_enabled: bool,
+) -> tuple[bool, connectors.AgentBrowserScope | None, InternalJobScope | None, AccessFence | None]:
+    """Check original run/session/profile/Chat and source grant in this short callback transaction.
+
+    Also returns the job scope and the locked original access fence (both None when authority is
+    already revoked and no fence is held) so the caller can commit with replay.
+    """
     from core.auth.public import revalidate_owner_session
     from modules.sources import public as sources
 
-    source = await sources.lock_source(session, job.source_id)
-    source_view = await sources.get_connector_source(session, job.source_id)
-    scope = await connectors.resolve_agent_browser_scope(session, job.owner_id, job.source_id)
+    authority = await _job_authority(session, job, multi_workspace_enabled=multi_workspace_enabled)
+    if authority is None:
+        return False, None, None, None
+    job_scope, fence = authority
+    source = await sources.lock_source(
+        session, job.source_id, scope=job_scope, multi_workspace_enabled=multi_workspace_enabled,
+        expected_access_fence=fence,
+    )
+    source_view = await sources.get_connector_source(
+        session, job.source_id, scope=job_scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    grant = await connectors.resolve_agent_browser_scope(
+        session, job.owner_id, job.source_id, scope=job_scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
 
     authorization = BrowserRunAuthorization(
         job.owner_id, job.run_id, job.tool_slot, job.arguments_hash,
@@ -101,19 +118,21 @@ async def _current_authority(
         job.claim_generation, 0, 0, 0, 1,
     )
     session_valid = await revalidate_owner_session(session, job.auth_session_hash, job.owner_id)
-    run_valid = await revalidate_browser_run_authority(session, authorization)
+    run_valid = await revalidate_browser_run_authority(
+        session, authorization, scope=job_scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     if (
         not session_valid or not run_valid or job.source_id not in authorization.source_ids
         or source is None or source.status != "active"
         or source.generation != job.source_generation
         or source_view is None
-        or scope is None or not scope.enabled or scope.scope_hash != job.scope_hash
-        or scope.source_generation != job.source_generation
-        or scope.connector_revision != job.connector_revision
-        or scope.grant_revision != job.grant_revision
+        or grant is None or not grant.enabled or grant.scope_hash != job.scope_hash
+        or grant.source_generation != job.source_generation
+        or grant.connector_revision != job.connector_revision
+        or grant.grant_revision != job.grant_revision
     ):
-        return False, None
-    return True, scope
+        return False, None, job_scope, fence
+    return True, grant, job_scope, fence
 
 
 @router.post("/jobs/{job_id}/event")
@@ -150,7 +169,23 @@ async def browser_control_event(
         )
         # Cross-module row locks follow Sources -> Agents -> Tools. The job is
         # reread under lock only after both current authorities have been checked.
-        valid, _scope = await _current_authority(session, candidate)
+        flag = settings.multi_workspace_enabled
+        valid, grant, job_scope, fence = await _current_authority(
+            session, candidate, multi_workspace_enabled=flag,
+        )
+
+        async def commit() -> None:
+            if fence is None or job_scope is None:
+                await session.commit()  # authority already revoked: no fence is held
+            else:
+                await commit_with_replay(
+                    session, [], scope=job_scope, multi_workspace_enabled=flag, access_fence=fence,
+                )
+
+        def revoke() -> None:
+            if job.status in {"queued", "running"}:
+                job.status, job.error_code = "failed", "authority_revoked"
+
         job = await session.scalar(select(BrowserReadJob).where(
             BrowserReadJob.id == job_id,
         ).with_for_update().execution_options(populate_existing=True))
@@ -176,6 +211,8 @@ async def browser_control_event(
             if not _browser_network_verified():
                 raise HTTPException(status_code=503, detail="Browser network capability is unverified")
             if not valid:
+                revoke()
+                await commit()
                 raise HTTPException(status_code=403, detail="Browser job authority was revoked")
             await register_remote_heavy_in_uow(
                 session, job.operation_id, payload.service_instance_id,
@@ -186,7 +223,7 @@ async def browser_control_event(
             )
             job.service_instance_id = payload.service_instance_id
             job.status = "running"
-            await session.commit()
+            await commit()
             return {"allowed": True}
 
         guard = await get_remote_heavy_guard(session, job.operation_id)
@@ -212,20 +249,23 @@ async def browser_control_event(
         if payload.event == "authorize":
             if not _browser_network_verified():
                 raise HTTPException(status_code=503, detail="Browser network capability is unverified")
-            scope = _scope
+            if not valid:
+                revoke()
+                await commit()
+                raise HTTPException(status_code=403, detail="Browser request is outside current authority")
             if (
                 # The API enforces the guard bound: no new permits after expiry.
                 guard.expires_at <= datetime.now(UTC)
-                or not valid or scope is None
+                or not valid or grant is None
                 or payload.request_ordinal != job.request_ordinal + 1
                 or payload.request_ordinal > 6
                 or payload.actual_pages != 0 or payload.actual_bytes != 0
                 or payload.result_hash is not None
-                or not _target_in_scope(payload.target_url, scope.origin, scope.path_prefix)
+                or not _target_in_scope(payload.target_url, grant.origin, grant.path_prefix)
             ):
                 raise HTTPException(status_code=403, detail="Browser request is outside current authority")
             job.request_ordinal = payload.request_ordinal
-            await session.commit()
+            await commit()
             return {"allowed": True, "request_ordinal": payload.request_ordinal}
         if payload.event == "complete":
             if job.cancel_requested or job.status != "running":
@@ -235,7 +275,7 @@ async def browser_control_event(
                     job.status = "cancelled"
                 proof = cleanup_proof_after_ack(job.operation_id, guard.service_instance_id, job.id)
                 await clear_remote_heavy_in_uow(session, job.operation_id, proof)
-                await session.commit()
+                await commit()
                 return {"allowed": True, "cleaned": True}
             if (
                 payload.request_ordinal != job.request_ordinal
@@ -250,12 +290,12 @@ async def browser_control_event(
             job.status = "running"
             proof = cleanup_proof_after_ack(job.operation_id, guard.service_instance_id, job.id)
             await clear_remote_heavy_in_uow(session, job.operation_id, proof)
-            await session.commit()
+            await commit()
             return {"allowed": True}
         if job.status not in {"succeeded", "failed", "expired"}:
             job.status = "cancelled"
         job.cancel_requested = True
         proof = cleanup_proof_after_ack(job.operation_id, guard.service_instance_id, job.id)
         await clear_remote_heavy_in_uow(session, job.operation_id, proof)
-        await session.commit()
+        await commit()
         return {"allowed": True}

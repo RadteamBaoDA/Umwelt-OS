@@ -14,6 +14,7 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
+from core.workspaces.schemas import WorkspaceContext
 from modules.connectors.catalog import (
     CatalogEntry,
     get_catalog_entry,
@@ -45,6 +46,9 @@ from modules.connectors.registry import (
 from modules.sources.public import SourceFence
 from modules.sources.schemas import ConnectorSource
 
+WORKSPACE_ID = uuid4()
+SCOPE = WorkspaceContext(user_id=7, workspace_id=WORKSPACE_ID, role="owner", membership_revision=3)
+
 
 class TestConnectorRegistry:
     """Tests for connector registry validation, configuration defaults, and record normalization."""
@@ -63,6 +67,8 @@ class TestConnectorRegistry:
         """Native providers default to 30s timeout; generic providers default to 60s."""
         # Generic RSS source
         generic_source = ConnectorSource(
+            workspace_id=WORKSPACE_ID,
+            local_only=False,
             id=uuid4(),
             type="rss",
             status="active",
@@ -74,6 +80,8 @@ class TestConnectorRegistry:
 
         # Native YouTube source
         native_source = ConnectorSource(
+            workspace_id=WORKSPACE_ID,
+            local_only=False,
             id=uuid4(),
             type="rss",
             provider="youtube",
@@ -89,6 +97,8 @@ class TestConnectorRegistry:
 
         # Custom timeout preserved
         custom_source = ConnectorSource(
+            workspace_id=WORKSPACE_ID,
+            local_only=False,
             id=uuid4(),
             type="rss",
             provider="youtube",
@@ -105,6 +115,8 @@ class TestConnectorRegistry:
     def test_registry_validate_inactive_source_rejected(self) -> None:
         """Paused or archived sources cannot be validated for active collection."""
         source = ConnectorSource(
+            workspace_id=WORKSPACE_ID,
+            local_only=False,
             id=uuid4(),
             type="rss",
             status="paused",
@@ -117,6 +129,8 @@ class TestConnectorRegistry:
     def test_registry_validate_unsupported_type_rejected(self) -> None:
         """Sources with unsupported types raise ValueError."""
         source = ConnectorSource(
+            workspace_id=WORKSPACE_ID,
+            local_only=False,
             id=uuid4(),
             type="unsupported_type",
             status="active",
@@ -130,6 +144,8 @@ class TestConnectorRegistry:
         """Valid configurations for registered native providers pass validation."""
         # YouTube
         yt_source = ConnectorSource(
+            workspace_id=WORKSPACE_ID,
+            local_only=False,
             id=uuid4(),
             type="rss",
             provider="youtube",
@@ -146,6 +162,8 @@ class TestConnectorRegistry:
 
         # ArXiv
         arxiv_source = ConnectorSource(
+            workspace_id=WORKSPACE_ID,
+            local_only=False,
             id=uuid4(),
             type="rss",
             provider="arxiv",
@@ -162,6 +180,8 @@ class TestConnectorRegistry:
 
         # Telegram
         tg_source = ConnectorSource(
+            workspace_id=WORKSPACE_ID,
+            local_only=False,
             id=uuid4(),
             type="api",
             provider="telegram",
@@ -178,6 +198,8 @@ class TestConnectorRegistry:
     def test_registry_validate_native_timeout_limit(self) -> None:
         """Native providers cannot exceed 30 seconds request timeout."""
         source = ConnectorSource(
+            workspace_id=WORKSPACE_ID,
+            local_only=False,
             id=uuid4(),
             type="rss",
             provider="youtube",
@@ -196,6 +218,8 @@ class TestConnectorRegistry:
         """REST connectors require items_path and reject non-standard HTTP(S) ports."""
         # Missing items_path
         source_missing_items = ConnectorSource(
+            workspace_id=WORKSPACE_ID,
+            local_only=False,
             id=uuid4(),
             type="api",
             status="active",
@@ -207,6 +231,8 @@ class TestConnectorRegistry:
 
         # Non-standard port
         source_bad_port = ConnectorSource(
+            workspace_id=WORKSPACE_ID,
+            local_only=False,
             id=uuid4(),
             type="api",
             status="active",
@@ -220,6 +246,8 @@ class TestConnectorRegistry:
         """health() correctly differentiates ready, misconfigured, and inactive sources."""
         # Ready generic RSS
         ready_source = ConnectorSource(
+            workspace_id=WORKSPACE_ID,
+            local_only=False,
             id=uuid4(),
             type="rss",
             status="active",
@@ -230,6 +258,8 @@ class TestConnectorRegistry:
 
         # Misconfigured active source (missing feed_url)
         bad_source = ConnectorSource(
+            workspace_id=WORKSPACE_ID,
+            local_only=False,
             id=uuid4(),
             type="rss",
             status="active",
@@ -240,6 +270,8 @@ class TestConnectorRegistry:
 
         # Inactive source
         paused_source = ConnectorSource(
+            workspace_id=WORKSPACE_ID,
+            local_only=False,
             id=uuid4(),
             type="rss",
             status="paused",
@@ -251,6 +283,8 @@ class TestConnectorRegistry:
     def test_registry_sync_payload(self) -> None:
         """sync() constructs validated connector payloads with cursor state."""
         source = ConnectorSource(
+            workspace_id=WORKSPACE_ID,
+            local_only=False,
             id=uuid4(),
             type="rss",
             status="active",
@@ -392,8 +426,10 @@ class TestQueryContracts:
     async def test_get_connector_configuration_contract(self) -> None:
         """get_connector_configuration returns a redact-safe ConnectorConfigurationSnapshot."""
         source_id = uuid4()
-        source_fence = SourceFence(id=source_id, generation=1, status="active", local_only=False)
+        source_fence = SourceFence(id=source_id, workspace_id=WORKSPACE_ID, generation=1, status="active", local_only=False)
         source = ConnectorSource(
+            workspace_id=WORKSPACE_ID,
+            local_only=False,
             id=source_id,
             type="rss",
             status="active",
@@ -410,9 +446,9 @@ class TestQueryContracts:
         )
         session = AsyncMock()
 
-        with patch("modules.connectors.provisioning.lock_connector", return_value=(source_fence, row, {})), \
+        with patch("modules.connectors.provisioning._read_connector_rows", return_value=(source_fence, row, {})), \
              patch("modules.sources.public.get_connector_source", return_value=source):
-            snapshot = await get_connector_configuration(session, source_id)
+            snapshot = await get_connector_configuration(session, source_id, scope=SCOPE, multi_workspace_enabled=False)
 
         assert snapshot is not None
         assert isinstance(snapshot, ConnectorConfigurationSnapshot)
@@ -427,6 +463,8 @@ class TestQueryContracts:
         """get_current_provider_scope hashes non-secret scope fields deterministically."""
         source_id = uuid4()
         source = ConnectorSource(
+            workspace_id=WORKSPACE_ID,
+            local_only=False,
             id=source_id,
             type="rss",
             status="active",
@@ -435,15 +473,18 @@ class TestQueryContracts:
         )
         source_fence = SourceFence(
             id=source_id,
+            workspace_id=WORKSPACE_ID,
             status="active",
             generation=1,
             local_only=False,
         )
         session = AsyncMock()
 
-        with patch("modules.sources.public.lock_source", return_value=source_fence), \
+        with patch("modules.sources.public.get_source_fence", return_value=source_fence), \
              patch("modules.sources.public.get_connector_source", return_value=source):
-            scope = await get_current_provider_scope(session, source_id, expected_source_generation=1)
+            scope = await get_current_provider_scope(
+                session, source_id, expected_source_generation=1, scope=SCOPE, multi_workspace_enabled=False,
+            )
 
         assert scope is not None
         assert isinstance(scope, ProviderScopeSnapshot)
@@ -479,7 +520,11 @@ class TestStatusChecksAndGuards:
         fence = CollectionFence(source_generation=1, connector_revision=2)
         session = AsyncMock()
 
-        with patch("modules.connectors.provisioning.require_collection_fence", new_callable=AsyncMock) as mock_fence:
+        source = ConnectorSource(
+            workspace_id=WORKSPACE_ID, local_only=False, id=source_id, type="rss", status="active",
+            generation=1, configuration={},
+        )
+        with patch("modules.connectors.provisioning.require_collection_fence", new_callable=AsyncMock) as mock_fence,              patch("modules.connectors.public._read_scoped_source", AsyncMock(return_value=source)):
             mock_fence.return_value = True
             allowed = await collection_allowed(
                 session,
@@ -487,6 +532,8 @@ class TestStatusChecksAndGuards:
                 source_status="active",
                 source_generation=1,
                 fence=fence,
+                scope=SCOPE,
+                multi_workspace_enabled=False,
             )
 
         assert allowed is True
@@ -495,6 +542,7 @@ class TestStatusChecksAndGuards:
     def test_agent_browser_target_in_scope_allowed(self) -> None:
         """Valid target URL matching granted origin and path prefix returns True."""
         scope = AgentBrowserScope(
+            workspace_id=WORKSPACE_ID,
             source_id=uuid4(),
             source_generation=1,
             connector_revision=1,
@@ -513,6 +561,7 @@ class TestStatusChecksAndGuards:
     def test_agent_browser_target_in_scope_rejected_reasons(self) -> None:
         """agent_browser_target_in_scope rejects targets violating security invariants."""
         scope = AgentBrowserScope(
+            workspace_id=WORKSPACE_ID,
             source_id=uuid4(),
             source_generation=1,
             connector_revision=1,

@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import time
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -192,7 +192,9 @@ class TestSessionDependencies:
             expires_at=datetime.now(UTC) + timedelta(hours=1),
         )
         session.get.return_value = valid_row
-        result = await _current_session(request, session, "valid-token")
+        with patch("core.auth.dependencies.get_active_account", AsyncMock(return_value=MagicMock())) as active:
+            result = await _current_session(request, session, "valid-token")
+        active.assert_awaited_once()
         assert result == valid_row
         assert request.state.auth_session == valid_row
 
@@ -210,7 +212,8 @@ class TestSessionDependencies:
             expires_at=datetime.now(UTC) + timedelta(hours=1),
         )
         session.get.return_value = valid_row
-        res = await require_owner(request, session)
+        with patch("core.auth.dependencies.get_active_account", AsyncMock(return_value=MagicMock())):
+            res = await require_owner(request, session)
         assert res == valid_row
 
     @pytest.mark.asyncio
@@ -239,7 +242,8 @@ class TestPublicAuthContracts:
         """Verify revalidate_owner_session returns True when row is found."""
         session = AsyncMock()
         session.scalar.return_value = "token_hash_abc"
-        res = await revalidate_owner_session(session, "token_hash_abc", owner_id=1)
+        with patch("core.auth.public.get_active_account", AsyncMock(return_value=MagicMock())):
+            res = await revalidate_owner_session(session, "token_hash_abc", owner_id=1)
         assert res is True
 
     @pytest.mark.asyncio

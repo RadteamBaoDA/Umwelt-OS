@@ -64,6 +64,7 @@ from modules.ingestion.schemas import (
     classify_telegram_probe,
 )
 from modules.knowledge.documents import public as documents
+from modules.knowledge.documents.schemas import DocumentCleanupPreparationLimitError
 from modules.sources import public as sources
 from modules.sources.schemas import ConnectorSource, SourceFence
 
@@ -222,6 +223,23 @@ def _source_purge_event_subject(
     return UUID(payload["operation_id"]), retained
 
 
+def _document_cleanup_operation_id(event_id: UUID, version: int, producer: str, payload: object) -> UUID:
+    """Parse the exact operation-only Documents cleanup envelope; any deviation is a ValueError."""
+    message = "Document cleanup event requires exact operation-only envelope"
+    if (type(version) is not int or version != 1 or producer != "modules.knowledge.documents"
+            or not isinstance(payload, dict) or set(payload) != {"operation_id"}):
+        raise ValueError(message)
+    raw = payload["operation_id"]
+    try:
+        operation_id = UUID(raw) if isinstance(raw, str) else None
+    except ValueError:
+        operation_id = None
+    if (operation_id is None or str(operation_id) != raw
+            or event_id != uuid5(operation_id, "document-cleanup-requested")):
+        raise ValueError(message)
+    return operation_id
+
+
 async def resolve_collector_job_scope(
     session: AsyncSession, token: str, *, source_id: UUID, credential_scope: str = "ingestion:write",
     multi_workspace_enabled: bool,
@@ -247,6 +265,42 @@ async def resolve_collector_job_scope(
     return scope
 
 
+async def _resolve_document_cleanup_event_scope(
+    session: AsyncSession, event_id: UUID, row: Any, *, multi_workspace_enabled: bool,
+) -> InternalJobScope | None:
+    """Resolve an operation-only Documents cleanup event through its retained receipt authority.
+
+    The outbox principal columns must equal the receipt's captured tuple and the payload must be
+    exactly the operation id with the deterministic event id; anything else (legacy
+    identity-in-payload, extra keys, NULL receipt epochs, stale configuration) is None.
+    """
+    if row.operation_type != "string" or row.version != 1 or row.producer != "modules.knowledge.documents":
+        return None
+    try:
+        operation_id = UUID(row.payload_operation)
+    except (TypeError, ValueError):
+        return None
+    if str(operation_id) != row.payload_operation or event_id != uuid5(operation_id, "document-cleanup-requested"):
+        return None
+    exact = await session.scalar(select(EventOutbox.id).where(
+        EventOutbox.id == event_id, EventOutbox.payload == {"operation_id": str(operation_id)},
+    ))
+    if exact is None:
+        return None
+    identity = await documents.resolve_document_cleanup_job_identity(
+        session, operation_id, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if identity is None or (identity.workspace_id, identity.actor_user_id, identity.membership_revision) != (
+        row.workspace_id, row.actor_user_id, row.membership_revision,
+    ):
+        return None
+    return InternalJobScope(
+        workspace_id=identity.workspace_id, actor_user_id=identity.actor_user_id,
+        membership_revision=identity.membership_revision, source_id=identity.source_id,
+        source_generation=identity.source_generation,
+    )
+
+
 async def resolve_ingestion_event_scope(
     session: AsyncSession, event_id: UUID, *, multi_workspace_enabled: bool,
 ) -> InternalJobScope | None:
@@ -255,6 +309,16 @@ async def resolve_ingestion_event_scope(
     Corrupt/missing scope is unresolved, never an owner/default upgrade. The caller owns
     quarantine and transaction release; Source/claim/lease checks remain owner-specific.
     """
+    cleanup_row = (await session.execute(select(
+        EventOutbox.workspace_id, EventOutbox.actor_user_id, EventOutbox.membership_revision,
+        EventOutbox.version, EventOutbox.producer,
+        func.left(EventOutbox.payload["operation_id"].astext, 37).label("payload_operation"),
+        func.jsonb_typeof(EventOutbox.payload["operation_id"]).label("operation_type"),
+    ).where(EventOutbox.id == event_id, EventOutbox.type == "document.cleanup.requested"))).one_or_none()
+    if cleanup_row is not None:
+        return await _resolve_document_cleanup_event_scope(
+            session, event_id, cleanup_row, multi_workspace_enabled=multi_workspace_enabled,
+        )
     # Identity discovery never loads the event body/config/raw URI before admission.
     # Bound textual scalar fields so corrupt JSON cannot turn discovery into a content read.
     row = (await session.execute(select(
@@ -580,7 +644,21 @@ async def publish_event(session: AsyncSession, event: DomainEvent, *, scope: Sco
     for key, value in identity.items():
         if key in payload and (type(payload[key]) is not type(value) or payload[key] != value):
             raise HTTPException(status_code=404, detail="Event identity not found")
-    if event.type in _SOURCE_PURGE_PRODUCERS:
+    if event.type == "document.cleanup.requested":
+        operation_id = _document_cleanup_operation_id(event.id, event.version, event.producer, payload)
+        receipt = await documents.read_document_cleanup_job_identity(
+            session, operation_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
+        # The operation-only payload is preserved: principal columns come from ``scope`` below.
+        if (
+            receipt is None or receipt.workspace_id != scope.workspace_id
+            or receipt.actor_user_id != _actor_id(scope)
+            or receipt.membership_revision != scope.membership_revision
+            or isinstance(scope, InternalJobScope) and scope.source_id is not None
+            and (receipt.source_id != scope.source_id or receipt.source_generation != scope.source_generation)
+        ):
+            raise HTTPException(status_code=404, detail="Document cleanup receipt not found")
+    elif event.type in _SOURCE_PURGE_PRODUCERS:
         subject = _source_purge_event_subject(
             event.type, event.version, event.producer, payload, scope=scope,
         )
@@ -743,12 +821,35 @@ async def schedule_normalization(
     return stage
 
 
+async def prepare_document_materializations_in_uow(
+    session: AsyncSession, document_id: UUID, *, source_id: UUID, scope: Scope,
+    multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+) -> None:
+    """Lock the Document's materializations in id order before ``tombstone_document_materializations``.
+
+    Individual-delete path only, so an oversized set raises before any mutation. The Document
+    owner holds admission, Source and earlier owner locks; this commits nothing.
+    """
+    actual = await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if (actual != access_fence or source_fence.id != source_id
+            or source_fence.workspace_id != scope.workspace_id):
+        raise HTTPException(status_code=409, detail="Cleanup authority changed")
+    ids = list((await session.scalars(
+        select(ObservationNormalization.id)
+        .where(ObservationNormalization.document_id == document_id, *_materialization_scope(scope))
+        .order_by(ObservationNormalization.id).limit(10_001).with_for_update(of=ObservationNormalization)
+    )).all())
+    if len(ids) > 10_000:
+        raise DocumentCleanupPreparationLimitError("ingestion")
+
+
 async def tombstone_document_materializations(session: AsyncSession, document_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
 ) -> None:
     """Tombstone materializations through exact retained run/stage/batch/workspace lineage.
 
     The Document owner holds earlier admission/Source/deletion locks. No earlier lock
-    acquisition or commit occurs; nullable document/version IDs retain owner scope.
+    acquisition or commit occurs; nullable document/version IDs retain owner scope. Rows were
+    locked by prepare_document_materializations_in_uow.
     """
     await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     await session.execute(
@@ -881,6 +982,90 @@ async def set_event_delivery(
         .where(EventOutbox.id == event_id, *_event_scope(scope))
         .values(**values)
         .returning(EventOutbox.id)
+    )
+    return result.scalar_one_or_none() is not None
+
+
+def _cleanup_event_scope(event_id: UUID, operation_id: UUID, scope: Scope) -> tuple[Any, ...]:
+    """Principal-column plus exact operation-only payload predicates for one cleanup event.
+
+    The generic event scope adds payload Source predicates for Source-bound scopes, which an
+    operation-only cleanup payload can never satisfy; the receipt owner proves Source lineage.
+    """
+    return (EventOutbox.id == event_id, EventOutbox.type == "document.cleanup.requested",
+            EventOutbox.workspace_id == scope.workspace_id,
+            EventOutbox.actor_user_id == _actor_id(scope),
+            EventOutbox.membership_revision == scope.membership_revision,
+            EventOutbox.payload == {"operation_id": str(operation_id)})
+
+
+def _event_delivery(event: EventOutbox) -> EventDelivery:
+    return EventDelivery(id=event.id, workspace_id=event.workspace_id, actor_user_id=event.actor_user_id,
+                         membership_revision=event.membership_revision, type=event.type,
+                         version=event.version, producer=event.producer, dispatched_at=event.dispatched_at,
+                         status=event.status, payload=deepcopy(event.payload))
+
+
+async def read_document_cleanup_event_operation_id(session: AsyncSession, event_id: UUID) -> UUID | None:
+    """Identity-only discovery of the operation id in an exact cleanup envelope (before admission).
+
+    Reads only the bounded id text of the deterministic cleanup event; a reshaped event or a
+    mismatched deterministic id returns None. It grants no authority: callers still resolve scope.
+    """
+    row = (await session.execute(select(
+        func.left(EventOutbox.payload["operation_id"].astext, 37),
+    ).where(EventOutbox.id == event_id, EventOutbox.type == "document.cleanup.requested"))).scalar_one_or_none()
+    try:
+        operation_id = UUID(row)
+    except (TypeError, ValueError):
+        return None
+    if str(operation_id) != row or event_id != uuid5(operation_id, "document-cleanup-requested"):
+        return None
+    return operation_id
+
+
+async def get_document_cleanup_event(
+    session: AsyncSession, event_id: UUID, *, operation_id: UUID, scope: Scope, multi_workspace_enabled: bool,
+) -> EventDelivery | None:
+    """Read one exact Documents cleanup event nonlocking; foreign or reshaped rows return None."""
+    await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    event = await session.scalar(select(EventOutbox).where(
+        *_cleanup_event_scope(event_id, operation_id, scope),
+    ).execution_options(populate_existing=True))
+    return None if event is None else _event_delivery(event)
+
+
+async def lock_document_cleanup_event_in_uow(
+    session: AsyncSession, event_id: UUID, *, operation_id: UUID, scope: Scope, multi_workspace_enabled: bool,
+) -> EventDelivery | None:
+    """Lock that single cleanup outbox row after the caller's privacy/URI/receipt locks."""
+    await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    event = await session.scalar(select(EventOutbox).where(
+        *_cleanup_event_scope(event_id, operation_id, scope),
+    ).with_for_update().execution_options(populate_existing=True))
+    return None if event is None else _event_delivery(event)
+
+
+async def settle_document_cleanup_event_in_uow(
+    session: AsyncSession, event_id: UUID, status: Literal["failed", "pending", "delivered"], *,
+    operation_id: UUID, dispatched_at: datetime | None, next_attempt_at: datetime | None = None,
+    expected_status: Literal["queued", "pending", "delivered", "failed"] = "queued",
+    scope: Scope, multi_workspace_enabled: bool,
+) -> bool:
+    """Compare-and-set a cleanup event from its claimed state (default queued); False means the claim was lost.
+
+    ``expected_status`` lets the cache-completion and reconciler paths act on a pending, delivered
+    or failed row; the exact ``dispatched_at`` claim stamp is always part of the comparison.
+    """
+    await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    values: dict[str, object] = {"status": status}
+    if next_attempt_at is not None:
+        values["next_attempt_at"] = next_attempt_at
+    result = await session.execute(
+        update(EventOutbox).where(
+            *_cleanup_event_scope(event_id, operation_id, scope), EventOutbox.status == expected_status,
+            EventOutbox.dispatched_at.is_not_distinct_from(dispatched_at),
+        ).values(**values).returning(EventOutbox.id)
     )
     return result.scalar_one_or_none() is not None
 
@@ -2446,20 +2631,6 @@ def _decode_history_cursor(cursor: str, binding: str) -> tuple[datetime, UUID]:
         raise HTTPException(status_code=422, detail="Invalid or stale ingestion cursor") from exc
 
 
-def encode_ingestion_cursor(
-    position: tuple[datetime, UUID], *, scope: Scope, access_fence: AccessFence,
-    kind: Literal["ready", "terminal"], limit: int = 100,
-) -> str:
-    """Build a pure principal-bound sweep cursor from a previously admitted page's last row.
-
-    Automation `_Reader` and `_CURSORS` callers retain per-principal state and the same
-    page kind/limit. This builder grants no admission; readers recheck current fences.
-    """
-    if kind not in {"ready", "terminal"} or not 1 <= limit <= 100:
-        raise ValueError("Invalid ingestion sweep cursor contract")
-    return _encode_history_cursor(position, _cursor_binding(scope, access_fence, kind, limit))
-
-
 async def list_source_runs(
     session: AsyncSession,
     source_id: UUID,
@@ -2648,21 +2819,25 @@ async def retry_run(
 
 
 async def list_ready_events_after(
-    session: AsyncSession, position: str | None, limit: int = 100, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession, position: tuple[datetime, UUID] | None, limit: int = 100,
+    *, scope: Scope, multi_workspace_enabled: bool,
 ) -> list[tuple[datetime, UUID, str, dict[str, Any] | None]]:
-    """Read-only cursor page of ``document.version.ready`` outbox rows for the automations sweep.
+    """Read-only keyset page of ``document.version.ready`` outbox rows for the automations sweep.
 
-    Ordered by ``(created_at, id)`` strictly after a principal-bound v2 ``position``; returns validated private metadata
-    projection including the immutable version identity, never content. It never changes delivery
-    status, so the single outbox consumer is unaffected.
+    Ordered by ``(created_at, id)`` strictly after the caller's ``(created_at, id)`` tuple
+    ``position``. The caller (the sweep) keeps that position in its workspace-keyed cursor row,
+    so the position is not an opaque token: the workspace predicate comes from ``_event_scope``
+    and precedes the ordering and LIMIT, which means a position taken from another workspace can
+    only skip rows that belong to the caller's own scope. Owner admission precedes any query.
+    Returns validated private metadata projection including the immutable version identity,
+    never content. It never changes delivery status, so the single outbox consumer is unaffected.
     """
-    access_fence = await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if not 1 <= limit <= 100:
         raise ValueError("Ready-event page size must be between 1 and 100")
     stmt = select(EventOutbox).where(EventOutbox.type == "document.version.ready", *_event_scope(scope))
     if position is not None:
-        offset = _decode_history_cursor(position, _cursor_binding(scope, access_fence, "ready", limit))
-        stmt = stmt.where(tuple_(EventOutbox.created_at, EventOutbox.id) > tuple_(*offset))
+        stmt = stmt.where(tuple_(EventOutbox.created_at, EventOutbox.id) > tuple_(*position))
     rows = (await session.scalars(stmt.order_by(EventOutbox.created_at, EventOutbox.id).limit(limit))).all()
     # A malformed row keeps its slot with a None payload so the sweep cursor still advances past it.
     return [(row.created_at, row.id, str(row.id), _ready_document_payload(row)) for row in rows]
@@ -2760,14 +2935,18 @@ async def resolve_ready_event_provenance(
 
 
 async def list_terminal_runs_after(
-    session: AsyncSession, position: str | None, limit: int = 100, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession, position: tuple[datetime, UUID] | None, limit: int = 100,
+    *, scope: Scope, multi_workspace_enabled: bool,
 ) -> list[tuple[datetime, UUID, str, dict[str, str | int]]]:
-    """Read-only cursor page of ingestion runs in a terminal state for connector sync results.
+    """Read-only keyset page of ingestion runs in a terminal state for connector sync results.
 
-    Ordered by ``(updated_at, id)`` after a principal-bound v2 position; the key combines run id and status so a later status change
-    is a new event. Payload carries original principal/source identity, status and the observation count.
+    Ordered by ``(updated_at, id)`` after the caller's ``(updated_at, id)`` tuple ``position``;
+    the key combines run id and status so a later status change is a new event. The workspace
+    predicate (``_run_scope``) precedes ordering and LIMIT, owner admission precedes any query, and
+    the tuple position is the sweep's own workspace-keyed cursor, never an opaque token.
+    Payload carries original principal/source identity, status and the observation count.
     """
-    access_fence = await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if not 1 <= limit <= 100:
         raise ValueError("Terminal-run page size must be between 1 and 100")
     stmt = select(IngestionRun).join(IngestionBatch, and_(
@@ -2775,8 +2954,7 @@ async def list_terminal_runs_after(
     )).where(IngestionRun.status.in_(("succeeded", "failed", "needs_ocr")),
              IngestionBatch.source_generation >= 1, *_run_scope(scope))
     if position is not None:
-        offset = _decode_history_cursor(position, _cursor_binding(scope, access_fence, "terminal", limit))
-        stmt = stmt.where(tuple_(IngestionRun.updated_at, IngestionRun.id) > tuple_(*offset))
+        stmt = stmt.where(tuple_(IngestionRun.updated_at, IngestionRun.id) > tuple_(*position))
     rows = (await session.scalars(stmt.order_by(IngestionRun.updated_at, IngestionRun.id).limit(limit))).all()
     # new_items = observations collected in the run's batch (one grouped count for the page).
     counts = dict((await session.execute(

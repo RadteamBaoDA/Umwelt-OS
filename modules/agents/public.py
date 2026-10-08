@@ -18,9 +18,12 @@ from sqlalchemy import and_, exists, func, or_, select, text, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.pagination import decode_cursor, encode_cursor
+from core.realtime import commit_with_replay
 from core.telemetry import RunMeta as _RunMeta
 from core.tools import ToolRegistry, ToolRisk
 from core.tools.schemas import ToolExecutionPrincipal, ToolOutputFence
+from core.workspaces.schemas import AccessFence, Scope
+from modules.agents.access import actor, admit, read_workspace_modules, run_epoch
 from modules.agents.leases import try_agent_run_lease_in_uow
 from modules.agents.models import (
     AgentApproval,
@@ -145,44 +148,74 @@ def _browser_profile_current(run: AgentRun, profile: AgentProfile | None) -> boo
     return False
 
 
+async def lock_write_admission(
+    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
+) -> AccessFence:
+    """Lock owner admission ahead of an in-UoW Agents write so the caller can commit with its fence.
+
+    Members are denied (403) before any statement. Callers pass the returned fence to
+    ``core.realtime.commit_with_replay`` once the in-UoW helper has flushed its rows.
+    """
+    return await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+
+
+def _epoch_current(run: AgentRun, fence: AccessFence) -> bool:
+    """Require the live access fence to equal the run's captured original epoch (NULL fails closed)."""
+    epoch = run_epoch(run)
+    return epoch is not None and epoch[1] == fence
+
+
 async def reserve_browser_run_budget_in_uow(
-    session: AsyncSession, owner_id: int, run_id: UUID, claim_generation: int,
+    session: AsyncSession, run_id: UUID, claim_generation: int,
     tool_slot: int, args_digest: str, requested_pages: int,
+    *, scope: Scope, multi_workspace_enabled: bool,
 ) -> BrowserRunAuthorization:
     """Reserve run-wide browser ceilings once for an exact durable tool slot.
 
     The run row serializes concurrent slots and survives worker handoff. An exact
     duplicate does not spend budget twice; changed arguments for a slot conflict.
+    The caller owns the transaction and its fences; this helper admits ``scope`` without
+    locking, binds the run to that workspace/actor and requires the live access fence to equal
+    the run's captured original epoch (legacy NULL epochs are refused, never rebased).
     The returned object contains no ORM row or owner privilege.
     """
     from modules.chat import public as chat
 
+    fence = await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    owner_id = actor(scope)
     if (
-        owner_id != 1 or type(claim_generation) is not int or claim_generation < 1
+        type(claim_generation) is not int or claim_generation < 1
         or type(tool_slot) is not int or not 1 <= tool_slot <= 10
         or type(requested_pages) is not int or not 1 <= requested_pages <= 3
         or len(args_digest) != 64
     ):
         raise PermissionError("Browser run authority is invalid")
     run = await session.scalar(
-        select(AgentRun).where(AgentRun.id == run_id, AgentRun.owner_id == owner_id).with_for_update()
+        select(AgentRun).where(
+            AgentRun.id == run_id, AgentRun.workspace_id == scope.workspace_id,
+            AgentRun.owner_id == owner_id,
+        ).with_for_update()
     )
     if (
         run is None or run.status != "running" or run.cancel_requested or run.evidence_revoked
         or run.claim_generation != claim_generation or run.auth_session_hash is None
     ):
         raise PermissionError("Browser run claim is no longer current")
+    if not _epoch_current(run, fence):
+        raise PermissionError("Browser run workspace authorization changed")
     profile_id = str((run.profile_snapshot or {}).get("id", ""))
     raw_sources = (run.profile_snapshot or {}).get("source_ids")
     try:
         source_ids = frozenset(UUID(item) for item in raw_sources) if isinstance(raw_sources, list) else frozenset()
     except (TypeError, ValueError):
         raise PermissionError("Browser profile source scope is invalid")
-    profile = await session.get(AgentProfile, profile_id)
+    profile = await session.scalar(select(AgentProfile).where(
+        AgentProfile.workspace_id == scope.workspace_id, AgentProfile.profile_id == profile_id,
+    ))
     if not _browser_profile_current(run, profile):
         raise PermissionError("Current specialist profile no longer permits browser reads")
     tool_call = await session.scalar(select(AgentToolCall).where(
-        AgentToolCall.run_id == run_id, AgentToolCall.ordinal == tool_slot,
+        AgentToolCall.run_id == run.id, AgentToolCall.ordinal == tool_slot,
     ))
     if (
         tool_call is None or tool_call.tool_name != "browser.read"
@@ -233,17 +266,32 @@ async def reserve_browser_run_budget_in_uow(
 
 
 async def revalidate_browser_run_authority(
-    session: AsyncSession, authorization: BrowserRunAuthorization
+    session: AsyncSession, authorization: BrowserRunAuthorization,
+    *, scope: Scope, multi_workspace_enabled: bool,
 ) -> bool:
-    """Recheck the live run claim, session, profile, and Chat link before each browser request."""
+    """Recheck the live run claim, session, profile, Chat link and original workspace epoch.
+
+    Admission precedes every query; a run outside ``scope``'s workspace or actor, or whose
+    captured epoch no longer equals the live access fence, is simply not current.
+    """
     from modules.chat import public as chat
 
+    try:
+        fence = await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    except HTTPException as exc:
+        if exc.status_code in {401, 403, 404, 409}:
+            return False
+        raise
+    if authorization.owner_id != actor(scope):
+        return False
     run = await session.scalar(select(AgentRun).where(
         AgentRun.id == authorization.run_id,
+        AgentRun.workspace_id == scope.workspace_id,
         AgentRun.owner_id == authorization.owner_id,
     ).with_for_update())
     if (
-        run is None or run.status != "running" or run.cancel_requested or run.evidence_revoked
+        run is None or not _epoch_current(run, fence)
+        or run.status != "running" or run.cancel_requested or run.evidence_revoked
         or run.claim_generation != authorization.claim_generation
         or run.auth_session_hash != authorization.auth_session_hash
         or run.profile_revision_hash != authorization.profile_revision_hash
@@ -251,7 +299,7 @@ async def revalidate_browser_run_authority(
         return False
     profile = await session.scalar(select(AgentProfile).where(
         AgentProfile.profile_id == authorization.profile_id,
-        AgentProfile.owner_id == authorization.owner_id,
+        AgentProfile.workspace_id == scope.workspace_id,
     ).with_for_update())
     if not _browser_profile_current(run, profile):
         return False
@@ -302,7 +350,14 @@ def _read(row: AgentRun) -> AgentRunRead:
 
 
 def _result_principal(row: AgentRun) -> ToolExecutionPrincipal | None:
-    """Rebuild output authorization from a profile's original exact source grant, failing closed on malformed snapshots."""
+    """Rebuild output authorization from a profile's original exact source grant, failing closed on malformed snapshots.
+
+    The principal's scope is the run's captured original epoch (Recipe J); a legacy run with
+    NULL epochs yields None, so its answer stays suppressed rather than being rebased.
+    """
+    epoch = run_epoch(row)
+    if epoch is None:
+        return None
     source_ids: frozenset[UUID]
     if row.profile_snapshot is None:
         source_ids, owner_all_sources = frozenset(), True
@@ -319,7 +374,7 @@ def _result_principal(row: AgentRun) -> ToolExecutionPrincipal | None:
     if "webhook.send" in row.allowed_tools:
         capabilities.add("webhook.send")
     return ToolExecutionPrincipal(
-        actor_id=f"owner:{row.owner_id}", is_owner=True,
+        actor_id=f"owner:{row.owner_id}", scope=epoch[0], is_owner=True,
         allowed_tools=frozenset(row.allowed_tools), source_ids=source_ids,
         owner_all_sources=owner_all_sources, destinations=frozenset(),
         capabilities=frozenset(capabilities),
@@ -327,15 +382,22 @@ def _result_principal(row: AgentRun) -> ToolExecutionPrincipal | None:
 
 
 async def create_profile_run_in_uow(
-    session: AsyncSession, owner_id: int, auth_session_hash: str, profile_id: str,
+    session: AsyncSession, auth_session_hash: str, profile_id: str,
     request: ProfileRunStart, registry: ToolRegistry, config: Any,
+    *, scope: Scope, multi_workspace_enabled: bool,
 ) -> AgentRunRead:
     """Persist a replay-safe linked profile run without committing the caller's run/link transaction.
 
-    The idempotency key is scoped to the owner session digest. A byte-identical retry returns its
-    original run; reusing the key for different prompt, profile revision, or conversation is a 409.
-    Token budgets remain explicitly unavailable and are rejected before worker/model egress.
+    The idempotency key is scoped to the workspace, owner and session digest. A byte-identical
+    retry returns its original run; reusing the key for different prompt, profile revision, or
+    conversation is a 409. Token budgets remain explicitly unavailable and are rejected before
+    worker/model egress. The caller must take ``lock_write_admission`` before any other lock; the
+    lock taken here is a re-entrant re-check. The fence's membership and configuration revisions
+    are stored on the run as the original epoch Recipe J later compares, and the caller commits with
+    ``commit_with_replay`` using the fence returned by ``lock_write_admission``.
     """
+    fence = await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    owner_id = actor(scope)
     if request.token_budget is not None:
         raise HTTPException(status_code=422, detail="token_budget_unavailable")
     request_body = {
@@ -346,11 +408,12 @@ async def create_profile_run_in_uow(
     request_hash = hashlib.sha256(json.dumps(
         request_body, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
     ).encode("utf-8")).hexdigest()
-    lock_material = f"{owner_id}:{auth_session_hash}:{request.client_request_id}".encode()
+    lock_material = f"{scope.workspace_id}:{owner_id}:{auth_session_hash}:{request.client_request_id}".encode()
     lock_key = int.from_bytes(hashlib.sha256(lock_material).digest()[:8], "big", signed=True)
     # Serialize the absent-row case as well as ordinary reads so parallel retries cannot create duplicate work.
     await session.execute(text("SELECT pg_advisory_xact_lock(:lock_key)"), {"lock_key": lock_key})
     existing = await session.scalar(select(AgentRun).where(
+        AgentRun.workspace_id == scope.workspace_id,
         AgentRun.owner_id == owner_id,
         AgentRun.auth_session_hash == auth_session_hash,
         AgentRun.client_request_id == request.client_request_id,
@@ -363,14 +426,17 @@ async def create_profile_run_in_uow(
         if not await has_live_agent_run_link(session, existing.id, owner_id, auth_session_hash):
             raise HTTPException(status_code=404, detail="Agent run not found")
         retry_factory = async_sessionmaker(session.bind) if session.bind is not None else None
-        return await _read_current_result(existing, retry_factory)
+        return await _read_current_result(
+            existing, retry_factory, multi_workspace_enabled=multi_workspace_enabled,
+        )
     snapshot, snapshot_hash = await resolve_profile_snapshot(
-        session, owner_id, profile_id, request.expected_profile_revision, registry, config,
+        session, profile_id, request.expected_profile_revision, registry, config,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
     revision = snapshot["revision"]
     if revision:
         revision_row = await session.scalar(select(AgentProfileRevision).where(
-            AgentProfileRevision.owner_id == owner_id,
+            AgentProfileRevision.workspace_id == scope.workspace_id,
             AgentProfileRevision.profile_id == profile_id,
             AgentProfileRevision.revision == revision,
         ))
@@ -383,7 +449,10 @@ async def create_profile_run_in_uow(
                  for item in snapshot["allowed_tools"]}
     profile_id_value = snapshot["id"]
     run = AgentRun(
-        id=uuid4(), owner_id=owner_id, auth_session_hash=auth_session_hash,
+        id=uuid4(), workspace_id=scope.workspace_id, owner_id=owner_id,
+        membership_revision=fence.membership_revision,
+        configuration_revision=fence.configuration_revision,
+        auth_session_hash=auth_session_hash,
         agent_id=profile_id_value,
         workflow_version=SPECIALIST_WORKFLOW_VERSION,
         prompt_version=SPECIALIST_PROMPT_VERSION,
@@ -404,10 +473,11 @@ async def create_profile_run_in_uow(
 
 
 async def list_runs(
-    session: AsyncSession, owner_id: int, *, profile_id: str | None = None,
+    session: AsyncSession, *, profile_id: str | None = None,
     conversation_id: UUID | None = None, auth_session_hash: str | None = None,
     session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]],
     limit: int = 25, cursor: str | None = None,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> AgentRunPage:
     """Page bounded owner run history after Chat-link and current-output authorization.
 
@@ -416,6 +486,8 @@ async def list_runs(
     direct run reads. The opaque cursor advances over examined candidates so expired ephemeral
     links cannot hide later live runs or leak their retained answers.
     """
+    await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    owner_id = actor(scope)
     if not 1 <= limit <= 25:
         raise HTTPException(status_code=422, detail="Run history page size is outside its supported bound")
     anchor = decode_cursor(cursor) if cursor else None
@@ -424,7 +496,9 @@ async def list_runs(
     has_more = False
     scan_anchor = anchor
     while scanned < 100 and len(page) <= limit:
-        statement = select(AgentRun).where(AgentRun.owner_id == owner_id)
+        statement = select(AgentRun).where(
+            AgentRun.workspace_id == scope.workspace_id, AgentRun.owner_id == owner_id,
+        )
         if profile_id is not None:
             statement = statement.where(AgentRun.agent_id == profile_id)
         if scan_anchor is not None:
@@ -464,7 +538,10 @@ async def list_runs(
     else:
         next_cursor = None
     return AgentRunPage(
-        items=[await _read_current_result(row, session_factory) for row in page],
+        items=[
+            await _read_current_result(row, session_factory, multi_workspace_enabled=multi_workspace_enabled)
+            for row in page
+        ],
         next_cursor=next_cursor,
     )
 
@@ -474,8 +551,12 @@ async def create_run(
     auth_session_hash: str,
     request: AgentRunStart,
     registry: ToolRegistry,
+    *, scope: Scope, multi_workspace_enabled: bool,
 ) -> AgentRunRead:
     """Persist one exact-version read-only workflow and its durable dispatch generation.
+
+    The access fence is locked first; its revisions are stored as the run's original epoch and
+    the final commit is fenced by it.
 
     Caller must pass the authenticated session digest and canonical app registry. Only the
     fixed workflow allowlist intersected with currently registered READ_ONLY, non-confirmed
@@ -487,9 +568,13 @@ async def create_run(
     commits the returned row before responding, leaving PostgreSQL as queue authority while the
     worker reconciler retries Redis dispatch.
     """
+    fence = await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    owner_id = actor(scope)
+    modules = await read_workspace_modules(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     definitions = {
-        item.name: item for item in registry.list_tools(allowed_tools=APPROVAL_WORKFLOW_TOOLS)
-        if (item.risk == ToolRisk.READ_ONLY and not item.confirmation_required
+        item.name: item for item in registry.list_tools(allowed_tools=APPROVAL_WORKFLOW_TOOLS, modules=modules)
+        if not (registry.hides_tool and registry.hides_tool(item.name, scope.workspace_id))
+        and (item.risk == ToolRisk.READ_ONLY and not item.confirmation_required
             or item.name == "webhook.send" and item.risk == ToolRisk.EXTERNAL_WRITE
             and item.confirmation_required)
     }
@@ -497,7 +582,10 @@ async def create_run(
     if not allowed:
         raise HTTPException(status_code=503, detail="Agent tools are unavailable")
     run = AgentRun(
-        id=uuid4(), owner_id=1, auth_session_hash=auth_session_hash,
+        id=uuid4(), workspace_id=scope.workspace_id, owner_id=owner_id,
+        membership_revision=fence.membership_revision,
+        configuration_revision=fence.configuration_revision,
+        auth_session_hash=auth_session_hash,
         agent_id="assistant", workflow_version=APPROVAL_WORKFLOW_VERSION,
         prompt_version=APPROVAL_PROMPT_VERSION, checkpoint_schema_version=CHECKPOINT_SCHEMA_VERSION,
         checkpoint_thread_id=str(uuid4()), prompt=request.prompt,
@@ -512,8 +600,10 @@ async def create_run(
     if request.conversation_id is not None:
         from modules.chat.public import link_agent_run
 
-        await link_agent_run(session, request.conversation_id, run.id, 1, auth_session_hash)
-    await session.commit()
+        await link_agent_run(session, request.conversation_id, run.id, owner_id, auth_session_hash)
+    await commit_with_replay(
+        session, (), scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+    )
     await session.refresh(run)
     return _read(run)
 
@@ -522,20 +612,25 @@ async def get_run(
     session: AsyncSession,
     run_id: UUID,
     session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]],
+    *, scope: Scope, multi_workspace_enabled: bool,
 ) -> AgentRunRead:
     """Return owner-visible run state and suppress answers with stale source evidence."""
-    row = await session.scalar(select(AgentRun).where(AgentRun.id == run_id, AgentRun.owner_id == 1))
+    await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    row = await session.scalar(select(AgentRun).where(
+        AgentRun.id == run_id, AgentRun.workspace_id == scope.workspace_id,
+        AgentRun.owner_id == actor(scope),
+    ))
     if row is None:
         raise HTTPException(status_code=404, detail="Agent run not found")
-    return await _read_current_result(row, session_factory)
+    return await _read_current_result(row, session_factory, multi_workspace_enabled=multi_workspace_enabled)
 
 
 async def get_run_for_owner(
     session: AsyncSession,
     run_id: UUID,
-    owner_id: int,
     auth_session_hash: str,
     session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]],
+    *, scope: Scope, multi_workspace_enabled: bool,
 ) -> AgentRunRead:
     """Read a run only after Chat confirms its linked conversation is retained for this owner.
 
@@ -543,8 +638,11 @@ async def get_run_for_owner(
     contract; persistent links permit the current owner, while ephemeral links remain session-bound.
     Unlinked assistant runs are still readable by the authenticated owner.
     """
+    await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    owner_id = actor(scope)
     row = await session.scalar(select(AgentRun).where(
-        AgentRun.id == run_id, AgentRun.owner_id == owner_id,
+        AgentRun.id == run_id, AgentRun.workspace_id == scope.workspace_id,
+        AgentRun.owner_id == owner_id,
     ))
     if row is None:
         raise HTTPException(status_code=404, detail="Agent run not found")
@@ -556,12 +654,15 @@ async def get_run_for_owner(
         )
         if not allowed:
             raise HTTPException(status_code=404, detail="Agent run not found")
-    return await get_run(session, run_id, session_factory)
+    return await get_run(
+        session, run_id, session_factory, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
 
 
 async def _read_current_result(
     row: AgentRun,
     session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]] | None,
+    *, multi_workspace_enabled: bool,
 ) -> AgentRunRead:
     """Project one durable result only while its captured native evidence fences remain current.
 
@@ -573,12 +674,13 @@ async def _read_current_result(
     if row.source_fences and result.answer is not None and session_factory is not None:
         principal = _result_principal(row)
         try:
-            sink = _restore_fences(row.source_fences)
-            current = bool(principal and await revalidate_native_output_fences(
-                session_factory, sink, principal, destination_kind="remote",
-            ))
+            sink: dict[str, Any] | None = _restore_fences(row.source_fences)
         except (TypeError, ValueError, KeyError):
-            current = False
+            sink = None
+        current = bool(sink is not None and principal and await revalidate_native_output_fences(
+            session_factory, sink, principal, destination_kind="remote",
+            multi_workspace_enabled=multi_workspace_enabled,
+        ))
         if not current:
             return result.model_copy(update={"answer": None})
     elif row.source_fences and result.answer is not None:
@@ -744,6 +846,9 @@ async def _agent_cleanup_candidate_ids(
     records: list[dict[str, object]],
     after: UUID | None,
     limit: int,
+    *,
+    workspace_id: UUID,
+    owner_id: int,
 ) -> list[UUID]:
     """Read a bounded UUID keyset page using exact JSONB containment and durable operation receipts."""
     run_clauses = []
@@ -760,6 +865,7 @@ async def _agent_cleanup_candidate_ids(
     )) if records else False
     related_approval = exists(select(AgentApproval.id).where(
         AgentApproval.run_id == AgentRun.id,
+        AgentApproval.workspace_id == workspace_id,
         or_(*[AgentApproval.source_fences.contains({"records": [
             {key: record[key] for key in ("document_id", "document_version_id", "source_id", "chunk_id")}
         ]}) for record in records]),
@@ -782,24 +888,39 @@ async def _agent_cleanup_candidate_ids(
     )
     marker_exists = exists(select(AgentEvidenceCleanup.id).where(
         AgentEvidenceCleanup.run_id == AgentRun.id,
+        AgentEvidenceCleanup.workspace_id == workspace_id,
         AgentEvidenceCleanup.operation_id == scope.operation_id,
     ))
     cleanup_clauses: list[Any] = [
         *run_clauses, related_call, related_approval, legacy_active,
         legacy_unreconciled_active, marker_exists,
     ]
-    query = select(AgentRun.id).where(or_(*cleanup_clauses))
+    query = select(AgentRun.id).where(
+        AgentRun.workspace_id == workspace_id, AgentRun.owner_id == owner_id, or_(*cleanup_clauses),
+    )
     if after is not None:
         query = query.where(AgentRun.id > after)
     return list((await session.scalars(query.order_by(AgentRun.id).limit(limit + 1))).all())
 
 
+async def _admit_cleanup_evidence(
+    session: AsyncSession, evidence: DocumentCleanupEvidenceScope, *, scope: Scope,
+    multi_workspace_enabled: bool,
+) -> None:
+    """Admit the owner (members denied before SQL) and bind the detached page to this workspace."""
+    await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if evidence.workspace_id != scope.workspace_id or evidence.actor_user_id != actor(scope):
+        raise HTTPException(status_code=409, detail="Document cleanup evidence belongs to another workspace")
+
+
 async def preflight_document_copied_evidence_lease(
     session: AsyncSession,
-    scope: DocumentCleanupEvidenceScope,
+    evidence: DocumentCleanupEvidenceScope,
     *,
     cursor: str | None = None,
     limit: int = AGENT_CLEANUP_LIMIT,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> AgentCleanupLeasePreflight:
     """Acquire a pending run's nonblocking saver lease before Documents/Memory locks.
 
@@ -808,15 +929,22 @@ async def preflight_document_copied_evidence_lease(
     """
     if type(limit) is not int or not 1 <= limit <= AGENT_CLEANUP_LIMIT:
         raise ValueError(f"Agent cleanup page size must be between 1 and {AGENT_CLEANUP_LIMIT}")
-    records = _agent_cleanup_records(scope)
-    fingerprint = _agent_cleanup_fingerprint(scope, records)
-    after, _ = _decode_agent_cleanup_cursor(cursor, scope, fingerprint) if cursor else (None, False)
-    candidate_ids = await _agent_cleanup_candidate_ids(session, scope, records, after, 1)
+    await _admit_cleanup_evidence(
+        session, evidence, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    workspace_id, owner_id = scope.workspace_id, actor(scope)
+    records = _agent_cleanup_records(evidence)
+    fingerprint = _agent_cleanup_fingerprint(evidence, records)
+    after, _ = _decode_agent_cleanup_cursor(cursor, evidence, fingerprint) if cursor else (None, False)
+    candidate_ids = await _agent_cleanup_candidate_ids(
+        session, evidence, records, after, 1, workspace_id=workspace_id, owner_id=owner_id,
+    )
     run_id = candidate_ids[0] if candidate_ids else None
     marker = None
     if run_id is not None:
         marker = await session.scalar(select(AgentEvidenceCleanup).where(
-            AgentEvidenceCleanup.operation_id == scope.operation_id,
+            AgentEvidenceCleanup.operation_id == evidence.operation_id,
+            AgentEvidenceCleanup.workspace_id == workspace_id,
             AgentEvidenceCleanup.run_id == run_id,
         ))
     marker_state = "none" if run_id is None else (
@@ -829,23 +957,27 @@ async def preflight_document_copied_evidence_lease(
         if lease_required and run_id is not None else False
     )
     return AgentCleanupLeasePreflight(
-        scope.operation_id, fingerprint, run_id, cursor,
+        evidence.operation_id, fingerprint, run_id, cursor,
         marker_state, lease_required, lease_acquired, lease_required and not lease_acquired,
     )
 
 
 async def _agent_cleanup_ledgers(
-    session: AsyncSession, run_id: UUID,
+    session: AsyncSession, run_id: UUID, *, workspace_id: UUID,
 ) -> tuple[list[AgentApproval], list[AgentEffect], list[AgentToolCall]]:
-    """Lock the Agent action ledger in run→approval→effect→call order."""
+    """Lock the Agent action ledger in run→approval→effect→call order, inside one workspace."""
     approvals = list((await session.scalars(select(AgentApproval).where(
-        AgentApproval.run_id == run_id,
+        AgentApproval.run_id == run_id, AgentApproval.workspace_id == workspace_id,
     ).order_by(AgentApproval.id).with_for_update())).all())
     effects = list((await session.scalars(select(AgentEffect).where(
-        AgentEffect.run_id == run_id,
+        AgentEffect.run_id == run_id, AgentEffect.workspace_id == workspace_id,
     ).order_by(AgentEffect.action_id).with_for_update())).all())
     calls = list((await session.scalars(select(AgentToolCall).where(
         AgentToolCall.run_id == run_id,
+        # AgentToolCall carries no workspace column; bind it through its workspace-scoped run.
+        AgentToolCall.run_id.in_(select(AgentRun.id).where(
+            AgentRun.id == run_id, AgentRun.workspace_id == workspace_id,
+        )),
     ).order_by(AgentToolCall.ordinal).with_for_update())).all())
     return approvals, effects, calls
 
@@ -904,10 +1036,13 @@ def _scrub_agent_scope_payloads(
     return unavailable
 
 
-async def _agent_unavailable_run_count(session: AsyncSession, operation_id: UUID) -> int:
+async def _agent_unavailable_run_count(
+    session: AsyncSession, operation_id: UUID, workspace_id: UUID,
+) -> int:
     """Count distinct per-operation/run unavailable receipts through their unique lookup index."""
     return int(await session.scalar(select(func.count(AgentEvidenceCleanup.id)).where(
         AgentEvidenceCleanup.operation_id == operation_id,
+        AgentEvidenceCleanup.workspace_id == workspace_id,
         AgentEvidenceCleanup.state == "unavailable",
     )) or 0)
 
@@ -943,10 +1078,12 @@ def _agent_cleanup_marker_state(marker: AgentEvidenceCleanup | None) -> str:
 
 async def purge_document_copied_evidence_page(
     session: AsyncSession,
-    scope: DocumentCleanupEvidenceScope,
+    evidence: DocumentCleanupEvidenceScope,
     *,
     cursor: str | None = None,
     limit: int = AGENT_CLEANUP_LIMIT,
+    scope: Scope,
+    multi_workspace_enabled: bool,
     preflight: AgentCleanupLeasePreflight,
 ) -> AgentCopiedEvidenceCleanupProgress:
     """Revoke and selectively scrub one bounded Agent page for a detached Documents cleanup scope.
@@ -958,11 +1095,15 @@ async def purge_document_copied_evidence_page(
     """
     if type(limit) is not int or not 1 <= limit <= AGENT_CLEANUP_LIMIT:
         raise ValueError(f"Agent cleanup page size must be between 1 and {AGENT_CLEANUP_LIMIT}")
-    records = _agent_cleanup_records(scope)
-    page_fingerprint = _agent_cleanup_fingerprint(scope, records)
-    scope_fingerprint = _agent_cleanup_scope_fingerprint(scope)
+    await _admit_cleanup_evidence(
+        session, evidence, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    workspace_id, owner_id = scope.workspace_id, actor(scope)
+    records = _agent_cleanup_records(evidence)
+    page_fingerprint = _agent_cleanup_fingerprint(evidence, records)
+    scope_fingerprint = _agent_cleanup_scope_fingerprint(evidence)
     after, unavailable = (
-        _decode_agent_cleanup_cursor(cursor, scope, page_fingerprint) if cursor else (None, False)
+        _decode_agent_cleanup_cursor(cursor, evidence, page_fingerprint) if cursor else (None, False)
     )
     async def progress(
         next_cursor: str | None, complete: bool, rows_processed: int, unavailable_result: bool,
@@ -972,19 +1113,21 @@ async def purge_document_copied_evidence_page(
         """Count operation-wide unique unavailable receipts; leave flush and commit to the caller's UoW."""
         return AgentCopiedEvidenceCleanupProgress(
             next_cursor, complete, rows_processed, unavailable_result,
-            await _agent_unavailable_run_count(session, scope.operation_id), lease_pending,
+            await _agent_unavailable_run_count(session, evidence.operation_id, workspace_id), lease_pending,
             preflight_stale,
         )
 
     # One run per transaction keeps the caller's detached lease preflight aligned with the
     # exact candidate whose Agent rows this hook may lock. Later runs use this opaque cursor.
-    if preflight.operation_id != scope.operation_id or preflight.agent_cursor != cursor:
+    if preflight.operation_id != evidence.operation_id or preflight.agent_cursor != cursor:
         raise ValueError("Agent cleanup lease preflight does not match the Documents cursor")
     if preflight.scope_fingerprint != page_fingerprint:
         raise ValueError("Agent cleanup lease preflight does not match the Documents evidence scope")
     if preflight.blocked:
         return await progress(cursor, False, 0, unavailable)
-    candidate_ids = await _agent_cleanup_candidate_ids(session, scope, records, after, 1)
+    candidate_ids = await _agent_cleanup_candidate_ids(
+        session, evidence, records, after, 1, workspace_id=workspace_id, owner_id=owner_id,
+    )
     more_candidates = len(candidate_ids) > 1
     page = candidate_ids[:1]
     if (page[0] if page else None) != preflight.candidate_run_id:
@@ -997,7 +1140,8 @@ async def purge_document_copied_evidence_page(
         # Marker read is intentionally unlocked. Its durable state is checked again after lease
         # acquisition and before locking mutable Agent rows.
         marker = await session.scalar(select(AgentEvidenceCleanup).where(
-            AgentEvidenceCleanup.operation_id == scope.operation_id,
+            AgentEvidenceCleanup.operation_id == evidence.operation_id,
+            AgentEvidenceCleanup.workspace_id == workspace_id,
             AgentEvidenceCleanup.run_id == run_id,
         ))
         current_marker_state = _agent_cleanup_marker_state(marker)
@@ -1009,11 +1153,11 @@ async def purge_document_copied_evidence_page(
                 ))):
             return await progress(cursor, False, 0, unavailable, preflight_stale=True)
         if marker is not None and (
-            marker.source_id != scope.source_id or marker.document_id != scope.document_id
+            marker.source_id != evidence.source_id or marker.document_id != evidence.document_id
             or marker.scope_fingerprint != scope_fingerprint
         ):
             return await progress(
-                _encode_agent_cleanup_cursor(scope, page_fingerprint, last_processed, True),
+                _encode_agent_cleanup_cursor(evidence, page_fingerprint, last_processed, True),
                 False, processed, True,
             )
         if marker is not None and (marker.state == "finalized" or marker.finalized_at is not None):
@@ -1022,15 +1166,17 @@ async def purge_document_copied_evidence_page(
             await lock_export_privacy(session)
             run = await session.scalar(select(AgentRun).where(
                 AgentRun.id == run_id,
+                AgentRun.workspace_id == workspace_id, AgentRun.owner_id == owner_id,
             ).with_for_update())
             marker = await session.scalar(select(AgentEvidenceCleanup).where(
-                AgentEvidenceCleanup.operation_id == scope.operation_id,
+                AgentEvidenceCleanup.operation_id == evidence.operation_id,
+                AgentEvidenceCleanup.workspace_id == workspace_id,
                 AgentEvidenceCleanup.run_id == run_id,
             ).with_for_update().execution_options(populate_existing=True))
             if _agent_cleanup_marker_state(marker) != preflight.marker_state:
                 return await progress(cursor, False, processed, unavailable, preflight_stale=True)
             if run is not None:
-                approvals, effects, calls = await _agent_cleanup_ledgers(session, run_id)
+                approvals, effects, calls = await _agent_cleanup_ledgers(session, run_id, workspace_id=workspace_id)
                 unresolved = _scrub_agent_scope_payloads(
                     approvals, effects, calls, records, datetime.now(UTC),
                 )
@@ -1046,9 +1192,11 @@ async def purge_document_copied_evidence_page(
             await lock_export_privacy(session)
             run = await session.scalar(select(AgentRun).where(
                 AgentRun.id == run_id,
+                AgentRun.workspace_id == workspace_id, AgentRun.owner_id == owner_id,
             ).with_for_update())
             marker = await session.scalar(select(AgentEvidenceCleanup).where(
-                AgentEvidenceCleanup.operation_id == scope.operation_id,
+                AgentEvidenceCleanup.operation_id == evidence.operation_id,
+                AgentEvidenceCleanup.workspace_id == workspace_id,
                 AgentEvidenceCleanup.run_id == run_id,
             ).with_for_update().execution_options(populate_existing=True))
             if _agent_cleanup_marker_state(marker) != preflight.marker_state:
@@ -1057,7 +1205,7 @@ async def purge_document_copied_evidence_page(
                 last_processed, processed = run_id, processed + 1
                 unavailable = True
                 continue
-            approvals, effects, calls = await _agent_cleanup_ledgers(session, run_id)
+            approvals, effects, calls = await _agent_cleanup_ledgers(session, run_id, workspace_id=workspace_id)
             matching = _find_agent_scope_match(run, approvals, calls, records)
             if matching is None:
                 last_processed, processed = run_id, processed + 1
@@ -1075,7 +1223,7 @@ async def purge_document_copied_evidence_page(
             run.updated_at = datetime.now(UTC)
             await session.flush()
             return await progress(
-                _encode_agent_cleanup_cursor(scope, page_fingerprint, last_processed, True),
+                _encode_agent_cleanup_cursor(evidence, page_fingerprint, last_processed, True),
                 False, processed + 1, True, lease_pending=True,
             )
 
@@ -1085,28 +1233,30 @@ async def purge_document_copied_evidence_page(
             await lock_export_privacy(session)
             run = await session.scalar(select(AgentRun).where(
                 AgentRun.id == run_id,
+                AgentRun.workspace_id == workspace_id, AgentRun.owner_id == owner_id,
             ).with_for_update())
             if run is None:
                 last_processed, processed = run_id, processed + 1
                 continue
             marker = await session.scalar(select(AgentEvidenceCleanup).where(
-                AgentEvidenceCleanup.operation_id == scope.operation_id,
+                AgentEvidenceCleanup.operation_id == evidence.operation_id,
+                AgentEvidenceCleanup.workspace_id == workspace_id,
                 AgentEvidenceCleanup.run_id == run_id,
             ).with_for_update())
             if _agent_cleanup_marker_state(marker) != preflight.marker_state:
                 return await progress(cursor, False, processed, unavailable, preflight_stale=True)
             if marker is not None and marker.scope_fingerprint != scope_fingerprint:
                 return await progress(
-                        _encode_agent_cleanup_cursor(scope, page_fingerprint, last_processed, True),
+                        _encode_agent_cleanup_cursor(evidence, page_fingerprint, last_processed, True),
                         False, processed, True,
                 )
             if marker is not None and marker.state == "pending":
                 return await progress(
-                        _encode_agent_cleanup_cursor(scope, page_fingerprint, last_processed, unavailable),
+                        _encode_agent_cleanup_cursor(evidence, page_fingerprint, last_processed, unavailable),
                         False, processed, unavailable,
                 )
             if marker is not None:
-                approvals, effects, calls = await _agent_cleanup_ledgers(session, run_id)
+                approvals, effects, calls = await _agent_cleanup_ledgers(session, run_id, workspace_id=workspace_id)
                 if marker.state == "unavailable" and marker.finalized_at is None:
                     matching = _find_agent_scope_match(run, approvals, calls, records)
                     if matching is None:
@@ -1123,7 +1273,7 @@ async def purge_document_copied_evidence_page(
                     run.updated_at = datetime.now(UTC)
                     await session.flush()
                     return await progress(
-                        _encode_agent_cleanup_cursor(scope, page_fingerprint, last_processed, True),
+                        _encode_agent_cleanup_cursor(evidence, page_fingerprint, last_processed, True),
                         False, processed + 1, True,
                     )
                 unresolved = _scrub_agent_scope_payloads(
@@ -1134,14 +1284,14 @@ async def purge_document_copied_evidence_page(
                 unavailable = unavailable or unresolved or marker.state == "unavailable"
                 last_processed, processed = run_id, processed + 1
                 continue
-            approvals, effects, calls = await _agent_cleanup_ledgers(session, run_id)
+            approvals, effects, calls = await _agent_cleanup_ledgers(session, run_id, workspace_id=workspace_id)
             matching = _find_agent_scope_match(run, approvals, calls, records)
             if matching is None:
                 # An unclassified active legacy row is only a coverage gate. Persist it once so
                 # keyset replay is finite, but never revoke, erase, or otherwise mutate that run.
                 marker = AgentEvidenceCleanup(
-                    operation_id=scope.operation_id, run_id=run_id,
-                    source_id=scope.source_id, document_id=scope.document_id,
+                    workspace_id=workspace_id, operation_id=evidence.operation_id, run_id=run_id,
+                    source_id=evidence.source_id, document_id=evidence.document_id,
                     scope_fingerprint=scope_fingerprint,
                     matched_identity=None, state="unavailable",
                 )
@@ -1151,8 +1301,8 @@ async def purge_document_copied_evidence_page(
                 unavailable = True
                 continue
             marker = AgentEvidenceCleanup(
-                operation_id=scope.operation_id, run_id=run_id,
-                source_id=scope.source_id, document_id=scope.document_id,
+                workspace_id=workspace_id, operation_id=evidence.operation_id, run_id=run_id,
+                source_id=evidence.source_id, document_id=evidence.document_id,
                 scope_fingerprint=scope_fingerprint, matched_identity=matching, state="pending",
             )
             session.add(marker)
@@ -1166,7 +1316,7 @@ async def purge_document_copied_evidence_page(
             run.updated_at = datetime.now(UTC)
             await session.flush()
             return await progress(
-                _encode_agent_cleanup_cursor(scope, page_fingerprint, last_processed, unavailable),
+                _encode_agent_cleanup_cursor(evidence, page_fingerprint, last_processed, unavailable),
                 False, processed + 1, unavailable, lease_pending=True,
             )
 
@@ -1174,15 +1324,17 @@ async def purge_document_copied_evidence_page(
         # Memory privacy or Agent rows. Contention leaves this run at the current cursor position.
         if preflight.blocked or (preflight.lease_required and not preflight.lease_acquired):
             return await progress(
-                _encode_agent_cleanup_cursor(scope, page_fingerprint, last_processed, unavailable),
+                _encode_agent_cleanup_cursor(evidence, page_fingerprint, last_processed, unavailable),
                 False, processed, unavailable,
             )
         await lock_export_privacy(session)
         run = await session.scalar(select(AgentRun).where(
             AgentRun.id == run_id,
+            AgentRun.workspace_id == workspace_id, AgentRun.owner_id == owner_id,
         ).with_for_update())
         marker = await session.scalar(select(AgentEvidenceCleanup).where(
-            AgentEvidenceCleanup.operation_id == scope.operation_id,
+            AgentEvidenceCleanup.operation_id == evidence.operation_id,
+            AgentEvidenceCleanup.workspace_id == workspace_id,
             AgentEvidenceCleanup.run_id == run_id,
         ).with_for_update())
         if (_agent_cleanup_marker_state(marker) != preflight.marker_state
@@ -1192,10 +1344,10 @@ async def purge_document_copied_evidence_page(
             return await progress(cursor, False, processed, unavailable, preflight_stale=True)
         if run is None or marker is None or marker.scope_fingerprint != scope_fingerprint:
             return await progress(
-                _encode_agent_cleanup_cursor(scope, page_fingerprint, last_processed, True),
+                _encode_agent_cleanup_cursor(evidence, page_fingerprint, last_processed, True),
                 False, processed, True,
             )
-        approvals, effects, calls = await _agent_cleanup_ledgers(session, run_id)
+        approvals, effects, calls = await _agent_cleanup_ledgers(session, run_id, workspace_id=workspace_id)
         now = datetime.now(UTC)
         unresolved = _scrub_agent_scope_payloads(approvals, effects, calls, records, now)
         if marker.state == "finalized" or marker.finalized_at is not None:
@@ -1205,7 +1357,7 @@ async def purge_document_copied_evidence_page(
             continue
         if marker.state != "pending":
             return await progress(
-                _encode_agent_cleanup_cursor(scope, page_fingerprint, last_processed, True),
+                _encode_agent_cleanup_cursor(evidence, page_fingerprint, last_processed, True),
                 False, processed, True,
             )
         run.answer = None
@@ -1226,7 +1378,7 @@ async def purge_document_copied_evidence_page(
         last_processed, processed = run_id, processed + 1
 
     next_cursor = (
-        _encode_agent_cleanup_cursor(scope, page_fingerprint, last_processed, unavailable)
+        _encode_agent_cleanup_cursor(evidence, page_fingerprint, last_processed, unavailable)
         if more_candidates else None
     )
     return await progress(next_cursor, not more_candidates, processed, unavailable)
@@ -1235,12 +1387,15 @@ async def purge_document_copied_evidence_page(
 async def list_conversation_approvals(
     session: AsyncSession,
     session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]],
-    conversation_id: UUID, owner_id: int, auth_session_hash: str,
+    conversation_id: UUID, auth_session_hash: str,
+    *, scope: Scope, multi_workspace_enabled: bool,
 ) -> list[ApprovalRead]:
     """List bounded actions only while the owner session, Chat link and current output fences remain valid."""
     from core.auth.public import revalidate_owner_session
     from modules.chat.public import list_agent_run_ids_for_owner
 
+    await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    owner_id = actor(scope)
     if not await revalidate_owner_session(session, auth_session_hash, owner_id):
         return []
 
@@ -1248,7 +1403,8 @@ async def list_conversation_approvals(
     if not run_ids:
         return []
     rows = list((await session.scalars(select(AgentApproval).where(
-        AgentApproval.run_id.in_(run_ids), AgentApproval.owner_id == owner_id,
+        AgentApproval.run_id.in_(run_ids), AgentApproval.workspace_id == scope.workspace_id,
+        AgentApproval.owner_id == owner_id,
         AgentApproval.arguments.is_not(None),
         AgentApproval.status.in_({"pending", "approved", "denied", "expired", "cancelled", "requires_review"}),
     ).order_by(AgentApproval.created_at.desc()).limit(50))).all())
@@ -1256,13 +1412,16 @@ async def list_conversation_approvals(
         AgentEffect.action_id, AgentEffect.result_reference, AgentEffect.state,
     ).where(
         AgentEffect.action_id.in_([item.action_id for item in rows]),
+        AgentEffect.workspace_id == scope.workspace_id,
     ))).all()} if rows else {}
     reads: list[ApprovalRead] = []
     for item in rows:
-        run_revoked = await _approval_run_is_revoked(session_factory, item.run_id)
+        run_revoked = await _approval_run_is_revoked(session_factory, item.run_id, scope.workspace_id)
         fences_current = (
             not run_revoked and item.auth_session_hash == auth_session_hash
-            and await _approval_fences_current(session_factory, item, owner_id)
+            and await _approval_fences_current(
+                session_factory, item, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
         )
         from modules.chat.public import has_live_agent_run_link
         session_current = await revalidate_owner_session(session, auth_session_hash, owner_id)
@@ -1275,7 +1434,9 @@ async def list_conversation_approvals(
             await _invalidate_stale_approval(session, item)
             current_effect = await session.execute(select(
                 AgentEffect.result_reference, AgentEffect.state,
-            ).where(AgentEffect.action_id == item.action_id))
+            ).where(
+                AgentEffect.action_id == item.action_id, AgentEffect.workspace_id == scope.workspace_id,
+            ))
             effect_row = current_effect.one_or_none()
             if effect_row is not None:
                 effects[item.action_id] = (effect_row[0], effect_row[1])
@@ -1295,16 +1456,20 @@ async def list_conversation_approvals(
 async def get_approval(
     session: AsyncSession,
     session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]],
-    approval_id: UUID, owner_id: int, auth_session_hash: str,
+    approval_id: UUID, auth_session_hash: str,
+    *, scope: Scope, multi_workspace_enabled: bool,
 ) -> ApprovalRead:
     """Return exact bounded action detail only while its original Chat link and owner session are live."""
     from core.auth.public import revalidate_owner_session
     from modules.chat.public import live_agent_conversation_id
 
+    await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    owner_id = actor(scope)
     if not await revalidate_owner_session(session, auth_session_hash, owner_id):
         raise HTTPException(status_code=404, detail="Approval not found")
     item = await session.scalar(select(AgentApproval).where(
-        AgentApproval.id == approval_id, AgentApproval.owner_id == owner_id,
+        AgentApproval.id == approval_id, AgentApproval.workspace_id == scope.workspace_id,
+        AgentApproval.owner_id == owner_id,
         AgentApproval.auth_session_hash == auth_session_hash,
         AgentApproval.arguments.is_not(None),
     ))
@@ -1314,8 +1479,10 @@ async def get_approval(
     )
     if item is None or conversation_id is None or item.arguments is None:
         raise HTTPException(status_code=404, detail="Approval not found")
-    run_revoked = await _approval_run_is_revoked(session_factory, item.run_id)
-    fences_current = not run_revoked and await _approval_fences_current(session_factory, item, owner_id)
+    run_revoked = await _approval_run_is_revoked(session_factory, item.run_id, scope.workspace_id)
+    fences_current = not run_revoked and await _approval_fences_current(
+        session_factory, item, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     if (not await revalidate_owner_session(session, auth_session_hash, owner_id)
             or not await live_agent_conversation_id(
                 session, item.run_id, owner_id, auth_session_hash,
@@ -1323,7 +1490,9 @@ async def get_approval(
         raise HTTPException(status_code=404, detail="Approval not found")
     if not fences_current and not run_revoked:
         await _invalidate_stale_approval(session, item)
-    effect = await session.scalar(select(AgentEffect).where(AgentEffect.action_id == item.action_id))
+    effect = await session.scalar(select(AgentEffect).where(
+        AgentEffect.action_id == item.action_id, AgentEffect.workspace_id == scope.workspace_id,
+    ))
     return ApprovalRead(
         id=item.id, action_id=item.action_id, run_id=item.run_id, conversation_id=conversation_id,
         tool_name=item.tool_name, tool_version=item.tool_version,
@@ -1339,47 +1508,51 @@ async def get_approval(
 async def _approval_fences_current(
     session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]],
     item: AgentApproval,
-    owner_id: int,
+    *, scope: Scope, multi_workspace_enabled: bool,
 ) -> bool:
-    """Revalidate this action's persisted owner-scoped evidence snapshot only."""
+    """Revalidate this action's persisted workspace-scoped evidence snapshot only."""
     principal = ToolExecutionPrincipal(
-        actor_id=f"owner:{owner_id}", is_owner=True,
+        actor_id=f"owner:{actor(scope)}", scope=scope, is_owner=True,
         allowed_tools=frozenset({item.tool_name}), owner_all_sources=True,
         destinations=frozenset(), capabilities=frozenset({"source.read"}),
     )
     try:
-        return await revalidate_native_output_fences(
-            session_factory, _restore_fences(item.source_fences), principal,
-            destination_kind="remote",
-        )
+        sink = _restore_fences(item.source_fences)
     except (TypeError, ValueError, KeyError):
         return False
+    return await revalidate_native_output_fences(
+        session_factory, sink, principal,
+        destination_kind="remote", multi_workspace_enabled=multi_workspace_enabled,
+    )
 
 
 async def _approval_run_is_revoked(
     session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]], run_id: UUID,
+    workspace_id: UUID,
 ) -> bool:
-    """Hide action arguments for a globally revoked/missing run without mutating its action ledger."""
+    """Hide action arguments for a revoked/missing run of this workspace without mutating its action ledger."""
     async with session_factory() as session:
-        revoked = await session.scalar(select(AgentRun.evidence_revoked).where(AgentRun.id == run_id))
+        revoked = await session.scalar(select(AgentRun.evidence_revoked).where(
+            AgentRun.id == run_id, AgentRun.workspace_id == workspace_id,
+        ))
     return revoked is None or revoked
 
 
 async def _invalidate_stale_approval(session: AsyncSession, item: AgentApproval) -> None:
     """Redact stale action evidence and durably deny an unconsumed pending slot under owner locks."""
     run = await session.scalar(select(AgentRun).where(
-        AgentRun.id == item.run_id,
+        AgentRun.id == item.run_id, AgentRun.workspace_id == item.workspace_id,
     ).with_for_update())
     if run is None or run.evidence_revoked:
         # The run-wide read/replay fence must not destructively scrub an independent approval.
         return
     row = await session.scalar(select(AgentApproval).where(
-        AgentApproval.id == item.id,
+        AgentApproval.id == item.id, AgentApproval.workspace_id == item.workspace_id,
     ).with_for_update())
     if row is None:
         return
     effect = await session.scalar(select(AgentEffect).where(
-        AgentEffect.action_id == row.action_id,
+        AgentEffect.action_id == row.action_id, AgentEffect.workspace_id == item.workspace_id,
     ).with_for_update())
     if row.status in {"pending", "approved"}:
         now = datetime.now(UTC)
@@ -1406,7 +1579,7 @@ async def _invalidate_stale_approval(session: AsyncSession, item: AgentApproval)
 
 
 async def purge_conversation_actions(
-    session: AsyncSession, conversation_id: UUID, owner_id: int,
+    session: AsyncSession, conversation_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
 ) -> int:
     """Cancel linked runs and redact action payloads before Chat deletes their live activity link.
 
@@ -1418,17 +1591,27 @@ async def purge_conversation_actions(
     purged = 0
     cursor: UUID | None = None
     while True:
-        run_ids = await list_agent_run_ids_for_delete(session, conversation_id, owner_id, cursor)
+        run_ids = await list_agent_run_ids_for_delete(session, conversation_id, actor(scope), cursor)
         if not run_ids:
             return purged
-        purged += await purge_agent_runs(session, run_ids, owner_id)
+        purged += await purge_agent_runs(
+            session, run_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
         cursor = run_ids[-1]
 
 
-async def purge_agent_runs(session: AsyncSession, run_ids: list[UUID], owner_id: int = 1) -> int:
-    """Cancel and redact a bounded set of Chat-owned runs while retaining independent effect tombstones."""
+async def purge_agent_runs(
+    session: AsyncSession, run_ids: list[UUID], *, scope: Scope, multi_workspace_enabled: bool,
+) -> int:
+    """Cancel and redact a bounded set of Chat-owned runs while retaining independent effect tombstones.
+
+    The caller holds the admission fence and Chat locks; this admits ``scope`` without locking and
+    selects only runs of its workspace and actor before the row locks.
+    """
+    await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     runs = list((await session.scalars(select(AgentRun).where(
-        AgentRun.id.in_(run_ids), AgentRun.owner_id == owner_id,
+        AgentRun.id.in_(run_ids), AgentRun.workspace_id == scope.workspace_id,
+        AgentRun.owner_id == actor(scope),
     ).order_by(AgentRun.id).with_for_update())).all()) if run_ids else []
     for run in runs:
         approvals = list((await session.scalars(select(AgentApproval).where(
@@ -1469,7 +1652,10 @@ async def purge_agent_runs(session: AsyncSession, run_ids: list[UUID], owner_id:
                 text(f"DELETE FROM {table} WHERE thread_id = :thread_id"),
                 {"thread_id": run.checkpoint_thread_id},
             )
-    await purge_browser_results_in_uow(session, run_ids=[run.id for run in runs])
+    await purge_browser_results_in_uow(
+        session, run_ids=[run.id for run in runs], scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
     return len(runs)
 
 
@@ -1477,15 +1663,22 @@ async def request_cancel(
     session: AsyncSession,
     run_id: UUID,
     session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]],
+    *, scope: Scope, multi_workspace_enabled: bool,
 ) -> AgentRunRead:
     """Commit PostgreSQL cancellation intent, terminalizing unclaimed work immediately.
+
+    The access fence is locked first and validates the cancellation commit.
 
     Running executions observe the committed flag before every gateway retry, tool call and
     output publication. A completed remote read cannot be undone; its late result is fenced.
     Linked chat status is an optional bounded side effect and is retried from durable state.
     """
+    fence = await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
     row = await session.scalar(
-        select(AgentRun).where(AgentRun.id == run_id, AgentRun.owner_id == 1).with_for_update()
+        select(AgentRun).where(
+            AgentRun.id == run_id, AgentRun.workspace_id == scope.workspace_id,
+            AgentRun.owner_id == actor(scope),
+        ).with_for_update()
     )
     if row is None:
         raise HTTPException(status_code=404, detail="Agent run not found")
@@ -1512,7 +1705,9 @@ async def request_cancel(
             elif effect.state == "reserved":
                 effect.state = "failed"
             effect.payload = None
-        await purge_browser_results_in_uow(session, run_ids=[run_id])
+        await purge_browser_results_in_uow(
+            session, run_ids=[run_id], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
         if row.status in {"queued", "waiting_approval"}:
             row.status = "cancelled"
             row.completed_at = datetime.now(UTC)
@@ -1522,7 +1717,9 @@ async def request_cancel(
                     text(f"DELETE FROM {table} WHERE thread_id = :thread_id"),
                     {"thread_id": row.checkpoint_thread_id},
                 )
-        await session.commit()
+        await commit_with_replay(
+            session, (), scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+        )
         await session.refresh(row)
         publication = (row.owner_id, row.auth_session_hash, row.status)
         await publish_agent_activity_safely(
@@ -1534,11 +1731,13 @@ async def request_cancel(
         # Reuse the same fresh source authorization before returning an answer from any route.
         principal = _result_principal(row)
         try:
-            current = bool(principal and await revalidate_native_output_fences(
-                session_factory, _restore_fences(row.source_fences), principal, destination_kind="remote",
-            ))
+            restored: dict[str, Any] | None = _restore_fences(row.source_fences)
         except (TypeError, ValueError, KeyError):
-            current = False
+            restored = None
+        current = bool(restored is not None and principal and await revalidate_native_output_fences(
+            session_factory, restored, principal, destination_kind="remote",
+            multi_workspace_enabled=multi_workspace_enabled,
+        ))
         if not current:
             result = result.model_copy(update={"answer": None})
     return result
@@ -1547,9 +1746,9 @@ async def request_cancel(
 async def request_cancel_for_owner(
     session: AsyncSession,
     run_id: UUID,
-    owner_id: int,
     auth_session_hash: str,
     session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]],
+    *, scope: Scope, multi_workspace_enabled: bool,
 ) -> AgentRunRead:
     """Cancel only a run whose original session and live Chat parent authorize the action.
 
@@ -1558,8 +1757,11 @@ async def request_cancel_for_owner(
     the live Chat link is reauthorized under the conversation lock afterward; a concurrent delete
     therefore suppresses the result. The legacy cancellation signature stays frozen.
     """
+    await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    owner_id = actor(scope)
     row = await session.scalar(select(AgentRun).where(
-        AgentRun.id == run_id, AgentRun.owner_id == owner_id,
+        AgentRun.id == run_id, AgentRun.workspace_id == scope.workspace_id,
+        AgentRun.owner_id == owner_id,
     ))
     if row is None or row.auth_session_hash != auth_session_hash:
         raise HTTPException(status_code=404, detail="Agent run not found")
@@ -1572,7 +1774,9 @@ async def request_cancel_for_owner(
         )
         if not allowed:
             raise HTTPException(status_code=404, detail="Agent run not found")
-    result = await request_cancel(session, run_id, session_factory)
+    result = await request_cancel(
+        session, run_id, session_factory, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     if row.chat_link_required:
         # Cancellation commits internally; reacquire the parent lock before returning linked data.
         allowed = await authorize_agent_run_access(
@@ -1585,7 +1789,8 @@ async def request_cancel_for_owner(
 
 
 async def current_profile_revision(
-    session: AsyncSession, owner_id: int, profile_id: str, registry: ToolRegistry, config: Any,
+    session: AsyncSession, profile_id: str, registry: ToolRegistry, config: Any,
+    *, scope: Scope, multi_workspace_enabled: bool,
 ) -> int:
     """Return the selected profile's current revision (for a caller that pins ``expected_profile_revision``).
 
@@ -1593,7 +1798,10 @@ async def current_profile_revision(
     """
     from modules.agents.specialists import get_profile
 
-    return (await get_profile(session, owner_id, profile_id, registry, config)).revision
+    return (await get_profile(
+        session, profile_id, registry, config,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )).revision
 
 
 __all__ = [
@@ -1618,13 +1826,16 @@ __all__ = [
     "get_run",
     "get_run_for_owner",
     "get_run_meta_by_id",
+    "list_agent_trace_workspace_ids",
     "list_conversation_approvals",
     "list_run_meta",
     "list_runs",
+    "lock_write_admission",
     "preflight_document_copied_evidence_lease",
     "purge_agent_runs",
     "purge_conversation_actions",
     "purge_document_copied_evidence_page",
+    "redact_expired_agent_traces",
     "request_cancel",
     "request_cancel_for_owner",
     "reserve_browser_run_budget_in_uow",
@@ -1651,8 +1862,30 @@ async def get_run_meta_by_id(session: AsyncSession, run_id: UUID) -> _RunMeta | 
                     token_usage=None if row.token_usage_unknown else row.token_usage)
 
 
-async def redact_expired_agent_traces(session: AsyncSession, *, cutoff: datetime, limit: int = 100) -> int:
+async def list_agent_trace_workspace_ids(
+    session: AsyncSession, *, after: UUID | None = None, limit: int = 100,
+) -> tuple[UUID, ...]:
+    """Return at most ``limit`` (<=100) distinct run workspace IDs after ``after``, in ID order.
+
+    Identity-only discovery for the retention maintenance pass: it reads no content and grants no
+    authority. The caller derives a per-workspace job scope from the workspace owner, then calls
+    ``redact_expired_agent_traces`` under that scope, one workspace per transaction.
+    """
+    if type(limit) is not int or not 1 <= limit <= 100:
+        raise ValueError("Workspace discovery page size must be between 1 and 100")
+    statement = select(AgentRun.workspace_id).distinct()
+    if after is not None:
+        statement = statement.where(AgentRun.workspace_id > after)
+    return tuple((await session.scalars(statement.order_by(AgentRun.workspace_id).limit(limit))).all())
+
+
+async def redact_expired_agent_traces(
+    session: AsyncSession, *, cutoff: datetime, limit: int = 100,
+    scope: Scope, multi_workspace_enabled: bool,
+) -> int:
     """Redact a bounded batch of old terminal run payloads while preserving canonical outcomes and action ledgers.
+
+    Admission precedes the query and only this workspace's runs are candidates (predicate before LIMIT).
 
     Runs with unresolved approvals or reserved, in-flight, or review-required effects are excluded
     before LIMIT so they cannot starve later eligible runs, then their ledgers are locked and
@@ -1660,6 +1893,7 @@ async def redact_expired_agent_traces(session: AsyncSession, *, cutoff: datetime
     """
     if not 1 <= limit <= 500:
         raise ValueError("Retention batch size must be between 1 and 500")
+    await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     unresolved_approvals = select(AgentApproval.run_id).where(
         AgentApproval.run_id == AgentRun.id,
         AgentApproval.status.in_({"pending", "approved", "requires_review"}),
@@ -1669,6 +1903,7 @@ async def redact_expired_agent_traces(session: AsyncSession, *, cutoff: datetime
         AgentEffect.state.in_({"reserved", "in_flight", "requires_review"}),
     ).exists()
     candidates = list((await session.scalars(select(AgentRun).where(
+        AgentRun.workspace_id == scope.workspace_id,
         AgentRun.status.in_(TERMINAL_STATUSES), AgentRun.completed_at < cutoff,
         AgentRun.trace_redacted_at.is_(None), ~unresolved_approvals, ~unresolved_effects,
     ).order_by(AgentRun.completed_at, AgentRun.id).limit(limit).with_for_update(skip_locked=True))).all())

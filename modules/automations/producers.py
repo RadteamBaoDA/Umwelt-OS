@@ -17,16 +17,20 @@ those events enter as root events.
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Protocol
 from uuid import UUID
 
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from core.realtime import commit_with_replay
+from core.workspaces.schemas import AccessFence, Scope
 from modules.automations import execution
 from modules.automations.models import AutomationCursor
+from modules.automations.scope import DENIED_STATUSES, _admit
 from modules.goals import public as goals
 from modules.ingestion import public as ingestion
 from modules.knowledge.documents import public as documents
@@ -36,7 +40,6 @@ from modules.tasks import public as tasks
 from modules.timeline import public as timeline
 
 logger = logging.getLogger(__name__)
-OWNER_ID = 1
 BATCH = 100
 # Server-side `now()` defaults/onupdate stamp the *transaction start*, not the commit. A writer that
 # started at T and commits after a sweep has moved past T would otherwise be skipped forever, so every
@@ -44,10 +47,16 @@ BATCH = 100
 # the longest producer write transaction.
 CURSOR_LAG = timedelta(seconds=30)
 DUE_GRACE = timedelta(days=1)  # a due moment missed by more than a day is not announced late
-_Reader = Callable[
-    [AsyncSession, tuple[datetime, UUID] | None, int],
-    Awaitable[Sequence[tuple[datetime, UUID, str, Mapping[str, Any] | None]]],
-]
+class _Reader(Protocol):
+    """Owner-module cursor reader: tuple position, bounded page, explicit workspace scope."""
+
+    def __call__(
+        self, session: AsyncSession, position: tuple[datetime, UUID] | None, limit: int, /,
+        *, scope: Scope, multi_workspace_enabled: bool,
+    ) -> Awaitable[Sequence[tuple[datetime, UUID, str, Mapping[str, Any] | None]]]: ...
+
+
+
 _CURSORS: dict[str, _Reader] = {
     "new_document": ingestion.list_ready_events_after,
     "connector_sync_result": ingestion.list_terminal_runs_after,
@@ -56,7 +65,10 @@ _CURSORS: dict[str, _Reader] = {
 }
 
 
-async def _cursor_sweep(session: AsyncSession, name: str, reader: _Reader, now: datetime) -> int:
+async def _cursor_sweep(
+    session: AsyncSession, name: str, reader: _Reader, now: datetime,
+    *, scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
+) -> int:
     """Move one cursor forward by at most ``BATCH`` items, offering each to the trigger inbox.
 
     Reads start ``CURSOR_LAG`` before the cursor (see the constant). When a lagged page is full and
@@ -65,24 +77,26 @@ async def _cursor_sweep(session: AsyncSession, name: str, reader: _Reader, now: 
     soft-deleted) is never offered but still moves the cursor. Document identity is passed separately
     from the unchanged public condition whitelist. New-document Source IDs are proved and prelocked
     in UUID order before the mutable cursor row; the bounded page is re-read and revalidated under
-    those fences before enqueue.
+    those fences before enqueue. The cursor is keyed ``(workspace_id, name)``.
     """
-    cursor = await session.get(AutomationCursor, name)
+    sk: dict[str, Any] = {"scope": scope, "multi_workspace_enabled": multi_workspace_enabled}
+    cursor = await session.get(AutomationCursor, (scope.workspace_id, name))
     if cursor is None:
-        session.add(AutomationCursor(name=name, ts=now, item_id=None))
+        session.add(AutomationCursor(workspace_id=scope.workspace_id, name=name, ts=now, item_id=None))
         return 0
-    if not await execution.live_rules(session, name):
+    if not await execution.live_rules(session, name, scope=scope):
         locked = await session.scalar(
-            select(AutomationCursor).where(AutomationCursor.name == name).with_for_update()
-            .execution_options(populate_existing=True)
+            select(AutomationCursor).where(
+                AutomationCursor.workspace_id == scope.workspace_id, AutomationCursor.name == name,
+            ).with_for_update().execution_options(populate_existing=True)
         )
         if locked is not None:
             locked.ts, locked.item_id = now, None
         return 0
     current = (cursor.ts, cursor.item_id or UUID(int=0))
-    items = await reader(session, (cursor.ts - CURSOR_LAG, UUID(int=0)), BATCH)
+    items = await reader(session, (cursor.ts - CURSOR_LAG, UUID(int=0)), BATCH, **sk)
     if len(items) == BATCH and (items[-1][0], items[-1][1]) <= current:
-        items = await reader(session, current, BATCH)
+        items = await reader(session, current, BATCH, **sk)
     # Publication fences precede the mutable cursor row. Prelock every source represented by this
     # bounded detached page in UUID order, then revalidate each event during enrichment/admission.
     if name == "new_document":
@@ -96,21 +110,22 @@ async def _cursor_sweep(session: AsyncSession, name: str, reader: _Reader, now: 
                 continue
             if str(event_id) != key or event_id != item_id:
                 continue
-            proof = await ingestion.resolve_ready_event_provenance(session, event_id)
+            proof = await ingestion.resolve_ready_event_provenance(session, event_id, **sk)
             if proof is not None:
                 source_ids.add(proof.source_id)
         for source_id in sorted(source_ids, key=str):
-            await sources.lock_retained_evidence_source(session, source_id)
+            await sources.lock_retained_evidence_source(session, source_id, **sk, expected_access_fence=access_fence)
     cursor = await session.scalar(
-        select(AutomationCursor).where(AutomationCursor.name == name).with_for_update()
-        .execution_options(populate_existing=True)
+        select(AutomationCursor).where(
+            AutomationCursor.workspace_id == scope.workspace_id, AutomationCursor.name == name,
+        ).with_for_update().execution_options(populate_existing=True)
     )
     if cursor is None or (cursor.ts, cursor.item_id or UUID(int=0)) != current:
         return 0
     # Re-read under the acquired fences; events may have changed while the ordered Source set was locked.
-    items = await reader(session, (cursor.ts - CURSOR_LAG, UUID(int=0)), BATCH)
+    items = await reader(session, (cursor.ts - CURSOR_LAG, UUID(int=0)), BATCH, **sk)
     if len(items) == BATCH and (items[-1][0], items[-1][1]) <= current:
-        items = await reader(session, current, BATCH)
+        items = await reader(session, current, BATCH, **sk)
     if name == "new_document":
         reread_sources: set[UUID] = set()
         for _ts, item_id, key, payload in items:
@@ -122,7 +137,7 @@ async def _cursor_sweep(session: AsyncSession, name: str, reader: _Reader, now: 
                 continue
             if str(event_id) != key or event_id != item_id:
                 continue
-            proof = await ingestion.resolve_ready_event_provenance(session, event_id)
+            proof = await ingestion.resolve_ready_event_provenance(session, event_id, **sk)
             if proof is not None:
                 reread_sources.add(proof.source_id)
         if not reread_sources.issubset(source_ids):
@@ -134,21 +149,21 @@ async def _cursor_sweep(session: AsyncSession, name: str, reader: _Reader, now: 
     ]
     document_items: list[tuple[datetime, UUID, str, dict[str, Any], UUID, UUID]] | None = None
     if name == "new_document":
-        document_items = await _enrich_documents(session, offerable)
+        document_items = await _enrich_documents(session, offerable, **sk)
     offered = 0
     if document_items is not None:
         for _ts, _item_id, key, payload, document_id, version_id in document_items:
             try:
                 offered += await execution.enqueue_trigger(
-                    session, OWNER_ID, name, key, payload,
-                    document_id=document_id, document_version_id=version_id,
+                    session, name, key, payload,
+                    document_id=document_id, document_version_id=version_id, **sk,
                 )
             except ValueError:
                 pass  # an item with an undeclared shape is skipped, never retried forever
     else:
         for _ts, _item_id, key, payload in offerable:
             try:
-                offered += await execution.enqueue_trigger(session, OWNER_ID, name, key, payload)
+                offered += await execution.enqueue_trigger(session, name, key, payload, **sk)
             except ValueError:
                 pass  # an item with an undeclared shape is skipped, never retried forever
     if last is not None and last > current:
@@ -158,14 +173,16 @@ async def _cursor_sweep(session: AsyncSession, name: str, reader: _Reader, now: 
 
 async def _enrich_documents(
     session: AsyncSession, items: Sequence[tuple[datetime, UUID, str, Mapping[str, Any]]],
+    *, scope: Scope, multi_workspace_enabled: bool,
 ) -> list[tuple[datetime, UUID, str, dict[str, Any], UUID, UUID]]:
     """Add title, mime type and source type (metadata only, no content) to ready-document events.
 
     The emitted title is current Document metadata, not a historical version snapshot; exact event
     version identity travels separately from condition fields. Invalid or deleted evidence is dropped.
     """
+    SK: dict[str, Any] = {"scope": scope, "multi_workspace_enabled": multi_workspace_enabled}
     ids = [UUID(p["document_id"]) for _, _, _, p in items]
-    meta = await documents.document_metadata(session, ids) if ids else {}
+    meta = await documents.document_metadata(session, ids, **SK) if ids else {}
     source_types: dict[str, str] = {}
     enriched = []
     for ts, item_id, key, payload in items:
@@ -176,7 +193,7 @@ async def _enrich_documents(
             continue
         if str(event_id) != key or event_id != item_id:
             continue
-        proof = await ingestion.resolve_ready_event_provenance(session, event_id)
+        proof = await ingestion.resolve_ready_event_provenance(session, event_id, **SK)
         if (
             proof is None or proof.document_id != document_id or proof.document_version_id != version_id
             or proof.source_id != UUID(payload["source_id"])
@@ -188,7 +205,7 @@ async def _enrich_documents(
         title, mime_type = found
         source_id = payload["source_id"]
         if source_id not in source_types:
-            source = await sources.get_source(session, UUID(source_id))
+            source = await sources.get_source(session, UUID(source_id), **SK)
             source_types[source_id] = source.type if source is not None else ""
         body: dict[str, Any] = {"source_id": source_id, "title": title}
         if mime_type:
@@ -199,24 +216,25 @@ async def _enrich_documents(
     return enriched
 
 
-async def _due_sweep(session: AsyncSession) -> int:
+async def _due_sweep(session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool) -> int:
     """Plan runs for tasks and goals whose due moment is inside each rule's lead window.
 
     Identity ``(rule, revision, kind:id:due:lead)`` makes the sweep idempotent; moving a due date
     produces a new key and fires again, which is intended.
     """
     created = 0
-    for rev in await execution.live_rules(session, "task_due"):
+    sk: dict[str, Any] = {"scope": scope, "multi_workspace_enabled": multi_workspace_enabled}
+    for rev in await execution.live_rules(session, "task_due", scope=scope):
         lead = rev.trigger.get("lead_minutes", 0)
         for task_id, status, due, hours, goal_id in await tasks.list_due_within(
-            session, OWNER_ID, timedelta(minutes=lead), DUE_GRACE, BATCH,
+            session, timedelta(minutes=lead), DUE_GRACE, BATCH, **sk,
         ):
             key = f"task:{task_id}:{due}:{lead}"
-            if await execution.run_exists(session, rev, key):
+            if await execution.run_exists(session, rev, key, scope=scope):
                 continue
-            origin = await execution.origin_for_reference(session, f"task:{task_id}")
+            origin = await execution.origin_for_reference(session, f"task:{task_id}", scope=scope)
             created += await execution.plan_run(
-                session, owner_id=OWNER_ID, rev=rev, trigger_type="task_due", trigger_key=key,
+                session, rev=rev, trigger_type="task_due", trigger_key=key,
                 trigger_event_id=f"{task_id}:{due}", slot=None,
                 payload={
                     "status": status, "hours_until_due": hours, "created_by_automation": origin is not None,
@@ -224,41 +242,54 @@ async def _due_sweep(session: AsyncSession) -> int:
                 },
                 depth=origin[2] + 1 if origin else 1,
                 origin_automation_id=origin[0] if origin else None, origin_run_id=origin[1] if origin else None,
+                **sk,
             ) is not None
-    for rev in await execution.live_rules(session, "goal_deadline"):
+    for rev in await execution.live_rules(session, "goal_deadline", scope=scope):
         lead_days = rev.trigger.get("lead_days", 0)
         for goal_id, status, deadline, days, progress in await goals.list_deadlines_within(
-            session, OWNER_ID, lead_days, BATCH,
+            session, lead_days, BATCH, **sk,
         ):
             key = f"goal:{goal_id}:{deadline}:{lead_days}"
-            if await execution.run_exists(session, rev, key):
+            if await execution.run_exists(session, rev, key, scope=scope):
                 continue
             created += await execution.plan_run(
-                session, owner_id=OWNER_ID, rev=rev, trigger_type="goal_deadline", trigger_key=key,
+                session, rev=rev, trigger_type="goal_deadline", trigger_key=key,
                 trigger_event_id=f"{goal_id}:{deadline}", slot=None,
                 payload={"goal_id": str(goal_id), "status": status, "days_until_deadline": days, "progress": progress},
-                depth=1, origin_automation_id=None, origin_run_id=None,
+                depth=1, origin_automation_id=None, origin_run_id=None, **sk,
             ) is not None
     return created
 
 
-async def sweep(factory: async_sessionmaker[AsyncSession], now: datetime | None = None) -> int:
+async def sweep(
+    factory: async_sessionmaker[AsyncSession], now: datetime | None = None,
+    *, scope: Scope, multi_workspace_enabled: bool,
+) -> int:
     """Run every producer once, each in its own transaction, and return rows created.
 
     Isolation: a failing sweep (poisoned item, first-cursor insert race) rolls back only itself; the
     others, the schedule tick and dispatch still run, and the failed one retries next tick. A failure is
-    logged as a warning (sweep name and exception class only) and the pass continues.
+    logged as a warning (sweep name and exception class only) and the pass continues. An admission denial
+    (401/403/404/409) is re-raised so the worker skips this workspace.
     """
     now = now or datetime.now(UTC)
     total = 0
     sweeps: list[tuple[str, Any]] = [
-        (name, (lambda s, n=name, r=reader: _cursor_sweep(s, n, r, now))) for name, reader in _CURSORS.items()
-    ] + [("due", _due_sweep)]
+        (name, (lambda s, f, n=name, r=reader: _cursor_sweep(
+            s, n, r, now, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=f)))
+        for name, reader in _CURSORS.items()
+    ] + [("due", lambda s, f: _due_sweep(s, scope=scope, multi_workspace_enabled=multi_workspace_enabled))]
     for name, run in sweeps:
         try:
             async with factory() as session:
-                total += await run(session)
-                await session.commit()
+                fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+                total += await run(session, fence)
+                await commit_with_replay(
+                    session, [], scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
+        except HTTPException as exc:
+            if exc.status_code in DENIED_STATUSES:
+                raise
+            logger.warning("automation producer sweep %s failed (%s)", name, type(exc).__name__)
         except Exception as exc:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
             # Name and class only: never the exception text, which could carry item content.
             logger.warning("automation producer sweep %s failed (%s)", name, type(exc).__name__)

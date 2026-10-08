@@ -20,10 +20,13 @@ from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.realtime import commit_with_replay, make_source_change
+from core.workspaces.public import lock_access_fence
+from core.workspaces.schemas import AccessFence, InternalJobScope
 from modules.ingestion import public as ingestion
 from modules.ingestion.schemas import Receipt, ReceiveBatch
 from modules.sources import public as sources
@@ -201,15 +204,20 @@ def normalize(
     return records
 
 
+_DENIED = frozenset({401, 403, 404, 409})
+
+
 async def collect(
     runtime: tools.McpRuntime,
     session_factory: async_sessionmaker[AsyncSession],
     source_id: UUID,
     expected_connector_revision: int,
     expected_generation: int,
-    owner_id: int = 1,
     collector_token: str | None = None,
     expected_connection_id: UUID | None = None,
+    *,
+    scope: InternalJobScope,
+    multi_workspace_enabled: bool,
 ) -> dict[str, Any]:
     """Run the source's allowlisted calls once and submit one fenced ingestion batch.
 
@@ -218,9 +226,26 @@ async def collect(
     outbound request and again before accepting its result. A failed call never blocks others.
     The ingestion credential is minted and revoked here; the batch carries the same revision
     fence checked during collection and at final receipt. A retry re-collects observations.
+
+    ``scope`` is the caller's durable Source job subject (the C4 wiring resolves it with
+    ``sources.resolve_source_job_scope`` before calling); it is never defaulted or rebased, and
+    its actor, not a constant owner, is the MCP principal. Every fence below admits that same
+    scope: access fence, then Source, then provisioning, in a short session that holds no lock
+    across the MCP request. Lost admission reads as a stale source or a revoked collector.
     """
+    if scope.source_id is not None and (
+        scope.source_id != source_id or scope.source_generation != expected_generation
+    ):
+        raise McpCollectionError("mcp_source_stale")
     async with session_factory() as session:
-        source = await sources.get_connector_source(session, source_id)
+        try:
+            source = await sources.get_connector_source(
+                session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
+        except HTTPException as exc:
+            if exc.status_code not in _DENIED:
+                raise
+            raise McpCollectionError("mcp_source_stale") from exc
         if source is None:
             raise LookupError("Source not found")
         try:
@@ -231,12 +256,15 @@ async def collect(
             raise McpCollectionError("mcp_source_stale")
         if expected_connection_id is not None and config.connection_id != expected_connection_id:
             raise McpCollectionError("mcp_connection_stale")
-        if not await _collection_fence(
-            session, source, expected_generation,
-            expected_connector_revision,
-        ):
+        fence = await _collection_fence(
+            session, source_id, expected_generation, expected_connector_revision,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
+        if fence is None:
             raise McpCollectionError("mcp_source_stale")
-        cursor_before = await ingestion.get_source_cursor(session, source_id)
+        cursor_before = await ingestion.get_source_cursor(
+            session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
     collected_at = datetime.now(UTC)
     records: list[dict[str, Any]] = []
     failed: list[str] = []
@@ -245,21 +273,26 @@ async def collect(
             async def collector_current() -> bool:
                 """Recheck provisioning and optional n8n authority at every MCP request/result fence."""
                 async with session_factory() as session:
-                    if collector_token is not None and not await ingestion.collector_can_ingest(
-                        session, source_id, collector_token, scope="mcp:collect",
-                    ):
-                        return False
-                    current = await sources.get_connector_source(session, source_id)
-                    if current is None:
+                    try:
+                        if collector_token is not None and not await ingestion.collector_can_ingest(
+                            session, source_id, collector_token, credential_scope="mcp:collect",
+                            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                        ):
+                            return False
+                    except HTTPException as exc:
+                        if exc.status_code not in _DENIED:
+                            raise
                         return False
                     return await _collection_fence(
-                        session, current, expected_generation, expected_connector_revision,
-                    )
+                        session, source_id, expected_generation, expected_connector_revision,
+                        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                        expected_access_fence=fence,
+                    ) is not None
 
             read = await tools.read_collection_capability(
-                runtime, owner_id, connection_id=config.connection_id, grant_id=call.grant_id,
+                runtime, connection_id=config.connection_id, grant_id=call.grant_id,
                 source_id=source_id, source_generation=source.generation, arguments=call.arguments,
-                authorize_extra=collector_current,
+                authorize_extra=collector_current, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
             )
             records.extend(normalize(read, call.arguments, collected_at))
         except McpCollectionError:
@@ -273,14 +306,26 @@ async def collect(
             logger.warning("MCP collection call failed (%s)", type(exc).__name__)
             failed.append(str(call.grant_id))
     if len(failed) == len(config.calls):
-        if not await _fence_current(session_factory, source_id, expected_generation, expected_connector_revision):
+        if not await _fence_current(
+            session_factory, source_id, expected_generation, expected_connector_revision,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=fence,
+        ):
             raise McpCollectionError("mcp_source_stale")
-        await _record_result(session_factory, source, "mcp_collection_failed")
+        await _record_result(
+            session_factory, source, "mcp_collection_failed",
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=fence,
+        )
         raise McpCollectionError("mcp_collection_failed")
     if not records:
-        if not await _fence_current(session_factory, source_id, expected_generation, expected_connector_revision):
+        if not await _fence_current(
+            session_factory, source_id, expected_generation, expected_connector_revision,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=fence,
+        ):
             raise McpCollectionError("mcp_source_stale")
-        await _record_result(session_factory, source, None, no_changes=True)
+        await _record_result(
+            session_factory, source, None, no_changes=True,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=fence,
+        )
         return {"status": "no_changes", "run_id": None, "batch_id": None, "failed_calls": failed}
     if len(records) > MAX_RECORDS:
         records = records[:MAX_RECORDS]
@@ -294,17 +339,24 @@ async def collect(
     token: str | None = None
     try:
         async with session_factory() as session:
-            current = await sources.get_connector_source(session, source_id)
-            if current is None or not await _collection_fence(
-                session, current, expected_generation, expected_connector_revision,
-            ):
+            if await _collection_fence(
+                session, source_id, expected_generation, expected_connector_revision,
+                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                expected_access_fence=fence,
+            ) is None:
                 raise McpCollectionError("mcp_source_stale")
-            token = await ingestion.create_collector_credential(session, source_id)
-            receipt: Receipt = await ingestion.receive_connector_batch(session, batch, token)
+            token = await ingestion.create_collector_credential(
+                session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
+            receipt: Receipt = await ingestion.receive_connector_batch(
+                session, batch, token, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
     finally:
         if token is not None:
             async with session_factory() as session:
-                await ingestion.revoke_collector_credential(session, token)
+                await ingestion.revoke_collector_credential(
+                    session, token, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                )
                 await session.commit()
     return {
         "status": receipt.status, "run_id": receipt.run_id, "batch_id": receipt.batch_id,
@@ -314,22 +366,51 @@ async def collect(
 
 async def _collection_fence(
     session: AsyncSession,
-    source: ConnectorSource,
+    source_id: UUID,
     source_generation: int,
     connector_revision: int,
-) -> bool:
+    *, scope: InternalJobScope,
+    multi_workspace_enabled: bool,
+    expected_access_fence: AccessFence | None = None,
+) -> AccessFence | None:
     """Require live connector/tool owners plus the exact active/applied source revision.
 
     Callers use this at admission, each provider request/result callback and before final receipt.
+    Lock order is access fence, Source, then provisioning (``lock=True``); the caller's session
+    ends right after, so no lock is held across the MCP request. Denied admission is not current.
+    ``expected_access_fence`` is the fence captured at the first call; returns the locked fence
+    when current, else None.
     """
     from modules.connectors import provisioning
     from modules.settings.public import module_is_enabled
 
-    return (await module_is_enabled(session, "connectors")
-            and await module_is_enabled(session, "tools")
-            and await provisioning.require_collection_fence(
-                session, source, source_generation, connector_revision, lock=True,
-            ))
+    try:
+        access_fence = await lock_access_fence(
+            session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            expected=expected_access_fence,
+        )
+        if await sources.lock_source(
+            session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            expected_access_fence=access_fence,
+        ) is None:
+            return None
+        source = await sources.get_connector_source(
+            session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
+        current = (source is not None
+                and await module_is_enabled(
+                    session, "connectors", scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+                and await module_is_enabled(
+                    session, "tools", scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+                and await provisioning.require_collection_fence(
+                    session, source, source_generation, connector_revision, lock=True,
+                    scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                ))
+        return access_fence if current else None
+    except HTTPException as exc:
+        if exc.status_code not in _DENIED:
+            raise
+        return None
 
 
 async def _fence_current(
@@ -337,24 +418,53 @@ async def _fence_current(
     source_id: UUID,
     source_generation: int,
     connector_revision: int,
+    *, scope: InternalJobScope,
+    multi_workspace_enabled: bool,
+    expected_access_fence: AccessFence | None = None,
 ) -> bool:
     """Check the current source generation and applied provisioning fence in a fresh session."""
     async with session_factory() as session:
-        source = await sources.get_connector_source(session, source_id)
-        return source is not None and await _collection_fence(
-            session, source, source_generation, connector_revision,
-        )
+        return await _collection_fence(
+            session, source_id, source_generation, connector_revision,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            expected_access_fence=expected_access_fence,
+        ) is not None
 
 
 async def _record_result(
     session_factory: async_sessionmaker[AsyncSession], source: ConnectorSource,
     error_code: str | None, *, no_changes: bool = False,
+    scope: InternalJobScope, multi_workspace_enabled: bool,
+    expected_access_fence: AccessFence | None = None,
 ) -> None:
-    """Persist a collection outcome on the source when its generation is still current."""
+    """Persist a collection outcome on the source when its generation is still current.
+
+    Locks the access fence first, passes it as the expected fence to the Source owner, and
+    commits through the replay gate so a revoked actor never publishes the source change.
+    """
     async with session_factory() as session:
-        if await sources.record_collection_result(
-            session, source.id, source.generation, datetime.now(UTC), error_code, no_changes=no_changes,
-        ):
-            current = await sources.lock_source(session, source.id)
-            drafts = [make_source_change(current.id, current.generation, current.status)] if current else []
-            await commit_with_replay(session, drafts)
+        try:
+            access_fence = await lock_access_fence(
+                session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                expected=expected_access_fence,
+            )
+            if await sources.record_collection_result(
+                session, source.id, source.generation, datetime.now(UTC), error_code,
+                no_changes=no_changes, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                expected_access_fence=access_fence,
+            ):
+                current = await sources.lock_source(
+                    session, source.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                    expected_access_fence=access_fence,
+                )
+                drafts = [make_source_change(
+                    current.id, current.generation, current.status, scope=scope,
+                )] if current else []
+                await commit_with_replay(
+                    session, drafts, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                    access_fence=access_fence,
+                )
+        except HTTPException as exc:
+            await session.rollback()
+            if exc.status_code not in _DENIED:
+                raise

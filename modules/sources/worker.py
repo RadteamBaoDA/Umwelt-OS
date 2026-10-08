@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from core.config import Settings
 from core.events import DomainEvent
 from core.realtime import ReplayDraft, commit_with_replay, make_knowledge_change, make_source_change
+from core.worker_cursors import STATE_KEY, read_cursor, write_cursor
 from core.workspaces.access import read_access_fence
 from core.workspaces.schemas import AccessFence, InternalJobScope
 from modules.ingestion import public as ingestion
@@ -113,12 +114,15 @@ def _event_operation_id(
 async def _admit_event(
     session: AsyncSession, event_id: UUID, *, multi_workspace_enabled: bool,
     event_types: tuple[str, ...], expected_scope: InternalJobScope | None = None,
+    expected_fence: AccessFence | None = None,
 ) -> tuple[UUID, InternalJobScope, AccessFence, EventDelivery] | None:
     """Resolve/admit retained outbox identity before content, then compare Source receipt.
 
     Ingestion acquires real account/workspace/membership locks from identity-only discovery.
-    Source's retained nonlocking identity hook compares the exact operation; no earlier lock
-    is reacquired. Missing lineage or changed epoch cannot become a current-owner job.
+    The Source retained nonlocking capture hook compares the exact operation and its captured
+    configuration epoch; no earlier lock is reacquired. Missing lineage, a legacy NULL capture
+    or a changed epoch cannot become a current-owner job (None, no mutation). A caller that
+    admitted before a rollback passes its snapshot fence as expected_fence; any drift is a no-op.
     Dispatcher owns quarantine of unadmitted/malformed events without protected body access.
     """
     scope = await ingestion.resolve_ingestion_event_scope(
@@ -132,14 +136,28 @@ async def _admit_event(
     if event is None or event.status == "delivered":
         return None
     operation_id = _event_operation_id(event, scope, event_types)
-    retained = await sources.read_source_purge_job_identity(
+    capture = await sources.read_source_purge_job_capture(
         session, operation_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
+    if capture is None:
+        return None
+    try:
+        retained = InternalJobScope(
+            workspace_id=capture.workspace_id, actor_user_id=capture.actor_user_id,
+            membership_revision=capture.membership_revision, source_id=capture.source_id,
+            source_generation=capture.source_generation,
+        )
+    except ValueError:
+        return None
     if retained != scope:
         return None
     access_fence = await read_access_fence(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
+    if access_fence.configuration_revision != capture.configuration_revision:
+        return None
+    if expected_fence is not None and access_fence != expected_fence:
+        return None
     return operation_id, scope, access_fence, event
 
 
@@ -177,6 +195,7 @@ async def _lock_operation(
         SourcePurgeOperation.workspace_id == scope.workspace_id,
         SourcePurgeOperation.actor_user_id == scope.actor_user_id,
         SourcePurgeOperation.membership_revision == scope.membership_revision,
+        SourcePurgeOperation.configuration_revision == access_fence.configuration_revision,
         SourcePurgeOperation.source_id == scope.source_id,
         SourcePurgeOperation.generation == scope.source_generation,
     ).with_for_update().execution_options(populate_existing=True))
@@ -344,6 +363,14 @@ async def process_source_purge(ctx: dict[str, object], event_id: str) -> None:
                     scope=scope, multi_workspace_enabled=flag, access_fence=access_fence,
                     source_fence=source_fence,
                 )
+            except documents.DocumentCleanupPreparationLimitError:
+                operation.documents_status = "failed"
+                operation.status = "failed"
+                operation.error_code = "source_cleanup_dependency_limit_exceeded"
+                operation.pending_owner_codes = ["documents"]
+                await ingestion.set_event_delivery(session, identifier, "delivered", scope=scope, multi_workspace_enabled=flag)
+                await commit_with_replay(session, drafts, scope=scope, multi_workspace_enabled=flag, access_fence=access_fence)
+                return
             except ValueError as exc:
                 if str(exc) != "Source graph cleanup exceeds its atomic document limit":
                     raise
@@ -374,7 +401,7 @@ async def process_source_purge(ctx: dict[str, object], event_id: str) -> None:
 async def _evict_memory_cache_after_commit(
     factory: async_sessionmaker[AsyncSession], redis: Redis, operation_id: UUID, event_id: UUID, *,
     scope: InternalJobScope, multi_workspace_enabled: bool, dispatched_at: datetime,
-    attempt: tuple[object, ...],
+    attempt: tuple[object, ...], access_fence: AccessFence,
 ) -> None:
     """Evict the admitted actor cache outside SQL locks, then CAS the exact pending stage.
 
@@ -384,7 +411,8 @@ async def _evict_memory_cache_after_commit(
     """
     async with factory() as session:
         admitted = await _admit_event(session, event_id, multi_workspace_enabled=multi_workspace_enabled,
-                                      event_types=_COVERAGE_EVENTS, expected_scope=scope)
+                                      event_types=_COVERAGE_EVENTS, expected_scope=scope,
+                                      expected_fence=access_fence)
         if admitted is None or admitted[0] != operation_id:
             return
         _, _, access_fence, captured_delivery = admitted
@@ -406,7 +434,8 @@ async def _evict_memory_cache_after_commit(
         return
     async with factory() as session:
         admitted = await _admit_event(session, event_id, multi_workspace_enabled=multi_workspace_enabled,
-                                      event_types=_COVERAGE_EVENTS, expected_scope=scope)
+                                      event_types=_COVERAGE_EVENTS, expected_scope=scope,
+                                      expected_fence=access_fence)
         if admitted is None or admitted[0] != operation_id:
             return
         _, _, access_fence, captured_delivery = admitted
@@ -447,6 +476,7 @@ async def process_source_memory_coverage(ctx: dict[str, object], event_id: str) 
     flag = _configured_flag(ctx)
     identifier = UUID(event_id)
     scope: InternalJobScope | None = None
+    snapshot_fence: AccessFence | None = None
     dispatched_at: datetime | None = None
     attempt: tuple[object, ...] | None = None
     eviction: tuple[UUID, tuple[object, ...]] | None = None
@@ -457,6 +487,7 @@ async def process_source_memory_coverage(ctx: dict[str, object], event_id: str) 
             if admitted is None:
                 return
             operation_id, scope, access_fence, captured_delivery = admitted
+            snapshot_fence = access_fence
             if captured_delivery.status != "queued" or not isinstance(captured_delivery.dispatched_at, datetime):
                 return
             source, operation = await _lock_operation(session, operation_id, scope=scope,
@@ -529,9 +560,10 @@ async def process_source_memory_coverage(ctx: dict[str, object], event_id: str) 
                 return
             await commit_with_replay(session, _source_drafts(source, operation_id, scope), scope=scope,
                                      multi_workspace_enabled=flag, access_fence=access_fence)
-        if eviction is not None and scope is not None and dispatched_at is not None:
+        if eviction is not None and scope is not None and dispatched_at is not None and snapshot_fence is not None:
             await _evict_memory_cache_after_commit(factory, redis, eviction[0], identifier, scope=scope,
-                multi_workspace_enabled=flag, dispatched_at=dispatched_at, attempt=eviction[1])
+                multi_workspace_enabled=flag, dispatched_at=dispatched_at, attempt=eviction[1],
+                access_fence=snapshot_fence)
     except HTTPException:
         # Permission loss is never rewritten as cursor failure or an upgraded job epoch.
         raise
@@ -539,7 +571,12 @@ async def process_source_memory_coverage(ctx: dict[str, object], event_id: str) 
         logger.warning("Source Memory coverage deferred (%s)", type(exc).__name__)
         reset_cursor = reset_cursor or isinstance(exc, ValueError) and str(exc) == "Source Memory cleanup cursor is invalid"
         await _recover_memory_coverage(factory, identifier, attempt, reset=reset_cursor, scope=scope,
-                                       multi_workspace_enabled=flag, dispatched_at=dispatched_at)
+                                       multi_workspace_enabled=flag, dispatched_at=dispatched_at,
+                                       access_fence=snapshot_fence)
+
+
+_COVERAGE_CURSOR_KEY = "sources_coverage_metadata"
+_CURSOR_KEYS = frozenset({_COVERAGE_CURSOR_KEY})
 
 
 async def reconcile_source_coverage(ctx: dict[str, object]) -> int:
@@ -552,22 +589,23 @@ async def reconcile_source_coverage(ctx: dict[str, object]) -> int:
     """
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     flag = _configured_flag(ctx)
-    cursor = ctx.get("source_coverage_metadata_cursor")
-    after = cursor if isinstance(cursor, UUID) else None
+    # ARQ copies ctx per job: only the shared worker_cursors dict (Redis first) survives between passes.
+    shared = isinstance(ctx.get(STATE_KEY), dict)
+    after = await read_cursor(ctx, _COVERAGE_CURSOR_KEY, _CURSOR_KEYS) if shared else None
     async with factory() as session:
         statement = select(SourcePurgeOperation.id).where(
             SourcePurgeOperation.documents_status == "deleted", SourcePurgeOperation.status != "succeeded",
             ~and_(SourcePurgeOperation.memory_status == "failed",
                   SourcePurgeOperation.memory_error_code.in_(sources.SOURCE_MEMORY_TERMINAL_CODES)),
-            ~and_(SourcePurgeOperation.status == "failed", SourcePurgeOperation.memory_status == "succeeded",
-                  SourcePurgeOperation.memory_cache_pending.is_(False)),
+            sources.coverage_settled_exclusion(),
         ).order_by(SourcePurgeOperation.id).limit(100)
         operation_ids = tuple((await session.scalars(statement.where(SourcePurgeOperation.id > after)
                                                      if after is not None else statement)).all())
         if not operation_ids and after is not None:
             operation_ids = tuple((await session.scalars(statement)).all())
         await session.rollback()
-    ctx["source_coverage_metadata_cursor"] = operation_ids[-1] if operation_ids else None
+    if shared:
+        await write_cursor(ctx, _COVERAGE_CURSOR_KEY, operation_ids[-1] if operation_ids else None, _CURSOR_KEYS)
     enqueued = 0
     for operation_id in operation_ids:
         try:
@@ -604,6 +642,7 @@ async def reconcile_source_coverage(ctx: dict[str, object]) -> int:
 async def _recover_memory_coverage(
     factory: async_sessionmaker[AsyncSession], identifier: UUID, attempt: tuple[object, ...] | None, *,
     reset: bool, scope: InternalJobScope | None, multi_workspace_enabled: bool, dispatched_at: datetime | None,
+    access_fence: AccessFence | None = None,
 ) -> None:
     """Persist retry failure only for original admitted epoch, dispatch and exact stage snapshot.
 
@@ -611,11 +650,12 @@ async def _recover_memory_coverage(
     precedes outbox. New dispatch/success/cursor wins. Reset counts only for malformed stored
     cursor; permission, payload or downstream errors never silently become a cursor reset.
     """
-    if scope is None or attempt is None or dispatched_at is None:
+    if scope is None or attempt is None or dispatched_at is None or access_fence is None:
         return
     async with factory() as session:
         admitted = await _admit_event(session, identifier, multi_workspace_enabled=multi_workspace_enabled,
-                                      event_types=_COVERAGE_EVENTS, expected_scope=scope)
+                                      event_types=_COVERAGE_EVENTS, expected_scope=scope,
+                                      expected_fence=access_fence)
         if admitted is None:
             return
         operation_id, _, access_fence, captured_delivery = admitted

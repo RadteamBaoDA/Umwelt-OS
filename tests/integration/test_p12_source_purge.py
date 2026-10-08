@@ -59,6 +59,12 @@ async def _create_document(client: AsyncClient, source_id: UUID, title: str, con
     return UUID(response.json()["id"])
 
 
+async def _scope(engine: AsyncEngine) -> dict[str, object]:
+    """Owner workspace identity required by workspace-scoped rows since W1/W2."""
+    row = (await _rows(engine, "SELECT id, owner_user_id FROM workspaces ORDER BY created_at LIMIT 1"))[0]
+    return {"workspace_id": row["id"], "actor_user_id": row["owner_user_id"]}
+
+
 async def _occurrences(engine: AsyncEngine, needle: str) -> dict[str, int]:
     """Count rows still holding ``needle`` per public table, in text/jsonb and in bytea columns."""
     tables = [row["tablename"] for row in await _rows(
@@ -119,30 +125,36 @@ async def _seed_copied_evidence(
         "source_id": str(source_id), "document_id": str(first["document_id"]),
         "document_version_id": str(first["version_id"]), "chunk_id": str(first["chunk_id"]),
     }
+    ws = await _scope(engine)
     async with AsyncSession(engine, expire_on_commit=False) as session:
         session.add(MemoryCandidate(
+            **ws,
             id=ids["candidate"], content=f"candidate copy {secret}", memory_type="fact",
             provenance=identity, status="pending",
         ))
         await session.flush()
         session.add_all([
             Memory(
+                **ws,
                 id=ids["derived"], content=f"derived copy {secret}", is_manual=False,
                 provenance=identity,
                 candidate_id=ids["candidate"], reason=f"learned from {secret}",
             ),
             Memory(
+                **ws,
                 id=ids["manual"], content="manual fact the owner wrote independently",
                 is_manual=True,
                 provenance={**identity, "origin": "manual"},
             ),
             Memory(
+                **ws,
                 id=ids["control"], content="control memory from another source", is_manual=False,
                 provenance={"source_id": str(control_source_id)},
             ),
         ])
         thread_id = str(uuid4())
         session.add(AgentRun(
+            workspace_id=ws["workspace_id"], owner_id=ws["actor_user_id"],
             id=ids["run"], auth_session_hash="0" * 64, workflow_version="w1", prompt_version="p1",
             checkpoint_schema_version=1, checkpoint_thread_id=thread_id,
             prompt="Fictional question", allowed_tools=[], tool_contracts={},
@@ -427,8 +439,10 @@ async def test_purge_is_not_reported_successful_while_a_historical_cleanup_recei
     # (an unsupported legacy key) is an unresolved, terminal per-Document failure; the Source-wide
     # sweep still erases it by exact Source identity.
     orphan = uuid4()
+    ws = await _scope(engine)
     async with AsyncSession(engine, expire_on_commit=False) as session:
         session.add(Memory(
+            **ws,
             id=orphan, content=f"copy with unreadable provenance {secret}", is_manual=False,
             provenance={"source_id": str(source_id), "legacy_import_note": "unsupported shape"},
         ))

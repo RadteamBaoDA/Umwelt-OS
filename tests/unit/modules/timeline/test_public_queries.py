@@ -18,6 +18,7 @@ from uuid import uuid4
 
 import pytest
 
+from core.workspaces.schemas import WorkspaceContext
 from modules.timeline.models import (
     Event,
     EventParticipant,
@@ -36,6 +37,16 @@ from modules.timeline.public import (
     remove_entity_participants,
 )
 from modules.timeline.schemas import EventRead, TimelinePage, TimelineQuery
+
+SCOPE = WorkspaceContext(user_id=1, workspace_id=uuid4(), role="owner", membership_revision=1)
+KW = {"scope": SCOPE, "multi_workspace_enabled": False}
+
+
+@pytest.fixture(autouse=True)
+def _admitted() -> object:
+    """Admission is covered in test_scope; these tests exercise the domain logic past it."""
+    with patch("modules.timeline.public._admit", AsyncMock(return_value=MagicMock())):
+        yield
 
 
 class TestCursorCodec:
@@ -74,7 +85,7 @@ class TestWindowPaginationAndLimits:
         session = AsyncMock()
         query = TimelineQuery()
         with pytest.raises(ValueError, match="page size must be between 1 and 100"):
-            await _list_page(session, query, limit=0, cursor=None)
+            await _list_page(session, query, limit=0, cursor=None, **KW)
 
     @pytest.mark.asyncio
     async def test_page_limit_overflow_raises_value_error(self) -> None:
@@ -82,7 +93,7 @@ class TestWindowPaginationAndLimits:
         session = AsyncMock()
         query = TimelineQuery()
         with pytest.raises(ValueError, match="page size must be between 1 and 100"):
-            await _list_page(session, query, limit=101, cursor=None)
+            await _list_page(session, query, limit=101, cursor=None, **KW)
 
     @pytest.mark.asyncio
     async def test_empty_results_returns_empty_page_without_next_cursor(self) -> None:
@@ -93,7 +104,7 @@ class TestWindowPaginationAndLimits:
         session.scalars.return_value = scalars_mock
 
         query = TimelineQuery()
-        page = await list_timeline(session, query, limit=10)
+        page = await list_timeline(session, query, limit=10, **KW)
         assert isinstance(page, TimelinePage)
         assert page.items == []
         assert page.next_cursor is None
@@ -107,7 +118,7 @@ class TestWindowPaginationAndLimits:
         session.scalars.return_value = scalars_mock
 
         source_id = uuid4()
-        res = await list_events(session, limit=20, source_id=source_id)
+        res = await list_events(session, limit=20, source_id=source_id, **KW)
         assert isinstance(res, TimelinePage)
 
 
@@ -144,7 +155,7 @@ class TestEventFilteringAndQueries:
         # 1st scalar: Event exists; 2nd scalar: EventEvidence count query returns None (no evidence)
         session.scalar.side_effect = [derived_event, None]
 
-        result = await get_event(session, event_id)
+        result = await get_event(session, event_id, **KW)
         assert result is None
 
     @pytest.mark.asyncio
@@ -186,7 +197,7 @@ class TestEventFilteringAndQueries:
         scalars_mock.all.return_value = []
         session.scalars.return_value = scalars_mock
 
-        result = await get_event(session, event_id)
+        result = await get_event(session, event_id, **KW)
         assert result is not None
         assert isinstance(result, EventRead)
         assert result.title == "My Manual Note"
@@ -208,7 +219,7 @@ class TestEntityAndSourceLinkage:
 
         new_participant = SimpleNamespace(entity_id=entity_id, role="organizer", metadata={})
         with patch("modules.knowledge.entities.public.get_entity_refs", return_value=[MagicMock()]):
-            await _set_participants(session, event_id, [new_participant], origin="manual")
+            await _set_participants(session, event_id, [new_participant], origin="manual", **KW)
 
         session.execute.assert_called_once()
         session.add.assert_called_once()
@@ -239,8 +250,7 @@ class TestEntityAndSourceLinkage:
 
         with patch("modules.timeline.public._schedule_temporal_event", return_value=None):
             result = await apply_entity_merge(
-                session, source_id=source_id, target_id=target_id, event_ids=[event_id]
-            )
+                session, source_id=source_id, target_id=target_id, event_ids=[event_id], **KW)
             assert result == [event_id]
             assert participant_row.entity_id == target_id
 
@@ -262,8 +272,7 @@ class TestEntityAndSourceLinkage:
                 source_id=source_id,
                 target_id=target_id,
                 event_ids=[event_id],
-                selected_pairs=set(),
-            )
+                selected_pairs=set(), **KW)
             assert result == []
 
     @pytest.mark.asyncio
@@ -278,7 +287,7 @@ class TestEntityAndSourceLinkage:
         session.scalars.return_value = scalars_mock
 
         with patch("modules.timeline.public._schedule_temporal_event", return_value=None):
-            result = await remove_entity_participants(session, [entity_id])
+            result = await remove_entity_participants(session, [entity_id], **KW)
             assert result == [event_id]
 
     @pytest.mark.asyncio
@@ -286,13 +295,14 @@ class TestEntityAndSourceLinkage:
         """_hide_unsupported soft-deletes derived events that have no surviving evidence."""
         session = AsyncMock()
         event_id = uuid4()
-        unsupported_event = Event(id=event_id, origin="derived", owner_fields=[], deleted_at=None)
+        workspace_id = uuid4()
+        unsupported_event = Event(id=event_id, workspace_id=workspace_id, origin="derived", owner_fields=[], deleted_at=None)
 
         session.get.return_value = unsupported_event
         session.scalar.return_value = None  # No remaining evidence
 
         with patch("modules.timeline.public._schedule_temporal_event", return_value=None):
-            await _hide_unsupported(session, [event_id])
+            await _hide_unsupported(session, [event_id], workspace_id=workspace_id)
             assert unsupported_event.deleted_at is not None
             assert unsupported_event.title == "[unsupported derived event]"
             assert unsupported_event.type == "unsupported_derived_event"

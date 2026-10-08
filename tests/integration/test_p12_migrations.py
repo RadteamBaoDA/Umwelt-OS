@@ -9,8 +9,9 @@ from pathlib import Path
 import pytest
 from alembic.config import Config
 from alembic.script import ScriptDirectory
+from core.auth.public import provision_bootstrap_account_in_uow
 from sqlalchemy import inspect, text
-from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, create_async_engine
 
 pytestmark = pytest.mark.skipif(
     os.getenv("BBD_INTEGRATION") != "1", reason="requires disposable Compose test services"
@@ -26,6 +27,11 @@ def _p12_revisions() -> tuple[str, list[str]]:
     assert head is not None
     chain: list[str] = []
     revision = script.get_revision(head)
+    # Skip later (non-P12) revisions above the P12 chain so new heads do not break collection.
+    while revision is not None and not revision.revision.startswith("p12_"):
+        parent = revision.down_revision
+        assert isinstance(parent, str), "revisions above P12 form a linear chain"
+        revision = script.get_revision(parent)
     while revision is not None and revision.revision.startswith("p12_"):
         chain.append(revision.revision)
         parent = revision.down_revision
@@ -36,7 +42,7 @@ def _p12_revisions() -> tuple[str, list[str]]:
 
 
 PRE_P12, P12_CHAIN = _p12_revisions()
-HEAD = P12_CHAIN[0]
+HEAD = str(ScriptDirectory.from_config(Config(str(REPOSITORY_ROOT / "alembic.ini"))).get_current_head())
 
 
 def _alembic(database_url: str, *arguments: str) -> str:
@@ -131,15 +137,14 @@ async def _seed_rows(url: str) -> dict[str, int]:
     """Create owner-scoped demo data plus rows in P12-added tables; return pre-P12 table row counts."""
     engine = create_async_engine(url)
     try:
-        async with engine.begin() as connection:
-            await connection.execute(text(
-                "INSERT INTO owner (id, password_hash) VALUES (1, 'not-a-real-hash')"
-            ))
+        async with AsyncSession(engine) as session, session.begin():
+            await provision_bootstrap_account_in_uow(session, "not-a-real-hash")  # account + default workspace
         _run_demo_seed(url)
         async with engine.begin() as connection:
             await connection.execute(text(
-                "INSERT INTO document_cleanup_operations (id, source_id, document_id) "
-                "VALUES (gen_random_uuid(), gen_random_uuid(), gen_random_uuid())"
+                "INSERT INTO document_cleanup_operations (id, source_id, document_id, workspace_id, actor_user_id) "
+                "SELECT gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), id, owner_user_id "
+                "FROM workspaces LIMIT 1"
             ))
             await connection.execute(text(
                 "INSERT INTO onboarding_state (owner_id) SELECT id FROM owner LIMIT 1"

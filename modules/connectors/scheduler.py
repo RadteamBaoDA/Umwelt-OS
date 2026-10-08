@@ -268,6 +268,7 @@ async def admit_collection_request(
     cancel the request; the sixth admission fails it. Commits before any provider I/O.
     """
     from modules.ingestion.models import SourceIngestionState
+    from modules.settings.public import module_is_enabled
     from modules.sources import public as sources
 
     peek = await session.get(ConnectorCollectionRequest, request_id)
@@ -279,6 +280,11 @@ async def admit_collection_request(
     await session.rollback()
     try:
         await connectors._connector_access(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        if not await module_is_enabled(
+            session, "connectors", scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        ):
+            await session.rollback()
+            return None  # durable request untouched until the module is re-enabled
         source_fence, row, _ = await provisioning.lock_connector(
             session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         source = await sources.get_connector_source(
@@ -557,6 +563,8 @@ async def _create_due_requests(factory: async_sessionmaker[AsyncSession], now: d
     Fair turns: workspaces and sources are ordered by persisted last_considered_at, and
     consideration is committed before scope work so a busy workspace cannot starve others.
     """
+    from modules.settings.public import module_is_enabled
+
     async with factory() as session:
         picked = list((await session.execute(text("""
             SELECT t.source_id, t.workspace_id FROM (
@@ -593,6 +601,9 @@ async def _create_due_requests(factory: async_sessionmaker[AsyncSession], now: d
                 workspace_id=workspace_id, actor_user_id=owner.user_id, membership_revision=owner.revision,
                 source_id=source_id, source_generation=row.source_generation)
             await session.rollback()
+            if not await module_is_enabled(session, "connectors", scope=scope, multi_workspace_enabled=multi):
+                await session.rollback()
+                continue
             try:
                 request = await _open_request(
                     session, scope, source_id, "scheduled", None, multi_workspace_enabled=multi)

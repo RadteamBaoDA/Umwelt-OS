@@ -3,26 +3,29 @@
 import base64
 import hashlib
 import json
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, cast
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
+from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy import Select, delete, desc, exists, false, func, or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.auth.models import Owner
 from core.realtime import (
     ReplayDraft,
     commit_with_replay,
     make_timeline_change,
     make_timeline_collection_change,
 )
+from core.workspaces import public as workspaces
+from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
 from modules.knowledge.documents import public as documents
 from modules.knowledge.entities import public as entities
 from modules.sources import public as sources
-from modules.sources.schemas import SourceExportFence
+from modules.sources.schemas import SourceExportFence, SourceFence
 from modules.timeline.models import (
     Event,
     EventAudit,
@@ -48,6 +51,31 @@ from modules.timeline.schemas import (
     TimelinePage,
     TimelineQuery,
 )
+
+
+def _actor(scope: Scope) -> int:
+    """Return the principal recorded by a real workspace or durable job scope."""
+    return scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
+
+
+async def _admit(
+    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
+    lock: bool = False, expected: AccessFence | None = None,
+) -> AccessFence:
+    """Require owner scope and capture or lock authorization before event locks."""
+    if not isinstance(scope, (WorkspaceContext, InternalJobScope)):
+        raise TypeError("An explicit timeline workspace scope is required")
+    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
+    if type(multi_workspace_enabled) is not bool:
+        raise TypeError("The configured multi-workspace feature flag must be a boolean")
+    if lock:
+        return await workspaces.lock_access_fence(
+            session, scope=scope, expected=expected, multi_workspace_enabled=multi_workspace_enabled,
+        )
+    return await workspaces.read_access_fence(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
 from modules.timeline.seed import (
     ensure_demo_events,  # re-export: used by documents seed
 )
@@ -65,29 +93,29 @@ class _TimelineExportIneligible(Exception):
     """An otherwise persisted derived event has no currently exportable evidence."""
 
 
-def _encode_timeline_export_cursor(owner_id: int, snapshot_at: datetime, position_at: datetime, position_id: UUID) -> str:
+def _encode_timeline_export_cursor(owner_id: int, workspace_id: UUID, snapshot_at: datetime, position_at: datetime, position_id: UUID) -> str:
     """Bind a keyset position to its current owner and immutable snapshot cutoff."""
-    value = {"v": 1, "owner": owner_id, "kind": "events", "snapshot": snapshot_at.astimezone(UTC).isoformat(),
+    value = {"v": 1, "owner": owner_id, "workspace": str(workspace_id), "kind": "events", "snapshot": snapshot_at.astimezone(UTC).isoformat(),
              "at": position_at.astimezone(UTC).isoformat(), "id": str(position_id)}
     return base64.urlsafe_b64encode(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).decode().rstrip("=")
 
 
-def _decode_timeline_export_cursor(cursor: str, owner_id: int) -> tuple[datetime, datetime, UUID]:
+def _decode_timeline_export_cursor(cursor: str, owner_id: int, workspace_id: UUID) -> tuple[datetime, datetime, UUID]:
     """Reject malformed, noncanonical, future or cross-owner timeline cursors."""
     try:
         if not cursor or len(cursor) > 1024 or "=" in cursor:
             raise ValueError
         value = json.loads(base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True))
-        if not isinstance(value, dict) or set(value) != {"v", "owner", "kind", "snapshot", "at", "id"}:
+        if not isinstance(value, dict) or set(value) != {"v", "owner", "workspace", "kind", "snapshot", "at", "id"}:
             raise ValueError
-        if value["v"] != 1 or value["owner"] != owner_id or value["kind"] != "events":
+        if value["v"] != 1 or value["owner"] != owner_id or value["workspace"] != str(workspace_id) or value["kind"] != "events":
             raise ValueError
         snapshot, position = datetime.fromisoformat(value["snapshot"]), datetime.fromisoformat(value["at"])
         if any(item.tzinfo is None or item.utcoffset() is None for item in (snapshot, position)):
             raise ValueError
         snapshot, position = snapshot.astimezone(UTC), position.astimezone(UTC)
         row_id = UUID(value["id"])
-        if snapshot > datetime.now(UTC) or _encode_timeline_export_cursor(owner_id, snapshot, position, row_id) != cursor:
+        if snapshot > datetime.now(UTC) or _encode_timeline_export_cursor(owner_id, workspace_id, snapshot, position, row_id) != cursor:
             raise ValueError
         return snapshot, position, row_id
     except (ValueError, TypeError, KeyError, UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -99,23 +127,27 @@ def _timeline_export_json(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
-def _timeline_export_statement(snapshot_at: datetime) -> Select[Event]:
-    """Select undeleted owner events and derived events with retained eligible evidence."""
-    eligible = sources.export_eligible_source_ids()
+def _timeline_export_statement(snapshot_at: datetime, *, scope: Scope) -> Select[Event]:
+    """Select undeleted workspace events and derived events with retained eligible evidence."""
+    eligible = sources.export_eligible_source_ids(scope=scope)
     support = exists(select(EventEvidence.id).where(
+        EventEvidence.workspace_id == scope.workspace_id,
         EventEvidence.event_id == Event.id, EventEvidence.source_id.in_(eligible),
         EventEvidence.document_version_id.is_not(None), EventEvidence.chunk_id.is_not(None),
     ))
     return select(Event).where(
+        Event.workspace_id == scope.workspace_id,
         Event.deleted_at.is_(None), Event.created_at <= snapshot_at, Event.updated_at <= snapshot_at,
         or_(Event.origin == "manual", support),
     )
 
 
-async def _timeline_export_count(session: AsyncSession, snapshot_at: datetime) -> int:
+async def _timeline_export_count(
+    session: AsyncSession, snapshot_at: datetime, *, scope: Scope, multi_workspace_enabled: bool,
+) -> int:
     """Count only cutoff-stable owner facts or derived events with exact retained support."""
     count, position = 0, None
-    base = _timeline_export_statement(snapshot_at)
+    base = _timeline_export_statement(snapshot_at, scope=scope)
     while True:
         statement = base
         if position is not None:
@@ -126,24 +158,29 @@ async def _timeline_export_count(session: AsyncSession, snapshot_at: datetime) -
             return count
         for event in rows:
             try:
-                await _timeline_export_record(session, event)
+                await _timeline_export_record(
+                    session, event, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
                 count += 1
             except _TimelineExportIneligible:
                 continue
         position = (rows[-1].created_at, rows[-1].id)
 
 
-async def _timeline_export_record(session: AsyncSession, event: Event) -> tuple[TimelineExportRead, str, str, list[tuple[UUID, int]]]:
+async def _timeline_export_record(
+    session: AsyncSession, event: Event, *, scope: Scope, multi_workspace_enabled: bool,
+) -> tuple[TimelineExportRead, str, str, list[tuple[UUID, int]]]:
     """Project one fresh event and its exact supported children without arbitrary metadata."""
-    participants = list((await session.scalars(select(EventParticipant).where(
-        EventParticipant.event_id == event.id,
+    participants = list((await session.scalars(select(EventParticipant).join(
+        Event, Event.id == EventParticipant.event_id,
+    ).where(
+        Event.workspace_id == scope.workspace_id, EventParticipant.event_id == event.id,
     ).order_by(EventParticipant.role, EventParticipant.entity_id).limit(101)
       .execution_options(populate_existing=True))).all())
     if len(participants) > 100:
         raise ValueError("An event export record exceeds the participant bound")
     evidence_rows = list((await session.scalars(select(EventEvidence).where(
-        EventEvidence.event_id == event.id,
-        EventEvidence.source_id.in_(sources.export_eligible_source_ids()),
+        EventEvidence.workspace_id == scope.workspace_id, EventEvidence.event_id == event.id,
+        EventEvidence.source_id.in_(sources.export_eligible_source_ids(scope=scope)),
         EventEvidence.document_version_id.is_not(None), EventEvidence.chunk_id.is_not(None),
     ).order_by(EventEvidence.id).limit(101).execution_options(populate_existing=True))).all())
     if len(evidence_rows) > 100:
@@ -161,7 +198,7 @@ async def _timeline_export_record(session: AsyncSession, event: Event) -> tuple[
             accepted_source_generation=evidence_row.source_generation,
             document_id=evidence_row.document_id, document_version_id=evidence_row.document_version_id,
             chunk_id=evidence_row.chunk_id,
-        ))
+        ), scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         if proof is None:
             continue
         valid_evidence_ids.add(evidence_row.id)
@@ -198,19 +235,22 @@ async def _timeline_export_record(session: AsyncSession, event: Event) -> tuple[
 
 
 async def export_page(session: AsyncSession, *, owner_id: int, record_kind: str, limit: int = 50,
-                      cursor: str | None = None) -> TimelineExportPage:
+                      cursor: str | None = None, scope: Scope,
+                      multi_workspace_enabled: bool) -> TimelineExportPage:
     """Return a bounded fixed-cutoff event page with independently retained owner facts and citations."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if record_kind != "events" or not 1 <= limit <= 100:
         raise ValueError("Timeline export kind or limit is invalid")
-    if owner_id != 1 or await session.scalar(select(Owner.id).where(Owner.id == owner_id)) is None:
-        raise PermissionError("Timeline export requires the current owner")
+    if owner_id != _actor(scope):
+        raise PermissionError("Timeline export requires the workspace owner")
     if cursor is None:
         snapshot, position = datetime.now(UTC), None
     else:
-        snapshot, position_at, position_id = _decode_timeline_export_cursor(cursor, owner_id)
+        snapshot, position_at, position_id = _decode_timeline_export_cursor(cursor, owner_id, scope.workspace_id)
         position = (position_at, position_id)
-    count = await _timeline_export_count(session, snapshot)
-    statement = _timeline_export_statement(snapshot)
+    count = await _timeline_export_count(
+        session, snapshot, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    statement = _timeline_export_statement(snapshot, scope=scope)
     if position is not None:
         statement = statement.where(tuple_(Event.created_at, Event.id) > position)
     rows = list((await session.scalars(statement.order_by(Event.created_at, Event.id).limit(limit + 1)
@@ -221,7 +261,8 @@ async def export_page(session: AsyncSession, *, owner_id: int, record_kind: str,
     last_examined: tuple[datetime, UUID] | None = None
     for event in rows[:limit]:
         try:
-            item, participant_digest, evidence_digest, source_fences = await _timeline_export_record(session, event)
+            item, participant_digest, evidence_digest, source_fences = await _timeline_export_record(
+                session, event, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         except _TimelineExportIneligible:
             last_examined = (event.created_at, event.id)
             continue
@@ -238,7 +279,7 @@ async def export_page(session: AsyncSession, *, owner_id: int, record_kind: str,
             record_digest=hashlib.sha256(_timeline_export_json(item.model_dump(mode="json"))).hexdigest(),
             evidence_digest=evidence_digest, participant_digest=participant_digest, source_fences=source_fences,
         ))
-    next_cursor = (_encode_timeline_export_cursor(owner_id, snapshot, *last_examined)
+    next_cursor = (_encode_timeline_export_cursor(owner_id, scope.workspace_id, snapshot, *last_examined)
                    if more and last_examined is not None else None)
     payload_bytes = len(_timeline_export_json([item.model_dump(mode="json") for item in items]))
     return TimelineExportPage(owner_id=owner_id, record_kind="events", snapshot_at=snapshot,
@@ -248,23 +289,29 @@ async def export_page(session: AsyncSession, *, owner_id: int, record_kind: str,
 
 async def validate_export_fences(session: AsyncSession, *, owner_id: int, record_kind: str,
                                  snapshot_at: datetime, expected_snapshot_count: int,
-                                 fences: list[TimelineExportFence]) -> TimelineExportFenceValidation:
+                                 fences: list[TimelineExportFence], scope: Scope,
+                                 multi_workspace_enabled: bool) -> TimelineExportFenceValidation:
     """Re-read every event and child projection and reject source, revision or count drift."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if record_kind != "events" or len(fences) > 100 or expected_snapshot_count < 0:
         raise ValueError("Timeline export validation input is invalid")
-    if owner_id != 1 or await session.scalar(select(Owner.id).where(Owner.id == owner_id)) is None:
+    if owner_id != _actor(scope):
         return TimelineExportFenceValidation(valid=False, reason="owner_unavailable", observed_snapshot_count=0)
-    observed = await _timeline_export_count(session, snapshot_at)
+    observed = await _timeline_export_count(
+        session, snapshot_at, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if observed != expected_snapshot_count:
         return TimelineExportFenceValidation(valid=False, reason="snapshot_count_changed", observed_snapshot_count=observed)
     for fence in fences:
-        event = await session.scalar(select(Event).where(Event.id == fence.id).execution_options(populate_existing=True))
+        event = await session.scalar(select(Event).where(
+            Event.workspace_id == scope.workspace_id, Event.id == fence.id,
+        ).execution_options(populate_existing=True))
         if event is None or event.deleted_at is not None or (event.created_at, event.updated_at, event.revision) != (
             fence.created_at, fence.updated_at, fence.revision,
         ):
             return TimelineExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
         try:
-            item, participant_digest, evidence_digest, source_fences = await _timeline_export_record(session, event)
+            item, participant_digest, evidence_digest, source_fences = await _timeline_export_record(
+                session, event, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         except _TimelineExportIneligible:
             return TimelineExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
         record_digest = hashlib.sha256(_timeline_export_json(item.model_dump(mode="json"))).hexdigest()
@@ -273,9 +320,9 @@ async def validate_export_fences(session: AsyncSession, *, owner_id: int, record
                 or source_fences != fence.source_fences):
             return TimelineExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
         retained_sources = await sources.filter_export_eligible_sources(session, [
-            SourceExportFence(source_id=source_id, generation=generation)
+            SourceExportFence(source_id=source_id, workspace_id=scope.workspace_id, generation=generation)
             for source_id, generation in fence.source_fences
-        ])
+        ], scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         if set(retained_sources) != {source_id for source_id, _ in fence.source_fences}:
             return TimelineExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
     return TimelineExportFenceValidation(valid=True, reason="valid", observed_snapshot_count=observed)
@@ -347,19 +394,28 @@ def _cursor_decode(value: str | None, fingerprint: str) -> dict[str, Any]:
     return payload
 
 
-async def _event_read(session: AsyncSession, event: Event) -> EventRead:
+async def _event_read(
+    session: AsyncSession, event: Event, *, scope: Scope, multi_workspace_enabled: bool,
+) -> EventRead:
     """Build an owner DTO from canonical rows and currently valid exact evidence."""
     participants = list((await session.scalars(
-        select(EventParticipant).where(EventParticipant.event_id == event.id).order_by(EventParticipant.role, EventParticipant.entity_id)
+        select(EventParticipant).join(Event, Event.id == EventParticipant.event_id).where(
+            Event.workspace_id == scope.workspace_id, EventParticipant.event_id == event.id,
+        ).order_by(EventParticipant.role, EventParticipant.entity_id)
     )).all())
     evidence_rows = list((await session.scalars(
-        select(EventEvidence).where(EventEvidence.event_id == event.id).order_by(EventEvidence.id)
+        select(EventEvidence).where(
+            EventEvidence.workspace_id == scope.workspace_id, EventEvidence.event_id == event.id,
+        ).order_by(EventEvidence.id)
     )).all())
     evidence: list[dict[str, Any]] = []
     for item in evidence_rows:
         if item.document_version_id is None or item.chunk_id is None:
             continue
-        refs = await documents.read_evidence_refs(session, [(item.document_version_id, item.chunk_id)])
+        refs = await documents.read_evidence_refs(
+            session, [(item.document_version_id, item.chunk_id)], scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
         if not refs:
             continue
         ref = refs[0]
@@ -386,31 +442,47 @@ async def _event_read(session: AsyncSession, event: Event) -> EventRead:
     )
 
 
-async def get_event(session: AsyncSession, event_id: UUID) -> EventRead | None:
+async def get_event(
+    session: AsyncSession, event_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+) -> EventRead | None:
     """Read one visible event with detached participant and evidence projections."""
-    event = await session.scalar(select(Event).where(Event.id == event_id, Event.deleted_at.is_(None)))
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    event = await session.scalar(select(Event).where(
+        Event.id == event_id, Event.workspace_id == scope.workspace_id, Event.deleted_at.is_(None),
+    ))
     if event is None:
         return None
     if event.origin == "derived" and await session.scalar(select(EventEvidence.id).where(
+        EventEvidence.workspace_id == scope.workspace_id,
         EventEvidence.event_id == event.id, EventEvidence.document_version_id.is_not(None),
         EventEvidence.chunk_id.is_not(None),
     ).limit(1)) is None:
         return None
-    return await _event_read(session, event)
+    return await _event_read(session, event, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
 
 
-async def list_event_evidence(session: AsyncSession, event_id: UUID) -> list[dict[str, Any]] | None:
+async def list_event_evidence(
+    session: AsyncSession, event_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+) -> list[dict[str, Any]] | None:
     """Return exact live evidence references for a visible event, or None when absent."""
-    event = await session.scalar(select(Event.id).where(Event.id == event_id, Event.deleted_at.is_(None)))
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    event = await session.scalar(select(Event.id).where(
+        Event.id == event_id, Event.workspace_id == scope.workspace_id, Event.deleted_at.is_(None),
+    ))
     if event is None:
         return None
-    event_row = await session.get(Event, event_id)
+    event_row = await session.scalar(select(Event).where(
+        Event.id == event_id, Event.workspace_id == scope.workspace_id,
+    ))
     assert event_row is not None  # id was just selected above
-    result = await _event_read(session, event_row)
+    result = await _event_read(session, event_row, scope=scope,
+                               multi_workspace_enabled=multi_workspace_enabled)
     return result.evidence if result else None
 
 
-async def lock_brief_events(session: AsyncSession, event_ids: list[UUID]) -> set[UUID]:
+async def lock_brief_events(
+    session: AsyncSession, event_ids: list[UUID], *, scope: Scope, multi_workspace_enabled: bool,
+) -> set[UUID]:
     """Share-lock a bounded event set in canonical UUID order for Dashboard capture.
 
     Missing or deleted events are omitted; subsequent support reads decide
@@ -418,12 +490,15 @@ async def lock_brief_events(session: AsyncSession, event_ids: list[UUID]) -> set
     a prompt contains several timeline facts.
     """
     ids = sorted(set(event_ids), key=str)
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if len(ids) > 40:
         raise ValueError("Dashboard brief event lock set exceeds its fact limit")
     if not ids:
         return set()
     locked = await session.scalars(
-        select(Event.id).where(Event.id.in_(ids), Event.deleted_at.is_(None))
+        select(Event.id).where(
+            Event.workspace_id == scope.workspace_id, Event.id.in_(ids), Event.deleted_at.is_(None),
+        )
         .order_by(Event.id).with_for_update(read=True)
     )
     return set(locked)
@@ -431,7 +506,7 @@ async def lock_brief_events(session: AsyncSession, event_ids: list[UUID]) -> set
 
 async def brief_event_support(
     session: AsyncSession, event_id: UUID, *, expected_title: str | None,
-    expected_source_ids: list[str], lock_fact: bool = False,
+    expected_source_ids: list[str], lock_fact: bool = False, scope: Scope, multi_workspace_enabled: bool,
 ) -> BriefEventSupport:
     """Return complete exact evidence or actual evidence-free manual origin for a brief fact.
 
@@ -439,7 +514,10 @@ async def brief_event_support(
     event-row lock after it has acquired canonical source and document locks, so
     owner edits cannot race Dashboard model egress or final persistence.
     """
-    statement = select(Event).where(Event.id == event_id, Event.deleted_at.is_(None))
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    statement = select(Event).where(
+        Event.id == event_id, Event.workspace_id == scope.workspace_id, Event.deleted_at.is_(None),
+    )
     if lock_fact:
         statement = statement.with_for_update(read=True, of=Event)
     event = await session.scalar(statement.execution_options(populate_existing=True))
@@ -450,7 +528,7 @@ async def brief_event_support(
     if event is None or (expected_title is not None and event.title != expected_title):
         return unavailable
     evidence_rows = list((await session.scalars(select(EventEvidence).where(
-        EventEvidence.event_id == event.id,
+        EventEvidence.workspace_id == scope.workspace_id, EventEvidence.event_id == event.id,
     ).order_by(EventEvidence.id).limit(101))).all())
     if not evidence_rows:
         independent = event.origin == "manual" and not expected_source_ids
@@ -464,7 +542,9 @@ async def brief_event_support(
         return unavailable.model_copy(update={"origin": event.origin})
     pairs = [(row.document_version_id, row.chunk_id) for row in evidence_rows
              if row.document_version_id is not None and row.chunk_id is not None]  # None rows returned above
-    refs = await documents.read_evidence_refs(session, pairs)
+    refs = await documents.read_evidence_refs(
+        session, pairs, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     if len(refs) != len(pairs):
         return unavailable.model_copy(update={"origin": event.origin})
     support = [
@@ -485,7 +565,8 @@ async def brief_event_support(
 
 async def list_correlation_signals(
     session: AsyncSession, *, domain: str, from_at: datetime, to_at: datetime,
-    regions: list[str], source_ids: list[UUID], limit: int = 100,
+    regions: list[str], source_ids: list[UUID], limit: int = 100, scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> CorrelationSignalPage:
     """Project a bounded timed event slice into detached IDs after exact evidence checks.
 
@@ -504,15 +585,16 @@ async def list_correlation_signals(
         or any(not region or len(region) > 80 or region != region.strip() for region in regions)
     ):
         raise ValueError("Invalid bounded correlation projection scope")
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     selected_sources = set(source_ids)
     start, end = from_at.astimezone(UTC), to_at.astimezone(UTC)
     statement = select(Event).where(
-        Event.deleted_at.is_(None), Event.date_precision == "timed",
+        Event.workspace_id == scope.workspace_id, Event.deleted_at.is_(None), Event.date_precision == "timed",
         Event.started_at >= start, Event.started_at < end,
         Event.type == domain,
         Event.metadata_json["region"].as_string().in_(regions),
         Event.id.in_(select(EventEvidence.event_id).where(
-            EventEvidence.event_id == Event.id,
+            EventEvidence.workspace_id == scope.workspace_id, EventEvidence.event_id == Event.id,
             EventEvidence.document_version_id.is_not(None),
             EventEvidence.chunk_id.is_not(None),
         )),
@@ -521,7 +603,7 @@ async def list_correlation_signals(
         or_(
             Event.source_id.in_(selected_sources),
             Event.id.in_(select(EventEvidence.event_id).where(
-                EventEvidence.event_id == Event.id,
+                EventEvidence.workspace_id == scope.workspace_id, EventEvidence.event_id == Event.id,
                 EventEvidence.source_id.in_(selected_sources),
                 EventEvidence.document_version_id.is_not(None),
                 EventEvidence.chunk_id.is_not(None),
@@ -533,7 +615,8 @@ async def list_correlation_signals(
     for event in rows:
         if event.source_id is not None and event.source_id not in selected_sources:
             continue
-        current = await _event_read(session, event)
+        current = await _event_read(session, event, scope=scope,
+                                    multi_workspace_enabled=multi_workspace_enabled)
         if not current.evidence or (
             event.type in {"military", "escalation"} and not current.participants
         ):
@@ -543,7 +626,7 @@ async def list_correlation_signals(
             for item in current.evidence if item["source_id"] in selected_sources
         }
         evidence_rows = (await session.scalars(select(EventEvidence).where(
-            EventEvidence.event_id == event.id,
+            EventEvidence.workspace_id == scope.workspace_id, EventEvidence.event_id == event.id,
         ).order_by(EventEvidence.id))).all()
         exact_rows = [item for item in evidence_rows if item.source_id in selected_sources and (
             item.document_version_id, item.chunk_id
@@ -574,11 +657,13 @@ async def list_correlation_signals(
     return CorrelationSignalPage(items=signals[:limit], truncated=truncated)
 
 
-async def _list_partition(session: AsyncSession, query: TimelineQuery, partition: int, key: Any, limit: int) -> list[Event]:
+async def _list_partition(
+    session: AsyncSession, query: TimelineQuery, partition: int, key: Any, limit: int, *, scope: Scope,
+) -> list[Event]:
     """Read a stable occurrence partition with shared visibility and type filters applied."""
-    statement = select(Event).where(Event.deleted_at.is_(None)).where(
+    statement = select(Event).where(Event.workspace_id == scope.workspace_id, Event.deleted_at.is_(None)).where(
         (Event.origin == "manual") | Event.id.in_(select(EventEvidence.event_id).where(
-            EventEvidence.event_id == Event.id, EventEvidence.document_version_id.is_not(None),
+            EventEvidence.workspace_id == scope.workspace_id, EventEvidence.event_id == Event.id, EventEvidence.document_version_id.is_not(None),
             EventEvidence.chunk_id.is_not(None),
         ))
     )
@@ -624,22 +709,34 @@ async def _list_partition(session: AsyncSession, query: TimelineQuery, partition
     return list((await session.scalars(statement.limit(limit))).all())
 
 
-async def list_events(session: AsyncSession, *, limit: int = 50, cursor: str | None = None, source_id: UUID | None = None) -> EventPage:
+async def list_events(
+    session: AsyncSession, *, limit: int = 50, cursor: str | None = None, source_id: UUID | None = None,
+    scope: Scope, multi_workspace_enabled: bool,
+) -> EventPage:
     """Return bounded events with stable timed/date/unknown cursor partitions."""
     query = TimelineQuery(source_id=source_id)
-    return await _list_page(session, query, limit, cursor)
+    return await _list_page(session, query, limit, cursor, scope=scope,
+                             multi_workspace_enabled=multi_workspace_enabled)
 
 
-async def list_timeline(session: AsyncSession, query: TimelineQuery, *, limit: int = 50, cursor: str | None = None) -> TimelinePage:
+async def list_timeline(
+    session: AsyncSession, query: TimelineQuery, *, limit: int = 50, cursor: str | None = None,
+    scope: Scope, multi_workspace_enabled: bool,
+) -> TimelinePage:
     """Return timeline pages in timed, date-only, then unknown partition order."""
-    return await _list_page(session, query, limit, cursor)
+    return await _list_page(session, query, limit, cursor, scope=scope,
+                             multi_workspace_enabled=multi_workspace_enabled)
 
 
-async def _list_page(session: AsyncSession, query: TimelineQuery, limit: int, cursor: str | None) -> TimelinePage:
+async def _list_page(
+    session: AsyncSession, query: TimelineQuery, limit: int, cursor: str | None, *, scope: Scope,
+    multi_workspace_enabled: bool,
+) -> TimelinePage:
     """Apply the shared finite cursor algorithm and detached DTO projection."""
     if not 1 <= limit <= MAX_PAGE:
         raise ValueError("page size must be between 1 and 100")
-    filters = query.model_dump(mode="json")
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    filters = {**query.model_dump(mode="json"), "workspace_id": str(scope.workspace_id)}
     fingerprint = hashlib.sha256(json.dumps(filters, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     position = _cursor_decode(cursor, fingerprint)
     partition = int(position["p"])
@@ -650,7 +747,7 @@ async def _list_page(session: AsyncSession, query: TimelineQuery, limit: int, cu
         if query.precision == "timed" and partition != 0 or query.precision == "date" and partition != 1 or query.precision == "unknown" and partition != 2:
             rows = []
         else:
-            rows = await _list_partition(session, query, partition, key, limit - len(items) + 1)
+            rows = await _list_partition(session, query, partition, key, limit - len(items) + 1, scope=scope)
         room = limit - len(items)
         items.extend(rows[:room])
         if len(rows) > room:
@@ -663,20 +760,29 @@ async def _list_page(session: AsyncSession, query: TimelineQuery, limit: int, cu
         key = None
     if next_position is None and partition < 3 and len(items) == limit:
         next_position = {"v": 1, "f": fingerprint, "p": partition, "k": None}
-    return TimelinePage(items=[await _event_read(session, row) for row in items], next_cursor=_cursor_encode(next_position) if next_position else None)
+    return TimelinePage(items=[await _event_read(session, row, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled) for row in items],
+        next_cursor=_cursor_encode(next_position) if next_position else None)
 
 
-async def _evidence_rows(session: AsyncSession, pairs: list[tuple[UUID, UUID]], *, for_write: bool) -> list[Any]:
+async def _evidence_rows(
+    session: AsyncSession, pairs: list[tuple[UUID, UUID]], *, for_write: bool, scope: Scope,
+    multi_workspace_enabled: bool,
+) -> list[Any]:
     """Resolve exact version/chunk pairs through the documents owner boundary."""
     if not pairs:
         return []
-    refs = await documents.read_evidence_refs(session, pairs, for_write=for_write)
+    refs = await documents.read_evidence_refs(session, pairs, for_write=for_write, scope=scope,
+                                              multi_workspace_enabled=multi_workspace_enabled)
     if len(refs) != len(pairs):
         raise ValueError("event evidence is missing, inactive, or no longer authorized")
     return refs
 
 
-async def _read_evidence_closure(session: AsyncSession, pairs: list[tuple[UUID, UUID]]) -> list[Any]:
+async def _read_evidence_closure(
+    session: AsyncSession, pairs: list[tuple[UUID, UUID]], *, scope: Scope,
+    multi_workspace_enabled: bool,
+) -> list[Any]:
     """Read a unique event support closure of at most 200 pairs in owner-sized batches.
 
     A correction can combine 100 old and 100 replacement references; extraction
@@ -690,15 +796,26 @@ async def _read_evidence_closure(session: AsyncSession, pairs: list[tuple[UUID, 
     # Owner reads cap each request at 100; splitting preserves the full closure
     # without weakening that shared boundary or changing source lock ordering.
     for offset in range(0, len(pairs), 100):
-        refs.extend(await documents.read_evidence_refs(session, pairs[offset:offset + 100]))
+        refs.extend(await documents.read_evidence_refs(session, pairs[offset:offset + 100], scope=scope,
+                                                       multi_workspace_enabled=multi_workspace_enabled))
     return refs
 
 
-async def _set_participants(session: AsyncSession, event_id: UUID, values: list[Any], *, origin: str) -> None:
+async def _set_participants(
+    session: AsyncSession, event_id: UUID, values: list[Any], *, origin: str, scope: Scope,
+    multi_workspace_enabled: bool,
+) -> None:
     """Replace participant links after validating every canonical entity reference."""
-    await session.execute(delete(EventParticipant).where(EventParticipant.event_id == event_id))
+    await session.execute(delete(EventParticipant).where(
+        EventParticipant.event_id == event_id,
+        EventParticipant.event_id.in_(select(Event.id).where(
+            Event.workspace_id == scope.workspace_id, Event.id == event_id,
+        )),
+    ))
     entity_ids = sorted({item.entity_id for item in values}, key=str)
-    refs = await entities.get_entity_refs(session, entity_ids, for_write=True) if entity_ids else []
+    refs = await entities.get_entity_refs(
+        session, entity_ids, for_write=True, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    ) if entity_ids else []
     if len(refs) != len(entity_ids):
         raise ValueError("participant entity is missing or redirected")
     for item in values:
@@ -706,7 +823,9 @@ async def _set_participants(session: AsyncSession, event_id: UUID, values: list[
                                      metadata_json=item.metadata, origin=origin))
 
 
-async def _remove_unsupported_derived_participants(session: AsyncSession, event_id: UUID) -> None:
+async def _remove_unsupported_derived_participants(
+    session: AsyncSession, event_id: UUID, *, scope: Scope,
+) -> None:
     """Remove derived participant roles with no exact surviving event-evidence support.
 
     Evidence replacement may cascade its participant-support rows. Manual links
@@ -715,6 +834,9 @@ async def _remove_unsupported_derived_participants(session: AsyncSession, event_
     """
     unsupported_ids = list((await session.scalars(select(EventParticipant.id).where(
         EventParticipant.event_id == event_id,
+        EventParticipant.event_id.in_(select(Event.id).where(
+            Event.workspace_id == scope.workspace_id, Event.id == event_id,
+        )),
         EventParticipant.origin == "derived",
         ~EventParticipant.id.in_(select(ParticipantEvidence.participant_id)),
     ))).all())
@@ -722,20 +844,26 @@ async def _remove_unsupported_derived_participants(session: AsyncSession, event_
         await session.execute(delete(EventParticipant).where(EventParticipant.id.in_(unsupported_ids)))
 
 
-async def create_event(session: AsyncSession, payload: EventCreate, *, actor_id: int) -> EventRead:
+async def create_event(
+    session: AsyncSession, payload: EventCreate, *, scope: Scope,
+    multi_workspace_enabled: bool,
+) -> EventRead:
     """Create a manual event and flush its exact evidence, participants, and replay atomically.
 
     This caller-owned HTTP command commits through ``commit_with_replay``;
     reusable support helpers only flush and never commit.
     """
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
     pairs = list(payload.evidence)
-    refs = await _evidence_rows(session, pairs, for_write=bool(pairs))
+    refs = await _evidence_rows(session, pairs, for_write=bool(pairs), scope=scope,
+                                multi_workspace_enabled=multi_workspace_enabled)
     source_ids = sorted({ref.source_id for ref in refs}, key=str)
     if len(source_ids) > 1:
         raise ValueError("manual event evidence must belong to one source")
     # Resolve owner observation only at creation; derived occurrence is never inferred here.
     event = Event(
-        source_id=source_ids[0] if source_ids else None, type=payload.type, subtype=payload.subtype,
+        workspace_id=scope.workspace_id, source_id=source_ids[0] if source_ids else None,
+        type=payload.type, subtype=payload.subtype,
         title=payload.title, summary=payload.summary, importance_score=payload.importance_score,
         confidence=payload.confidence, metadata_json=payload.metadata, origin="manual",
         date_precision=payload.date_precision, started_at=payload.started_at, ended_at=payload.ended_at,
@@ -747,20 +875,26 @@ async def create_event(session: AsyncSession, payload: EventCreate, *, actor_id:
     await session.flush()
     for ref in refs:
         session.add(EventEvidence(
-            event_id=event.id, source_id=ref.source_id, document_id=ref.document_id,
+            workspace_id=scope.workspace_id, event_id=event.id, source_id=ref.source_id, document_id=ref.document_id,
             document_version_id=ref.document_version_id, chunk_id=ref.chunk_id,
             version_number=ref.version_number, observed_at=ref.observed_at,
             title_snapshot=ref.title, url_snapshot=ref.canonical_url,
             metadata_is_version_snapshot=ref.metadata_is_version_snapshot,
             evidence_metadata={},
         ))
-    await _set_participants(session, event.id, payload.participants, origin="manual")
-    await _schedule_temporal_event(session, event, ["created"])
-    await commit_with_replay(session, [make_timeline_change(event.id, event.revision)])
-    return await _event_read(session, event)
+    await _set_participants(session, event.id, payload.participants, origin="manual", scope=scope,
+                            multi_workspace_enabled=multi_workspace_enabled)
+    await _schedule_temporal_event(session, event, ["created"], scope=scope,
+                                   multi_workspace_enabled=multi_workspace_enabled)
+    await commit_with_replay(session, [make_timeline_change(event.id, event.revision, scope=scope)],
+                             scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
+    return await _event_read(session, event, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
 
 
-async def update_event(session: AsyncSession, event_id: UUID, payload: EventPatch, *, actor_id: int) -> EventRead | None:
+async def update_event(
+    session: AsyncSession, event_id: UUID, payload: EventPatch, *, scope: Scope,
+    multi_workspace_enabled: bool,
+) -> EventRead | None:
     """Apply a revision-fenced owner correction after locking its immutable support closure.
 
     Locks source, document, canonical participant and event rows in that order.
@@ -768,37 +902,44 @@ async def update_event(session: AsyncSession, event_id: UUID, payload: EventPatc
     mutation; the caller commits the correction, audit and replay atomically.
     Explicit null clears nullable fields, participant links, or evidence lists.
     """
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
     initial = (await session.execute(select(Event.revision, Event.origin, Event.deleted_at).where(
-        Event.id == event_id, Event.deleted_at.is_(None),
+        Event.workspace_id == scope.workspace_id, Event.id == event_id, Event.deleted_at.is_(None),
     ))).one_or_none()
     if initial is None:
         return None
     initial_evidence = list((await session.execute(select(
         EventEvidence.id, EventEvidence.source_id, EventEvidence.document_id,
         EventEvidence.document_version_id, EventEvidence.chunk_id,
-    ).where(EventEvidence.event_id == event_id).order_by(EventEvidence.id))).all())
+    ).where(EventEvidence.workspace_id == scope.workspace_id, EventEvidence.event_id == event_id).order_by(EventEvidence.id))).all())
     initial_participants = list((await session.execute(select(
         EventParticipant.id, EventParticipant.entity_id, EventParticipant.role, EventParticipant.origin,
-    ).where(EventParticipant.event_id == event_id).order_by(EventParticipant.id))).all())
+    ).where(EventParticipant.event_id == event_id,
+            EventParticipant.event_id.in_(select(Event.id).where(Event.workspace_id == scope.workspace_id))).order_by(EventParticipant.id))).all())
     fields = payload.model_fields_set
     supplied = payload.model_dump(exclude_unset=True, exclude={"expected_revision", "reason", "participants", "evidence"})
     old_pairs = [(row.document_version_id, row.chunk_id) for row in (await session.scalars(
-        select(EventEvidence).where(EventEvidence.event_id == event_id).order_by(EventEvidence.id)
+        select(EventEvidence).where(EventEvidence.workspace_id == scope.workspace_id,
+                                   EventEvidence.event_id == event_id).order_by(EventEvidence.id)
     )).all() if row.document_version_id is not None and row.chunk_id is not None]
     new_pairs = payload.evidence if "evidence" in fields else None
     all_pairs = list(dict.fromkeys([*old_pairs, *(new_pairs or [])]))
-    refs_before = await _read_evidence_closure(session, all_pairs)
+    refs_before = await _read_evidence_closure(session, all_pairs, scope=scope,
+                                               multi_workspace_enabled=multi_workspace_enabled)
     source_ids = sorted({item.source_id for item in refs_before}, key=str)
     from modules.sources import public as sources
     for source_id in source_ids:
-        if await sources.lock_source(session, source_id) is None:
+        if await sources.lock_source(session, source_id, scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=fence) is None:
             raise ValueError("event evidence source is unavailable")
     document_ids = sorted({item.document_id for item in refs_before}, key=str)
     # Old and replacement support can span 200 owners. Keep the global sorted
     # order across batches and retain every row lock in this same transaction.
     for offset in range(0, len(document_ids), 100):
-        await documents.lock_document_ids(session, document_ids[offset:offset + 100])
-    refs_after = await _read_evidence_closure(session, all_pairs)
+        await documents.lock_document_ids(session, document_ids[offset:offset + 100], scope=scope,
+                                          multi_workspace_enabled=multi_workspace_enabled)
+    refs_after = await _read_evidence_closure(session, all_pairs, scope=scope,
+                                              multi_workspace_enabled=multi_workspace_enabled)
     if refs_after != refs_before:
         raise ValueError("stale event evidence closure; retry the correction")
     participant_values = (payload.participants or []) if "participants" in fields else []
@@ -807,21 +948,25 @@ async def update_event(session: AsyncSession, event_id: UUID, payload: EventPatc
     if entity_ids:
         canonical_refs = []
         for offset in range(0, len(entity_ids), 100):
-            canonical_refs.extend(await entities.get_entity_refs(session, entity_ids[offset:offset + 100], for_write=True))
+            canonical_refs.extend(await entities.get_entity_refs(session, entity_ids[offset:offset + 100],
+                for_write=True, scope=scope, multi_workspace_enabled=multi_workspace_enabled))
         if [item.requested_id for item in canonical_refs] != entity_ids or any(
             item.canonical_id != item.requested_id for item in canonical_refs
         ):
             raise ValueError("participant entity is missing or redirected; retry the correction")
-    event = await session.scalar(select(Event).where(Event.id == event_id).with_for_update().execution_options(populate_existing=True))
+    event = await session.scalar(select(Event).where(Event.workspace_id == scope.workspace_id,
+        Event.id == event_id).with_for_update().execution_options(populate_existing=True))
     if event is None or event.deleted_at is not None:
         return None
     current_evidence = list((await session.execute(select(
         EventEvidence.id, EventEvidence.source_id, EventEvidence.document_id,
         EventEvidence.document_version_id, EventEvidence.chunk_id,
-    ).where(EventEvidence.event_id == event_id).order_by(EventEvidence.id))).all())
+    ).where(EventEvidence.workspace_id == scope.workspace_id,
+            EventEvidence.event_id == event_id).order_by(EventEvidence.id))).all())
     current_participants = list((await session.execute(select(
         EventParticipant.id, EventParticipant.entity_id, EventParticipant.role, EventParticipant.origin,
-    ).where(EventParticipant.event_id == event_id).order_by(EventParticipant.id))).all())
+    ).where(EventParticipant.event_id == event_id,
+            EventParticipant.event_id.in_(select(Event.id).where(Event.workspace_id == scope.workspace_id))).order_by(EventParticipant.id))).all())
     if (
         event.revision != initial.revision or event.origin != initial.origin
         or event.deleted_at != initial.deleted_at
@@ -858,26 +1003,29 @@ async def update_event(session: AsyncSession, event_id: UUID, payload: EventPatc
         valid_from=event.valid_from, valid_to=event.valid_to,
     )
     if "participants" in fields:
-        await _set_participants(session, event.id, participant_values, origin="manual")
+        await _set_participants(session, event.id, participant_values, origin="manual", scope=scope,
+                                multi_workspace_enabled=multi_workspace_enabled)
         changed["participants"] = [item.model_dump(mode="json") for item in participant_values]
         if event.origin == "derived":
             event.owner_fields = sorted(set(event.owner_fields) | {"participants"})
     if "evidence" in fields:
         evidence_pairs = payload.evidence or []
-        refs = await _evidence_rows(session, evidence_pairs, for_write=bool(evidence_pairs))
+        refs = await _evidence_rows(session, evidence_pairs, for_write=bool(evidence_pairs), scope=scope,
+                                    multi_workspace_enabled=multi_workspace_enabled)
         evidence_sources = {ref.source_id for ref in refs}
         if len(evidence_sources) > 1:
             raise ValueError("event evidence must belong to one source")
-        await session.execute(delete(EventEvidence).where(EventEvidence.event_id == event.id))
+        await session.execute(delete(EventEvidence).where(EventEvidence.workspace_id == scope.workspace_id,
+                                                          EventEvidence.event_id == event.id))
         for ref in refs:
-            session.add(EventEvidence(event_id=event.id, source_id=ref.source_id, document_id=ref.document_id,
+            session.add(EventEvidence(workspace_id=scope.workspace_id, event_id=event.id, source_id=ref.source_id, document_id=ref.document_id,
                 document_version_id=ref.document_version_id, chunk_id=ref.chunk_id,
                 version_number=ref.version_number, observed_at=ref.observed_at, title_snapshot=ref.title,
                 url_snapshot=ref.canonical_url, evidence_metadata={},
                 metadata_is_version_snapshot=ref.metadata_is_version_snapshot))
         event.source_id = next(iter(evidence_sources), None)
         if event.origin == "derived":
-            await _remove_unsupported_derived_participants(session, event.id)
+            await _remove_unsupported_derived_participants(session, event.id, scope=scope)
         changed["evidence"] = [f"{ref.document_version_id}:{ref.chunk_id}" for ref in refs]
         if event.origin == "derived":
             event.owner_fields = sorted(set(event.owner_fields) | {"evidence"})
@@ -885,11 +1033,13 @@ async def update_event(session: AsyncSession, event_id: UUID, payload: EventPatc
         raise ValueError("event correction contains no changes")
     event.revision += 1
     event.updated_at = datetime.now(UTC)
-    session.add(EventAudit(event_id=event.id, actor_id=actor_id, reason=payload.reason,
+    session.add(EventAudit(workspace_id=scope.workspace_id, event_id=event.id, actor_id=_actor(scope), reason=payload.reason,
         prior_revision=prior, resulting_revision=event.revision, changed_json=changed))
-    await _schedule_temporal_event(session, event, list(changed))
-    await commit_with_replay(session, [make_timeline_change(event.id, event.revision)])
-    return await _event_read(session, event)
+    await _schedule_temporal_event(session, event, list(changed), scope=scope,
+                                   multi_workspace_enabled=multi_workspace_enabled)
+    await commit_with_replay(session, [make_timeline_change(event.id, event.revision, scope=scope)],
+                             scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
+    return await _event_read(session, event, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
 
 
 def _normalize_optional_instant(value: Any) -> Any:
@@ -901,44 +1051,57 @@ def _normalize_optional_instant(value: Any) -> Any:
     return value
 
 
-async def delete_event(session: AsyncSession, event_id: UUID, *, expected_revision: int, reason: str, actor_id: int) -> bool:
+async def delete_event(
+    session: AsyncSession, event_id: UUID, *, expected_revision: int, reason: str,
+    scope: Scope, multi_workspace_enabled: bool,
+) -> bool:
     """Tombstone a revision-fenced event and suppress its exact derived proposal before replay commit."""
-    event = await session.scalar(select(Event).where(Event.id == event_id).with_for_update())
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    event = await session.scalar(select(Event).where(
+        Event.workspace_id == scope.workspace_id, Event.id == event_id,
+    ).with_for_update())
     if event is None or event.deleted_at is not None:
         return False
     if event.revision != expected_revision:
         raise ValueError("event revision is stale")
     if event.origin == "derived":
         supports = list((await session.scalars(select(EventEvidence).where(
-            EventEvidence.event_id == event.id, EventEvidence.document_version_id.is_not(None), EventEvidence.candidate_hash.is_not(None)
+            EventEvidence.workspace_id == scope.workspace_id, EventEvidence.event_id == event.id,
+            EventEvidence.document_version_id.is_not(None), EventEvidence.candidate_hash.is_not(None)
         ))).all())
         unique_supports = {(item.document_version_id, item.candidate_hash): item for item in supports}
         for item in unique_supports.values():
-            session.add(EventSuppression(document_id=item.document_id, document_version_id=item.document_version_id,
+            session.add(EventSuppression(workspace_id=scope.workspace_id, document_id=item.document_id, document_version_id=item.document_version_id,
                 source_id=item.source_id, source_generation=item.source_generation, candidate_hash=item.candidate_hash))
     prior = event.revision
     event.deleted_at = datetime.now(UTC)
     event.revision += 1
-    session.add(EventAudit(event_id=event.id, actor_id=actor_id, reason=reason,
+    session.add(EventAudit(workspace_id=scope.workspace_id, event_id=event.id, actor_id=_actor(scope), reason=reason,
         prior_revision=prior, resulting_revision=event.revision, changed_json={"deleted": True}))
-    await _schedule_temporal_event(session, event, ["deleted"], deleted=True)
-    await commit_with_replay(session, [make_timeline_change(event.id, event.revision, deleted=True)])
+    await _schedule_temporal_event(session, event, ["deleted"], deleted=True, scope=scope,
+                                   multi_workspace_enabled=multi_workspace_enabled)
+    await commit_with_replay(session, [make_timeline_change(event.id, event.revision, deleted=True, scope=scope)],
+                             scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
     return True
 
 
-async def schedule_extraction_work(session: AsyncSession, ready: Any, extractor_version: str, prompt_version: str) -> UUID:
+async def schedule_extraction_work(
+    session: AsyncSession, ready: Any, extractor_version: str, prompt_version: str, *, scope: Scope,
+    multi_workspace_enabled: bool,
+) -> UUID:
     """Idempotently create timeline extraction work and flush without committing the caller transaction."""
     from sqlalchemy.dialects.postgresql import insert
 
     from modules.timeline.models import TimelineExtractionWork
     statement = insert(TimelineExtractionWork).values(
-        document_id=ready.document_id, document_version_id=ready.document_version_id,
+        workspace_id=scope.workspace_id, document_id=ready.document_id, document_version_id=ready.document_version_id,
         source_id=ready.source_id, source_generation=ready.source_generation,
         extractor_version=extractor_version, prompt_version=prompt_version,
     ).on_conflict_do_nothing(constraint="uq_timeline_extraction_work_identity").returning(TimelineExtractionWork.id)
     work_id = await session.scalar(statement)
     if work_id is None:
         work_id = await session.scalar(select(TimelineExtractionWork.id).where(
+            TimelineExtractionWork.workspace_id == scope.workspace_id,
             TimelineExtractionWork.document_version_id == ready.document_version_id,
             TimelineExtractionWork.source_generation == ready.source_generation,
             TimelineExtractionWork.extractor_version == extractor_version,
@@ -950,9 +1113,11 @@ async def schedule_extraction_work(session: AsyncSession, ready: Any, extractor_
     # model extraction would only add duplicates. Terminal-block the work (an error code the
     # recheck/requeue paths ignore) so every scheduler, including recovery, skips it.
     from modules.sources import public as sources
-    detached = await sources.get_connector_source(session, ready.source_id)
+    detached = await sources.get_connector_source(session, ready.source_id, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled)
     if detached is not None and detached.provider == "github":
         work = await session.scalar(select(TimelineExtractionWork).where(
+            TimelineExtractionWork.workspace_id == scope.workspace_id,
             TimelineExtractionWork.id == work_id).with_for_update())
         if work is not None and work.status not in {"succeeded", "blocked"}:
             work.status, work.error_code = "blocked", "deterministic_provider"
@@ -963,13 +1128,16 @@ async def schedule_extraction_work(session: AsyncSession, ready: Any, extractor_
     return work_id
 
 
-async def claim_extraction_work(session: AsyncSession, work_id: UUID, lease_owner: str, now: datetime) -> Any | None:
+async def claim_extraction_work(
+    session: AsyncSession, work_id: UUID, lease_owner: str, now: datetime, *, scope: Scope,
+    multi_workspace_enabled: bool,
+) -> Any | None:
     """Claim due work or terminalize an exhausted expired lease; flush without committing."""
     from datetime import timedelta
 
     from modules.timeline.models import TimelineExtractionWork
     work = await session.scalar(select(TimelineExtractionWork).where(
-        TimelineExtractionWork.id == work_id,
+        TimelineExtractionWork.workspace_id == scope.workspace_id, TimelineExtractionWork.id == work_id,
         (TimelineExtractionWork.status == "pending") | (
             (TimelineExtractionWork.status == "running") & (TimelineExtractionWork.lease_expires_at <= now)
         ),
@@ -989,20 +1157,23 @@ async def claim_extraction_work(session: AsyncSession, work_id: UUID, lease_owne
     return work
 
 
-async def list_recoverable_extraction_work(session: AsyncSession, limit: int = 25) -> list[UUID]:
+async def list_recoverable_extraction_work(
+    session: AsyncSession, limit: int = 25, *, scope: Scope, multi_workspace_enabled: bool,
+) -> list[UUID]:
     """Return bounded due pending work and expired leases for claim or exhaustion handling."""
     from modules.timeline.models import TimelineExtractionWork
     if not 1 <= limit <= 100:
         raise ValueError("Timeline recovery page must be between 1 and 100")
     now = datetime.now(UTC)
     return list((await session.scalars(select(TimelineExtractionWork.id).where(
+        TimelineExtractionWork.workspace_id == scope.workspace_id,
         ((TimelineExtractionWork.status == "pending") & (TimelineExtractionWork.next_attempt_at <= now))
         | ((TimelineExtractionWork.status == "running") & (TimelineExtractionWork.lease_expires_at <= now)),
     ).order_by(TimelineExtractionWork.next_attempt_at, TimelineExtractionWork.id).limit(limit))).all())
 
 
 async def list_blocked_extraction_work(
-    session: AsyncSession, limit: int = 25,
+    session: AsyncSession, limit: int = 25, *, scope: Scope, multi_workspace_enabled: bool,
 ) -> list[tuple[UUID, UUID, int, str, str]]:
     """List a bounded page of retryable policy-blocked work and its dependency fence."""
     from modules.timeline.models import TimelineExtractionWork
@@ -1013,6 +1184,7 @@ async def list_blocked_extraction_work(
         TimelineExtractionWork.source_generation, TimelineExtractionWork.error_code,
         TimelineExtractionWork.dependency_fingerprint,
     ).where(
+        TimelineExtractionWork.workspace_id == scope.workspace_id,
         TimelineExtractionWork.status == "blocked",
         TimelineExtractionWork.error_code.in_(("ai_policy_denied", "structured_unsupported")),
         TimelineExtractionWork.dependency_fingerprint.is_not(None),
@@ -1023,13 +1195,15 @@ async def list_blocked_extraction_work(
 
 
 async def requeue_blocked_extraction_work(
-    session: AsyncSession, work_id: UUID, previous_fingerprint: str, current_fingerprint: str,
+    session: AsyncSession, work_id: UUID, previous_fingerprint: str, current_fingerprint: str, *,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> bool:
     """Requeue policy-blocked work only if its stored dependency fence still matches."""
     from modules.timeline.models import TimelineExtractionWork
     if previous_fingerprint == current_fingerprint:
         return False
     work = await session.scalar(select(TimelineExtractionWork).where(
+        TimelineExtractionWork.workspace_id == scope.workspace_id,
         TimelineExtractionWork.id == work_id, TimelineExtractionWork.status == "blocked",
         TimelineExtractionWork.dependency_fingerprint == previous_fingerprint,
     ).with_for_update())
@@ -1044,10 +1218,12 @@ async def requeue_blocked_extraction_work(
 
 async def defer_blocked_extraction_recheck(
     session: AsyncSession, work_id: UUID, fingerprint: str, *, minutes: int = 15,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> None:
     """Delay the next recheck only while a policy block retains the observed dependency fence."""
     from modules.timeline.models import TimelineExtractionWork
     work = await session.scalar(select(TimelineExtractionWork).where(
+        TimelineExtractionWork.workspace_id == scope.workspace_id,
         TimelineExtractionWork.id == work_id, TimelineExtractionWork.status == "blocked",
         TimelineExtractionWork.dependency_fingerprint == fingerprint,
     ).with_for_update())
@@ -1057,7 +1233,8 @@ async def defer_blocked_extraction_recheck(
 
 async def set_extraction_work_error(session: AsyncSession, work_id: UUID, lease_owner: str,
                                     error_code: str, *, blocked: bool = False,
-                                    dependency_fingerprint: str | None = None) -> None:
+                                    dependency_fingerprint: str | None = None, scope: Scope,
+                                    multi_workspace_enabled: bool) -> None:
     """Persist lease-owned retry state; blocked retries fence against the attempted dependencies.
 
     The caller retains the request's original dependency fingerprint when it
@@ -1068,6 +1245,7 @@ async def set_extraction_work_error(session: AsyncSession, work_id: UUID, lease_
     from modules.timeline.models import TimelineExtractionWork
     now = datetime.now(UTC)
     work = await session.scalar(select(TimelineExtractionWork).where(
+        TimelineExtractionWork.workspace_id == scope.workspace_id,
         TimelineExtractionWork.id == work_id, TimelineExtractionWork.status == "running",
         TimelineExtractionWork.lease_owner == lease_owner, TimelineExtractionWork.lease_expires_at > now,
     ).with_for_update())
@@ -1080,7 +1258,9 @@ async def set_extraction_work_error(session: AsyncSession, work_id: UUID, lease_
     work.lease_owner = work.lease_expires_at = None
 
 
-async def block_local_only_extraction_work(session: AsyncSession, work_id: UUID) -> None:
+async def block_local_only_extraction_work(
+    session: AsyncSession, work_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+) -> None:
     """Mark extraction ineligible while the source remains local-only, without a recheck fence.
 
     Configuration changes cannot authorize provider egress from a local-only
@@ -1088,7 +1268,7 @@ async def block_local_only_extraction_work(session: AsyncSession, work_id: UUID)
     """
     from modules.timeline.models import TimelineExtractionWork
     work = await session.scalar(select(TimelineExtractionWork).where(
-        TimelineExtractionWork.id == work_id,
+        TimelineExtractionWork.workspace_id == scope.workspace_id, TimelineExtractionWork.id == work_id,
     ).with_for_update())
     if work is not None and work.status != "succeeded":
         work.status, work.error_code = "blocked", "local_only_source"
@@ -1099,18 +1279,20 @@ async def block_local_only_extraction_work(session: AsyncSession, work_id: UUID)
 
 
 async def finish_extraction_work(session: AsyncSession, work_id: UUID, lease_owner: str,
-                                 proposals: list[dict[str, object]], model: str | None) -> bool:
+                                 proposals: list[dict[str, object]], model: str | None, *, scope: Scope,
+                                 multi_workspace_enabled: bool) -> bool:
     """Persist bounded structured proposals without raw source chunks under a live lease."""
     from modules.timeline.models import TimelineExtractionResult, TimelineExtractionWork
     now = datetime.now(UTC)
     work = await session.scalar(select(TimelineExtractionWork).where(
+        TimelineExtractionWork.workspace_id == scope.workspace_id,
         TimelineExtractionWork.id == work_id, TimelineExtractionWork.status == "running",
         TimelineExtractionWork.lease_owner == lease_owner, TimelineExtractionWork.lease_expires_at > now,
     ).with_for_update())
     if work is None:
         return False
     result = await session.scalar(select(TimelineExtractionResult).where(
-        TimelineExtractionResult.work_id == work.id
+        TimelineExtractionResult.work_id == work.id  # work was selected above under this workspace
     ).with_for_update())
     if result is None:
         session.add(TimelineExtractionResult(work_id=work.id, proposals_json=proposals, model=model))
@@ -1123,7 +1305,8 @@ async def finish_extraction_work(session: AsyncSession, work_id: UUID, lease_own
 
 async def publish_extracted_events(session: AsyncSession, *, work_id: UUID, lease_owner: str,
                                    ready: Any, proposals: Any, model: str | None,
-                                   membership_revisions: dict[UUID, int]) -> bool:
+                                   membership_revisions: dict[UUID, int], scope: Scope,
+                                   multi_workspace_enabled: bool) -> bool:
     """Publish bounded event proposals and exact evidence under caller-owned source/document fences.
 
     Resolves and locks participant entities after inference, then event rows.
@@ -1141,6 +1324,7 @@ async def publish_extracted_events(session: AsyncSession, *, work_id: UUID, leas
     from modules.timeline.extraction import EXTRACTOR_VERSION, PROMPT_VERSION
     from modules.timeline.models import TimelineExtractionWork
     work = await session.scalar(select(TimelineExtractionWork).where(
+        TimelineExtractionWork.workspace_id == scope.workspace_id,
         TimelineExtractionWork.id == work_id, TimelineExtractionWork.status == "running",
         TimelineExtractionWork.lease_owner == lease_owner,
         TimelineExtractionWork.lease_expires_at > datetime.now(UTC),
@@ -1151,17 +1335,19 @@ async def publish_extracted_events(session: AsyncSession, *, work_id: UUID, leas
     refs = await documents.read_extraction_evidence_refs(
         session, document_id=ready.document_id, document_version_id=ready.document_version_id,
         source_id=ready.source_id, source_generation=ready.source_generation, chunk_ids=chunk_ids,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     ) if chunk_ids else []
     if refs is None:
         raise ValueError("event evidence is no longer current")
-    evidence = await _read_evidence_closure(session, [(item.document_version_id, item.chunk_id) for item in refs])
+    evidence = await _read_evidence_closure(session, [(item.document_version_id, item.chunk_id) for item in refs],
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if len(evidence) != len(refs):
         raise ValueError("event evidence snapshot is unavailable")
     evidence_by_chunk = {item.chunk_id: item for item in evidence}
     memberships = []
     for offset in range(0, len(chunk_ids), 100):
         memberships.extend(await entities.list_version_membership_refs(session, ready.document_version_id,
-                                                                       chunk_ids[offset:offset + 100]))
+            chunk_ids[offset:offset + 100], scope=scope, multi_workspace_enabled=multi_workspace_enabled))
     membership_by_id = {item.membership_id: item for item in memberships}
     allowed = set(chunk_ids)
     normalized: list[tuple[Any, str, dict[tuple[UUID, str], Any]]] = []
@@ -1213,7 +1399,8 @@ async def publish_extracted_events(session: AsyncSession, *, work_id: UUID, leas
     # No graph lock is held during provider inference; acquire sorted canonical
     # entity revisions and then events only after a validated response exists.
     if entity_ids:
-        entity_refs = await entities.get_entity_refs(session, sorted(entity_ids, key=str), for_write=True)
+        entity_refs = await entities.get_entity_refs(session, sorted(entity_ids, key=str), for_write=True,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         if {item.canonical_id for item in entity_refs} != entity_ids:
             raise ValueError("participant canonical identity changed during extraction")
         expected_revisions = {
@@ -1225,10 +1412,12 @@ async def publish_extracted_events(session: AsyncSession, *, work_id: UUID, leas
             raise ValueError("participant canonical revision changed during extraction")
     candidates = [item[1] for item in normalized]
     existing = list((await session.scalars(select(Event).where(
-        Event.extraction_identity == identity, Event.candidate_hash.in_(candidates)
+        Event.workspace_id == scope.workspace_id, Event.extraction_identity == identity,
+        Event.candidate_hash.in_(candidates)
     ).order_by(Event.id).with_for_update())).all()) if candidates else []
     by_hash = {item.candidate_hash: item for item in existing}
     suppressed = set((await session.scalars(select(EventSuppression.candidate_hash).where(
+        EventSuppression.workspace_id == scope.workspace_id,
         EventSuppression.document_version_id == ready.document_version_id,
         EventSuppression.candidate_hash.in_(candidates),
     ))).all()) if candidates else set()
@@ -1240,7 +1429,7 @@ async def publish_extracted_events(session: AsyncSession, *, work_id: UUID, leas
         event = by_hash.get(candidate_hash)
         if event is None:
             event = Event(
-                source_id=ready.source_id, type=proposal.type, subtype=proposal.subtype,
+                workspace_id=scope.workspace_id, source_id=ready.source_id, type=proposal.type, subtype=proposal.subtype,
                 title=proposal.title, summary=proposal.summary, importance_score=proposal.importance_score,
                 confidence=proposal.confidence, metadata_json={}, origin="derived",
                 date_precision=proposal.date_precision,
@@ -1312,7 +1501,7 @@ async def publish_extracted_events(session: AsyncSession, *, work_id: UUID, leas
             for chunk_id in proposal.evidence_chunk_ids:
                 ref = evidence_by_chunk[chunk_id]
                 await session.execute(insert(EventEvidence).values(
-                    event_id=event.id, source_id=ref.source_id, document_id=ref.document_id,
+                    workspace_id=scope.workspace_id, event_id=event.id, source_id=ref.source_id, document_id=ref.document_id,
                     document_version_id=ref.document_version_id, chunk_id=ref.chunk_id,
                     version_number=ref.version_number, source_generation=ready.source_generation,
                     extraction_identity=identity, candidate_hash=candidate_hash,
@@ -1324,7 +1513,9 @@ async def publish_extracted_events(session: AsyncSession, *, work_id: UUID, leas
         if "participants" not in event.owner_fields and "evidence" not in event.owner_fields:
             for (entity_id, _role), participant in participants.items():
                 row = await session.scalar(select(EventParticipant).where(
-                    EventParticipant.event_id == event.id, EventParticipant.entity_id == entity_id,
+                    EventParticipant.event_id == event.id,
+                    EventParticipant.event_id.in_(select(Event.id).where(Event.workspace_id == scope.workspace_id)),
+                    EventParticipant.entity_id == entity_id,
                     EventParticipant.role == participant.role,
                 ).with_for_update())
                 if row is None:
@@ -1333,7 +1524,8 @@ async def publish_extracted_events(session: AsyncSession, *, work_id: UUID, leas
                     session.add(row)
                     await session.flush()
                 rows = (await session.scalars(select(EventEvidence).where(
-                    EventEvidence.event_id == event.id, EventEvidence.chunk_id.in_(participant.chunk_ids)
+                    EventEvidence.workspace_id == scope.workspace_id, EventEvidence.event_id == event.id,
+                    EventEvidence.chunk_id.in_(participant.chunk_ids)
                 ))).all()
                 for evidence_row in rows:
                     await session.execute(insert(ParticipantEvidence).values(
@@ -1348,27 +1540,33 @@ async def publish_extracted_events(session: AsyncSession, *, work_id: UUID, leas
                     "membership_ids": [str(item.membership_id) for item in proposal.participants]},
         "refresh_conflicts": refresh_conflicts.get(str(event.candidate_hash), []),
     } for event, proposal in published]
-    if not await finish_extraction_work(session, work_id, lease_owner, proposals_json, model):
+    if not await finish_extraction_work(session, work_id, lease_owner, proposals_json, model, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled):
         return False
     for event, _proposal in published:
-        await _schedule_temporal_event(session, event, ["extracted"])
+        await _schedule_temporal_event(session, event, ["extracted"], scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled)
     return True
 
 
 async def summarize_source_events(
-    session: AsyncSession, source_id: UUID, type_prefix: str
+    session: AsyncSession, source_id: UUID, type_prefix: str, *, scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> tuple[dict[str, int], datetime | None]:
     """Count visible derived events per type for one source and return the latest observation time.
 
     Applies the same visibility rule as timeline listing (not deleted, backed by exact evidence)
-    so counts never exceed what the Timeline can show. Read-only; no authorization of its own.
+    so counts never exceed what the Timeline can show. Read-only; admits the owner workspace scope before reading.
     """
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     escaped = type_prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     rows = (await session.execute(
         select(Event.type, func.count(), func.max(Event.observed_at)).where(
-            Event.source_id == source_id, Event.deleted_at.is_(None), Event.origin == "derived",
+            Event.workspace_id == scope.workspace_id, Event.source_id == source_id,
+            Event.deleted_at.is_(None), Event.origin == "derived",
             Event.type.like(f"{escaped}%", escape="\\"),
             Event.id.in_(select(EventEvidence.event_id).where(
+                EventEvidence.workspace_id == scope.workspace_id,
                 EventEvidence.document_version_id.is_not(None), EventEvidence.chunk_id.is_not(None))),
         ).group_by(Event.type)
     )).all()
@@ -1379,7 +1577,8 @@ async def publish_provider_event(
     session: AsyncSession, *, source_id: UUID, source_generation: int, document_id: UUID,
     document_version_id: UUID, chunk_ids: list[UUID], extraction_identity: str, record_key: str,
     event_type: str, title: str, summary: str | None, started_at: datetime, observed_at: datetime,
-    metadata: dict[str, Any], participants: list[tuple[UUID, str]],
+    metadata: dict[str, Any], participants: list[tuple[UUID, str]], scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> UUID | None:
     """Idempotently publish one deterministic provider event with exact current evidence.
 
@@ -1397,23 +1596,27 @@ async def publish_provider_event(
     refs = await documents.read_extraction_evidence_refs(
         session, document_id=document_id, document_version_id=document_version_id,
         source_id=source_id, source_generation=source_generation, chunk_ids=chunk_ids,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
     if refs is None:
         return None
-    evidence = await _read_evidence_closure(session, [(item.document_version_id, item.chunk_id) for item in refs])
+    evidence = await _read_evidence_closure(session, [(item.document_version_id, item.chunk_id) for item in refs],
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if len(evidence) != len(refs):
         return None
-    canonical = await entities.get_entity_refs(session, [entity_id for entity_id, _ in participants], for_write=True)
+    canonical = await entities.get_entity_refs(session, [entity_id for entity_id, _ in participants], for_write=True,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     candidate_hash = sha256(record_key.encode("utf-8")).hexdigest()
     event = await session.scalar(select(Event).where(
-        Event.extraction_identity == extraction_identity, Event.candidate_hash == candidate_hash,
+        Event.workspace_id == scope.workspace_id, Event.extraction_identity == extraction_identity,
+        Event.candidate_hash == candidate_hash,
     ).with_for_update())
     if event is not None and event.deleted_at is not None:
         return None
     changed = event is None
     if event is None:
         event = Event(
-            source_id=source_id, type=event_type, title=title[:300], summary=summary,
+            workspace_id=scope.workspace_id, source_id=source_id, type=event_type, title=title[:300], summary=summary,
             confidence=1.0, metadata_json=metadata, origin="derived", date_precision="timed",
             started_at=started_at, observed_at=observed_at, extraction_identity=extraction_identity,
             candidate_hash=candidate_hash,
@@ -1434,7 +1637,7 @@ async def publish_provider_event(
             changed = True
     for item in evidence:
         inserted = await session.execute(insert(EventEvidence).values(
-            event_id=event.id, source_id=item.source_id, document_id=item.document_id,
+            workspace_id=scope.workspace_id, event_id=event.id, source_id=item.source_id, document_id=item.document_id,
             document_version_id=item.document_version_id, chunk_id=item.chunk_id,
             version_number=item.version_number, source_generation=source_generation,
             extraction_identity=extraction_identity, candidate_hash=candidate_hash,
@@ -1444,7 +1647,8 @@ async def publish_provider_event(
         ).on_conflict_do_nothing(constraint="uq_timeline_event_evidence").returning(EventEvidence.id))
         changed = changed or inserted.first() is not None
     evidence_rows = list((await session.scalars(select(EventEvidence).where(
-        EventEvidence.event_id == event.id, EventEvidence.chunk_id.in_(chunk_ids),
+        EventEvidence.workspace_id == scope.workspace_id, EventEvidence.event_id == event.id,
+        EventEvidence.chunk_id.in_(chunk_ids),
         EventEvidence.document_version_id == document_version_id,
     ))).all())
     for ref, (_, role) in zip(canonical, participants):
@@ -1464,29 +1668,40 @@ async def publish_provider_event(
             ).on_conflict_do_nothing(constraint="uq_timeline_participant_evidence"))
     await session.flush()
     if changed:
-        await _schedule_temporal_event(session, event, ["extracted"])
+        await _schedule_temporal_event(session, event, ["extracted"], scope=scope,
+                                       multi_workspace_enabled=multi_workspace_enabled)
     return event.id
 
 
-async def _schedule_temporal_event(session: AsyncSession, event: Event, fields: list[str], *, deleted: bool = False) -> None:
+async def _schedule_temporal_event(
+    session: AsyncSession, event: Event, fields: list[str], *, deleted: bool = False,
+    scope: Scope, multi_workspace_enabled: bool,
+) -> None:
     """Flush desired temporal history with the canonical event transaction, preserving exact evidence IDs."""
     from modules.knowledge.temporal import public as temporal
-    rows = (await session.scalars(select(EventEvidence).where(EventEvidence.event_id == event.id))).all()
+    rows = (await session.scalars(select(EventEvidence).where(
+        EventEvidence.workspace_id == scope.workspace_id, EventEvidence.event_id == event.id,
+    ))).all()
     await temporal.schedule_canonical_change(
         session, kind="event", canonical_id=event.id, revision=event.revision, fields=fields,
         support=[(item.document_version_id, item.chunk_id) for item in rows
                  if item.document_version_id is not None and item.chunk_id is not None],
-        origin=event.origin, deleted=deleted,
+        origin=event.origin, deleted=deleted, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
 
 
-async def temporal_event_refs(session: AsyncSession, version_ids: list[UUID]) -> list[dict[str, Any]]:
+async def temporal_event_refs(
+    session: AsyncSession, version_ids: list[UUID], *, scope: Scope, multi_workspace_enabled: bool,
+) -> list[dict[str, Any]]:
     """Expose complete bounded canonical event/support identity for selected temporal versions; no private reads by callers."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if len(set(version_ids)) > 100:
         raise ValueError("Temporal event scope exceeds100 versions")
     rows = (await session.execute(select(Event, EventEvidence).join(
         EventEvidence, EventEvidence.event_id == Event.id,
-    ).where(EventEvidence.document_version_id.in_(version_ids), Event.deleted_at.is_(None),
+    ).where(Event.workspace_id == scope.workspace_id, EventEvidence.workspace_id == scope.workspace_id,
+            EventEvidence.document_version_id.in_(version_ids), Event.deleted_at.is_(None),
             ).order_by(Event.id, EventEvidence.id).limit(10001))).all()
     if len(rows) > 10000:
         raise ValueError("Temporal event support closure exceeds10000 references")
@@ -1496,29 +1711,131 @@ async def temporal_event_refs(session: AsyncSession, version_ids: list[UUID]) ->
             for event, evidence in rows]
 
 
-async def support_cleanup_ids(session: AsyncSession, *, document_id: UUID | None = None, source_id: UUID | None = None) -> tuple[list[UUID], list[UUID]]:
-    """Return participant entity and all affected event IDs for upfront lock closure.
+@dataclass(frozen=True)
+class TimelineSupportClosure:
+    """Workspace-qualified ID closure of timeline support for one Source or Document."""
+
+    source_id: UUID
+    document_id: UUID | None
+    event_ids: tuple[UUID, ...]
+    evidence_ids: tuple[UUID, ...]
+    participant_ids: tuple[UUID, ...]
+    participant_entity_ids: tuple[UUID, ...]
+    overflow: bool
+
+
+_CLEANUP_LIMIT = 10_000
+
+
+def _require_cleanup_fences(
+    actual: AccessFence, *, closure: TimelineSupportClosure, scope: Scope,
+    access_fence: AccessFence, source_fence: SourceFence,
+) -> None:
+    if (
+        actual != access_fence or source_fence.id != closure.source_id
+        or source_fence.workspace_id != scope.workspace_id
+    ):
+        raise HTTPException(status_code=409, detail="Cleanup authority changed")
+
+
+async def support_cleanup_ids(
+    session: AsyncSession, *, source_id: UUID, document_id: UUID | None = None,
+    scope: Scope, multi_workspace_enabled: bool,
+) -> TimelineSupportClosure:
+    """Discover (nonlocking, bounded, ID-only) the timeline support of one Source or Document.
 
     Cleanup uses one source-scoped collection invalidation, so event identities
     are not truncated to the realtime per-batch limit.
     """
-    statement = select(Event.id, EventParticipant.entity_id).join(EventEvidence, EventEvidence.event_id == Event.id).outerjoin(
-        EventParticipant, EventParticipant.event_id == Event.id)
-    if document_id is not None:
-        statement = statement.where(EventEvidence.document_id == document_id)
-    elif source_id is not None:
-        statement = statement.where(EventEvidence.source_id == source_id)
-    else:
-        raise ValueError("specify one cleanup scope")
-    rows = (await session.execute(statement)).all()
-    return sorted({entity_id for _, entity_id in rows if entity_id is not None}, key=str), sorted({event_id for event_id, _ in rows}, key=str)
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    workspace_id = scope.workspace_id
+    evidence_rows = list((await session.execute(
+        select(EventEvidence.id, EventEvidence.event_id).where(
+            EventEvidence.workspace_id == workspace_id,
+            EventEvidence.document_id == document_id if document_id is not None
+            else EventEvidence.source_id == source_id,
+        ).order_by(EventEvidence.id).limit(_CLEANUP_LIMIT + 1)
+    )).all())
+    overflow = len(evidence_rows) > _CLEANUP_LIMIT
+    evidence_rows = evidence_rows[:_CLEANUP_LIMIT]
+    evidence_ids = [row[0] for row in evidence_rows]
+    event_ids = sorted({row[1] for row in evidence_rows})
+    participant_ids: list[UUID] = []
+    entity_ids: set[UUID] = set()
+    if event_ids:
+        if evidence_ids:
+            participant_ids = list((await session.scalars(
+                select(EventParticipant.id)
+                .join(ParticipantEvidence, ParticipantEvidence.participant_id == EventParticipant.id)
+                .join(Event, Event.id == EventParticipant.event_id)
+                .where(
+                    Event.workspace_id == workspace_id,
+                    ParticipantEvidence.event_evidence_id.in_(evidence_ids),
+                ).distinct().order_by(EventParticipant.id).limit(_CLEANUP_LIMIT + 1)
+            )).all())
+            overflow |= len(participant_ids) > _CLEANUP_LIMIT
+            participant_ids = participant_ids[:_CLEANUP_LIMIT]
+        entity_rows = list((await session.scalars(
+            select(EventParticipant.entity_id)
+            .join(Event, Event.id == EventParticipant.event_id)
+            .where(Event.workspace_id == workspace_id, EventParticipant.event_id.in_(event_ids))
+            .distinct().order_by(EventParticipant.entity_id).limit(_CLEANUP_LIMIT + 1)
+        )).all())
+        overflow |= len(entity_rows) > _CLEANUP_LIMIT
+        entity_ids.update(entity_rows[:_CLEANUP_LIMIT])
+    return TimelineSupportClosure(
+        source_id=source_id, document_id=document_id, event_ids=tuple(event_ids),
+        evidence_ids=tuple(evidence_ids), participant_ids=tuple(sorted(participant_ids)),
+        participant_entity_ids=tuple(sorted(entity_ids)), overflow=overflow,
+    )
 
 
-async def correction_event_ids(session: AsyncSession, entity_ids: list[UUID]) -> list[UUID]:
-    """Capture bounded event rows containing participants before correction locks are taken."""
+async def prepare_support_cleanup_in_uow(
+    session: AsyncSession, closure: TimelineSupportClosure, *, scope: Scope,
+    multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+) -> None:
+    """Lock events, then evidence, then participants in UUID order; no mutation."""
+    _require_cleanup_fences(
+        await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled),
+        closure=closure, scope=scope, access_fence=access_fence, source_fence=source_fence,
+    )
+    if closure.overflow:
+        raise ValueError("Timeline support cleanup exceeds its atomic limit")
+    workspace_id = scope.workspace_id
+    if closure.event_ids:
+        await session.scalars(
+            select(Event.id).where(Event.workspace_id == workspace_id, Event.id.in_(closure.event_ids))
+            .order_by(Event.id).with_for_update()
+        )
+    if closure.evidence_ids:
+        await session.scalars(
+            select(EventEvidence.id).where(
+                EventEvidence.workspace_id == workspace_id, EventEvidence.id.in_(closure.evidence_ids),
+            ).order_by(EventEvidence.id).with_for_update()
+        )
+    if closure.participant_ids:
+        await session.scalars(
+            select(EventParticipant.id).where(
+                EventParticipant.event_id.in_(select(Event.id).where(Event.workspace_id == workspace_id)),
+                EventParticipant.id.in_(closure.participant_ids),
+            ).order_by(EventParticipant.id).with_for_update()
+        )
+
+
+async def correction_event_ids(
+    session: AsyncSession, entity_ids: list[UUID], *, scope: Scope,
+) -> list[UUID]:
+    """Capture bounded event rows containing participants before correction locks are taken.
+
+    The correction transaction already holds owner admission; this read adds only the role guard and workspace scope.
+    """
+    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
     if not entity_ids:
         return []
-    ids = list((await session.scalars(select(EventParticipant.event_id).where(
+    ids = list((await session.scalars(select(EventParticipant.event_id).join(
+        Event, Event.id == EventParticipant.event_id,
+    ).where(Event.workspace_id == scope.workspace_id,
         EventParticipant.entity_id.in_(entity_ids)
     ).distinct().order_by(EventParticipant.event_id).limit(201))).all())
     if len(ids) > 200:
@@ -1526,13 +1843,20 @@ async def correction_event_ids(session: AsyncSession, entity_ids: list[UUID]) ->
     return sorted(set(ids), key=str)
 
 
-async def lock_event_ids(session: AsyncSession, event_ids: list[UUID]) -> None:
+async def lock_event_ids(
+    session: AsyncSession, event_ids: list[UUID], *, scope: Scope, multi_workspace_enabled: bool,
+) -> None:
     """Acquire captured event row locks in global UUID order after entity and relationship locks."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if event_ids:
-        await session.execute(select(Event.id).where(Event.id.in_(sorted(set(event_ids), key=str))).order_by(Event.id).with_for_update())
+        await session.execute(select(Event.id).where(Event.workspace_id == scope.workspace_id,
+            Event.id.in_(sorted(set(event_ids), key=str))).order_by(Event.id).with_for_update())
 
 
-async def revise_corrected_events(session: AsyncSession, event_ids: list[UUID], *, entity_id: UUID) -> list[ReplayDraft]:
+async def revise_corrected_events(
+    session: AsyncSession, event_ids: list[UUID], *, entity_id: UUID, scope: Scope,
+    multi_workspace_enabled: bool,
+) -> list[ReplayDraft]:
     """Bump each changed event once and return one entity-scoped collection invalidation.
 
     Callers must supply only events whose participant representation changed
@@ -1540,17 +1864,25 @@ async def revise_corrected_events(session: AsyncSession, event_ids: list[UUID], 
     """
     changed_ids = sorted(set(event_ids), key=str)
     for event_id in changed_ids:
-        event = await session.get(Event, event_id)
+        event = await session.scalar(select(Event).where(
+            Event.workspace_id == scope.workspace_id, Event.id == event_id,
+        ))
         if event is not None:
             event.revision += 1
             event.updated_at = datetime.now(UTC)
-            await _schedule_temporal_event(session, event, ["participants"])
-    return [make_timeline_collection_change(entity_id=entity_id)] if changed_ids else []
+            await _schedule_temporal_event(session, event, ["participants"], scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled)
+    return [make_timeline_collection_change(entity_id=entity_id, scope=scope)] if changed_ids else []
 
 
-async def apply_entity_merge(session: AsyncSession, *, source_id: UUID, target_id: UUID, event_ids: list[UUID]) -> list[UUID]:
+async def apply_entity_merge(
+    session: AsyncSession, *, source_id: UUID, target_id: UUID, event_ids: list[UUID], scope: Scope,
+    multi_workspace_enabled: bool,
+) -> list[UUID]:
     """Transfer links through prelocked events, coalesce roles with manual origin winning, and return changed IDs."""
-    rows = list((await session.scalars(select(EventParticipant).where(
+    rows = list((await session.scalars(select(EventParticipant).join(
+        Event, Event.id == EventParticipant.event_id,
+    ).where(Event.workspace_id == scope.workspace_id,
         EventParticipant.event_id.in_(event_ids), EventParticipant.entity_id == source_id
     ).order_by(EventParticipant.event_id, EventParticipant.id).with_for_update())).all()) if event_ids else []
     changed_ids: set[UUID] = set()
@@ -1581,14 +1913,17 @@ async def apply_entity_merge(session: AsyncSession, *, source_id: UUID, target_i
 
 
 async def apply_entity_split(session: AsyncSession, *, source_id: UUID, target_id: UUID,
-                             event_ids: list[UUID], selected_pairs: set[tuple[UUID, UUID]]) -> list[UUID]:
+                             event_ids: list[UUID], selected_pairs: set[tuple[UUID, UUID]], scope: Scope,
+                             multi_workspace_enabled: bool) -> list[UUID]:
     """Move only selected exact-support derived links and return changed event IDs; retain manual links."""
-    rows = list((await session.scalars(select(EventParticipant).where(
+    rows = list((await session.scalars(select(EventParticipant).join(
+        Event, Event.id == EventParticipant.event_id,
+    ).where(Event.workspace_id == scope.workspace_id,
         EventParticipant.event_id.in_(event_ids), EventParticipant.entity_id == source_id,
         EventParticipant.origin == "derived",
     ).order_by(EventParticipant.event_id, EventParticipant.id).with_for_update())).all()) if event_ids else []
     evidence_by_id = {item.id: item for item in (await session.scalars(select(EventEvidence).where(
-        EventEvidence.event_id.in_(event_ids)
+        EventEvidence.workspace_id == scope.workspace_id, EventEvidence.event_id.in_(event_ids)
     ))).all()} if event_ids else {}
     changed_ids: set[UUID] = set()
     for row in rows:
@@ -1619,70 +1954,99 @@ async def apply_entity_split(session: AsyncSession, *, source_id: UUID, target_i
     return sorted(changed_ids, key=str)
 
 
-async def remove_entity_participants(session: AsyncSession, entity_ids: list[UUID]) -> list[UUID]:
+async def remove_entity_participants(
+    session: AsyncSession, entity_ids: list[UUID], *, scope: Scope, multi_workspace_enabled: bool,
+) -> list[UUID]:
     """Remove participant links for terminally deleted entities and return their affected event IDs."""
     if entity_ids:
-        event_ids = list((await session.scalars(select(EventParticipant.event_id).where(
+        event_ids = list((await session.scalars(select(EventParticipant.event_id).join(
+            Event, Event.id == EventParticipant.event_id,
+        ).where(Event.workspace_id == scope.workspace_id,
             EventParticipant.entity_id.in_(entity_ids),
         ).distinct())).all())
-        await session.execute(delete(EventParticipant).where(EventParticipant.entity_id.in_(entity_ids)))
+        await session.execute(delete(EventParticipant).where(
+            EventParticipant.entity_id.in_(entity_ids), EventParticipant.event_id.in_(select(Event.id).where(
+                Event.workspace_id == scope.workspace_id,
+            )),
+        ))
         return sorted(set(event_ids), key=str)
     return []
 
 
-async def remove_document_support(session: AsyncSession, *, document_id: UUID, source_id: UUID) -> list[ReplayDraft]:
-    """Remove one document's evidence and only participants whose exact support vanished; flush without commit."""
-    evidence_ids = list((await session.scalars(select(EventEvidence.id).where(EventEvidence.document_id == document_id))).all())
-    event_ids = list((await session.scalars(select(EventEvidence.event_id).where(EventEvidence.document_id == document_id))).all())
-    participant_ids = list((await session.scalars(select(EventParticipant.id).join(
-        ParticipantEvidence, ParticipantEvidence.participant_id == EventParticipant.id,
-    ).where(ParticipantEvidence.event_evidence_id.in_(evidence_ids)))).all()) if evidence_ids else []
-    await session.execute(delete(EventEvidence).where(EventEvidence.id.in_(evidence_ids)))
+async def remove_document_support(
+    session: AsyncSession, closure: TimelineSupportClosure, *, scope: Scope,
+    multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+) -> list[ReplayDraft]:
+    """Remove one document's prepared evidence and only participants whose exact support vanished."""
+    if closure.document_id is None:
+        raise ValueError("A document closure is required")
+    return await _remove_support(
+        session, closure, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence, source_fence=source_fence,
+    )
+
+
+async def remove_source_support(
+    session: AsyncSession, closure: TimelineSupportClosure, *, scope: Scope,
+    multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+) -> list[ReplayDraft]:
+    """Remove one Source's prepared support while preserving unrelated evidence and owner fields."""
+    if closure.document_id is not None:
+        raise ValueError("A Source-wide closure is required")
+    return await _remove_support(
+        session, closure, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence, source_fence=source_fence,
+    )
+
+
+async def _remove_support(
+    session: AsyncSession, closure: TimelineSupportClosure, *, scope: Scope,
+    multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+) -> list[ReplayDraft]:
+    """Held apply: rows were locked by ``prepare_support_cleanup_in_uow``; flush without commit."""
+    _require_cleanup_fences(
+        await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled),
+        closure=closure, scope=scope, access_fence=access_fence, source_fence=source_fence,
+    )
+    current = await support_cleanup_ids(
+        session, source_id=closure.source_id, document_id=closure.document_id,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if current.overflow or current != closure:
+        raise RuntimeError("cleanup closure changed")
+    workspace_id = scope.workspace_id
+    if closure.evidence_ids:
+        await session.execute(delete(EventEvidence).where(
+            EventEvidence.workspace_id == workspace_id, EventEvidence.id.in_(closure.evidence_ids),
+        ))
     orphaned = list((await session.scalars(select(EventParticipant.id).where(
-        EventParticipant.id.in_(participant_ids), EventParticipant.origin == "derived",
+        EventParticipant.id.in_(closure.participant_ids), EventParticipant.origin == "derived",
+        EventParticipant.event_id.in_(select(Event.id).where(Event.workspace_id == workspace_id)),
         ~EventParticipant.id.in_(select(ParticipantEvidence.participant_id)),
-    ))).all()) if participant_ids else []
+    ))).all()) if closure.participant_ids else []
     if orphaned:
-        await session.execute(delete(EventParticipant).where(EventParticipant.id.in_(orphaned)))
-    for event_id in sorted(set(event_ids), key=str):
-        event = await session.get(Event, event_id, with_for_update=True)
-        if event is not None:
+        await session.execute(delete(EventParticipant).where(
+            EventParticipant.id.in_(orphaned),
+            EventParticipant.event_id.in_(select(Event.id).where(Event.workspace_id == workspace_id)),
+        ))
+    for event_id in closure.event_ids:
+        event = await session.get(Event, event_id)
+        if event is not None and event.workspace_id == workspace_id:
             event.revision += 1
-    await _hide_unsupported(session, event_ids)
+    await _hide_unsupported(session, list(closure.event_ids), workspace_id=workspace_id)
     await session.flush()
-    return [make_timeline_collection_change(source_id=source_id)] if event_ids else []
+    return [make_timeline_collection_change(scope=scope, source_id=closure.source_id)] if closure.event_ids else []
 
 
-async def remove_source_support(session: AsyncSession, *, source_id: UUID) -> list[ReplayDraft]:
-    """Remove one source's support while preserving unrelated evidence and owner-authored event fields."""
-    event_ids = list((await session.scalars(select(EventEvidence.event_id).where(EventEvidence.source_id == source_id))).all())
-    evidence_ids = list((await session.scalars(select(EventEvidence.id).where(EventEvidence.source_id == source_id))).all())
-    participant_ids = list((await session.scalars(select(EventParticipant.id).join(
-        ParticipantEvidence, ParticipantEvidence.participant_id == EventParticipant.id,
-    ).where(ParticipantEvidence.event_evidence_id.in_(evidence_ids)))).all()) if evidence_ids else []
-    await session.execute(delete(EventEvidence).where(EventEvidence.id.in_(evidence_ids)))
-    orphaned = list((await session.scalars(select(EventParticipant.id).where(
-        EventParticipant.id.in_(participant_ids), EventParticipant.origin == "derived",
-        ~EventParticipant.id.in_(select(ParticipantEvidence.participant_id)),
-    ))).all()) if participant_ids else []
-    if orphaned:
-        await session.execute(delete(EventParticipant).where(EventParticipant.id.in_(orphaned)))
-    for event_id in sorted(set(event_ids), key=str):
-        event = await session.get(Event, event_id, with_for_update=True)
-        if event is not None:
-            event.revision += 1
-    await _hide_unsupported(session, event_ids)
-    await session.flush()
-    return [make_timeline_collection_change(source_id=source_id)] if event_ids else []
-
-
-async def _hide_unsupported(session: AsyncSession, event_ids: list[UUID]) -> None:
+async def _hide_unsupported(session: AsyncSession, event_ids: list[UUID], *, workspace_id: UUID) -> None:
     """Hide unsupported derived events and scrub every extracted field not explicitly owner-corrected."""
     for event_id in sorted(set(event_ids), key=str):
-        event = await session.get(Event, event_id, with_for_update=True)
-        if event is None or event.origin != "derived":
+        event = await session.get(Event, event_id)
+        if event is None or event.workspace_id != workspace_id or event.origin != "derived":
             continue
-        remaining = await session.scalar(select(EventEvidence.id).where(EventEvidence.event_id == event_id).limit(1))
+        remaining = await session.scalar(select(EventEvidence.id).where(
+            EventEvidence.workspace_id == workspace_id, EventEvidence.event_id == event_id,
+        ).limit(1))
         if remaining is None:
             owners = set(event.owner_fields)
             event.title = event.title if "title" in owners else "[unsupported derived event]"
@@ -1744,6 +2108,7 @@ async def _hide_unsupported(session: AsyncSession, event_ids: list[UUID]) -> Non
 
 async def list_changed_events_after(
     session: AsyncSession, position: tuple[datetime, UUID] | None, limit: int = 100,
+    *, scope: Scope, multi_workspace_enabled: bool,
 ) -> list[tuple[datetime, UUID, str, dict[str, Any] | None]]:
     """Read-only cursor page of timeline events by ``(updated_at, id)`` for the automations sweep.
 
@@ -1751,7 +2116,8 @@ async def list_changed_events_after(
     carries type, source id and importance only (no title or summary). Soft-deleted events stay in
     the page with a None payload so the cursor advances past them without offering them.
     """
-    stmt = select(Event)
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    stmt = select(Event).where(Event.workspace_id == scope.workspace_id)
     if position is not None:
         stmt = stmt.where(tuple_(Event.updated_at, Event.id) > tuple_(*position))
     rows = (await session.scalars(stmt.order_by(Event.updated_at, Event.id).limit(limit))).all()

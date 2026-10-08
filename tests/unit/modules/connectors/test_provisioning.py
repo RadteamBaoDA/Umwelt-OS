@@ -9,6 +9,7 @@ Covers:
 - Token refresh and OAuth token cipher validation (_validate_expiring_token, _token_cipher, _open_token_cipher, refresh_github_grant)
 """
 
+import copy
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -17,6 +18,7 @@ import pytest
 from cryptography.fernet import Fernet
 
 from core.config import Settings
+from core.workspaces.schemas import AccessFence, WorkspaceContext
 from modules.connectors.credentials import (
     CredentialEncryptionUnavailable,
     decrypt_credential_input,
@@ -52,6 +54,32 @@ from modules.connectors.provisioning import (
 from modules.connectors.public import NativeCredentialSnapshot
 from modules.sources.schemas import SourceFence
 
+WORKSPACE_ID = uuid4()
+SCOPE = WorkspaceContext(user_id=7, workspace_id=WORKSPACE_ID, role="owner", membership_revision=3)
+ACCESS = AccessFence(WORKSPACE_ID, 7, 3, 5)
+FLAG = {"scope": SCOPE, "multi_workspace_enabled": False}
+
+
+def _identity() -> dict[str, object]:
+    """Durable operation principal/epoch keys that a retained-effect envelope must carry."""
+    return {
+        "workspace_id": str(WORKSPACE_ID), "actor_user_id": 7, "membership_revision": 3,
+        "workspace_configuration_revision": 5,
+    }
+
+
+def _fence(source_id=None, generation: int = 1, status: str = "active") -> SourceFence:
+    return SourceFence(
+        id=source_id or uuid4(), workspace_id=WORKSPACE_ID, generation=generation, status=status, local_only=False,
+    )
+
+
+@pytest.fixture(autouse=True)
+def _admitted_access():
+    """Owner admission is covered by scope tests; these exercise provisioning state transitions."""
+    with patch("modules.connectors.provisioning._connector_access", AsyncMock(return_value=ACCESS)):
+        yield
+
 
 @pytest.fixture
 def fernet_key() -> str:
@@ -62,12 +90,7 @@ def fernet_key() -> str:
 @pytest.fixture
 def mock_source_fence() -> SourceFence:
     """Create a sample active SourceFence."""
-    return SourceFence(
-        id=uuid4(),
-        generation=1,
-        status="active",
-        local_only=False,
-    )
+    return _fence()
 
 
 class TestCredentialMaskingAndRedaction:
@@ -75,11 +98,11 @@ class TestCredentialMaskingAndRedaction:
 
     def test_connector_observation_none_source(self) -> None:
         """Connector observation returns None when source fence is None."""
-        assert _connector_observation(None, None, {}) is None
+        assert _connector_observation(None, None, {}, ACCESS) is None
 
     def test_connector_observation_unsaved_defaults(self, mock_source_fence: SourceFence) -> None:
         """Connector observation returns default saved_not_active values for revision zero without row."""
-        obs = _connector_observation(mock_source_fence, None, {})
+        obs = _connector_observation(mock_source_fence, None, {}, ACCESS)
         assert obs is not None
         assert obs.desired_revision == 0
         assert obs.applied_revision == 0
@@ -108,7 +131,7 @@ class TestCredentialMaskingAndRedaction:
         )
         slots = {"collector": cred}
 
-        obs = _connector_observation(mock_source_fence, row, slots)
+        obs = _connector_observation(mock_source_fence, row, slots, ACCESS)
         assert obs is not None
         assert obs.desired_revision == 2
         assert obs.applied_revision == 2
@@ -141,7 +164,7 @@ class TestCredentialMaskingAndRedaction:
         )
         slots = {"collector": cred}
 
-        obs = _connector_observation(mock_source_fence, row, slots)
+        obs = _connector_observation(mock_source_fence, row, slots, ACCESS)
         assert obs is not None
         assert obs.state == "reconciliation_required"
         assert obs.error_code == "credential_operation_pending"
@@ -152,20 +175,30 @@ class TestCredentialMaskingAndRedaction:
         """Acknowledging a dispatched credential operation removes input_ciphertext from the envelope."""
         source_id = uuid4()
         operation_id = uuid4()
+        envelope = {
+            **_identity(),
+            "id": str(operation_id),
+            "kind": "create",
+            "state": "dispatched",
+            "revision": 2,
+            "source_generation": 1,
+            "input_ciphertext": "super-secret-ciphertext",
+        }
         cred = ConnectorManagedCredential(
             source_id=source_id,
             slot="collector",
             operation_id=operation_id,
+            operation_revision=2,
+            source_generation=1,
             state="dispatching",
-            operation_envelope={
-                "id": str(operation_id),
-                "state": "dispatched",
-                "input_ciphertext": "super-secret-ciphertext",
-            },
+            operation_envelope=dict(envelope),
         )
+        desired = ConnectorProvisioning(source_id=source_id, source_generation=1, desired_revision=2)
         session = AsyncMock()
 
-        with patch("modules.connectors.provisioning.lock_connector", return_value=(MagicMock(), MagicMock(), {"collector": cred})):
+        with patch("modules.connectors.provisioning._read_retained_connector_rows",
+                   return_value=(_fence(source_id), desired, {"collector": cred})), \
+             patch("modules.settings.public.module_is_enabled", AsyncMock(return_value=True)):
             result = await complete_credential_operation(
                 session,
                 source_id=source_id,
@@ -173,6 +206,9 @@ class TestCredentialMaskingAndRedaction:
                 operation_id=operation_id,
                 credential_id="n8n-cred-id",
                 binding={"auth": "ok"},
+                original_operation=envelope,
+                access_fence=ACCESS,
+                **FLAG,
             )
 
         assert result is True
@@ -203,8 +239,9 @@ class TestCredentialMaskingAndRedaction:
         session = AsyncMock()
         session.scalar = AsyncMock(side_effect=[native, grant])
 
-        with patch("modules.connectors.provisioning.github_grant_has_active_peer", return_value=True):
-            await clear_retired_source_credentials(session, source_id)
+        with patch("modules.connectors.provisioning._read_scoped_source", return_value=MagicMock()), \
+             patch("modules.connectors.provisioning.github_grant_has_active_peer", return_value=True):
+            await clear_retired_source_credentials(session, source_id, **FLAG)
 
         assert native.encrypted_token is None
         assert native.token_fingerprint is None
@@ -218,14 +255,21 @@ class TestCredentialMaskingAndRedaction:
     async def test_finish_deleted_source_grant_revoke_clears_ciphertext(self) -> None:
         """finish_deleted_source_grant_revoke always removes ciphertext regardless of remote revoke outcome."""
         source_id = uuid4()
+        grant_operation_id = uuid4()
         grant = GithubOAuthGrant(
             source_id=source_id,
             encrypted_tokens="retained-tokens",
+            operation_id=grant_operation_id,
+            token_revision=3,
         )
         session = AsyncMock()
         session.scalar = AsyncMock(return_value=grant)
 
-        await finish_deleted_source_grant_revoke(session, source_id, "provider_revoked")
+        with patch("modules.connectors.provisioning._read_scoped_source", return_value=MagicMock()):
+            await finish_deleted_source_grant_revoke(
+                session, source_id, "provider_revoked", access_fence=ACCESS,
+                grant_operation_id=grant_operation_id, token_revision=3, **FLAG,
+            )
         assert grant.encrypted_tokens is None
         assert grant.error_code == "provider_revoked"
         session.flush.assert_awaited_once()
@@ -317,6 +361,8 @@ class TestSecretStorageAndEncryption:
         )
 
         snapshot = NativeCredentialSnapshot(
+            access_fence=ACCESS,
+            workspace_id=WORKSPACE_ID,
             source_id=source_id,
             operation_id=operation_id,
             source_generation=1,
@@ -363,6 +409,8 @@ class TestSecretStorageAndEncryption:
     def test_decrypt_native_token_not_ready_raises(self, fernet_key: str) -> None:
         """Decrypting a native credential snapshot whose state is not ready raises CredentialEncryptionUnavailable."""
         snapshot = NativeCredentialSnapshot(
+            access_fence=ACCESS,
+            workspace_id=WORKSPACE_ID,
             source_id=uuid4(),
             operation_id=uuid4(),
             source_generation=1,
@@ -387,8 +435,9 @@ class TestConnectorLifecycleStateTransitions:
         session = AsyncMock()
         session.add = MagicMock()
 
-        with patch("modules.connectors.provisioning.lock_connector", return_value=(MagicMock(), None, {})):
-            row = await save_desired(session, source_id, source_generation=1, expected_revision=0, configuration={"url": "https://example.com"})
+        with patch("modules.connectors.provisioning.sources.lock_source", return_value=_fence(source_id)), \
+             patch("modules.connectors.provisioning._lock_connector_rows", return_value=(_fence(source_id), None, {})):
+            row = await save_desired(session, source_id, source_generation=1, expected_revision=0, configuration={"url": "https://example.com"}, **FLAG)
 
         assert row is not None
         assert row.source_id == source_id
@@ -411,8 +460,9 @@ class TestConnectorLifecycleStateTransitions:
         )
         session = AsyncMock()
 
-        with patch("modules.connectors.provisioning.lock_connector", return_value=(MagicMock(), existing, {})):
-            row = await save_desired(session, source_id, source_generation=1, expected_revision=1, configuration={})
+        with patch("modules.connectors.provisioning.sources.lock_source", return_value=_fence(source_id)), \
+             patch("modules.connectors.provisioning._lock_connector_rows", return_value=(_fence(source_id), existing, {})):
+            row = await save_desired(session, source_id, source_generation=1, expected_revision=1, configuration={}, **FLAG)
 
         assert row is None
 
@@ -430,8 +480,9 @@ class TestConnectorLifecycleStateTransitions:
         )
         session = AsyncMock()
 
-        with patch("modules.connectors.provisioning.lock_connector", return_value=(MagicMock(), existing, {})):
-            row = await save_desired(session, source_id, source_generation=1, expected_revision=1, configuration={"url": "https://new.example.com"})
+        with patch("modules.connectors.provisioning.sources.lock_source", return_value=_fence(source_id)), \
+             patch("modules.connectors.provisioning._lock_connector_rows", return_value=(_fence(source_id), existing, {})):
+            row = await save_desired(session, source_id, source_generation=1, expected_revision=1, configuration={"url": "https://new.example.com"}, **FLAG)
 
         assert row is not None
         assert row.desired_revision == 2
@@ -446,7 +497,7 @@ class TestConnectorLifecycleStateTransitions:
         """begin_enable transitions connector to provisioning state and returns an operation_id."""
         source_id = uuid4()
         activation_id = uuid4()
-        source = SourceFence(id=source_id, generation=1, status="active", local_only=False)
+        source = _fence(source_id)
         row = ConnectorProvisioning(
             source_id=source_id,
             source_generation=1,
@@ -457,7 +508,9 @@ class TestConnectorLifecycleStateTransitions:
         )
         session = AsyncMock()
 
-        with patch("modules.connectors.provisioning.lock_connector", return_value=(source, row, {})):
+        with patch("modules.connectors.provisioning.lock_connector", return_value=(source, row, {})), \
+             patch("modules.connectors.provisioning._read_connector_rows", return_value=(source, row, {})), \
+             patch("modules.connectors.provisioning._operation_matches", AsyncMock(return_value=True)):
             op_id = await begin_enable(
                 session,
                 source_id=source_id,
@@ -467,6 +520,7 @@ class TestConnectorLifecycleStateTransitions:
                 workflow_name="Test Workflow",
                 body={"nodes": []},
                 activation_id=activation_id,
+                **FLAG,
             )
 
         assert op_id is not None
@@ -479,7 +533,7 @@ class TestConnectorLifecycleStateTransitions:
     async def test_begin_enable_fence_mismatch_returns_none(self) -> None:
         """begin_enable rejects requests when source generation or revision does not match."""
         source_id = uuid4()
-        source = SourceFence(id=source_id, generation=2, status="active", local_only=False)  # Gen 2 vs Gen 1
+        source = _fence(source_id, generation=2)  # Gen 2 vs Gen 1
         row = ConnectorProvisioning(
             source_id=source_id,
             source_generation=1,
@@ -487,7 +541,8 @@ class TestConnectorLifecycleStateTransitions:
         )
         session = AsyncMock()
 
-        with patch("modules.connectors.provisioning.lock_connector", return_value=(source, row, {})):
+        with patch("modules.connectors.provisioning.lock_connector", return_value=(source, row, {})), \
+             patch("modules.connectors.provisioning._read_connector_rows", return_value=(source, row, {})):
             op_id = await begin_enable(
                 session,
                 source_id=source_id,
@@ -497,6 +552,7 @@ class TestConnectorLifecycleStateTransitions:
                 workflow_name="wf",
                 body={},
                 activation_id=uuid4(),
+                **FLAG,
             )
 
         assert op_id is None
@@ -515,7 +571,7 @@ class TestConnectorLifecycleStateTransitions:
         session = AsyncMock()
 
         with patch("modules.connectors.provisioning.lock_connector", return_value=(MagicMock(), row, {})):
-            result = await reject_activation(session, source_id, revision=3, error_code="config_invalid")
+            result = await reject_activation(session, source_id, revision=3, error_code="config_invalid", **FLAG)
 
         assert result is True
         assert row.desired_enabled is False
@@ -528,8 +584,9 @@ class TestConnectorLifecycleStateTransitions:
         source_id = uuid4()
         operation_id = uuid4()
         step_id = str(uuid4())
-        source = SourceFence(id=source_id, generation=1, status="active", local_only=False)
+        source = _fence(source_id)
         op = {
+            **_identity(),
             "id": str(operation_id),
             "kind": "enable",
             "source_generation": 1,
@@ -552,23 +609,28 @@ class TestConnectorLifecycleStateTransitions:
         )
         session = AsyncMock()
 
-        with patch("modules.connectors.provisioning.activation_status", return_value=row), \
-             patch("modules.connectors.provisioning.lock_connector", return_value=(source, row, {})), \
-             patch("modules.connectors.provisioning.capture_connector_observation", return_value=None), \
-             patch("modules.connectors.provisioning.commit_connector_observation", return_value=None):
+        with patch("modules.connectors.provisioning.lock_retained_connector_effect", return_value=None), \
+             patch("modules.connectors.provisioning._read_retained_connector_rows", return_value=(source, row, {})), \
+             patch("modules.connectors.provisioning.commit_retained_connector_effect", new_callable=AsyncMock), \
+             patch("modules.settings.public.module_is_enabled", AsyncMock(return_value=True)):
 
             # Claim step
-            claimed = await claim_workflow_step(session, source_id)
+            claimed = await claim_workflow_step(
+                session, source_id, original_operation=copy.deepcopy(op), access_fence=ACCESS, **FLAG,
+            )
             assert claimed is not None
             assert row.workflow_operation["step"]["state"] == "dispatched"
 
-            # Acknowledge step activate -> transitions row to active
+            # Acknowledge step activate -> transitions row to active (CAS against the dispatched snapshot)
             acked = await acknowledge_workflow_step(
                 session,
                 source_id,
                 operation_id,
                 step_id,
                 workflow_id="wf-activated-1",
+                original_operation=copy.deepcopy(claimed),
+                access_fence=ACCESS,
+                **FLAG,
             )
             assert acked is True
             assert row.state == "active"
@@ -579,7 +641,7 @@ class TestConnectorLifecycleStateTransitions:
     async def test_fence_source_collection_archived_wipes_and_disables(self) -> None:
         """Fencing an archived source collection disables it and triggers credential purging."""
         source_id = uuid4()
-        source = SourceFence(id=source_id, generation=3, status="archived", local_only=False)
+        source = _fence(source_id, generation=3, status="archived")
         row = ConnectorProvisioning(
             source_id=source_id,
             source_generation=2,
@@ -588,15 +650,15 @@ class TestConnectorLifecycleStateTransitions:
         )
         session = AsyncMock()
 
-        with patch("modules.connectors.provisioning.lock_connector", return_value=(source, row, {})), \
+        with patch("modules.connectors.provisioning._lock_connector_rows", return_value=(source, row, {})), \
              patch("modules.connectors.provisioning.clear_retired_source_credentials", new_callable=AsyncMock) as mock_clear:
-            result = await fence_source_collection(session, source)
+            result = await fence_source_collection(session, source, **FLAG)
 
         assert result is True
         assert row.source_generation == 3
         assert row.desired_enabled is False
         assert row.state == "disabled"
-        mock_clear.assert_awaited_once_with(session, source_id)
+        mock_clear.assert_awaited_once_with(session, source_id, **FLAG)
 
 
 class TestTokenRefreshAndOAuthCiphers:

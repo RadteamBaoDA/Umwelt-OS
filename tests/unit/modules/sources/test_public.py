@@ -7,9 +7,21 @@ from uuid import UUID, uuid4
 import pytest
 
 from core.tools.schemas import ToolDestination
+from core.workspaces.schemas import AccessFence, WorkspaceContext
 from modules.sources import public
 from modules.sources.models import Source
 from modules.sources.schemas import SourcePatch
+
+WORKSPACE_ID = uuid4()
+SCOPE = WorkspaceContext(user_id=7, workspace_id=WORKSPACE_ID, role="owner", membership_revision=3)
+FENCE = AccessFence(WORKSPACE_ID, 7, 3, 5)
+
+
+@pytest.fixture(autouse=True)
+def _admitted_scope():
+    """Owner admission/locking is covered by scope tests; these exercise Source behaviour only."""
+    with patch("modules.sources.public.workspaces.read_access_fence", AsyncMock(return_value=FENCE)),             patch("modules.sources.public.workspaces.lock_access_fence", AsyncMock(return_value=FENCE)):
+        yield
 
 
 def _make_source(
@@ -27,6 +39,7 @@ def _make_source(
     now = datetime.now(UTC)
     return Source(
         id=source_id or uuid4(),
+        workspace_id=WORKSPACE_ID,
         type=source_type,
         name=name,
         provider=provider,
@@ -48,7 +61,7 @@ class TestLockSourceFunctions:
         session = AsyncMock()
         session.scalar.return_value = src
 
-        fence = await public.lock_source(session, src.id)
+        fence = await public.lock_source(session, src.id, scope=SCOPE, multi_workspace_enabled=False)
         assert fence is not None
         assert fence.id == src.id
         assert fence.status == "active"
@@ -60,7 +73,7 @@ class TestLockSourceFunctions:
         session = AsyncMock()
         session.scalar.return_value = None
 
-        fence = await public.lock_source(session, uuid4())
+        fence = await public.lock_source(session, uuid4(), scope=SCOPE, multi_workspace_enabled=False)
         assert fence is None
 
     @pytest.mark.asyncio
@@ -69,7 +82,7 @@ class TestLockSourceFunctions:
         session = AsyncMock()
         session.scalar.return_value = src
 
-        fence = await public.get_source_fence(session, src.id)
+        fence = await public.get_source_fence(session, src.id, scope=SCOPE, multi_workspace_enabled=False)
         assert fence is not None
         assert fence.status == "paused"
         assert fence.generation == 3
@@ -79,7 +92,7 @@ class TestLockSourceFunctions:
         session = AsyncMock()
         session.scalar.return_value = None
 
-        fence = await public.get_source_fence(session, uuid4())
+        fence = await public.get_source_fence(session, uuid4(), scope=SCOPE, multi_workspace_enabled=False)
         assert fence is None
 
     @pytest.mark.asyncio
@@ -89,7 +102,7 @@ class TestLockSourceFunctions:
         session.scalar.return_value = src
 
         # Should complete without error
-        await public.lock_source_for_document(session, src.id)
+        await public.lock_source_for_document(session, src.id, scope=SCOPE, multi_workspace_enabled=False)
 
     @pytest.mark.asyncio
     async def test_lock_source_for_document_not_found_raises(self) -> None:
@@ -97,7 +110,7 @@ class TestLockSourceFunctions:
         session.scalar.return_value = None
 
         with pytest.raises(LookupError, match="Source not found"):
-            await public.lock_source_for_document(session, uuid4())
+            await public.lock_source_for_document(session, uuid4(), scope=SCOPE, multi_workspace_enabled=False)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("status", ["paused", "archived"])
@@ -107,7 +120,7 @@ class TestLockSourceFunctions:
         session.scalar.return_value = src
 
         with pytest.raises(ValueError, match="Cannot add documents to an inactive source"):
-            await public.lock_source_for_document(session, src.id)
+            await public.lock_source_for_document(session, src.id, scope=SCOPE, multi_workspace_enabled=False)
 
 
 class TestSourceConnectorAndConfiguration:
@@ -121,7 +134,7 @@ class TestSourceConnectorAndConfiguration:
         session = AsyncMock()
         session.scalar.return_value = src
 
-        cs = await public.get_connector_source(session, src.id)
+        cs = await public.get_connector_source(session, src.id, scope=SCOPE, multi_workspace_enabled=False)
         assert cs is not None
         assert cs.id == src.id
         assert cs.configuration["url"] == "https://example.com"
@@ -136,7 +149,7 @@ class TestSourceConnectorAndConfiguration:
         session = AsyncMock()
         session.scalar.return_value = None
 
-        assert await public.get_connector_source(session, uuid4()) is None
+        assert await public.get_connector_source(session, uuid4(), scope=SCOPE, multi_workspace_enabled=False) is None
 
     @pytest.mark.asyncio
     async def test_set_connector_configuration_success(self) -> None:
@@ -146,7 +159,7 @@ class TestSourceConnectorAndConfiguration:
 
         new_config = {"feed_url": "https://news.org/feed.xml"}
         updated = await public.set_connector_configuration(
-            session, src.id, expected_generation=1, configuration=new_config
+            session, src.id, expected_generation=1, configuration=new_config, scope=SCOPE, multi_workspace_enabled=False
         )
         assert updated is not None
         assert updated.generation == 2
@@ -161,7 +174,7 @@ class TestSourceConnectorAndConfiguration:
         session.scalar.return_value = src
 
         updated = await public.set_connector_configuration(
-            session, src.id, expected_generation=1, configuration={"url": "abc"}
+            session, src.id, expected_generation=1, configuration={"url": "abc"}, scope=SCOPE, multi_workspace_enabled=False
         )
         assert updated is None
         assert src.generation == 2
@@ -174,13 +187,13 @@ class TestSourceConnectorAndConfiguration:
 
         # Fails without allow_paused=True
         updated = await public.set_connector_configuration(
-            session, src.id, expected_generation=1, configuration={"a": 1}, allow_paused=False
+            session, src.id, expected_generation=1, configuration={"a": 1}, allow_paused=False, scope=SCOPE, multi_workspace_enabled=False
         )
         assert updated is None
 
         # Succeeds with allow_paused=True
         updated_allowed = await public.set_connector_configuration(
-            session, src.id, expected_generation=1, configuration={"a": 1}, allow_paused=True
+            session, src.id, expected_generation=1, configuration={"a": 1}, allow_paused=True, scope=SCOPE, multi_workspace_enabled=False
         )
         assert updated_allowed is not None
         assert updated_allowed.generation == 2
@@ -192,7 +205,7 @@ class TestSourceConnectorAndConfiguration:
         session.scalar.return_value = src
 
         updated = await public.set_connector_configuration(
-            session, src.id, expected_generation=1, configuration={"a": 1}, allow_paused=True
+            session, src.id, expected_generation=1, configuration={"a": 1}, allow_paused=True, scope=SCOPE, multi_workspace_enabled=False
         )
         assert updated is None
 
@@ -207,7 +220,7 @@ class TestSourceSyncAndProcessingState:
         session = AsyncMock()
         session.scalar.return_value = src
 
-        result = await public.record_collection_started(session, src.id, 1, now)
+        result = await public.record_collection_started(session, src.id, 1, now, scope=SCOPE, multi_workspace_enabled=False)
         assert result is True
         assert src.last_sync_at == now
         assert src.collected_at == now
@@ -220,10 +233,10 @@ class TestSourceSyncAndProcessingState:
         session.scalar.return_value = src
 
         # Status is paused
-        assert await public.record_collection_started(session, src.id, 2, now) is False
+        assert await public.record_collection_started(session, src.id, 2, now, scope=SCOPE, multi_workspace_enabled=False) is False
         # Generation is 2, expected 1
         src.status = "active"
-        assert await public.record_collection_started(session, src.id, 1, now) is False
+        assert await public.record_collection_started(session, src.id, 1, now, scope=SCOPE, multi_workspace_enabled=False) is False
 
     @pytest.mark.asyncio
     async def test_record_collection_result_success(self) -> None:
@@ -234,7 +247,7 @@ class TestSourceSyncAndProcessingState:
         session = AsyncMock()
         session.scalar.return_value = src
 
-        ok = await public.record_collection_result(session, src.id, 1, now, error_code=None)
+        ok = await public.record_collection_result(session, src.id, 1, now, error_code=None, scope=SCOPE, multi_workspace_enabled=False)
         assert ok is True
         assert src.last_success_at == now
         assert src.last_error_code is None
@@ -249,7 +262,7 @@ class TestSourceSyncAndProcessingState:
         session.scalar.return_value = src
 
         ok = await public.record_collection_result(
-            session, src.id, 1, now, error_code=None, no_changes=True
+            session, src.id, 1, now, error_code=None, no_changes=True, scope=SCOPE, multi_workspace_enabled=False
         )
         assert ok is True
         assert src.last_sync_at == now
@@ -264,7 +277,7 @@ class TestSourceSyncAndProcessingState:
         session.scalar.return_value = src
 
         ok = await public.record_collection_result(
-            session, src.id, 1, now, error_code="rate_limit_exceeded"
+            session, src.id, 1, now, error_code="rate_limit_exceeded", scope=SCOPE, multi_workspace_enabled=False
         )
         assert ok is True
         assert src.collection_error_code == "rate_limit_exceeded"
@@ -280,7 +293,7 @@ class TestSourceSyncAndProcessingState:
 
         # Success
         assert (
-            await public.record_processing_result(session, src.id, 1, now, error_code=None) is True
+            await public.record_processing_result(session, src.id, 1, now, error_code=None, scope=SCOPE, multi_workspace_enabled=False) is True
         )
         assert src.last_success_at == now
         assert src.processing_error_code is None
@@ -288,7 +301,7 @@ class TestSourceSyncAndProcessingState:
         # Failure
         assert (
             await public.record_processing_result(
-                session, src.id, 1, now, error_code="parse_failure"
+                session, src.id, 1, now, error_code="parse_failure", scope=SCOPE, multi_workspace_enabled=False
             )
             is True
         )
@@ -308,7 +321,7 @@ class TestSourceLifecycleMutations:
 
         with patch("modules.sources.public.commit_with_replay", new_callable=AsyncMock):
             updated = await public.update_source(
-                session, src, SourcePatch(name="New Name")
+                session, src, SourcePatch(name="New Name"), scope=SCOPE, multi_workspace_enabled=False
             )
         assert updated is not None
         assert updated.name == "New Name"
@@ -324,7 +337,7 @@ class TestSourceLifecycleMutations:
             patch("modules.sources.public._fence_connector_source", new_callable=AsyncMock),
             patch("modules.sources.public.commit_with_replay", new_callable=AsyncMock),
         ):
-            updated = await public.update_source(session, src, SourcePatch(status="paused"))
+            updated = await public.update_source(session, src, SourcePatch(status="paused"), scope=SCOPE, multi_workspace_enabled=False)
         assert updated is not None
         assert updated.status == "paused"
         assert updated.generation == 2
@@ -337,7 +350,7 @@ class TestSourceLifecycleMutations:
         session.scalar.return_value = src
 
         with pytest.raises(ValueError, match="Archived sources cannot be reactivated"):
-            await public.update_source(session, src, SourcePatch(status="active"))
+            await public.update_source(session, src, SourcePatch(status="active"), scope=SCOPE, multi_workspace_enabled=False)
 
     @pytest.mark.asyncio
     async def test_pause_source_for_connector(self) -> None:
@@ -346,7 +359,7 @@ class TestSourceLifecycleMutations:
         session.scalar.return_value = src
 
         with patch("modules.sources.public._fence_connector_source", new_callable=AsyncMock):
-            cs = await public.pause_source_for_connector(session, src.id)
+            cs = await public.pause_source_for_connector(session, src.id, scope=SCOPE, multi_workspace_enabled=False)
         assert cs is not None
         assert cs.status == "paused"
         assert cs.generation == 3
@@ -363,7 +376,7 @@ class TestSourceLifecycleMutations:
             patch("modules.sources.public._fence_connector_source", new_callable=AsyncMock),
             patch("modules.sources.public.commit_with_replay", new_callable=AsyncMock),
         ):
-            archived = await public.archive_source(session, src.id)
+            archived = await public.archive_source(session, src.id, scope=SCOPE, multi_workspace_enabled=False)
         assert archived is not None
         assert archived.status == "archived"
         assert archived.generation == 2
@@ -385,14 +398,14 @@ class TestSourceFiltersAndProjections:
 
         # Reject more than 32 IDs
         with pytest.raises(ValueError, match="At most 32 distinct source IDs"):
-            await public.get_gadget_sources(session, tuple(uuid4() for _ in range(33)))
+            await public.get_gadget_sources(session, tuple(uuid4() for _ in range(33)), scope=SCOPE, multi_workspace_enabled=False)
 
         # Reject duplicate IDs
         with pytest.raises(ValueError, match="At most 32 distinct source IDs"):
-            await public.get_gadget_sources(session, (id1, id1))
+            await public.get_gadget_sources(session, (id1, id1), scope=SCOPE, multi_workspace_enabled=False)
 
         # Empty request returns empty
-        assert await public.get_gadget_sources(session, ()) == ()
+        assert await public.get_gadget_sources(session, (), scope=SCOPE, multi_workspace_enabled=False) == ()
 
         # Ordered result
         row1 = Row(id1, "Source 1", "rss", None, "active", 1, False)
@@ -403,7 +416,7 @@ class TestSourceFiltersAndProjections:
         session.execute.return_value = mock_result
 
         # Caller requested (id1, id2): order must match request
-        results = await public.get_gadget_sources(session, (id1, id2))
+        results = await public.get_gadget_sources(session, (id1, id2), scope=SCOPE, multi_workspace_enabled=False)
         assert len(results) == 2
         assert results[0].id == id1
         assert results[0].name == "Source 1"
@@ -414,31 +427,31 @@ class TestSourceFiltersAndProjections:
     async def test_list_active_gadget_sources_limits(self) -> None:
         session = AsyncMock()
         with pytest.raises(ValueError, match="Active source projection limit"):
-            await public.list_active_gadget_sources(session, limit=0)
+            await public.list_active_gadget_sources(session, limit=0, scope=SCOPE, multi_workspace_enabled=False)
         with pytest.raises(ValueError, match="Active source projection limit"):
-            await public.list_active_gadget_sources(session, limit=33)
+            await public.list_active_gadget_sources(session, limit=33, scope=SCOPE, multi_workspace_enabled=False)
 
     @pytest.mark.asyncio
     async def test_list_gadget_sources_limits(self) -> None:
         session = AsyncMock()
         with pytest.raises(ValueError, match="Source selection page limit"):
-            await public.list_gadget_sources(session, limit=0)
+            await public.list_gadget_sources(session, limit=0, scope=SCOPE, multi_workspace_enabled=False)
         with pytest.raises(ValueError, match="Source selection page limit"):
-            await public.list_gadget_sources(session, limit=101)
+            await public.list_gadget_sources(session, limit=101, scope=SCOPE, multi_workspace_enabled=False)
 
     @pytest.mark.asyncio
     async def test_list_tool_sources_limits(self) -> None:
         session = AsyncMock()
         with pytest.raises(ValueError, match="Source tool page size is outside"):
-            await public.list_tool_sources(session, limit=0, cursor=None, source_ids=frozenset())
+            await public.list_tool_sources(session, limit=0, cursor=None, source_ids=frozenset(), scope=SCOPE, multi_workspace_enabled=False)
         with pytest.raises(ValueError, match="Source tool page size is outside"):
-            await public.list_tool_sources(session, limit=101, cursor=None, source_ids=frozenset())
+            await public.list_tool_sources(session, limit=101, cursor=None, source_ids=frozenset(), scope=SCOPE, multi_workspace_enabled=False)
 
     @pytest.mark.asyncio
     async def test_list_tool_sources_empty_ids_without_owner_all(self) -> None:
         session = AsyncMock()
         page = await public.list_tool_sources(
-            session, limit=10, cursor=None, source_ids=frozenset(), owner_all=False
+            session, limit=10, cursor=None, source_ids=frozenset(), owner_all=False, scope=SCOPE, multi_workspace_enabled=False
         )
         assert page.items == ()
         assert page.next_cursor is None
@@ -456,7 +469,7 @@ class TestSourceFiltersAndProjections:
 
         # 1. Not in scope and owner_all=False -> None
         res = await public.get_tool_source(
-            session, source_id, source_ids=frozenset(), owner_all=False
+            session, source_id, source_ids=frozenset(), owner_all=False, scope=SCOPE, multi_workspace_enabled=False
         )
         assert res is None
 
@@ -471,7 +484,7 @@ class TestSourceFiltersAndProjections:
             source_id,
             source_ids=frozenset([source_id]),
             owner_all=False,
-            destination=ToolDestination.REMOTE,
+            destination=ToolDestination.REMOTE, scope=SCOPE, multi_workspace_enabled=False
         )
         assert res_remote is None
 
@@ -481,7 +494,7 @@ class TestSourceFiltersAndProjections:
             source_id,
             source_ids=frozenset([source_id]),
             owner_all=False,
-            destination=ToolDestination.LOCAL,
+            destination=ToolDestination.LOCAL, scope=SCOPE, multi_workspace_enabled=False
         )
         assert res_local is not None
         assert res_local.id == source_id

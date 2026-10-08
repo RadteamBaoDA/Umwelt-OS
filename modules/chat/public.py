@@ -14,6 +14,7 @@ from urllib.parse import urlsplit as _urlsplit
 from urllib.parse import urlunsplit as _urlunsplit
 from uuid import UUID
 
+from fastapi import HTTPException
 from pydantic import BaseModel
 from sqlalchemy import ColumnElement
 from sqlalchemy import func as _func
@@ -24,6 +25,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.models import Owner as _Owner
 from core.telemetry import RunMeta as _RunMeta
+from core.workspaces import public as _workspaces
+from core.workspaces.schemas import InternalJobScope, WorkspaceContext
 from modules.chat.citations import (
     INSUFFICIENT_EVIDENCE_MESSAGE,
     ensure_grounded_answer,
@@ -201,8 +204,12 @@ async def delete_conversation(
         return False
 
     from modules.agents.public import purge_conversation_actions
+    from modules.chat.scope import multi_workspace_enabled, owner_default_scope
 
-    await purge_conversation_actions(session, conversation_id, owner_id)
+    await purge_conversation_actions(
+        session, conversation_id, scope=await owner_default_scope(session, owner_id),
+        multi_workspace_enabled=multi_workspace_enabled(),
+    )
     await session.delete(conversation)
     return True
 
@@ -256,12 +263,15 @@ async def resolve_gadget_context(session: AsyncSession, context: dict[str, _Any]
     if len({item.document_id for item in selections}) != len(selections):
         raise HTTPException(status_code=422, detail="Selection contains duplicate documents")
 
+    from modules.chat.scope import owner_scope_kwargs
+
+    scope_kw = await owner_scope_kwargs(session)
     sources: list[UUID] = []
     refs: list[dict[str, str]] = []
     selection_fences: list[GadgetDocumentSelectionFence] = []
     for item in selections:
         projection = await documents_public.get_news_document_projection(
-            session, item.document_id,
+            session, item.document_id, **scope_kw,
         )
         if (
             projection is None or projection.source_id != item.source_id
@@ -278,13 +288,15 @@ async def resolve_gadget_context(session: AsyncSession, context: dict[str, _Any]
             local_only=projection.local_only,
             scope_discriminator=projection.scope_discriminator,
         )
-        if not await documents_public.validate_gadget_document_selection_fences(session, (fence,)):
+        if not await documents_public.validate_gadget_document_selection_fences(
+            session, (fence,), **scope_kw,
+        ):
             raise HTTPException(status_code=409, detail="A selected document source scope is stale")
         selection_fences.append(fence)
         if item.chunk_id is not None:
             chunks = await documents_public.read_chat_evidence_chunks(
                 session, [(item.document_version_id, item.chunk_id)],
-                require_current_version=True, selection_fences=(fence,),
+                require_current_version=True, selection_fences=(fence,), **scope_kw,
             )
             if not chunks or chunks[0].document_id != item.document_id or chunks[0].source_id != item.source_id:
                 raise HTTPException(status_code=409, detail="A selected evidence chunk is unavailable")
@@ -347,7 +359,8 @@ async def link_agent_run(
     ephemeral = conversation.ephemeral or not await is_history_storage_enabled(session)
     expires_at = conversation.expires_at or (now + timedelta(hours=24) if ephemeral else None)
     session.add(AgentActivityLink(
-        conversation_id=conversation_id, agent_run_id=agent_run_id, owner_id=owner_id,
+        workspace_id=conversation.workspace_id, conversation_id=conversation_id,
+        agent_run_id=agent_run_id, owner_id=owner_id,
         auth_session_hash=auth_session_hash, ephemeral=ephemeral,
         expires_at=expires_at,
         activities=[{"kind": "status", "status": "queued", "created_at": datetime.now(UTC).isoformat()}],
@@ -784,11 +797,18 @@ def _chat_export_privacy_marker(persisted: bool, updated_at: _datetime | None) -
     return persisted, updated_at
 
 
-async def _chat_export_privacy(session: AsyncSession) -> tuple[bool, bool, _datetime | None]:
+async def _chat_export_privacy(
+    session: AsyncSession, *, scope: _Any = None, multi_workspace_enabled: bool | None = None,
+) -> tuple[bool, bool, _datetime | None]:
     """Read Memory's current history-storage grant and its minimal persisted-row fence."""
-    from modules.memory import public as memory_public
+    from modules.chat.scope import read_owner_export_privacy
 
-    privacy = await memory_public.read_export_privacy(session)
+    if scope is not None and multi_workspace_enabled is not None:
+        from modules.memory.public import read_export_privacy
+
+        privacy = await read_export_privacy(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    else:
+        privacy = await read_owner_export_privacy(session)
     persisted, updated_at = _chat_export_privacy_marker(privacy.persisted, privacy.updated_at)
     return privacy.store_conversation_history, persisted, updated_at
 
@@ -820,7 +840,7 @@ async def _chat_export_count(session: AsyncSession, record_kind: str, snapshot_a
 
 
 async def _chat_export_evidence_fences(
-    session: AsyncSession, refs: Sequence[tuple[UUID, UUID]],
+    session: AsyncSession, refs: Sequence[tuple[UUID, UUID]], *, scope: _Any, multi_workspace_enabled: bool,
 ) -> dict[tuple[UUID, UUID], tuple[EvidenceReferenceRead, int]]:
     """Resolve exact retained chunks and live source generations for at most one bounded batch."""
     from modules.knowledge.documents import public as documents_public
@@ -831,18 +851,21 @@ async def _chat_export_evidence_fences(
     if not unique_refs:
         return {}
     try:
-        evidence_rows = await documents_public.read_evidence_refs(session, unique_refs)
+        evidence_rows = await documents_public.read_evidence_refs(
+            session, unique_refs, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     except ValueError:
         # A deletion can race a page; retry individually to omit only copied citation fields
         # whose exact document/version/chunk fence is no longer owner-visible.
         evidence_rows = []
         for ref in unique_refs:
             try:
-                evidence_rows.extend(await documents_public.read_evidence_refs(session, [ref]))
+                evidence_rows.extend(await documents_public.read_evidence_refs(
+                    session, [ref], scope=scope, multi_workspace_enabled=multi_workspace_enabled))
             except ValueError:
                 continue
     versions = list(dict.fromkeys(item.document_version_id for item in evidence_rows))
-    source_fences = await documents_public.review_version_fences(session, versions)
+    source_fences = await documents_public.review_version_fences(
+        session, versions, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     from modules.sources import public as sources_public
     from modules.sources.schemas import SourceExportFence
 
@@ -853,11 +876,12 @@ async def _chat_export_evidence_fences(
         if previous != source_fence.current_source_generation:
             conflicting_sources.add(source_fence.source_id)
     source_export_fences = [
-        SourceExportFence(source_id=source_id, generation=generation)
+        SourceExportFence(source_id=source_id, workspace_id=scope.workspace_id, generation=generation)
         for source_id, generation in source_generations.items()
         if source_id not in conflicting_sources
     ]
-    eligible_sources = set(await sources_public.filter_export_eligible_sources(session, source_export_fences))
+    eligible_sources = set(await sources_public.filter_export_eligible_sources(
+        session, source_export_fences, scope=scope, multi_workspace_enabled=multi_workspace_enabled))
     resolved: dict[tuple[UUID, UUID], tuple[EvidenceReferenceRead, int]] = {}
     for item in evidence_rows:
         fence = source_fences.get(item.document_version_id)
@@ -874,6 +898,8 @@ async def export_page(
     record_kind: str,
     limit: int = 50,
     cursor: str | None = None,
+    scope: _Any,
+    multi_workspace_enabled: bool,
 ) -> ChatExportPage:
     """Return a bounded owner-authorized page of conversations or retained message revisions.
 
@@ -892,7 +918,8 @@ async def export_page(
     else:
         snapshot_at, position_at, position_id = _decode_chat_export_cursor(cursor, owner_id, record_kind)
         position = (position_at, position_id)
-    history_enabled, privacy_persisted, privacy_updated_at = await _chat_export_privacy(session)
+    history_enabled, privacy_persisted, privacy_updated_at = await _chat_export_privacy(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if not history_enabled:
         return ChatExportPage(
             owner_id=owner_id, record_kind=record_kind, snapshot_at=snapshot_at,
@@ -902,7 +929,7 @@ async def export_page(
         )
     snapshot_count = await _chat_export_count(session, record_kind, snapshot_at)
     now = _datetime.now(_UTC)
-    scope = _chat_export_scope(snapshot_at, now)
+    row_scope = _chat_export_scope(snapshot_at, now)
     items: list[ChatExportConversationRead | ChatExportMessageRead] = []
     fences: list[ChatExportFence] = []
     has_more = False
@@ -915,7 +942,7 @@ async def export_page(
             Conversation.context_resource_id.label("context_resource_id"),
             Conversation.pinned.label("pinned"), Conversation.archived.label("archived"),
             Conversation.created_at.label("created_at"), Conversation.updated_at.label("updated_at"),
-        ).where(*scope)
+        ).where(*row_scope)
         if position is not None:
             statement = statement.where(_tuple(Conversation.created_at, Conversation.id) > position)
         result = await session.stream(
@@ -963,7 +990,7 @@ async def export_page(
                 Conversation.updated_at.label("conversation_updated_at"),
             )
             .join(Conversation, Conversation.id == Message.conversation_id)
-            .where(*scope, Message.created_at <= snapshot_at, Message.updated_at <= snapshot_at)
+            .where(*row_scope, Message.created_at <= snapshot_at, Message.updated_at <= snapshot_at)
         )
         if position is not None:
             message_statement = message_statement.where(_tuple(Message.created_at, Message.id) > position)
@@ -1011,7 +1038,8 @@ async def export_page(
         finally:
             await result.close()
 
-        evidence = await _chat_export_evidence_fences(session, list(page_ref_set))
+        evidence = await _chat_export_evidence_fences(
+            session, list(page_ref_set), scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         for message_row, parsed, initially_omitted in candidates:
             citations: list[ChatExportCitation] = []
             citation_fences: list[ChatExportCitationFence] = []
@@ -1090,6 +1118,8 @@ async def validate_export_fences(
     privacy_persisted: bool,
     privacy_updated_at: _datetime | None,
     fences: Sequence[ChatExportFence],
+    scope: _Any,
+    multi_workspace_enabled: bool,
 ) -> ChatExportFenceValidation:
     """Revalidate bounded chat rows, privacy, deletion, and exact citation evidence before publication."""
     if record_kind not in {"conversations", "messages"} or not 0 <= expected_snapshot_count <= 2**63 - 1:
@@ -1102,7 +1132,8 @@ async def validate_export_fences(
             valid=False, reason="owner_unavailable", observed_snapshot_count=0,
             privacy_persisted=privacy_persisted, privacy_updated_at=privacy_updated_at,
         )
-    history_enabled, current_privacy_persisted, current_privacy_updated_at = await _chat_export_privacy(session)
+    history_enabled, current_privacy_persisted, current_privacy_updated_at = await _chat_export_privacy(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if not history_enabled:
         return ChatExportFenceValidation(
             valid=False, reason="conversation_history_disabled", observed_snapshot_count=0,
@@ -1167,14 +1198,16 @@ async def validate_export_fences(
             batch = refs[start:start + CHAT_EXPORT_MAX_CITATIONS_PER_PAGE]
             try:
                 evidence.update({(row.document_version_id, row.chunk_id): row
-                                 for row in await documents_public.read_evidence_refs(session, batch)})
+                                 for row in await documents_public.read_evidence_refs(
+                                     session, batch, scope=scope, multi_workspace_enabled=multi_workspace_enabled)})
             except ValueError:
                 return ChatExportFenceValidation(
                     valid=False, reason="citation_unavailable", observed_snapshot_count=observed_count,
                     privacy_persisted=current_privacy_persisted, privacy_updated_at=current_privacy_updated_at,
                 )
         version_ids = list(dict.fromkeys(version_id for version_id, _chunk_id in refs))
-        current_sources = await documents_public.review_version_fences(session, version_ids)
+        current_sources = await documents_public.review_version_fences(
+            session, version_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         from modules.sources import public as sources_public
         from modules.sources.schemas import SourceExportFence
 
@@ -1188,11 +1221,12 @@ async def validate_export_fences(
             if previous != current.current_source_generation:
                 conflicting_sources.add(current.source_id)
         eligible_source_fences = [
-            SourceExportFence(source_id=source_id, generation=generation)
+            SourceExportFence(source_id=source_id, workspace_id=scope.workspace_id, generation=generation)
             for source_id, generation in current_generations.items()
             if source_id not in conflicting_sources
         ]
-        eligible_sources = set(await sources_public.filter_export_eligible_sources(session, eligible_source_fences))
+        eligible_sources = set(await sources_public.filter_export_eligible_sources(
+            session, eligible_source_fences, scope=scope, multi_workspace_enabled=multi_workspace_enabled))
         for citation in citation_fences:
             ref = evidence.get((citation.document_version_id, citation.chunk_id))
             current_fence = current_sources.get(citation.document_version_id)
@@ -1383,12 +1417,14 @@ async def filter_current_citations(
     unique_refs = sorted(set(refs), key=lambda item: (str(item[0]), str(item[1])))
     if not unique_refs:
         return []
+    from modules.chat.scope import owner_scope_kwargs
     from modules.knowledge.documents import public as documents_public
 
+    scope_kw = await owner_scope_kwargs(session)
     current = {}
     for start in range(0, len(unique_refs), 100):
         evidence = await documents_public.lock_chat_evidence_chunks(
-            session, unique_refs[start:start + 100], require_active_source=False,
+            session, unique_refs[start:start + 100], require_active_source=False, **scope_kw,
         )
         current.update({(item.document_version_id, item.chunk_id): item for item in evidence})
     return [
@@ -1400,10 +1436,12 @@ async def filter_current_citations(
 
 async def purge_document_copied_evidence_page(
     session: AsyncSession,
-    scope: DocumentCleanupEvidenceScope,
+    evidence: DocumentCleanupEvidenceScope,
     *,
     cursor: str | None = None,
     limit: int = 100,
+    scope: WorkspaceContext | InternalJobScope,
+    multi_workspace_enabled: bool,
 ) -> CopiedEvidenceCleanupProgress:
     """Clean one bounded Chat table page using detached identities captured before hard deletion.
 
@@ -1412,16 +1450,31 @@ async def purge_document_copied_evidence_page(
     append-only mutation receipts, and every existing stream/event/run identity. The Documents
     caller persists the returned cursor and page mutations in the same transaction. Version-only
     and chunk identity records can fall on different scope pages; each exact chunk pair matches
-    independently of the separate version-only record.
+    independently of the separate version-only record. The owner is admitted (non-locking, members
+    denied before SQL), the detached page must belong to this workspace and actor, and every
+    statement is bound to that workspace and actor.
     """
     if not 1 <= limit <= 100:
         raise ValueError("Chat copied-evidence page size must be between 1 and 100")
-    if len(scope.references) > 100:
+    if len(evidence.references) > 100:
         raise ValueError("Chat copied-evidence identity page exceeds 100 references")
+    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
+    if type(multi_workspace_enabled) is not bool:
+        raise TypeError("The configured multi-workspace feature flag must be a boolean")
+    await _workspaces.read_access_fence(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    workspace_id = scope.workspace_id
+    actor_id = scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
+    if evidence.workspace_id != workspace_id or evidence.actor_user_id != actor_id:
+        raise HTTPException(status_code=409, detail="Document cleanup evidence belongs to another workspace")
+    own_conversation = (Conversation.workspace_id == workspace_id, Conversation.actor_user_id == actor_id)
+    own_run = (ResponseRun.workspace_id == workspace_id, ResponseRun.actor_user_id == actor_id)
     if cursor is None:
         kind, after = "messages", None
     else:
-        kind, after = _decode_cleanup_cursor(cursor, scope)
+        kind, after = _decode_cleanup_cursor(cursor, evidence)
     from modules.memory.public import bound_cleanup_lock_waits, lock_export_privacy
 
     await lock_export_privacy(session)
@@ -1437,20 +1490,21 @@ async def purge_document_copied_evidence_page(
         if kind == "messages":
             found = list((await session.execute(
                 _select(Message.id, Message.conversation_id)
-                .where(*([Message.id > after] if after else []))
+                .join(Conversation, Conversation.id == Message.conversation_id)
+                .where(*own_conversation, *([Message.id > after] if after else []))
                 .order_by(Message.id).limit(remaining + 1)
             )).all())
         elif kind == "runs":
             found = list((await session.execute(
                 _select(ResponseRun.id, ResponseRun.conversation_id)
-                .where(*([ResponseRun.id > after] if after else []))
+                .where(*own_run, *([ResponseRun.id > after] if after else []))
                 .order_by(ResponseRun.id).limit(remaining + 1)
             )).all())
         else:
             found = list((await session.execute(
                 _select(StreamEvent.id, StreamEvent.response_id, ResponseRun.conversation_id)
                 .join(ResponseRun, ResponseRun.id == StreamEvent.response_id)
-                .where(*([StreamEvent.id > after] if after else []))
+                .where(*own_run, *([StreamEvent.id > after] if after else []))
                 .order_by(StreamEvent.id).limit(remaining + 1)
             )).all())
         has_more = len(found) > remaining
@@ -1460,7 +1514,7 @@ async def purge_document_copied_evidence_page(
             if kind == "messages":
                 row_id, conversation_id = candidate
                 parent = await session.scalar(_select(Conversation).where(
-                    Conversation.id == conversation_id,
+                    Conversation.id == conversation_id, *own_conversation,
                 ).with_for_update().execution_options(populate_existing=True))
                 if parent is None:
                     continue
@@ -1469,8 +1523,8 @@ async def purge_document_copied_evidence_page(
                 ).with_for_update().execution_options(populate_existing=True))
                 if message is None:
                     continue
-                citations, citations_changed = _filter_citation_values(message.citations, scope)
-                metadata, metadata_changed = _scrub_cleanup_payload(message.metadata_json or {}, scope)
+                citations, citations_changed = _filter_citation_values(message.citations, evidence)
+                metadata, metadata_changed = _scrub_cleanup_payload(message.metadata_json or {}, evidence)
                 if citations_changed or metadata_changed:
                     message.citations = citations
                     message.metadata_json = metadata if isinstance(metadata, dict) else {}
@@ -1478,17 +1532,17 @@ async def purge_document_copied_evidence_page(
             elif kind == "runs":
                 row_id, conversation_id = candidate
                 parent = await session.scalar(_select(Conversation).where(
-                    Conversation.id == conversation_id,
+                    Conversation.id == conversation_id, *own_conversation,
                 ).with_for_update().execution_options(populate_existing=True))
                 if parent is None:
                     continue
                 run = await session.scalar(_select(ResponseRun).where(
-                    ResponseRun.id == row_id, ResponseRun.conversation_id == conversation_id,
+                    ResponseRun.id == row_id, ResponseRun.conversation_id == conversation_id, *own_run,
                 ).with_for_update().execution_options(populate_existing=True))
                 if run is None:
                     continue
-                citations, citations_changed = _filter_citation_values(run.citations, scope)
-                context, context_changed = _scrub_cleanup_payload(run.retrieval_context or {}, scope)
+                citations, citations_changed = _filter_citation_values(run.citations, evidence)
+                context, context_changed = _scrub_cleanup_payload(run.retrieval_context or {}, evidence)
                 if citations_changed or context_changed:
                     run.citations = citations
                     run.retrieval_context = context if isinstance(context, dict) else {}
@@ -1498,12 +1552,12 @@ async def purge_document_copied_evidence_page(
             else:
                 row_id, response_id, conversation_id = candidate
                 parent = await session.scalar(_select(Conversation).where(
-                    Conversation.id == conversation_id,
+                    Conversation.id == conversation_id, *own_conversation,
                 ).with_for_update().execution_options(populate_existing=True))
                 if parent is None:
                     continue
                 run = await session.scalar(_select(ResponseRun).where(
-                    ResponseRun.id == response_id, ResponseRun.conversation_id == conversation_id,
+                    ResponseRun.id == response_id, ResponseRun.conversation_id == conversation_id, *own_run,
                 ).with_for_update().execution_options(populate_existing=True))
                 if run is None:
                     continue
@@ -1512,7 +1566,7 @@ async def purge_document_copied_evidence_page(
                 ).with_for_update().execution_options(populate_existing=True))
                 if event is None:
                     continue
-                payload, payload_changed = _scrub_cleanup_payload(event.data or {}, scope)
+                payload, payload_changed = _scrub_cleanup_payload(event.data or {}, evidence)
                 if payload_changed:
                     event.data = payload if isinstance(payload, dict) else {}
                     changed += 1
@@ -1521,14 +1575,14 @@ async def purge_document_copied_evidence_page(
         if has_more:
             last_id = rows[-1][0]
             return CopiedEvidenceCleanupProgress(
-                next_cursor=_encode_cleanup_cursor(scope, kind, last_id),
+                next_cursor=_encode_cleanup_cursor(evidence, kind, last_id),
                 complete=False, rows_examined=examined, rows_changed=changed,
             )
         after = None
         index += 1
         if examined >= limit and index < len(kinds):
             return CopiedEvidenceCleanupProgress(
-                next_cursor=_encode_cleanup_cursor(scope, kinds[index], None),
+                next_cursor=_encode_cleanup_cursor(evidence, kinds[index], None),
                 complete=False, rows_examined=examined, rows_changed=changed,
             )
     return CopiedEvidenceCleanupProgress(

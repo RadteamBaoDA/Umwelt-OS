@@ -24,6 +24,7 @@ from modules.chat.schemas import (
     EvidenceItem,
     TemporalContextItem,
 )
+from modules.chat.scope import ensure_ai_config_unchanged, owner_scope_kwargs
 from modules.knowledge.documents import public as documents_public
 from modules.knowledge.entities import public as entities_public
 from modules.knowledge.relationships import public as relationships_public
@@ -98,7 +99,10 @@ async def _apply_configured_reranking(
         return evidence_items, "unavailable", ["Remote reranking skipped because evidence contains local-only sources"]
 
     try:
-        config = await settings_public.get_ai_execution_config(session, settings, redis)
+        scope_kw = await owner_scope_kwargs(session)
+        config = await settings_public.get_ai_execution_config(
+            session, settings, redis, scope=scope_kw["scope"],  # type: ignore[arg-type]
+        )
         rerank_mapping = config.aliases.get("reranker")
         if not rerank_mapping or not rerank_mapping.model.strip():
             return evidence_items, "unavailable", ["Configured reranker alias is not mapped"]
@@ -107,6 +111,8 @@ async def _apply_configured_reranking(
             return evidence_items, "unavailable", ["Gateway endpoint policy denies remote calls"]
 
         policy = RequestPolicy(
+            workspace_id=config.workspace_id, actor_user_id=config.actor_user_id,
+            membership_revision=config.membership_revision, gateway_identity=config.gateway_identity,
             reasoning_allowed=config.privacy.allow_remote_reasoning,
             embeddings_allowed=config.privacy.allow_remote_embeddings,
             web_search_allowed=config.privacy.allow_remote_web_search,
@@ -133,16 +139,6 @@ async def _apply_configured_reranking(
 
         # PRODUCTION FIX: the previous call used a nonexistent `timeout=` kwarg and omitted the
         # required redis/destination_id, so reranking always raised TypeError.
-        gateway = ModelGateway(
-            redis=redis,
-            base_url=config.omniroute_base_url or "http://localhost:8000",
-            api_key=config.omniroute_api_key,
-            destination_id=destination_id,
-            timeout_seconds=config.request_timeout_seconds,
-            gateway_identity=config.gateway_identity,
-            approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
-        )
-
         documents = [item.content for item in evidence_items]
 
         send_session: AsyncSession | None = None
@@ -150,11 +146,14 @@ async def _apply_configured_reranking(
         async def before_rerank_send() -> None:
             """Lock and revalidate every exact chunk before sending copied text to a remote reranker."""
             nonlocal send_session
+            await ensure_ai_config_unchanged(
+                session_factory, settings, redis, scope_kw["scope"], config, "reranker", rerank_mapping,
+            )
             send_session = session_factory()
             refs = list(dict.fromkeys((item.document_version_id, item.chunk_id) for item in evidence_items))
             try:
                 current = await documents_public.lock_chat_evidence_chunks(
-                    send_session, refs, require_active_source=True,
+                    send_session, refs, require_active_source=True, **scope_kw,
                 )
                 current_by_ref = {(item.document_version_id, item.chunk_id): item for item in current}
                 if any(
@@ -175,6 +174,19 @@ async def _apply_configured_reranking(
             if send_session is not None:
                 await send_session.close()
                 send_session = None
+
+        gateway = ModelGateway(
+            redis=redis,
+            base_url=config.omniroute_base_url or "http://localhost:8000",
+            api_key=config.omniroute_api_key,
+            destination_id=destination_id,
+            timeout_seconds=config.request_timeout_seconds,
+            scope=scope_kw["scope"],  # type: ignore[arg-type]
+            gateway_identity=config.gateway_identity,
+            configuration_revision=config.configuration_revision,
+            before_send=before_rerank_send,
+            approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
+        )
 
         raw_result = await gateway.rerank(
             alias="reranker",
@@ -202,6 +214,8 @@ async def _apply_configured_reranking(
 
         return evidence_items, "unavailable", ["Reranker output could not be parsed; preserved retrieval ranking"]
 
+    except TypeError:
+        raise
     except (ModelGatewayError, Exception) as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
         logger.warning("Reranking failed or unavailable: %s", exc)
         return evidence_items, "unavailable", ["Reranking unavailable; preserved retrieval ranking"]
@@ -234,6 +248,7 @@ async def build_context(
     warnings: list[str] = []
     collected_refs: list[tuple[UUID, UUID]] = []
     hit_scores: dict[tuple[UUID, UUID], float] = {}
+    scope_kw = await owner_scope_kwargs(session)
 
     if request.selected_only:
         fence_by_document = {item.document_id: item for item in request.selection_fences}
@@ -261,12 +276,14 @@ async def build_context(
                 mode=request.mode if request.allow_hybrid else "lexical",
                 limit=min(request.limit, MAX_RETRIEVAL_LIMIT),
             )
-            search_res = await search_public.search(session, redis, settings, search_req)
+            search_res = await search_public.search(session, redis, settings, search_req, **scope_kw)
             warnings.extend(search_res.warnings)
             for hit in search_res.items:
                 ref = (hit.document_version_id, hit.chunk_id)
                 collected_refs.append(ref)
                 hit_scores[ref] = hit.score
+        except TypeError:
+            raise  # a call-shape bug must surface, not degrade to "no evidence"
         except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
             logger.error("Search retrieval failed in build_context: %s", exc)
             warnings.append("Search retrieval encountered an error")
@@ -282,13 +299,13 @@ async def build_context(
     entity_summaries: list[EntityContextItem] = []
     for entity_id in (() if request.selected_only else request.entity_ids[:MAX_ENTITY_SCOPE]):
         try:
-            canonical_id = await entities_public.resolve_canonical_entity_id(session, entity_id)
-            entity_data = await entities_public.get_entity(session, canonical_id)
+            canonical_id = await entities_public.resolve_canonical_entity_id(session, entity_id, **scope_kw)
+            entity_data = await entities_public.get_entity(session, canonical_id, **scope_kw)
             if entity_data is None:
                 continue
 
-            evidence_page = await entities_public.list_entity_evidence(session, canonical_id, limit=10)
-            neighbors = await relationships_public.get_neighbors(session, canonical_id, limit=10)
+            evidence_page = await entities_public.list_entity_evidence(session, canonical_id, limit=10, **scope_kw)
+            neighbors = await relationships_public.get_neighbors(session, canonical_id, limit=10, **scope_kw)
 
             backing_refs: list[Citation] = []
             if evidence_page:
@@ -329,6 +346,8 @@ async def build_context(
                 backing_refs=backing_refs,
                 neighbors=neighbor_dicts,
             ))
+        except TypeError:
+            raise  # a call-shape bug must surface, not degrade silently
         except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
             logger.warning("Entity resolution failed for %s: %s", entity_id, exc)
 
@@ -359,7 +378,7 @@ async def build_context(
                     date_to=date_to,
                     timezone=request.timezone or "Asia/Ho_Chi_Minh",
                 )
-                timeline_page = await timeline_public.list_timeline(session, timeline_query, limit=10)
+                timeline_page = await timeline_public.list_timeline(session, timeline_query, limit=10, **scope_kw)
                 for event in timeline_page.items:
                     event_backing: list[Citation] = []
                     for ev_dict in event.evidence:
@@ -389,6 +408,8 @@ async def build_context(
                         summary=event.summary,
                         backing_refs=event_backing,
                     ))
+        except TypeError:
+            raise  # a call-shape bug must surface, not degrade silently
         except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
             logger.warning("Timeline context retrieval failed: %s", exc)
 
@@ -398,6 +419,7 @@ async def build_context(
         session, unique_refs, require_active_source=True,
         require_current_version=request.selected_only,
         selection_fences=tuple(request.selection_fences) if request.selected_only else None,
+        **scope_kw,
     )
 
     evidence_items: list[EvidenceItem] = []
@@ -508,11 +530,12 @@ async def revalidate_context_fence(
         Tuple of (is_valid: bool, list of rejection reason strings).
     """
     reasons: list[str] = []
+    scope_kw = await owner_scope_kwargs(session)
 
     selection_valid = True
     if context.selection_fences:
         selection_valid = await documents_public.validate_gadget_document_selection_fences(
-            session, tuple(context.selection_fences),
+            session, tuple(context.selection_fences), **scope_kw,
         )
         if not selection_valid:
             reasons.append("One or more exact selected document versions or provider scopes are stale")
@@ -525,7 +548,7 @@ async def revalidate_context_fence(
             reasons.append(f"Invalid source identifier in fence: {source_id_str}")
             continue
 
-        fence = await sources_public.get_source_fence(session, source_id)
+        fence = await sources_public.get_source_fence(session, source_id, **scope_kw)
         if fence is None:
             reasons.append(f"Source {source_id} no longer exists")
             continue
@@ -550,12 +573,14 @@ async def revalidate_context_fence(
                     session, refs, require_active_source=True,
                     require_current_version=require_current_versions,
                     selection_fences=tuple(context.selection_fences) if context.selection_fences else None,
+                    **scope_kw,
                 )
             else:
                 existing_chunks = await documents_public.read_chat_evidence_chunks(
                     session, refs, require_active_source=True,
                     require_current_version=require_current_versions,
                     selection_fences=tuple(context.selection_fences) if context.selection_fences else None,
+                    **scope_kw,
                 )
         except ValueError:
             existing_chunks = []

@@ -25,6 +25,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.models import Owner
 from core.pagination import decode_cursor, encode_cursor
+from core.realtime import commit_with_replay
+from core.workspaces import public as workspaces
+from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
 from modules.tasks.models import Task
 from modules.tasks.schemas import (
     TaskCreate,
@@ -45,6 +48,31 @@ __all__ = [
     "TaskCreate",
     "ensure_demo_tasks",
 ]
+
+
+def _actor(scope: Scope) -> int:
+    """Return the principal recorded by a real workspace or durable job scope."""
+    return scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
+
+
+async def _admit(
+    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
+    lock: bool = False, expected: AccessFence | None = None,
+) -> AccessFence:
+    """Require owner scope and capture or lock authorization before task/goal locks."""
+    if not isinstance(scope, (WorkspaceContext, InternalJobScope)):
+        raise TypeError("An explicit task workspace scope is required")
+    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
+    if type(multi_workspace_enabled) is not bool:
+        raise TypeError("The configured multi-workspace feature flag must be a boolean")
+    if lock:
+        return await workspaces.lock_access_fence(
+            session, scope=scope, expected=expected, multi_workspace_enabled=multi_workspace_enabled,
+        )
+    return await workspaces.read_access_fence(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
 
 MAX_REVISION = 9_007_199_254_740_991
 
@@ -80,17 +108,19 @@ def _decode_task_export_cursor(cursor: str) -> tuple[datetime, datetime, UUID]:
         raise HTTPException(status_code=422, detail="Task export cursor is invalid") from exc
 
 
-def _task_export_scope(snapshot_at: datetime) -> tuple[ColumnElement[bool], ...]:
+def _task_export_scope(scope: Scope, snapshot_at: datetime) -> tuple[ColumnElement[bool], ...]:
     """Select live owner tasks unchanged through the fixed snapshot cutoff."""
-    return (Task.owner_id == 1, Task.deleted_at.is_(None),
+    return (Task.workspace_id == scope.workspace_id, Task.deleted_at.is_(None),
             Task.created_at <= snapshot_at, Task.updated_at <= snapshot_at)
 
 
 async def export_page(
-    session: AsyncSession, *, owner_id: int, record_kind: str, limit: int = 50, cursor: str | None = None,
+    session: AsyncSession, *, owner_id: int, record_kind: str, scope: Scope,
+    multi_workspace_enabled: bool, limit: int = 50, cursor: str | None = None,
 ) -> TaskExportPage:
     """Return a bounded owner task page using the same detached DTO as the task API."""
-    if owner_id != 1 or record_kind != "tasks" or not 1 <= limit <= 100:
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if owner_id != _actor(scope) or record_kind != "tasks" or not 1 <= limit <= 100:
         raise ValueError("Task export owner, kind or page limit is invalid")
     if await session.scalar(select(Owner.id).where(Owner.id == owner_id)) is None:
         raise HTTPException(status_code=404, detail="Owner not found")
@@ -100,9 +130,9 @@ async def export_page(
         snapshot_at, position_at, position_id = _decode_task_export_cursor(cursor)
         position = (position_at, position_id)
     count = int(await session.scalar(select(func.count()).select_from(Task).where(
-        *_task_export_scope(snapshot_at),
+        *_task_export_scope(scope, snapshot_at),
     )) or 0)
-    statement = select(Task).where(*_task_export_scope(snapshot_at))
+    statement = select(Task).where(*_task_export_scope(scope, snapshot_at))
     if position is not None:
         statement = statement.where(tuple_(Task.created_at, Task.id) > position)
     rows = list((await session.scalars(
@@ -129,21 +159,23 @@ async def export_page(
 
 async def validate_export_fences(
     session: AsyncSession, *, owner_id: int, record_kind: str, snapshot_at: datetime,
-    expected_snapshot_count: int, fences: list[TaskExportFence],
+    expected_snapshot_count: int, fences: list[TaskExportFence], scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> TaskExportValidation:
     """Recheck task ownership, deletion, exact DTO content and snapshot count before publication."""
-    if owner_id != 1 or record_kind != "tasks" or len(fences) > 100:
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if owner_id != _actor(scope) or record_kind != "tasks" or len(fences) > 100:
         raise ValueError("Task export validation input is invalid")
     if await session.scalar(select(Owner.id).where(Owner.id == owner_id)) is None:
         return TaskExportValidation(valid=False, reason="owner_unavailable", observed_snapshot_count=0)
     count = int(await session.scalar(select(func.count()).select_from(Task).where(
-        *_task_export_scope(snapshot_at),
+        *_task_export_scope(scope, snapshot_at),
     )) or 0)
     if count != expected_snapshot_count:
         return TaskExportValidation(valid=False, reason="snapshot_count_changed", observed_snapshot_count=count)
     for fence in fences:
         row = await session.scalar(select(Task).where(
-            Task.id == fence.id, *_task_export_scope(snapshot_at),
+            Task.id == fence.id, *_task_export_scope(scope, snapshot_at),
         ).execution_options(populate_existing=True))
         if row is None or row.created_at != fence.created_at or row.updated_at != fence.updated_at:
             return TaskExportValidation(valid=False, reason="record_changed", observed_snapshot_count=count)
@@ -172,14 +204,18 @@ def _to_task_read(task: Task) -> TaskRead:
     return TaskRead.model_validate(task)
 
 
-async def _current_entity_projection(session: AsyncSession, result: TaskRead) -> TaskRead:
+async def _current_entity_projection(
+    session: AsyncSession, result: TaskRead, *, scope: Scope, multi_workspace_enabled: bool,
+) -> TaskRead:
     """Keep only entity links that still resolve through the entity owner's read API."""
     from modules.knowledge.entities import public as entities
 
     visible = []
     for entity_id in result.entity_ids:
         try:
-            visible.append((await entities.get_entity_refs(session, [entity_id]))[0].canonical_id)
+            visible.append((await entities.get_entity_refs(
+                session, [entity_id], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            ))[0].canonical_id)
         except LookupError:
             continue
     result.entity_ids = list(dict.fromkeys(visible))
@@ -187,19 +223,24 @@ async def _current_entity_projection(session: AsyncSession, result: TaskRead) ->
 
 
 async def _validate_references(
-    session: AsyncSession, owner_id: int, entity_ids: Sequence[UUID], goal_id: UUID | None
+    session: AsyncSession, entity_ids: Sequence[UUID], goal_id: UUID | None, *,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> None:
     """Validate linked entity and goal IDs through their owner public contracts."""
     if entity_ids:
-        await validate_entity_references_for_write(session, entity_ids)
+        await validate_entity_references_for_write(
+            session, entity_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
     if goal_id is not None:
         from modules.goals import public as goals
 
-        await goals.require_active_goal_link(session, owner_id, goal_id)
+        await goals.require_active_goal_link(
+            session, goal_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
 
 
 async def validate_entity_references_for_write(
-    session: AsyncSession, entity_ids: Sequence[UUID]
+    session: AsyncSession, entity_ids: Sequence[UUID], *, scope: Scope, multi_workspace_enabled: bool,
 ) -> None:
     """Resolve and lock a bounded entity-reference set through its owning public contract.
 
@@ -211,13 +252,16 @@ async def validate_entity_references_for_write(
     from modules.knowledge.entities import public as entities
 
     try:
-        await entities.get_entity_refs(session, list(entity_ids), for_write=True)
+        await entities.get_entity_refs(
+            session, list(entity_ids), for_write=True, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
     except LookupError as exc:
         raise ValueError("entity_ids must identify current canonical entities") from exc
 
 
 async def _locked_goal_ids(
-    session: AsyncSession, owner_id: int, goal_ids: Sequence[UUID | None]
+    session: AsyncSession, goal_ids: Sequence[UUID | None], *, scope: Scope, multi_workspace_enabled: bool,
 ) -> list[UUID]:
     """Lock linked goals in UUID order before task rows to avoid lock inversion."""
     # Goal rows precede task rows in every task mutation to give moves and deletes one lock order.
@@ -225,31 +269,36 @@ async def _locked_goal_ids(
     if ids:
         from modules.goals import public as goals
 
-        await goals.lock_owned_goal_links(session, owner_id, ids)
+        await goals.lock_owned_goal_links(
+            session, ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
     return ids
 
 
 async def create_task_in_uow(
-    session: AsyncSession, owner_id: int, payload: TaskCreate,
-    *, idempotency_key: tuple[UUID, str, int] | None = None,
+    session: AsyncSession, payload: TaskCreate, *, scope: Scope, multi_workspace_enabled: bool,
+    idempotency_key: tuple[UUID, str, int] | None = None,
 ) -> TaskRead:
     """Add a server-identified task without committing the caller's transaction.
 
     Goal acceptance uses this owner UoW contract while holding the goal fence;
     an optional server-composed scope/key/index deterministically generates identity.
     """
-    await _validate_references(session, owner_id, payload.entity_ids, payload.goal_id)
+    await _validate_references(session, payload.entity_ids, payload.goal_id, scope=scope,
+                               multi_workspace_enabled=multi_workspace_enabled)
     if idempotency_key is not None:
         goal_id, key, position = idempotency_key
         if payload.goal_id != goal_id or not key or len(key) > 128 or not 0 <= position < 100:
             raise ValueError("Invalid task materialization idempotency scope")
         task_id = uuid5(goal_id, f"accepted:{key}:task:{position}")
-        if await session.scalar(select(Task.id).where(Task.id == task_id)) is not None:
+        if await session.scalar(select(Task.id).where(
+            Task.id == task_id, Task.workspace_id == scope.workspace_id,
+        )) is not None:
             raise TaskConflict("task_id_conflict", "Server-generated accepted task ID is already occupied")
     else:
         task_id = uuid4()
     task = Task(
-        id=task_id, owner_id=owner_id, title=payload.title,
+        id=task_id, workspace_id=scope.workspace_id, owner_id=_actor(scope), title=payload.title,
         description=payload.description, status=payload.status,
         due_date=payload.due_date, due_at=payload.due_at,
         completed_at=datetime.now(UTC) if payload.status == "done" else None,
@@ -261,33 +310,44 @@ async def create_task_in_uow(
     return _to_task_read(task)
 
 
-async def create_task(session: AsyncSession, owner_id: int, payload: TaskCreate) -> TaskRead:
+async def create_task(
+    session: AsyncSession, payload: TaskCreate, *, scope: Scope, multi_workspace_enabled: bool,
+) -> TaskRead:
     """Create one owner task and commit its validated references atomically."""
-    goals = await _locked_goal_ids(session, owner_id, [payload.goal_id])
-    result = await create_task_in_uow(session, owner_id, payload)
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    goals = await _locked_goal_ids(session, [payload.goal_id], scope=scope,
+                                   multi_workspace_enabled=multi_workspace_enabled)
+    result = await create_task_in_uow(session, payload, scope=scope,
+                                      multi_workspace_enabled=multi_workspace_enabled)
     if goals:
         from modules.goals import public as goal_public
 
-        await goal_public.reconcile_task_milestone(session, owner_id, result.id, goals)
-    await session.commit()
-    return await get_task(session, owner_id, result.id)
+        await goal_public.reconcile_task_milestone(
+            session, result.id, goals, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
+    await commit_with_replay(session, [], scope=scope,
+                             multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
+    return await get_task(session, result.id, scope=scope,
+                          multi_workspace_enabled=multi_workspace_enabled)
 
 
 async def update_task(
-    session: AsyncSession, owner_id: int, task_id: UUID, payload: TaskUpdate
+    session: AsyncSession, task_id: UUID, payload: TaskUpdate, *, scope: Scope, multi_workspace_enabled: bool
 ) -> TaskRead:
     """Apply a revision-fenced patch with coherent due and completion transitions."""
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
     locator = await session.scalar(select(Task.goal_id).where(
-        Task.id == task_id, Task.owner_id == owner_id, Task.deleted_at.is_(None),
+        Task.id == task_id, Task.workspace_id == scope.workspace_id, Task.deleted_at.is_(None),
     ))
     if locator is None and not await session.scalar(select(Task.id).where(
-        Task.id == task_id, Task.owner_id == owner_id, Task.deleted_at.is_(None),
+        Task.id == task_id, Task.workspace_id == scope.workspace_id, Task.deleted_at.is_(None),
     )):
         raise TaskMissing
     requested_goal = payload.goal_id if "goal_id" in payload.model_fields_set else locator
-    locked_goals = await _locked_goal_ids(session, owner_id, [locator, requested_goal])
+    locked_goals = await _locked_goal_ids(session, [locator, requested_goal], scope=scope,
+                                          multi_workspace_enabled=multi_workspace_enabled)
     task = await session.scalar(select(Task).where(
-        Task.id == task_id, Task.owner_id == owner_id, Task.deleted_at.is_(None),
+        Task.id == task_id, Task.workspace_id == scope.workspace_id, Task.deleted_at.is_(None),
     ).with_for_update().execution_options(populate_existing=True))
     if task is None:
         raise TaskMissing
@@ -309,10 +369,12 @@ async def update_task(
     if "goal_id" in fields and next_goal_id is not None:
         from modules.goals import public as goals
 
-        await goals.require_active_goal_link(session, owner_id, next_goal_id)
+        await goals.require_active_goal_link(session, next_goal_id, scope=scope,
+                                             multi_workspace_enabled=multi_workspace_enabled)
     if "entity_ids" in fields and next_entity_ids:
         # Updates acquire goal locks, then the task row, then sorted entity-owner fences.
-        await validate_entity_references_for_write(session, next_entity_ids)
+        await validate_entity_references_for_write(session, next_entity_ids, scope=scope,
+                                                   multi_workspace_enabled=multi_workspace_enabled)
     if "title" in fields and payload.title is None:
         raise ValueError("title cannot be cleared")
     if "completed_at" in fields and payload.completed_at is not None and next_status != "done":
@@ -336,26 +398,34 @@ async def update_task(
             from modules.goals import public as goal_public
 
             # Recompute each affected goal from the task's final persisted linkage/status once.
-            await goal_public.reconcile_task_milestone(session, owner_id, task_id, locked_goals)
+            await goal_public.reconcile_task_milestone(
+                session, task_id, locked_goals, scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+            )
     except goal_public.GoalConflict as exc:
         await session.rollback()
         raise TaskConflict(exc.code, str(exc), exc.current_revision) from exc
-    await session.commit()
-    return await get_task(session, owner_id, task_id)
+    await commit_with_replay(session, [], scope=scope,
+                             multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
+    return await get_task(session, task_id, scope=scope,
+                          multi_workspace_enabled=multi_workspace_enabled)
 
 
-async def get_task(session: AsyncSession, owner_id: int, task_id: UUID) -> TaskRead:
+async def get_task(session: AsyncSession, task_id: UUID, *, scope: Scope, multi_workspace_enabled: bool) -> TaskRead:
     """Return one non-deleted task visible to its owner."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     task = await session.scalar(select(Task).where(
-        Task.id == task_id, Task.owner_id == owner_id, Task.deleted_at.is_(None),
+        Task.id == task_id, Task.workspace_id == scope.workspace_id, Task.deleted_at.is_(None),
     ))
     if task is None: raise TaskMissing
-    return await _current_entity_projection(session, _to_task_read(task))
+    return await _current_entity_projection(session, _to_task_read(task), scope=scope,
+                                            multi_workspace_enabled=multi_workspace_enabled)
 
 
-async def list_tasks(session: AsyncSession, owner_id: int, filter: TaskFilter) -> TaskPage:
+async def list_tasks(session: AsyncSession, filter: TaskFilter, *, scope: Scope, multi_workspace_enabled: bool) -> TaskPage:
     """Return an owner-fenced, bounded task page using date-only and local-instant semantics."""
-    statement = select(Task).where(Task.owner_id == owner_id, Task.deleted_at.is_(None))
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    statement = select(Task).where(Task.workspace_id == scope.workspace_id, Task.deleted_at.is_(None))
     try:
         zone = ZoneInfo(filter.timezone)
     except (ZoneInfoNotFoundError, ValueError) as exc:
@@ -390,20 +460,27 @@ async def list_tasks(session: AsyncSession, owner_id: int, filter: TaskFilter) -
     next_cursor = encode_cursor(rows[-1].created_at, rows[-1].id) if more and rows else None
     items = []
     for row in rows:
-        items.append(await _current_entity_projection(session, _to_task_read(row)))
+        items.append(await _current_entity_projection(session, _to_task_read(row), scope=scope,
+                                                      multi_workspace_enabled=multi_workspace_enabled))
     return TaskPage(items=items, next_cursor=next_cursor)
 
 
-async def delete_task(session: AsyncSession, owner_id: int, task_id: UUID, expected_revision: int) -> None:
+async def delete_task(
+    session: AsyncSession, task_id: UUID, expected_revision: int, *, scope: Scope, multi_workspace_enabled: bool,
+) -> None:
     """Soft-delete a revision-fenced task while retaining accepted-plan identity."""
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
     goal_id = await session.scalar(select(Task.goal_id).where(
-        Task.id == task_id, Task.owner_id == owner_id, Task.deleted_at.is_(None),
+        Task.id == task_id, Task.workspace_id == scope.workspace_id, Task.deleted_at.is_(None),
     ))
-    if goal_id is None and not await session.scalar(select(Task.id).where(Task.id == task_id, Task.owner_id == owner_id, Task.deleted_at.is_(None))):
+    if goal_id is None and not await session.scalar(select(Task.id).where(
+        Task.id == task_id, Task.workspace_id == scope.workspace_id, Task.deleted_at.is_(None),
+    )):
         raise TaskMissing
-    locked_goals = await _locked_goal_ids(session, owner_id, [goal_id])
+    locked_goals = await _locked_goal_ids(session, [goal_id], scope=scope,
+                                          multi_workspace_enabled=multi_workspace_enabled)
     task = await session.scalar(select(Task).where(
-        Task.id == task_id, Task.owner_id == owner_id, Task.deleted_at.is_(None),
+        Task.id == task_id, Task.workspace_id == scope.workspace_id, Task.deleted_at.is_(None),
     ).with_for_update())
     if task is None: raise TaskMissing
     if task.revision != expected_revision:
@@ -418,36 +495,53 @@ async def delete_task(session: AsyncSession, owner_id: int, task_id: UUID, expec
         from modules.goals import public as goal_public
 
         try:
-            await goal_public.reconcile_task_milestone(session, owner_id, task_id, locked_goals)
+            await goal_public.reconcile_task_milestone(
+                session, task_id, locked_goals, scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+            )
         except goal_public.GoalConflict as exc:
             await session.rollback()
             raise TaskConflict(exc.code, str(exc), exc.current_revision) from exc
-    await session.commit()
+    await commit_with_replay(session, [], scope=scope,
+                             multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
 
 
 async def accepted_task_results(
-    session: AsyncSession, owner_id: int, task_ids: Sequence[UUID]
+    session: AsyncSession, task_ids: Sequence[UUID], *, scope: Scope, multi_workspace_enabled: bool,
 ) -> tuple[list[TaskRead], list[UUID]]:
-    """Return live accepted tasks plus tombstoned IDs without recreating either."""
+    """Return live accepted tasks and absent IDs only from the admitted workspace.
+
+    Task IDs are bounded before lookup; foreign, deleted, and missing identities
+    remain in the replay result's deleted-ID list and are never recreated.
+    """
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if len(task_ids) > 100: raise ValueError("Accepted task manifest exceeds 100 entries")
     rows = list((await session.scalars(select(Task).where(
-        Task.owner_id == owner_id, Task.id.in_(task_ids), Task.deleted_at.is_(None),
+        Task.workspace_id == scope.workspace_id, Task.id.in_(task_ids), Task.deleted_at.is_(None),
     ).order_by(Task.id))).all()) if task_ids else []
     live = {row.id: _to_task_read(row) for row in rows}
-    visible = [await _current_entity_projection(session, live[item]) for item in task_ids if item in live]
+    visible = [await _current_entity_projection(
+        session, live[item], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    ) for item in task_ids if item in live]
     return visible, [item for item in task_ids if item not in live]
 
 
 async def linked_task_completion(
-    session: AsyncSession, owner_id: int, task_ids: Sequence[UUID], goal_id: UUID | None
+    session: AsyncSession, task_ids: Sequence[UUID], goal_id: UUID | None, *,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> dict[UUID, bool]:
-    """Return bounded live task completion states under owner and optional goal fences."""
+    """Return bounded completion states for live task links in one admitted workspace.
+
+    Workspace and optional goal predicates are applied in SQL before fetching any
+    linked rows, preventing foreign task state from affecting goal progress.
+    """
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if len(task_ids) > 100 or len(set(task_ids)) != len(task_ids):
         raise ValueError("Linked task lookup requires at most 100 unique IDs")
     if not task_ids:
         return {}
     statement = select(Task).where(
-        Task.id.in_(task_ids), Task.owner_id == owner_id, Task.deleted_at.is_(None),
+        Task.id.in_(task_ids), Task.workspace_id == scope.workspace_id, Task.deleted_at.is_(None),
     )
     if goal_id is not None:
         statement = statement.where(Task.goal_id == goal_id)
@@ -456,10 +550,11 @@ async def linked_task_completion(
 
 
 async def validate_linked_tasks(
-    session: AsyncSession, owner_id: int, task_ids: Sequence[UUID], goal_id: UUID,
-    *, allow_deleted_ids: Sequence[UUID] = (),
+    session: AsyncSession, task_ids: Sequence[UUID], goal_id: UUID, *,
+    allow_deleted_ids: Sequence[UUID] = (), scope: Scope, multi_workspace_enabled: bool,
 ) -> None:
-    """Validate milestone links, preserving only pre-existing tombstoned IDs as history."""
+    """Validate workspace-local milestone links and explicitly retained tombstones."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if len(task_ids) > 100 or len(set(task_ids)) != len(task_ids):
         raise ValueError("A goal may link at most 100 unique milestone tasks")
     if not set(allow_deleted_ids).issubset(task_ids):
@@ -467,7 +562,7 @@ async def validate_linked_tasks(
     if not task_ids:
         return
     rows = list((await session.scalars(select(Task).where(
-        Task.id.in_(task_ids), Task.owner_id == owner_id, Task.goal_id == goal_id,
+        Task.id.in_(task_ids), Task.workspace_id == scope.workspace_id, Task.goal_id == goal_id,
     ))).all())
     by_id = {row.id: row for row in rows}
     if set(by_id) != set(task_ids) or any(
@@ -477,10 +572,13 @@ async def validate_linked_tasks(
         raise ValueError("Milestone task links must identify live tasks or existing tombstone history for this goal")
 
 
-async def detach_goal_tasks(session: AsyncSession, owner_id: int, goal_id: UUID) -> None:
-    """Detach all owner task rows from a deleting goal and advance each task revision."""
+async def detach_goal_tasks(
+    session: AsyncSession, goal_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+) -> None:
+    """Detach only this workspace's linked tasks and advance each task revision."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
     rows = list((await session.scalars(select(Task).where(
-        Task.owner_id == owner_id, Task.goal_id == goal_id,
+        Task.workspace_id == scope.workspace_id, Task.goal_id == goal_id,
     ).order_by(Task.id).with_for_update())).all())
     if any(row.revision >= MAX_REVISION for row in rows):
         raise TaskConflict("revision_exhausted", "A linked task revision counter is exhausted")
@@ -496,39 +594,56 @@ class TaskService:
         """Store the session used for delegated task operations."""
         self.session = session
 
-    async def create_task(self, owner_id: int, payload: TaskCreate) -> TaskRead:
-        """Create a task through the owner-scoped public contract."""
-        return await create_task(self.session, owner_id, payload)
+    async def create_task(
+        self, payload: TaskCreate, *, scope: Scope, multi_workspace_enabled: bool,
+    ) -> TaskRead:
+        """Create a task through the required admitted workspace contract."""
+        return await create_task(self.session, payload, scope=scope,
+                                 multi_workspace_enabled=multi_workspace_enabled)
 
-    async def update_task(self, owner_id: int, task_id: UUID, payload: TaskUpdate) -> TaskRead:
-        """Update a task through the required-revision public contract."""
-        return await update_task(self.session, owner_id, task_id, payload)
+    async def update_task(
+        self, task_id: UUID, payload: TaskUpdate, *, scope: Scope, multi_workspace_enabled: bool,
+    ) -> TaskRead:
+        """Update a task through its workspace-scoped revision contract."""
+        return await update_task(self.session, task_id, payload, scope=scope,
+                                 multi_workspace_enabled=multi_workspace_enabled)
 
-    async def get_task(self, owner_id: int, task_id: UUID) -> TaskRead:
-        """Read a task through the owner-scoped public contract."""
-        return await get_task(self.session, owner_id, task_id)
+    async def get_task(
+        self, task_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+    ) -> TaskRead:
+        """Read a task through its admitted workspace contract."""
+        return await get_task(self.session, task_id, scope=scope,
+                              multi_workspace_enabled=multi_workspace_enabled)
 
-    async def list_tasks(self, owner_id: int, filter: TaskFilter) -> TaskPage:
-        """List tasks through the bounded public query contract."""
-        return await list_tasks(self.session, owner_id, filter)
+    async def list_tasks(
+        self, filter: TaskFilter, *, scope: Scope, multi_workspace_enabled: bool,
+    ) -> TaskPage:
+        """List tasks through the bounded workspace query contract."""
+        return await list_tasks(self.session, filter, scope=scope,
+                                multi_workspace_enabled=multi_workspace_enabled)
 
-    async def delete_task(self, owner_id: int, task_id: UUID, expected_revision: int) -> None:
-        """Soft-delete a task through the revision-fenced public contract."""
-        await delete_task(self.session, owner_id, task_id, expected_revision)
+    async def delete_task(
+        self, task_id: UUID, expected_revision: int, *, scope: Scope, multi_workspace_enabled: bool,
+    ) -> None:
+        """Soft-delete a task through its workspace-scoped revision contract."""
+        await delete_task(self.session, task_id, expected_revision, scope=scope,
+                          multi_workspace_enabled=multi_workspace_enabled)
 
 
 async def list_due_within(
-    session: AsyncSession, owner_id: int, lead: timedelta, grace: timedelta, limit: int = 100,
+    session: AsyncSession, lead: timedelta, grace: timedelta, limit: int = 100, *,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> list[tuple[UUID, str, str, float, UUID | None]]:
     """Open tasks whose due moment is within ``lead`` ahead or ``grace`` behind now (bounded).
 
     Returns ``(task_id, status, due_marker, hours_until_due, goal_id)`` for the automations due sweep. Date-only
     due dates count as the start of that UTC day.
     """
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     now = datetime.now(UTC)
     start, end = now - grace, now + lead
     stmt = select(Task).where(
-        Task.owner_id == owner_id, Task.deleted_at.is_(None), Task.status.notin_(("done", "cancelled")),
+        Task.workspace_id == scope.workspace_id, Task.deleted_at.is_(None), Task.status.notin_(("done", "cancelled")),
         or_(Task.due_at.between(start, end), Task.due_date.between(start.date(), end.date())),
     ).order_by(func.coalesce(Task.due_at, cast(Task.due_date, DateTime(timezone=True))), Task.id).limit(limit)
     result = []

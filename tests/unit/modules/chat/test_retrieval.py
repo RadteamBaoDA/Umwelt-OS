@@ -190,6 +190,15 @@ class TestContextBudgetAndReranking:
         assert warnings == []
 
 
+@pytest.fixture(autouse=True)
+def _owner_scope(monkeypatch):
+    """Chat resolves the owner-default scope itself; keep these unit tests off the database."""
+    monkeypatch.setattr(
+        "modules.chat.retrieval.owner_scope_kwargs",
+        AsyncMock(return_value={"scope": MagicMock(), "multi_workspace_enabled": False}),
+    )
+
+
 class TestFenceRevalidation:
     """Tests for revalidate_context_fence before sending evidence to outbound destinations."""
 

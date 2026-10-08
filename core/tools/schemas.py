@@ -10,6 +10,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, computed_field, field_validator
 
+from core.workspaces.schemas import InternalJobScope, WorkspaceContext
+
 
 class ToolRisk(str, Enum):  # str+Enum kept: StrEnum changes str()/format() behavior
     """Classification of tool execution risk controlling automatic execution and approval requirements."""
@@ -214,6 +216,7 @@ class ToolExecutionPrincipal(BaseModel):
     """Server-derived actor and scope fence used for each tool dispatch."""
 
     actor_id: str
+    scope: WorkspaceContext | InternalJobScope
     is_owner: bool = False
     allowed_tools: frozenset[str] = frozenset()
     source_ids: frozenset[str] = frozenset()
@@ -222,3 +225,11 @@ class ToolExecutionPrincipal(BaseModel):
     capabilities: frozenset[str] = frozenset()
 
     model_config = {"frozen": True, "extra": "forbid"}
+
+    @field_validator("scope", mode="before")
+    @classmethod
+    def _typed_scope(cls, value: object) -> object:
+        """Reject dict/str input: pydantic would otherwise build a dataclass from a mapping."""
+        if not isinstance(value, (WorkspaceContext, InternalJobScope)):
+            raise ValueError("Typed workspace scope required")  # noqa: TRY004  # pydantic only wraps ValueError
+        return value

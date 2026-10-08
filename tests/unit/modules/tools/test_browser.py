@@ -13,6 +13,7 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
+from core.workspaces.schemas import AccessFence, WorkspaceContext
 from modules.agents.public import BrowserRunAuthorization
 from modules.connectors.public import AgentBrowserScope
 from modules.tools.browser_control import BrowserControlEvent, _service_authorized, _target_in_scope
@@ -192,6 +193,11 @@ class TestBrowserControlEvents:
         assert _service_authorized(None, expected) is False
 
 
+WS = uuid4()
+OWNER_SCOPE = WorkspaceContext(user_id=1, workspace_id=WS, role="owner", membership_revision=1)
+FENCE = AccessFence(WS, 1, 1, 1)
+
+
 class TestBrowserJobSubmissionAndCancellation:
     """Unit tests for submit_browser_read_in_uow and cancel_browser_job_in_uow."""
 
@@ -221,6 +227,7 @@ class TestBrowserJobSubmissionAndCancellation:
         """Return a valid AgentBrowserScope matching the source."""
         source_id = next(iter(mock_agent_auth.source_ids))
         return AgentBrowserScope(
+            workspace_id=WS,
             source_id=source_id,
             source_generation=1,
             connector_revision=1,
@@ -251,13 +258,15 @@ class TestBrowserJobSubmissionAndCancellation:
         with pytest.raises(PermissionError, match="authorization is invalid"):
             await submit_browser_read_in_uow(
                 session=session,
-                owner_id=2,  # Not owner 1
                 run_id=mock_agent_auth.run_id,
                 tool_slot=1,
                 auth_session_hash="session-hash",
-                scope=mock_browser_scope,
+                grant=mock_browser_scope,
                 args=args,
                 budget=budget,
+                scope=WorkspaceContext(user_id=2, workspace_id=WS, role="owner", membership_revision=1),
+                multi_workspace_enabled=False,
+                access_fence=FENCE,
             )
 
     @pytest.mark.asyncio
@@ -279,13 +288,15 @@ class TestBrowserJobSubmissionAndCancellation:
         with pytest.raises(PermissionError, match="authorization is invalid"):
             await submit_browser_read_in_uow(
                 session=session,
-                owner_id=1,
                 run_id=mock_agent_auth.run_id,
                 tool_slot=1,
                 auth_session_hash="session-hash",
-                scope=mock_browser_scope,
+                grant=mock_browser_scope,
                 args=args,
                 budget=budget,
+                scope=OWNER_SCOPE,
+                multi_workspace_enabled=False,
+                access_fence=FENCE,
             )
 
     @pytest.mark.asyncio
@@ -314,13 +325,15 @@ class TestBrowserJobSubmissionAndCancellation:
 
         job_read = await submit_browser_read_in_uow(
             session=session,
-            owner_id=1,
             run_id=mock_agent_auth.run_id,
             tool_slot=1,
             auth_session_hash="session-hash",
-            scope=mock_browser_scope,
+            grant=mock_browser_scope,
             args=args,
             budget=budget,
+            scope=OWNER_SCOPE,
+            multi_workspace_enabled=False,
+            access_fence=FENCE,
         )
 
         assert job_read.status == "queued"
@@ -364,7 +377,9 @@ class TestBrowserJobSubmissionAndCancellation:
         session.scalar.return_value = mock_job
         session.execute.return_value = MagicMock(rowcount=0)
 
-        result = await cancel_browser_job_in_uow(session, owner_id=1, job_id=mock_job.id)
+        result = await cancel_browser_job_in_uow(
+            session, mock_job.id, scope=OWNER_SCOPE, multi_workspace_enabled=False,
+        )
 
         assert result.status == "cancel_requested"
         assert mock_job.cancel_requested is True

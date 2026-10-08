@@ -6,7 +6,11 @@ from uuid import uuid4
 
 import pytest
 
+from core.workspaces.schemas import AccessFence, InternalJobScope
 from modules.sources import public, worker
+
+WORKSPACE_ID = uuid4()
+SCOPE = InternalJobScope(WORKSPACE_ID, 7, 3, None, None)
 
 
 def _progress(**overrides):
@@ -28,7 +32,7 @@ def _operation(**overrides):
 
 async def _settle(operation, progress):
     with patch.object(worker.documents, "source_cleanup_progress", AsyncMock(return_value=progress)) as read:
-        await worker._settle_operation(None, operation)
+        await worker._settle_operation(None, operation, scope=SCOPE, multi_workspace_enabled=False)
     return read
 
 
@@ -36,7 +40,9 @@ async def test_settles_only_when_documents_and_memory_are_complete() -> None:
     operation = _operation()
     read = await _settle(operation, _progress())
     assert operation.status == "succeeded" and operation.error_code is None
-    assert read.await_args.kwargs == {"source_id": operation.source_id, "capture_recorded": True}
+    assert read.await_args.kwargs == {
+        "source_id": operation.source_id, "capture_recorded": True, "scope": SCOPE, "multi_workspace_enabled": False,
+    }
 
 
 @pytest.mark.parametrize("operation,progress", [
@@ -78,5 +84,9 @@ class _Session:
 
 
 async def test_data_purge_exists_reports_any_receipt() -> None:
-    assert await public.source_data_purge_exists(_Session(uuid4()), uuid4()) is True
-    assert await public.source_data_purge_exists(_Session(None), uuid4()) is False
+    fence = AccessFence(WORKSPACE_ID, 7, 3, 5)
+    with patch.object(public.workspaces, "read_access_fence", AsyncMock(return_value=fence)):
+        assert await public.source_data_purge_exists(
+            _Session(uuid4()), uuid4(), scope=SCOPE, multi_workspace_enabled=False) is True
+        assert await public.source_data_purge_exists(
+            _Session(None), uuid4(), scope=SCOPE, multi_workspace_enabled=False) is False

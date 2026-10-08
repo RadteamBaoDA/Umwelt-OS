@@ -5,19 +5,22 @@ import binascii
 import json
 import math
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
 
+from fastapi import HTTPException
 from sqlalchemy import and_, delete, desc, exists, func, or_, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.auth.models import Owner
 from core.pagination import decode_cursor, encode_cursor
 from core.realtime import commit_with_replay, make_graph_change
+from core.workspaces import public as workspaces
+from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
 from modules.knowledge.entities.models import (
     Entity,
     EntityAlias,
@@ -67,11 +70,40 @@ from modules.knowledge.entities.seed import (
     ensure_demo_entities,  # re-export: used by documents seed
 )
 from modules.sources import public as sources
-from modules.sources.schemas import SourceExportFence
+from modules.sources.schemas import SourceExportFence, SourceFence
 
 
-async def observability_quality_summary(session: AsyncSession) -> dict[str, int]:
-    """Return entity-owned unresolved and failed-extraction counts only."""
+def _actor(scope: Scope) -> int:
+    """Return the principal recorded by a real workspace or durable job scope."""
+    return scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
+
+
+async def _admit(
+    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
+    lock: bool = False, expected: AccessFence | None = None,
+) -> AccessFence:
+    """Require owner scope and capture or lock authorization before entity locks."""
+    if not isinstance(scope, (WorkspaceContext, InternalJobScope)):
+        raise TypeError("An explicit entity workspace scope is required")
+    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
+    if type(multi_workspace_enabled) is not bool:
+        raise TypeError("The configured multi-workspace feature flag must be a boolean")
+    if lock:
+        return await workspaces.lock_access_fence(
+            session, scope=scope, expected=expected, multi_workspace_enabled=multi_workspace_enabled,
+        )
+    return await workspaces.read_access_fence(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+
+
+async def observability_quality_summary(
+    session: AsyncSession, *, instance_operator: bool,
+) -> dict[str, int]:
+    """Return global entity quality counts only for the explicit instance operator route."""
+    if instance_operator is not True:
+        raise HTTPException(status_code=403, detail="Instance operator access required")
     unresolved = int(await session.scalar(select(func.count()).select_from(Entity).where(
         and_(Entity.canonical_name.is_(None), Entity.name.is_(None))
     )) or 0)
@@ -129,11 +161,14 @@ def _entity_export_payload_bytes(items: list[EntityExportRead]) -> int:
                           separators=(",", ":")).encode("utf-8"))
 
 
-async def _entity_export_count(session: AsyncSession, snapshot_at: datetime) -> int:
+async def _entity_export_count(
+    session: AsyncSession, snapshot_at: datetime, *, scope: Scope, multi_workspace_enabled: bool,
+) -> int:
     """Count cutoff-stable owner facts and entities backed by currently eligible source evidence."""
-    eligible = sources.export_eligible_source_ids()
+    eligible = sources.export_eligible_source_ids(scope=scope)
     eligible_membership = exists(select(EntityEvidenceMembership.id).where(
         EntityEvidenceMembership.entity_id == Entity.id,
+        EntityEvidenceMembership.workspace_id == scope.workspace_id,
         EntityEvidenceMembership.source_id.in_(eligible),
     ))
     eligible_alias_support = exists(select(EntityAliasEvidence.id).join(
@@ -141,26 +176,30 @@ async def _entity_export_count(session: AsyncSession, snapshot_at: datetime) -> 
     ).where(
         EntityAliasEvidence.alias_id == EntityAlias.id,
         EntityEvidenceMembership.entity_id == EntityAlias.entity_id,
+        EntityEvidenceMembership.workspace_id == scope.workspace_id,
         EntityEvidenceMembership.source_id.in_(eligible),
     ))
     owner_alias = exists(select(EntityAlias.id).where(
-        EntityAlias.entity_id == Entity.id, or_(EntityAlias.origin == "owner", eligible_alias_support),
+        EntityAlias.entity_id == Entity.id,
+        or_(EntityAlias.origin == "owner", eligible_alias_support),
     ))
     return int(await session.scalar(select(func.count()).select_from(Entity).where(
+        Entity.workspace_id == scope.workspace_id,
         Entity.created_at <= snapshot_at, Entity.updated_at <= snapshot_at,
         or_(Entity.name_origin == "owner", Entity.description_origin == "owner", eligible_membership, owner_alias),
     )) or 0)
 
 
 async def _entity_export_source_generations(
-    session: AsyncSession, source_ids: set[UUID],
+    session: AsyncSession, source_ids: set[UUID], *, scope: Scope, multi_workspace_enabled: bool,
 ) -> dict[UUID, int]:
     """Read current eligible source generations through the public lifecycle projection."""
     if not source_ids:
         return {}
-    projection = sources.ingestion_lifecycle_projection().subquery()
+    projection = sources.ingestion_lifecycle_projection(scope=scope).subquery()
     rows: Any = (await session.execute(select(projection.c.id, projection.c.generation).where(
-        projection.c.id.in_(source_ids), projection.c.id.in_(sources.export_eligible_source_ids()),
+        projection.c.id.in_(source_ids),
+        projection.c.id.in_(sources.export_eligible_source_ids(scope=scope)),
     ))).all()
     generations = {source_id: int(generation) for source_id, generation in rows}
     if generations.keys() != source_ids:
@@ -169,7 +208,8 @@ async def _entity_export_source_generations(
 
 
 async def _entity_export_field_is_supported(
-    session: AsyncSession, entity: Entity, field_name: str, value: str | None,
+    session: AsyncSession, entity: Entity, field_name: str, value: str | None, *,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> bool:
     """Require one exact current-field support membership from an eligible source."""
     if value is None:
@@ -178,15 +218,16 @@ async def _entity_export_field_is_supported(
     return await session.scalar(select(EntityFieldEvidence.id).join(
         EntityEvidenceMembership, EntityEvidenceMembership.id == EntityFieldEvidence.membership_id,
     ).where(
+        EntityEvidenceMembership.workspace_id == scope.workspace_id,
         EntityFieldEvidence.entity_id == entity.id, EntityFieldEvidence.field_name == field_name,
         EntityFieldEvidence.value_hash == value_hash,
-        EntityEvidenceMembership.source_id.in_(sources.export_eligible_source_ids()),
+        EntityEvidenceMembership.source_id.in_(sources.export_eligible_source_ids(scope=scope)),
     ).limit(1)) is not None
 
 
 async def export_page(
     session: AsyncSession, *, owner_id: int, record_kind: str, limit: int = 50,
-    cursor: str | None = None,
+    cursor: str | None = None, scope: Scope, multi_workspace_enabled: bool,
 ) -> EntityExportPage:
     """Return bounded canonical entity facts with aliases, citation IDs, and final-validation fences.
 
@@ -196,31 +237,37 @@ async def export_page(
     metadata, extraction payloads and audit details are excluded. Combined citations are capped at 100;
     an overfull record fails explicitly so no canonical fact is silently truncated.
     """
-    if record_kind != "entities" or not 1 <= limit <= 100:
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if owner_id != _actor(scope) or record_kind != "entities" or not 1 <= limit <= 100:
         raise ValueError("Entity export kind or page limit is invalid")
-    if owner_id != 1 or await session.scalar(select(Owner.id).where(Owner.id == owner_id)) is None:
-        raise PermissionError("Entity export requires the current owner")
     if cursor is None:
         snapshot_at, position = datetime.now(UTC), None
     else:
         snapshot_at, position_at, position_id = _decode_entity_export_cursor(cursor, owner_id)
         position = (position_at, position_id)
-    snapshot_count = await _entity_export_count(session, snapshot_at)
-    eligible = sources.export_eligible_source_ids()
+    snapshot_count = await _entity_export_count(
+        session, snapshot_at, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    eligible = sources.export_eligible_source_ids(scope=scope)
     eligible_membership = exists(select(EntityEvidenceMembership.id).where(
-        EntityEvidenceMembership.entity_id == Entity.id, EntityEvidenceMembership.source_id.in_(eligible),
+        EntityEvidenceMembership.entity_id == Entity.id,
+        EntityEvidenceMembership.workspace_id == scope.workspace_id,
+        EntityEvidenceMembership.source_id.in_(eligible),
     ))
     eligible_alias_support = exists(select(EntityAliasEvidence.id).join(
         EntityEvidenceMembership, EntityEvidenceMembership.id == EntityAliasEvidence.membership_id,
     ).where(
         EntityAliasEvidence.alias_id == EntityAlias.id,
         EntityEvidenceMembership.entity_id == EntityAlias.entity_id,
+        EntityEvidenceMembership.workspace_id == scope.workspace_id,
         EntityEvidenceMembership.source_id.in_(eligible),
     ))
     owner_alias = exists(select(EntityAlias.id).where(
-        EntityAlias.entity_id == Entity.id, or_(EntityAlias.origin == "owner", eligible_alias_support),
+        EntityAlias.entity_id == Entity.id,
+        or_(EntityAlias.origin == "owner", eligible_alias_support),
     ))
     statement = select(Entity).where(
+        Entity.workspace_id == scope.workspace_id,
         Entity.created_at <= snapshot_at, Entity.updated_at <= snapshot_at,
         or_(Entity.name_origin == "owner", Entity.description_origin == "owner", eligible_membership, owner_alias),
     )
@@ -239,13 +286,16 @@ async def export_page(
             ).where(
                 EntityAliasEvidence.alias_id == EntityAlias.id,
                 EntityEvidenceMembership.entity_id == EntityAlias.entity_id,
+                EntityEvidenceMembership.workspace_id == scope.workspace_id,
                 EntityEvidenceMembership.source_id.in_(eligible),
             ))),
         )
                                               .order_by(EntityAlias.id).limit(101)
                                               .execution_options(populate_existing=True))).all())
         evidence = list((await session.scalars(select(EntityEvidenceMembership).where(
-            EntityEvidenceMembership.entity_id == row.id, EntityEvidenceMembership.source_id.in_(eligible),
+            EntityEvidenceMembership.entity_id == row.id,
+            EntityEvidenceMembership.workspace_id == scope.workspace_id,
+            EntityEvidenceMembership.source_id.in_(eligible),
         ).order_by(EntityEvidenceMembership.id).limit(101)
           .execution_options(populate_existing=True))).all())
         if len(aliases) > 100 or len(evidence) > 100:
@@ -257,6 +307,7 @@ async def export_page(
             ).where(
                 EntityAliasEvidence.alias_id == alias.id,
                 EntityEvidenceMembership.entity_id == alias.entity_id,
+                EntityEvidenceMembership.workspace_id == scope.workspace_id,
                 EntityEvidenceMembership.source_id.in_(eligible),
             ).order_by(EntityAliasEvidence.id).limit(101)
               .execution_options(populate_existing=True))).all())
@@ -270,7 +321,9 @@ async def export_page(
                           for _, membership in rows_for_alias)
         if len(source_ids) > 100:
             raise ValueError("An entity export record exceeds the distinct source generation bound")
-        source_generations = await _entity_export_source_generations(session, source_ids)
+        source_generations = await _entity_export_source_generations(
+            session, source_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
         alias_items = [EntityExportAlias(
             id=alias.id, alias=alias.alias, confirmed=alias.confirmed, origin=alias.origin,
             confidence=alias.confidence, created_at=alias.created_at,
@@ -288,13 +341,17 @@ async def export_page(
         name = row.name
         canonical_name = row.canonical_name
         name_origin = row.name_origin
-        if row.name_origin != "owner" and not await _entity_export_field_is_supported(session, row, "name", row.name):
+        if row.name_origin != "owner" and not await _entity_export_field_is_supported(
+            session, row, "name", row.name, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        ):
             name = canonical_name = None
             name_origin = None
         description = row.description
         description_origin = row.description_origin
         if row.description_origin != "owner" and not await _entity_export_field_is_supported(
             session, row, "description", row.description,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         ):
             description = None
             description_origin = None
@@ -334,28 +391,34 @@ async def export_page(
 
 async def validate_export_fences(
     session: AsyncSession, *, owner_id: int, record_kind: str, snapshot_at: datetime,
-    expected_snapshot_count: int, fences: list[EntityExportFence],
+    expected_snapshot_count: int, fences: list[EntityExportFence], scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> EntityExportFenceValidation:
     """Recheck the bounded entity set, revisions, aliases, and citation IDs before publication."""
-    if record_kind != "entities" or len(fences) > 100 or expected_snapshot_count < 0:
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if owner_id != _actor(scope) or record_kind != "entities" or len(fences) > 100 or expected_snapshot_count < 0:
         raise ValueError("Entity export revalidation input is invalid")
-    if owner_id != 1 or await session.scalar(select(Owner.id).where(Owner.id == owner_id)) is None:
-        return EntityExportFenceValidation(valid=False, reason="owner_unavailable", observed_snapshot_count=0)
-    observed = await _entity_export_count(session, snapshot_at)
+    observed = await _entity_export_count(
+        session, snapshot_at, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     if observed != expected_snapshot_count:
         return EntityExportFenceValidation(valid=False, reason="snapshot_count_changed", observed_snapshot_count=observed)
     for fence in fences:
-        row = await session.scalar(select(Entity).where(Entity.id == fence.id).execution_options(populate_existing=True))
+        row = await session.scalar(select(Entity).where(
+            Entity.id == fence.id, Entity.workspace_id == scope.workspace_id,
+        ).execution_options(populate_existing=True))
         if row is None or (row.created_at, row.updated_at, row.revision) != (
             fence.created_at, fence.updated_at, fence.revision,
         ):
             return EntityExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
-        source_fences = [SourceExportFence(source_id=item.source_id, generation=item.generation)
+        source_fences = [SourceExportFence(source_id=item.source_id, workspace_id=scope.workspace_id, generation=item.generation)
                          for item in fence.source_fences]
-        eligible_source_ids = set(await sources.filter_export_eligible_sources(session, source_fences))
+        eligible_source_ids = set(await sources.filter_export_eligible_sources(
+            session, source_fences, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        ))
         if eligible_source_ids != {item.source_id for item in source_fences}:
             return EntityExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
-        eligible = sources.export_eligible_source_ids()
+        eligible = sources.export_eligible_source_ids(scope=scope)
         aliases = list((await session.scalars(select(EntityAlias).where(
             EntityAlias.entity_id == fence.id,
             or_(EntityAlias.origin == "owner", exists(select(EntityAliasEvidence.id).join(
@@ -363,11 +426,14 @@ async def validate_export_fences(
             ).where(
                 EntityAliasEvidence.alias_id == EntityAlias.id,
                 EntityEvidenceMembership.entity_id == EntityAlias.entity_id,
+                EntityEvidenceMembership.workspace_id == scope.workspace_id,
                 EntityEvidenceMembership.source_id.in_(eligible),
             ))),
         ).order_by(EntityAlias.id).limit(101).execution_options(populate_existing=True))).all())
         evidence = list((await session.scalars(select(EntityEvidenceMembership).where(
-            EntityEvidenceMembership.entity_id == fence.id, EntityEvidenceMembership.source_id.in_(eligible),
+            EntityEvidenceMembership.entity_id == fence.id,
+            EntityEvidenceMembership.workspace_id == scope.workspace_id,
+            EntityEvidenceMembership.source_id.in_(eligible),
         ).order_by(EntityEvidenceMembership.id).limit(101)
           .execution_options(populate_existing=True))).all())
         if len(aliases) > 100 or len(evidence) > 100:
@@ -379,6 +445,7 @@ async def validate_export_fences(
             ).where(
                 EntityAliasEvidence.alias_id == alias.id,
                 EntityEvidenceMembership.entity_id == alias.entity_id,
+                EntityEvidenceMembership.workspace_id == scope.workspace_id,
                 EntityEvidenceMembership.source_id.in_(eligible),
             ).order_by(EntityAliasEvidence.id).limit(101)
               .execution_options(populate_existing=True))).all())
@@ -392,7 +459,9 @@ async def validate_export_fences(
                           for _, membership in rows_for_alias)
         if len(source_ids) > 100:
             return EntityExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
-        generations = await _entity_export_source_generations(session, source_ids)
+        generations = await _entity_export_source_generations(
+            session, source_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
         alias_values = [EntityExportAlias(
             id=alias.id, alias=alias.alias, confirmed=alias.confirmed, origin=alias.origin,
             confidence=alias.confidence, created_at=alias.created_at,
@@ -418,7 +487,7 @@ async def validate_export_fences(
 
 
 async def get_temporal_node_seeds(
-    session: AsyncSession, membership_ids: list[UUID],
+    session: AsyncSession, membership_ids: list[UUID], *, scope: Scope, multi_workspace_enabled: bool,
 ) -> tuple[EntityTemporalNodeSeed, ...]:
     """Prove current nonblank fields against exact selected source-local evidence.
 
@@ -427,14 +496,24 @@ async def get_temporal_node_seeds(
     stale, redirected or unsupported fields fail closed; no writes or commits.
     Owner authorship alone is not source-local evidence for model seed text.
     """
+    """Return bounded current temporal node seeds backed by live exact evidence.
+
+    The scope is admitted before reading memberships, and every membership,
+    entity, source, document fence, and evidence lookup stays inside that
+    workspace. This is read-only and does not commit the caller's transaction.
+    """
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if not membership_ids or len(membership_ids) > 100 or len(set(membership_ids)) != len(membership_ids):
         raise ValueError("Node seed memberships must contain 1 to 100 unique IDs")
     rows = list((await session.scalars(select(EntityEvidenceMembership).where(
         EntityEvidenceMembership.id.in_(membership_ids),
+        EntityEvidenceMembership.workspace_id == scope.workspace_id,
     ).order_by(EntityEvidenceMembership.id))).all())
     if len(rows) != len(membership_ids) or len({row.source_id for row in rows}) != 1:
         raise LookupError("Node seed memberships are missing or cross-source")
-    source = await sources.get_connector_source(session, rows[0].source_id)
+    source = await sources.get_connector_source(
+        session, rows[0].source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     if source is None or source.status != "active":
         raise LookupError("Node seed source is unavailable")
     from modules.knowledge.documents import public as documents
@@ -442,11 +521,14 @@ async def get_temporal_node_seeds(
     for row in rows:
         groups.setdefault((row.document_id, row.document_version_id), []).append(row.chunk_id)
     for (document_id, version_id), chunks in groups.items():
-        fences = await documents.review_version_fences(session, [version_id])
+        fences = await documents.review_version_fences(
+            session, [version_id], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
         fence = fences.get(version_id)
-        refs = await documents.read_evidence_refs(session, [
-            (version_id, chunk) for chunk in dict.fromkeys(chunks)
-        ])
+        refs = await documents.read_evidence_refs(
+            session, [(version_id, chunk) for chunk in dict.fromkeys(chunks)],
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
         if (fence is None or fence.document_id != document_id or fence.source_id != source.id
                 or fence.current_source_generation != source.generation
                 or len(refs) != len(set(chunks))
@@ -454,16 +536,23 @@ async def get_temporal_node_seeds(
             raise LookupError("Node seed retained evidence is not current and permitted")
     result = []
     for entity_id in sorted({row.entity_id for row in rows}):
-        ref = (await get_entity_refs(session, [entity_id]))[0]
+        ref = (await get_entity_refs(
+            session, [entity_id], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        ))[0]
         if ref.canonical_id != entity_id:
             raise LookupError("Node seed identity was redirected")
-        entity = await session.get(Entity, entity_id)
+        entity = await session.scalar(select(Entity).where(
+            Entity.id == entity_id, Entity.workspace_id == scope.workspace_id,
+        ))
         if entity is None or not entity.name or not entity.name.strip() or entity.name_origin is None:
             raise LookupError("Node seed name is unavailable")
         selected = [row for row in rows if row.entity_id == entity_id]
-        proofs = list((await session.scalars(select(EntityFieldEvidence).where(
+        proofs = list((await session.scalars(select(EntityFieldEvidence).join(
+            EntityEvidenceMembership, EntityEvidenceMembership.id == EntityFieldEvidence.membership_id,
+        ).where(
             EntityFieldEvidence.entity_id == entity_id,
             EntityFieldEvidence.membership_id.in_([row.id for row in selected]),
+            EntityEvidenceMembership.workspace_id == scope.workspace_id,
         ))).all())
         name_hash = sha256(entity.name.encode("utf-8")).hexdigest()
         name_support = sorted({p.membership_id for p in proofs if p.field_name == "name" and p.value_hash == name_hash})
@@ -475,7 +564,10 @@ async def get_temporal_node_seeds(
             entity_id=entity.id, revision=entity.revision, type=entity.type,
             name=entity.name, summary=entity.description if summary_support else None,
             source_id=source.id, source_generation=source.generation,
-            memberships=await get_membership_refs(session, [row.id for row in selected]),
+            memberships=await get_membership_refs(
+                session, [row.id for row in selected], scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+            ),
             name_support_membership_ids=name_support, summary_support_membership_ids=summary_support,
             name_hash=name_hash, summary_hash=summary_hash if summary_support else None,
         ))
@@ -486,7 +578,7 @@ async def get_temporal_node_seeds(
 
 async def list_entity_history(
     session: AsyncSession, entity_id: UUID, limit: int = 50, cursor: str | None = None,
-    *, membership_cursor: str | None = None,
+    *, membership_cursor: str | None = None, scope: Scope, multi_workspace_enabled: bool,
 ) -> EntityHistoryPage | None:
     """Page identifier-only owner audit for a currently accessible canonical entity.
 
@@ -494,13 +586,18 @@ async def list_entity_history(
     not occurrence; retained evidence remains available via list_entity_evidence.
     Bound cursor to requested identity and never manufacture past field values.
     """
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if not 1 <= limit <= 100:
         raise ValueError("Entity history page limit must be between 1 and 100")
     try:
-        canonical = await resolve_canonical_entity_id(session, entity_id)
+        canonical = await resolve_canonical_entity_id(
+            session, entity_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
     except LookupError:
         return None
-    statement = select(EntityOwnerAction).where(or_(
+    statement = select(EntityOwnerAction).where(
+        EntityOwnerAction.workspace_id == scope.workspace_id,
+        or_(
         EntityOwnerAction.affected_ids.contains([str(entity_id)]),
         EntityOwnerAction.affected_ids.contains([str(canonical)]),
     ))
@@ -536,11 +633,16 @@ async def list_entity_history(
             decode_cursor(membership_position)
         except (ValueError, TypeError, binascii.Error) as exc:
             raise ValueError("Invalid entity membership history cursor") from exc
-    membership_page = await list_entity_evidence(session, canonical, limit, membership_position)
+    membership_page = await list_entity_evidence(
+        session, canonical, limit, membership_position, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
     if membership_page:
         permitted = set()
         for source_id in sorted({item.source_id for item in membership_page.items}):
-            source = await sources.get_connector_source(session, source_id)
+            source = await sources.get_connector_source(
+                session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
             if source is not None and source.status == "active":
                 permitted.add(source_id)
         membership_page.items = [item for item in membership_page.items if item.source_id in permitted]
@@ -558,18 +660,23 @@ async def list_entity_history(
 
 
 async def _schedule_entity_change(
-    session: AsyncSession, entity: Entity, fields: list[str], origin: str,
+    session: AsyncSession, entity: Entity, fields: list[str], origin: str, *,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> None:
-    """Flush exact current support/revision scheduling in caller's canonical transaction."""
+    """Flush workspace-local support and revision scheduling without committing."""
     from modules.knowledge.temporal import public as temporal
     rows = list((await session.execute(select(
         EntityEvidenceMembership.document_version_id, EntityEvidenceMembership.chunk_id,
-    ).where(EntityEvidenceMembership.entity_id == entity.id).limit(10_001))).all())
+    ).where(
+        EntityEvidenceMembership.workspace_id == scope.workspace_id,
+        EntityEvidenceMembership.entity_id == entity.id,
+    ).limit(10_001))).all())
     if len(rows) > 10_000:
         raise ValueError("Entity change exceeds complete support bound")
     await temporal.schedule_canonical_change(
         session, kind="entity", canonical_id=entity.id, revision=entity.revision,
         fields=fields, support=[(version, chunk) for version, chunk in rows], origin=origin,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
 
 
@@ -616,14 +723,16 @@ def _entity_read(entity: Entity, aliases: list[EntityAlias] | None = None) -> En
     )
 
 
-async def _aliases(session: AsyncSession, entity_ids: list[UUID]) -> dict[UUID, list[EntityAlias]]:
-    """Load ordered display aliases, excluding unconfirmed source-derived aliases."""
+async def _aliases(
+    session: AsyncSession, entity_ids: list[UUID], *, scope: Scope,
+) -> dict[UUID, list[EntityAlias]]:
+    """Load ordered display aliases only from the admitted workspace."""
     if not entity_ids:
         return {}
     result: dict[UUID, list[EntityAlias]] = {}
     aliases = (await session.scalars(
-        select(EntityAlias).where(
-            EntityAlias.entity_id.in_(entity_ids),
+        select(EntityAlias).join(Entity, Entity.id == EntityAlias.entity_id).where(
+            EntityAlias.entity_id.in_(entity_ids), Entity.workspace_id == scope.workspace_id,
             or_(EntityAlias.origin.is_not(None), EntityAlias.source_id.is_(None)),
         ).order_by(EntityAlias.alias)
     )).all()
@@ -635,18 +744,21 @@ async def _aliases(session: AsyncSession, entity_ids: list[UUID]) -> dict[UUID, 
 async def record_owner_action(
     session: AsyncSession,
     *,
-    actor_id: int,
+    scope: Scope,
+    multi_workspace_enabled: bool,
     operation: str,
     reason: str,
     affected_ids: list[UUID],
     revisions: dict[str, int | None] | None = None,
 ) -> None:
-    """Queue an owner correction audit record without committing the transaction."""
+    """Queue an actor-attributed workspace correction record without committing."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     clean_reason = " ".join(reason.split())
     if not clean_reason or len(clean_reason) > 300:
         raise ValueError("Owner action reason must contain 1 to 300 characters")
     session.add(EntityOwnerAction(
-        actor_id=actor_id,
+        workspace_id=scope.workspace_id,
+        actor_id=_actor(scope),
         operation=operation,
         reason=clean_reason,
         affected_ids=[str(identifier) for identifier in affected_ids],
@@ -656,10 +768,19 @@ async def record_owner_action(
 
 
 async def list_entities(
-    session: AsyncSession, limit: int, cursor: str | None, entity_type: str | None, query: str | None
+    session: AsyncSession, limit: int, cursor: str | None, entity_type: str | None, query: str | None,
+    *, scope: Scope, multi_workspace_enabled: bool,
 ) -> EntityPage:
-    """Return a cursor-paged list of canonical entities matching optional filters."""
-    statement = select(Entity).where(~Entity.id.in_(select(EntityRedirect.old_entity_id)))
+    """Return a bounded cursor page of canonical entities in one admitted workspace."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if not 1 <= limit <= 100:
+        raise ValueError("Entity page limit must be between 1 and 100")
+    statement = select(Entity).where(
+        Entity.workspace_id == scope.workspace_id,
+        ~Entity.id.in_(select(EntityRedirect.old_entity_id).where(
+            EntityRedirect.workspace_id == scope.workspace_id,
+        )),
+    )
     if entity_type:
         statement = statement.where(Entity.type == entity_type)
     if query:
@@ -674,26 +795,33 @@ async def list_entities(
     )).all())
     has_more = len(rows) > limit
     rows = rows[:limit]
-    aliases = await _aliases(session, [row.id for row in rows])
+    aliases = await _aliases(session, [row.id for row in rows], scope=scope)
     next_cursor = encode_cursor(rows[-1].created_at, rows[-1].id) if has_more and rows else None
     return EntityPage(items=[_entity_read(row, aliases.get(row.id)) for row in rows], next_cursor=next_cursor)
 
 
-async def get_entity(session: AsyncSession, entity_id: UUID) -> EntityRead | None:
+async def get_entity(
+    session: AsyncSession, entity_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+) -> EntityRead | None:
     """Read a canonical entity through redirects, returning None when unavailable."""
     try:
-        canonical_id = await resolve_canonical_entity_id(session, entity_id)
+        canonical_id = await resolve_canonical_entity_id(
+            session, entity_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
     except LookupError:
         return None
-    entity = await session.get(Entity, canonical_id)
+    entity = await session.scalar(select(Entity).where(
+        Entity.id == canonical_id, Entity.workspace_id == scope.workspace_id,
+    ))
     if entity is None:
         return None
-    aliases = await _aliases(session, [entity.id])
+    aliases = await _aliases(session, [entity.id], scope=scope)
     return _entity_read(entity, aliases.get(entity.id))
 
 
 async def get_entity_refs(
-    session: AsyncSession, ids: list[UUID], *, for_write: bool = False
+    session: AsyncSession, ids: list[UUID], *, for_write: bool = False,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> list[EntityReferenceRead]:
     """Resolve up to 100 unique entity IDs while preserving requested order.
 
@@ -701,6 +829,7 @@ async def get_entity_refs(
     deleted IDs, then locks canonical rows in sorted order. Missing references
     raise LookupError; duplicate or oversized input raises ValueError.
     """
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if len(ids) > 100 or len(set(ids)) != len(ids):
         raise ValueError("Entity reference query must contain up to 100 unique IDs")
     if not ids:
@@ -708,14 +837,22 @@ async def get_entity_refs(
     canonical_ids: dict[UUID, UUID] = {}
     for identifier in ids:
         try:
-            canonical_ids[identifier] = await resolve_canonical_entity_id(session, identifier)
+            canonical_ids[identifier] = await resolve_canonical_entity_id(
+                session, identifier, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
         except LookupError as exc:
-            if for_write and await session.scalar(select(EntityRedirect.old_entity_id).where(EntityRedirect.old_entity_id == identifier)) is not None:
+            if for_write and await session.scalar(select(EntityRedirect.old_entity_id).where(
+                EntityRedirect.workspace_id == scope.workspace_id,
+                EntityRedirect.old_entity_id == identifier,
+            )) is not None:
                 raise TerminalEntityConflict("Entity identity was deleted") from exc
             raise
     if for_write and any(canonical_ids[identifier] != identifier for identifier in ids):
         raise RedirectedEntityConflict("Entity ID was merged; use its canonical ID")
-    query = select(Entity).where(Entity.id.in_(set(canonical_ids.values())))
+    query = select(Entity).where(
+        Entity.workspace_id == scope.workspace_id,
+        Entity.id.in_(set(canonical_ids.values())),
+    )
     if for_write:
         query = query.order_by(Entity.id).with_for_update()
     rows = (await session.scalars(query)).all()
@@ -732,14 +869,22 @@ async def get_entity_refs(
     return [by_id[identifier] for identifier in ids]
 
 
-async def resolve_canonical_entity_id(session: AsyncSession, entity_id: UUID) -> UUID:
+async def resolve_canonical_entity_id(
+    session: AsyncSession, entity_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+) -> UUID:
     """Follow the bounded owner redirect chain; malformed cycles fail closed."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     current = entity_id
     seen = {current}
     for _ in range(32):
-        redirect = await session.scalar(select(EntityRedirect).where(EntityRedirect.old_entity_id == current))
+        redirect = await session.scalar(select(EntityRedirect).where(
+            EntityRedirect.old_entity_id == current,
+            EntityRedirect.workspace_id == scope.workspace_id,
+        ))
         if redirect is None:
-            if await session.get(Entity, current) is None:
+            if await session.scalar(select(Entity.id).where(
+                Entity.id == current, Entity.workspace_id == scope.workspace_id,
+            )) is None:
                 raise LookupError("Entity reference is missing")
             return current
         target = redirect.target_entity_id
@@ -753,14 +898,19 @@ async def resolve_canonical_entity_id(session: AsyncSession, entity_id: UUID) ->
 
 
 async def get_membership_refs(
-    session: AsyncSession, ids: list[UUID], *, for_write: bool = False
+    session: AsyncSession, ids: list[UUID], *, for_write: bool = False,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> list[EntityMembershipReferenceRead]:
     """Resolve unique memberships, acquiring stable entity/ID locks for writes."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if len(ids) > 200 or len(set(ids)) != len(ids):
         raise ValueError("Entity membership query must contain up to 200 unique IDs")
     if not ids:
         return []
-    query = select(EntityEvidenceMembership).where(EntityEvidenceMembership.id.in_(ids))
+    query = select(EntityEvidenceMembership).where(
+        EntityEvidenceMembership.id.in_(ids),
+        EntityEvidenceMembership.workspace_id == scope.workspace_id,
+    )
     if for_write:
         query = query.order_by(EntityEvidenceMembership.entity_id, EntityEvidenceMembership.id).with_for_update().execution_options(populate_existing=True)
     rows = (await session.scalars(query)).all()
@@ -778,7 +928,8 @@ async def get_membership_refs(
 
 
 async def list_version_membership_refs(
-    session: AsyncSession, document_version_id: UUID, chunk_ids: list[UUID]
+    session: AsyncSession, document_version_id: UUID, chunk_ids: list[UUID], *,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> list[VersionMembershipReference]:
     """Return bounded canonical memberships for chunks already authorized by documents extraction input.
 
@@ -787,6 +938,7 @@ async def list_version_membership_refs(
     result exposes membership keys for model selection; the model never chooses
     a global entity ID.
     """
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if len(chunk_ids) > 100 or len(set(chunk_ids)) != len(chunk_ids):
         raise ValueError("Version membership chunks must be unique and bounded")
     if not chunk_ids:
@@ -796,8 +948,12 @@ async def list_version_membership_refs(
         .join(Entity, Entity.id == EntityEvidenceMembership.entity_id)
         .where(
             EntityEvidenceMembership.document_version_id == document_version_id,
+            EntityEvidenceMembership.workspace_id == scope.workspace_id,
+            Entity.workspace_id == scope.workspace_id,
             EntityEvidenceMembership.chunk_id.in_(chunk_ids),
-            ~EntityEvidenceMembership.entity_id.in_(select(EntityRedirect.old_entity_id)),
+            ~EntityEvidenceMembership.entity_id.in_(select(EntityRedirect.old_entity_id).where(
+                EntityRedirect.workspace_id == scope.workspace_id,
+            )),
         )
         .order_by(EntityEvidenceMembership.id)
     )).all()
@@ -813,6 +969,7 @@ async def list_version_membership_refs(
 
 async def list_retained_version_membership_refs(
     session: AsyncSession, document_version_id: UUID, chunk_ids: list[UUID],
+    *, scope: Scope, multi_workspace_enabled: bool,
 ) -> list[VersionMembershipReference]:
     """Return canonical membership keys for exact currently permitted retained chunks.
 
@@ -825,22 +982,28 @@ async def list_retained_version_membership_refs(
     are identity hints, not model seed proof: get_temporal_node_seeds owns that
     source-local field-value proof. No locks, writes or commits occur here.
     """
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if len(chunk_ids) > 100 or len(set(chunk_ids)) != len(chunk_ids):
         raise ValueError("Retained membership chunks must be unique and bounded to100")
     if not chunk_ids:
         return []
     from modules.knowledge.documents import public as documents
 
-    fences = await documents.review_version_fences(session, [document_version_id])
+    fences = await documents.review_version_fences(
+        session, [document_version_id], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     fence = fences.get(document_version_id)
     if fence is None:
         raise LookupError("Retained membership version is unavailable")
-    source = await sources.get_connector_source(session, fence.source_id)
+    source = await sources.get_connector_source(
+        session, fence.source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     if source is None or source.status != "active" or source.generation != fence.current_source_generation:
         raise LookupError("Retained membership source policy or generation changed")
     try:
         evidence = await documents.read_evidence_refs(
             session, [(document_version_id, chunk_id) for chunk_id in chunk_ids],
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
     except ValueError as exc:
         raise LookupError("Retained membership evidence is unavailable") from exc
@@ -854,8 +1017,12 @@ async def list_retained_version_membership_refs(
         .join(Entity, Entity.id == EntityEvidenceMembership.entity_id)
         .where(
             EntityEvidenceMembership.document_version_id == document_version_id,
+            EntityEvidenceMembership.workspace_id == scope.workspace_id,
+            Entity.workspace_id == scope.workspace_id,
             EntityEvidenceMembership.chunk_id.in_(chunk_ids),
-            ~EntityEvidenceMembership.entity_id.in_(select(EntityRedirect.old_entity_id)),
+            ~EntityEvidenceMembership.entity_id.in_(select(EntityRedirect.old_entity_id).where(
+                EntityRedirect.workspace_id == scope.workspace_id,
+            )),
         )
         .order_by(EntityEvidenceMembership.id).limit(101)
     )).all()
@@ -873,16 +1040,23 @@ async def list_retained_version_membership_refs(
 
 
 async def list_entity_evidence(
-    session: AsyncSession, entity_id: UUID, limit: int = 50, cursor: str | None = None
+    session: AsyncSession, entity_id: UUID, limit: int = 50, cursor: str | None = None,
+    *, scope: Scope, multi_workspace_enabled: bool,
 ) -> EntityEvidencePage | None:
     """Return evidence for a canonical entity with document-version provenance."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if not 1 <= limit <= 100:
         raise ValueError("Entity evidence page limit must be between 1 and 100")
     try:
-        canonical_id = await resolve_canonical_entity_id(session, entity_id)
+        canonical_id = await resolve_canonical_entity_id(
+            session, entity_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
     except LookupError:
         return None
-    statement = select(EntityEvidenceMembership).where(EntityEvidenceMembership.entity_id == canonical_id)
+    statement = select(EntityEvidenceMembership).where(
+        EntityEvidenceMembership.entity_id == canonical_id,
+        EntityEvidenceMembership.workspace_id == scope.workspace_id,
+    )
     if cursor:
         extracted_at, identifier = decode_cursor(cursor)
         statement = statement.where(tuple_(EntityEvidenceMembership.extracted_at, EntityEvidenceMembership.id) > (extracted_at, identifier))
@@ -896,7 +1070,8 @@ async def list_entity_evidence(
     from modules.knowledge.documents import public as documents
 
     refs = await documents.read_evidence_refs(
-        session, list(dict.fromkeys((row.document_version_id, row.chunk_id) for row in rows))
+        session, list(dict.fromkeys((row.document_version_id, row.chunk_id) for row in rows)),
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
     by_pair = {(ref.document_version_id, ref.chunk_id): ref for ref in refs}
     items = [
@@ -941,14 +1116,21 @@ def _decode_review_cursor(value: str) -> tuple[datetime, UUID, int]:
         raise ValueError("Invalid review cursor") from exc
 
 
-async def list_review_candidates(session: AsyncSession, limit: int = 50, cursor: str | None = None) -> EntityReviewPage:
+async def list_review_candidates(
+    session: AsyncSession, limit: int = 50, cursor: str | None = None, *,
+    scope: Scope, multi_workspace_enabled: bool,
+) -> EntityReviewPage:
     """Bounded owner projection; only immutable future snapshots are actionable."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if not 1 <= limit <= 100:
         raise ValueError("Review page limit must be between 1 and 100")
     cursor_time, cursor_work, cursor_index = _decode_review_cursor(cursor) if cursor else (None, None, 0)
     statement = select(EntityExtractionWork, EntityExtractionResult).join(
         EntityExtractionResult, EntityExtractionResult.work_id == EntityExtractionWork.id
-    ).where(EntityExtractionResult.review_json.is_not(None))
+    ).where(
+        EntityExtractionWork.workspace_id == scope.workspace_id,
+        EntityExtractionResult.review_json.is_not(None),
+    )
     if cursor_time is not None and cursor_work is not None:
         statement = statement.where(tuple_(EntityExtractionWork.updated_at, EntityExtractionWork.id) <= (cursor_time, cursor_work))
     rows = (await session.execute(
@@ -957,7 +1139,10 @@ async def list_review_candidates(session: AsyncSession, limit: int = 50, cursor:
         .limit(101)
     )).all()
     from modules.knowledge.documents import public as documents
-    fences = await documents.review_version_fences(session, [work.document_version_id for work, _ in rows[:100]])
+    fences = await documents.review_version_fences(
+        session, [work.document_version_id for work, _ in rows[:100]],
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     items: list[EntityReviewCandidate] = []
     evidence_keys: list[list[tuple[UUID, UUID]]] = []
     endpoint_keys: list[tuple[UUID, UUID, str, str, UUID] | None] = []
@@ -1045,7 +1230,10 @@ async def list_review_candidates(session: AsyncSession, limit: int = 50, cursor:
     all_keys = list(dict.fromkeys(key for group in evidence_keys for key in group))
     refs_by_pair = {}
     for offset in range(0, len(all_keys), 100):
-        refs = await documents.read_evidence_refs(session, all_keys[offset:offset + 100])
+        refs = await documents.read_evidence_refs(
+            session, all_keys[offset:offset + 100], scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
         refs_by_pair.update({(ref.document_version_id, ref.chunk_id): ref for ref in refs})
     endpoint_bindings = list(dict.fromkeys(
         (str(work_id), key, version_id, chunk_id)
@@ -1055,6 +1243,7 @@ async def list_review_candidates(session: AsyncSession, limit: int = 50, cursor:
     ))
     endpoint_rows = list((await session.scalars(
         select(EntityEvidenceMembership).where(
+            EntityEvidenceMembership.workspace_id == scope.workspace_id,
             tuple_(EntityEvidenceMembership.extraction_identity, EntityEvidenceMembership.candidate_key,
                    EntityEvidenceMembership.document_version_id, EntityEvidenceMembership.chunk_id).in_(endpoint_bindings)
         ).order_by(EntityEvidenceMembership.entity_id, EntityEvidenceMembership.id).limit(401)
@@ -1062,7 +1251,10 @@ async def list_review_candidates(session: AsyncSession, limit: int = 50, cursor:
     endpoint_entities = sorted({row.entity_id for row in endpoint_rows}, key=str)
     entity_refs = []
     for offset in range(0, len(endpoint_entities), 100):
-        entity_refs.extend(await get_entity_refs(session, endpoint_entities[offset:offset + 100]))
+        entity_refs.extend(await get_entity_refs(
+            session, endpoint_entities[offset:offset + 100], scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        ))
     entity_refs_by_id = {ref.requested_id: ref for ref in entity_refs}
     for item, keys, endpoints in zip(items, evidence_keys, endpoint_keys):
         fence = fences.get(item.document_version_id)
@@ -1142,15 +1334,27 @@ def _review_entity_bindings(review: list[Any]) -> dict[str, tuple[str, set[UUID]
 
 
 async def assign_review_candidate(
-    session: AsyncSession, candidate_id: UUID, payload: EntityReviewAssignmentRequest, *, actor_id: int,
+    session: AsyncSession, candidate_id: UUID, payload: EntityReviewAssignmentRequest, *,
+    scope: Scope, multi_workspace_enabled: bool, actor_id: int,
 ) -> EntityReviewAssignmentResult:
     """Bind one durable extraction candidate to an owner-selected canonical entity."""
     from modules.knowledge.documents import public as documents
 
-    result_hint = await session.get(EntityExtractionResult, payload.result_id)
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    if actor_id != _actor(scope):
+        raise HTTPException(status_code=403, detail="Review actor does not match the admitted owner")
+    result_hint = await session.scalar(select(EntityExtractionResult).join(
+        EntityExtractionWork, EntityExtractionWork.id == EntityExtractionResult.work_id,
+    ).where(
+        EntityExtractionResult.id == payload.result_id,
+        EntityExtractionWork.workspace_id == scope.workspace_id,
+    ))
     if result_hint is None:
         raise LookupError("Review result is unavailable")
-    work_hint = await session.get(EntityExtractionWork, result_hint.work_id)
+    work_hint = await session.scalar(select(EntityExtractionWork).where(
+        EntityExtractionWork.id == result_hint.work_id,
+        EntityExtractionWork.workspace_id == scope.workspace_id,
+    ))
     if work_hint is None:
         raise LookupError("Review work is unavailable")
     extraction_generation = work_hint.source_generation
@@ -1178,17 +1382,23 @@ async def assign_review_candidate(
     if not 1 <= len(chunks) <= 5 or len(set(chunks)) != len(chunks) or len(fingerprint) != 64 or len(candidate_key) != 64:
         raise ValueError("Review candidate evidence selector is invalid")
 
-    locator = await documents.review_version_locator(session, work_hint.document_version_id)
+    locator = await documents.review_version_locator(
+        session, work_hint.document_version_id, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
     if locator is None:
         raise LookupError("Review evidence was removed")
     document_id, source_id = locator
-    source = await sources.lock_source(session, source_id)
+    source = await sources.lock_source(
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        expected_access_fence=fence,
+    )
     if source is None or source.generation != payload.expected_owner_generation:
         raise ValueError("Owner evidence fence changed; reload the review candidate")
     evidence = await documents.lock_review_version_evidence(
         session, document_id=document_id, source_id=source_id,
         version_id=work_hint.document_version_id, source_generation=source.generation,
-        chunk_ids=chunks,
+        chunk_ids=chunks, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
     if evidence is None:
         raise LookupError("Selected source evidence is no longer retained")
@@ -1196,16 +1406,25 @@ async def assign_review_candidate(
     bindings = _review_entity_bindings(reviews)
     if str(candidate_id) not in bindings or bindings[str(candidate_id)] != (fingerprint, set(chunks)):
         raise ValueError("Selected candidate is missing from the complete result selector set")
-    prior = await get_document_correction_decisions(session, document_id, work_hint.document_version_id, bindings)
+    prior = await get_document_correction_decisions(
+        session, document_id, work_hint.document_version_id, bindings,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     prior_decision = prior.get(str(candidate_id))
     if prior_decision is not None and (prior_decision[1] != "assign" or prior_decision[2] != payload.target_entity_id):
         raise ValueError("A conflicting correction decision already exists")
-    refs = await get_entity_refs(session, [payload.target_entity_id], for_write=True)
+    refs = await get_entity_refs(
+        session, [payload.target_entity_id], for_write=True,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     target = refs[0]
     if target.canonical_id != payload.target_entity_id or target.type != candidate_type or target.revision != payload.expected_target_revision:
         raise ValueError("Target entity changed or has an incompatible identity")
 
-    work = await session.scalar(select(EntityExtractionWork).where(EntityExtractionWork.id == work_hint.id).with_for_update().execution_options(populate_existing=True))
+    work = await session.scalar(select(EntityExtractionWork).where(
+        EntityExtractionWork.id == work_hint.id,
+        EntityExtractionWork.workspace_id == scope.workspace_id,
+    ).with_for_update().execution_options(populate_existing=True))
     result = await session.scalar(select(EntityExtractionResult).where(
         EntityExtractionResult.id == payload.result_id, EntityExtractionResult.work_id == work_hint.id,
     ).with_for_update().execution_options(populate_existing=True))
@@ -1217,14 +1436,17 @@ async def assign_review_candidate(
     evidence = await documents.lock_review_version_evidence(
         session, document_id=document_id, source_id=source_id,
         version_id=work.document_version_id, source_generation=payload.expected_owner_generation,
-        chunk_ids=chunks,
+        chunk_ids=chunks, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
     if evidence is None:
         raise LookupError("Selected source evidence is no longer retained")
     current_bindings = _review_entity_bindings(result.review_json if isinstance(result.review_json, list) else [])
     if current_bindings != bindings:
         raise ValueError("Same-result candidate selectors changed; reload the review")
-    current = await get_document_correction_decisions(session, document_id, work.document_version_id, current_bindings, for_update=True)
+    current = await get_document_correction_decisions(
+        session, document_id, work.document_version_id, current_bindings, for_update=True,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     decision = current.get(str(candidate_id))
     if decision != prior_decision:
         raise ValueError("Correction decision changed; reload the review")
@@ -1238,14 +1460,17 @@ async def assign_review_candidate(
         ),
         source_generation=payload.expected_owner_generation, extraction_identity=str(work.id),
         candidate_key=candidate_key, match_fingerprint=fingerprint,
-        observed_at=ref.observed_at, confidence=confidence,
+        observed_at=ref.observed_at, confidence=confidence, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     ) for ref in evidence]
     for membership_id in memberships:
         existing = await session.scalar(select(EntityCorrectionDecision).where(
+            EntityCorrectionDecision.workspace_id == scope.workspace_id,
             EntityCorrectionDecision.scope == "evidence", EntityCorrectionDecision.membership_id == membership_id,
         ).with_for_update())
         if existing is None:
             session.add(EntityCorrectionDecision(
+                workspace_id=scope.workspace_id,
                 decision="assign", scope="evidence", entity_id=payload.target_entity_id,
                 membership_id=membership_id, match_fingerprint=fingerprint, actor_id=actor_id,
                 reason=payload.reason, created_at=datetime.now(UTC),
@@ -1259,26 +1484,42 @@ async def assign_review_candidate(
             break
     result.review_json = updated_review
     await record_owner_action(
-        session, actor_id=actor_id, operation="entity_review_assign", reason=payload.reason,
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        operation="entity_review_assign", reason=payload.reason,
         affected_ids=[payload.target_entity_id, candidate_id, *memberships],
         revisions={str(payload.target_entity_id): target.revision},
     )
     await session.flush()
-    await commit_with_replay(session, [make_graph_change(entity_id=payload.target_entity_id)])
+    await commit_with_replay(
+        session, [make_graph_change(entity_id=payload.target_entity_id, scope=scope)],
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+    )
     return EntityReviewAssignmentResult(candidate_id=candidate_id, target_entity_id=payload.target_entity_id, membership_ids=memberships, revision=target.revision)
 
 
 async def resolve_relationship_review(
-    session: AsyncSession, candidate_id: UUID, payload: EntityRelationshipReviewRequest, *, actor_id: int,
+    session: AsyncSession, candidate_id: UUID, payload: EntityRelationshipReviewRequest, *,
+    scope: Scope, multi_workspace_enabled: bool, actor_id: int,
 ) -> EntityRelationshipReviewResult:
     """Publish a stored relationship only after both exact endpoint memberships exist."""
     from modules.knowledge.documents import public as documents
     from modules.knowledge.relationships import public as relationships
 
-    result_hint = await session.get(EntityExtractionResult, payload.result_id)
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    if actor_id != _actor(scope):
+        raise HTTPException(status_code=403, detail="Review actor does not match the admitted owner")
+    result_hint = await session.scalar(select(EntityExtractionResult).join(
+        EntityExtractionWork, EntityExtractionWork.id == EntityExtractionResult.work_id,
+    ).where(
+        EntityExtractionResult.id == payload.result_id,
+        EntityExtractionWork.workspace_id == scope.workspace_id,
+    ))
     if result_hint is None:
         raise LookupError("Review result is unavailable")
-    work_hint = await session.get(EntityExtractionWork, result_hint.work_id)
+    work_hint = await session.scalar(select(EntityExtractionWork).where(
+        EntityExtractionWork.id == result_hint.work_id,
+        EntityExtractionWork.workspace_id == scope.workspace_id,
+    ))
     if work_hint is None:
         raise LookupError("Review work is unavailable")
     extraction_generation = work_hint.source_generation
@@ -1300,17 +1541,23 @@ async def resolve_relationship_review(
     if not source_key or not target_key or source_key == target_key or not relationship_type:
         raise ValueError("Relationship endpoint selector is invalid")
 
-    locator = await documents.review_version_locator(session, work_hint.document_version_id)
+    locator = await documents.review_version_locator(
+        session, work_hint.document_version_id, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
     if locator is None:
         raise LookupError("Relationship evidence was removed")
     document_id, source_id = locator
-    source = await sources.lock_source(session, source_id)
+    source = await sources.lock_source(
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        expected_access_fence=fence,
+    )
     if source is None or source.generation != payload.expected_owner_generation:
         raise ValueError("Owner evidence fence changed; reload the relationship review")
     refs = await documents.lock_review_version_evidence(
         session, document_id=document_id, source_id=source_id,
         version_id=work_hint.document_version_id, source_generation=source.generation,
-        chunk_ids=[chunk_id],
+        chunk_ids=[chunk_id], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
     if refs is None:
         raise LookupError("Relationship evidence is no longer retained")
@@ -1318,6 +1565,7 @@ async def resolve_relationship_review(
     async def endpoint_memberships() -> tuple[EntityEvidenceMembership, EntityEvidenceMembership]:
         """Require one distinct endpoint membership per candidate on the cited chunk."""
         rows = list((await session.scalars(select(EntityEvidenceMembership).where(
+            EntityEvidenceMembership.workspace_id == scope.workspace_id,
             EntityEvidenceMembership.extraction_identity == str(work_hint.id),
             EntityEvidenceMembership.candidate_key.in_([source_key, target_key]),
             EntityEvidenceMembership.document_version_id == work_hint.document_version_id,
@@ -1335,11 +1583,20 @@ async def resolve_relationship_review(
         source_membership.id: (source_membership.entity_id, source_membership.document_version_id, source_membership.chunk_id),
         target_membership.id: (target_membership.entity_id, target_membership.document_version_id, target_membership.chunk_id),
     }
-    endpoint_refs = await get_entity_refs(session, [source_membership.entity_id, target_membership.entity_id], for_write=True)
+    endpoint_refs = await get_entity_refs(
+        session, [source_membership.entity_id, target_membership.entity_id], for_write=True,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     if len(endpoint_refs) != 2 or any(ref.requested_id != ref.canonical_id for ref in endpoint_refs):
         raise ValueError("Relationship endpoint identity changed; review the assignments")
-    locked = await get_membership_refs(session, [source_membership.id, target_membership.id], for_write=True)
-    work = await session.scalar(select(EntityExtractionWork).where(EntityExtractionWork.id == work_hint.id).with_for_update().execution_options(populate_existing=True))
+    locked = await get_membership_refs(
+        session, [source_membership.id, target_membership.id], for_write=True,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    work = await session.scalar(select(EntityExtractionWork).where(
+        EntityExtractionWork.id == work_hint.id,
+        EntityExtractionWork.workspace_id == scope.workspace_id,
+    ).with_for_update().execution_options(populate_existing=True))
     result = await session.scalar(select(EntityExtractionResult).where(
         EntityExtractionResult.id == payload.result_id, EntityExtractionResult.work_id == work_hint.id,
     ).with_for_update().execution_options(populate_existing=True))
@@ -1360,7 +1617,8 @@ async def resolve_relationship_review(
         target_entity_id=target_membership.entity_id, relationship_type=relationship_type,
         document_version_id=work.document_version_id, chunk_id=chunk_id,
         source_membership_id=source_membership.id, target_membership_id=target_membership.id,
-        confidence=float(snapshot["confidence"]),
+        confidence=float(snapshot["confidence"]), scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     if relationship_id is None:
         raise ValueError("Relationship endpoints are identical")
@@ -1371,11 +1629,15 @@ async def resolve_relationship_review(
             break
     result.review_json = updated_review
     await record_owner_action(
-        session, actor_id=actor_id, operation="relationship_review_resolve", reason=payload.reason,
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        operation="relationship_review_resolve", reason=payload.reason,
         affected_ids=[relationship_id, candidate_id, source_membership.id, target_membership.id],
     )
     await session.flush()
-    await commit_with_replay(session, [make_graph_change(relationship_id=relationship_id)])
+    await commit_with_replay(
+        session, [make_graph_change(relationship_id=relationship_id, scope=scope)],
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+    )
     return EntityRelationshipReviewResult(candidate_id=candidate_id, relationship_id=relationship_id)
 
 
@@ -1386,6 +1648,8 @@ async def publish_derived_field(
     membership_id: UUID,
     field_name: Literal["name", "description"],
     value: str,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> bool:
     """Publish a derived field and bind its exact value to one valid membership.
 
@@ -1393,10 +1657,11 @@ async def publish_derived_field(
     command takes entity then membership locks and queues temporal desired state
     with exact current support in the same transaction; it never commits.
     """
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if field_name not in {"name", "description"}:
         raise ValueError("Unsupported derived entity field")
     entity = await session.scalar(
-        select(Entity).where(Entity.id == entity_id).with_for_update()
+        select(Entity).where(Entity.id == entity_id, Entity.workspace_id == scope.workspace_id).with_for_update()
     )
     if entity is None:
         raise LookupError("Entity is missing")
@@ -1405,6 +1670,7 @@ async def publish_derived_field(
         .where(
             EntityEvidenceMembership.id == membership_id,
             EntityEvidenceMembership.entity_id == entity_id,
+            EntityEvidenceMembership.workspace_id == scope.workspace_id,
         )
         .with_for_update()
     )
@@ -1452,24 +1718,30 @@ async def publish_derived_field(
         entity.revision += 1
     await session.flush()
     if support_exists is None or previous_value != value or previous_origin != "derived":
-        await _schedule_entity_change(session, entity, [field_name, "support"], "derived")
+        await _schedule_entity_change(
+            session, entity, [field_name, "support"], "derived", scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
     return True
 
 
 async def schedule_extraction_work(
     session: AsyncSession, document_version_id: UUID, source_generation: int,
-    extractor_version: str, prompt_version: str,
+    extractor_version: str, prompt_version: str, *, scope: Scope, multi_workspace_enabled: bool,
 ) -> EntityExtractionWork:
     """Create or lock durable extraction work keyed by version and prompt identity."""
     if len(extractor_version) > 64 or len(prompt_version) > 64:
         raise ValueError("Extraction versions are too long")
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     await session.execute(pg_insert(EntityExtractionWork).values(
+        workspace_id=scope.workspace_id,
         document_version_id=document_version_id,
         source_generation=source_generation,
         extractor_version=extractor_version,
         prompt_version=prompt_version,
     ).on_conflict_do_nothing(constraint="uq_entity_extraction_work_identity"))
     work = await session.scalar(select(EntityExtractionWork).where(
+        EntityExtractionWork.workspace_id == scope.workspace_id,
         EntityExtractionWork.document_version_id == document_version_id,
         EntityExtractionWork.extractor_version == extractor_version,
         EntityExtractionWork.prompt_version == prompt_version,
@@ -1482,10 +1754,14 @@ async def schedule_extraction_work(
 
 
 async def claim_extraction_work(
-    session: AsyncSession, work_id: UUID, lease_owner: str, now: datetime
+    session: AsyncSession, work_id: UUID, lease_owner: str, now: datetime, *, scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> EntityExtractionWork | None:
     """Claim due work under a lease, enforcing expiry and the five-attempt ceiling."""
-    work = await session.scalar(select(EntityExtractionWork).where(EntityExtractionWork.id == work_id).with_for_update())
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    work = await session.scalar(select(EntityExtractionWork).where(
+        EntityExtractionWork.id == work_id, EntityExtractionWork.workspace_id == scope.workspace_id,
+    ).with_for_update())
     if work is None or work.status not in {"pending", "running"}:
         return None
     if work.status == "running" and work.lease_expires_at is not None and work.lease_expires_at > now:
@@ -1508,13 +1784,17 @@ async def claim_extraction_work(
     return work
 
 
-async def list_recoverable_extraction_work(session: AsyncSession, limit: int = 25) -> list[UUID]:
+async def list_recoverable_extraction_work(
+    session: AsyncSession, limit: int = 25, *, scope: Scope, multi_workspace_enabled: bool,
+) -> list[UUID]:
     """Lock and return bounded pending or expired extraction work IDs."""
     if not 1 <= limit <= 100:
         raise ValueError("Extraction recovery limit must be between 1 and 100")
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     now = datetime.now(UTC)
     return list((await session.scalars(
         select(EntityExtractionWork.id).where(
+            EntityExtractionWork.workspace_id == scope.workspace_id,
             EntityExtractionWork.next_attempt_at <= now,
             or_(
                 EntityExtractionWork.status == "pending",
@@ -1526,14 +1806,16 @@ async def list_recoverable_extraction_work(session: AsyncSession, limit: int = 2
 
 
 async def terminalize_exhausted_extraction_work(
-    session: AsyncSession, limit: int = 25
+    session: AsyncSession, limit: int = 25, *, scope: Scope, multi_workspace_enabled: bool,
 ) -> int:
     """Fail expired running work at the attempt ceiling and clear its lease."""
     if not 1 <= limit <= 100:
         raise ValueError("Extraction terminalization limit must be between 1 and 100")
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     now = datetime.now(UTC)
     rows = list((await session.scalars(
         select(EntityExtractionWork).where(
+            EntityExtractionWork.workspace_id == scope.workspace_id,
             EntityExtractionWork.status == "running",
             EntityExtractionWork.attempt >= 5,
             EntityExtractionWork.lease_expires_at <= now,
@@ -1548,16 +1830,20 @@ async def terminalize_exhausted_extraction_work(
     return len(rows)
 
 
-async def list_blocked_extraction_work(session: AsyncSession, limit: int = 25) -> list[tuple[UUID, UUID, int, str | None, str | None]]:
+async def list_blocked_extraction_work(
+    session: AsyncSession, limit: int = 25, *, scope: Scope, multi_workspace_enabled: bool,
+) -> list[tuple[UUID, UUID, int, str | None, str | None]]:
     """List due policy/capability-blocked work with its dependency fingerprint."""
     if not 1 <= limit <= 100:
         raise ValueError("Blocked extraction page size must be between 1 and 100")
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     rows = (await session.execute(
         select(
             EntityExtractionWork.id, EntityExtractionWork.document_version_id,
             EntityExtractionWork.source_generation, EntityExtractionWork.error_code,
             EntityExtractionWork.dependency_fingerprint,
         ).where(
+            EntityExtractionWork.workspace_id == scope.workspace_id,
             EntityExtractionWork.status == "blocked",
             EntityExtractionWork.error_code.in_(("ai_policy_denied", "structured_unsupported")),
             EntityExtractionWork.next_attempt_at <= datetime.now(UTC),
@@ -1567,13 +1853,16 @@ async def list_blocked_extraction_work(session: AsyncSession, limit: int = 25) -
 
 
 async def requeue_blocked_extraction_work(
-    session: AsyncSession, work_id: UUID, previous_fingerprint: str | None, current_fingerprint: str
+    session: AsyncSession, work_id: UUID, previous_fingerprint: str | None, current_fingerprint: str,
+    *, scope: Scope, multi_workspace_enabled: bool,
 ) -> bool:
     """Requeue blocked work only after its dependency fingerprint has changed."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if previous_fingerprint is None or previous_fingerprint == current_fingerprint:
         return False
     work = await session.scalar(select(EntityExtractionWork).where(
         EntityExtractionWork.id == work_id,
+        EntityExtractionWork.workspace_id == scope.workspace_id,
         EntityExtractionWork.status == "blocked",
         EntityExtractionWork.dependency_fingerprint == previous_fingerprint,
     ).with_for_update())
@@ -1592,11 +1881,14 @@ async def requeue_blocked_extraction_work(
 
 
 async def defer_blocked_extraction_recheck(
-    session: AsyncSession, work_id: UUID, fingerprint: str, *, minutes: int = 15
+    session: AsyncSession, work_id: UUID, fingerprint: str, *, scope: Scope,
+    multi_workspace_enabled: bool, minutes: int = 15,
 ) -> None:
     """Delay a matching blocked work item's next dependency recheck."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     work = await session.scalar(select(EntityExtractionWork).where(
         EntityExtractionWork.id == work_id,
+        EntityExtractionWork.workspace_id == scope.workspace_id,
         EntityExtractionWork.status == "blocked",
         EntityExtractionWork.dependency_fingerprint == fingerprint,
     ).with_for_update())
@@ -1604,14 +1896,18 @@ async def defer_blocked_extraction_recheck(
         work.next_attempt_at = datetime.now(UTC) + timedelta(minutes=minutes)
 
 
-async def get_extraction_status(session: AsyncSession, document_version_id: UUID) -> _ExtractionStatus | None:
+async def get_extraction_status(
+    session: AsyncSession, document_version_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+) -> _ExtractionStatus | None:
     """Return the newest work status and stored facts for one document version."""
     from modules.knowledge.entities.schemas import EntityExtractionStatus
 
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     row = (await session.execute(
         select(EntityExtractionWork, EntityExtractionResult)
         .outerjoin(EntityExtractionResult, EntityExtractionResult.work_id == EntityExtractionWork.id)
-        .where(EntityExtractionWork.document_version_id == document_version_id)
+        .where(EntityExtractionWork.document_version_id == document_version_id,
+               EntityExtractionWork.workspace_id == scope.workspace_id)
         .order_by(desc(EntityExtractionWork.created_at)).limit(1)
     )).one_or_none()
     if row is None:
@@ -1628,10 +1924,13 @@ async def get_extraction_status(session: AsyncSession, document_version_id: UUID
 async def finish_extraction_work(
     session: AsyncSession, work_id: UUID, lease_owner: str, *, facts: list[dict[str, object]],
     review: list[dict[str, object]], model: str | None, usage: dict[str, object] | None,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> bool:
     """Persist results and succeed only while the caller still owns a live lease."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     work = await session.scalar(select(EntityExtractionWork).where(
         EntityExtractionWork.id == work_id, EntityExtractionWork.status == "running",
+        EntityExtractionWork.workspace_id == scope.workspace_id,
         EntityExtractionWork.lease_owner == lease_owner,
         EntityExtractionWork.lease_expires_at > datetime.now(UTC),
     ).with_for_update())
@@ -1653,6 +1952,7 @@ async def finish_extraction_work(
 
 async def set_extraction_work_error(
     session: AsyncSession, work_id: UUID, lease_owner: str, error_code: str, *,
+    scope: Scope, multi_workspace_enabled: bool,
     blocked: bool = False, dependency_fingerprint: str | None = None,
 ) -> None:
     """Mutate failure state only while the caller still owns a live lease.
@@ -1665,8 +1965,10 @@ async def set_extraction_work_error(
     rows with a fingerprint. Local-only work has no fingerprint and is parked at
     ``datetime.max`` rather than requeued after a dependency change.
     """
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     work = await session.scalar(select(EntityExtractionWork).where(
         EntityExtractionWork.id == work_id, EntityExtractionWork.status == "running",
+        EntityExtractionWork.workspace_id == scope.workspace_id,
         EntityExtractionWork.lease_owner == lease_owner,
         EntityExtractionWork.lease_expires_at > datetime.now(UTC),
     ).with_for_update())
@@ -1684,24 +1986,32 @@ async def set_extraction_work_error(
 
 
 async def list_resolution_candidates(
-    session: AsyncSession, entity_type: str, candidate_names: list[str], limit: int = 1000
+    session: AsyncSession, entity_type: str, candidate_names: list[str], limit: int = 1000, *,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> tuple[list[dict[str, object]], bool]:
     """Return bounded same-type entities and exact confirmed aliases for resolution."""
     if not 1 <= limit <= 1000 or not 1 <= len(candidate_names) <= 30:
         raise ValueError("Resolution context must be bounded")
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     normalized_names = sorted({canonicalize_name(name) for name in candidate_names})
     rows = list((await session.execute(
         select(Entity.id, Entity.type, Entity.name, Entity.revision)
         .where(
+            Entity.workspace_id == scope.workspace_id,
             Entity.type == entity_type,
-            ~Entity.id.in_(select(EntityRedirect.old_entity_id)),
+            ~Entity.id.in_(select(EntityRedirect.old_entity_id).where(
+                EntityRedirect.workspace_id == scope.workspace_id,
+            )),
         ).order_by(Entity.id).limit(limit + 1)
     )).all())
     overflow = len(rows) > limit
     rows = rows[:limit]
     aliases = (await session.execute(
-        select(EntityAlias.entity_id, EntityAlias.normalized_alias)
+        select(EntityAlias.entity_id, EntityAlias.normalized_alias).join(
+            Entity, Entity.id == EntityAlias.entity_id,
+        )
         .where(
+            Entity.workspace_id == scope.workspace_id,
             EntityAlias.entity_id.in_([row.id for row in rows]),
             EntityAlias.confirmed.is_(True),
             EntityAlias.normalized_alias.in_(normalized_names),
@@ -1720,16 +2030,23 @@ async def list_resolution_candidates(
     ], overflow)
 
 
-async def create_extracted_entity(session: AsyncSession, entity_type: str) -> UUID:
-    """Create an unnamed derived entity for later evidence-backed field publication."""
-    entity = Entity(type=entity_type, name=None, canonical_name=None, name_origin=None, description_origin=None)
+async def create_extracted_entity(
+    session: AsyncSession, entity_type: str, *, scope: Scope, multi_workspace_enabled: bool,
+) -> UUID:
+    """Create an unnamed derived entity inside an already admitted workspace."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    entity = Entity(
+        workspace_id=scope.workspace_id, type=entity_type, name=None, canonical_name=None,
+        name_origin=None, description_origin=None,
+    )
     session.add(entity)
     await session.flush()
     return entity.id
 
 
 async def find_extraction_entity(
-    session: AsyncSession, *, extraction_identity: str, candidate_key: str
+    session: AsyncSession, *, extraction_identity: str, candidate_key: str,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> UUID | None:
     """Return the canonical entity already bound to a deterministic extraction key, if any.
 
@@ -1739,8 +2056,10 @@ async def find_extraction_entity(
     the answer is stable; a merged entity is followed to its canonical ID. The
     caller holds the source lock that serializes find-or-create.
     """
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     entity_id = await session.scalar(
         select(EntityEvidenceMembership.entity_id).where(
+            EntityEvidenceMembership.workspace_id == scope.workspace_id,
             EntityEvidenceMembership.extraction_identity == extraction_identity,
             EntityEvidenceMembership.candidate_key == candidate_key,
         ).order_by(EntityEvidenceMembership.extracted_at, EntityEvidenceMembership.id).limit(1)
@@ -1748,7 +2067,9 @@ async def find_extraction_entity(
     if entity_id is None:
         return None
     try:
-        return await resolve_canonical_entity_id(session, entity_id)
+        return await resolve_canonical_entity_id(
+            session, entity_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
     except LookupError:
         # The owner deleted the entity: report "absent" so the mapper recreates it
         # deterministically instead of failing every later record of the source.
@@ -1759,8 +2080,10 @@ async def record_extraction_membership(
     session: AsyncSession, *, entity_id: UUID, evidence_ref: ExtractionEvidenceRef,
     source_generation: int, extraction_identity: str, candidate_key: str,
     match_fingerprint: str, observed_at: datetime, confidence: float,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> UUID:
     """Insert idempotent evidence membership after validating source generation and identity."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if (
         not extraction_identity or len(extraction_identity) > 256
         or not candidate_key or len(candidate_key) > 256
@@ -1769,10 +2092,13 @@ async def record_extraction_membership(
         or evidence_ref.source_generation != source_generation
     ):
         raise ValueError("Extraction membership values are invalid")
-    entity = await session.scalar(select(Entity).where(Entity.id == entity_id).with_for_update())
+    entity = await session.scalar(select(Entity).where(
+        Entity.id == entity_id, Entity.workspace_id == scope.workspace_id,
+    ).with_for_update())
     if entity is None:
         raise LookupError("Extraction entity is missing")
     await session.execute(pg_insert(EntityEvidenceMembership).values(
+        workspace_id=scope.workspace_id,
         entity_id=entity_id, document_id=evidence_ref.document_id, source_id=evidence_ref.source_id,
         document_version_id=evidence_ref.document_version_id, chunk_id=evidence_ref.chunk_id,
         extraction_identity=extraction_identity, candidate_key=candidate_key,
@@ -1780,13 +2106,17 @@ async def record_extraction_membership(
         observed_at=observed_at, confidence=confidence,
     ).on_conflict_do_nothing(constraint="uq_entity_evidence_retry"))
     membership_id = await session.scalar(select(EntityEvidenceMembership.id).where(
+        EntityEvidenceMembership.workspace_id == scope.workspace_id,
         EntityEvidenceMembership.extraction_identity == extraction_identity,
         EntityEvidenceMembership.candidate_key == candidate_key,
         EntityEvidenceMembership.chunk_id == evidence_ref.chunk_id,
     ))
     if membership_id is None:
         raise RuntimeError("Entity evidence membership could not be recorded")
-    member = await session.scalar(select(EntityEvidenceMembership).where(EntityEvidenceMembership.id == membership_id))
+    member = await session.scalar(select(EntityEvidenceMembership).where(
+        EntityEvidenceMembership.id == membership_id,
+        EntityEvidenceMembership.workspace_id == scope.workspace_id,
+    ))
     if member is None or member.entity_id != entity_id:
         raise ValueError("Extraction retry identity resolved to a different entity")
     return membership_id
@@ -1795,9 +2125,10 @@ async def record_extraction_membership(
 async def get_document_correction_decisions(
     session: AsyncSession, document_id: UUID, document_version_id: UUID,
     candidates: dict[str, tuple[str, set[UUID]]],
-    *, for_update: bool = False,
+    *, scope: Scope, multi_workspace_enabled: bool, for_update: bool = False,
 ) -> dict[str, tuple[UUID, str, UUID | None] | None]:
     """Resolve bounded evidence/document owner decisions, reporting ambiguous conflicts."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if len(candidates) > 30:
         raise ValueError("Correction decision lookup exceeds its candidate limit")
     if not candidates:
@@ -1807,6 +2138,7 @@ async def get_document_correction_decisions(
     if len(chunk_ids) > 200 or any(not chunks for _, chunks in candidates.values()):
         raise ValueError("Correction evidence binding exceeds its chunk limit")
     membership_query = select(EntityEvidenceMembership).where(
+        EntityEvidenceMembership.workspace_id == scope.workspace_id,
         EntityEvidenceMembership.document_id == document_id,
         EntityEvidenceMembership.document_version_id == document_version_id,
         EntityEvidenceMembership.match_fingerprint.in_(fingerprints),
@@ -1825,6 +2157,7 @@ async def get_document_correction_decisions(
             ).append(membership)
     membership_ids = sorted({row.id for row in memberships}, key=str)
     decisions_query = select(EntityCorrectionDecision).where(
+        EntityCorrectionDecision.workspace_id == scope.workspace_id,
         EntityCorrectionDecision.scope == "evidence",
         EntityCorrectionDecision.document_id.is_(None),
         EntityCorrectionDecision.membership_id.in_(membership_ids),
@@ -1841,6 +2174,7 @@ async def get_document_correction_decisions(
         for row in evidence_decisions if row.membership_id in membership_by_id
     ]
     document_query = select(EntityCorrectionDecision).where(
+            EntityCorrectionDecision.workspace_id == scope.workspace_id,
             EntityCorrectionDecision.scope == "document",
             EntityCorrectionDecision.document_id == document_id,
             EntityCorrectionDecision.match_fingerprint.in_(fingerprints),
@@ -1911,9 +2245,13 @@ async def get_document_correction_decisions(
     return result
 
 
-async def create_entity(session: AsyncSession, payload: EntityCreate, *, actor_id: int) -> EntityRead:
-    """Commit owner fields, aliases, audit and temporal desired-state change atomically."""
+async def create_entity(
+    session: AsyncSession, payload: EntityCreate, *, scope: Scope, multi_workspace_enabled: bool,
+) -> EntityRead:
+    """Create an owner-authored entity and aliases inside one admitted workspace transaction."""
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
     entity = Entity(
+        workspace_id=scope.workspace_id,
         type=payload.type,
         name=payload.name,
         canonical_name=canonicalize_name(payload.name),
@@ -1941,11 +2279,18 @@ async def create_entity(session: AsyncSession, payload: EntityCreate, *, actor_i
         await session.refresh(entity)
         result = _entity_read(entity, aliases)
         await record_owner_action(
-            session, actor_id=actor_id, operation="entity_create", reason=payload.reason,
+            session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            operation="entity_create", reason=payload.reason,
             affected_ids=[entity.id], revisions={str(entity.id): 1},
         )
-        await _schedule_entity_change(session, entity, ["name", "description", "metadata", "aliases"], "owner")
-        await commit_with_replay(session, [make_graph_change(entity_id=entity.id)])
+        await _schedule_entity_change(
+            session, entity, ["name", "description", "metadata", "aliases"], "owner",
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
+        await commit_with_replay(
+            session, [make_graph_change(entity_id=entity.id, scope=scope)], scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+        )
     except IntegrityError:
         await session.rollback()
         raise
@@ -1953,25 +2298,34 @@ async def create_entity(session: AsyncSession, payload: EntityCreate, *, actor_i
 
 
 async def update_entity(
-    session: AsyncSession, entity_id: UUID, payload: EntityPatch, *, actor_id: int
+    session: AsyncSession, entity_id: UUID, payload: EntityPatch, *,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> EntityRead | None:
     """Apply a canonical owner-field update with revision and redirect fences.
 
-    The owner-write route enforces authorization; ``actor_id`` is audit
-    provenance. Returns None if the row disappears, rejects merged/deleted IDs
-    with typed conflicts and stale revisions with ValueError, marks edited fields
+    Admission is captured before canonical/entity locks. Returns None if the row
+    disappears, rejects merged/deleted IDs with typed conflicts and stale revisions,
+    marks edited fields
     owner-authored, removes their derived field support, then commits audit and
     graph changes plus exact-support temporal desired state in one transaction.
     """
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
     try:
-        canonical_id = await resolve_canonical_entity_id(session, entity_id)
+        canonical_id = await resolve_canonical_entity_id(
+            session, entity_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
     except LookupError as exc:
-        if await session.scalar(select(EntityRedirect.old_entity_id).where(EntityRedirect.old_entity_id == entity_id)) is not None:
+        if await session.scalar(select(EntityRedirect.old_entity_id).where(
+            EntityRedirect.workspace_id == scope.workspace_id,
+            EntityRedirect.old_entity_id == entity_id,
+        )) is not None:
             raise TerminalEntityConflict("Entity identity was deleted") from exc
         raise
     if canonical_id != entity_id:
         raise RedirectedEntityConflict("Entity ID was merged; use its canonical ID")
-    entity = await session.scalar(select(Entity).where(Entity.id == entity_id).with_for_update())
+    entity = await session.scalar(select(Entity).where(
+        Entity.id == entity_id, Entity.workspace_id == scope.workspace_id,
+    ).with_for_update())
     if entity is None:
         return None
     previous_revision = entity.revision
@@ -1986,6 +2340,9 @@ async def update_entity(
         await session.execute(delete(EntityFieldEvidence).where(
             EntityFieldEvidence.entity_id == entity_id,
             EntityFieldEvidence.field_name == "name",
+            EntityFieldEvidence.membership_id.in_(select(EntityEvidenceMembership.id).where(
+                EntityEvidenceMembership.workspace_id == scope.workspace_id,
+            )),
         ))
     if "description" in payload.model_fields_set:
         entity.description = payload.description
@@ -1993,41 +2350,60 @@ async def update_entity(
         await session.execute(delete(EntityFieldEvidence).where(
             EntityFieldEvidence.entity_id == entity_id,
             EntityFieldEvidence.field_name == "description",
+            EntityFieldEvidence.membership_id.in_(select(EntityEvidenceMembership.id).where(
+                EntityEvidenceMembership.workspace_id == scope.workspace_id,
+            )),
         ))
     if "metadata" in payload.model_fields_set and payload.metadata is not None:
         entity.metadata_json = payload.metadata
     entity.revision += 1
     await session.flush()
     await session.refresh(entity)
-    aliases = await _aliases(session, [entity.id])
+    aliases = await _aliases(session, [entity.id], scope=scope)
     result = _entity_read(entity, aliases.get(entity.id))
     await record_owner_action(
-        session, actor_id=actor_id, operation="entity_update", reason=payload.reason,
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        operation="entity_update", reason=payload.reason,
         affected_ids=[entity.id], revisions={str(entity.id): previous_revision},
     )
-    await _schedule_entity_change(session, entity, sorted(payload.model_fields_set - {"expected_revision", "reason"}), "owner")
-    await commit_with_replay(session, [make_graph_change(entity_id=entity.id)])
+    await _schedule_entity_change(
+        session, entity, sorted(payload.model_fields_set - {"expected_revision", "reason"}), "owner",
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    await commit_with_replay(
+        session, [make_graph_change(entity_id=entity.id, scope=scope)], scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+    )
     return result
 
 
 async def add_alias(
-    session: AsyncSession, entity_id: UUID, payload: AliasCreate, *, actor_id: int
+    session: AsyncSession, entity_id: UUID, payload: AliasCreate, *,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> EntityRead | None:
     """Add an owner-authored alias to a canonical entity and commit its audit.
 
-    The owner-write route authorizes the operation. Redirected or terminal IDs
+    Admission and its access fence precede row locks. Redirected or terminal IDs
     raise typed conflicts; a missing canonical row returns None. A successful
     insert records the actor/reason and atomically schedules graph desired state.
     """
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
     try:
-        canonical_id = await resolve_canonical_entity_id(session, entity_id)
+        canonical_id = await resolve_canonical_entity_id(
+            session, entity_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
     except LookupError as exc:
-        if await session.scalar(select(EntityRedirect.old_entity_id).where(EntityRedirect.old_entity_id == entity_id)) is not None:
+        if await session.scalar(select(EntityRedirect.old_entity_id).where(
+            EntityRedirect.workspace_id == scope.workspace_id,
+            EntityRedirect.old_entity_id == entity_id,
+        )) is not None:
             raise TerminalEntityConflict("Entity identity was deleted") from exc
         raise
     if canonical_id != entity_id:
         raise RedirectedEntityConflict("Entity ID was merged; use its canonical ID")
-    entity = await session.scalar(select(Entity).where(Entity.id == entity_id).with_for_update())
+    entity = await session.scalar(select(Entity).where(
+        Entity.id == entity_id, Entity.workspace_id == scope.workspace_id,
+    ).with_for_update())
     if entity is None:
         return None
     normalized = canonicalize_name(payload.alias)
@@ -2042,151 +2418,323 @@ async def add_alias(
     )
     session.add(alias)
     await session.flush()
-    aliases = await _aliases(session, [entity.id])
+    aliases = await _aliases(session, [entity.id], scope=scope)
     result = _entity_read(entity, aliases.get(entity.id))
     await record_owner_action(
-        session, actor_id=actor_id, operation="alias_create", reason=payload.reason,
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        operation="alias_create", reason=payload.reason,
         affected_ids=[entity.id, alias.id], revisions={str(entity.id): entity.revision},
     )
-    await _schedule_entity_change(session, entity, ["aliases"], "owner")
-    await commit_with_replay(session, [make_graph_change(entity_id=entity.id)])
+    await _schedule_entity_change(
+        session, entity, ["aliases"], "owner", scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    await commit_with_replay(
+        session, [make_graph_change(entity_id=entity.id, scope=scope)], scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+    )
     return result
 
 
 async def delete_alias(
-    session: AsyncSession, entity_id: UUID, alias_id: UUID, *, actor_id: int, reason: str = "owner_alias_delete"
+    session: AsyncSession, entity_id: UUID, alias_id: UUID, *, reason: str = "owner_alias_delete",
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> bool:
     """Delete one alias from a canonical entity and commit its owner audit.
 
-    The owner-write route authorizes the operation. Redirected or terminal IDs
-    raise typed conflicts; a missing entity or alias returns False. Success
+    The admission fence precedes canonical/entity/alias locks. Redirected or
+    terminal IDs raise typed conflicts; a missing entity or alias returns False. Success
     records the actor/reason and atomically schedules graph desired state.
     """
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
     try:
-        canonical_id = await resolve_canonical_entity_id(session, entity_id)
+        canonical_id = await resolve_canonical_entity_id(
+            session, entity_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
     except LookupError as exc:
-        if await session.scalar(select(EntityRedirect.old_entity_id).where(EntityRedirect.old_entity_id == entity_id)) is not None:
+        if await session.scalar(select(EntityRedirect.old_entity_id).where(
+            EntityRedirect.workspace_id == scope.workspace_id,
+            EntityRedirect.old_entity_id == entity_id,
+        )) is not None:
             raise TerminalEntityConflict("Entity identity was deleted") from exc
         raise
     if canonical_id != entity_id:
         raise RedirectedEntityConflict("Entity ID was merged; use its canonical ID")
-    entity = await session.scalar(select(Entity).where(Entity.id == entity_id).with_for_update())
+    entity = await session.scalar(select(Entity).where(
+        Entity.id == entity_id, Entity.workspace_id == scope.workspace_id,
+    ).with_for_update())
     if entity is None:
         return False
     alias = await session.scalar(
-        select(EntityAlias).where(EntityAlias.id == alias_id, EntityAlias.entity_id == entity_id).with_for_update()
+        select(EntityAlias).where(
+            EntityAlias.id == alias_id, EntityAlias.entity_id == entity_id,
+        ).with_for_update()
     )
     if alias is None:
         return False
     await session.delete(alias)
     await record_owner_action(
-        session, actor_id=actor_id, operation="alias_delete", reason=reason,
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        operation="alias_delete", reason=reason,
         affected_ids=[entity.id, alias_id], revisions={str(entity.id): entity.revision},
     )
-    await _schedule_entity_change(session, entity, ["aliases"], "owner")
-    await commit_with_replay(session, [make_graph_change(entity_id=entity.id)])
+    await _schedule_entity_change(
+        session, entity, ["aliases"], "owner", scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    await commit_with_replay(
+        session, [make_graph_change(entity_id=entity.id, scope=scope)], scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+    )
     return True
 
 
 async def delete_entity(
-    session: AsyncSession, entity_id: UUID, *, actor_id: int, reason: str = "owner_entity_delete"
+    session: AsyncSession, entity_id: UUID, *, reason: str = "owner_entity_delete",
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> bool:
     """Delegate canonical deletion and its support cleanup to the correction owner."""
     from modules.knowledge.entities.corrections import delete_canonical_entity
 
-    return await delete_canonical_entity(session, entity_id, actor_id=actor_id, reason=reason)
+    return await delete_canonical_entity(
+        session, entity_id, reason=reason, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+
+
+@dataclass(frozen=True)
+class EntitySupportClosure:
+    """Workspace-qualified ID closure of entity support for one Source or Document."""
+
+    source_id: UUID
+    document_id: UUID | None
+    membership_ids: tuple[UUID, ...]
+    alias_ids: tuple[UUID, ...]
+    alias_evidence_ids: tuple[UUID, ...]
+    field_evidence_ids: tuple[UUID, ...]
+    entity_ids: tuple[UUID, ...]
+    overflow: bool
+
+
+_CLEANUP_LIMIT = 10_000
+
+
+def _require_cleanup_fences(
+    actual: AccessFence, *, source_id: UUID, scope: Scope,
+    access_fence: AccessFence, source_fence: SourceFence,
+) -> None:
+    if (
+        actual != access_fence or source_fence.id != source_id
+        or source_fence.workspace_id != scope.workspace_id
+    ):
+        raise HTTPException(status_code=409, detail="Cleanup authority changed")
 
 
 async def support_cleanup_ids(
-    session: AsyncSession, *, document_id: UUID | None = None, source_id: UUID | None = None
-) -> tuple[list[UUID], list[UUID]]:
-    """Return bounded membership and entity lock IDs for one document/source cleanup."""
-    if (document_id is None) == (source_id is None):
-        raise ValueError("Specify one document or source")
-    statement = select(EntityEvidenceMembership.id, EntityEvidenceMembership.entity_id)
-    statement = statement.where(
-        EntityEvidenceMembership.document_id == document_id
-        if document_id is not None else EntityEvidenceMembership.source_id == source_id
-    ).order_by(EntityEvidenceMembership.entity_id, EntityEvidenceMembership.id).limit(10_001)
-    rows = list((await session.execute(statement)).all())
-    if len(rows) > 10_000:
-        raise ValueError("Entity support cleanup exceeds its atomic limit")
-    entity_ids = {entity_id for _, entity_id in rows}
-    if source_id is not None:
-        entity_ids.update((await session.scalars(
-            select(EntityAlias.entity_id).where(EntityAlias.source_id == source_id).distinct()
+    session: AsyncSession, *, source_id: UUID, document_id: UUID | None = None,
+    scope: Scope, multi_workspace_enabled: bool,
+) -> EntitySupportClosure:
+    """Discover (nonlocking, ID-only) the entity support rows of one Source or Document."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    workspace_id = scope.workspace_id
+    overflow = False
+    member_where = [
+        EntityEvidenceMembership.workspace_id == workspace_id,
+        EntityEvidenceMembership.source_id == source_id,
+    ]
+    if document_id is not None:
+        member_where.append(EntityEvidenceMembership.document_id == document_id)
+    members = list((await session.execute(
+        select(EntityEvidenceMembership.id, EntityEvidenceMembership.entity_id)
+        .where(*member_where).order_by(EntityEvidenceMembership.id).limit(_CLEANUP_LIMIT + 1)
+    )).all())
+    overflow |= len(members) > _CLEANUP_LIMIT
+    members = members[:_CLEANUP_LIMIT]
+    membership_ids = [row[0] for row in members]
+    entity_ids = {row[1] for row in members}
+    alias_ids: set[UUID] = set()
+    alias_evidence_ids: list[UUID] = []
+    field_evidence_ids: list[UUID] = []
+    if membership_ids:
+        alias_support = list((await session.execute(
+            select(EntityAliasEvidence.id, EntityAliasEvidence.alias_id)
+            .join(EntityEvidenceMembership, EntityEvidenceMembership.id == EntityAliasEvidence.membership_id)
+            .where(
+                EntityEvidenceMembership.workspace_id == workspace_id,
+                EntityAliasEvidence.membership_id.in_(membership_ids),
+            ).order_by(EntityAliasEvidence.id).limit(_CLEANUP_LIMIT + 1)
         )).all())
-    return [membership_id for membership_id, _ in rows], sorted(entity_ids, key=str)
+        overflow |= len(alias_support) > _CLEANUP_LIMIT
+        alias_support = alias_support[:_CLEANUP_LIMIT]
+        alias_evidence_ids = [row[0] for row in alias_support]
+        alias_ids.update(row[1] for row in alias_support)
+        field_evidence_ids = list((await session.scalars(
+            select(EntityFieldEvidence.id)
+            .join(EntityEvidenceMembership, EntityEvidenceMembership.id == EntityFieldEvidence.membership_id)
+            .where(
+                EntityEvidenceMembership.workspace_id == workspace_id,
+                EntityFieldEvidence.membership_id.in_(membership_ids),
+            ).order_by(EntityFieldEvidence.id).limit(_CLEANUP_LIMIT + 1)
+        )).all())
+        overflow |= len(field_evidence_ids) > _CLEANUP_LIMIT
+        field_evidence_ids = field_evidence_ids[:_CLEANUP_LIMIT]
+    alias_clauses = [EntityAlias.source_id == source_id] if document_id is None else []
+    if alias_ids:
+        alias_clauses.append(EntityAlias.id.in_(alias_ids))
+    if alias_clauses:
+        aliases = list((await session.execute(
+            select(EntityAlias.id, EntityAlias.entity_id)
+            .join(Entity, Entity.id == EntityAlias.entity_id)
+            .where(Entity.workspace_id == workspace_id, or_(*alias_clauses))
+            .order_by(EntityAlias.id).limit(_CLEANUP_LIMIT + 1)
+        )).all())
+        overflow |= len(aliases) > _CLEANUP_LIMIT
+        for alias_id, alias_entity_id in aliases[:_CLEANUP_LIMIT]:
+            alias_ids.add(alias_id)
+            entity_ids.add(alias_entity_id)
+    return EntitySupportClosure(
+        source_id=source_id, document_id=document_id,
+        membership_ids=tuple(sorted(membership_ids)), alias_ids=tuple(sorted(alias_ids)),
+        alias_evidence_ids=tuple(sorted(alias_evidence_ids)),
+        field_evidence_ids=tuple(sorted(field_evidence_ids)),
+        entity_ids=tuple(sorted(entity_ids)), overflow=overflow,
+    )
 
 
-async def lock_entity_ids(session: AsyncSession, entity_ids: list[UUID]) -> None:
+async def prepare_support_cleanup_in_uow(
+    session: AsyncSession, closure: EntitySupportClosure, *, entity_ids: tuple[UUID, ...],
+    scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+) -> None:
+    """Lock the combined entity union, then support children, in UUID order; no mutation."""
+    _require_cleanup_fences(
+        await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled),
+        source_id=closure.source_id, scope=scope, access_fence=access_fence, source_fence=source_fence,
+    )
+    if closure.overflow:
+        raise ValueError("Entity support cleanup exceeds its atomic limit")
+    workspace_id = scope.workspace_id
+    locked_entities = sorted(set(entity_ids) | set(closure.entity_ids))
+    workspace_entities = select(Entity.id).where(Entity.workspace_id == workspace_id)
+    workspace_memberships = select(EntityEvidenceMembership.id).where(
+        EntityEvidenceMembership.workspace_id == workspace_id,
+    )
+    if locked_entities:
+        await session.scalars(
+            select(Entity.id).where(Entity.workspace_id == workspace_id, Entity.id.in_(locked_entities))
+            .order_by(Entity.id).with_for_update()
+        )
+    if closure.membership_ids:
+        await session.scalars(
+            select(EntityEvidenceMembership.id).where(
+                EntityEvidenceMembership.workspace_id == workspace_id,
+                EntityEvidenceMembership.id.in_(closure.membership_ids),
+            ).order_by(EntityEvidenceMembership.id).with_for_update()
+        )
+    if closure.alias_ids:
+        await session.scalars(
+            select(EntityAlias.id).where(
+                EntityAlias.entity_id.in_(workspace_entities), EntityAlias.id.in_(closure.alias_ids),
+            ).order_by(EntityAlias.id).with_for_update()
+        )
+    if closure.alias_evidence_ids:
+        await session.scalars(
+            select(EntityAliasEvidence.id).where(
+                EntityAliasEvidence.membership_id.in_(workspace_memberships),
+                EntityAliasEvidence.id.in_(closure.alias_evidence_ids),
+            ).order_by(EntityAliasEvidence.id).with_for_update()
+        )
+    if closure.field_evidence_ids:
+        await session.scalars(
+            select(EntityFieldEvidence.id).where(
+                EntityFieldEvidence.membership_id.in_(workspace_memberships),
+                EntityFieldEvidence.id.in_(closure.field_evidence_ids),
+            ).order_by(EntityFieldEvidence.id).with_for_update()
+        )
+
+
+async def lock_entity_ids(
+    session: AsyncSession, entity_ids: list[UUID], *, scope: Scope, multi_workspace_enabled: bool,
+) -> None:
     """Lock a bounded sorted set of entity rows for support cleanup."""
     ids = sorted(set(entity_ids), key=str)
     if len(ids) > 10_000:
         raise ValueError("Entity support cleanup exceeds its atomic limit")
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if ids:
         await session.scalars(
-            select(Entity.id).where(Entity.id.in_(ids)).order_by(Entity.id).with_for_update()
+            select(Entity.id).where(
+                Entity.workspace_id == scope.workspace_id, Entity.id.in_(ids),
+            ).order_by(Entity.id).with_for_update()
         )
 
 
-async def remove_document_support(session: AsyncSession, document_id: UUID) -> int:
-    """Remove evidence memberships and unsupported derived fields for one document."""
-    return await _remove_entity_support(session, document_id=document_id)
+async def remove_document_support(
+    session: AsyncSession, closure: EntitySupportClosure, *, scope: Scope,
+    multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+) -> int:
+    """Remove prepared evidence memberships and unsupported derived fields for one document."""
+    if closure.document_id is None:
+        raise ValueError("A document closure is required")
+    return await _remove_entity_support(
+        session, closure, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence, source_fence=source_fence,
+    )
 
 
-async def remove_source_support(session: AsyncSession, source_id: UUID) -> int:
-    """Remove evidence memberships and unsupported derived fields for one source."""
-    return await _remove_entity_support(session, source_id=source_id)
+async def remove_source_support(
+    session: AsyncSession, closure: EntitySupportClosure, *, scope: Scope,
+    multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+) -> int:
+    """Remove prepared evidence memberships and unsupported derived fields for one Source."""
+    if closure.document_id is not None:
+        raise ValueError("A Source-wide closure is required")
+    return await _remove_entity_support(
+        session, closure, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence, source_fence=source_fence,
+    )
 
 
 async def _remove_entity_support(
-    session: AsyncSession, *, document_id: UUID | None = None, source_id: UUID | None = None
+    session: AsyncSession, closure: EntitySupportClosure, *, scope: Scope,
+    multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
 ) -> int:
-    """Delete scoped evidence and aliases, preserving owner aliases and supported values."""
-    if (document_id is None) == (source_id is None):
-        raise ValueError("Specify one document or source")
-    membership_query = select(EntityEvidenceMembership).where(
-        EntityEvidenceMembership.document_id == document_id
-        if document_id is not None else EntityEvidenceMembership.source_id == source_id
-    ).order_by(EntityEvidenceMembership.entity_id, EntityEvidenceMembership.id).limit(10_001)
-    memberships = list((await session.scalars(membership_query)).all())
-    if len(memberships) > 10_000:
-        raise ValueError("Entity support cleanup exceeds its atomic limit")
-    membership_ids = [item.id for item in memberships]
-    entity_ids = {item.entity_id for item in memberships}
-    alias_ids: set[UUID] = set()
-    if membership_ids:
-        alias_supports = list((await session.execute(
-            select(EntityAliasEvidence.id, EntityAliasEvidence.alias_id)
-            .where(EntityAliasEvidence.membership_id.in_(membership_ids))
-            .order_by(EntityAliasEvidence.id)
-            .limit(10_001)
-        )).all())
-        if len(alias_supports) > 10_000:
-            raise ValueError("Entity alias support cleanup exceeds its atomic limit")
-        alias_ids.update(alias_id for _, alias_id in alias_supports)
+    """Delete prepared evidence and aliases, preserving owner aliases and supported values.
+
+    Rows were locked by ``prepare_support_cleanup_in_uow``; this never locks.
+    """
+    _require_cleanup_fences(
+        await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled),
+        source_id=closure.source_id, scope=scope, access_fence=access_fence, source_fence=source_fence,
+    )
+    current = await support_cleanup_ids(
+        session, source_id=closure.source_id, document_id=closure.document_id,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if current.overflow or current != closure:
+        raise RuntimeError("cleanup closure changed")
+    workspace_id = scope.workspace_id
+    source_wide = closure.document_id is None
+    if closure.alias_evidence_ids:
         await session.execute(
             delete(EntityAliasEvidence).where(
-                EntityAliasEvidence.id.in_([support_id for support_id, _ in alias_supports])
+                EntityAliasEvidence.id.in_(closure.alias_evidence_ids),
+                EntityAliasEvidence.membership_id.in_(
+                    select(EntityEvidenceMembership.id).where(EntityEvidenceMembership.workspace_id == workspace_id)
+                ),
             )
         )
+    if closure.membership_ids:
         await session.execute(
-            delete(EntityEvidenceMembership).where(EntityEvidenceMembership.id.in_(membership_ids))
+            delete(EntityEvidenceMembership).where(
+                EntityEvidenceMembership.workspace_id == workspace_id,
+                EntityEvidenceMembership.id.in_(closure.membership_ids),
+            )
         )
-    if source_id is not None:
-        sourced = list((await session.scalars(
-            select(EntityAlias).where(EntityAlias.source_id == source_id).order_by(EntityAlias.id).limit(10_001)
-        )).all())
-        if len(sourced) > 10_000:
-            raise ValueError("Entity alias cleanup exceeds its atomic limit")
-        alias_ids.update(item.id for item in sourced)
-        entity_ids.update(item.entity_id for item in sourced)
-    for alias_id in sorted(alias_ids, key=str):
+    for alias_id in closure.alias_ids:
         alias = await session.get(EntityAlias, alias_id)
         if alias is None:
             continue
-        if source_id is not None and alias.source_id == source_id:
+        if source_wide and alias.source_id == closure.source_id:
             alias.source_id = None
         remaining_confidence = await session.scalar(
             select(func.max(EntityAliasEvidence.confidence))
@@ -2197,6 +2745,7 @@ async def _remove_entity_support(
             .where(
                 EntityAliasEvidence.alias_id == alias.id,
                 EntityEvidenceMembership.entity_id == alias.entity_id,
+                EntityEvidenceMembership.workspace_id == workspace_id,
             )
         )
         if alias.origin == "owner":
@@ -2207,15 +2756,17 @@ async def _remove_entity_support(
         # Origin-less legacy aliases carry no proof of owner authorship. Forget
         # them with their final exact support instead of upgrading their status.
         await session.delete(alias)
-    await _clear_unsupported_derived_fields(session, entity_ids)
-    return len(membership_ids)
+    await _clear_unsupported_derived_fields(session, set(closure.entity_ids), workspace_id=workspace_id)
+    return len(closure.membership_ids)
 
 
-async def _clear_unsupported_derived_fields(session: AsyncSession, entity_ids: set[UUID]) -> None:
+async def _clear_unsupported_derived_fields(
+    session: AsyncSession, entity_ids: set[UUID], *, workspace_id: UUID,
+) -> None:
     """Clear non-owner entity fields whose exact current evidence support was removed."""
-    for entity_id in entity_ids:
+    for entity_id in sorted(entity_ids):
         entity = await session.get(Entity, entity_id)
-        if entity is not None:
+        if entity is not None and entity.workspace_id == workspace_id:
             changed = False
             # Unknown legacy provenance is not proof that a non-owner value is safe to retain.
             if entity.name_origin != "owner" and entity.name is not None:
@@ -2231,6 +2782,7 @@ async def _clear_unsupported_derived_fields(session: AsyncSession, entity_ids: s
                         EntityFieldEvidence.field_name == "name",
                         EntityFieldEvidence.value_hash == name_hash,
                         EntityEvidenceMembership.entity_id == entity_id,
+                        EntityEvidenceMembership.workspace_id == workspace_id,
                     ).limit(1)
                 ) is not None
                 if not name_supported:
@@ -2255,6 +2807,7 @@ async def _clear_unsupported_derived_fields(session: AsyncSession, entity_ids: s
                         EntityFieldEvidence.field_name == "description",
                         EntityFieldEvidence.value_hash == description_hash,
                         EntityEvidenceMembership.entity_id == entity_id,
+                        EntityEvidenceMembership.workspace_id == workspace_id,
                     ).limit(1)
                 ) is not None
                 if not description_supported:
@@ -2269,13 +2822,15 @@ async def _clear_unsupported_derived_fields(session: AsyncSession, entity_ids: s
 
 async def list_changed_entities_after(
     session: AsyncSession, position: tuple[datetime, UUID] | None, limit: int = 100,
+    *, scope: Scope, multi_workspace_enabled: bool,
 ) -> list[tuple[datetime, UUID, str, dict[str, str]]]:
     """Read-only cursor page of entities by ``(updated_at, id)`` for the automations sweep.
 
     The key combines id and ``updated_at`` so every change is a distinct trigger event. Payload
     carries id, type and a created/updated marker only.
     """
-    stmt = select(Entity)
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    stmt = select(Entity).where(Entity.workspace_id == scope.workspace_id)
     if position is not None:
         stmt = stmt.where(tuple_(Entity.updated_at, Entity.id) > tuple_(*position))
     rows = (await session.scalars(stmt.order_by(Entity.updated_at, Entity.id).limit(limit))).all()

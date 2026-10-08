@@ -2,17 +2,33 @@ import base64
 import binascii
 import json
 from copy import deepcopy
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from hashlib import sha256
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Select, delete, desc, exists, false, func, or_, select, tuple_, update
+from fastapi import HTTPException
+from sqlalchemy import (
+    ColumnElement,
+    Select,
+    delete,
+    desc,
+    exists,
+    false,
+    func,
+    or_,
+    select,
+    tuple_,
+    update,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
-from core.auth.models import Owner
 from core.pagination import decode_cursor, encode_cursor
 from core.realtime import commit_with_replay, make_graph_change
+from core.workspaces import public as workspaces
+from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
 from modules.knowledge.documents import public as documents
 from modules.knowledge.entities import public as entities
 from modules.knowledge.relationships.models import (
@@ -42,7 +58,32 @@ from modules.knowledge.relationships.seed import (
     ensure_demo_relationships,  # re-export: used by documents seed
 )
 from modules.sources import public as sources
-from modules.sources.schemas import SourceExportFence
+from modules.sources.schemas import SourceExportFence, SourceFence
+
+
+def _actor(scope: Scope) -> int:
+    """Return the principal recorded by a real workspace or durable job scope."""
+    return scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
+
+
+async def _admit(
+    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
+    lock: bool = False, expected: AccessFence | None = None,
+) -> AccessFence:
+    """Require owner scope and capture or lock authorization before relationship locks."""
+    if not isinstance(scope, (WorkspaceContext, InternalJobScope)):
+        raise TypeError("An explicit relationship workspace scope is required")
+    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
+    if type(multi_workspace_enabled) is not bool:
+        raise TypeError("The configured multi-workspace feature flag must be a boolean")
+    if lock:
+        return await workspaces.lock_access_fence(
+            session, scope=scope, expected=expected, multi_workspace_enabled=multi_workspace_enabled,
+        )
+    return await workspaces.read_access_fence(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
 
 # Explicit re-exports consumed by other modules (mypy strict forbids implicit re-export).
 __all__ = [
@@ -53,8 +94,17 @@ __all__ = [
 MAX_CLEANUP_SUPPORTS = 10_000
 
 
+def _evidence_scope(scope: Scope) -> ColumnElement[bool]:
+    """Scope support rows through their workspace-owned relationship; the child has no scope column."""
+    owned = aliased(Relationship)  # aliased: never auto-correlate with an enclosing Relationship query
+    return RelationshipEvidence.relationship_id.in_(
+        select(owned.id).where(owned.workspace_id == scope.workspace_id)
+    )
+
+
 async def record_relationship_history(
-    session: AsyncSession, relationship_id: UUID, *, deleted: bool = False,
+    session: AsyncSession, relationship_id: UUID, *, deleted: bool = False, scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> None:
     """Flush one presently observed owner snapshot; never backdate canonical truth.
 
@@ -62,72 +112,165 @@ async def record_relationship_history(
     titles and URLs are excluded; derived state is physically cleared on purge.
     Complete exact support is bounded and no missing historical state is invented.
     """
-    snapshot = await get_relationship_snapshot(session, relationship_id)
+    snapshot = await get_relationship_snapshot(session, relationship_id, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled)
     if snapshot is None:
         return
     session.add(RelationshipSnapshotHistory(
-        relationship_id=relationship_id, deleted=deleted,
+        workspace_id=scope.workspace_id, relationship_id=relationship_id, deleted=deleted,
         state=snapshot.relationship.model_dump(mode="json", exclude={"evidence"}),
         support=snapshot.supports,
     ))
     await session.flush()
 
 
-async def purge_history_support(session: AsyncSession, refs: list[tuple[UUID, UUID]]) -> None:
-    """Remove purged evidence from every retained history page without committing.
+def _support_pairs(refs: list[tuple[UUID, UUID]]) -> set[tuple[str, str]]:
+    return {(str(version), str(chunk)) for version, chunk in refs}
 
-    Caller holds deletion source/document fences before support cascades. Derived
-    fields sharing any removed support lose their entire state; owner-authored
+
+@dataclass(frozen=True)
+class RelationshipSupportClosure:
+    """Workspace-qualified ID closure of relationship support for one Source or Document."""
+
+    source_id: UUID
+    document_id: UUID | None
+    membership_ids: tuple[UUID, ...]
+    relationship_ids: tuple[UUID, ...]
+    evidence_ids: tuple[UUID, ...]
+    endpoint_entity_ids: tuple[UUID, ...]
+    history_ids: tuple[int, ...]
+    overflow: bool
+
+
+def _require_cleanup_fences(
+    actual: AccessFence, *, closure: RelationshipSupportClosure, scope: Scope,
+    access_fence: AccessFence, source_fence: SourceFence,
+) -> None:
+    if (
+        actual != access_fence or source_fence.id != closure.source_id
+        or source_fence.workspace_id != scope.workspace_id
+    ):
+        raise HTTPException(status_code=409, detail="Cleanup authority changed")
+
+
+async def _discover_support(
+    session: AsyncSession, *, refs: list[tuple[UUID, UUID]], source_id: UUID,
+    document_id: UUID | None, membership_ids: tuple[UUID, ...], scope: Scope, include_history: bool,
+) -> RelationshipSupportClosure:
+    """Nonlocking ID-only discovery; ``include_history`` False leaves history IDs empty."""
+    match = or_(
+        RelationshipEvidence.document_id == document_id if document_id else RelationshipEvidence.source_id == source_id,
+        tuple_(RelationshipEvidence.document_version_id, RelationshipEvidence.chunk_id).in_(refs) if refs else false(),
+        RelationshipEvidence.source_membership_id.in_(membership_ids) if membership_ids else false(),
+        RelationshipEvidence.target_membership_id.in_(membership_ids) if membership_ids else false(),
+    )
+    rows = list((await session.execute(
+        select(RelationshipEvidence.id, RelationshipEvidence.relationship_id)
+        .where(_evidence_scope(scope), match)
+        .order_by(RelationshipEvidence.id).limit(MAX_CLEANUP_SUPPORTS + 1)
+    )).all())
+    overflow = len(rows) > MAX_CLEANUP_SUPPORTS
+    rows = rows[:MAX_CLEANUP_SUPPORTS]
+    relationship_ids = sorted({row[1] for row in rows})
+    endpoints: set[UUID] = set()
+    if relationship_ids:
+        endpoint_rows = (await session.execute(
+            select(Relationship.source_entity_id, Relationship.target_entity_id).where(
+                Relationship.workspace_id == scope.workspace_id, Relationship.id.in_(relationship_ids),
+            )
+        )).all()
+        endpoints = {identifier for row in endpoint_rows for identifier in row}
+    history_ids: list[int] = []
+    if len(set(refs)) > MAX_CLEANUP_SUPPORTS:
+        overflow = True
+    elif include_history and refs:
+        pairs = _support_pairs(refs)
+        after = 0
+        # ponytail: JSON support scan; add a GIN index if retained history makes purge slow.
+        while len(history_ids) <= MAX_CLEANUP_SUPPORTS:
+            page = list((await session.scalars(select(RelationshipSnapshotHistory.id).where(
+                RelationshipSnapshotHistory.workspace_id == scope.workspace_id,
+                RelationshipSnapshotHistory.id > after,
+                or_(*[RelationshipSnapshotHistory.support.contains([{
+                    "document_version_id": version, "chunk_id": chunk,
+                }]) for version, chunk in sorted(pairs)]),
+            ).order_by(RelationshipSnapshotHistory.id).limit(100))).all())
+            if not page:
+                break
+            history_ids.extend(page)
+            after = page[-1]
+        if len(history_ids) > MAX_CLEANUP_SUPPORTS:
+            overflow = True
+            history_ids = history_ids[:MAX_CLEANUP_SUPPORTS]
+    return RelationshipSupportClosure(
+        source_id=source_id, document_id=document_id, membership_ids=tuple(sorted(membership_ids)),
+        relationship_ids=tuple(relationship_ids), evidence_ids=tuple(row[0] for row in rows),
+        endpoint_entity_ids=tuple(sorted(endpoints)), history_ids=tuple(history_ids), overflow=overflow,
+    )
+
+
+async def purge_history_support(
+    session: AsyncSession, closure: RelationshipSupportClosure, refs: list[tuple[UUID, UUID]], *,
+    scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+) -> None:
+    """Remove purged evidence from the prepared retained-history rows without committing.
+
+    History rows were found by bounded discovery and locked by ``prepare_support_cleanup_in_uow``.
+    Derived fields sharing any removed support lose their entire state; owner-authored
     fields survive without removed citations. Identifier-only support remains.
     """
-    if len(set(refs)) > MAX_CLEANUP_SUPPORTS:
-        raise ValueError("Historical support purge exceeds atomic bound")
-    pairs = {(str(version), str(chunk)) for version, chunk in refs}
-    if not pairs:
-        return
-    after = 0
-    # ponytail: JSON support scan; add a GIN index if retained history makes purge slow.
-    while True:
-        rows = list((await session.scalars(select(RelationshipSnapshotHistory).where(
-            RelationshipSnapshotHistory.id > after,
-            or_(*[RelationshipSnapshotHistory.support.contains([{
-                "document_version_id": version, "chunk_id": chunk,
-            }]) for version, chunk in pairs]),
-        ).order_by(RelationshipSnapshotHistory.id).limit(100).with_for_update())).all())
-        if not rows:
-            break
+    _require_cleanup_fences(
+        await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled),
+        closure=closure, scope=scope, access_fence=access_fence, source_fence=source_fence,
+    )
+    current = await _discover_support(
+        session, refs=refs, source_id=closure.source_id, document_id=closure.document_id,
+        membership_ids=closure.membership_ids, scope=scope, include_history=True,
+    )
+    if current.overflow or current != closure:
+        raise RuntimeError("cleanup closure changed")
+    pairs = _support_pairs(refs)
+    for offset in range(0, len(closure.history_ids), 100):
+        rows = (await session.scalars(select(RelationshipSnapshotHistory).where(
+            RelationshipSnapshotHistory.workspace_id == scope.workspace_id,
+            RelationshipSnapshotHistory.id.in_(closure.history_ids[offset:offset + 100]),
+        ).order_by(RelationshipSnapshotHistory.id))).all()
         for row in rows:
             row.support = [item for item in row.support if (
                 str(item.get("document_version_id")), str(item.get("chunk_id")),
             ) not in pairs]
             if row.state.get("origin") != "owner":
                 row.state = {}  # Past derived text cannot survive evidence purge.
-        after = rows[-1].id
-        await session.flush()
+    await session.flush()
 
 
 async def _schedule_relationship_change(
     session: AsyncSession, relationship_id: UUID, fields: list[str], *, deleted: bool = False,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> None:
     """Queue detached exact support in the same owner transaction before commit."""
     from modules.knowledge.temporal import public as temporal
-    row = await session.get(Relationship, relationship_id)
+    row = await session.scalar(select(Relationship).where(
+        Relationship.workspace_id == scope.workspace_id, Relationship.id == relationship_id,
+    ))
     if row is None:
         return
     support = list((await session.execute(select(
         RelationshipEvidence.document_version_id, RelationshipEvidence.chunk_id,
-    ).where(RelationshipEvidence.relationship_id == relationship_id).limit(MAX_CLEANUP_SUPPORTS + 1))).all())
+    ).where(_evidence_scope(scope),
+            RelationshipEvidence.relationship_id == relationship_id).limit(MAX_CLEANUP_SUPPORTS + 1))).all())
     if len(support) > MAX_CLEANUP_SUPPORTS:
         raise ValueError("Relationship change exceeds complete support bound")
     await temporal.schedule_canonical_change(
         session, kind="relationship", canonical_id=relationship_id, revision=None,
         fields=fields, support=[(version, chunk) for version, chunk in support],
-        origin=row.origin, deleted=deleted,
+        origin=row.origin, deleted=deleted, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
 
 
 async def get_relationship_snapshot(
-    session: AsyncSession, relationship_id: UUID,
+    session: AsyncSession, relationship_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
 ) -> RelationshipSnapshot | None:
     """Detach complete current fact/support state under caller-held owner fences.
 
@@ -136,10 +279,14 @@ async def get_relationship_snapshot(
     over10000 support fails closed. Caller holds source/document then entity/fact
     publication locks when comparing for writes; this query never commits.
     """
-    row = await session.get(Relationship, relationship_id)
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    row = await session.scalar(select(Relationship).where(
+        Relationship.workspace_id == scope.workspace_id, Relationship.id == relationship_id,
+    ))
     if row is None:
         return None
     supports = list((await session.scalars(select(RelationshipEvidence).where(
+        _evidence_scope(scope),
         RelationshipEvidence.relationship_id == relationship_id,
     ).order_by(RelationshipEvidence.id).limit(MAX_CLEANUP_SUPPORTS + 1))).all())
     if len(supports) > MAX_CLEANUP_SUPPORTS:
@@ -148,17 +295,20 @@ async def get_relationship_snapshot(
         raise LookupError("Derived relationship has no permitted support")
     evidence = []
     for offset in range(0, len(supports), 100):
-        batch = await _evidence_read(session, supports[offset:offset + 100])
+        batch = await _evidence_read(session, supports[offset:offset + 100], scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled)
         if len(batch) != len(supports[offset:offset + 100]):
             raise LookupError("Relationship support is unavailable")
         evidence.extend(batch)
-    endpoint_refs = await entities.get_entity_refs(session, [row.source_entity_id, row.target_entity_id])
+    endpoint_refs = await entities.get_entity_refs(session, [row.source_entity_id, row.target_entity_id],
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     membership_ids = sorted({identifier for item in supports for identifier in (
         item.source_membership_id, item.target_membership_id,
     ) if identifier is not None})
     memberships = []
     for offset in range(0, len(membership_ids), 200):
-        memberships.extend(await entities.get_membership_refs(session, membership_ids[offset:offset + 200]))
+        memberships.extend(await entities.get_membership_refs(session, membership_ids[offset:offset + 200],
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled))
     by_id = {item.id: item for item in memberships}
     for item in supports:
         if row.origin == "derived" and (item.source_membership_id is None or item.target_membership_id is None):
@@ -171,7 +321,8 @@ async def get_relationship_snapshot(
     from modules.sources import public as sources
     generations = {}
     for identifier in sorted({item.source_id for item in evidence}):
-        source = await sources.get_connector_source(session, identifier)
+        source = await sources.get_connector_source(session, identifier, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled)
         if source is None or source.status != "active":
             raise LookupError("Relationship source is unavailable")
         generations[str(identifier)] = source.generation
@@ -204,7 +355,7 @@ async def get_relationship_snapshot(
 async def _list_relationships_as_of(
     session: AsyncSession, *, limit: int, cursor: str | None, entity_id: UUID | None,
     valid_at: datetime | None, include_unknown_validity: bool,
-    knowledge_as_of: datetime, fingerprint: str,
+    knowledge_as_of: datetime, fingerprint: str, scope: Scope, multi_workspace_enabled: bool,
 ) -> RelationshipPage:
     """Page actual latest recorded canonical snapshots by transaction cutoff.
 
@@ -216,9 +367,12 @@ async def _list_relationships_as_of(
         RelationshipSnapshotHistory.id.label("history_id"),
         func.row_number().over(partition_by=RelationshipSnapshotHistory.relationship_id,
             order_by=(RelationshipSnapshotHistory.recorded_at.desc(), RelationshipSnapshotHistory.id.desc())).label("position"),
-    ).where(RelationshipSnapshotHistory.recorded_at <= knowledge_as_of).subquery()
-    missing_statement = select(Relationship.id).where(Relationship.created_at <= knowledge_as_of,
+    ).where(RelationshipSnapshotHistory.workspace_id == scope.workspace_id,
+            RelationshipSnapshotHistory.recorded_at <= knowledge_as_of).subquery()
+    missing_statement = select(Relationship.id).where(
+        Relationship.workspace_id == scope.workspace_id, Relationship.created_at <= knowledge_as_of,
         ~select(RelationshipSnapshotHistory.id).where(
+        RelationshipSnapshotHistory.workspace_id == scope.workspace_id,
         RelationshipSnapshotHistory.relationship_id == Relationship.id,
         RelationshipSnapshotHistory.recorded_at <= knowledge_as_of,
     ).exists())
@@ -229,7 +383,7 @@ async def _list_relationships_as_of(
     missing = list((await session.scalars(missing_statement.order_by(Relationship.id).limit(101))).all())
     statement = select(RelationshipSnapshotHistory).join(
         ranked, ranked.c.history_id == RelationshipSnapshotHistory.id,
-    ).where(ranked.c.position == 1)
+    ).where(ranked.c.position == 1, RelationshipSnapshotHistory.workspace_id == scope.workspace_id)
     if entity_id is not None:
         statement = statement.where(or_(
             RelationshipSnapshotHistory.state["source_entity_id"].astext == str(entity_id),
@@ -239,8 +393,8 @@ async def _list_relationships_as_of(
         try:
             if len(cursor) > 1024:
                 raise ValueError
-            scope, position = json.loads(base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True))
-            if scope != fingerprint:
+            bound, position = json.loads(base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True))
+            if bound != fingerprint:
                 raise ValueError
             recorded_at, identifier = decode_cursor(position)
         except (ValueError, TypeError, binascii.Error) as exc:
@@ -261,7 +415,9 @@ async def _list_relationships_as_of(
     for history in rows:
         if history.deleted:
             continue
-        if not history.state or await session.get(Relationship, history.relationship_id) is None:
+        if not history.state or await session.scalar(select(Relationship.id).where(
+            Relationship.workspace_id == scope.workspace_id, Relationship.id == history.relationship_id,
+        )) is None:
             unavailable.append(history.relationship_id)
             continue
         item = RelationshipRead.model_validate(history.state)
@@ -272,17 +428,22 @@ async def _list_relationships_as_of(
                                     or (item.valid_to is not None and item.valid_to <= valid_at)):
             continue
         try:
-            endpoint_refs = await entities.get_entity_refs(session, [item.source_entity_id, item.target_entity_id])
+            endpoint_refs = await entities.get_entity_refs(
+                session, [item.source_entity_id, item.target_entity_id], scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled)
             canonical_endpoints = {ref.requested_id: ref.canonical_id for ref in endpoint_refs}
             pairs = list(dict.fromkeys((UUID(str(s["document_version_id"])), UUID(str(s["chunk_id"]))) for s in history.support))
             if len(pairs) > MAX_CLEANUP_SUPPORTS:
                 raise ValueError("Historical snapshot support exceeds its bound")
             refs = []
             for offset in range(0, len(pairs), 100):
-                refs.extend(await documents.read_evidence_refs(session, pairs[offset:offset + 100]))
+                refs.extend(await documents.read_evidence_refs(
+                    session, pairs[offset:offset + 100], scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled))
             permitted_sources = set()
             for source_id in sorted({ref.source_id for ref in refs}):
-                source = await sources.get_connector_source(session, source_id)
+                source = await sources.get_connector_source(
+                    session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
                 if source is not None and source.status == "active":
                     permitted_sources.add(source_id)
             by_pair = {(ref.document_version_id, ref.chunk_id): ref for ref in refs
@@ -295,7 +456,9 @@ async def _list_relationships_as_of(
                 for key in ("source_membership_id", "target_membership_id") if s.get(key)})
             memberships = []
             for offset in range(0, len(membership_ids), 200):
-                memberships.extend(await entities.get_membership_refs(session, membership_ids[offset:offset + 200]))
+                memberships.extend(await entities.get_membership_refs(
+                    session, membership_ids[offset:offset + 200], scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled))
             by_membership = {member.id: member for member in memberships}
             evidence = []
             for support in history.support:
@@ -364,6 +527,8 @@ async def publish_extracted_relationship(
     source_membership_id: UUID,
     target_membership_id: UUID,
     confidence: float,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> UUID | None:
     """Publish exact extraction support, observed history and temporal desired state.
 
@@ -372,9 +537,11 @@ async def publish_extracted_relationship(
     """
     if source_entity_id == target_entity_id:
         return None
-    refs = await documents.read_evidence_refs(session, [(document_version_id, chunk_id)])
+    refs = await documents.read_evidence_refs(session, [(document_version_id, chunk_id)], scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled)
     memberships = await entities.get_membership_refs(
-        session, [source_membership_id, target_membership_id], for_write=True
+        session, [source_membership_id, target_membership_id], for_write=True, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled
     )
     by_id = {item.id: item for item in memberships}
     source_membership, target_membership = by_id[source_membership_id], by_id[target_membership_id]
@@ -383,6 +550,7 @@ async def publish_extracted_relationship(
             raise ValueError("Relationship evidence memberships do not match the cited chunk")
     ref = refs[0]
     relationship = await session.scalar(select(Relationship).where(
+        Relationship.workspace_id == scope.workspace_id,
         Relationship.source_entity_id == source_entity_id,
         Relationship.target_entity_id == target_entity_id,
         Relationship.type == relationship_type,
@@ -393,12 +561,13 @@ async def publish_extracted_relationship(
     created = relationship is None
     if relationship is None:
         relationship = Relationship(
-            source_entity_id=source_entity_id, target_entity_id=target_entity_id,
+            workspace_id=scope.workspace_id, source_entity_id=source_entity_id, target_entity_id=target_entity_id,
             type=relationship_type, origin="derived", confidence=confidence,
         )
         session.add(relationship)
         await session.flush()
     evidence = await session.scalar(select(RelationshipEvidence).where(
+        _evidence_scope(scope),
         RelationshipEvidence.relationship_id == relationship.id,
         RelationshipEvidence.document_version_id == document_version_id,
         RelationshipEvidence.chunk_id == chunk_id,
@@ -417,6 +586,7 @@ async def publish_extracted_relationship(
         evidence.confidence = max(evidence.confidence, confidence)
     await session.flush()
     supported_confidence = await session.scalar(select(func.max(RelationshipEvidence.confidence)).where(
+        _evidence_scope(scope),
         RelationshipEvidence.relationship_id == relationship.id,
     ))
     confidence_changed = supported_confidence is not None and supported_confidence != relationship.confidence
@@ -424,17 +594,23 @@ async def publish_extracted_relationship(
         relationship.confidence = supported_confidence
     await session.flush()
     if created or support_changed or confidence_changed:
-        await record_relationship_history(session, relationship.id)
-        await _schedule_relationship_change(session, relationship.id, ["support", "confidence"])
+        await record_relationship_history(session, relationship.id, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled)
+        await _schedule_relationship_change(session, relationship.id, ["support", "confidence"],
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     return relationship.id
 
 
-async def _evidence_read(session: AsyncSession, rows: list[RelationshipEvidence]) -> list[EvidenceRead]:
+async def _evidence_read(
+    session: AsyncSession, rows: list[RelationshipEvidence], *, scope: Scope,
+    multi_workspace_enabled: bool,
+) -> list[EvidenceRead]:
     """Join support rows to document-owned provenance and excerpts."""
     if not rows:
         return []
     pairs = list(dict.fromkeys((row.document_version_id, row.chunk_id) for row in rows))
-    refs = await documents.read_evidence_refs(session, pairs)
+    refs = await documents.read_evidence_refs(session, pairs, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled)
     by_pair = {(ref.document_version_id, ref.chunk_id): ref for ref in refs}
     return [
         EvidenceRead(
@@ -463,7 +639,7 @@ async def _evidence_read(session: AsyncSession, rows: list[RelationshipEvidence]
 async def list_relationships(
     session: AsyncSession, limit: int, cursor: str | None, entity_id: UUID | None = None,
     *, valid_at: datetime | None = None, include_unknown_validity: bool = True,
-    knowledge_as_of: datetime | None = None,
+    knowledge_as_of: datetime | None = None, scope: Scope, multi_workspace_enabled: bool,
 ) -> RelationshipPage:
     """Page current canonical facts with half-open validity and observation cutoff.
 
@@ -472,6 +648,7 @@ async def list_relationships(
     then. Unrecorded/purged intervals are unavailable, never filled with current fields.
     Current permissions/deletion apply at every read; cursors bind all filters.
     """
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if not 1 <= limit <= 100:
         raise ValueError("Relationship page limit must be between 1 and 100")
     for instant in (valid_at, knowledge_as_of):
@@ -480,17 +657,19 @@ async def list_relationships(
     valid_at = valid_at.astimezone(UTC) if valid_at else None
     knowledge_as_of = knowledge_as_of.astimezone(UTC) if knowledge_as_of else None
     if entity_id is not None:
-        entity_id = await entities.resolve_canonical_entity_id(session, entity_id)
-    filters = [str(entity_id) if entity_id else None, valid_at.isoformat() if valid_at else None,
+        entity_id = await entities.resolve_canonical_entity_id(
+            session, entity_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    filters = [str(scope.workspace_id), str(entity_id) if entity_id else None, valid_at.isoformat() if valid_at else None,
                include_unknown_validity, knowledge_as_of.isoformat() if knowledge_as_of else None]
     fingerprint = sha256(json.dumps(filters, separators=(",", ":")).encode()).hexdigest()
     if knowledge_as_of is not None:
         return await _list_relationships_as_of(
             session, limit=limit, cursor=cursor, entity_id=entity_id, valid_at=valid_at,
             include_unknown_validity=include_unknown_validity,
-            knowledge_as_of=knowledge_as_of, fingerprint=fingerprint,
+            knowledge_as_of=knowledge_as_of, fingerprint=fingerprint, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
-    statement = select(Relationship)
+    statement = select(Relationship).where(Relationship.workspace_id == scope.workspace_id)
     known = Relationship.valid_from.is_not(None) & Relationship.valid_to.is_not(None)
     if not include_unknown_validity:
         statement = statement.where(known)
@@ -507,8 +686,8 @@ async def list_relationships(
         try:
             if len(cursor) > 1024:
                 raise ValueError
-            scope, position = json.loads(base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True))
-            if scope != fingerprint:
+            bound, position = json.loads(base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True))
+            if bound != fingerprint:
                 raise ValueError
             created_at, identifier = decode_cursor(position)
         except (ValueError, TypeError, binascii.Error) as exc:
@@ -527,7 +706,8 @@ async def list_relationships(
     items = []
     for row in rows:
         try:
-            snapshot = await get_relationship_snapshot(session, row.id)
+            snapshot = await get_relationship_snapshot(
+                session, row.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         except LookupError:
             continue
         if snapshot is None:
@@ -542,13 +722,14 @@ async def list_relationships(
 
 async def list_relationship_evidence(
     session: AsyncSession, relationship_id: UUID, limit: int, cursor: str | None,
-    *, knowledge_as_of: datetime | None = None,
+    *, knowledge_as_of: datetime | None = None, scope: Scope, multi_workspace_enabled: bool,
 ) -> tuple[list[EvidenceRead] | None, str | None]:
     """Page retained observations independently of canonical historical availability.
 
     Current source permission/deletion still applies. An aware cutoff filters
     observed time, not fact validity or owner edits; cursor binds identity/cutoff.
     """
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if not 1 <= limit <= 100:
         raise ValueError("Relationship evidence limit must be between 1 and 100")
     if knowledge_as_of is not None:
@@ -556,17 +737,22 @@ async def list_relationship_evidence(
             raise ValueError("Evidence cutoff requires an aware instant")
         knowledge_as_of = knowledge_as_of.astimezone(UTC)
     fingerprint = sha256(json.dumps([str(relationship_id), knowledge_as_of.isoformat() if knowledge_as_of else None]).encode()).hexdigest()
-    if await session.get(Relationship, relationship_id) is None:
+    if await session.scalar(select(Relationship.id).where(
+        Relationship.workspace_id == scope.workspace_id, Relationship.id == relationship_id,
+    )) is None:
         return None, None
-    statement = select(RelationshipEvidence).where(RelationshipEvidence.relationship_id == relationship_id)
+    statement = select(RelationshipEvidence).where(
+        _evidence_scope(scope),
+        RelationshipEvidence.relationship_id == relationship_id,
+    )
     if knowledge_as_of is not None:
         statement = statement.where(RelationshipEvidence.observed_at <= knowledge_as_of)
     if cursor:
         try:
             if len(cursor) > 1024:
                 raise ValueError
-            scope, position = json.loads(base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True))
-            if scope != fingerprint:
+            bound, position = json.loads(base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True))
+            if bound != fingerprint:
                 raise ValueError
             extracted_at, identifier = decode_cursor(position)
         except (ValueError, TypeError, binascii.Error) as exc:
@@ -582,11 +768,11 @@ async def list_relationship_evidence(
         next_cursor = base64.urlsafe_b64encode(json.dumps([
             fingerprint, encode_cursor(rows[-1].extracted_at, rows[-1].id),
         ]).encode()).decode().rstrip("=")
-    evidence = await _evidence_read(session, rows)
-    from modules.sources import public as sources
+    evidence = await _evidence_read(session, rows, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     permitted = set()
     for source_id in sorted({ref.source_id for ref in evidence}):
-        source = await sources.get_connector_source(session, source_id)
+        source = await sources.get_connector_source(
+            session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         if source is not None and source.status == "active":
             permitted.add(source_id)
     return [ref for ref in evidence if ref.source_id in permitted
@@ -616,17 +802,21 @@ def _decode_neighbor_cursor(cursor: str, focus_id: UUID) -> tuple[object, UUID]:
 
 
 async def get_neighbors(
-    session: AsyncSession, entity_id: UUID, limit: int = 50, cursor: str | None = None
+    session: AsyncSession, entity_id: UUID, limit: int = 50, cursor: str | None = None,
+    *, scope: Scope, multi_workspace_enabled: bool,
 ) -> NeighborPage | None:
     """Return bounded adjacent entities with their connecting relationships."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if not 2 <= limit <= 100:
         raise ValueError("Neighbor page limit must be between 2 and 100 total nodes")
     try:
-        focus = (await entities.get_entity_refs(session, [entity_id]))[0].canonical_id
+        focus = (await entities.get_entity_refs(
+            session, [entity_id], scope=scope, multi_workspace_enabled=multi_workspace_enabled))[0].canonical_id
     except LookupError:
         return None
     statement = select(Relationship).where(
-        or_(Relationship.source_entity_id == focus, Relationship.target_entity_id == focus)
+        Relationship.workspace_id == scope.workspace_id,
+        or_(Relationship.source_entity_id == focus, Relationship.target_entity_id == focus),
     )
     if cursor:
         created_at, relationship_id = _decode_neighbor_cursor(cursor, focus)
@@ -639,7 +829,9 @@ async def get_neighbors(
     neighbor_ids = list(dict.fromkeys(
         row.target_entity_id if row.source_entity_id == focus else row.source_entity_id for row in rows
     ))
-    refs = await entities.get_entity_refs(session, neighbor_ids) if neighbor_ids else []
+    refs = await entities.get_entity_refs(
+        session, neighbor_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    ) if neighbor_ids else []
     by_id = {ref.requested_id: ref for ref in refs}
     items = [
         NeighborRead(
@@ -657,16 +849,17 @@ async def get_neighbors(
 
 
 async def create_relationship(
-    session: AsyncSession, payload: RelationshipCreate, *, actor_id: int
+    session: AsyncSession, payload: RelationshipCreate, *, scope: Scope, multi_workspace_enabled: bool,
 ) -> RelationshipRead:
     """Create and commit a relationship with exact endpoint/evidence support.
 
-    Authorization is enforced by the owner-write route; ``actor_id`` records the
-    audit actor. The input may be owner or derived origin. Derived relationships
+    The workspace owner scope is admitted under the access-fence lock first and
+    records the audit actor. The input may be owner or derived origin. Derived relationships
     require both endpoint memberships for each evidence ref and use the maximum
     evidence confidence; the function locks write refs and commits audit plus
     graph notification, retained canonical snapshot and temporal desired state.
     """
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
     if payload.source_entity_id == payload.target_entity_id:
         raise ValueError("Relationship endpoints must be different")
     if payload.origin == "derived" and not payload.evidence:
@@ -678,11 +871,13 @@ async def create_relationship(
     ) for item in payload.evidence]
     if len(set(support_pairs)) != len(support_pairs):
         raise ValueError("Relationship evidence membership pairs must be unique")
-    evidence_refs = await documents.read_evidence_refs(session, pairs, for_write=bool(pairs))
+    evidence_refs = await documents.read_evidence_refs(
+        session, pairs, for_write=bool(pairs), scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     by_pair = {(ref.document_version_id, ref.chunk_id): ref for ref in evidence_refs}
     endpoints = [payload.source_entity_id, payload.target_entity_id]
     try:
-        await entities.get_entity_refs(session, endpoints, for_write=True)
+        await entities.get_entity_refs(
+            session, endpoints, for_write=True, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     except entities.TerminalEntityConflict as exc:
         raise LookupError("Relationship entity not found") from exc
     except LookupError as exc:
@@ -694,7 +889,8 @@ async def create_relationship(
         if identifier is not None
     }, key=str)
     try:
-        memberships = await entities.get_membership_refs(session, membership_ids, for_write=True)
+        memberships = await entities.get_membership_refs(
+            session, membership_ids, for_write=True, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     except LookupError as exc:
         raise ValueError("Relationship endpoint evidence membership is missing") from exc
     memberships_by_id = {item.id: item for item in memberships}
@@ -727,6 +923,7 @@ async def create_relationship(
             target_membership_id=item.target_membership_id,
         ))
     relationship = Relationship(
+        workspace_id=scope.workspace_id,
         source_entity_id=payload.source_entity_id,
         target_entity_id=payload.target_entity_id,
         type=payload.type,
@@ -743,112 +940,159 @@ async def create_relationship(
         evidence.relationship_id = relationship.id
     session.add_all(evidence_rows)
     await session.flush()
-    evidence_read = await _evidence_read(session, evidence_rows)
+    evidence_read = await _evidence_read(
+        session, evidence_rows, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     result = _relationship_read(relationship, evidence_read)
     await entities.record_owner_action(
-        session, actor_id=actor_id, operation="relationship_create", reason=payload.reason,
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        operation="relationship_create", reason=payload.reason,
         affected_ids=[relationship.id, *endpoints],
     )
-    await record_relationship_history(session, relationship.id)
-    await _schedule_relationship_change(session, relationship.id, ["created", "support"])
-    await commit_with_replay(session, [make_graph_change(relationship_id=relationship.id)])
+    await record_relationship_history(
+        session, relationship.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await _schedule_relationship_change(
+        session, relationship.id, ["created", "support"], scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled)
+    await commit_with_replay(
+        session, [make_graph_change(scope=scope, relationship_id=relationship.id)], scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
     return result
 
 
 async def remove_relationship(
-    session: AsyncSession, relationship_id: UUID, *, actor_id: int, reason: str = "owner_relationship_delete"
+    session: AsyncSession, relationship_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+    reason: str = "owner_relationship_delete",
 ) -> bool:
     """Delete a relationship after endpoint locks and commit its owner audit.
 
-    Authorization is enforced by the owner-write route; ``actor_id`` is audit
-    provenance. Returns False when the relationship is absent, rejects terminal
+    The workspace owner scope is admitted under the access-fence lock first and
+    is the audit actor. Returns False when the relationship is absent, rejects terminal
     endpoints, and captures exact support/history before deleting. Desired-state
     deletion, audit and replay commit atomically; no external graph work occurs.
     """
-    hint = await session.get(Relationship, relationship_id)
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    hint = await session.scalar(select(Relationship).where(
+        Relationship.workspace_id == scope.workspace_id, Relationship.id == relationship_id,
+    ))
     if hint is None:
         return False
     endpoints = [hint.source_entity_id, hint.target_entity_id]
     try:
-        await entities.get_entity_refs(session, endpoints, for_write=True)
+        await entities.get_entity_refs(
+            session, endpoints, for_write=True, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     except entities.TerminalEntityConflict as exc:
         raise LookupError("Relationship entity not found") from exc
     relationship = await session.scalar(
-        select(Relationship).where(Relationship.id == relationship_id).with_for_update()
+        select(Relationship).where(
+            Relationship.workspace_id == scope.workspace_id, Relationship.id == relationship_id,
+        ).with_for_update()
     )
     if relationship is None:
         return False
-    await record_relationship_history(session, relationship_id, deleted=True)
-    await _schedule_relationship_change(session, relationship_id, ["deleted"], deleted=True)
+    await record_relationship_history(
+        session, relationship_id, deleted=True, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await _schedule_relationship_change(
+        session, relationship_id, ["deleted"], deleted=True, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled)
     await session.execute(update(RelationshipSnapshotHistory).where(
+        RelationshipSnapshotHistory.workspace_id == scope.workspace_id,
         RelationshipSnapshotHistory.relationship_id == relationship_id,
     ).values(state={}, support=[]))
     await session.delete(relationship)
     await entities.record_owner_action(
-        session, actor_id=actor_id, operation="relationship_delete", reason=reason,
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        operation="relationship_delete", reason=reason,
         affected_ids=[relationship_id, *endpoints],
     )
-    await commit_with_replay(session, [make_graph_change(relationship_id=relationship_id, deleted=True)])
+    await commit_with_replay(
+        session, [make_graph_change(scope=scope, relationship_id=relationship_id, deleted=True)],
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
     return True
 
 
 async def support_cleanup_ids(
-    session: AsyncSession, *, refs: list[tuple[UUID, UUID]], document_id: UUID | None = None,
-    source_id: UUID | None = None, membership_ids: list[UUID] | None = None,
-) -> tuple[list[UUID], list[UUID]]:
-    """Resolve bounded relationships and endpoint entities affected by support cleanup."""
-    if (document_id is None) == (source_id is None):
-        raise ValueError("Specify one document or source")
-    statement = select(RelationshipEvidence.relationship_id).where(
-        or_(
-            RelationshipEvidence.document_id == document_id if document_id else RelationshipEvidence.source_id == source_id,
-            tuple_(RelationshipEvidence.document_version_id, RelationshipEvidence.chunk_id).in_(refs) if refs else false(),
-            RelationshipEvidence.source_membership_id.in_(membership_ids) if membership_ids else false(),
-            RelationshipEvidence.target_membership_id.in_(membership_ids) if membership_ids else false(),
-        )
+    session: AsyncSession, *, refs: list[tuple[UUID, UUID]], source_id: UUID,
+    document_id: UUID | None = None, membership_ids: list[UUID] | tuple[UUID, ...],
+    scope: Scope, multi_workspace_enabled: bool,
+) -> RelationshipSupportClosure:
+    """Discover (nonlocking, ID-only) relationship support, endpoints and retained history."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    return await _discover_support(
+        session, refs=refs, source_id=source_id, document_id=document_id,
+        membership_ids=tuple(membership_ids), scope=scope, include_history=True,
     )
-    relation_ids = sorted(set((await session.scalars(statement.limit(MAX_CLEANUP_SUPPORTS + 1))).all()), key=str)
-    if len(relation_ids) > MAX_CLEANUP_SUPPORTS:
+
+
+async def prepare_support_cleanup_in_uow(
+    session: AsyncSession, closure: RelationshipSupportClosure, *, scope: Scope,
+    multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+) -> None:
+    """Lock relationships, then evidence, then retained history rows in order; no mutation."""
+    _require_cleanup_fences(
+        await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled),
+        closure=closure, scope=scope, access_fence=access_fence, source_fence=source_fence,
+    )
+    if closure.overflow:
         raise ValueError("Relationship support cleanup exceeds its atomic limit")
-    if not relation_ids:
-        return [], []
-    rows = (await session.execute(
-        select(Relationship.source_entity_id, Relationship.target_entity_id)
-        .where(Relationship.id.in_(relation_ids))
-    )).all()
-    entity_ids = sorted({identifier for row in rows for identifier in row}, key=str)
-    return relation_ids, entity_ids
+    if closure.relationship_ids:
+        await session.scalars(
+            select(Relationship.id).where(
+                Relationship.workspace_id == scope.workspace_id, Relationship.id.in_(closure.relationship_ids),
+            ).order_by(Relationship.id).with_for_update()
+        )
+    if closure.evidence_ids:
+        await session.scalars(
+            select(RelationshipEvidence.id).where(
+                _evidence_scope(scope), RelationshipEvidence.id.in_(closure.evidence_ids),
+            ).order_by(RelationshipEvidence.id).with_for_update()
+        )
+    if closure.history_ids:
+        await session.scalars(
+            select(RelationshipSnapshotHistory.id).where(
+                RelationshipSnapshotHistory.workspace_id == scope.workspace_id,
+                RelationshipSnapshotHistory.id.in_(closure.history_ids),
+            ).order_by(RelationshipSnapshotHistory.id).with_for_update()
+        )
 
 
-async def lock_relationship_ids(session: AsyncSession, relationship_ids: list[UUID]) -> None:
-    """Lock a bounded sorted relationship set for cleanup or correction."""
+async def lock_relationship_ids(
+    session: AsyncSession, relationship_ids: list[UUID], *, scope: Scope, multi_workspace_enabled: bool,
+) -> None:
+    """Lock a bounded sorted relationship set in one workspace for cleanup or correction."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     ids = sorted(set(relationship_ids), key=str)
     if len(ids) > MAX_CLEANUP_SUPPORTS:
         raise ValueError("Relationship support cleanup exceeds its atomic limit")
     if ids:
         await session.scalars(
-            select(Relationship.id).where(Relationship.id.in_(ids)).order_by(Relationship.id).with_for_update()
+            select(Relationship.id).where(
+                Relationship.workspace_id == scope.workspace_id, Relationship.id.in_(ids),
+            ).order_by(Relationship.id).with_for_update()
         )
 
 
 async def lock_delete_closure(
-    session: AsyncSession, entity_ids: list[UUID]
+    session: AsyncSession, entity_ids: list[UUID], *, scope: Scope, multi_workspace_enabled: bool,
 ) -> tuple[list[UUID], list[UUID]]:
     """Lock and return the exact incident edge/support IDs after entity locks."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     ids = sorted(set(entity_ids), key=str)
     if len(ids) > 100:
         raise ValueError("Entity deletion closure exceeds its atomic entity limit")
     edges = list((await session.scalars(
         select(Relationship).where(
-            or_(Relationship.source_entity_id.in_(ids), Relationship.target_entity_id.in_(ids))
+            Relationship.workspace_id == scope.workspace_id,
+            or_(Relationship.source_entity_id.in_(ids), Relationship.target_entity_id.in_(ids)),
         ).order_by(Relationship.id).limit(101).execution_options(populate_existing=True)
     )).all())
     if len(edges) > 100:
         raise ValueError("Entity deletion closure exceeds its atomic relationship limit")
     relationship_ids = [item.id for item in edges]
     supports = list((await session.scalars(
-        select(RelationshipEvidence).where(RelationshipEvidence.relationship_id.in_(relationship_ids))
-        .order_by(RelationshipEvidence.id).limit(201).execution_options(populate_existing=True)
+        select(RelationshipEvidence).where(
+            _evidence_scope(scope),
+            RelationshipEvidence.relationship_id.in_(relationship_ids),
+        ).order_by(RelationshipEvidence.id).limit(201).execution_options(populate_existing=True)
     )).all()) if relationship_ids else []
     support_snapshot = [(
         item.id, item.relationship_id, item.document_version_id, item.chunk_id,
@@ -856,20 +1100,24 @@ async def lock_delete_closure(
     ) for item in supports]
     if len(supports) > 200 or len({(item.document_version_id, item.chunk_id) for item in supports}) > 100:
         raise ValueError("Entity deletion closure exceeds its atomic support limit")
-    await lock_relationship_ids(session, relationship_ids)
+    await lock_relationship_ids(
+        session, relationship_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     support_ids = sorted((item.id for item in supports), key=str)
     if support_ids:
         await session.scalars(select(RelationshipEvidence.id).where(
-            RelationshipEvidence.id.in_(support_ids)
+            _evidence_scope(scope), RelationshipEvidence.id.in_(support_ids)
         ).order_by(RelationshipEvidence.id).with_for_update().execution_options(populate_existing=True))
     refreshed_edges = list((await session.scalars(
         select(Relationship).where(
-            or_(Relationship.source_entity_id.in_(ids), Relationship.target_entity_id.in_(ids))
+            Relationship.workspace_id == scope.workspace_id,
+            or_(Relationship.source_entity_id.in_(ids), Relationship.target_entity_id.in_(ids)),
         ).order_by(Relationship.id).execution_options(populate_existing=True)
     )).all())
     refreshed_supports = list((await session.scalars(
-        select(RelationshipEvidence).where(RelationshipEvidence.relationship_id.in_(relationship_ids))
-        .order_by(RelationshipEvidence.id).execution_options(populate_existing=True)
+        select(RelationshipEvidence).where(
+            _evidence_scope(scope),
+            RelationshipEvidence.relationship_id.in_(relationship_ids),
+        ).order_by(RelationshipEvidence.id).execution_options(populate_existing=True)
     )).all()) if relationship_ids else []
     if ([item.id for item in refreshed_edges] != relationship_ids
             or [item.id for item in refreshed_supports] != support_ids
@@ -881,25 +1129,38 @@ async def lock_delete_closure(
 
 
 async def remove_entity_closure(
-    session: AsyncSession, entity_ids: list[UUID], relationship_ids: list[UUID], support_ids: list[UUID]
+    session: AsyncSession, entity_ids: list[UUID], relationship_ids: list[UUID], support_ids: list[UUID],
+    *, scope: Scope, multi_workspace_enabled: bool,
 ) -> None:
     """Delete the verified incident relationship closure and its support rows."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     ids = sorted(set(entity_ids), key=str)
     current = list((await session.scalars(
         select(Relationship.id).where(
-            or_(Relationship.source_entity_id.in_(ids), Relationship.target_entity_id.in_(ids))
+            Relationship.workspace_id == scope.workspace_id,
+            or_(Relationship.source_entity_id.in_(ids), Relationship.target_entity_id.in_(ids)),
         ).order_by(Relationship.id)
     )).all())
     if current != sorted(set(relationship_ids), key=str):
         raise ValueError("Entity deletion relationship closure changed; retry")
-    await session.execute(delete(RelationshipEvidence).where(RelationshipEvidence.id.in_(support_ids)))
-    await session.execute(delete(Relationship).where(Relationship.id.in_(relationship_ids)))
+    await session.execute(delete(RelationshipEvidence).where(
+        _evidence_scope(scope), RelationshipEvidence.id.in_(support_ids),
+    ))
+    await session.execute(delete(Relationship).where(
+        Relationship.workspace_id == scope.workspace_id, Relationship.id.in_(relationship_ids),
+    ))
 
 
 async def list_correction_relationship_refs(
-    session: AsyncSession, entity_ids: list[UUID]
+    session: AsyncSession, entity_ids: list[UUID], *, scope: Scope,
 ) -> list[CorrectionRelationshipRef]:
-    """Read a bounded incident edge/support snapshot for correction planning."""
+    """Read a bounded incident edge/support snapshot in one workspace for correction planning.
+
+    The calling correction transaction already holds owner admission; this read adds no
+    authorization of its own beyond the role-only owner guard, and restricts rows to the scoped workspace.
+    """
+    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
     ids = sorted(set(entity_ids), key=str)
     if len(ids) > 100:
         raise ValueError("Correction entity closure exceeds its atomic limit")
@@ -907,7 +1168,8 @@ async def list_correction_relationship_refs(
         return []
     edges = list((await session.scalars(
         select(Relationship).where(
-            or_(Relationship.source_entity_id.in_(ids), Relationship.target_entity_id.in_(ids))
+            Relationship.workspace_id == scope.workspace_id,
+            or_(Relationship.source_entity_id.in_(ids), Relationship.target_entity_id.in_(ids)),
         ).order_by(Relationship.id).limit(101).execution_options(populate_existing=True)
     )).all())
     if len(edges) > 100:
@@ -918,7 +1180,8 @@ async def list_correction_relationship_refs(
         raise ValueError("Correction relationship closure contains a self relationship")
     supports = (await session.scalars(
         select(RelationshipEvidence).where(
-            RelationshipEvidence.relationship_id.in_([edge.id for edge in edges])
+            _evidence_scope(scope),
+            RelationshipEvidence.relationship_id.in_([edge.id for edge in edges]),
         ).order_by(RelationshipEvidence.relationship_id, RelationshipEvidence.id).limit(201).execution_options(populate_existing=True)
     )).all() if edges else []
     if len(supports) > 200 or len({(row.document_version_id, row.chunk_id) for row in supports}) > 100:
@@ -946,19 +1209,25 @@ async def list_correction_relationship_refs(
 
 
 async def lock_correction_closure(
-    session: AsyncSession, entity_ids: list[UUID], expected_relationship_ids: set[UUID]
+    session: AsyncSession, entity_ids: list[UUID], expected_relationship_ids: set[UUID],
+    *, scope: Scope, multi_workspace_enabled: bool,
 ) -> None:
     """Lock and revalidate the relationship/support snapshot before correction writes."""
-    refs = await list_correction_relationship_refs(session, entity_ids)
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    refs = await list_correction_relationship_refs(session, entity_ids, scope=scope)
     if {item.id for item in refs} != expected_relationship_ids:
         raise ValueError("Correction relationship closure changed; retry preview")
     relation_ids = sorted(expected_relationship_ids, key=str)
     if relation_ids:
-        await session.scalars(select(Relationship).where(Relationship.id.in_(relation_ids)).order_by(Relationship.id).with_for_update().execution_options(populate_existing=True))
+        await session.scalars(select(Relationship).where(
+            Relationship.workspace_id == scope.workspace_id, Relationship.id.in_(relation_ids),
+        ).order_by(Relationship.id).with_for_update().execution_options(populate_existing=True))
         support_ids = sorted({support.id for ref in refs for support in ref.supports}, key=str)
         if support_ids:
-            await session.scalars(select(RelationshipEvidence).where(RelationshipEvidence.id.in_(support_ids)).order_by(RelationshipEvidence.id).with_for_update().execution_options(populate_existing=True))
-        refreshed = await list_correction_relationship_refs(session, entity_ids)
+            await session.scalars(select(RelationshipEvidence).where(
+                _evidence_scope(scope), RelationshipEvidence.id.in_(support_ids),
+            ).order_by(RelationshipEvidence.id).with_for_update().execution_options(populate_existing=True))
+        refreshed = await list_correction_relationship_refs(session, entity_ids, scope=scope)
         if [item.model_dump(mode="json") for item in refs] != [item.model_dump(mode="json") for item in refreshed]:
             raise ValueError("Correction relationship support closure changed; retry preview")
 
@@ -1008,19 +1277,22 @@ def validate_entity_split_plan(
 async def apply_entity_merge(
     session: AsyncSession, source_entity_id: UUID, target_entity_id: UUID,
     expected_relationship_ids: set[UUID], closure_entity_ids: list[UUID],
-    source_redirect_ids: set[UUID],
+    source_redirect_ids: set[UUID], *, scope: Scope, multi_workspace_enabled: bool,
 ) -> list[tuple[UUID, UUID]]:
     """Redirect incident edges and retain presently observed post-correction history.
 
     Caller fences and captures old history before membership moves, then commits
     correction scheduling. This owner helper flushes; it never commits.
     """
-    refs = await list_correction_relationship_refs(session, closure_entity_ids)
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    refs = await list_correction_relationship_refs(session, closure_entity_ids, scope=scope)
     if {item.id for item in refs} != expected_relationship_ids:
         raise ValueError("Correction relationship closure changed; retry preview")
     validate_entity_merge_plan(source_entity_id, target_entity_id, refs, source_redirect_ids)
     relation_ids = sorted(expected_relationship_ids, key=str)
-    rows = list((await session.scalars(select(Relationship).where(Relationship.id.in_(relation_ids)).order_by(Relationship.id))).all()) if relation_ids else []
+    rows = list((await session.scalars(select(Relationship).where(
+        Relationship.workspace_id == scope.workspace_id, Relationship.id.in_(relation_ids),
+    ).order_by(Relationship.id))).all()) if relation_ids else []
     source_merge_ids = {source_entity_id} | source_redirect_ids
     key_groups: dict[tuple[UUID, UUID, str, str, datetime | None, datetime | None], list[Relationship]] = {}
     for row in rows:
@@ -1038,7 +1310,10 @@ async def apply_entity_merge(
         supports_by_key: dict[tuple[UUID, UUID, UUID | None, UUID | None], RelationshipEvidence] = {}
         for row in group:
             support_rows = (await session.scalars(
-                select(RelationshipEvidence).where(RelationshipEvidence.relationship_id == row.id).order_by(RelationshipEvidence.id)
+                select(RelationshipEvidence).where(
+                    _evidence_scope(scope),
+                    RelationshipEvidence.relationship_id == row.id,
+                ).order_by(RelationshipEvidence.id)
             )).all()
             for support in support_rows:
                 support_key = (support.document_version_id, support.chunk_id, support.source_membership_id, support.target_membership_id)
@@ -1052,32 +1327,42 @@ async def apply_entity_merge(
             if row.id != survivor.id:
                 replacements.append((row.id, survivor.id))
                 await session.delete(row)
-    await _refresh_derived_confidence(session, affected_relationship_ids)
+    await _refresh_derived_confidence(session, affected_relationship_ids, scope=scope)
     await session.flush()
     for identifier in sorted(affected_relationship_ids):
-        await record_relationship_history(session, identifier)
+        await record_relationship_history(
+            session, identifier, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     for old_id, _ in replacements:
-        session.add(RelationshipSnapshotHistory(relationship_id=old_id, deleted=True, state={}, support=[]))
+        session.add(RelationshipSnapshotHistory(
+            workspace_id=scope.workspace_id, relationship_id=old_id, deleted=True, state={}, support=[],
+        ))
     return replacements
 
 
 async def apply_entity_split(
     session: AsyncSession, entity_id: UUID, new_entity_id: UUID,
     membership_ids: set[UUID], expected_relationship_ids: set[UUID],
+    *, scope: Scope, multi_workspace_enabled: bool,
 ) -> list[tuple[UUID, UUID]]:
     """Move exact endpoint support and retain observed post-correction history.
 
     Caller captures old history before memberships move and owns correction
     scheduling/commit. Missing old identities receive identifier-only tombstones.
     """
-    refs = await list_correction_relationship_refs(session, [entity_id])
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    refs = await list_correction_relationship_refs(session, [entity_id], scope=scope)
     if {item.id for item in refs} != expected_relationship_ids:
         raise ValueError("Correction relationship closure changed; retry preview")
     validate_entity_split_plan(entity_id, membership_ids, refs)
     relation_ids = sorted(expected_relationship_ids, key=str)
-    rows = list((await session.scalars(select(Relationship).where(Relationship.id.in_(relation_ids)).order_by(Relationship.id))).all()) if relation_ids else []
+    rows = list((await session.scalars(select(Relationship).where(
+        Relationship.workspace_id == scope.workspace_id, Relationship.id.in_(relation_ids),
+    ).order_by(Relationship.id))).all()) if relation_ids else []
     support_by_edge: dict[UUID, list[RelationshipEvidence]] = {}
-    for support in (await session.scalars(select(RelationshipEvidence).where(RelationshipEvidence.relationship_id.in_(relation_ids)).order_by(RelationshipEvidence.relationship_id, RelationshipEvidence.id))).all() if relation_ids else []:
+    for support in (await session.scalars(select(RelationshipEvidence).where(
+        _evidence_scope(scope),
+        RelationshipEvidence.relationship_id.in_(relation_ids),
+    ).order_by(RelationshipEvidence.relationship_id, RelationshipEvidence.id))).all() if relation_ids else []:
         support_by_edge.setdefault(support.relationship_id, []).append(support)
     replacements: list[tuple[UUID, UUID]] = []
     affected_relationship_ids: set[UUID] = set()
@@ -1099,6 +1384,7 @@ async def apply_entity_split(
             endpoints.setdefault((next_source, next_target), []).append(support)
         for (next_source, next_target), moved_supports in endpoints.items():
             existing = await session.scalar(select(Relationship).where(
+                Relationship.workspace_id == scope.workspace_id,
                 Relationship.id != row.id,
                 Relationship.source_entity_id == next_source,
                 Relationship.target_entity_id == next_target,
@@ -1110,7 +1396,7 @@ async def apply_entity_split(
             if existing is not None and existing.metadata_json != row.metadata_json:
                 raise ValueError("Split has conflicting relationship metadata")
             destination = existing or Relationship(
-                source_entity_id=next_source, target_entity_id=next_target, type=row.type,
+                workspace_id=scope.workspace_id, source_entity_id=next_source, target_entity_id=next_target, type=row.type,
                 origin=row.origin, confidence=None, valid_from=row.valid_from,
                 valid_to=row.valid_to, metadata_json=row.metadata_json,
             )
@@ -1124,100 +1410,136 @@ async def apply_entity_split(
             replacements.append((row.id, destination.id))
         if len(source_rows) == len(moving):
             await session.delete(row)
-    await _refresh_derived_confidence(session, affected_relationship_ids)
+    await _refresh_derived_confidence(session, affected_relationship_ids, scope=scope)
     await session.flush()
     for identifier in sorted(affected_relationship_ids):
-        if await session.get(Relationship, identifier) is None:
-            session.add(RelationshipSnapshotHistory(relationship_id=identifier, deleted=True, state={}, support=[]))
+        if await session.scalar(select(Relationship.id).where(
+            Relationship.workspace_id == scope.workspace_id, Relationship.id == identifier,
+        )) is None:
+            session.add(RelationshipSnapshotHistory(
+                workspace_id=scope.workspace_id, relationship_id=identifier, deleted=True, state={}, support=[],
+            ))
         else:
-            await record_relationship_history(session, identifier)
+            await record_relationship_history(
+                session, identifier, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     return replacements
 
 
-async def _refresh_derived_confidence(session: AsyncSession, relationship_ids: set[UUID]) -> None:
+async def _refresh_derived_confidence(
+    session: AsyncSession, relationship_ids: set[UUID], *, scope: Scope,
+) -> None:
     """Recompute derived relationship confidence from remaining evidence rows."""
     if not relationship_ids:
         return
     await session.flush()
     for relationship_id in sorted(relationship_ids, key=str):
         relationship = await session.scalar(select(Relationship).where(
-            Relationship.id == relationship_id
+            Relationship.workspace_id == scope.workspace_id, Relationship.id == relationship_id,
         ).execution_options(populate_existing=True))
         if relationship is None or relationship.origin != "derived":
             continue
         relationship.confidence = await session.scalar(select(func.max(
             RelationshipEvidence.confidence
-        )).where(RelationshipEvidence.relationship_id == relationship_id))
+        )).where(
+            _evidence_scope(scope),
+            RelationshipEvidence.relationship_id == relationship_id,
+        ))
 
 
 async def remove_document_support(
-    session: AsyncSession, *, document_id: UUID, refs: list[tuple[UUID, UUID]], membership_ids: list[UUID]
+    session: AsyncSession, closure: RelationshipSupportClosure, *, refs: list[tuple[UUID, UUID]],
+    membership_ids: list[UUID] | tuple[UUID, ...], scope: Scope, multi_workspace_enabled: bool,
+    access_fence: AccessFence, source_fence: SourceFence,
 ) -> int:
-    """Remove evidence rows scoped to a document and refresh affected derived edges."""
-    return await _remove_support(session, document_id=document_id, refs=refs, membership_ids=membership_ids)
+    """Remove prepared evidence rows scoped to a document and refresh affected derived edges."""
+    if closure.document_id is None:
+        raise ValueError("A document closure is required")
+    return await _remove_support(
+        session, closure, refs=refs, membership_ids=membership_ids, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence,
+    )
 
 
 async def remove_source_support(
-    session: AsyncSession, *, source_id: UUID, refs: list[tuple[UUID, UUID]], membership_ids: list[UUID]
+    session: AsyncSession, closure: RelationshipSupportClosure, *, refs: list[tuple[UUID, UUID]],
+    membership_ids: list[UUID] | tuple[UUID, ...], scope: Scope, multi_workspace_enabled: bool,
+    access_fence: AccessFence, source_fence: SourceFence,
 ) -> int:
-    """Remove evidence rows scoped to a source and refresh affected derived edges."""
-    return await _remove_support(session, source_id=source_id, refs=refs, membership_ids=membership_ids)
+    """Remove prepared evidence rows scoped to a Source and refresh affected derived edges."""
+    if closure.document_id is not None:
+        raise ValueError("A Source-wide closure is required")
+    return await _remove_support(
+        session, closure, refs=refs, membership_ids=membership_ids, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence,
+    )
 
 
 async def _remove_support(
-    session: AsyncSession, *, refs: list[tuple[UUID, UUID]], membership_ids: list[UUID],
-    document_id: UUID | None = None, source_id: UUID | None = None,
+    session: AsyncSession, closure: RelationshipSupportClosure, *, refs: list[tuple[UUID, UUID]],
+    membership_ids: list[UUID] | tuple[UUID, ...], scope: Scope, multi_workspace_enabled: bool,
+    access_fence: AccessFence, source_fence: SourceFence,
 ) -> int:
-    """Delete bounded matching evidence and remove unsupported derived relationships."""
-    statement = select(RelationshipEvidence).where(or_(
-        RelationshipEvidence.document_id == document_id if document_id else RelationshipEvidence.source_id == source_id,
-        tuple_(RelationshipEvidence.document_version_id, RelationshipEvidence.chunk_id).in_(refs) if refs else false(),
-        RelationshipEvidence.source_membership_id.in_(membership_ids) if membership_ids else false(),
-        RelationshipEvidence.target_membership_id.in_(membership_ids) if membership_ids else false(),
-    )).limit(MAX_CLEANUP_SUPPORTS + 1)
-    rows = list((await session.scalars(statement)).all())
-    if len(rows) > MAX_CLEANUP_SUPPORTS:
-        raise ValueError("Relationship support cleanup exceeds its atomic limit")
-    affected = sorted({row.relationship_id for row in rows}, key=str)
-    await session.execute(delete(RelationshipEvidence).where(RelationshipEvidence.id.in_([row.id for row in rows])))
-    for relationship_id in affected:
+    """Delete prepared evidence and remove unsupported derived relationships; never locks.
+
+    Requires ``purge_history_support`` to have run in this transaction: any history row still
+    matching ``refs`` means the purge was skipped or raced, so cleanup fails.
+    """
+    _require_cleanup_fences(
+        await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled),
+        closure=closure, scope=scope, access_fence=access_fence, source_fence=source_fence,
+    )
+    current = await _discover_support(
+        session, refs=refs, source_id=closure.source_id, document_id=closure.document_id,
+        membership_ids=tuple(membership_ids), scope=scope, include_history=True,
+    )
+    if current.overflow or current.history_ids \
+            or replace(current, history_ids=closure.history_ids) != closure:
+        raise RuntimeError("cleanup closure changed")
+    if closure.evidence_ids:
+        await session.execute(delete(RelationshipEvidence).where(
+            _evidence_scope(scope), RelationshipEvidence.id.in_(closure.evidence_ids),
+        ))
+    for relationship_id in closure.relationship_ids:
         relationship = await session.get(Relationship, relationship_id)
-        if relationship is None or relationship.origin != "derived":
+        if relationship is None or relationship.workspace_id != scope.workspace_id \
+                or relationship.origin != "derived":
             continue
         remaining = list((await session.scalars(
-            select(RelationshipEvidence).where(RelationshipEvidence.relationship_id == relationship_id)
+            select(RelationshipEvidence).where(
+                _evidence_scope(scope), RelationshipEvidence.relationship_id == relationship_id,
+            )
         )).all())
         if not remaining:
             await session.delete(relationship)
         else:
             relationship.confidence = max(row.confidence for row in remaining)
-    return len(rows)
+    return len(closure.evidence_ids)
 
 
 RELATIONSHIP_EXPORT_PAGE_MAX_BYTES = 16_777_216
 
 
 def _encode_relationship_export_cursor(
-    owner_id: int, snapshot_at: datetime, position_at: datetime, position_id: UUID,
+    owner_id: int, workspace_id: UUID, snapshot_at: datetime, position_at: datetime, position_id: UUID,
 ) -> str:
     """Encode a canonical relationship cursor bound to owner and fixed snapshot."""
-    raw = json.dumps({"v": 1, "owner": owner_id, "kind": "relationships",
+    raw = json.dumps({"v": 1, "owner": owner_id, "workspace": str(workspace_id), "kind": "relationships",
                       "snapshot": snapshot_at.astimezone(UTC).isoformat(),
                       "at": position_at.astimezone(UTC).isoformat(), "id": str(position_id)},
                      sort_keys=True, separators=(",", ":")).encode()
     return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
 
-def _decode_relationship_export_cursor(cursor: str, owner_id: int) -> tuple[datetime, datetime, UUID]:
+def _decode_relationship_export_cursor(cursor: str, owner_id: int, workspace_id: UUID) -> tuple[datetime, datetime, UUID]:
     """Reject malformed, overlong, future, or cross-owner relationship cursors."""
     try:
         if not cursor or len(cursor) > 1024 or "=" in cursor:
             raise ValueError
         raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
         value = json.loads(raw)
-        if not isinstance(value, dict) or set(value) != {"v", "owner", "kind", "snapshot", "at", "id"}:
+        if not isinstance(value, dict) or set(value) != {"v", "owner", "workspace", "kind", "snapshot", "at", "id"}:
             raise ValueError
-        if value["v"] != 1 or value["owner"] != owner_id or value["kind"] != "relationships":
+        if value["v"] != 1 or value["owner"] != owner_id or value["workspace"] != str(workspace_id) or value["kind"] != "relationships":
             raise ValueError
         snapshot_at, position_at = datetime.fromisoformat(value["snapshot"]), datetime.fromisoformat(value["at"])
         if any(item.tzinfo is None or item.utcoffset() is None for item in (snapshot_at, position_at)):
@@ -1226,7 +1548,7 @@ def _decode_relationship_export_cursor(cursor: str, owner_id: int) -> tuple[date
         if snapshot_at > datetime.now(UTC):
             raise ValueError
         position_id = UUID(value["id"])
-        if _encode_relationship_export_cursor(owner_id, snapshot_at, position_at, position_id) != cursor:
+        if _encode_relationship_export_cursor(owner_id, workspace_id, snapshot_at, position_at, position_id) != cursor:
             raise ValueError
         return snapshot_at, position_at, position_id
     except (ValueError, TypeError, KeyError, UnicodeDecodeError, binascii.Error, json.JSONDecodeError) as exc:
@@ -1239,32 +1561,36 @@ def _relationship_export_bytes(items: list[RelationshipExportRead]) -> int:
                           separators=(",", ":")).encode("utf-8"))
 
 
-def _relationship_export_statement(snapshot_at: datetime) -> Select[Any]:
-    """Select owner relationships plus derived rows with retained eligible citations."""
-    eligible = sources.export_eligible_source_ids()
+def _relationship_export_statement(snapshot_at: datetime, *, scope: Scope) -> Select[Any]:
+    """Select workspace relationships plus derived rows with retained eligible citations."""
+    eligible = sources.export_eligible_source_ids(scope=scope)
     retained_support = exists(select(RelationshipEvidence.id).where(
+        _evidence_scope(scope),
         RelationshipEvidence.relationship_id == Relationship.id,
         RelationshipEvidence.source_id.in_(eligible),
     ))
     return select(Relationship).where(
+        Relationship.workspace_id == scope.workspace_id,
         Relationship.created_at <= snapshot_at, Relationship.updated_at <= snapshot_at,
         or_(Relationship.origin == "owner", retained_support),
     )
 
 
-async def _relationship_export_count(session: AsyncSession, snapshot_at: datetime) -> int:
-    """Count portable owner relationships visible at the captured source-purge boundary."""
-    statement = _relationship_export_statement(snapshot_at).with_only_columns(func.count()).order_by(None)
+async def _relationship_export_count(session: AsyncSession, snapshot_at: datetime, *, scope: Scope) -> int:
+    """Count portable workspace relationships visible at the captured source-purge boundary."""
+    statement = _relationship_export_statement(snapshot_at, scope=scope).with_only_columns(func.count()).order_by(None)
     return int(await session.scalar(statement) or 0)
 
 
-async def _relationship_source_generations(session: AsyncSession, source_ids: set[UUID]) -> dict[UUID, int]:
+async def _relationship_source_generations(
+    session: AsyncSession, source_ids: set[UUID], *, scope: Scope,
+) -> dict[UUID, int]:
     """Read eligible source generations through the owner-public lifecycle projection."""
     if not source_ids:
         return {}
-    projection = sources.ingestion_lifecycle_projection().subquery()
+    projection = sources.ingestion_lifecycle_projection(scope=scope).subquery()
     rows: Any = (await session.execute(select(projection.c.id, projection.c.generation).where(
-        projection.c.id.in_(source_ids), projection.c.id.in_(sources.export_eligible_source_ids()),
+        projection.c.id.in_(source_ids), projection.c.id.in_(sources.export_eligible_source_ids(scope=scope)),
     ))).all()
     result = {source_id: int(generation) for source_id, generation in rows}
     if result.keys() != source_ids:
@@ -1274,7 +1600,7 @@ async def _relationship_source_generations(session: AsyncSession, source_ids: se
 
 async def export_page(
     session: AsyncSession, *, owner_id: int, record_kind: str, limit: int = 50,
-    cursor: str | None = None,
+    cursor: str | None = None, scope: Scope, multi_workspace_enabled: bool,
 ) -> RelationshipExportPage:
     """Return canonical relationships and stable eligible citations in a bounded keyset page.
 
@@ -1282,17 +1608,18 @@ async def export_page(
     owner-authored relations survive independently, with purging citations withheld. Raw
     excerpts, URLs, metadata, provider payloads, and ORM entities from other modules are omitted.
     """
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if record_kind != "relationships" or not 1 <= limit <= 100:
         raise ValueError("Relationship export kind or page limit is invalid")
-    if owner_id != 1 or await session.scalar(select(Owner.id).where(Owner.id == owner_id)) is None:
-        raise PermissionError("Relationship export requires the current owner")
+    if owner_id != _actor(scope):
+        raise PermissionError("Relationship export requires the workspace owner")
     if cursor is None:
         snapshot_at, position = datetime.now(UTC), None
     else:
-        snapshot_at, position_at, position_id = _decode_relationship_export_cursor(cursor, owner_id)
+        snapshot_at, position_at, position_id = _decode_relationship_export_cursor(cursor, owner_id, scope.workspace_id)
         position = (position_at, position_id)
-    snapshot_count = await _relationship_export_count(session, snapshot_at)
-    statement = _relationship_export_statement(snapshot_at)
+    snapshot_count = await _relationship_export_count(session, snapshot_at, scope=scope)
+    statement = _relationship_export_statement(snapshot_at, scope=scope)
     if position is not None:
         statement = statement.where(tuple_(Relationship.created_at, Relationship.id) > position)
     rows = list((await session.scalars(statement.order_by(Relationship.created_at, Relationship.id)
@@ -1300,9 +1627,10 @@ async def export_page(
     has_more = len(rows) > limit
     items: list[RelationshipExportRead] = []
     fences: list[RelationshipExportFence] = []
-    eligible = sources.export_eligible_source_ids()
+    eligible = sources.export_eligible_source_ids(scope=scope)
     for row in rows[:limit]:
         supports = list((await session.scalars(select(RelationshipEvidence).where(
+            _evidence_scope(scope),
             RelationshipEvidence.relationship_id == row.id,
             RelationshipEvidence.source_id.in_(eligible),
         ).order_by(RelationshipEvidence.id).limit(101)
@@ -1311,7 +1639,7 @@ async def export_page(
             raise ValueError("A relationship export record exceeds the citation bound")
         generations = await _relationship_source_generations(session, {
             support.source_id for support in supports if support.source_id is not None
-        })
+        }, scope=scope)
         refs = [RelationshipExportEvidence(
             id=support.id, source_id=support.source_id,
             source_generation=generations.get(support.source_id) if support.source_id is not None else None,
@@ -1340,7 +1668,7 @@ async def export_page(
                            for source_id, generation in sorted(generations.items(), key=lambda pair: str(pair[0]))],
             evidence_digest=digest,
         ))
-    next_cursor = (_encode_relationship_export_cursor(owner_id, snapshot_at, items[-1].created_at, items[-1].id)
+    next_cursor = (_encode_relationship_export_cursor(owner_id, scope.workspace_id, snapshot_at, items[-1].created_at, items[-1].id)
                    if has_more and items else None)
     return RelationshipExportPage(
         owner_id=owner_id, record_kind="relationships", snapshot_at=snapshot_at,
@@ -1352,28 +1680,34 @@ async def export_page(
 
 async def validate_export_fences(
     session: AsyncSession, *, owner_id: int, record_kind: str, snapshot_at: datetime,
-    expected_snapshot_count: int, fences: list[RelationshipExportFence],
+    expected_snapshot_count: int, fences: list[RelationshipExportFence], scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> RelationshipExportFenceValidation:
     """Recheck owner count, canonical row state, source generations, and exact citations."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if record_kind != "relationships" or len(fences) > 100 or expected_snapshot_count < 0:
         raise ValueError("Relationship export revalidation input is invalid")
-    if owner_id != 1 or await session.scalar(select(Owner.id).where(Owner.id == owner_id)) is None:
+    if owner_id != _actor(scope):
         return RelationshipExportFenceValidation(valid=False, reason="owner_unavailable", observed_snapshot_count=0)
-    observed = await _relationship_export_count(session, snapshot_at)
+    observed = await _relationship_export_count(session, snapshot_at, scope=scope)
     if observed != expected_snapshot_count:
         return RelationshipExportFenceValidation(valid=False, reason="snapshot_count_changed", observed_snapshot_count=observed)
-    eligible = sources.export_eligible_source_ids()
+    eligible = sources.export_eligible_source_ids(scope=scope)
     for fence in fences:
-        row = await session.scalar(select(Relationship).where(Relationship.id == fence.id).execution_options(populate_existing=True))
+        row = await session.scalar(select(Relationship).where(
+            Relationship.workspace_id == scope.workspace_id, Relationship.id == fence.id,
+        ).execution_options(populate_existing=True))
         if row is None or (row.created_at, row.updated_at) != (fence.created_at, fence.updated_at):
             return RelationshipExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
-        source_fences = [SourceExportFence(source_id=item.source_id, generation=item.generation)
+        source_fences = [SourceExportFence(source_id=item.source_id, workspace_id=scope.workspace_id, generation=item.generation)
                          for item in fence.source_fences]
-        if set(await sources.filter_export_eligible_sources(session, source_fences)) != {
+        if set(await sources.filter_export_eligible_sources(
+            session, source_fences, scope=scope, multi_workspace_enabled=multi_workspace_enabled)) != {
             item.source_id for item in source_fences
         }:
             return RelationshipExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
         supports = list((await session.scalars(select(RelationshipEvidence).where(
+            _evidence_scope(scope),
             RelationshipEvidence.relationship_id == fence.id, RelationshipEvidence.source_id.in_(eligible),
         ).order_by(RelationshipEvidence.id).limit(101)
           .execution_options(populate_existing=True))).all())
@@ -1381,7 +1715,7 @@ async def validate_export_fences(
             return RelationshipExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
         generations = await _relationship_source_generations(session, {
             support.source_id for support in supports if support.source_id is not None
-        })
+        }, scope=scope)
         refs = [RelationshipExportEvidence(
             id=support.id, source_id=support.source_id,
             source_generation=generations.get(support.source_id) if support.source_id is not None else None,

@@ -3,13 +3,18 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.dependencies import require_owner, require_owner_write
 from core.auth.models import AuthSession
 from core.database import get_session
+from core.workspaces.dependencies import (
+    require_default_workspace_read,
+    require_default_workspace_write,
+)
+from core.workspaces.schemas import WorkspaceContext
 from modules.memory.public import MemoryService
 from modules.memory.schemas import (
     MemoryCandidatePage,
@@ -34,6 +39,16 @@ router = APIRouter(tags=["memory"], dependencies=[Depends(module_dependency("mem
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[AuthSession, Depends(require_owner)]
 OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]
+# Memory is private: only the actor's own default workspace is admitted (409 default_workspace_required).
+DefaultRead = Annotated[WorkspaceContext, Depends(require_default_workspace_read)]
+DefaultWrite = Annotated[WorkspaceContext, Depends(require_default_workspace_write)]
+
+
+def _flag(request: Request) -> bool:
+    """Return the actual configured multi-workspace flag; never defaulted or inferred."""
+    flag = request.app.state.settings.multi_workspace_enabled
+    assert isinstance(flag, bool)
+    return flag
 
 
 def _get_redis(session: Session) -> Redis | None:
@@ -53,6 +68,8 @@ def _get_redis(session: Session) -> Redis | None:
 async def list_memories(
     session: Session,
     _owner: OwnerRead,
+    request: Request,
+    scope: DefaultRead,
     limit: int = Query(default=50, ge=1, le=100),
     cursor: str | None = Query(default=None),
     type: str | None = Query(default=None),
@@ -80,6 +97,8 @@ async def list_memories(
         memory_type=type,
         status=status,
         query=q,
+        scope=scope,
+        multi_workspace_enabled=_flag(request),
     )
 
 
@@ -88,6 +107,8 @@ async def create_memory(
     payload: MemoryCreate,
     session: Session,
     _owner: OwnerWrite,
+    request: Request,
+    scope: DefaultWrite,
 ) -> MemoryRead:
     """Explicitly create an owner memory item.
 
@@ -100,7 +121,7 @@ async def create_memory(
         Created MemoryRead schema.
     """
     svc = MemoryService(session, redis=_get_redis(session))
-    return await svc.create_memory(payload, is_manual=True)
+    return await svc.create_memory(payload, is_manual=True, scope=scope, multi_workspace_enabled=_flag(request))
 
 
 @router.get("/api/v1/memories/{memory_id}", response_model=MemoryRead)
@@ -108,6 +129,8 @@ async def get_memory(
     memory_id: UUID,
     session: Session,
     _owner: OwnerRead,
+    request: Request,
+    scope: DefaultRead,
 ) -> MemoryRead:
     """Fetch a single memory item by identifier.
 
@@ -123,7 +146,7 @@ async def get_memory(
         HTTPException: 404 if memory not found.
     """
     svc = MemoryService(session, redis=_get_redis(session))
-    mem = await svc.get_memory(memory_id)
+    mem = await svc.get_memory(memory_id, scope=scope, multi_workspace_enabled=_flag(request))
     if mem is None:
         raise HTTPException(status_code=404, detail="Memory not found")
     return mem
@@ -135,6 +158,8 @@ async def update_memory(
     payload: MemoryUpdate,
     session: Session,
     _owner: OwnerWrite,
+    request: Request,
+    scope: DefaultWrite,
 ) -> MemoryRead:
     """Update an existing active memory item.
 
@@ -151,7 +176,7 @@ async def update_memory(
         HTTPException: 404 if memory not found or not active.
     """
     svc = MemoryService(session, redis=_get_redis(session))
-    mem = await svc.update_memory(memory_id, payload)
+    mem = await svc.update_memory(memory_id, payload, scope=scope, multi_workspace_enabled=_flag(request))
     if mem is None:
         raise HTTPException(status_code=404, detail="Memory not found or not active")
     return mem
@@ -162,6 +187,8 @@ async def delete_memory(
     memory_id: UUID,
     session: Session,
     _owner: OwnerWrite,
+    request: Request,
+    scope: DefaultWrite,
 ) -> MemoryRead:
     """Forget and purge a memory item, making it immediately unavailable.
 
@@ -177,7 +204,7 @@ async def delete_memory(
         HTTPException: 404 if memory not found.
     """
     svc = MemoryService(session, redis=_get_redis(session))
-    mem = await svc.forget_memory(memory_id, reason="Deleted by owner")
+    mem = await svc.forget_memory(memory_id, reason="Deleted by owner", scope=scope, multi_workspace_enabled=_flag(request))
     if mem is None:
         raise HTTPException(status_code=404, detail="Memory not found")
     return mem
@@ -189,6 +216,8 @@ async def invalidate_memory(
     payload: MemoryInvalidateRequest,
     session: Session,
     _owner: OwnerWrite,
+    request: Request,
+    scope: DefaultWrite,
 ) -> MemoryRead:
     """Mark an active memory invalidated.
 
@@ -205,7 +234,7 @@ async def invalidate_memory(
         HTTPException: 404 if memory not found.
     """
     svc = MemoryService(session, redis=_get_redis(session))
-    mem = await svc.invalidate_memory(memory_id, reason=payload.reason)
+    mem = await svc.invalidate_memory(memory_id, reason=payload.reason, scope=scope, multi_workspace_enabled=_flag(request))
     if mem is None:
         raise HTTPException(status_code=404, detail="Memory not found")
     return mem
@@ -217,6 +246,8 @@ async def supersede_memory(
     payload: MemorySupersedeRequest,
     session: Session,
     _owner: OwnerWrite,
+    request: Request,
+    scope: DefaultWrite,
 ) -> MemoryRead:
     """Supersede an existing memory with updated knowledge.
 
@@ -233,7 +264,7 @@ async def supersede_memory(
         HTTPException: 404 if target memory not found.
     """
     svc = MemoryService(session, redis=_get_redis(session))
-    res = await svc.supersede_memory(memory_id, payload)
+    res = await svc.supersede_memory(memory_id, payload, scope=scope, multi_workspace_enabled=_flag(request))
     if res is None:
         raise HTTPException(status_code=404, detail="Memory not found")
     _old, new_mem = res
@@ -246,6 +277,8 @@ async def forget_memory(
     payload: MemoryForgetRequest,
     session: Session,
     _owner: OwnerWrite,
+    request: Request,
+    scope: DefaultWrite,
 ) -> MemoryRead:
     """Forget a memory item immediately, purging it from retrieval.
 
@@ -262,7 +295,7 @@ async def forget_memory(
         HTTPException: 404 if memory not found.
     """
     svc = MemoryService(session, redis=_get_redis(session))
-    mem = await svc.forget_memory(memory_id, reason=payload.reason)
+    mem = await svc.forget_memory(memory_id, reason=payload.reason, scope=scope, multi_workspace_enabled=_flag(request))
     if mem is None:
         raise HTTPException(status_code=404, detail="Memory not found")
     return mem
@@ -272,6 +305,8 @@ async def forget_memory(
 async def get_memory_privacy(
     session: Session,
     _owner: OwnerRead,
+    request: Request,
+    scope: DefaultRead,
 ) -> MemoryPrivacyConfig:
     """Read owner memory and conversation privacy settings.
 
@@ -283,7 +318,7 @@ async def get_memory_privacy(
         Current MemoryPrivacyConfig.
     """
     svc = MemoryService(session)
-    return await svc.get_privacy_config()
+    return await svc.get_privacy_config(scope=scope, multi_workspace_enabled=_flag(request))
 
 
 @router.put("/api/v1/settings/memory-privacy", response_model=MemoryPrivacyConfig)
@@ -291,6 +326,8 @@ async def update_memory_privacy(
     payload: MemoryPrivacyUpdate,
     session: Session,
     _owner: OwnerWrite,
+    request: Request,
+    scope: DefaultWrite,
 ) -> MemoryPrivacyConfig:
     """Update owner memory and conversation privacy controls.
 
@@ -303,13 +340,15 @@ async def update_memory_privacy(
         Updated MemoryPrivacyConfig.
     """
     svc = MemoryService(session)
-    return await svc.update_privacy_config(payload)
+    return await svc.update_privacy_config(payload, scope=scope, multi_workspace_enabled=_flag(request))
 
 
 @router.get("/api/v1/memories/candidates/list", response_model=MemoryCandidatePage)
 async def list_candidates(
     session: Session,
     _owner: OwnerRead,
+    request: Request,
+    scope: DefaultRead,
     limit: int = Query(default=50, ge=1, le=100),
     cursor: str | None = Query(default=None),
     status: str = Query(default="pending"),
@@ -327,7 +366,7 @@ async def list_candidates(
         MemoryCandidatePage.
     """
     svc = MemoryService(session)
-    return await svc.get_candidates(limit=limit, cursor=cursor, status=status)
+    return await svc.get_candidates(limit=limit, cursor=cursor, status=status, scope=scope, multi_workspace_enabled=_flag(request))
 
 
 @router.post("/api/v1/memories/candidates/{candidate_id}/accept", response_model=MemoryRead)
@@ -335,6 +374,8 @@ async def accept_candidate(
     candidate_id: UUID,
     session: Session,
     _owner: OwnerWrite,
+    request: Request,
+    scope: DefaultWrite,
 ) -> MemoryRead:
     """Accept a proposed memory candidate into active memory.
 
@@ -350,7 +391,7 @@ async def accept_candidate(
         HTTPException: 404 if candidate not found or not pending.
     """
     svc = MemoryService(session, redis=_get_redis(session))
-    mem = await svc.accept_candidate(candidate_id)
+    mem = await svc.accept_candidate(candidate_id, scope=scope, multi_workspace_enabled=_flag(request))
     if mem is None:
         raise HTTPException(status_code=404, detail="Candidate not found or not pending")
     return mem
@@ -365,6 +406,8 @@ async def reject_candidate(
     payload: MemoryCandidateRejectRequest,
     session: Session,
     _owner: OwnerWrite,
+    request: Request,
+    scope: DefaultWrite,
 ) -> MemoryCandidateRead:
     """Reject a proposed memory candidate.
 
@@ -381,7 +424,7 @@ async def reject_candidate(
         HTTPException: 404 if candidate not found.
     """
     svc = MemoryService(session)
-    cand = await svc.reject_candidate(candidate_id, reason=payload.reason)
+    cand = await svc.reject_candidate(candidate_id, reason=payload.reason, scope=scope, multi_workspace_enabled=_flag(request))
     if cand is None:
         raise HTTPException(status_code=404, detail="Candidate not found")
     return cand
@@ -392,6 +435,8 @@ async def purge_memory_data(
     payload: MemoryPurgeRequest,
     session: Session,
     _owner: OwnerWrite,
+    request: Request,
+    scope: DefaultWrite,
 ) -> MemoryPurgeResponse:
     """Purge forgotten memories, rejected candidates, or conversation history.
 
@@ -404,4 +449,4 @@ async def purge_memory_data(
         MemoryPurgeResponse with counts of deleted records.
     """
     svc = MemoryService(session, redis=_get_redis(session))
-    return await svc.purge_memories(payload)
+    return await svc.purge_memories(payload, scope=scope, multi_workspace_enabled=_flag(request))

@@ -9,7 +9,7 @@ Covers:
 - Privacy mapping: destination-bound consent checks for remote reasoning, embeddings, and web search.
 """
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -98,6 +98,13 @@ class TestOwnerPreferencesSchemas:
             )
 
 
+@pytest.fixture(autouse=True)
+def _active_account():
+    """Account admission is covered by auth/scope tests; these exercise preference defaults and CAS."""
+    with patch("modules.settings.public.require_preferences_account", AsyncMock()):
+        yield
+
+
 class TestReadOwnerPreferences:
     """Tests for read_owner_preferences defaults and database projections."""
 
@@ -107,7 +114,7 @@ class TestReadOwnerPreferences:
         session = AsyncMock()
         session.scalar.return_value = None  # No database row exists
 
-        prefs = await read_owner_preferences(session)
+        prefs = await read_owner_preferences(session, actor_user_id=1, multi_workspace_enabled=False)
         assert isinstance(prefs, OwnerPreferencesRead)
         assert prefs.configuration_revision == 1
         assert prefs.persisted is False
@@ -128,7 +135,7 @@ class TestReadOwnerPreferences:
         )
         session.scalar.return_value = record
 
-        prefs = await read_owner_preferences(session)
+        prefs = await read_owner_preferences(session, actor_user_id=1, multi_workspace_enabled=False)
         assert isinstance(prefs, OwnerPreferencesRead)
         assert prefs.configuration_revision == 4
         assert prefs.persisted is True
@@ -163,7 +170,7 @@ class TestSaveOwnerPreferences:
         )
 
         with pytest.raises(HTTPException) as exc_info:
-            await save_owner_preferences(session, update)
+            await save_owner_preferences(session, update, actor_user_id=1, multi_workspace_enabled=False)
         assert exc_info.value.status_code == 409
         assert "Preferences changed; reload before saving" in exc_info.value.detail
 
@@ -189,7 +196,7 @@ class TestSaveOwnerPreferences:
             timezone="Asia/Ho_Chi_Minh",
         )
 
-        result = await save_owner_preferences(session, update)
+        result = await save_owner_preferences(session, update, actor_user_id=1, multi_workspace_enabled=False)
         assert result.configuration_revision == 2
         assert result.persisted is True
         assert result.theme == "dark"

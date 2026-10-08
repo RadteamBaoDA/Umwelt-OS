@@ -5,10 +5,14 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
+from fastapi import HTTPException
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.realtime import commit_with_replay
+from core.workspaces import public as workspaces
+from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
 from modules.notifications.models import Notification
 from modules.notifications.schemas import (
     NotificationEmit,
@@ -29,6 +33,32 @@ __all__ = [
     "set_read",
 ]
 MAX_CLEANUP_PAGE = 100
+
+
+def _actor(scope: Scope) -> int:
+    return scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
+
+
+def _require_owner(scope: Scope) -> None:
+    if not isinstance(scope, (WorkspaceContext, InternalJobScope)):
+        raise TypeError("An explicit workspace scope is required")
+    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
+
+
+async def _admit(
+    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
+    lock: bool = False, expected: AccessFence | None = None,
+) -> AccessFence:
+    """Owner admission; a member is denied before any session await."""
+    _require_owner(scope)
+    if type(multi_workspace_enabled) is not bool:
+        raise TypeError("The configured multi-workspace feature flag must be a boolean")
+    if lock:
+        return await workspaces.lock_access_fence(
+            session, scope=scope, expected=expected, multi_workspace_enabled=multi_workspace_enabled,
+        )
+    return await workspaces.read_access_fence(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
 
 
 class NotificationMissing(Exception):
@@ -77,7 +107,10 @@ def _highlight_identity(kind: str, dedupe_key: str, params: Mapping[str, object]
     return definition_id, revision, rule_id, version_id
 
 
-async def _visible_read(session: AsyncSession, row: Notification) -> NotificationRead:
+async def _visible_read(
+    session: AsyncSession, row: Notification, *, scope: Scope, multi_workspace_enabled: bool,
+    access_fence: AccessFence,
+) -> NotificationRead:
     """Build a detached DTO, holding a Source eligibility lock through copied-highlight publication.
 
     The first locator lookup discovers Source identity only. The authoritative locator is repeated
@@ -102,15 +135,22 @@ async def _visible_read(session: AsyncSession, row: Notification) -> Notificatio
         return read.model_copy(update={"title": None, "link": None})
     from modules.knowledge.documents import public as documents
 
-    owner = await documents.review_version_locator(session, version_id)
+    owner = await documents.review_version_locator(
+        session, version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     if owner is None or (document_id is not None and owner[0] != document_id):
         return read.model_copy(update={"title": None, "link": None})
     from modules.sources import public as sources
 
-    fence = await sources.lock_retained_evidence_source(session, owner[1])
+    fence = await sources.lock_retained_evidence_source(
+        session, owner[1], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        expected_access_fence=access_fence,
+    )
     if fence is None:
         return read.model_copy(update={"title": None, "link": None})
-    version_fence = (await documents.review_version_fences(session, [version_id])).get(version_id)
+    version_fence = (await documents.review_version_fences(
+        session, [version_id], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )).get(version_id)
     if (version_fence is None or version_fence.source_id != fence.id
             or version_fence.current_source_generation != fence.generation
             or (document_id is not None and version_fence.document_id != document_id)):
@@ -118,7 +158,10 @@ async def _visible_read(session: AsyncSession, row: Notification) -> Notificatio
     return read
 
 
-async def _lock_notification_read_sources(session: AsyncSession, rows: list[Notification]) -> None:
+async def _lock_notification_read_sources(
+    session: AsyncSession, rows: list[Notification], *, scope: Scope, multi_workspace_enabled: bool,
+    access_fence: AccessFence,
+) -> None:
     """Acquire candidate Source read locks in stable UUID order before projecting a page.
 
     A notification page can refer to multiple sources. Prelocking the bounded source set avoids
@@ -141,14 +184,19 @@ async def _lock_notification_read_sources(session: AsyncSession, rows: list[Noti
     from modules.knowledge.documents import public as documents
     from modules.sources import public as sources
 
-    fences = await documents.review_version_fences(session, sorted(version_ids, key=str))
+    fences = await documents.review_version_fences(
+        session, sorted(version_ids, key=str), scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     for source_id in sorted({fence.source_id for fence in fences.values()}, key=str):
-        await sources.lock_retained_evidence_source(session, source_id)
+        await sources.lock_retained_evidence_source(
+            session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            expected_access_fence=access_fence,
+        )
 
 
 async def emit(
-    session: AsyncSession, owner_id: int, payload: NotificationEmit,
-    *, evidence: NotificationEvidence | None = None,
+    session: AsyncSession, payload: NotificationEmit,
+    *, evidence: NotificationEvidence | None = None, scope: Scope, multi_workspace_enabled: bool,
 ) -> bool:
     """Insert an idempotent notification in the caller's transaction.
 
@@ -156,7 +204,8 @@ async def emit(
     before rechecking the exact ready current version and remains locked through insertion/commit;
     this serializes publication with Source purge and lifecycle changes. The sidecar stays private.
     """
-    values = payload.model_dump()
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    values = payload.model_dump(mode="json")
     if evidence is not None:
         identity = _highlight_identity(payload.kind, payload.dedupe_key, payload.params)
         if payload.kind != "dashboard_highlight" or identity is None or identity[3] != evidence.document_version_id:
@@ -164,13 +213,22 @@ async def emit(
         from modules.knowledge.documents import public as documents
         from modules.sources import public as sources
 
-        locator = await documents.review_version_locator(session, evidence.document_version_id)
+        locator = await documents.review_version_locator(
+            session, evidence.document_version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
         if locator is None or locator[0] != evidence.document_id:
             return False
-        fence = await sources.lock_retained_evidence_source(session, locator[1])
-        current = await documents.get_ready_version_ref(session, evidence.document_version_id) if fence else None
-        if (fence is None or current is None or current.document_id != evidence.document_id
-                or current.source_id != fence.id or current.source_generation != fence.generation):
+        source_fence = await sources.lock_retained_evidence_source(
+            session, locator[1], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            expected_access_fence=fence,
+        )
+        current = (
+            await documents.get_ready_version_ref(
+                session, evidence.document_version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            ) if source_fence else None
+        )
+        if (source_fence is None or current is None or current.document_id != evidence.document_id
+                or current.source_id != source_fence.id or current.source_generation != source_fence.generation):
             return False
         values.update(
             document_id=evidence.document_id,
@@ -179,7 +237,7 @@ async def emit(
         )
     result = await session.execute(
         insert(Notification)
-        .values(owner_id=owner_id, **values)
+        .values(workspace_id=scope.workspace_id, owner_id=_actor(scope), **values)
         .on_conflict_do_nothing(constraint="uq_notifications_dedupe")
         .returning(Notification.id)
     )
@@ -187,42 +245,59 @@ async def emit(
 
 
 async def list_notifications(
-    session: AsyncSession, owner_id: int, *, unread_only: bool = False, limit: int = 50
+    session: AsyncSession, *, unread_only: bool = False, limit: int = 50,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> NotificationPage:
     """Return a bounded safe page with every unread row counted, even when copied display fields are withheld."""
-    statement = select(Notification).where(Notification.owner_id == owner_id)
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    own = (Notification.workspace_id == scope.workspace_id, Notification.owner_id == _actor(scope))
+    statement = select(Notification).where(*own)
     if unread_only:
         statement = statement.where(Notification.read_at.is_(None))
     rows = (await session.scalars(
         statement.order_by(Notification.created_at.desc(), Notification.id.desc()).limit(min(max(limit, 1), 100))
     )).all()
-    await _lock_notification_read_sources(session, list(rows))
+    await _lock_notification_read_sources(
+        session, list(rows), scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+    )
     unread_count = int(await session.scalar(
-        select(func.count()).select_from(Notification).where(
-            Notification.owner_id == owner_id, Notification.read_at.is_(None),
-        )
+        select(func.count()).select_from(Notification).where(*own, Notification.read_at.is_(None))
     ) or 0)
     return NotificationPage(
-        items=[await _visible_read(session, row) for row in rows],
+        items=[
+            await _visible_read(
+                session, row, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+            ) for row in rows
+        ],
         unread_count=unread_count,
     )
 
 
-async def set_read(session: AsyncSession, owner_id: int, notification_id: UUID, read: bool) -> NotificationRead:
+async def set_read(
+    session: AsyncSession, notification_id: UUID, read: bool, *, scope: Scope, multi_workspace_enabled: bool,
+) -> NotificationRead:
     """Mark one owned notification read or unread and return its currently safe detached projection."""
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
     row = await session.scalar(
-        select(Notification).where(Notification.id == notification_id, Notification.owner_id == owner_id).with_for_update()
+        select(Notification).where(
+            Notification.id == notification_id, Notification.workspace_id == scope.workspace_id,
+            Notification.owner_id == _actor(scope),
+        ).with_for_update()
     )
     if row is None:
         raise NotificationMissing
     row.read_at = datetime.now(UTC) if read else None
-    await session.commit()
-    return await _visible_read(session, row)
+    await commit_with_replay(session, [], scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
+    fence2 = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    return await _visible_read(
+        session, row, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence2,
+    )
 
 
 async def scrub_document_evidence(
     session: AsyncSession, *, operation_id: UUID, document_id: UUID, version_ids: tuple[UUID, ...],
     final_reference_page: bool = False, after: UUID | None = None, limit: int = MAX_CLEANUP_PAGE,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> NotificationCleanupProgress:
     """Flush-only scrub exact Document-backed highlight titles in a stable bounded notification page.
 
@@ -230,15 +305,21 @@ async def scrub_document_evidence(
     grammar and the caller's detached immutable-version receipt. If evidence is paged, the caller's
     durable cursor retains the operation ID and both page positions. Unsupported candidate identities
     are provisional until the caller declares the final reference page, then remain explicitly unavailable.
-    The caller owns commit and cursor.
+    The caller owns commit and cursor. The owner is admitted (non-locking) before any query and
+    every statement is bound to the caller's workspace and actor.
     """
     if not 1 <= limit <= MAX_CLEANUP_PAGE or len(version_ids) > MAX_CLEANUP_PAGE:
         raise ValueError("Notification evidence cleanup exceeds its page bound")
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     known_versions = set(version_ids)
-    candidates = select(Notification).where(or_(
-        Notification.document_id == document_id,
-        and_(Notification.kind == "dashboard_highlight", Notification.dedupe_key.like("highlight:%")),
-    ))
+    candidates = select(Notification).where(
+        Notification.workspace_id == scope.workspace_id,
+        Notification.owner_id == _actor(scope),
+        or_(
+            Notification.document_id == document_id,
+            and_(Notification.kind == "dashboard_highlight", Notification.dedupe_key.like("highlight:%")),
+        ),
+    )
     if after is not None:
         candidates = candidates.where(Notification.id > after)
     rows = list((await session.scalars(
@@ -294,12 +375,16 @@ async def scrub_document_evidence(
             from modules.knowledge.documents import public as documents
 
             # Report only genuinely undecidable legacy rows; a version that resolves elsewhere is foreign.
-            locator = await documents.review_version_locator(session, version_id)
+            locator = await documents.review_version_locator(
+                session, version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
             if locator is not None and locator[0] != document_id:
                 continue
             # A Document already deleted (its own receipt not yet scrubbed) resolves from retained evidence.
             if locator is None:
-                retained = await documents.cleanup_evidence_version_document(session, version_id)
+                retained = await documents.cleanup_evidence_version_document(
+                    session, version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                )
                 if retained is not None and retained != document_id:
                     continue
             (unavailable if final_reference_page else provisional).append(row.id)

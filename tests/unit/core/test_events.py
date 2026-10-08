@@ -27,6 +27,7 @@ from core.realtime import (
     make_timeline_change,
     make_timeline_collection_change,
 )
+from core.workspaces.schemas import WorkspaceContext
 
 
 class TestDomainEvent:
@@ -153,6 +154,9 @@ class TestDomainEvent:
             )
 
 
+SCOPE = WorkspaceContext(user_id=7, workspace_id=uuid4(), role="owner", membership_revision=3)
+
+
 class TestRealtimeEventConstructors:
     """Test suite for the domain change constructors in core.realtime."""
 
@@ -165,7 +169,7 @@ class TestRealtimeEventConstructors:
             generation=2,
             status="active",
             connector_state="synced",
-            operation_id=op_id,
+            operation_id=op_id, scope=SCOPE
         )
 
         assert isinstance(evt, SourceChanged)
@@ -183,7 +187,7 @@ class TestRealtimeEventConstructors:
             make_source_change(
                 source_id=uuid4(),
                 generation=0,
-                status="active",
+                status="active", scope=SCOPE
             )
 
     def test_make_source_change_invalid_status(self) -> None:
@@ -193,6 +197,7 @@ class TestRealtimeEventConstructors:
                 source_id=uuid4(),
                 generation=1,
                 status="invalid_status",  # type: ignore[arg-type]
+                scope=SCOPE,
             )
 
     def test_make_ingestion_change_valid(self) -> None:
@@ -204,7 +209,7 @@ class TestRealtimeEventConstructors:
             run_id=run_id,
             status="running",
             stage_key="parsing",
-            stage_status="pending",
+            stage_status="pending", scope=SCOPE
         )
 
         assert isinstance(evt, IngestionChanged)
@@ -222,6 +227,7 @@ class TestRealtimeEventConstructors:
                 source_id=uuid4(),
                 run_id=uuid4(),
                 status="not_a_valid_status",  # type: ignore[arg-type]
+                scope=SCOPE,
             )
 
     def test_make_knowledge_change_valid(self) -> None:
@@ -232,7 +238,7 @@ class TestRealtimeEventConstructors:
             source_id=src_id,
             document_id=doc_id,
             version=1,
-            deleted=False,
+            deleted=False, scope=SCOPE
         )
 
         assert isinstance(evt, KnowledgeChanged)
@@ -250,7 +256,7 @@ class TestRealtimeEventConstructors:
             generation_id=gen_id,
             status="active",
             indexed_items=100,
-            failed_items=2,
+            failed_items=2, scope=SCOPE
         )
 
         assert evt.scope == "index"
@@ -262,13 +268,13 @@ class TestRealtimeEventConstructors:
     def test_make_graph_change_valid(self) -> None:
         """make_graph_change creates graph events with mutually exclusive entity/relationship."""
         ent_id = uuid4()
-        evt1 = make_graph_change(entity_id=ent_id)
+        evt1 = make_graph_change(entity_id=ent_id, scope=SCOPE)
         assert evt1.scope == "graph"
         assert evt1.entity_id == ent_id
         assert evt1.relationship_id is None
 
         rel_id = uuid4()
-        evt2 = make_graph_change(relationship_id=rel_id, deleted=True)
+        evt2 = make_graph_change(relationship_id=rel_id, deleted=True, scope=SCOPE)
         assert evt2.scope == "graph"
         assert evt2.relationship_id == rel_id
         assert evt2.entity_id is None
@@ -277,15 +283,15 @@ class TestRealtimeEventConstructors:
     def test_make_graph_change_mutual_exclusion_violation(self) -> None:
         """make_graph_change rejects when both entity and relationship are supplied or both None."""
         with pytest.raises(ValidationError):
-            make_graph_change(entity_id=uuid4(), relationship_id=uuid4())
+            make_graph_change(entity_id=uuid4(), relationship_id=uuid4(), scope=SCOPE)
 
         with pytest.raises(ValidationError):
-            make_graph_change(entity_id=None, relationship_id=None)
+            make_graph_change(entity_id=None, relationship_id=None, scope=SCOPE)
 
     def test_make_timeline_change_valid(self) -> None:
         """make_timeline_change creates timeline events with event identity and revision."""
         evt_id = uuid4()
-        evt = make_timeline_change(event_id=evt_id, revision=3, deleted=True)
+        evt = make_timeline_change(event_id=evt_id, revision=3, deleted=True, scope=SCOPE)
         assert evt.scope == "timeline"
         assert evt.event_id == evt_id
         assert evt.event_revision == 3
@@ -294,13 +300,13 @@ class TestRealtimeEventConstructors:
     def test_make_timeline_collection_change_valid(self) -> None:
         """make_timeline_collection_change accepts exactly one source or entity."""
         src_id = uuid4()
-        evt1 = make_timeline_collection_change(source_id=src_id)
+        evt1 = make_timeline_collection_change(source_id=src_id, scope=SCOPE)
         assert evt1.scope == "timeline_collection"
         assert evt1.source_id == src_id
         assert evt1.entity_id is None
 
         ent_id = uuid4()
-        evt2 = make_timeline_collection_change(entity_id=ent_id)
+        evt2 = make_timeline_collection_change(entity_id=ent_id, scope=SCOPE)
         assert evt2.scope == "timeline_collection"
         assert evt2.entity_id == ent_id
         assert evt2.source_id is None
@@ -308,15 +314,15 @@ class TestRealtimeEventConstructors:
     def test_make_timeline_collection_change_invalid_exclusion(self) -> None:
         """make_timeline_collection_change raises ValueError if neither or both are supplied."""
         with pytest.raises(ValueError, match="exactly one"):
-            make_timeline_collection_change(source_id=None, entity_id=None)
+            make_timeline_collection_change(source_id=None, entity_id=None, scope=SCOPE)
 
         with pytest.raises(ValueError, match="exactly one"):
-            make_timeline_collection_change(source_id=uuid4(), entity_id=uuid4())
+            make_timeline_collection_change(source_id=uuid4(), entity_id=uuid4(), scope=SCOPE)
 
     def test_make_dashboard_change_valid(self) -> None:
         """make_dashboard_change creates validated DashboardChanged events."""
         res_id = uuid4()
-        evt = make_dashboard_change(scope="dashboard", resource_id=res_id, revision=5, deleted=False)
+        evt = make_dashboard_change(category="dashboard", resource_id=res_id, revision=5, deleted=False, scope=SCOPE)
         assert isinstance(evt, DashboardChanged)
         assert evt.type == "dashboard.changed"
         assert evt.scope == "dashboard"
@@ -327,7 +333,7 @@ class TestRealtimeEventConstructors:
     def test_make_dashboard_change_invalid_scope_or_revision(self) -> None:
         """make_dashboard_change rejects invalid scopes or non-positive revisions."""
         with pytest.raises(ValidationError):
-            make_dashboard_change(scope="invalid", resource_id=uuid4(), revision=1)  # type: ignore[arg-type]
+            make_dashboard_change(category="invalid", resource_id=uuid4(), revision=1, scope=SCOPE)  # type: ignore[arg-type]
 
         with pytest.raises(ValidationError):
-            make_dashboard_change(scope="dashboard", resource_id=uuid4(), revision=0)
+            make_dashboard_change(category="dashboard", resource_id=uuid4(), revision=0, scope=SCOPE)

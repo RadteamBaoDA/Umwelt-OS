@@ -1,3 +1,4 @@
+import os
 import subprocess
 import sys
 
@@ -16,3 +17,37 @@ def test_empty_database_migration_emits_single_owner_and_session_schema() -> Non
     assert "ix_auth_session_expires_at" in result.stdout
     assert "version_num VARCHAR(255)" in result.stdout
     assert "VARCHAR(32)" not in result.stdout.split("CREATE TABLE owner")[0]
+
+
+def _alembic(*args: str) -> subprocess.CompletedProcess[str]:
+    env = {**os.environ, "DATABASE_URL": "postgresql+asyncpg://u:build-placeholder@postgres:5432/db"}
+    return subprocess.run(
+        [sys.executable, "-m", "alembic", *args], check=False, capture_output=True, text=True, env=env
+    )
+
+
+def test_single_head_is_cleanup_authority() -> None:
+    result = _alembic("heads")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split() == ["p14_cleanup_authority", "(head)"]
+
+
+def test_offline_base_to_head_renders_cleanup_authority_checks() -> None:
+    result = _alembic("upgrade", "base:head", "--sql")
+    assert result.returncode == 0, result.stderr
+    assert "ck_document_cleanup_original_epoch" in result.stdout
+    assert "ck_source_purge_operations_configuration_revision" in result.stdout
+
+
+def test_offline_upgrade_removes_empty_replay_head_and_guards_populated_database() -> None:
+    result = _alembic("upgrade", "base:head", "--sql")
+    assert result.returncode == 0, result.stderr
+    assert "DELETE FROM realtime_replay_head WHERE id = 1" in result.stdout
+    assert "p14_workspace_scope offline script requires an empty database" in result.stdout
+
+
+def test_offline_downgrade_refuses_cleanly() -> None:
+    result = _alembic("downgrade", "p14_cleanup_authority:base", "--sql")
+    assert result.returncode != 0
+    assert "run it online" in result.stderr
+    assert "get_bind" not in result.stderr

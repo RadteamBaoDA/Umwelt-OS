@@ -4,7 +4,7 @@ Tests cover:
 - Document extraction and ExtractionInputLimitError bounds validation
   (empty input, > 100 chunks, > 64,000 bytes, allowed_chunk_ids bounds).
 - Version hashing (content_hash SHA-256 calculation and determinism).
-- Chunking bounds and persistence (add_content_chunks, list_evidence_ref_keys bounds).
+- Chunking bounds and persistence (add_content_chunks, _list_evidence_ref_keys bounds).
 - Cursor serialization and decoding (_encode_provider_cursor, _decode_provider_cursor,
   _encode_news_projection_cursor, _decode_news_projection_cursor, version cursor roundtrips).
 - Document retention and observation validation (news_retained_observation_allowed,
@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.dialects import postgresql
 
 from modules.knowledge.documents.models import DocumentChunk, DocumentVersion
 from modules.knowledge.documents.public import (
@@ -30,16 +31,17 @@ from modules.knowledge.documents.public import (
     _decode_provider_cursor,
     _encode_news_projection_cursor,
     _encode_provider_cursor,
+    _list_evidence_ref_keys,
     add_content_chunks,
     content_hash,
     decode_version_cursor,
     delete_document,
     encode_version_cursor,
-    list_evidence_ref_keys,
     news_projection_scope_unavailable,
     news_retained_observation_allowed,
     read_extraction_input,
 )
+from tests.unit.modules.knowledge.documents._scope import SCOPE_KW
 
 
 class TestVersionHashingAndExtractionLimits:
@@ -66,7 +68,7 @@ class TestVersionHashingAndExtractionLimits:
         session = AsyncMock()
         session.execute = AsyncMock(return_value=MagicMock(one_or_none=MagicMock(return_value=None)))
 
-        result = await read_extraction_input(session, version_id=uuid4())
+        result = await read_extraction_input(session, version_id=uuid4(), **SCOPE_KW)
         assert result is None
 
     @pytest.mark.asyncio
@@ -78,17 +80,17 @@ class TestVersionHashingAndExtractionLimits:
 
         # Empty allowed_chunk_ids
         with pytest.raises(ValueError, match="Extraction chunk IDs must be unique and bounded"):
-            await read_extraction_input(session, version_id=uuid4(), allowed_chunk_ids=[])
+            await read_extraction_input(session, version_id=uuid4(), allowed_chunk_ids=[], **SCOPE_KW)
 
         # Over 100 items
         oversized = [uuid4() for _ in range(EXTRACTION_CHUNK_LIMIT + 1)]
         with pytest.raises(ValueError, match="Extraction chunk IDs must be unique and bounded"):
-            await read_extraction_input(session, version_id=uuid4(), allowed_chunk_ids=oversized)
+            await read_extraction_input(session, version_id=uuid4(), allowed_chunk_ids=oversized, **SCOPE_KW)
 
         # Duplicate IDs
         dup_id = uuid4()
         with pytest.raises(ValueError, match="Extraction chunk IDs must be unique and bounded"):
-            await read_extraction_input(session, version_id=uuid4(), allowed_chunk_ids=[dup_id, dup_id])
+            await read_extraction_input(session, version_id=uuid4(), allowed_chunk_ids=[dup_id, dup_id], **SCOPE_KW)
 
     @pytest.mark.asyncio
     async def test_read_extraction_input_chunk_count_zero_raises_limit_error(self) -> None:
@@ -103,7 +105,7 @@ class TestVersionHashingAndExtractionLimits:
         ])
 
         with pytest.raises(ExtractionInputLimitError, match="Extraction input exceeds its chunk or byte limit"):
-            await read_extraction_input(session, version_id=uuid4())
+            await read_extraction_input(session, version_id=uuid4(), **SCOPE_KW)
 
     @pytest.mark.asyncio
     async def test_read_extraction_input_chunk_count_exceeded_raises_limit_error(self) -> None:
@@ -117,7 +119,7 @@ class TestVersionHashingAndExtractionLimits:
         ])
 
         with pytest.raises(ExtractionInputLimitError, match="Extraction input exceeds its chunk or byte limit"):
-            await read_extraction_input(session, version_id=uuid4())
+            await read_extraction_input(session, version_id=uuid4(), **SCOPE_KW)
 
     @pytest.mark.asyncio
     async def test_read_extraction_input_bytes_exceeded_raises_limit_error(self) -> None:
@@ -131,7 +133,7 @@ class TestVersionHashingAndExtractionLimits:
         ])
 
         with pytest.raises(ExtractionInputLimitError, match="Extraction input exceeds its chunk or byte limit"):
-            await read_extraction_input(session, version_id=uuid4())
+            await read_extraction_input(session, version_id=uuid4(), **SCOPE_KW)
 
     @pytest.mark.asyncio
     async def test_read_extraction_input_success(self) -> None:
@@ -153,7 +155,7 @@ class TestVersionHashingAndExtractionLimits:
             MagicMock(all=MagicMock(return_value=chunks_data)),
         ])
 
-        extraction = await read_extraction_input(session, version_id=ver_id)
+        extraction = await read_extraction_input(session, version_id=ver_id, **SCOPE_KW)
         assert isinstance(extraction, ExtractionInput)
         assert extraction.document_id == doc_id
         assert extraction.document_version_id == ver_id
@@ -165,7 +167,7 @@ class TestVersionHashingAndExtractionLimits:
 
 
 class TestChunkingBounds:
-    """Tests for add_content_chunks and list_evidence_ref_keys bounds."""
+    """Tests for add_content_chunks and _list_evidence_ref_keys bounds."""
 
     @pytest.mark.asyncio
     async def test_add_content_chunks_creates_chunks(self) -> None:
@@ -197,39 +199,33 @@ class TestChunkingBounds:
         assert added_chunks[1].chunk_index == 1
 
     @pytest.mark.asyncio
-    async def test_list_evidence_ref_keys_scope_validation(self) -> None:
-        """Verify list_evidence_ref_keys requires exactly one of document_id or source_id."""
+    async def test_list_evidence_ref_keys_is_workspace_qualified(self) -> None:
+        """Verify _list_evidence_ref_keys qualifies the Document root by workspace and Source."""
         session = AsyncMock()
-        # Both None
-        with pytest.raises(ValueError, match="Specify one document or source and a bounded limit"):
-            await list_evidence_ref_keys(session, document_id=None, source_id=None)
-
-        # Both provided
-        with pytest.raises(ValueError, match="Specify one document or source and a bounded limit"):
-            await list_evidence_ref_keys(session, document_id=uuid4(), source_id=uuid4())
+        session.execute = AsyncMock(return_value=MagicMock(all=MagicMock(return_value=[])))
+        await _list_evidence_ref_keys(session, source_id=uuid4(), scope=SCOPE_KW["scope"])
+        sql = str(session.execute.await_args.args[0].compile(dialect=postgresql.dialect()))
+        assert "documents.workspace_id" in sql and "documents.source_id" in sql
 
     @pytest.mark.asyncio
     async def test_list_evidence_ref_keys_limit_bounds(self) -> None:
-        """Verify list_evidence_ref_keys rejects limit < 1 or limit > 10,000."""
+        """Verify _list_evidence_ref_keys rejects limit < 1 or limit > 10,000."""
         session = AsyncMock()
-        with pytest.raises(ValueError, match="Specify one document or source and a bounded limit"):
-            await list_evidence_ref_keys(session, document_id=uuid4(), limit=0)
+        with pytest.raises(ValueError, match="Specify a bounded limit"):
+            await _list_evidence_ref_keys(session, source_id=uuid4(), limit=0, scope=SCOPE_KW["scope"])
 
-        with pytest.raises(ValueError, match="Specify one document or source and a bounded limit"):
-            await list_evidence_ref_keys(session, document_id=uuid4(), limit=10_001)
+        with pytest.raises(ValueError, match="Specify a bounded limit"):
+            await _list_evidence_ref_keys(session, source_id=uuid4(), limit=10_001, scope=SCOPE_KW["scope"])
 
     @pytest.mark.asyncio
-    async def test_list_evidence_ref_keys_exceeds_atomic_limit(self) -> None:
-        """Verify list_evidence_ref_keys raises when rows count > limit."""
+    async def test_list_evidence_ref_keys_reports_overflow_without_raising(self) -> None:
+        """Verify _list_evidence_ref_keys returns the first limit keys and overflow=True."""
         session = AsyncMock()
-        v_id = uuid4()
-        c_id = uuid4()
-        # Mock rows returning limit + 1 items
-        rows = [(v_id, c_id)] * 3
+        rows = [(uuid4(), uuid4()) for _ in range(3)]
         session.execute = AsyncMock(return_value=MagicMock(all=MagicMock(return_value=rows)))
 
-        with pytest.raises(ValueError, match="Evidence cleanup exceeds its atomic support limit"):
-            await list_evidence_ref_keys(session, document_id=uuid4(), limit=2)
+        refs, overflow = await _list_evidence_ref_keys(session, source_id=uuid4(), limit=2, scope=SCOPE_KW["scope"])
+        assert overflow is True and refs == rows[:2]
 
 
 class TestCursorEncoding:
@@ -260,15 +256,15 @@ class TestCursorEncoding:
         dt = datetime(2026, 10, 5, 12, 0, 0, tzinfo=UTC)
         doc_id = uuid4()
 
-        cursor = _encode_news_projection_cursor(dt, doc_id)
+        cursor = _encode_news_projection_cursor(dt, doc_id, "f" * 64)
         assert isinstance(cursor, str)
 
-        decoded_dt, decoded_id = _decode_news_projection_cursor(cursor)
+        decoded_dt, decoded_id = _decode_news_projection_cursor(cursor, "f" * 64)
         assert decoded_dt == dt
         assert decoded_id == doc_id
 
         with pytest.raises(ValueError, match="Invalid News projection cursor"):
-            _decode_news_projection_cursor("")
+            _decode_news_projection_cursor("", "f" * 64)
 
     def test_version_cursor_roundtrip_and_errors(self) -> None:
         """Verify encode_version_cursor and decode_version_cursor roundtrip."""
@@ -294,7 +290,7 @@ class TestRetentionAndDeletionValidation:
         session.execute = AsyncMock(return_value=MagicMock(all=MagicMock(return_value=[])))
 
         allowed = await news_retained_observation_allowed(
-            session, document_id=uuid4(), source_id=uuid4(), expected_source_generation=1,
+            session, document_id=uuid4(), source_id=uuid4(), expected_source_generation=1, **SCOPE_KW,
         )
         assert allowed is False
 
@@ -307,7 +303,7 @@ class TestRetentionAndDeletionValidation:
         session.execute = AsyncMock(return_value=MagicMock(all=MagicMock(return_value=rows)))
 
         allowed = await news_retained_observation_allowed(
-            session, document_id=uuid4(), source_id=uuid4(), expected_source_generation=2,
+            session, document_id=uuid4(), source_id=uuid4(), expected_source_generation=2, **SCOPE_KW,
         )
         assert allowed is False
 
@@ -319,7 +315,7 @@ class TestRetentionAndDeletionValidation:
         session.execute = AsyncMock(return_value=MagicMock(all=MagicMock(return_value=rows)))
 
         allowed = await news_retained_observation_allowed(
-            session, document_id=uuid4(), source_id=uuid4(), expected_source_generation=1,
+            session, document_id=uuid4(), source_id=uuid4(), expected_source_generation=1, **SCOPE_KW,
         )
         assert allowed is True
 
@@ -330,7 +326,7 @@ class TestRetentionAndDeletionValidation:
         session.execute = AsyncMock(return_value=MagicMock(one_or_none=MagicMock(return_value=None)))
 
         unavailable = await news_projection_scope_unavailable(
-            session, document_id=uuid4(), expected_source_generation=1,
+            session, document_id=uuid4(), expected_source_generation=1, **SCOPE_KW,
         )
         assert unavailable is False
 
@@ -338,7 +334,40 @@ class TestRetentionAndDeletionValidation:
     async def test_delete_document_missing_returns_false(self) -> None:
         """Verify delete_document returns False if document source identity is not found."""
         session = AsyncMock()
-        session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
+        session.scalar = AsyncMock(return_value=None)
 
-        deleted = await delete_document(session, document_id=uuid4())
+        deleted = await delete_document(session, document_id=uuid4(), **SCOPE_KW)
         assert deleted is None
+
+
+class TestRawlessExtractionLock:
+    """Raw-less (API/manual) documents skip the original-input proof; uploads stay strict."""
+
+    @staticmethod
+    async def _lock(session, raw_uri, mime):
+        from modules.knowledge.documents.public import lock_document_for_extraction
+        from tests.unit.modules.knowledge.documents._scope import FENCE
+        with patch("modules.knowledge.documents.public._normalized_source_proof", AsyncMock()), \
+             patch("modules.knowledge.documents.public.lock_raw_uri_identity", AsyncMock()) as uri_lock, \
+             patch("modules.knowledge.documents.public.SourceFence", MagicMock):
+            ok = await lock_document_for_extraction(
+                session, uuid4(), uuid4(), access_fence=FENCE, source_fence=MagicMock(generation=1),
+                expected_raw_uri=raw_uri, expected_mime_type=mime, **SCOPE_KW,
+            )
+        return ok, uri_lock
+
+    @pytest.mark.asyncio
+    async def test_rawless_document_locks_without_uri_identity(self) -> None:
+        session = AsyncMock()
+        session.scalar = AsyncMock(return_value=MagicMock())
+        ok, uri_lock = await self._lock(session, None, None)
+        assert ok is True
+        uri_lock.assert_not_awaited()
+        sql = str(session.scalar.await_args_list[0].args[0].compile(dialect=postgresql.dialect()))
+        assert "raw_uri IS NULL" in sql
+
+    @pytest.mark.asyncio
+    async def test_raw_document_without_mime_still_rejected(self) -> None:
+        session = AsyncMock()
+        with pytest.raises(RuntimeError, match="extraction_original_input_required"):
+            await self._lock(session, "s3://x/raw", None)

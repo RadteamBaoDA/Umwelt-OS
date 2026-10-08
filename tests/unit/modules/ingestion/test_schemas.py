@@ -146,11 +146,11 @@ class TestReceiveBatchAndReceipt:
     def test_receipt_statuses(self) -> None:
         b_id, r_id = uuid4(), uuid4()
         for status in ["queued", "running", "succeeded", "needs_ocr", "failed"]:
-            receipt = Receipt(batch_id=b_id, run_id=r_id, status=status)  # type: ignore[arg-type]
+            receipt = Receipt(workspace_id=uuid4(), batch_id=b_id, run_id=r_id, status=status)  # type: ignore[arg-type]
             assert receipt.status == status
 
         with pytest.raises(ValidationError):
-            Receipt(batch_id=b_id, run_id=r_id, status="unknown")  # type: ignore[arg-type]
+            Receipt(workspace_id=uuid4(), batch_id=b_id, run_id=r_id, status="unknown")  # type: ignore[arg-type]
 
     def test_retry_run_request(self) -> None:
         req = RetryRunRequest(stage_key="normalize")
@@ -183,6 +183,7 @@ class TestRunReadAndStageRead:
         run_id = uuid4()
         src_id = uuid4()
         run = RunRead(
+            workspace_id=uuid4(),
             run_id=run_id,
             source_id=src_id,
             status="succeeded",

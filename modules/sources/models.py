@@ -80,6 +80,10 @@ class SourcePurgeOperation(Base):
     __tablename__ = "source_purge_operations"
     __table_args__ = (
         CheckConstraint("membership_revision > 0", name="ck_w2_source_purge_membership_revision_positive"),
+        CheckConstraint(
+            "configuration_revision IS NULL OR configuration_revision > 0",
+            name="ck_source_purge_operations_configuration_revision",
+        ),
         CheckConstraint("status IN ('queued', 'running', 'succeeded', 'failed')", name="ck_source_purge_operations_status"),
         CheckConstraint(
             "documents_status IN ('queued', 'deleted', 'failed', 'unavailable')",
@@ -115,6 +119,8 @@ class SourcePurgeOperation(Base):
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     actor_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
     membership_revision: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    # NULL is quarantined legacy authority; new receipts capture the exact admitted epoch.
+    configuration_revision: Mapped[int | None] = mapped_column(BigInteger)
 
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)

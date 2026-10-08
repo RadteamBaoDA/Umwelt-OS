@@ -34,7 +34,7 @@ async def read_runs(
     kind: RunKind | None = None,
 ) -> RunsRead:
     """Return the newest runs across ingestion, agents, automations and chat."""
-    return await public.list_runs(session, limit=limit, kind=kind)
+    return await public.list_runs(session, limit=limit, kind=kind, instance_operator=True)
 
 
 @router.get("/maintenance", response_model=MaintenanceSummaryRead)

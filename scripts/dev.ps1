@@ -202,7 +202,7 @@ OMNIROUTE_MODELS={}
         Invoke-Checked 'uv' @('run', 'pytest', 'tests/integration/test_auth_race.py', '-q')
         if ($PytestTarget) {
           if ($PytestTarget -ne 'tests/integration/test_auth_race.py') {
-            Invoke-Checked 'uv' @('run', 'pytest', $PytestTarget, '-q')
+            Invoke-Checked 'uv' @('run', 'pytest', $PytestTarget, '-q', '--ignore=tests/integration/test_auth_race.py')
           }
         } else {
           Invoke-Checked 'uv' @('run', 'pytest', 'tests/integration', '-q', '--ignore=tests/integration/test_auth_race.py')

@@ -241,6 +241,8 @@ class TestConnectorSource:
             "timezone": "UTC",
         }
         cs = ConnectorSource(
+            workspace_id=uuid4(),
+            local_only=False,
             id=source_id,
             type="rss",
             status="active",
@@ -256,6 +258,8 @@ class TestConnectorSource:
 
     def test_connector_source_immutability(self) -> None:
         cs = ConnectorSource(
+            workspace_id=uuid4(),
+            local_only=False,
             id=uuid4(),
             type="rss",
             status="active",
@@ -268,6 +272,8 @@ class TestConnectorSource:
     def test_connector_source_extra_forbidden(self) -> None:
         with pytest.raises(ValidationError):
             ConnectorSource(
+                workspace_id=uuid4(),
+                local_only=False,
                 id=uuid4(),
                 type="rss",
                 status="active",
@@ -283,6 +289,7 @@ class TestSourceFenceAndProjections:
     def test_source_fence_fields_and_immutability(self) -> None:
         source_id = uuid4()
         fence = SourceFence(
+            workspace_id=uuid4(),
             id=source_id,
             status="active",
             generation=4,
@@ -294,6 +301,7 @@ class TestSourceFenceAndProjections:
             fence.generation = 5  # type: ignore[misc]
         with pytest.raises(ValidationError):
             SourceFence(
+                workspace_id=uuid4(),
                 id=source_id,
                 status="active",
                 generation=4,
@@ -322,6 +330,7 @@ class TestSourceFenceAndProjections:
         op_id = uuid4()
         src_id = uuid4()
         op = OperationRead(
+            workspace_id=uuid4(),
             operation_id=op_id,
             source_id=src_id,
             status="queued",
@@ -340,6 +349,7 @@ class TestSourceFenceAndProjections:
         # Invalid operation status
         with pytest.raises(ValidationError):
             OperationRead(
+                workspace_id=uuid4(),
                 operation_id=op_id,
                 source_id=src_id,
                 status="in_progress",  # type: ignore[arg-type]

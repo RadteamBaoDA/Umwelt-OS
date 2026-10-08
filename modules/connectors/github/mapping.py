@@ -12,6 +12,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.workspaces.schemas import Scope
 from modules.knowledge.documents import public as documents
 from modules.knowledge.documents.public import ReadyVersionRef
 from modules.knowledge.entities import public as entities
@@ -49,7 +50,9 @@ def _display_title(record_type: str, title: str, excerpt: str) -> str:
     return f"Commit {title[:7]}: {body[0]}" if body else f"Commit {title[:7]}"
 
 
-async def map_github_version(session: AsyncSession, ready: ReadyVersionRef) -> bool:
+async def map_github_version(
+    session: AsyncSession, ready: ReadyVersionRef, *, scope: Scope, multi_workspace_enabled: bool,
+) -> bool:
     """Map one current GitHub version to its repository/item entities, relationship and event.
 
     Idempotent: entity lookup uses a deterministic extraction key, memberships and
@@ -59,15 +62,24 @@ async def map_github_version(session: AsyncSession, ready: ReadyVersionRef) -> b
     overwrite newer state. Deletion needs no code here: all rows hang off document
     evidence that the common document/source deletion workflow already removes.
     Returns False when the source is not a github source or the version is not mappable.
+
+    ``scope`` is the caller's already-admitted ready-version scope (the entity worker holds the
+    access fence, Source and Document locks); ``ReadyVersionRef`` carries no principal, so the
+    workspace relationship is proved by the scoped Source read below and by every scoped callee.
+    This function takes no locks of its own and never calls an earlier-lock helper.
     """
-    source = await sources.get_connector_source(session, ready.source_id)
+    source = await sources.get_connector_source(
+        session, ready.source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     if source is None or source.provider != "github" or source.generation != ready.source_generation:
         return False
     try:
         # The savepoint rolls back every partial flush (entities, memberships, derived names)
         # if a later step fails, so a failed record never leaves an eventless orphan behind.
         async with session.begin_nested():
-            return await _map_version(session, ready, source.configuration)
+            return await _map_version(
+                session, ready, source.configuration, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
     except (ValueError, LookupError) as exc:
         # Visible but content-free: only exception class and opaque IDs. The ready-version
         # recovery pass re-runs the idempotent mapper, so this is retried, not permanent.
@@ -78,22 +90,33 @@ async def map_github_version(session: AsyncSession, ready: ReadyVersionRef) -> b
         return False
 
 
-async def _map_version(session: AsyncSession, ready: ReadyVersionRef, configuration: dict[str, object]) -> bool:
+async def _map_version(
+    session: AsyncSession, ready: ReadyVersionRef, configuration: dict[str, object],
+    *, scope: Scope, multi_workspace_enabled: bool,
+) -> bool:
     """Do the mapping work for one version inside the caller's savepoint; False means not mappable.
 
     Only the first (title) chunk and bounded snapshot metadata are used, never the full body,
-    so oversized issue/PR/release bodies still produce entities and an event.
+    so oversized issue/PR/release bodies still produce entities and an event. Every Documents,
+    Entities, Relationships and Timeline call carries the same admitted scope and flag.
+    The first chunk is read under the same scope; ``read_extraction_evidence_refs`` then re-proves
+    Source, generation and current version before any membership, relationship or event is written.
     """
-    snapshot = (await documents.read_provider_snapshots(session, [ready.document_version_id]))[0]
+    snapshot = (await documents.read_provider_snapshots(
+        session, [ready.document_version_id], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    ))[0]
     record_type = (snapshot.provider_metadata.source_fields if snapshot.provider_metadata else {}).get("record_type")
     if record_type not in _RECORD_TYPES:
         return False
-    chunk_id = await documents.get_first_chunk_id(session, ready.document_version_id)
+    chunk_id = await documents.get_first_chunk_id(
+        session, ready.document_version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     if chunk_id is None:
         return False
     refs = await documents.read_extraction_evidence_refs(
         session, document_id=ready.document_id, document_version_id=ready.document_version_id,
         source_id=ready.source_id, source_generation=ready.source_generation, chunk_ids=[chunk_id],
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
     if refs is None:
         return False
@@ -104,18 +127,23 @@ async def _map_version(session: AsyncSession, ready: ReadyVersionRef, configurat
         """Find or create a keyed entity, bind this chunk as support and publish its derived name."""
         entity_id = await entities.find_extraction_entity(
             session, extraction_identity=identity, candidate_key=candidate_key,
-        ) or await entities.create_extracted_entity(session, entity_type)
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        ) or await entities.create_extracted_entity(
+            session, entity_type, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
         membership_id = await entities.record_extraction_membership(
             session, entity_id=entity_id, evidence_ref=evidence_ref,
             source_generation=ready.source_generation, extraction_identity=identity,
             candidate_key=candidate_key,
             match_fingerprint=sha256(f"{identity}:{candidate_key}".encode()).hexdigest(),
             observed_at=snapshot.observed_at, confidence=1.0,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
         if name:
             await entities.publish_derived_field(
                 session, entity_id=entity_id, membership_id=membership_id,
                 field_name="name", value=name,
+                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
             )
         return entity_id, membership_id
 
@@ -132,6 +160,7 @@ async def _map_version(session: AsyncSession, ready: ReadyVersionRef, configurat
         relationship_type="part_of", document_version_id=ready.document_version_id,
         chunk_id=chunk_id, source_membership_id=item_membership,
         target_membership_id=repository_membership, confidence=1.0,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
     await timeline.publish_provider_event(
         session, source_id=ready.source_id, source_generation=ready.source_generation,
@@ -144,5 +173,6 @@ async def _map_version(session: AsyncSession, ready: ReadyVersionRef, configurat
             "repository_entity_id": str(repository_id),
         },
         participants=[(repository_id, "repository"), (item_id, "subject")],
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
     return True

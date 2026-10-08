@@ -2804,17 +2804,15 @@ def overlap_floor(cursor: str | None) -> datetime | None:
 async def map_github_version(session: AsyncSession, ready: object, *, scope: Scope, multi_workspace_enabled: bool) -> bool:
     """Map a current ready GitHub document version into canonical knowledge (flush-only, idempotent).
 
-    Public entry for the ready-version worker; non-github sources return False.
+    Public entry for the ready-version worker; non-github sources return False. ``ready`` is a
+    ``ReadyVersionRef``, which carries no workspace, actor or membership revision, so identity is
+    never compared against the DTO. The caller's admitted ``scope`` is authoritative: a fresh
+    owner admission is checked, then the Source is read through that scope (a foreign or
+    generation-mismatched Source reads as absent) before the mapper runs under the same scope.
     """
     from modules.connectors.github.mapping import map_github_version as _map
 
     await _connector_access(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    if (
-        getattr(ready, "workspace_id", None) != scope.workspace_id
-        or getattr(ready, "actor_user_id", None) != _connector_actor(scope)
-        or getattr(ready, "membership_revision", None) != scope.membership_revision
-    ):
-        return False
     source_id = getattr(ready, "source_id", None)
     if not isinstance(source_id, UUID):
         return False

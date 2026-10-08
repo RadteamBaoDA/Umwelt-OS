@@ -11,36 +11,27 @@ from core import realtime_routes
 from core.realtime import ReplayCursor
 
 
-class _FakeSession:
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *exc):
-        return False
-
-
 def test_stale_epoch_cursor_first_frame_is_epoch_changed_resync(monkeypatch) -> None:
     head = SimpleNamespace(epoch=uuid4(), sequence=7, floor_sequence=1)
 
-    async def fake_head(_session):
-        return head
+    async def fake_prepare(_session, _request, _workspace_id, _workspace_header):
+        # Admission/fence/session are covered by the scope tests; this exercises resync framing only.
+        return SimpleNamespace(), SimpleNamespace(), SimpleNamespace(), head
 
-    async def fake_current(_request):
-        return True
-
-    monkeypatch.setattr(realtime_routes, "current_head", fake_head)
-    monkeypatch.setattr(realtime_routes, "_session_is_current", fake_current)
+    monkeypatch.setattr(realtime_routes, "_prepare_realtime", fake_prepare)
     request = SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(
-            session_factory=lambda: _FakeSession(),
             realtime_connections=asyncio.Semaphore(1),
         )),
     )
     stale = ReplayCursor(epoch=uuid4(), sequence=3).encode()
 
     async def run() -> str:
-        response = await realtime_routes.stream_events(request, cursor=stale, last_event_id=None)
-        return await anext(response.body_iterator)
+        response = await realtime_routes.stream_events(
+            None, request, None, cursor=stale, last_event_id=None,
+        )
+        # Inspect the wrapped stream; the outer response only gates actual ASGI sends.
+        return await anext(response.response.body_iterator)
 
     frame = asyncio.run(run())
     assert frame.startswith("event: resync_required")

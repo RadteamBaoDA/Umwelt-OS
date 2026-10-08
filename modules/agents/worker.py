@@ -3,13 +3,14 @@
 import asyncio
 import logging
 import math
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any, cast
 from uuid import UUID
 
 from arq.connections import ArqRedis
+from fastapi import HTTPException
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from redis.asyncio import Redis
@@ -19,7 +20,11 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, a
 
 from core.config import Settings
 from core.modules import register_modules
+from core.realtime import commit_with_replay
 from core.tools import ToolRegistry
+from core.workspaces import public as workspaces
+from core.workspaces.schemas import AccessFence, InternalJobScope
+from modules.agents.access import admit, admit_run, run_epoch
 from modules.agents.approvals import expire_pending_approvals
 from modules.agents.handoff import register_handoff_tool
 from modules.agents.harness import (
@@ -57,6 +62,7 @@ logger = logging.getLogger(__name__)
 SEGMENT_TIMEOUT_SECONDS = 145
 RECOVERY_AFTER_SECONDS = 150
 RECOVERY_ACCOUNTING_SECONDS = 150
+RECONCILE_MAX_PAGES = 4
 MAX_RECONCILE_ROWS = 25
 _activity_reconcile_cursor: UUID | None = None
 
@@ -94,12 +100,45 @@ async def _run_lease(engine: AsyncEngine, run_id: UUID) -> AsyncIterator[tuple[A
         await connection.close()
 
 
+async def _terminate_unadmitted(
+    session_factory: async_sessionmaker[AsyncSession], run_id: UUID, workspace_id: UUID, code: str,
+) -> None:
+    """Terminally fail a queued run whose original workspace epoch can no longer be proven.
+
+    Used for quarantined legacy rows (NULL epochs) and for runs whose owner/membership/configuration
+    changed since creation. Execution never rebases onto the current epoch; the row only moves to a
+    terminal state (no payload read, no effect). Running or finished rows are left to their own paths.
+    """
+    async with session_factory() as session:
+        row = await session.scalar(select(AgentRun).where(
+            AgentRun.id == run_id, AgentRun.workspace_id == workspace_id,
+        ).with_for_update())
+        if row is None or row.status != "queued":
+            return
+        now = datetime.now(UTC)
+        row.cancel_requested = True
+        row.status, row.error_code, row.completed_at, row.updated_at = "failed", code, now, now
+        await _delete_checkpoints(session, row.checkpoint_thread_id)
+        await session.commit()
+
+
 async def _claim_run(
     session_factory: async_sessionmaker[AsyncSession], run_id: UUID, dispatch_generation: int,
+    *, scope: InternalJobScope, original_fence: AccessFence, multi_workspace_enabled: bool,
 ) -> AgentRun | None:
-    """Claim the matching queued generation and attempt bounded linked-chat status delivery."""
+    """Claim the matching queued generation and attempt bounded linked-chat status delivery.
+
+    The run's original access fence is locked and compared before the row lock, and the claim
+    commit is validated by it, so a revoked owner or changed epoch can never start new work.
+    """
     async with session_factory() as session:
-        row = await session.scalar(select(AgentRun).where(AgentRun.id == run_id).with_for_update())
+        fence = await admit(
+            session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            lock=True, expected=original_fence,
+        )
+        row = await session.scalar(select(AgentRun).where(
+            AgentRun.id == run_id, AgentRun.workspace_id == scope.workspace_id,
+        ).with_for_update())
         if (
             row is None or row.status != "queued" or row.cancel_requested or row.evidence_revoked
             or row.dispatch_generation != dispatch_generation
@@ -112,7 +151,9 @@ async def _claim_run(
         row.activities = [*row.activities[-63:], {
             "kind": "status", "status": "running", "created_at": datetime.now(UTC).isoformat(),
         }]
-        await session.commit()
+        await commit_with_replay(
+            session, (), scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+        )
         await session.refresh(row)
         session.expunge(row)
         claimed = row
@@ -130,7 +171,9 @@ async def _account_segment(
     """Persist bounded segment accounting and continuation state after rechecking authorization at approval pauses."""
     elapsed = max(0, math.ceil(context.elapsed()))
     async with session_factory() as session:
-        row = await session.scalar(select(AgentRun).where(AgentRun.id == context.run_id).with_for_update())
+        row = await session.scalar(select(AgentRun).where(
+            AgentRun.id == context.run_id, AgentRun.workspace_id == context.scope.workspace_id,
+        ).with_for_update())
         if row is None or row.claim_generation != context.claim_generation or row.status != "running":
             return
         row.active_seconds = min(MAX_ACTIVE_SECONDS, row.active_seconds + elapsed)
@@ -149,10 +192,12 @@ async def _account_segment(
         row.token_usage_unknown = row.token_usage_unknown or context.unobservable_model_usage
         approvals = list((await session.scalars(select(AgentApproval).where(
             AgentApproval.run_id == context.run_id,
+            AgentApproval.workspace_id == context.scope.workspace_id,
         ).order_by(AgentApproval.id).with_for_update())).all())
         approvals_by_action = {approval.action_id: approval for approval in approvals}
         uncertain = list((await session.scalars(select(AgentEffect).where(
             AgentEffect.run_id == context.run_id, AgentEffect.state == "in_flight",
+            AgentEffect.workspace_id == context.scope.workspace_id,
         ).order_by(AgentEffect.action_id).with_for_update())).all())
         for effect in uncertain:
             effect.state = "requires_review"
@@ -238,7 +283,9 @@ async def _finish_run(
             except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
                 status, error_code = "failed", "source_or_policy_fence_changed"
     async with session_factory() as session:
-        row = await session.scalar(select(AgentRun).where(AgentRun.id == context.run_id).with_for_update())
+        row = await session.scalar(select(AgentRun).where(
+            AgentRun.id == context.run_id, AgentRun.workspace_id == context.scope.workspace_id,
+        ).with_for_update())
         if row is None or row.claim_generation != context.claim_generation:
             return
         now = datetime.now(UTC)
@@ -288,8 +335,13 @@ async def _enqueue_generation(redis: ArqRedis, run_id: UUID, generation: int) ->
 
 async def _recover_abandoned(
     session_factory: async_sessionmaker[AsyncSession], engine: AsyncEngine, row_id: UUID,
+    workspace_id: UUID,
 ) -> bool:
-    """Recover stale rows only after lease release, then attempt bounded linked-status delivery."""
+    """Recover stale rows only after lease release, then attempt bounded linked-status delivery.
+
+    Recovery only requeues or terminalizes the row's own durable state and never reads content, so
+    it needs no admission; the row's workspace (from the stale-run page) binds every lock.
+    """
     async with _run_lease(engine, row_id) as lease:
         if lease is None:
             return False
@@ -298,6 +350,7 @@ async def _recover_abandoned(
             row = await session.scalar(
                 select(AgentRun).where(
                     AgentRun.id == row_id,
+                    AgentRun.workspace_id == workspace_id,
                     AgentRun.status == "running",
                     AgentRun.claim_started_at < func.now() - text("interval '150 seconds'"),
                 ).with_for_update()
@@ -315,11 +368,12 @@ async def _recover_abandoned(
             row.token_usage_unknown = True
             row.claim_started_at = None
             approvals = list((await session.scalars(select(AgentApproval).where(
-                AgentApproval.run_id == row_id,
+                AgentApproval.run_id == row_id, AgentApproval.workspace_id == workspace_id,
             ).order_by(AgentApproval.id).with_for_update())).all())
             approvals_by_action = {approval.action_id: approval for approval in approvals}
             uncertain = list((await session.scalars(select(AgentEffect).where(
                 AgentEffect.run_id == row_id, AgentEffect.state == "in_flight",
+                AgentEffect.workspace_id == workspace_id,
             ).order_by(AgentEffect.action_id).with_for_update())).all())
             for effect in uncertain:
                 effect.state = "requires_review"
@@ -358,7 +412,9 @@ async def _recover_abandoned(
         return True
 
 
-async def _refresh_stale_mcp_tools(ctx: dict[str, object], registry: ToolRegistry, row: Any) -> None:
+async def _refresh_stale_mcp_tools(
+    ctx: dict[str, object], registry: ToolRegistry, row: Any, scope: InternalJobScope,
+) -> None:
     """Re-project only this run's MCP connections whose worker registration is missing or drifted.
 
     The API registry changes on every grant edit while the worker hydrates once at startup, so a
@@ -383,7 +439,7 @@ async def _refresh_stale_mcp_tools(ctx: dict[str, object], registry: ToolRegistr
                 stale.add(parts[1])
     for connection_hex in stale:
         try:
-            await runtime.refresh_connection(row.owner_id, UUID(hex=connection_hex))
+            await runtime.refresh_connection(scope, UUID(hex=connection_hex))
         except Exception:  # noqa: BLE001, S112  # best-effort cleanup/optional step; failure intentionally ignored
             continue
 
@@ -401,26 +457,61 @@ async def process_agent_run(ctx: dict[str, object], run_id: str, dispatch_genera
     engine = cast(AsyncEngine, ctx["db_engine"])
     redis = cast(ArqRedis, ctx["redis"])  # arq worker context carries its ArqRedis pool
     registry = cast(ToolRegistry, ctx["agent_tool_registry"])
-    async with session_factory() as availability_session:
-        from modules.settings.public import read_module_availability
-
-        availability = await read_module_availability(availability_session)
-        # Worker process state can outlive owner updates made through another API process.
-        from core.modules import effective_modules, register_modules
-
-        disabled = {item.id for item in availability.modules if item.explicitly_disabled}
-        registry.set_module_registry(effective_modules(disabled, register_modules()))
-        if not next((module.enabled for module in availability.modules if module.id == "agents"), False):
-            return
+    flag = settings.multi_workspace_enabled
     try:
         parsed_id = UUID(run_id)
     except ValueError:
         return
+    # Recipe J: the job argument is only a run id; workspace, actor and the original epoch come from
+    # the durable row. Legacy NULL epochs are quarantined and never rebased.
+    async with session_factory() as identity_session:
+        identity = (await identity_session.execute(select(
+            AgentRun.workspace_id, AgentRun.owner_id, AgentRun.membership_revision,
+            AgentRun.configuration_revision, AgentRun.status,
+        ).where(AgentRun.id == parsed_id))).one_or_none()
+        if identity is None or identity.status != "queued":
+            return
+        epoch = run_epoch(identity)
+        if epoch is None:
+            await _terminate_unadmitted(
+                session_factory, parsed_id, identity.workspace_id, "workspace_epoch_unavailable",
+            )
+            return
+        scope, original_fence = epoch
+        modules: Mapping[str, Any] | None = None
+        try:
+            await admit_run(identity_session, identity, multi_workspace_enabled=flag)
+        except HTTPException:
+            await identity_session.rollback()
+            await _terminate_unadmitted(
+                session_factory, parsed_id, identity.workspace_id, "workspace_access_changed",
+            )
+            return
+        from modules.settings.public import module_is_enabled, read_module_availability
+
+        # A workspace with Agents disabled leaves its durable work untouched (not acknowledged).
+        if not await module_is_enabled(identity_session, "agents", scope=scope, multi_workspace_enabled=flag):
+            return
+        availability = await read_module_availability(
+            identity_session, scope=scope, multi_workspace_enabled=flag,
+        )
+        # Worker process state can outlive owner updates made through another API process.
+        from core.modules import effective_modules, register_modules
+
+        disabled = {item.id for item in availability.modules if item.explicitly_disabled}
+        modules = effective_modules(disabled, register_modules())
     async with _run_lease(engine, parsed_id) as lease:
         if lease is None:
             return
         connection, key = lease
-        row = await _claim_run(session_factory, parsed_id, dispatch_generation)
+        try:
+            row = await _claim_run(
+                session_factory, parsed_id, dispatch_generation,
+                scope=scope, original_fence=original_fence, multi_workspace_enabled=flag,
+            )
+        except HTTPException:
+            await _terminate_unadmitted(session_factory, parsed_id, scope.workspace_id, "workspace_access_changed")
+            return
         if row is None:
             return
         supported_versions = {
@@ -441,22 +532,24 @@ async def process_agent_run(ctx: dict[str, object], run_id: str, dispatch_genera
         )
         if not (legacy_compatible or specialist_compatible):
             failed_context = HarnessContext(
-                parsed_id, row.owner_id, row.claim_generation, session_factory, engine, settings, redis, registry,
+                parsed_id, scope, original_fence, row.claim_generation, session_factory, engine, settings,
+                redis, registry,
                 connection, key, asyncio.get_running_loop().time(), frozenset(row.allowed_tools),
                 dict(row.tool_contracts), row.active_seconds,
                 workflow_version=row.workflow_version, prompt_version=row.prompt_version,
-                profile_snapshot=profile_snapshot,
+                profile_snapshot=profile_snapshot, modules=modules,
             )
             await _finish_run(session_factory, failed_context, state=None, status="failed", error_code="incompatible_run_version")
             return
         context = HarnessContext(
-            parsed_id, row.owner_id, row.claim_generation, session_factory, engine, settings, redis, registry,
+            parsed_id, scope, original_fence, row.claim_generation, session_factory, engine, settings,
+            redis, registry,
             connection, key, asyncio.get_running_loop().time(), frozenset(row.allowed_tools),
             dict(row.tool_contracts), row.active_seconds,
             workflow_version=row.workflow_version, prompt_version=row.prompt_version,
-            profile_snapshot=profile_snapshot,
+            profile_snapshot=profile_snapshot, modules=modules,
         )
-        await _refresh_stale_mcp_tools(ctx, registry, row)
+        await _refresh_stale_mcp_tools(ctx, registry, row, scope)
         state: dict[str, Any] | None = None
         outcome = "execution_failed"
         try:
@@ -543,21 +636,17 @@ async def reconcile_agent_dispatch(ctx: dict[str, object]) -> int:
     session_factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     engine = cast(AsyncEngine, ctx["db_engine"])
     redis = cast(ArqRedis, ctx["redis"])
-    async with session_factory() as availability_session:
-        from modules.settings.public import read_module_availability
-
-        availability = await read_module_availability(availability_session)
-        agents_enabled = next((module.enabled for module in availability.modules if module.id == "agents"), False)
+    flag = cast(Settings, ctx["settings"]).multi_workspace_enabled
     await expire_pending_approvals(session_factory, MAX_RECONCILE_ROWS)
     async with session_factory() as session:
-        stale_ids = list((await session.scalars(
-            select(AgentRun.id).where(
+        stale_ids = list((await session.execute(
+            select(AgentRun.id, AgentRun.workspace_id).where(
                 AgentRun.status == "running",
                 AgentRun.claim_started_at < func.now() - text("interval '150 seconds'"),
             ).order_by(AgentRun.claim_started_at).limit(MAX_RECONCILE_ROWS)
         )).all())
-    for run_id in stale_ids:
-        await _recover_abandoned(session_factory, engine, run_id)
+    for run_id, run_workspace_id in stale_ids:
+        await _recover_abandoned(session_factory, engine, run_id, run_workspace_id)
     status_query = select(
         AgentRun.id, AgentRun.dispatch_generation, AgentRun.owner_id,
         AgentRun.auth_session_hash, AgentRun.status,
@@ -580,16 +669,52 @@ async def reconcile_agent_dispatch(ctx: dict[str, object]) -> int:
         )
     if rows:
         _activity_reconcile_cursor = rows[-1][0]
+    queued: list[Any] = []
     async with session_factory() as session:
-        if not agents_enabled:
-            return 0
-        queued = list((await session.execute(
-            select(AgentRun.id, AgentRun.dispatch_generation)
-            .where(AgentRun.status == "queued", AgentRun.cancel_requested.is_(False))
-            .order_by(AgentRun.created_at).limit(MAX_RECONCILE_ROWS)
-        )).all())
+        # Module enablement is per workspace (Recipe W). Workspaces with Agents disabled are excluded
+        # from the next page query so they cannot starve other workspaces; rows whose owner lineage
+        # is unavailable are enqueued so process_agent_run terminalizes them (Recipe J).
+        enabled: dict[tuple[UUID, int], bool] = {}
+        disabled_workspaces: set[UUID] = set()
+        for _page in range(RECONCILE_MAX_PAGES):
+            queue_stmt = select(
+                AgentRun.id, AgentRun.dispatch_generation, AgentRun.workspace_id, AgentRun.owner_id,
+            ).where(AgentRun.status == "queued", AgentRun.cancel_requested.is_(False))
+            if disabled_workspaces:
+                queue_stmt = queue_stmt.where(AgentRun.workspace_id.not_in(disabled_workspaces))
+            page = list((await session.execute(
+                queue_stmt.order_by(AgentRun.created_at).limit(MAX_RECONCILE_ROWS)
+            )).all())
+            new_disabled = False
+            queued = []
+            for row in page:
+                _run_id, _generation, workspace_id, owner_id = row
+                if (workspace_id, owner_id) not in enabled:
+                    owner = await workspaces.resolve_workspace_owner_context(
+                        session, workspace_id, multi_workspace_enabled=flag,
+                    )
+                    if owner is None or owner.user_id != owner_id:
+                        enabled[(workspace_id, owner_id)] = True
+                    else:
+                        from modules.settings.public import module_is_enabled
+
+                        job_scope = InternalJobScope(
+                            workspace_id=workspace_id, actor_user_id=owner.user_id,
+                            membership_revision=owner.membership_revision,
+                        )
+                        enabled[(workspace_id, owner_id)] = await module_is_enabled(
+                            session, "agents", scope=job_scope, multi_workspace_enabled=flag,
+                        )
+                        if not enabled[(workspace_id, owner_id)]:
+                            disabled_workspaces.add(workspace_id)
+                            new_disabled = True
+                if enabled[(workspace_id, owner_id)]:
+                    queued.append(row)
+            # A full page that held disabled rows may hide enabled ones behind it: re-query without them.
+            if not (new_disabled and len(page) == MAX_RECONCILE_ROWS):
+                break
     enqueued = 0
-    for run_id, generation in queued:
+    for run_id, generation, workspace_id, owner_id in queued:
         try:
             enqueued += int(await _enqueue_generation(redis, run_id, generation))
         except Exception:  # noqa: BLE001, S112  # best-effort cleanup/optional step; failure intentionally ignored
@@ -621,5 +746,5 @@ async def compose_agent_registry(
         approved_destination_cidrs=settings.mcp_allowed_endpoint_cidrs,
     )
     if modules["tools"].enabled:
-        await runtime.hydrate_connections(owner_id=1)
+        await runtime.hydrate_connections()
     return registry, admission, runtime

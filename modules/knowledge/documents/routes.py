@@ -19,6 +19,7 @@ from modules.knowledge.documents.models import Document
 from modules.knowledge.documents.schemas import (
     CitationTargetRead,
     ContentUpdate,
+    DocumentCleanupPreparationLimitError,
     DocumentCreate,
     DocumentDeletionRead,
     DocumentList,
@@ -68,11 +69,14 @@ async def _lock_document_write_request(request: Request, session: AsyncSession, 
 
 @router.post("/provider-snapshots", response_model=list[ProviderDocumentSnapshotRead])
 async def read_provider_snapshots(
-    payload: ProviderSnapshotRequest, session: Session, _owner: OwnerRead
+    payload: ProviderSnapshotRequest, session: Session, request: Request, _owner: OwnerRead,
+    workspace: WorkspaceRead,
 ) -> list[ProviderDocumentSnapshotRead]:
     """Return exact immutable provider versions after owner-route authentication."""
+    _require_document_route_owner(workspace)
     try:
-        return await public.read_provider_snapshots(session, payload.version_ids)
+        return await public.read_provider_snapshots(session, payload.version_ids, scope=workspace,
+            multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="One or more provider versions are unavailable") from exc
 
@@ -80,17 +84,21 @@ async def read_provider_snapshots(
 @router.get("/provider-snapshots", response_model=ProviderDocumentSnapshotList)
 async def list_provider_snapshots(
     session: Session,
+    request: Request,
     _owner: OwnerRead,
+    workspace: WorkspaceRead,
     source_ids: Annotated[list[UUID], Query(min_length=1, max_length=100)],
     channel_ids: Annotated[list[str] | None, Query(max_length=100)] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     cursor: Annotated[str | None, Query(max_length=1024)] = None,
 ) -> ProviderDocumentSnapshotList:
     """List current provider versions with owner authorization and keyset bounds."""
+    _require_document_route_owner(workspace)
     try:
         return await public.list_provider_snapshots(
             session, source_ids=source_ids, channel_ids=channel_ids,
-            limit=limit, cursor=cursor,
+            limit=limit, cursor=cursor, scope=workspace,
+            multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="Provider snapshot query is invalid") from exc
@@ -143,17 +151,21 @@ async def list_documents(
 @router.get("/dashboard-projections", response_model=GadgetDocumentProjectionList)
 async def list_dashboard_projections(
     session: Session,
-    owner: OwnerRead,
+    request: Request,
+    _owner: OwnerRead,
+    workspace: WorkspaceRead,
     source_ids: Annotated[list[UUID], Query(min_length=1, max_length=32)],
     channel_ids: Annotated[list[str] | None, Query(max_length=32)] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     cursor: Annotated[str | None, Query(max_length=1024)] = None,
 ) -> GadgetDocumentProjectionList:
     """Return current source-scoped records through the Documents owner projection."""
+    _require_document_route_owner(workspace)
     try:
         return await public.list_gadget_document_projections(
-            session, owner_id=owner.owner_id, source_ids=tuple(source_ids), limit=limit, cursor=cursor,
+            session, source_ids=tuple(source_ids), limit=limit, cursor=cursor,
             channel_ids=tuple(channel_ids) if channel_ids is not None else None,
+            scope=workspace, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="Dashboard projection scope is invalid") from exc
@@ -165,12 +177,15 @@ async def set_dashboard_document_interaction(
     version_number: Annotated[int, Path(ge=1, le=2_147_483_647)],
     payload: GadgetDocumentInteractionPatch,
     session: Session,
-    owner: OwnerWrite,
+    request: Request,
+    _owner: OwnerWrite,
+    workspace: WorkspaceWrite,
 ) -> GadgetDocumentInteractionRead:
     """Set durable owner read/bookmark state for an active exact current document version."""
+    await _lock_document_write_request(request, session, workspace)
     result = await public.set_gadget_document_interaction(
-        session, owner_id=owner.owner_id, document_id=document_id,
-        version_number=version_number, payload=payload,
+        session, document_id=document_id, version_number=version_number, payload=payload,
+        scope=workspace, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
     )
     if result is None:
         raise HTTPException(status_code=409, detail="Document version is stale or unavailable")
@@ -270,10 +285,17 @@ async def update_document(
 
 @router.delete("/{document_id}", status_code=202, response_model=DocumentDeletionRead)
 async def delete_document(
-    document_id: UUID, session: Session, _owner: OwnerWrite
+    document_id: UUID, session: Session, request: Request, scope: WorkspaceWrite
 ) -> DocumentDeletionRead:
     """Revoke document access immediately and return its durable cleanup receipt."""
-    operation = await public.delete_document(session, document_id)
+    await _lock_document_write_request(request, session, scope)
+    try:
+        operation = await public.delete_document(
+            session, document_id, scope=scope,
+            multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
+    except DocumentCleanupPreparationLimitError as exc:
+        # The session dependency rolls the whole transaction back; nothing was mutated.
+        raise HTTPException(status_code=409, detail="document_cleanup_dependency_limit_exceeded") from exc
     if operation is None:
         raise HTTPException(status_code=404, detail="Document not found")
     return DocumentDeletionRead(
@@ -308,12 +330,17 @@ async def delete_document(
 
 @router.get("/deletion-operations/{operation_id}", response_model=DocumentDeletionRead)
 async def get_deletion_operation(
-    operation_id: UUID, session: Session, _owner: OwnerRead,
+    operation_id: UUID, session: Session, request: Request, scope: WorkspaceRead,
 ) -> DocumentDeletionRead:
-    """Return owner-only durable status for a previously accepted document deletion."""
-    operation = await public.get_document_cleanup_operation(session, operation_id)
+    """Return owner-only durable status; a receipt whose authority is missing/stale reports action-required."""
+    _require_document_route_owner(scope)
+    flag = request.app.state.settings.multi_workspace_enabled
+    operation = await public.get_document_cleanup_operation(
+        session, operation_id, scope=scope, multi_workspace_enabled=flag)
     if operation is None:
         raise HTTPException(status_code=404, detail="Document cleanup operation not found")
+    authority_error = await public.cleanup_authority_error(
+        session, operation, scope=scope, multi_workspace_enabled=flag)
     return DocumentDeletionRead(
         operation_id=operation.id,
         status=operation.status,
@@ -339,7 +366,7 @@ async def get_deletion_operation(
         brief_error_code=operation.brief_error_code,
         brief_unresolved_count=operation.brief_unresolved_count,
         immediate_access_revoked=True,
-        error_code=operation.error_code,
+        error_code=authority_error or operation.error_code,
         copied_error_code=operation.copied_error_code,
     )
 
@@ -420,7 +447,9 @@ async def get_version(
 async def get_citation_target(
     document_id: UUID,
     session: Session,
+    request: Request,
     _owner: OwnerRead,
+    workspace: WorkspaceRead,
     document_version_id: UUID,
     chunk_id: UUID,
 ) -> CitationTargetRead:
@@ -430,10 +459,10 @@ async def get_citation_target(
     it never remaps a citation to a newer current version. Owner authentication is not replaced
     by the version IDs supplied in the navigation URL.
     """
-    from modules.knowledge.documents import public as documents_public
-
-    chunks = await documents_public.read_chat_evidence_chunks(
+    _require_document_route_owner(workspace)
+    chunks = await public.read_chat_evidence_chunks(
         session, [(document_version_id, chunk_id)], require_current_version=False,
+        scope=workspace, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
     )
     if not chunks or chunks[0].document_id != document_id:
         raise HTTPException(status_code=404, detail="Citation evidence is no longer available")

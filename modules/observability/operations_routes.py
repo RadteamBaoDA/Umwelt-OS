@@ -13,27 +13,8 @@ from modules.observability import public as observability
 from modules.observability.operations import quality_summary, queue_summary
 from modules.observability.schemas import RunKind, RunRead
 from modules.settings.public import module_dependency
-from modules.sources import public as sources
-from modules.sources.schemas import OperationRead
 
 router = APIRouter(prefix="/api/v1/system", tags=["system"], dependencies=[Depends(module_dependency("observability"))])
-
-
-@router.get("/operations/{operation_id}", response_model=OperationRead)
-async def read_source_operation(
-    operation_id: UUID,
-    session: Annotated[AsyncSession, Depends(get_session)],
-    _owner: Annotated[AuthSession, Depends(require_owner)],
-) -> OperationRead:
-    """Return only the Sources public projection for a polled purge operation ID.
-
-    This route exists for the source-list progress poller. It delegates the exact lookup to
-    the Sources owner and does not expose generic outbox payloads or other operation models.
-    """
-    operation = await sources.read_source_purge_operation(session, operation_id)
-    if operation is None:
-        raise HTTPException(status_code=404, detail="Operation not found")
-    return operation
 
 
 @router.get("/quality")
@@ -42,7 +23,7 @@ async def read_quality(
     _owner: Annotated[AuthSession, Depends(require_owner)],
 ) -> dict[str, object]:
     """Return aggregate, content-free data quality counts."""
-    return await quality_summary(session)
+    return await quality_summary(session, instance_operator=True)
 
 
 @router.get("/queue")
@@ -51,7 +32,7 @@ async def read_queue(
     _owner: Annotated[AuthSession, Depends(require_owner)],
 ) -> dict[str, object]:
     """Return durable state counts only; event payloads and job arguments never leave PostgreSQL."""
-    return await queue_summary(session)
+    return await queue_summary(session, instance_operator=True)
 
 
 @router.get("/runs/{kind}/{run_id}", response_model=RunRead)
@@ -62,7 +43,7 @@ async def read_run_detail(
     _owner: Annotated[AuthSession, Depends(require_owner)],
 ) -> RunRead:
     """Return one safe run projection by exact owner-module ID lookup."""
-    result = await observability.get_run_by_id(session, kind, run_id)
+    result = await observability.get_run_by_id(session, kind, run_id, instance_operator=True)
     if result is None:
         raise HTTPException(status_code=404, detail="Run not found")
     return result
