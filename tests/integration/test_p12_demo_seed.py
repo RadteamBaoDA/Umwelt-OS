@@ -5,13 +5,14 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from modules.goals.seed import GOAL_SEEDS
+from modules.goals.seed import GOAL_SEEDS, _ws_id
 from modules.knowledge.documents.seed import SOURCE_ID
 
 pytestmark = pytest.mark.skipif(
@@ -25,7 +26,7 @@ WORKER_OWNED = {
     "realtime_replay_head", "realtime_replay_events", "auth_session", "backup_activity", "p12_backup_activity", "index_generations", "search_index_items",
     "entity_extraction_work", "timeline_extraction_work", "temporal_changes", "temporal_operations",
     "temporal_dispatches", "temporal_receipts", "news_recovery_checkpoints",
-    "temporal_mappings", "temporal_supports", "news_stories", "news_story_identities", "news_observations",
+    "temporal_mappings", "temporal_supports", "automation_cursors", "news_stories", "news_story_identities", "news_observations",
 }
 # Seed-owned tables whose rows only the owner (or the seed) may change; compared by content digest.
 DIGEST_TABLES = (
@@ -120,13 +121,17 @@ async def test_demo_seed_twice_creates_no_duplicates_and_never_resurrects_delete
 
     # Reset semantics: an owner-deleted demo goal stays deleted and an owner edit to another demo
     # goal survives, so re-seeding neither resurrects nor overwrites (compared by content digest).
-    deleted_goal, edited_goal = (str(seed["id"]) for seed in GOAL_SEEDS[:2])
+    async with committed_engine.connect() as connection:
+        workspace = SimpleNamespace(workspace_id=await connection.scalar(text("SELECT id FROM workspaces LIMIT 1")))
+    # Demo goal IDs are workspace-derived since W1/W2, so the same fixture never collides across workspaces.
+    deleted_goal, edited_goal = (str(_ws_id(workspace, seed["id"])) for seed in GOAL_SEEDS[:2])
     current = await ready_owner_client.get(f"/api/v1/goals/{deleted_goal}")
     if current.status_code == 200:  # already deleted by an earlier run on a reused database
         removed = await ready_owner_client.delete(
             f"/api/v1/goals/{deleted_goal}", params={"expected_revision": current.json()["revision"]})
         assert removed.status_code == 204
     other = await ready_owner_client.get(f"/api/v1/goals/{edited_goal}")
+    assert other.status_code == 200, (other.status_code, other.text)
     edited = await ready_owner_client.patch(
         f"/api/v1/goals/{edited_goal}",
         json={"title": "Owner-edited demo goal", "expected_revision": other.json()["revision"]},

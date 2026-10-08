@@ -20,6 +20,8 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 
 import pytest
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
@@ -32,7 +34,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-HEAD = "p12_evidence_version_index"
+HEAD = str(ScriptDirectory.from_config(Config(str(REPOSITORY_ROOT / "alembic.ini"))).get_current_head())
 SEQUENCE_SQL = (
     "SELECT schemaname || '.' || sequencename, last_value, "
     "pg_sequence_last_value((schemaname || '.' || sequencename)::regclass) IS NOT NULL "
