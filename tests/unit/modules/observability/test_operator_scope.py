@@ -80,8 +80,7 @@ async def test_run_dispatch_gives_only_ingestion_the_operator_flag(monkeypatch: 
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("target", ["observability", "system"])
-async def test_purge_status_resolves_job_scope_before_reading(monkeypatch: pytest.MonkeyPatch, target: str) -> None:
+async def test_purge_status_resolves_job_scope_before_reading(monkeypatch: pytest.MonkeyPatch) -> None:
     job_scope = InternalJobScope(workspace_id=WS, actor_user_id=5, membership_revision=2)
     order: list[str] = []
 
@@ -94,16 +93,11 @@ async def test_purge_status_resolves_job_scope_before_reading(monkeypatch: pytes
         return "op"
 
     resolve, read = AsyncMock(side_effect=resolve_impl), AsyncMock(side_effect=read_impl)
-    if target == "observability":
-        monkeypatch.setattr(operations_routes.sources, "resolve_source_purge_job_scope", resolve)
-        monkeypatch.setattr(operations_routes.sources, "read_source_purge_operation", read)
-        call = operations_routes.read_source_operation
-    else:
-        monkeypatch.setattr(system_routes, "resolve_source_purge_job_scope", resolve)
-        monkeypatch.setattr(system_routes, "read_source_purge_operation", read)
-        call = system_routes.get_operation
+    monkeypatch.setattr(system_routes, "resolve_source_purge_job_scope", resolve)
+    monkeypatch.setattr(system_routes, "read_source_purge_operation", read)
+    call = system_routes.get_operation
     op_id = uuid4()
-    assert await call(operation_id=op_id, request=_request(True), session=MagicMock(), _owner=MagicMock()) == "op"
+    assert await call(operation_id=op_id, request=_request(True), session=_session(), _owner=MagicMock()) == "op"
     assert order == ["resolve", "read"]
     assert resolve.await_args.kwargs == {"multi_workspace_enabled": True}
     assert read.await_args.kwargs == {"scope": job_scope, "multi_workspace_enabled": True}
@@ -111,9 +105,43 @@ async def test_purge_status_resolves_job_scope_before_reading(monkeypatch: pytes
     resolve.return_value = None
     read.reset_mock()
     with pytest.raises(HTTPException) as exc:
-        await call(operation_id=op_id, request=_request(), session=MagicMock(), _owner=MagicMock())
+        await call(operation_id=op_id, request=_request(), session=_session(), _owner=MagicMock())
     assert exc.value.status_code == 404
     read.assert_not_awaited()
+
+
+def _session() -> MagicMock:
+    """Session mock with an awaitable rollback."""
+    session = MagicMock()
+    session.rollback = AsyncMock()
+    return session
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [401, 403, 409])
+async def test_purge_status_maps_lost_access_to_404_and_rolls_back(
+    monkeypatch: pytest.MonkeyPatch, status: int,
+) -> None:
+    monkeypatch.setattr(system_routes, "resolve_source_purge_job_scope", AsyncMock(side_effect=HTTPException(status)))
+    session = _session()
+    with pytest.raises(HTTPException) as exc:
+        await system_routes.get_operation(
+            operation_id=uuid4(), request=_request(), session=session, _owner=MagicMock(),
+        )
+    assert exc.value.status_code == 404
+    session.rollback.assert_awaited()
+
+
+def test_purge_status_route_has_single_owner() -> None:
+    assert not hasattr(operations_routes, "read_source_operation")  # dead duplicate removed; core.system owns it
+
+
+def test_export_route_requires_default_workspace_read() -> None:
+    from fastapi.dependencies.utils import get_dependant
+
+    deps = get_dependant(path="/x", call=export_routes.download_export)
+    calls = {d.call for d in deps.dependencies}
+    assert export_routes.require_default_workspace_read in calls
 
 
 class _Factory:
@@ -238,3 +266,74 @@ async def test_module_gate_uses_build_availability_without_database(monkeypatch:
     monkeypatch.setattr(worker_main, "_BUILD_AVAILABLE", frozenset())
     assert await guarded({}) is None
     assert calls == ["ran"]
+
+
+def _patch_pass(monkeypatch: pytest.MonkeyPatch, pages: list[tuple[object, ...]], redact_n: int = 1):
+    async def next_page(*args: object, **kwargs: object) -> tuple[object, ...]:
+        return pages.pop(0) if pages else ()
+
+    monkeypatch.setattr(maintenance.agents, "list_agent_trace_workspace_ids", next_page, raising=False)
+    monkeypatch.setattr(maintenance.workspaces, "resolve_workspace_owner_context", AsyncMock(return_value=OWNER))
+    monkeypatch.setattr(maintenance.workspaces, "read_access_fence", AsyncMock())
+    monkeypatch.setattr(maintenance.settings_public, "read_retention_settings",
+                        AsyncMock(return_value=SimpleNamespace(agent_trace_days=30)))
+    redact = AsyncMock(return_value=redact_n)
+    monkeypatch.setattr(maintenance.agents, "redact_expired_agent_traces", redact)
+    monkeypatch.setattr(maintenance, "purge_expired_browser_evidence", AsyncMock(return_value=0))
+    write = AsyncMock()
+    monkeypatch.setattr(maintenance.worker_cursors, "read_cursor", AsyncMock(return_value=None))
+    monkeypatch.setattr(maintenance.worker_cursors, "write_cursor", write)
+    return redact, write
+
+
+@pytest.mark.asyncio
+async def test_retention_runs_with_default_settings_without_module_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """observability is an instance module: module_is_enabled would deny it, so retention must not call it."""
+    gate = AsyncMock(return_value=False)
+    monkeypatch.setattr(maintenance.settings_public, "module_is_enabled", gate)
+    redact, _ = _patch_pass(monkeypatch, [(WS,), ()], redact_n=3)
+    ctx = {"session_factory": _Factory(), "settings": SimpleNamespace(multi_workspace_enabled=False)}
+    assert await maintenance.run_retention_maintenance(ctx) == 3
+    redact.assert_awaited_once()
+    gate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_one_workspace_failure_does_not_abort_pass(monkeypatch: pytest.MonkeyPatch) -> None:
+    bad, good = uuid4(), uuid4()
+    redact, write = _patch_pass(monkeypatch, [(bad, good), ()])
+    redact.side_effect = [ValueError("boom"), 2]
+    evidence = AsyncMock(return_value=5)
+    monkeypatch.setattr(maintenance, "purge_expired_browser_evidence", evidence)
+    ctx = {"session_factory": _Factory(), "settings": SimpleNamespace(multi_workspace_enabled=False)}
+    assert await maintenance.run_retention_maintenance(ctx) == 7
+    evidence.assert_awaited_once()
+    assert write.await_args.args[2] is None
+
+
+@pytest.mark.asyncio
+async def test_page_cap_and_budget_hit_persist_cursor(monkeypatch: pytest.MonkeyPatch) -> None:
+    ids = [uuid4() for _ in range(3)]
+    # page cap: never-empty pages stop after _MAX_PAGES and keep the last visited id as cursor
+    pages = [(ids[0],)] * 10
+    redact, write = _patch_pass(monkeypatch, pages, redact_n=0)
+    ctx = {"session_factory": _Factory(), "settings": SimpleNamespace(multi_workspace_enabled=False)}
+    await maintenance.run_retention_maintenance(ctx)
+    assert redact.await_count == maintenance._MAX_PAGES
+    assert write.await_args.args[2] == ids[0]
+    # budget hit: remaining budget is passed as limit, cursor is last workspace, not None
+    redact, write = _patch_pass(monkeypatch, [(ids[1], ids[2])], redact_n=100)
+    await maintenance.run_retention_maintenance(ctx)
+    assert redact.await_count == 1 and redact.await_args.kwargs["limit"] == 100
+    assert write.await_args.args[2] == ids[1]
+
+
+@pytest.mark.asyncio
+async def test_missing_agents_listing_still_purges_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_pass(monkeypatch, [])
+    monkeypatch.delattr(maintenance.agents, "list_agent_trace_workspace_ids", raising=False)
+    evidence = AsyncMock(return_value=1)
+    monkeypatch.setattr(maintenance, "purge_expired_browser_evidence", evidence)
+    ctx = {"session_factory": _Factory(), "settings": SimpleNamespace(multi_workspace_enabled=False)}
+    assert await maintenance.run_retention_maintenance(ctx) == 1
+    evidence.assert_awaited_once()

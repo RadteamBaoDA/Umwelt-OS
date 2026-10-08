@@ -1,5 +1,6 @@
 """Bounded durable cleanup for expired agent traces and temporary browser evidence."""
 
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import cast
 from uuid import UUID
@@ -20,6 +21,8 @@ from modules.tools.public import purge_expired_browser_evidence
 TRACE_CURSOR_KEY = "observability:retention:workspace-cursor"
 _CURSOR_KEYS = frozenset({TRACE_CURSOR_KEY})
 _TRACE_BUDGET = 100
+_MAX_PAGES = 3  # bounded discovery per hourly pass; the cursor carries the rest to the next pass
+logger = logging.getLogger(__name__)
 
 
 async def _redact_workspace_traces(
@@ -28,8 +31,9 @@ async def _redact_workspace_traces(
 ) -> int:
     """Redact one workspace's expired traces in its own session under its owner's current fence.
 
-    Recipe W: the owner and revision come from the live workspace, never a captured epoch.
-    Lost admission, a disabled observability module or retention policy denial skips the workspace
+    Retention is cleanup: it is never module-gated ("observability" is an instance module, so
+    module_is_enabled would always deny it). Recipe W: the owner and revision come from the live workspace, never a captured epoch.
+    Lost admission or retention policy denial skips the workspace
     and leaves its durable rows untouched. Commits only after the workspace pass succeeds.
     """
     async with factory() as session:
@@ -44,10 +48,6 @@ async def _redact_workspace_traces(
                 membership_revision=owner.membership_revision,
             )
             await workspaces.read_access_fence(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-            if not await settings_public.module_is_enabled(
-                session, "observability", scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-            ):
-                return 0
             policy = await settings_public.read_retention_settings(
                 session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
             )
@@ -80,19 +80,28 @@ async def run_retention_maintenance(ctx: dict[str, object]) -> int:
     traces = 0
     last = cursor
     exhausted = False
-    while traces < _TRACE_BUDGET:
-        async with factory() as session:
-            page = await agents.list_agent_trace_workspace_ids(session, after=last, limit=100)
-        if not page:
-            exhausted = True
-            break
-        for workspace_id in page:
+    try:
+        for _ in range(_MAX_PAGES):
             if traces >= _TRACE_BUDGET:
                 break
-            last = workspace_id
-            traces += await _redact_workspace_traces(
-                factory, workspace_id, now=now, limit=_TRACE_BUDGET - traces, multi_workspace_enabled=enabled,
-            )
+            async with factory() as session:
+                page = await agents.list_agent_trace_workspace_ids(session, after=last, limit=100)
+            if not page:
+                exhausted = True
+                break
+            for workspace_id in page:
+                if traces >= _TRACE_BUDGET:
+                    break
+                last = workspace_id
+                try:
+                    traces += await _redact_workspace_traces(
+                        factory, workspace_id, now=now, limit=_TRACE_BUDGET - traces, multi_workspace_enabled=enabled,
+                    )
+                except Exception:
+                    logger.warning("agent trace retention failed for workspace %s", workspace_id, exc_info=True)
+    except AttributeError:
+        # Agents trace listing not available in this build: skip the trace phase, keep evidence purge.
+        logger.warning("agent trace retention unavailable; skipping trace phase", exc_info=True)
     await worker_cursors.write_cursor(ctx, TRACE_CURSOR_KEY, None if exhausted else last, _CURSOR_KEYS)
     async with factory() as session:
         evidence = await purge_expired_browser_evidence(session, limit=200)
