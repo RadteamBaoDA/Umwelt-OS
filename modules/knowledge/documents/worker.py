@@ -420,7 +420,7 @@ async def _admit_cleanup(
     return _Admitted(identity, scope, original, event_id, event.dispatched_at)
 
 
-def _receipt_query(admitted: _Admitted, *, lock: bool = False) -> Select[tuple[DocumentCleanupOperation]]:
+def _receipt_query(admitted: _Admitted, *, lock: bool = False) -> Select[DocumentCleanupOperation]:
     """Select the admitted receipt with workspace and actor predicates on every statement."""
     identity = admitted.identity
     statement = select(DocumentCleanupOperation).where(
@@ -872,11 +872,11 @@ async def _advance_copied_cleanup(
                 and operation.agent_status in {"queued", "running"}):
             if agent_evidence is None or agent_preflight is None:
                 raise ValueError("Agent cleanup lease preflight is unavailable")
-            cursor_state = operation.agent_cursor or {
-                "v": 1, "reference_after": None, "candidate_after": None, "phase": "discover",
-            }
+            cursor_state = _cursor_state_agent(operation.agent_cursor)
             reference_value = cursor_state.get("reference_after")
             candidate_cursor = cursor_state.get("candidate_after")
+            if not isinstance(reference_value, (str, type(None))) or not isinstance(candidate_cursor, (str, type(None))):
+                raise ValueError("Stored Agent cleanup cursor is malformed")
             reference_after = UUID(reference_value) if reference_value else None
             from modules.agents import public as agents
 
