@@ -265,6 +265,42 @@ async def resolve_collector_job_scope(
     return scope
 
 
+async def _resolve_document_cleanup_event_scope(
+    session: AsyncSession, event_id: UUID, row: Any, *, multi_workspace_enabled: bool,
+) -> InternalJobScope | None:
+    """Resolve an operation-only Documents cleanup event through its retained receipt authority.
+
+    The outbox principal columns must equal the receipt's captured tuple and the payload must be
+    exactly the operation id with the deterministic event id; anything else (legacy
+    identity-in-payload, extra keys, NULL receipt epochs, stale configuration) is None.
+    """
+    if row.operation_type != "string" or row.version != 1 or row.producer != "modules.knowledge.documents":
+        return None
+    try:
+        operation_id = UUID(row.payload_operation)
+    except (TypeError, ValueError):
+        return None
+    if str(operation_id) != row.payload_operation or event_id != uuid5(operation_id, "document-cleanup-requested"):
+        return None
+    exact = await session.scalar(select(EventOutbox.id).where(
+        EventOutbox.id == event_id, EventOutbox.payload == {"operation_id": str(operation_id)},
+    ))
+    if exact is None:
+        return None
+    identity = await documents.resolve_document_cleanup_job_identity(
+        session, operation_id, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if identity is None or (identity.workspace_id, identity.actor_user_id, identity.membership_revision) != (
+        row.workspace_id, row.actor_user_id, row.membership_revision,
+    ):
+        return None
+    return InternalJobScope(
+        workspace_id=identity.workspace_id, actor_user_id=identity.actor_user_id,
+        membership_revision=identity.membership_revision, source_id=identity.source_id,
+        source_generation=identity.source_generation,
+    )
+
+
 async def resolve_ingestion_event_scope(
     session: AsyncSession, event_id: UUID, *, multi_workspace_enabled: bool,
 ) -> InternalJobScope | None:
@@ -273,6 +309,16 @@ async def resolve_ingestion_event_scope(
     Corrupt/missing scope is unresolved, never an owner/default upgrade. The caller owns
     quarantine and transaction release; Source/claim/lease checks remain owner-specific.
     """
+    cleanup_row = (await session.execute(select(
+        EventOutbox.workspace_id, EventOutbox.actor_user_id, EventOutbox.membership_revision,
+        EventOutbox.version, EventOutbox.producer,
+        func.left(EventOutbox.payload["operation_id"].astext, 37).label("payload_operation"),
+        func.jsonb_typeof(EventOutbox.payload["operation_id"]).label("operation_type"),
+    ).where(EventOutbox.id == event_id, EventOutbox.type == "document.cleanup.requested"))).one_or_none()
+    if cleanup_row is not None:
+        return await _resolve_document_cleanup_event_scope(
+            session, event_id, cleanup_row, multi_workspace_enabled=multi_workspace_enabled,
+        )
     # Identity discovery never loads the event body/config/raw URI before admission.
     # Bound textual scalar fields so corrupt JSON cannot turn discovery into a content read.
     row = (await session.execute(select(
@@ -936,6 +982,90 @@ async def set_event_delivery(
         .where(EventOutbox.id == event_id, *_event_scope(scope))
         .values(**values)
         .returning(EventOutbox.id)
+    )
+    return result.scalar_one_or_none() is not None
+
+
+def _cleanup_event_scope(event_id: UUID, operation_id: UUID, scope: Scope) -> tuple[Any, ...]:
+    """Principal-column plus exact operation-only payload predicates for one cleanup event.
+
+    The generic event scope adds payload Source predicates for Source-bound scopes, which an
+    operation-only cleanup payload can never satisfy; the receipt owner proves Source lineage.
+    """
+    return (EventOutbox.id == event_id, EventOutbox.type == "document.cleanup.requested",
+            EventOutbox.workspace_id == scope.workspace_id,
+            EventOutbox.actor_user_id == _actor_id(scope),
+            EventOutbox.membership_revision == scope.membership_revision,
+            EventOutbox.payload == {"operation_id": str(operation_id)})
+
+
+def _event_delivery(event: EventOutbox) -> EventDelivery:
+    return EventDelivery(id=event.id, workspace_id=event.workspace_id, actor_user_id=event.actor_user_id,
+                         membership_revision=event.membership_revision, type=event.type,
+                         version=event.version, producer=event.producer, dispatched_at=event.dispatched_at,
+                         status=event.status, payload=deepcopy(event.payload))
+
+
+async def read_document_cleanup_event_operation_id(session: AsyncSession, event_id: UUID) -> UUID | None:
+    """Identity-only discovery of the operation id in an exact cleanup envelope (before admission).
+
+    Reads only the bounded id text of the deterministic cleanup event; a reshaped event or a
+    mismatched deterministic id returns None. It grants no authority: callers still resolve scope.
+    """
+    row = (await session.execute(select(
+        func.left(EventOutbox.payload["operation_id"].astext, 37),
+    ).where(EventOutbox.id == event_id, EventOutbox.type == "document.cleanup.requested"))).scalar_one_or_none()
+    try:
+        operation_id = UUID(row)
+    except (TypeError, ValueError):
+        return None
+    if str(operation_id) != row or event_id != uuid5(operation_id, "document-cleanup-requested"):
+        return None
+    return operation_id
+
+
+async def get_document_cleanup_event(
+    session: AsyncSession, event_id: UUID, *, operation_id: UUID, scope: Scope, multi_workspace_enabled: bool,
+) -> EventDelivery | None:
+    """Read one exact Documents cleanup event nonlocking; foreign or reshaped rows return None."""
+    await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    event = await session.scalar(select(EventOutbox).where(
+        *_cleanup_event_scope(event_id, operation_id, scope),
+    ).execution_options(populate_existing=True))
+    return None if event is None else _event_delivery(event)
+
+
+async def lock_document_cleanup_event_in_uow(
+    session: AsyncSession, event_id: UUID, *, operation_id: UUID, scope: Scope, multi_workspace_enabled: bool,
+) -> EventDelivery | None:
+    """Lock that single cleanup outbox row after the caller's privacy/URI/receipt locks."""
+    await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    event = await session.scalar(select(EventOutbox).where(
+        *_cleanup_event_scope(event_id, operation_id, scope),
+    ).with_for_update().execution_options(populate_existing=True))
+    return None if event is None else _event_delivery(event)
+
+
+async def settle_document_cleanup_event_in_uow(
+    session: AsyncSession, event_id: UUID, status: Literal["failed", "pending", "delivered"], *,
+    operation_id: UUID, dispatched_at: datetime | None, next_attempt_at: datetime | None = None,
+    expected_status: Literal["queued", "pending", "delivered", "failed"] = "queued",
+    scope: Scope, multi_workspace_enabled: bool,
+) -> bool:
+    """Compare-and-set a cleanup event from its claimed state (default queued); False means the claim was lost.
+
+    ``expected_status`` lets the cache-completion and reconciler paths act on a pending, delivered
+    or failed row; the exact ``dispatched_at`` claim stamp is always part of the comparison.
+    """
+    await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    values: dict[str, object] = {"status": status}
+    if next_attempt_at is not None:
+        values["next_attempt_at"] = next_attempt_at
+    result = await session.execute(
+        update(EventOutbox).where(
+            *_cleanup_event_scope(event_id, operation_id, scope), EventOutbox.status == expected_status,
+            EventOutbox.dispatched_at.is_not_distinct_from(dispatched_at),
+        ).values(**values).returning(EventOutbox.id)
     )
     return result.scalar_one_or_none() is not None
 

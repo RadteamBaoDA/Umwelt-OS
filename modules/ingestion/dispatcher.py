@@ -4,7 +4,7 @@ import asyncio
 import json
 from datetime import UTC, datetime, timedelta
 from typing import cast
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from arq.connections import ArqRedis
 from fastapi import HTTPException
@@ -17,6 +17,7 @@ from core.workspaces.schemas import InternalJobScope, Scope
 from modules.ingestion import public
 from modules.ingestion.models import EventOutbox, IngestionRun, IngestionStage
 from modules.ingestion.schemas import EventDelivery
+from modules.knowledge.documents import public as documents
 from modules.settings.public import admit_write
 from modules.sources import public as sources
 
@@ -59,6 +60,19 @@ def valid_event_envelope(event: EventOutbox | EventDelivery, scope: InternalJobS
     if (event.type not in PRODUCERS_BY_EVENT or type(event.version) is not int or event.version != 1
             or event.producer not in PRODUCERS_BY_EVENT[event.type] or not isinstance(payload, dict)):
         return False
+    if event.type == "document.cleanup.requested":
+        # Operation-only envelope: principal is proven on the outbox columns (and by the receipt
+        # owner), never by payload keys; legacy identity-in-payload shapes are rejected.
+        if (event.workspace_id != scope.workspace_id or event.actor_user_id != scope.actor_user_id
+                or event.membership_revision != scope.membership_revision or scope.source_id is None
+                or set(payload) != {"operation_id"} or not isinstance(payload["operation_id"], str)):
+            return False
+        try:
+            operation_id = UUID(payload["operation_id"])
+        except ValueError:
+            return False
+        return (str(operation_id) == payload["operation_id"]
+                and event.id == uuid5(operation_id, "document-cleanup-requested"))
     principal = {"workspace_id": str(scope.workspace_id), "actor_user_id": scope.actor_user_id,
                  "membership_revision": scope.membership_revision,
                  "source_id": str(scope.source_id), "source_generation": scope.source_generation}
@@ -82,8 +96,6 @@ def valid_event_envelope(event: EventOutbox | EventDelivery, scope: InternalJobS
         if len(json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")) > 1024:
             return False
         uuid_fields = ["document_id", "document_version_id"]
-    elif event.type == "document.cleanup.requested":
-        uuid_fields = ["operation_id"]
     else:
         uuid_fields = ["run_id", "stage_id"]
         if event.type == "document.file.uploaded":
@@ -235,6 +247,16 @@ async def dispatch_pending_work(ctx: dict[str, object]) -> int:
                         continue
                     # Preserve an in-flight worker's original timestamp until its stage lease expires.
                     if stage.status == "running" and stage.lease_expires_at and stage.lease_expires_at > now:
+                        continue
+                if event.type == "document.cleanup.requested":
+                    receipt = await documents.read_document_cleanup_job_identity(
+                        session, UUID(event.payload["operation_id"]), scope=scope, multi_workspace_enabled=enabled,
+                    )
+                    if receipt is None or (receipt.source_id, receipt.source_generation) != (
+                        scope.source_id, scope.source_generation,
+                    ):
+                        event.status = "failed"
+                        await session.commit()
                         continue
                 if event.type.startswith("source.purge."):
                     retained = await sources.read_source_purge_job_identity(

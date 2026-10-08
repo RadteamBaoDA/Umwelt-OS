@@ -192,6 +192,7 @@ async def pending_document_memory_cleanup_ids(
             DocumentCleanupOperation.evidence_scope_status == "captured",
             DocumentCleanupOperation.chat_status == "succeeded",
             DocumentCleanupOperation.memory_status == "queued",
+            DocumentCleanupOperation.membership_revision.is_not(None),
         )
         .order_by(DocumentCleanupOperation.id)
         .limit(limit)
@@ -206,6 +207,7 @@ async def pending_document_agent_cleanup_ids(
         raise ValueError("Agent cleanup reconciliation page size must be between 1 and 100")
     statement = select(DocumentCleanupOperation.id).where(
         DocumentCleanupOperation.agent_status.in_({"queued", "running"}),
+        DocumentCleanupOperation.membership_revision.is_not(None),
     )
     if after is not None:
         statement = statement.where(DocumentCleanupOperation.id > after)
@@ -227,7 +229,7 @@ async def pending_document_copied_stage_cleanup_ids(
     statement = select(DocumentCleanupOperation.id).where(or_(
         DocumentCleanupOperation.materialization_status.in_({"queued", "running"}),
         DocumentCleanupOperation.brief_status.in_({"queued", "running"}),
-    ))
+    ), DocumentCleanupOperation.membership_revision.is_not(None))
     if after is not None:
         statement = statement.where(DocumentCleanupOperation.id > after)
     return tuple((await session.scalars(
@@ -1910,17 +1912,52 @@ async def backfill_current_chunks(session: AsyncSession, limit: int = 2, *, mult
     return done
 
 
-async def raw_uris(session: AsyncSession, source_id: UUID | None = None) -> set[str]:
-    """Return nonempty raw-storage URIs globally or for one source."""
-    statement = select(Document.raw_uri).where(Document.raw_uri.is_not(None))
-    if source_id is not None:
-        statement = statement.where(Document.source_id == source_id)
-    return {uri for uri in (await session.scalars(statement)).all() if uri}
+async def raw_uris(
+    session: AsyncSession, *, instance_operator: bool, multi_workspace_enabled: bool,
+) -> set[str]:
+    """Return every nonempty raw-storage URI for the single-workspace orphan sweep.
+
+    Only the bootstrap instance operator (flag off, active bootstrap account) may ask; any other
+    caller raises 403 and never receives an empty set that could be read as "nothing referenced".
+    """
+    from core.auth.public import get_active_account
+
+    if (instance_operator is not True or multi_workspace_enabled is not False
+            or await get_active_account(session, 1, multi_workspace_enabled=False) is None):
+        raise HTTPException(status_code=403, detail="Instance operator required")
+    return {uri for uri in (await session.scalars(
+        select(Document.raw_uri).where(Document.raw_uri.is_not(None))
+    )).all() if uri}
 
 
-async def raw_uri_is_referenced(session: AsyncSession, raw_uri: str) -> bool:
-    """Return whether a surviving document still owns the exact raw-storage URI."""
-    return bool(await session.scalar(select(Document.id).where(Document.raw_uri == raw_uri).limit(1)))
+async def raw_uri_is_referenced_for_cleanup(
+    session: AsyncSession, operation_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+    access_fence: AccessFence,
+) -> bool:
+    """Return whether any surviving Document (any workspace) still owns this receipt's raw URI.
+
+    The receipt is proven first (workspace/actor/membership/Source generation and configuration
+    equal to the held original fence) and its URI is read here, never taken from the caller. The
+    reference check is deliberately global because raw files are shared storage; only the
+    boolean leaves this function. Any proof failure raises, so cleanup never unlinks on doubt.
+    """
+    _require_document_owner(scope)
+    if (await read_access_fence(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+            != access_fence):
+        raise HTTPException(status_code=409, detail="Cleanup access fence is stale")
+    row = (await session.execute(select(
+        DocumentCleanupOperation.raw_uri, DocumentCleanupOperation.configuration_revision,
+    ).where(
+        DocumentCleanupOperation.id == operation_id,
+        DocumentCleanupOperation.workspace_id == scope.workspace_id,
+        DocumentCleanupOperation.actor_user_id == _actor(scope),
+        DocumentCleanupOperation.membership_revision == scope.membership_revision,
+    ))).one_or_none()
+    if row is None or row.configuration_revision != access_fence.configuration_revision:
+        raise HTTPException(status_code=409, detail="Cleanup receipt authority is unavailable")
+    if row.raw_uri is None:
+        return False
+    return bool(await session.scalar(select(Document.id).where(Document.raw_uri == row.raw_uri).limit(1)))
 
 
 async def lock_raw_uri_identity(session: AsyncSession, raw_uri: str) -> None:

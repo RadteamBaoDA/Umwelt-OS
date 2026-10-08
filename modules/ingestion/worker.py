@@ -1530,6 +1530,9 @@ async def cleanup_storage_orphans(ctx: dict[str, object]) -> int:
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     settings = cast(Settings, ctx["settings"])
     enabled = _worker_flag(ctx)
+    if enabled:
+        # ponytail: multiworkspace orphan sweep disabled until O instance-operator admission exists (ruling §6)
+        return 0
     async with factory() as session:
         if await get_active_account(session, 1, multi_workspace_enabled=enabled) is None:
             return 0
@@ -1537,7 +1540,9 @@ async def cleanup_storage_orphans(ctx: dict[str, object]) -> int:
         await session.commit()
     try:
         async with factory() as session:
-            referenced = await documents.raw_uris(session, instance_operator=True)
+            referenced = await documents.raw_uris(
+                session, instance_operator=True, multi_workspace_enabled=enabled,
+            )
         return cleanup_orphaned_files(settings.data_dir, referenced, settings.storage_orphan_grace_seconds)
     finally:
         async with factory() as session:
