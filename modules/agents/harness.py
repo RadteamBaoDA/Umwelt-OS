@@ -346,7 +346,7 @@ class HarnessContext:
     async def revalidate_principal(self, principal: ToolExecutionPrincipal) -> bool:
         """Recheck run lease, owner session, workflow versions, and exact current registry contracts."""
         try:
-            from core.modules import effective_modules, register_modules
+            from modules.agents.access import effective_workspace_modules
             from modules.settings.public import read_module_availability
 
             if principal.scope != self.scope:
@@ -356,8 +356,7 @@ class HarnessContext:
                     availability_session, scope=self.scope,
                     multi_workspace_enabled=self.multi_workspace_enabled,
                 )
-            disabled = {item.id for item in lifecycle.modules if item.explicitly_disabled}
-            self.modules = effective_modules(disabled, register_modules())
+            self.modules = effective_workspace_modules(lifecycle)
             if not next((item.enabled for item in lifecycle.modules if item.id == "agents"), False):
                 return False
             row = await self._run_snapshot()

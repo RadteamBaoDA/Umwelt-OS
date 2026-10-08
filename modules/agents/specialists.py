@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from collections.abc import Mapping
 from typing import Any
 from uuid import UUID
 
@@ -12,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.model_gateway.schemas import AIExecutionConfig
 from core.tools import ToolRegistry, ToolRisk
 from core.workspaces.schemas import Scope
-from modules.agents.access import actor, admit
+from modules.agents.access import actor, admit, read_workspace_modules
 from modules.agents.handoff import HANDOFF_TOOL
 from modules.agents.internal_writes import (
     AUTOMATION_PROFILE_TOOLS,
@@ -61,11 +62,13 @@ def _canonical_json(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
-def _tool_contracts(registry: ToolRegistry, workspace_id: UUID) -> dict[str, dict[str, str]]:
+def _tool_contracts(
+    registry: ToolRegistry, workspace_id: UUID, modules: Mapping[str, Any] | None = None,
+) -> dict[str, dict[str, str]]:
     """Expose only registered non-confirmed read tools and the established webhook approval contract."""
     result: dict[str, dict[str, str]] = {}
     hides = registry.hides_tool
-    for definition in registry.list_tools():
+    for definition in registry.list_tools(modules=modules):
         if hides is not None and hides(definition.name, workspace_id):
             continue
         if definition.risk == ToolRisk.READ_ONLY and not definition.confirmation_required or ((definition.name == "webhook.send" and definition.risk == ToolRisk.EXTERNAL_WRITE
@@ -79,9 +82,10 @@ def _tool_contracts(registry: ToolRegistry, workspace_id: UUID) -> dict[str, dic
 
 def _snapshot(
     row: AgentProfile | None, profile_id: str, registry: ToolRegistry, workspace_id: UUID,
+    modules: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the secret-free profile view, retaining exact registry fingerprints as authority ceilings."""
-    contracts = _tool_contracts(registry, workspace_id)
+    contracts = _tool_contracts(registry, workspace_id, modules)
     defaults = NATIVE_READ_TOOLS - ({PROJECT_ONLY_TOOL} if profile_id not in {"project", "supervisor"} else frozenset())
     defaults = (defaults | ({HANDOFF_TOOL} if profile_id == "supervisor" else frozenset())
                 | (INTERNAL_PROFILE_TOOLS if profile_id in INTERNAL_WRITE_PROFILES else frozenset())
@@ -140,13 +144,14 @@ async def list_profiles(
     Owner admission precedes the query; profile rows are bound to ``scope.workspace_id``.
     """
     await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    modules = await read_workspace_modules(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     rows = (await session.scalars(select(AgentProfile).where(
         AgentProfile.workspace_id == scope.workspace_id,
     ))).all()
     by_id = {row.profile_id: row for row in rows}
     profiles = []
     for profile_id in PROFILE_TITLES:
-        value = _snapshot(by_id.get(profile_id), profile_id, registry, scope.workspace_id)
+        value = _snapshot(by_id.get(profile_id), profile_id, registry, scope.workspace_id, modules)
         alias = value["model_alias"]
         if alias not in config.aliases or not config.aliases[alias].model:
             value["unavailable_reasons"] = sorted({*value["unavailable_reasons"], "model_alias_unconfigured"})
@@ -169,12 +174,13 @@ async def get_profile(
     Owner admission precedes the query; the profile row is read within the admitted workspace.
     """
     await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    modules = await read_workspace_modules(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if profile_id not in PROFILE_TITLES:
         raise HTTPException(status_code=404, detail="Agent profile not found")
     row = await session.scalar(select(AgentProfile).where(
         AgentProfile.workspace_id == scope.workspace_id, AgentProfile.profile_id == profile_id,
     ))
-    value = _snapshot(row, profile_id, registry, scope.workspace_id)
+    value = _snapshot(row, profile_id, registry, scope.workspace_id, modules)
     alias = value["model_alias"]
     if alias not in config.aliases or not config.aliases[alias].model:
         value["unavailable_reasons"] = sorted({*value["unavailable_reasons"], "model_alias_unconfigured"})
@@ -197,6 +203,7 @@ async def update_profile_in_uow(
     commits with the same fence via ``commit_with_replay``.
     """
     await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    modules = await read_workspace_modules(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if profile_id not in PROFILE_TITLES:
         raise HTTPException(status_code=404, detail="Agent profile not found")
     owner_id = actor(scope)
@@ -216,7 +223,7 @@ async def update_profile_in_uow(
         raise HTTPException(status_code=413, detail="Agent prompt exceeds the size limit")
     if patch.model_alias not in config.aliases:
         raise HTTPException(status_code=422, detail="Model alias is not configured")
-    contracts = _tool_contracts(registry, scope.workspace_id)
+    contracts = _tool_contracts(registry, scope.workspace_id, modules)
     chosen = [item.model_dump(mode="json") for item in patch.allowed_tools]
     if len({item["name"] for item in chosen}) != len(chosen) or any(contracts.get(item["name"]) != item for item in chosen):
         raise HTTPException(status_code=422, detail="Selected tool contract is no longer available")
@@ -249,7 +256,7 @@ async def update_profile_in_uow(
     row.allowed_tools = chosen
     row.source_ids = [str(item) for item in patch.source_ids]
     row.revision = revision
-    profile_view = _snapshot(row, profile_id, registry, scope.workspace_id)
+    profile_view = _snapshot(row, profile_id, registry, scope.workspace_id, modules)
     snapshot = _profile_content(_read_profile(profile_view))
     snapshot_hash = hashlib.sha256(_canonical_json(snapshot)).hexdigest()
     session.add(AgentProfileRevision(
@@ -274,7 +281,8 @@ async def resolve_profile_snapshot(
         raise HTTPException(status_code=409, detail="Agent profile changed; reload before starting")
     if not profile.enabled or profile.capability == "unavailable":
         raise HTTPException(status_code=503, detail="Agent profile capability is unavailable")
-    contracts = _tool_contracts(registry, scope.workspace_id)
+    modules = await read_workspace_modules(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    contracts = _tool_contracts(registry, scope.workspace_id, modules)
     profile_snapshot = _profile_content(profile)
     digest = hashlib.sha256(_canonical_json(profile_snapshot)).hexdigest()
     snapshot = profile.model_dump(mode="json")

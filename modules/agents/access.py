@@ -7,7 +7,8 @@ with NULL epochs are quarantined (``run_epoch`` returns None); they are never re
 current epoch.
 """
 
-from typing import Protocol
+from collections.abc import Mapping
+from typing import Any, Protocol
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -96,3 +97,21 @@ async def admit_run(
     if fence != original:
         raise HTTPException(status_code=409, detail="Workspace access fence changed")
     return scope, fence
+
+
+def effective_workspace_modules(lifecycle: Any) -> Mapping[str, Any]:
+    """Apply a workspace's explicit module disables to the build-time module map."""
+    from core.modules import effective_modules, register_modules
+
+    return effective_modules({item.id for item in lifecycle.modules if item.explicitly_disabled}, register_modules())
+
+
+async def read_workspace_modules(
+    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
+) -> Mapping[str, Any]:
+    """Per-call module map for ``ToolRegistry.list_tools(modules=...)`` catalogs."""
+    from modules.settings.public import read_module_availability
+
+    return effective_workspace_modules(await read_module_availability(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    ))

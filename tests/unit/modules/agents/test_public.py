@@ -51,6 +51,13 @@ EPOCH = {"workspace_id": WS, "membership_revision": 1, "configuration_revision":
 
 
 @pytest.fixture(autouse=True)
+def _module_map():
+    """Per-call module availability is covered in test_scope.py; here the shared map applies."""
+    with patch("modules.agents.public.read_workspace_modules", AsyncMock(return_value=None)):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def _admitted():
     """Admission and fenced commits are covered in test_scope.py; here they succeed."""
     with patch("modules.agents.access.workspaces.read_access_fence", AsyncMock(return_value=FENCE)),             patch("modules.agents.access.workspaces.lock_access_fence", AsyncMock(return_value=FENCE)),             patch("modules.agents.public.commit_with_replay", AsyncMock()) as commit:

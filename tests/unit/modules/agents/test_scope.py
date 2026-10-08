@@ -175,8 +175,9 @@ async def test_create_run_stores_workspace_actor_and_original_epoch() -> None:
     now = datetime.now(UTC)
     with patch.object(access.workspaces, "lock_access_fence", AsyncMock(return_value=FENCE)) as lock, \
             patch.object(agents, "commit_with_replay", AsyncMock()) as commit, \
-            patch.object(agents, "_read", MagicMock(return_value="read")):
+            patch.object(agents, "read_workspace_modules", AsyncMock(return_value={"m": 1})),             patch.object(agents, "_read", MagicMock(return_value="read")):
         assert await agents.create_run(session, "a" * 64, request, registry, **CTX) == "read"
+    assert registry.list_tools.call_args.kwargs["modules"] == {"m": 1}
     lock.assert_awaited_once()
     run = added[0]
     assert (run.workspace_id, run.owner_id) == (WS, 7)
@@ -370,3 +371,58 @@ async def test_worker_leaves_work_untouched_when_agents_are_disabled_for_the_wor
     assert enabled.await_args.kwargs["scope"] == JOB
     terminate.assert_not_awaited()
     claim.assert_not_awaited()
+
+
+# ----------------------------------------------------------------------------- per-call module map
+
+
+async def _noop(*_a: object, **_k: object) -> None:
+    return None
+
+
+def _lifecycle(*disabled: str) -> SimpleNamespace:
+    from core.modules import register_modules
+
+    return SimpleNamespace(modules=[
+        SimpleNamespace(id=module_id, explicitly_disabled=module_id in disabled) for module_id in register_modules()
+    ])
+
+
+def _registry_with(*tools: object):
+    from core.modules import register_modules
+    from core.tools import ToolRegistry
+
+    return ToolRegistry(module_registry=register_modules())
+
+
+def test_disabled_module_tool_absent_from_profile_catalog() -> None:
+    from core.tools import ToolDefinition, ToolRisk
+    from modules.agents import specialists
+
+    registry = _registry_with()
+    definition = ToolDefinition(
+        name="search.query", description="d", input_schema={"type": "object"},
+        output_schema={"type": "object"}, risk=ToolRisk.READ_ONLY, confirmation_required=False,
+        version="1", module="search",
+    )
+    registry.register_tool(definition, _noop)
+    enabled = access.effective_workspace_modules(_lifecycle())
+    disabled = access.effective_workspace_modules(_lifecycle("search"))
+    assert "search.query" in specialists._tool_contracts(registry, WS, enabled)
+    assert "search.query" not in specialists._tool_contracts(registry, WS, disabled)
+
+
+def test_specialists_filter_hides_other_workspace_mcp_tool() -> None:
+    from core.tools import ToolDefinition, ToolRisk
+    from modules.agents import specialists
+
+    registry = _registry_with()
+    name = "mcp.abc.def"
+    registry.register_tool(ToolDefinition(
+        name=name, description="d", input_schema={"type": "object"}, output_schema={"type": "object"},
+        risk=ToolRisk.READ_ONLY, confirmation_required=False, version="1", module="tools",
+    ), _noop)
+    other = uuid4()
+    registry.hides_tool = lambda tool, workspace_id: tool == name and workspace_id != WS
+    assert name in specialists._tool_contracts(registry, WS)
+    assert name not in specialists._tool_contracts(registry, other)

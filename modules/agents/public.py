@@ -23,7 +23,7 @@ from core.telemetry import RunMeta as _RunMeta
 from core.tools import ToolRegistry, ToolRisk
 from core.tools.schemas import ToolExecutionPrincipal, ToolOutputFence
 from core.workspaces.schemas import AccessFence, Scope
-from modules.agents.access import actor, admit, run_epoch
+from modules.agents.access import actor, admit, read_workspace_modules, run_epoch
 from modules.agents.leases import try_agent_run_lease_in_uow
 from modules.agents.models import (
     AgentApproval,
@@ -570,8 +570,9 @@ async def create_run(
     """
     fence = await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
     owner_id = actor(scope)
+    modules = await read_workspace_modules(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     definitions = {
-        item.name: item for item in registry.list_tools(allowed_tools=APPROVAL_WORKFLOW_TOOLS)
+        item.name: item for item in registry.list_tools(allowed_tools=APPROVAL_WORKFLOW_TOOLS, modules=modules)
         if not (registry.hides_tool and registry.hides_tool(item.name, scope.workspace_id))
         and (item.risk == ToolRisk.READ_ONLY and not item.confirmation_required
             or item.name == "webhook.send" and item.risk == ToolRisk.EXTERNAL_WRITE

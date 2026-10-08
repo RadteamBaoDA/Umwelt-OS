@@ -99,7 +99,7 @@ class ToolRegistry:
 
         ``modules`` is a per-call lifecycle map; None uses the registry's shared module state.
         """
-        # ponytail: catalog reads process-wide module state set by settings/agents; invocation is authoritative.
+        # ponytail: build-time descriptors only; workspace disables are applied per call via `modules=`.
         return sorted(
             (item.model_copy(deep=True) for item in self._tools.values()
              if (allowed_tools is None or item.name in allowed_tools) and self._module_enabled(item.module, modules)),
