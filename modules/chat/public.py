@@ -201,8 +201,12 @@ async def delete_conversation(
         return False
 
     from modules.agents.public import purge_conversation_actions
+    from modules.chat.scope import multi_workspace_enabled, owner_default_scope
 
-    await purge_conversation_actions(session, conversation_id, owner_id)
+    await purge_conversation_actions(
+        session, conversation_id, scope=await owner_default_scope(session, owner_id),
+        multi_workspace_enabled=multi_workspace_enabled(),
+    )
     await session.delete(conversation)
     return True
 
@@ -786,9 +790,9 @@ def _chat_export_privacy_marker(persisted: bool, updated_at: _datetime | None) -
 
 async def _chat_export_privacy(session: AsyncSession) -> tuple[bool, bool, _datetime | None]:
     """Read Memory's current history-storage grant and its minimal persisted-row fence."""
-    from modules.memory import public as memory_public
+    from modules.chat.scope import read_owner_export_privacy
 
-    privacy = await memory_public.read_export_privacy(session)
+    privacy = await read_owner_export_privacy(session)
     persisted, updated_at = _chat_export_privacy_marker(privacy.persisted, privacy.updated_at)
     return privacy.store_conversation_history, persisted, updated_at
 

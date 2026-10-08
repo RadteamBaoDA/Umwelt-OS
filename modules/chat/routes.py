@@ -38,6 +38,7 @@ from modules.chat.schemas import (
     SendMessageRequest,
     SendMessageResponse,
 )
+from modules.chat.scope import read_owner_export_privacy as read_export_privacy
 from modules.chat.stream import format_sse_event, parse_event_id
 from modules.chat.worker import (
     CANCEL_KEY_PREFIX,
@@ -47,7 +48,7 @@ from modules.chat.worker import (
     _require_privacy_fence,
     run_response_generation,
 )
-from modules.memory.public import lock_export_privacy, read_export_privacy
+from modules.memory.public import lock_export_privacy
 from modules.settings.public import module_dependency
 
 logger = logging.getLogger(__name__)

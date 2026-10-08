@@ -34,8 +34,9 @@ from modules.chat.retrieval import (
     revalidate_context_fence,
 )
 from modules.chat.schemas import AnswerContextRequest, Citation
+from modules.chat.scope import read_owner_export_privacy as read_export_privacy
 from modules.chat.stream import make_event_id
-from modules.memory.public import lock_export_privacy, read_export_privacy
+from modules.memory.public import lock_export_privacy
 from modules.settings import public as settings_public
 
 logger = logging.getLogger(__name__)
@@ -283,9 +284,25 @@ async def purge_expired_chat_runs(ctx: dict[str, object]) -> int:
                     or not link.ephemeral or link.expires_at is None or link.expires_at > now):
                 continue
 
+            from core.workspaces.public import resolve_workspace_owner_context
+            from core.workspaces.schemas import InternalJobScope
             from modules.agents.public import purge_agent_runs
+            from modules.chat.scope import multi_workspace_enabled
 
-            await purge_agent_runs(session, [link.agent_run_id], owner_id=link.owner_id)
+            flag = multi_workspace_enabled()
+            owner_ctx = await resolve_workspace_owner_context(
+                session, link.workspace_id, multi_workspace_enabled=flag,
+            )
+            if owner_ctx is None:
+                continue
+            await purge_agent_runs(
+                session, [link.agent_run_id],
+                scope=InternalJobScope(
+                    workspace_id=link.workspace_id, actor_user_id=link.owner_id,
+                    membership_revision=owner_ctx.membership_revision,
+                ),
+                multi_workspace_enabled=flag,
+            )
             # The parent lock serializes supported Chat link writers; refresh and lock only after
             # Agent locks, matching conversation deletion's parent-before-Agent lock ordering.
             current_link = await session.scalar(select(AgentActivityLink).where(
