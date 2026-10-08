@@ -5,9 +5,10 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.auth.dependencies import require_owner, require_owner_write, require_workspace_read, require_workspace_write
+from core.auth.dependencies import require_owner, require_owner_write
 from core.auth.models import AuthSession
 from core.database import get_session
+from core.workspaces.dependencies import require_workspace_read, require_workspace_write
 from core.workspaces.schemas import WorkspaceContext
 from modules.knowledge.entities.public import RedirectedEntityConflict
 from modules.knowledge.relationships import public
@@ -67,7 +68,7 @@ async def create_relationship(payload: RelationshipCreate, session: Session, own
     errors. Route authorization does not rewrite the supplied origin.
     """
     try:
-        return await public.create_relationship(session, payload, actor_id=owner.owner_id, scope=scope,
+        return await public.create_relationship(session, payload, scope=scope,
                                                 multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
     except RedirectedEntityConflict as exc:
         raise HTTPException(status_code=409, detail={"code": "ENTITY_REDIRECTED", "message": str(exc), "details": {}}) from exc
@@ -84,7 +85,7 @@ async def delete_relationship(
 ) -> None:
     """Delete a relationship using the authenticated owner and bounded audit reason."""
     try:
-        if not await public.remove_relationship(session, relationship_id, actor_id=owner.owner_id, reason=reason,
+        if not await public.remove_relationship(session, relationship_id, reason=reason,
                                                 scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled):
             raise HTTPException(status_code=404, detail="Relationship not found")
     except RedirectedEntityConflict as exc:
