@@ -4,7 +4,7 @@ import asyncio
 import hashlib
 import re
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
@@ -16,8 +16,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.dependencies import SESSION_COOKIE, require_owner, require_owner_write
 from core.auth.models import AuthSession
+from core.auth.public import authenticated_session_ref
 from core.config import Settings
 from core.database import get_session
+from core.realtime import commit_with_replay
+from core.workspaces.dependencies import require_workspace_read, require_workspace_write
+from core.workspaces.public import lock_access_fence, read_access_fence
+from core.workspaces.schemas import AccessFence, WorkspaceContext
 from modules.connectors import provisioning, registry
 from modules.connectors.github import oauth
 from modules.connectors.github.schemas import GitHubCursor, project_github_source_config
@@ -46,6 +51,40 @@ RECOVERY_GRACE = timedelta(minutes=2)
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[AuthSession, Depends(require_owner)]
 OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]
+WorkspaceRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
+WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
+_DENIED = frozenset({401, 403, 404, 409})
+
+
+def _flag(request: Request) -> bool:
+    """Return the instance's actual configured multi-workspace flag; never defaulted or inferred."""
+    return bool(request.app.state.settings.multi_workspace_enabled)
+
+
+async def _admit(
+    session: AsyncSession, request: Request, scope: WorkspaceContext, *,
+    expected: AccessFence | None = None, lock: bool = True,
+) -> AccessFence:
+    """Reject members, then lock (or read) the account/session/workspace access fence first.
+
+    Every route calls this before any Source, provisioning, grant or coordinator lock. Writes lock
+    with the authenticated session reference so logout conflicts; ``expected`` re-admits the ORIGINAL
+    fence after network I/O. The GitHub OAuth coordinator, operations and Source are then
+    keyed by this actor and workspace, never by a constant owner.
+    """
+    if scope.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
+    if not lock:
+        return await read_access_fence(session, scope=scope, multi_workspace_enabled=_flag(request))
+    return await lock_access_fence(
+        session, scope=scope, expected=expected, multi_workspace_enabled=_flag(request),
+        auth_sessions=(authenticated_session_ref(request),),
+    )
+
+
+async def _publish(session: AsyncSession, request: Request, scope: WorkspaceContext, fence: AccessFence) -> None:
+    """Commit through the replay gate so a stale original fence never publishes this transaction."""
+    await commit_with_replay(session, scope=scope, multi_workspace_enabled=_flag(request), access_fence=fence)
 
 
 class GitHubWebhookStatus(BaseModel):
@@ -112,10 +151,13 @@ async def receive_github_webhook(request: Request, session: Session) -> JSONResp
         )
     except (ValueError, TypeError, RecursionError) as exc:
         raise HTTPException(status_code=400, detail="GitHub webhook payload is invalid") from exc
+    from core.modules import register_modules
     from modules.connectors import public as connectors
-    from modules.settings.public import module_is_enabled, register_request_activity
+    from modules.settings.public import register_request_activity
 
-    if not await module_is_enabled(session, "connectors"):
+    # The signed receiver is a source-less instance ingress: only build availability can be checked
+    # here. Workspace enablement is checked per binding after that binding's own admission (worker).
+    if not register_modules()["connectors"].enabled:
         raise HTTPException(status_code=404, detail="Webhook unavailable")
 
     # Admission commits before the unique delivery/outbox transaction begins.
@@ -212,17 +254,37 @@ async def _require_current_owner_session(request: Request, session: AsyncSession
 
 
 async def _mark_github_reconciliation(
-    session: AsyncSession, source_id: UUID, owner_id: int, operation_id: UUID, error_code: str,
+    session: AsyncSession, request: Request, scope: WorkspaceContext, fence: AccessFence,
+    source_id: UUID, operation_id: UUID, error_code: str,
 ) -> None:
-    """Fence one uncertain OAuth operation under source, provisioning, grant, then owner-coordinator locks."""
-    source_fence, _provisioning, _slots = await provisioning.lock_connector(session, source_id, provisioning._ALL_CREDENTIAL_SLOTS)
+    """Fence one uncertain OAuth operation under access, source, provisioning, grant, then coordinator locks.
+
+    The ORIGINAL access fence is re-admitted. If that admission is gone, nothing is written: the
+    operation stays ``in_progress`` and the owner recovers it through the normal stale-operation
+    path once access is restored, rather than a revoked actor publishing state.
+    """
+    flag = _flag(request)
+    try:
+        await _admit(session, request, scope, expected=fence)
+        source_fence, _provisioning, _slots = await provisioning.lock_connector(
+            session, source_id, provisioning._ALL_CREDENTIAL_SLOTS, scope=scope,
+            multi_workspace_enabled=flag, expected_access_fence=fence,
+        )
+    except HTTPException as exc:
+        await session.rollback()
+        if exc.status_code not in _DENIED:
+            raise
+        return
     grant = await session.scalar(select(GithubOAuthGrant).where(GithubOAuthGrant.source_id == source_id).with_for_update().execution_options(populate_existing=True))
-    coordinator = await session.scalar(select(GithubOAuthCoordinator).where(GithubOAuthCoordinator.owner_id == owner_id).with_for_update())
+    coordinator = await session.scalar(select(GithubOAuthCoordinator).where(GithubOAuthCoordinator.owner_id == scope.user_id).with_for_update())
     if coordinator is None or coordinator.operation_id != operation_id:
         await session.rollback()
         return
     coordinator.state, coordinator.error_code = "reconciliation_required", error_code
-    operation = await session.scalar(select(GithubOAuthOperation).where(GithubOAuthOperation.operation_id == operation_id).with_for_update())
+    operation = await session.scalar(select(GithubOAuthOperation).where(
+        GithubOAuthOperation.operation_id == operation_id,
+        GithubOAuthOperation.workspace_id == scope.workspace_id,
+    ).with_for_update())
     if operation is not None:
         operation.state = "reconciliation_required"
         operation.error_code = error_code
@@ -231,7 +293,7 @@ async def _mark_github_reconciliation(
     )
     if grant is not None and source_fence is not None and grant.state in {"ready", "refreshing"} and should_fence_grant:
         grant.state, grant.error_code = "reconciliation_required", error_code
-    await session.commit()
+    await _publish(session, request, scope, fence)
 
 
 def _configured(settings: Settings) -> None:
@@ -242,21 +304,27 @@ def _configured(settings: Settings) -> None:
 
 
 @router.post("/{source_id}/github/oauth/start")
-async def start_github_authorization(source_id: str, payload: StartRequest, session: Session, request: Request, owner: OwnerWrite) -> dict[str, str]:
+async def start_github_authorization(
+    source_id: str, payload: StartRequest, session: Session, request: Request, owner: OwnerWrite,
+    scope: WorkspaceWrite,
+) -> dict[str, str]:
     """Create an expiring, owner-session and browser-cookie-bound S256 PKCE attempt.
 
     The attempt stores only hashes of state and browser nonce; the verifier is encrypted with
     the connector key and fenced to the source generation and saved configuration revision.
+    The Source must belong to the selected workspace; access is admitted before any read.
     """
     _configured(request.app.state.settings)
     try:
-        parsed_id = __import__("uuid").UUID(source_id)
+        parsed_id = UUID(source_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="Source not found") from exc
-    source = await sources.get_connector_source(session, parsed_id)
+    flag = _flag(request)
+    fence = await _admit(session, request, scope)
+    source = await sources.get_connector_source(session, parsed_id, scope=scope, multi_workspace_enabled=flag)
     if source is None or source.provider != "github" or source.status != "active" or source.generation != payload.expected_source_generation:
         raise HTTPException(status_code=409, detail="GitHub source changed; reload before connecting")
-    row = await activation_status(session, parsed_id)
+    row = await activation_status(session, parsed_id, scope=scope, multi_workspace_enabled=flag)
     revision = row.desired_revision if row else 0
     if revision != payload.expected_revision:
         raise HTTPException(status_code=409, detail="GitHub configuration changed; reload before connecting")
@@ -279,16 +347,26 @@ async def start_github_authorization(source_id: str, payload: StartRequest, sess
         expected_token_revision=token_revision, expires_at=datetime.now(UTC) + timedelta(minutes=10),
     ))
     request.session["github_oauth"] = {"state_hash": oauth.digest(state), "browser_nonce": browser_nonce}
-    await session.commit()
+    await _publish(session, request, scope, fence)
     return {"authorization_url": oauth.authorization_url(settings, state=state, verifier=verifier)}
 
 
 @router.get("/{source_id}/github/status")
-async def github_connection_status(source_id: str, session: Session, _owner: OwnerRead) -> dict[str, object]:
-    """Return a safe Settings grant, scan, and uncertainty summary without exposing token material."""
+async def github_connection_status(
+    source_id: str, session: Session, request: Request, _owner: OwnerRead, scope: WorkspaceRead,
+) -> dict[str, object]:
+    """Return a safe Settings grant, scan, and uncertainty summary without exposing token material.
+
+    The Source must belong to the selected workspace (otherwise 404); the OAuth coordinator and
+    operation shown are the actor's own and the operation must carry this workspace.
+    """
+    flag = _flag(request)
+    await _admit(session, request, scope, lock=False)
     source_uuid = UUID(source_id)
+    source = await sources.get_connector_source(session, source_uuid, scope=scope, multi_workspace_enabled=flag)
+    if source is None:
+        raise HTTPException(status_code=404, detail="Source not found")
     grant = await session.get(GithubOAuthGrant, source_uuid)
-    source = await sources.get_connector_source(session, source_uuid)
     cursor = None
     cursor_invalid = False
     scope_sha256 = None
@@ -297,18 +375,18 @@ async def github_connection_status(source_id: str, session: Session, _owner: Own
         select(GithubSyncReset).where(GithubSyncReset.source_id == source_uuid)
         .order_by(GithubSyncReset.reset_at.desc()).limit(1)
     )
-    if source is not None and source.provider == "github":
+    if source.provider == "github":
         from modules.connectors import public as connectors
         from modules.ingestion import public as ingestion
 
         if grant is not None:
             current_fence = await connectors.get_github_binding_fence(
                 session, source_uuid, source_generation=source.generation,
-                connector_revision=grant.configuration_revision,
+                connector_revision=grant.configuration_revision, scope=scope, multi_workspace_enabled=flag,
             )
             scope_sha256 = current_fence.scope_sha256 if current_fence is not None else None
 
-        raw_cursor = await ingestion.get_source_cursor(session, source_uuid)
+        raw_cursor = await ingestion.get_source_cursor(session, source_uuid, scope=scope, multi_workspace_enabled=flag)
         if raw_cursor is not None:
             try:
                 cursor = GitHubCursor.model_validate_json(raw_cursor)
@@ -328,7 +406,7 @@ async def github_connection_status(source_id: str, session: Session, _owner: Own
                 cursor_invalid = True
     sync_status = {
         "history_days": project_github_source_config(source.configuration).github_history_days
-        if source is not None and source.provider == "github" else 90,
+        if source.provider == "github" else 90,
         "scope_sha256": scope_sha256,
         "last_reset_at": last_reset.reset_at if last_reset else None,
         "gap_recorded": last_reset is not None,
@@ -357,10 +435,12 @@ async def github_connection_status(source_id: str, session: Session, _owner: Own
             for item in cursor.resources
         ] if cursor is not None else [],
     }
-    coordinator = await session.get(GithubOAuthCoordinator, _owner.owner_id)
-    operation = await session.get(GithubOAuthOperation, coordinator.operation_id) if coordinator and coordinator.operation_id else None
-    if operation is not None and operation.owner_id != _owner.owner_id:
-        operation = None
+    coordinator = await session.get(GithubOAuthCoordinator, scope.user_id)
+    operation = await session.scalar(select(GithubOAuthOperation).where(
+        GithubOAuthOperation.operation_id == coordinator.operation_id,
+        GithubOAuthOperation.workspace_id == scope.workspace_id,
+        GithubOAuthOperation.owner_id == scope.user_id,
+    )) if coordinator and coordinator.operation_id else None
     recovery_available = bool(
         coordinator is not None and coordinator.operation_id is not None
         and (coordinator.state == "reconciliation_required" or coordinator.updated_at <= datetime.now(UTC) - RECOVERY_GRACE
@@ -379,7 +459,10 @@ async def github_connection_status(source_id: str, session: Session, _owner: Own
 
 
 @router.post("/{source_id}/github/sync/reset")
-async def reset_github_sync(source_id: str, payload: ResetSyncRequest, session: Session, _owner: OwnerWrite) -> dict[str, str]:
+async def reset_github_sync(
+    source_id: str, payload: ResetSyncRequest, session: Session, request: Request, _owner: OwnerWrite,
+    scope: WorkspaceWrite,
+) -> dict[str, str]:
     """Restart selected GitHub resource sweeps after matching reviewed scope and idle ingestion state."""
     from modules.connectors import public as connectors
 
@@ -388,28 +471,43 @@ async def reset_github_sync(source_id: str, payload: ResetSyncRequest, session: 
         source_generation=payload.expected_source_generation,
         connector_revision=payload.expected_connector_revision,
         expected_scope_sha256=payload.expected_scope_sha256,
+        scope=scope, multi_workspace_enabled=_flag(request),
     )
     return {"status": "reset"}
 
 
 @router.post("/{source_id}/github/reconcile/reconnect")
-async def acknowledge_github_reconnect(source_id: str, payload: ReconnectReconciliationRequest, session: Session, request: Request, owner: OwnerWrite) -> dict[str, str]:
+async def acknowledge_github_reconnect(
+    source_id: str, payload: ReconnectReconciliationRequest, session: Session, request: Request,
+    owner: OwnerWrite, scope: WorkspaceWrite,
+) -> dict[str, str]:
     """Acknowledge one exact owner-wide auth/refresh tombstone even if its original source is paused or deleted.
 
     The path source is only the editor from which the owner initiated recovery. Stored origin identity
     authorizes no action on that source; current grants are fenced only when their recorded revisions
-    still match the unresolved operation.
+    still match the unresolved operation. The operation must carry the selected workspace and actor.
     """
-    __import__("uuid").UUID(source_id)
-    operation = await session.get(GithubOAuthOperation, payload.operation_id)
-    if operation is None or operation.owner_id != owner.owner_id or operation.operation_kind not in {"authorization", "refresh"} or operation.source_id is None:
+    UUID(source_id)
+    flag = _flag(request)
+    actor = scope.user_id
+    fence = await _admit(session, request, scope)
+    operation = await session.scalar(select(GithubOAuthOperation).where(
+        GithubOAuthOperation.operation_id == payload.operation_id,
+        GithubOAuthOperation.workspace_id == scope.workspace_id,
+    ))
+    if operation is None or operation.owner_id != actor or operation.operation_kind not in {"authorization", "refresh"} or operation.source_id is None:
         await session.rollback()
         raise HTTPException(status_code=409, detail="GitHub recovery operation is unavailable; reload connection status")
-    source_fence = await sources.lock_source(session, operation.source_id)
+    source_fence = await sources.lock_source(
+        session, operation.source_id, scope=scope, multi_workspace_enabled=flag, expected_access_fence=fence,
+    )
     grant = await session.scalar(select(GithubOAuthGrant).where(GithubOAuthGrant.source_id == operation.source_id).with_for_update().execution_options(populate_existing=True))
-    coordinator = await session.scalar(select(GithubOAuthCoordinator).where(GithubOAuthCoordinator.owner_id == owner.owner_id).with_for_update())
-    operation = await session.scalar(select(GithubOAuthOperation).where(GithubOAuthOperation.operation_id == payload.operation_id).with_for_update().execution_options(populate_existing=True))
-    if operation is None or operation.owner_id != owner.owner_id or coordinator is None or coordinator.operation_id != payload.operation_id or coordinator.state not in {"reconciliation_required", "authorizing", "refreshing"}:
+    coordinator = await session.scalar(select(GithubOAuthCoordinator).where(GithubOAuthCoordinator.owner_id == actor).with_for_update())
+    operation = await session.scalar(select(GithubOAuthOperation).where(
+        GithubOAuthOperation.operation_id == payload.operation_id,
+        GithubOAuthOperation.workspace_id == scope.workspace_id,
+    ).with_for_update().execution_options(populate_existing=True))
+    if operation is None or operation.owner_id != actor or coordinator is None or coordinator.operation_id != payload.operation_id or coordinator.state not in {"reconciliation_required", "authorizing", "refreshing"}:
         await session.rollback()
         raise HTTPException(status_code=409, detail="GitHub reconciliation operation changed; reload connection status")
     if coordinator.state != "reconciliation_required" and coordinator.updated_at > datetime.now(UTC) - RECOVERY_GRACE:
@@ -433,19 +531,33 @@ async def acknowledge_github_reconnect(source_id: str, payload: ReconnectReconci
     operation.error_code = recovery_error
     operation.resolved_at = datetime.now(UTC)
     # Keep nonsecret operation origin and outcome after releasing the owner-wide coordinator.
-    await session.commit()
+    await _publish(session, request, scope, fence)
     return {"state": "reconnect_required"}
 
 
 @router.post("/{source_id}/github/oauth/refresh")
-async def refresh_github_authorization(source_id: str, session: Session, request: Request, _owner: OwnerWrite) -> dict[str, str]:
-    """Rotate a source's expiring tokens under the owner-wide coordinator and revision fences."""
+async def refresh_github_authorization(
+    source_id: str, session: Session, request: Request, _owner: OwnerWrite, scope: WorkspaceWrite,
+) -> dict[str, str]:
+    """Rotate a source's expiring tokens under the actor-wide coordinator and revision fences.
+
+    Phase 1 captures the access fence and commits the in-progress operation (with its real workspace
+    and actor). Phase 3, after the provider call, re-admits that ORIGINAL fence before relocking
+    Source, provisioning, grant and coordinator; a lost fence marks the operation uncertain and
+    publishes nothing.
+    """
     _configured(request.app.state.settings)
-    source_uuid = __import__("uuid").UUID(source_id)
-    source_fence, connector, _slots = await provisioning.lock_connector(session, source_uuid, provisioning._ALL_CREDENTIAL_SLOTS)
-    source = await sources.get_connector_source(session, source_uuid) if source_fence is not None else None
+    source_uuid = UUID(source_id)
+    flag = _flag(request)
+    actor = scope.user_id
+    fence = await _admit(session, request, scope)
+    source_fence, connector, _slots = await provisioning.lock_connector(
+        session, source_uuid, provisioning._ALL_CREDENTIAL_SLOTS, scope=scope,
+        multi_workspace_enabled=flag, expected_access_fence=fence,
+    )
+    source = await sources.get_connector_source(session, source_uuid, scope=scope, multi_workspace_enabled=flag) if source_fence is not None else None
     grant = await session.scalar(select(GithubOAuthGrant).where(GithubOAuthGrant.source_id == source_uuid).with_for_update().execution_options(populate_existing=True))
-    coordinator = await session.scalar(select(GithubOAuthCoordinator).where(GithubOAuthCoordinator.owner_id == _owner.owner_id).with_for_update())
+    coordinator = await session.scalar(select(GithubOAuthCoordinator).where(GithubOAuthCoordinator.owner_id == actor).with_for_update())
     if source is None or source.provider != "github" or source.status != "active" or grant is None or grant.state != "ready" or grant.encrypted_tokens is None:
         raise HTTPException(status_code=409, detail="GitHub grant is unavailable")
     if connector is None or connector.desired_revision != grant.configuration_revision or source.generation != grant.source_generation:
@@ -463,42 +575,52 @@ async def refresh_github_authorization(source_id: str, session: Session, request
     coordinator.state, coordinator.operation_id = "refreshing", operation_id
     coordinator.error_code = None
     session.add(GithubOAuthOperation(
-        operation_id=operation_id, owner_id=_owner.owner_id, operation_kind="refresh",
+        operation_id=operation_id, workspace_id=scope.workspace_id, owner_id=actor, operation_kind="refresh",
         source_id=source_uuid, source_generation=grant.source_generation,
         configuration_revision=grant.configuration_revision, token_revision=grant.token_revision,
         state="in_progress",
     ))
     grant.refresh_operation_id = operation_id
     grant.state = "refreshing"
-    await session.commit()
+    await _publish(session, request, scope, fence)
     try:
         await _require_current_owner_session(request, session, _owner)
         tokens = await oauth.refresh_github_grant(request.app.state.settings, refresh_token)
         await _require_current_owner_session(request, session, _owner)
     except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
         await session.rollback()
-        await _mark_github_reconciliation(session, source_uuid, _owner.owner_id, operation_id, "token_refresh_outcome_unknown")
+        await _mark_github_reconciliation(session, request, scope, fence, source_uuid, operation_id, "token_refresh_outcome_unknown")
         raise HTTPException(status_code=503, detail="GitHub token refresh failed; reconnect to restore collection") from None
-    source_fence = await sources.lock_source(session, source_uuid)
-    source = await sources.get_connector_source(session, source_uuid) if source_fence is not None else None
-    current_provisioning = await session.scalar(select(ConnectorProvisioning).where(ConnectorProvisioning.source_id == source_uuid).with_for_update().execution_options(populate_existing=True))
+    try:
+        await _admit(session, request, scope, expected=fence)
+        source_fence, current_provisioning, _no_slots = await provisioning.lock_connector(
+            session, source_uuid, (), scope=scope, multi_workspace_enabled=flag, expected_access_fence=fence,
+        )
+    except HTTPException:
+        await session.rollback()
+        await _mark_github_reconciliation(session, request, scope, fence, source_uuid, operation_id, "token_refresh_outcome_unknown")
+        raise
+    source = await sources.get_connector_source(session, source_uuid, scope=scope, multi_workspace_enabled=flag) if source_fence is not None else None
     grant = await session.scalar(select(GithubOAuthGrant).where(GithubOAuthGrant.source_id == source_uuid).with_for_update().execution_options(populate_existing=True))
-    coordinator = await session.scalar(select(GithubOAuthCoordinator).where(GithubOAuthCoordinator.owner_id == _owner.owner_id).with_for_update())
+    coordinator = await session.scalar(select(GithubOAuthCoordinator).where(GithubOAuthCoordinator.owner_id == actor).with_for_update())
     if source is None or source.provider != "github" or source.status != "active" or grant is None or current_provisioning is None or source.generation != grant.source_generation or current_provisioning.desired_revision != grant.configuration_revision or grant.token_revision != expected_token_revision or grant.operation_id != expected_grant_operation or grant.state != "refreshing" or grant.refresh_operation_id != operation_id or coordinator is None or coordinator.operation_id != operation_id:
         await session.rollback()
-        await _mark_github_reconciliation(session, source_uuid, _owner.owner_id, operation_id, "stale_refresh_outcome_unknown")
+        await _mark_github_reconciliation(session, request, scope, fence, source_uuid, operation_id, "stale_refresh_outcome_unknown")
         raise HTTPException(status_code=409, detail="GitHub source changed during refresh")
-    operation = await session.scalar(select(GithubOAuthOperation).where(GithubOAuthOperation.operation_id == operation_id).with_for_update())
-    if operation is None or operation.owner_id != _owner.owner_id or operation.operation_kind != "refresh" or operation.state != "in_progress":
+    operation = await session.scalar(select(GithubOAuthOperation).where(
+        GithubOAuthOperation.operation_id == operation_id,
+        GithubOAuthOperation.workspace_id == scope.workspace_id,
+    ).with_for_update())
+    if operation is None or operation.owner_id != actor or operation.operation_kind != "refresh" or operation.state != "in_progress":
         await session.rollback()
-        await _mark_github_reconciliation(session, source_uuid, _owner.owner_id, operation_id, "stale_refresh_outcome_unknown")
+        await _mark_github_reconciliation(session, request, scope, fence, source_uuid, operation_id, "stale_refresh_outcome_unknown")
         raise HTTPException(status_code=409, detail="GitHub refresh operation changed")
     # This must remain the final awaited authorization check after every lifecycle lock.
     try:
         await _require_current_owner_session(request, session, _owner)
     except HTTPException:
         await session.rollback()
-        await _mark_github_reconciliation(session, source_uuid, _owner.owner_id, operation_id, "token_refresh_outcome_unknown")
+        await _mark_github_reconciliation(session, request, scope, fence, source_uuid, operation_id, "token_refresh_outcome_unknown")
         raise
     grant.operation_id = operation_id
     grant.token_revision += 1
@@ -511,20 +633,27 @@ async def refresh_github_authorization(source_id: str, session: Session, request
     operation.state = "completed"
     operation.error_code = None
     operation.resolved_at = datetime.now(UTC)
-    await session.commit()
+    await _publish(session, request, scope, fence)
     return {"state": "ready"}
 
 
 @router.get("/github/oauth/callback")
-async def complete_github_authorization(request: Request, session: Session, owner: OwnerRead) -> RedirectResponse:
+async def complete_github_authorization(
+    request: Request, session: Session, owner: OwnerRead, scope: WorkspaceRead,
+) -> RedirectResponse:
     """Consume one PKCE callback and publish tokens only if every source/session fence is current.
 
     Token exchange is dispatched once after the attempt is durably consumed. A successful explicit reauthorization may rearm paused dirty hints only after the new current binding is established. Any uncertain
     exchange outcome requires a fresh authorization; stale callback results never replace a
-    newer grant or automatically revoke an app-wide user authorization.
+    newer grant or automatically revoke an app-wide user authorization. The callback runs as the
+    browser's selected workspace owner; an attempt whose Source is outside it reads as expired.
+    Access is locked once, before the attempt, and the same ORIGINAL fence is re-admitted for every
+    later transaction.
     """
     settings: Settings = request.app.state.settings
     _configured(settings)
+    flag = _flag(request)
+    actor = scope.user_id
     browser = request.session.pop("github_oauth", None)
     state = request.query_params.get("state", "")
     if not isinstance(browser, dict) or not state or browser.get("state_hash") != oauth.digest(state) or not isinstance(browser.get("browser_nonce"), str):
@@ -534,9 +663,12 @@ async def complete_github_authorization(request: Request, session: Session, owne
     from modules.settings.public import register_request_activity
 
     await register_request_activity(request, session, "github_oauth_callback")
+    fence = await _admit(session, request, scope)
     attempt = await session.scalar(select(GithubOAuthAttempt).where(GithubOAuthAttempt.state_hash == oauth.digest(state)).with_for_update())
     now = datetime.now(UTC)
     if attempt is None or attempt.consumed_at is not None or attempt.expires_at <= now or attempt.session_hash != owner.token_hash or attempt.browser_hash != oauth.digest(browser["browser_nonce"]):
+        raise HTTPException(status_code=400, detail="GitHub authorization expired or was already used")
+    if await sources.get_connector_source(session, attempt.source_id, scope=scope, multi_workspace_enabled=flag) is None:
         raise HTTPException(status_code=400, detail="GitHub authorization expired or was already used")
     source_id, attempt_id = attempt.source_id, attempt.id
     key = settings.connector_credential_encryption_key.get_secret_value()
@@ -548,21 +680,24 @@ async def complete_github_authorization(request: Request, session: Session, owne
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=503, detail="GitHub authorization attempt is unavailable") from exc
     attempt.consumed_at = now
-    await session.commit()
+    await _publish(session, request, scope, fence)
     if "error" in request.query_params:
         return RedirectResponse(url="/settings/sources?github=denied", status_code=303)
     callback_config = urlsplit(settings.github_app_callback_url)
     callback_actual = urlsplit(str(request.url))
     if (callback_actual.scheme, callback_actual.netloc, callback_actual.path) != (callback_config.scheme, callback_config.netloc, callback_config.path):
         raise HTTPException(status_code=400, detail="GitHub callback URL does not match registration")
-    source_fence = await sources.lock_source(session, source_id)
-    _source_row, connector_row, _slots = await provisioning.lock_connector(session, source_id, provisioning._ALL_CREDENTIAL_SLOTS)
+    await _admit(session, request, scope, expected=fence)
+    source_fence, connector_row, _slots = await provisioning.lock_connector(
+        session, source_id, provisioning._ALL_CREDENTIAL_SLOTS, scope=scope,
+        multi_workspace_enabled=flag, expected_access_fence=fence,
+    )
     if source_fence is None or source_fence.status != "active" or source_fence.generation != attempt.source_generation or connector_row is not None and connector_row.desired_revision != attempt.configuration_revision:
         await session.rollback()
         raise HTTPException(status_code=409, detail="GitHub source changed before authorization")
-    coordinator = await session.scalar(select(GithubOAuthCoordinator).where(GithubOAuthCoordinator.owner_id == owner.owner_id).with_for_update())
+    coordinator = await session.scalar(select(GithubOAuthCoordinator).where(GithubOAuthCoordinator.owner_id == actor).with_for_update())
     if coordinator is None:
-        coordinator = GithubOAuthCoordinator(owner_id=owner.owner_id, state="idle")
+        coordinator = GithubOAuthCoordinator(owner_id=actor, state="idle")
         session.add(coordinator)
         await session.flush()
     if coordinator.state != "idle":
@@ -572,16 +707,16 @@ async def complete_github_authorization(request: Request, session: Session, owne
     coordinator.operation_id = attempt_id
     coordinator.error_code = None
     session.add(GithubOAuthOperation(
-        operation_id=attempt_id, owner_id=owner.owner_id, operation_kind="authorization",
+        operation_id=attempt_id, workspace_id=scope.workspace_id, owner_id=actor, operation_kind="authorization",
         source_id=source_id, source_generation=attempt.source_generation,
         configuration_revision=attempt.configuration_revision, token_revision=attempt.expected_token_revision,
         state="in_progress",
     ))
-    await session.commit()
+    await _publish(session, request, scope, fence)
     try:
         await _require_current_owner_session(request, session, owner)
         tokens = await oauth.exchange_code(settings, str(request.url), state=state, verifier=verifier)
-        source = await sources.get_connector_source(session, source_id)
+        source = await sources.get_connector_source(session, source_id, scope=scope, multi_workspace_enabled=flag)
         if source is None or source.provider != "github" or source.status != "active" or source.generation != attempt.source_generation:
             raise ValueError("github_source_fence_stale")
         config = project_github_source_config(source.configuration)
@@ -597,35 +732,44 @@ async def complete_github_authorization(request: Request, session: Session, owne
     except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
         # No exception text is returned or logged because provider libraries may include sensitive request detail.
         await session.rollback()
-        await _mark_github_reconciliation(session, source_id, owner.owner_id, attempt_id, "authorization_outcome_unknown")
+        await _mark_github_reconciliation(session, request, scope, fence, source_id, attempt_id, "authorization_outcome_unknown")
         raise HTTPException(status_code=503, detail="GitHub authorization could not be verified; reconnect to retry") from None
-    source_fence = await sources.lock_source(session, source_id)
-    current_source = await sources.get_connector_source(session, source_id) if source_fence is not None else None
+    try:
+        await _admit(session, request, scope, expected=fence)
+        source_fence, current, _no_slots = await provisioning.lock_connector(
+            session, source_id, (), scope=scope, multi_workspace_enabled=flag, expected_access_fence=fence,
+        )
+    except HTTPException:
+        await session.rollback()
+        await _mark_github_reconciliation(session, request, scope, fence, source_id, attempt_id, "authorization_outcome_unknown")
+        raise
+    current_source = await sources.get_connector_source(session, source_id, scope=scope, multi_workspace_enabled=flag) if source_fence is not None else None
     if source_fence is None or source_fence.status != "active" or source_fence.generation != attempt.source_generation or current_source is None or current_source.provider != "github":
         await session.rollback()
-        await _mark_github_reconciliation(session, source_id, owner.owner_id, attempt_id, "stale_authorization_outcome_unknown")
+        await _mark_github_reconciliation(session, request, scope, fence, source_id, attempt_id, "stale_authorization_outcome_unknown")
         raise HTTPException(status_code=409, detail="GitHub source changed during authorization")
-    current = await session.scalar(select(ConnectorProvisioning).where(ConnectorProvisioning.source_id == source_id).with_for_update())
-    current_source = await sources.get_connector_source(session, source_id)
     current_revision = current.desired_revision if current else 0
     grant = await session.scalar(select(GithubOAuthGrant).where(GithubOAuthGrant.source_id == source_id).with_for_update())
-    coordinator = await session.scalar(select(GithubOAuthCoordinator).where(GithubOAuthCoordinator.owner_id == owner.owner_id).with_for_update())
+    coordinator = await session.scalar(select(GithubOAuthCoordinator).where(GithubOAuthCoordinator.owner_id == actor).with_for_update())
     actual_revision = grant.token_revision if grant else 0
     if current_source is None or current_source.provider != "github" or current_source.status != "active" or current_source.generation != attempt.source_generation or current_revision != attempt.configuration_revision or actual_revision != attempt.expected_token_revision or coordinator is None or coordinator.state != "authorizing" or coordinator.operation_id != attempt_id:
         await session.rollback()
-        await _mark_github_reconciliation(session, source_id, owner.owner_id, attempt_id, "stale_authorization_outcome_unknown")
+        await _mark_github_reconciliation(session, request, scope, fence, source_id, attempt_id, "stale_authorization_outcome_unknown")
         raise HTTPException(status_code=409, detail="A newer GitHub configuration or connection requires reconnecting")
-    operation = await session.scalar(select(GithubOAuthOperation).where(GithubOAuthOperation.operation_id == attempt_id).with_for_update())
-    if operation is None or operation.owner_id != owner.owner_id or operation.operation_kind != "authorization" or operation.state != "in_progress":
+    operation = await session.scalar(select(GithubOAuthOperation).where(
+        GithubOAuthOperation.operation_id == attempt_id,
+        GithubOAuthOperation.workspace_id == scope.workspace_id,
+    ).with_for_update())
+    if operation is None or operation.owner_id != actor or operation.operation_kind != "authorization" or operation.state != "in_progress":
         await session.rollback()
-        await _mark_github_reconciliation(session, source_id, owner.owner_id, attempt_id, "stale_authorization_outcome_unknown")
+        await _mark_github_reconciliation(session, request, scope, fence, source_id, attempt_id, "stale_authorization_outcome_unknown")
         raise HTTPException(status_code=409, detail="GitHub authorization operation changed")
     # Revalidate after all locked rows, immediately before publishing the grant.
     try:
         await _require_current_owner_session(request, session, owner)
     except HTTPException:
         await session.rollback()
-        await _mark_github_reconciliation(session, source_id, owner.owner_id, attempt_id, "authorization_outcome_unknown")
+        await _mark_github_reconciliation(session, request, scope, fence, source_id, attempt_id, "authorization_outcome_unknown")
         raise
     operation_id = uuid4()
     encrypted_tokens = oauth._token_cipher(key, source_id, operation_id, attempt.source_generation, attempt.configuration_revision, tokens)
@@ -651,6 +795,7 @@ async def complete_github_authorization(request: Request, session: Session, owne
 
     await connectors.reconcile_github_source_hints_lifecycle(
         session, source_id=source_id, source_generation=attempt.source_generation, active=True,
+        scope=scope, multi_workspace_enabled=flag,
     )
     coordinator.state = "idle"
     coordinator.operation_id = None
@@ -658,24 +803,30 @@ async def complete_github_authorization(request: Request, session: Session, owne
     operation.state = "completed"
     operation.error_code = None
     operation.resolved_at = datetime.now(UTC)
-    await session.commit()
+    await _publish(session, request, scope, fence)
     return RedirectResponse(url="/settings/sources?github=connected", status_code=303)
 
 
 @router.get("/{source_id}/github/summary")
-async def github_project_summary(source_id: str, session: Session, _owner: OwnerRead) -> dict[str, object]:
+async def github_project_summary(
+    source_id: str, session: Session, request: Request, _owner: OwnerRead, scope: WorkspaceRead,
+) -> dict[str, object]:
     """Return canonical mapped GitHub counts and the latest observation time for one github source.
 
     Counts come only from the Timeline public API, i.e. from records that completed collection and
     mapping. ``live_verified`` is always false: no live provider check backs these numbers.
     """
+    flag = _flag(request)
+    await _admit(session, request, scope, lock=False)
     source_uuid = UUID(source_id)
-    source = await sources.get_connector_source(session, source_uuid)
+    source = await sources.get_connector_source(session, source_uuid, scope=scope, multi_workspace_enabled=flag)
     if source is None or source.provider != "github":
         raise HTTPException(status_code=404, detail="GitHub source not found")
     from modules.timeline import public as timeline
 
-    counts, latest = await timeline.summarize_source_events(session, source_uuid, "github_")
+    counts, latest = await timeline.summarize_source_events(
+        session, source_uuid, "github_", scope=scope, multi_workspace_enabled=flag,
+    )
     return {
         "resource_counts": {
             "repositories": 1 if counts else 0, "issues": counts.get("github_issue", 0),
@@ -687,38 +838,67 @@ async def github_project_summary(source_id: str, session: Session, _owner: Owner
     }
 
 
+def _peer_inventory(github_user_id: str, scope: WorkspaceContext) -> Any:
+    """Select token-bearing same-GitHub-user grants of Sources in the caller's workspace only.
+
+    The workspace predicate comes from the Sources lifecycle projection and is joined before ordering
+    and LIMIT 101, so another workspace's grants can neither appear nor crowd out this inventory.
+    ponytail: peers of the same GitHub user in other workspaces are outside this inventory; GitHub's
+    app/user-wide revoke still reaches them remotely, and their Source reports it on its next use.
+    """
+    lifecycle = sources.ingestion_lifecycle_projection(scope=scope).subquery()
+    return select(
+        GithubOAuthGrant.source_id, GithubOAuthGrant.source_generation,
+        GithubOAuthGrant.configuration_revision, GithubOAuthGrant.token_revision, GithubOAuthGrant.state,
+    ).join(lifecycle, lifecycle.c.id == GithubOAuthGrant.source_id).where(
+        GithubOAuthGrant.github_user_id == github_user_id, GithubOAuthGrant.encrypted_tokens.is_not(None),
+    ).order_by(GithubOAuthGrant.source_id).limit(101)
+
+
 @router.get("/{source_id}/github/peers")
-async def list_github_grant_peers(source_id: str, session: Session, _owner: OwnerRead) -> dict[str, object]:
+async def list_github_grant_peers(
+    source_id: str, session: Session, request: Request, _owner: OwnerRead, scope: WorkspaceRead,
+) -> dict[str, object]:
     """Return a bounded, secret-free inventory that must be reviewed before app-wide revocation."""
-    parsed_id = __import__("uuid").UUID(source_id)
+    flag = _flag(request)
+    await _admit(session, request, scope, lock=False)
+    parsed_id = UUID(source_id)
+    if await sources.get_connector_source(session, parsed_id, scope=scope, multi_workspace_enabled=flag) is None:
+        raise HTTPException(status_code=404, detail="Source not found")
     current_user_id = await session.scalar(select(GithubOAuthGrant.github_user_id).where(GithubOAuthGrant.source_id == parsed_id))
     if current_user_id is None:
         return {"complete": True, "peers": []}
-    rows = list((await session.execute(select(
-        GithubOAuthGrant.source_id, GithubOAuthGrant.source_generation,
-        GithubOAuthGrant.configuration_revision, GithubOAuthGrant.token_revision, GithubOAuthGrant.state,
-    ).where(GithubOAuthGrant.github_user_id == current_user_id, GithubOAuthGrant.encrypted_tokens.is_not(None)).order_by(GithubOAuthGrant.source_id).limit(101))).all())
+    rows = list((await session.execute(_peer_inventory(current_user_id, scope))).all())
     if len(rows) > 100:
         return {"complete": False, "peers": []}
     return {"complete": True, "github_user_id": current_user_id, "peers": [{"source_id": str(item.source_id), "source_generation": item.source_generation, "configuration_revision": item.configuration_revision, "token_revision": item.token_revision, "state": item.state} for item in rows]}
 
 
 @router.post("/{source_id}/github/disconnect")
-async def revoke_github_grant(source_id: str, payload: DisconnectRequest, session: Session, request: Request, _owner: OwnerWrite) -> dict[str, str]:
+async def revoke_github_grant(
+    source_id: str, payload: DisconnectRequest, session: Session, request: Request, _owner: OwnerWrite,
+    scope: WorkspaceWrite,
+) -> dict[str, str]:
     """Fence every reviewed local peer atomically before GitHub's app/user-wide grant revoke.
 
-    Peer inventory is bounded and rechecked under row locks; source rows are locked in sorted
-    order before provisioning and grant rows. Remote uncertainty leaves local access fenced.
+    Peer inventory is workspace-scoped, bounded and rechecked under row locks; the access fence is
+    locked first, then source rows in sorted order before provisioning and grant rows. The same
+    ORIGINAL fence is re-admitted after the provider call. Remote uncertainty leaves local access fenced.
     """
     _configured(request.app.state.settings)
-    target_id = __import__("uuid").UUID(source_id)
+    flag = _flag(request)
+    actor = scope.user_id
+    target_id = UUID(source_id)
+    fence = await _admit(session, request, scope)
+    if await sources.get_connector_source(session, target_id, scope=scope, multi_workspace_enabled=flag) is None:
+        raise HTTPException(status_code=404, detail="Source not found")
     target_user_id = await session.scalar(select(GithubOAuthGrant.github_user_id).where(GithubOAuthGrant.source_id == target_id))
     if target_user_id is None:
         return {"state": "revoked"}
-    peer_inventory = select(
+    peer_inventory = _peer_inventory(target_user_id, scope).with_only_columns(
         GithubOAuthGrant.source_id, GithubOAuthGrant.source_generation,
         GithubOAuthGrant.configuration_revision, GithubOAuthGrant.token_revision,
-    ).where(GithubOAuthGrant.github_user_id == target_user_id, GithubOAuthGrant.encrypted_tokens.is_not(None)).order_by(GithubOAuthGrant.source_id).limit(101)
+    )
     peer_rows = list((await session.execute(peer_inventory)).all())
     if len(peer_rows) > 100:
         raise HTTPException(status_code=409, detail="GitHub grant peer inventory is too large; revocation is unavailable")
@@ -730,11 +910,13 @@ async def revoke_github_grant(source_id: str, payload: DisconnectRequest, sessio
         reviewed = expected.get(str(item.source_id))
         if reviewed is None or (item.source_generation, item.configuration_revision, item.token_revision) != (reviewed.source_generation, reviewed.configuration_revision, reviewed.token_revision):
             raise HTTPException(status_code=409, detail="A GitHub source revision changed; review the current affected sources")
-        fence = await sources.lock_source(session, item.source_id)
-        if fence is None or fence.status == "archived" or fence.status == "active" and fence.generation != item.source_generation or fence.status == "paused" and fence.generation not in {item.source_generation, item.source_generation + 1}:
+        source_lock = await sources.lock_source(
+            session, item.source_id, scope=scope, multi_workspace_enabled=flag, expected_access_fence=fence,
+        )
+        if source_lock is None or source_lock.status == "archived" or source_lock.status == "active" and source_lock.generation != item.source_generation or source_lock.status == "paused" and source_lock.generation not in {item.source_generation, item.source_generation + 1}:
             raise HTTPException(status_code=409, detail="A GitHub source lifecycle changed; review current affected sources")
     key = request.app.state.settings.connector_credential_encryption_key.get_secret_value()
-    coordinator = await session.scalar(select(GithubOAuthCoordinator).where(GithubOAuthCoordinator.owner_id == _owner.owner_id).with_for_update())
+    coordinator = await session.scalar(select(GithubOAuthCoordinator).where(GithubOAuthCoordinator.owner_id == actor).with_for_update())
     explicit_revoke_retry = bool(
         coordinator is not None and coordinator.state in {"reconciliation_required", "revoking"}
         and coordinator.error_code in {"provider_revoke_outcome_unknown", "provider_revoke_pending"}
@@ -745,7 +927,7 @@ async def revoke_github_grant(source_id: str, payload: DisconnectRequest, sessio
         await session.rollback()
         raise HTTPException(status_code=409, detail="A GitHub connection operation needs reconciliation before disconnect")
     if coordinator is None:
-        coordinator = GithubOAuthCoordinator(owner_id=_owner.owner_id, state="idle")
+        coordinator = GithubOAuthCoordinator(owner_id=actor, state="idle")
         session.add(coordinator)
         await session.flush()
     # A newly authorized peer may have appeared while this request waited for the
@@ -764,7 +946,10 @@ async def revoke_github_grant(source_id: str, payload: DisconnectRequest, sessio
     coordinator.error_code = "provider_revoke_pending"
     revocation_operation = coordinator.operation_id if explicit_revoke_retry else uuid4()
     coordinator.operation_id = revocation_operation
-    operation = await session.scalar(select(GithubOAuthOperation).where(GithubOAuthOperation.operation_id == revocation_operation).with_for_update())
+    operation = await session.scalar(select(GithubOAuthOperation).where(
+        GithubOAuthOperation.operation_id == revocation_operation,
+        GithubOAuthOperation.workspace_id == scope.workspace_id,
+    ).with_for_update())
     origin = next((row for row in peer_rows if row.source_id == target_id), peer_rows[0])
     peer_snapshot = [{
         "source_id": str(item.source_id), "source_generation": item.source_generation,
@@ -772,7 +957,8 @@ async def revoke_github_grant(source_id: str, payload: DisconnectRequest, sessio
     } for item in peer_rows]
     if operation is None:
         operation = GithubOAuthOperation(
-            operation_id=revocation_operation, owner_id=_owner.owner_id, operation_kind="revoke",
+            operation_id=revocation_operation, workspace_id=scope.workspace_id, owner_id=actor,
+            operation_kind="revoke",
             source_id=origin.source_id, source_generation=origin.source_generation,
             configuration_revision=origin.configuration_revision, token_revision=origin.token_revision,
             peer_inventory=peer_snapshot,
@@ -781,8 +967,10 @@ async def revoke_github_grant(source_id: str, payload: DisconnectRequest, sessio
     operation.state, operation.error_code, operation.resolved_at = "in_progress", "provider_revoke_pending", None
     token = None
     for item in sorted(peer_rows, key=lambda row: str(row.source_id)):
-        source_fence = await sources.lock_source(session, item.source_id)
-        current_source = await sources.get_connector_source(session, item.source_id) if source_fence is not None else None
+        source_fence = await sources.lock_source(
+            session, item.source_id, scope=scope, multi_workspace_enabled=flag, expected_access_fence=fence,
+        )
+        current_source = await sources.get_connector_source(session, item.source_id, scope=scope, multi_workspace_enabled=flag) if source_fence is not None else None
         row = await session.scalar(select(ConnectorProvisioning).where(ConnectorProvisioning.source_id == item.source_id).with_for_update().execution_options(populate_existing=True))
         if row is None or row.desired_revision != item.configuration_revision:
             await session.rollback()
@@ -805,45 +993,61 @@ async def revoke_github_grant(source_id: str, payload: DisconnectRequest, sessio
         if token is None:
             opened = oauth._open_token_cipher(key, locked.encrypted_tokens, locked.source_id, locked.operation_id, locked.source_generation, locked.configuration_revision)
             token = opened.get("access_token")
-        source = await sources.pause_source_for_connector(session, item.source_id)
+        source = await sources.pause_source_for_connector(
+            session, item.source_id, scope=scope, multi_workspace_enabled=flag, expected_access_fence=fence,
+        )
         if source is None:
             await session.rollback()
             raise HTTPException(status_code=409, detail="A GitHub source lifecycle changed")
         locked.state = "revoked"
         locked.error_code = "provider_revoke_pending"
-    await session.commit()
+    await _publish(session, request, scope, fence)
     if not isinstance(token, str):
         coordinator.state, coordinator.operation_id, coordinator.error_code = "idle", None, None
         operation.state, operation.error_code, operation.resolved_at = "completed", None, datetime.now(UTC)
-        await session.commit()
+        await _publish(session, request, scope, fence)
         return {"state": "revoked"}
     await _require_current_owner_session(request, session, _owner)
     try:
         await oauth.revoke_github_grant(request.app.state.settings, token)
     except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
         # Local grants remain fenced; the owner can see cleanup is unresolved without exposing credentials.
-        coordinator = await session.scalar(select(GithubOAuthCoordinator).where(GithubOAuthCoordinator.owner_id == _owner.owner_id).with_for_update())
-        if coordinator is not None and coordinator.operation_id == revocation_operation:
-            coordinator.state = "reconciliation_required"
-            coordinator.error_code = "provider_revoke_outcome_unknown"
-            operation = await session.scalar(select(GithubOAuthOperation).where(GithubOAuthOperation.operation_id == revocation_operation).with_for_update())
-            if operation is not None:
-                operation.state = "review_required"
-                operation.error_code = "provider_revoke_outcome_unknown"
-            await session.commit()
+        try:
+            await _admit(session, request, scope, expected=fence)
+        except HTTPException as exc:
+            await session.rollback()
+            if exc.status_code not in _DENIED:
+                raise
+        else:
+            coordinator = await session.scalar(select(GithubOAuthCoordinator).where(GithubOAuthCoordinator.owner_id == actor).with_for_update())
+            if coordinator is not None and coordinator.operation_id == revocation_operation:
+                coordinator.state = "reconciliation_required"
+                coordinator.error_code = "provider_revoke_outcome_unknown"
+                operation = await session.scalar(select(GithubOAuthOperation).where(
+                    GithubOAuthOperation.operation_id == revocation_operation,
+                    GithubOAuthOperation.workspace_id == scope.workspace_id,
+                ).with_for_update())
+                if operation is not None:
+                    operation.state = "review_required"
+                    operation.error_code = "provider_revoke_outcome_unknown"
+                await _publish(session, request, scope, fence)
         raise HTTPException(status_code=503, detail="Local GitHub sources are disconnected; provider revocation outcome is unknown") from None
+    await _admit(session, request, scope, expected=fence)
     for item in peer_rows:
         locked = await session.scalar(select(GithubOAuthGrant).where(GithubOAuthGrant.source_id == item.source_id).with_for_update())
         if locked is not None and locked.state == "revoked":
             locked.encrypted_tokens = None
             locked.error_code = None
-    coordinator = await session.scalar(select(GithubOAuthCoordinator).where(GithubOAuthCoordinator.owner_id == _owner.owner_id).with_for_update())
+    coordinator = await session.scalar(select(GithubOAuthCoordinator).where(GithubOAuthCoordinator.owner_id == actor).with_for_update())
     if coordinator is not None and coordinator.operation_id == revocation_operation:
         coordinator.state = "idle"
         coordinator.operation_id = None
         coordinator.error_code = None
-    operation = await session.scalar(select(GithubOAuthOperation).where(GithubOAuthOperation.operation_id == revocation_operation).with_for_update())
+    operation = await session.scalar(select(GithubOAuthOperation).where(
+        GithubOAuthOperation.operation_id == revocation_operation,
+        GithubOAuthOperation.workspace_id == scope.workspace_id,
+    ).with_for_update())
     if operation is not None:
         operation.state, operation.error_code, operation.resolved_at = "completed", None, datetime.now(UTC)
-    await session.commit()
+    await _publish(session, request, scope, fence)
     return {"state": "revoked"}
