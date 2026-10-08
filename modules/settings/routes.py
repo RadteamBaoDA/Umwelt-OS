@@ -26,7 +26,10 @@ from modules.settings.schemas import (
     OwnerPreferencesUpdate,
     RetentionSettingsRead,
     RetentionSettingsUpdate,
+    TranslationSettingsRead,
+    TranslationSettingsUpdate,
 )
+from modules.translations import public as translations
 
 router = APIRouter(prefix="/api/v1/settings", tags=["settings"])
 Session = Annotated[AsyncSession, Depends(get_session)]
@@ -67,6 +70,23 @@ async def read_retention(request: Request, session: Session, _owner: OwnerRead) 
 async def patch_retention(value: RetentionSettingsUpdate, request: Request, session: Session, _owner: OwnerWrite) -> RetentionSettingsRead:
     """Save a revision-fenced trace-retention policy; source and document history stay retained."""
     result = await lifecycle.save_retention_settings(session, value, scope=_owner, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled, auth_sessions=(authenticated_session_ref(request),))
+    await session.commit()
+    return result
+
+
+@router.get("/translation", response_model=TranslationSettingsRead)
+async def read_translation(request: Request, session: Session, member: OwnerRead) -> TranslationSettingsRead:
+    """Read-only workspace translation projection; any member may read it, none can write it."""
+    return await translations.read_translation_settings(
+        session, scope=member, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
+
+
+@router.patch("/translation", response_model=TranslationSettingsRead)
+async def patch_translation(value: TranslationSettingsUpdate, request: Request, session: Session, _owner: OwnerWrite) -> TranslationSettingsRead:
+    """Owner-only CAS update; 409 on stale revision, 403 for members."""
+    result = await translations.save_translation_settings(
+        session, value, scope=_owner, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        auth_sessions=(authenticated_session_ref(request),))
     await session.commit()
     return result
 
