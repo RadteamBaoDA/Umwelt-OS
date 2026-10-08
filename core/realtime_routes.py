@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
+import anyio
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
@@ -114,9 +115,12 @@ class _PermitResponse(StreamingResponse):
         finally:
             # Starlette never closes body_iterator (e.g. a disconnect cancels the send task mid-stream);
             # close it here so the generator's finally (permit release, rollback) runs now, not at GC.
+            # On disconnect the enclosing scope is already cancelled: shield (bounded) so the generator's
+            # rollback/close completes and the pooled connection returns instead of being hard-terminated.
             aclose = getattr(self.body_iterator, "aclose", None)
             if aclose is not None:
-                await aclose()
+                with anyio.CancelScope(shield=True), anyio.move_on_after(2):
+                    await aclose()
             if not self._started.is_set():
                 self._started.set()  # idempotent guard against double release
                 self._semaphore.release()

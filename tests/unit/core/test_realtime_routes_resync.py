@@ -49,3 +49,39 @@ def test_stale_epoch_cursor_first_frame_is_epoch_changed_resync(monkeypatch) -> 
         "reason": "epoch_changed",
         "snapshot_cursor": ReplayCursor(epoch=head.epoch, sequence=7).encode(),
     }
+
+
+def test_permit_response_closes_body_iterator_shielded_on_cancelled_scope() -> None:
+    import anyio
+
+    done: list[bool] = []
+
+    class _Body:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+        async def aclose(self) -> None:
+            await asyncio.sleep(0)  # a cancelled scope would raise here without the shield
+            done.append(True)
+
+    async def run() -> None:
+        sem = asyncio.Semaphore(1)
+        await sem.acquire()
+        response = realtime_routes._PermitResponse(_Body(), asyncio.Event(), sem)  # type: ignore[arg-type]
+
+        async def receive():
+            return {"type": "http.disconnect"}
+
+        async def send(_message):
+            return None
+
+        with anyio.CancelScope() as scope:
+            scope.cancel()
+            await response({"type": "http", "asgi": {"spec_version": "2.4"}}, receive, send)
+        assert sem._value == 1  # permit released
+
+    asyncio.run(run())
+    assert done == [True]
