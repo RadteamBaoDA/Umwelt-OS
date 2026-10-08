@@ -4,7 +4,7 @@ import asyncio
 import json
 import math
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime
 from typing import Any, Literal, NotRequired, TypedDict, cast
@@ -192,6 +192,7 @@ class HarnessContext:
         workflow_version: str = WORKFLOW_VERSION,
         prompt_version: str = PROMPT_VERSION,
         profile_snapshot: dict[str, Any] | None = None,
+        modules: Mapping[str, Any] | None = None,
     ) -> None:
         """Bind the claimed owner and current worker services outside checkpoint state.
 
@@ -220,6 +221,8 @@ class HarnessContext:
         self.workflow_version = workflow_version
         self.prompt_version = prompt_version
         self.profile_snapshot = profile_snapshot
+        # Workspace-effective module map; never written to the shared ToolRegistry (O1).
+        self.modules = modules
         self.model_send_attempts = 0
         self.unobservable_model_usage = False
         # 0 for a run's own profile, 1 inside a supervisor handoff; depth never exceeds 1.
@@ -354,7 +357,7 @@ class HarnessContext:
                     multi_workspace_enabled=self.multi_workspace_enabled,
                 )
             disabled = {item.id for item in lifecycle.modules if item.explicitly_disabled}
-            self.registry.set_module_registry(effective_modules(disabled, register_modules()))
+            self.modules = effective_modules(disabled, register_modules())
             if not next((item.enabled for item in lifecycle.modules if item.id == "agents"), False):
                 return False
             row = await self._run_snapshot()
@@ -362,7 +365,7 @@ class HarnessContext:
                 return False
             available = {
                 definition.name: definition
-                for definition in self.registry.list_tools(allowed_tools=self.allowed_tools)
+                for definition in self.registry.list_tools(allowed_tools=self.allowed_tools, modules=self.modules)
             }
             for name in self.allowed_tools:
                 expected = self.tool_contracts.get(name, {})
@@ -370,6 +373,8 @@ class HarnessContext:
                 if current is None or not self.supports_definition(current, expected):
                     return False
             return True
+        except TypeError:
+            raise
         except Exception:  # noqa: BLE001  # fail-closed boundary: any failure denies/degrades
             return False
 
@@ -415,6 +420,8 @@ class HarnessContext:
                 original_fence=self.original_fence,
                 multi_workspace_enabled=self.multi_workspace_enabled,
             )
+        except TypeError:
+            raise
         except Exception:  # noqa: BLE001  # fail-closed boundary: any failure denies/degrades
             return False
 
@@ -442,6 +449,8 @@ class HarnessContext:
                 original_fence=self.original_fence,
                 multi_workspace_enabled=self.multi_workspace_enabled,
             )
+        except TypeError:
+            raise
         except Exception:  # noqa: BLE001  # fail-closed boundary: any failure denies/degrades
             return False
 
@@ -469,7 +478,7 @@ class HarnessContext:
             if not await revalidate_native_output_fences(
                 self.session_factory, self.decode_fences(state["source_fences"]), principal,
                 destination_kind="remote",
-                multi_workspace_enabled=self.multi_workspace_enabled,
+            multi_workspace_enabled=self.multi_workspace_enabled,
             ):
                 raise RunCancelled("Source evidence is no longer authorized")
         config = await self.read_gateway_config()
@@ -542,12 +551,12 @@ class HarnessContext:
         if state.get("source_fences") and not await revalidate_native_output_fences(
             self.session_factory, self.decode_fences(state["source_fences"]), principal,
             destination_kind="remote",
-                multi_workspace_enabled=self.multi_workspace_enabled,
+            multi_workspace_enabled=self.multi_workspace_enabled,
         ):
             raise RunCancelled("Earlier source evidence is no longer authorized")
         if not await revalidate_native_output_fences(
             self.session_factory, fence, principal, destination_kind="remote",
-                multi_workspace_enabled=self.multi_workspace_enabled,
+            multi_workspace_enabled=self.multi_workspace_enabled,
         ):
             raise RunCancelled("Search source scope changed before embedding")
         current_mapping = current.aliases.get("embedding")
@@ -770,7 +779,7 @@ async def _reserve_step(
 def _tool_specs(context: HarnessContext) -> list[dict[str, Any]]:
     """Project exact current registered READ_ONLY tools to the OpenAI-compatible call format."""
     items = {
-        item.name: item for item in context.registry.list_tools(allowed_tools=context.allowed_tools)
+        item.name: item for item in context.registry.list_tools(allowed_tools=context.allowed_tools, modules=context.modules)
     }
     if set(items) != set(context.allowed_tools):
         raise RunIncompatible("A persisted workflow tool is no longer registered")

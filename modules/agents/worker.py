@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import math
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -62,6 +62,7 @@ logger = logging.getLogger(__name__)
 SEGMENT_TIMEOUT_SECONDS = 145
 RECOVERY_AFTER_SECONDS = 150
 RECOVERY_ACCOUNTING_SECONDS = 150
+RECONCILE_MAX_PAGES = 4
 MAX_RECONCILE_ROWS = 25
 _activity_reconcile_cursor: UUID | None = None
 
@@ -477,6 +478,7 @@ async def process_agent_run(ctx: dict[str, object], run_id: str, dispatch_genera
             )
             return
         scope, original_fence = epoch
+        modules: Mapping[str, Any] | None = None
         try:
             await admit_run(identity_session, identity, multi_workspace_enabled=flag)
         except HTTPException:
@@ -497,15 +499,19 @@ async def process_agent_run(ctx: dict[str, object], run_id: str, dispatch_genera
         from core.modules import effective_modules, register_modules
 
         disabled = {item.id for item in availability.modules if item.explicitly_disabled}
-        registry.set_module_registry(effective_modules(disabled, register_modules()))
+        modules = effective_modules(disabled, register_modules())
     async with _run_lease(engine, parsed_id) as lease:
         if lease is None:
             return
         connection, key = lease
-        row = await _claim_run(
-            session_factory, parsed_id, dispatch_generation,
-            scope=scope, original_fence=original_fence, multi_workspace_enabled=flag,
-        )
+        try:
+            row = await _claim_run(
+                session_factory, parsed_id, dispatch_generation,
+                scope=scope, original_fence=original_fence, multi_workspace_enabled=flag,
+            )
+        except HTTPException:
+            await _terminate_unadmitted(session_factory, parsed_id, scope.workspace_id, "workspace_access_changed")
+            return
         if row is None:
             return
         supported_versions = {
@@ -531,7 +537,7 @@ async def process_agent_run(ctx: dict[str, object], run_id: str, dispatch_genera
                 connection, key, asyncio.get_running_loop().time(), frozenset(row.allowed_tools),
                 dict(row.tool_contracts), row.active_seconds,
                 workflow_version=row.workflow_version, prompt_version=row.prompt_version,
-                profile_snapshot=profile_snapshot,
+                profile_snapshot=profile_snapshot, modules=modules,
             )
             await _finish_run(session_factory, failed_context, state=None, status="failed", error_code="incompatible_run_version")
             return
@@ -541,7 +547,7 @@ async def process_agent_run(ctx: dict[str, object], run_id: str, dispatch_genera
             connection, key, asyncio.get_running_loop().time(), frozenset(row.allowed_tools),
             dict(row.tool_contracts), row.active_seconds,
             workflow_version=row.workflow_version, prompt_version=row.prompt_version,
-            profile_snapshot=profile_snapshot,
+            profile_snapshot=profile_snapshot, modules=modules,
         )
         await _refresh_stale_mcp_tools(ctx, registry, row, scope)
         state: dict[str, Any] | None = None
@@ -663,39 +669,52 @@ async def reconcile_agent_dispatch(ctx: dict[str, object]) -> int:
         )
     if rows:
         _activity_reconcile_cursor = rows[-1][0]
+    queued: list[Any] = []
     async with session_factory() as session:
-        queued = list((await session.execute(
-            select(AgentRun.id, AgentRun.dispatch_generation, AgentRun.workspace_id, AgentRun.owner_id)
-            .where(AgentRun.status == "queued", AgentRun.cancel_requested.is_(False))
-            .order_by(AgentRun.created_at).limit(MAX_RECONCILE_ROWS)
-        )).all())
-        # Module enablement is per workspace now (Recipe W): resolve each workspace's current owner
-        # scope once per page and skip, without touching rows, workspaces whose Agents are disabled
-        # or whose owner lineage is unavailable. ponytail: a page of disabled-workspace rows can
-        # delay later ones; add a keyset cursor if disabled workspaces ever dominate the queue.
+        # Module enablement is per workspace (Recipe W). Workspaces with Agents disabled are excluded
+        # from the next page query so they cannot starve other workspaces; rows whose owner lineage
+        # is unavailable are enqueued so process_agent_run terminalizes them (Recipe J).
         enabled: dict[tuple[UUID, int], bool] = {}
-        for _run_id, _generation, workspace_id, owner_id in queued:
-            if (workspace_id, owner_id) in enabled:
-                continue
-            owner = await workspaces.resolve_workspace_owner_context(
-                session, workspace_id, multi_workspace_enabled=flag,
-            )
-            if owner is None or owner.user_id != owner_id:
-                enabled[(workspace_id, owner_id)] = False
-                continue
-            from modules.settings.public import module_is_enabled
+        disabled_workspaces: set[UUID] = set()
+        for _page in range(RECONCILE_MAX_PAGES):
+            queue_stmt = select(
+                AgentRun.id, AgentRun.dispatch_generation, AgentRun.workspace_id, AgentRun.owner_id,
+            ).where(AgentRun.status == "queued", AgentRun.cancel_requested.is_(False))
+            if disabled_workspaces:
+                queue_stmt = queue_stmt.where(AgentRun.workspace_id.not_in(disabled_workspaces))
+            page = list((await session.execute(
+                queue_stmt.order_by(AgentRun.created_at).limit(MAX_RECONCILE_ROWS)
+            )).all())
+            new_disabled = False
+            queued = []
+            for row in page:
+                _run_id, _generation, workspace_id, owner_id = row
+                if (workspace_id, owner_id) not in enabled:
+                    owner = await workspaces.resolve_workspace_owner_context(
+                        session, workspace_id, multi_workspace_enabled=flag,
+                    )
+                    if owner is None or owner.user_id != owner_id:
+                        enabled[(workspace_id, owner_id)] = True
+                    else:
+                        from modules.settings.public import module_is_enabled
 
-            job_scope = InternalJobScope(
-                workspace_id=workspace_id, actor_user_id=owner.user_id,
-                membership_revision=owner.membership_revision,
-            )
-            enabled[(workspace_id, owner_id)] = await module_is_enabled(
-                session, "agents", scope=job_scope, multi_workspace_enabled=flag,
-            )
+                        job_scope = InternalJobScope(
+                            workspace_id=workspace_id, actor_user_id=owner.user_id,
+                            membership_revision=owner.membership_revision,
+                        )
+                        enabled[(workspace_id, owner_id)] = await module_is_enabled(
+                            session, "agents", scope=job_scope, multi_workspace_enabled=flag,
+                        )
+                        if not enabled[(workspace_id, owner_id)]:
+                            disabled_workspaces.add(workspace_id)
+                            new_disabled = True
+                if enabled[(workspace_id, owner_id)]:
+                    queued.append(row)
+            # A full page that held disabled rows may hide enabled ones behind it: re-query without them.
+            if not (new_disabled and len(page) == MAX_RECONCILE_ROWS):
+                break
     enqueued = 0
     for run_id, generation, workspace_id, owner_id in queued:
-        if not enabled.get((workspace_id, owner_id), False):
-            continue
         try:
             enqueued += int(await _enqueue_generation(redis, run_id, generation))
         except Exception:  # noqa: BLE001, S112  # best-effort cleanup/optional step; failure intentionally ignored

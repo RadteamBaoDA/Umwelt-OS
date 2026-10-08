@@ -3,6 +3,7 @@
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import UUID, uuid4, uuid5
 
 from fastapi import HTTPException
@@ -358,13 +359,13 @@ async def decision(
         owner_all_sources=True, destinations=frozenset(), capabilities=frozenset({"source.read"}),
     )
     try:
-        fences_current = await revalidate_native_output_fences(
-            session_factory,
-            _restore_fences(candidate.source_fences), principal, destination_kind="remote",
-            multi_workspace_enabled=multi_workspace_enabled,
-        )
+        restored: dict[str, Any] | None = _restore_fences(candidate.source_fences)
     except (TypeError, ValueError, KeyError):
-        fences_current = False
+        restored = None
+    fences_current = restored is not None and await revalidate_native_output_fences(
+        session_factory, restored, principal, destination_kind="remote",
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
     if not fences_current:
         return await _cancel_stale_action(
             session, candidate, "source_permissions_changed",
@@ -439,8 +440,9 @@ async def decision(
             row.status = "requires_review"
             row.resolved_at = datetime.now(UTC)
             await commit_with_replay(
-            session, (), scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
-        )
+                session, (), scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                access_fence=fence,
+            )
             return row, run
         row.status = "approved"
         row.resolved_at = datetime.now(UTC)
@@ -455,8 +457,8 @@ async def decision(
         "kind": "status", "status": "queued", "created_at": datetime.now(UTC).isoformat(),
     }]
     await commit_with_replay(
-            session, (), scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
-        )
+        session, (), scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+    )
     await session.refresh(row)
     await session.refresh(run)
     return row, run

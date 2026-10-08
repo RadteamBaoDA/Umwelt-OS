@@ -276,7 +276,12 @@ async def revalidate_browser_run_authority(
     """
     from modules.chat import public as chat
 
-    fence = await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    try:
+        fence = await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    except HTTPException as exc:
+        if exc.status_code in {401, 403, 404, 409}:
+            return False
+        raise
     if authorization.owner_id != actor(scope):
         return False
     run = await session.scalar(select(AgentRun).where(
@@ -386,9 +391,10 @@ async def create_profile_run_in_uow(
     The idempotency key is scoped to the workspace, owner and session digest. A byte-identical
     retry returns its original run; reusing the key for different prompt, profile revision, or
     conversation is a 409. Token budgets remain explicitly unavailable and are rejected before
-    worker/model egress. The access fence is locked before any other lock and its membership and
-    configuration revisions are stored on the run as the original epoch Recipe J later compares;
-    the caller commits with ``commit_with_replay`` using a fence taken by ``lock_write_admission``.
+    worker/model egress. The caller must take ``lock_write_admission`` before any other lock; the
+    lock taken here is a re-entrant re-check. The fence's membership and configuration revisions
+    are stored on the run as the original epoch Recipe J later compares, and the caller commits with
+    ``commit_with_replay`` using the fence returned by ``lock_write_admission``.
     """
     fence = await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
     owner_id = actor(scope)
@@ -666,13 +672,13 @@ async def _read_current_result(
     if row.source_fences and result.answer is not None and session_factory is not None:
         principal = _result_principal(row)
         try:
-            sink = _restore_fences(row.source_fences)
-            current = bool(principal and await revalidate_native_output_fences(
-                session_factory, sink, principal, destination_kind="remote",
-                multi_workspace_enabled=multi_workspace_enabled,
-            ))
+            sink: dict[str, Any] | None = _restore_fences(row.source_fences)
         except (TypeError, ValueError, KeyError):
-            current = False
+            sink = None
+        current = bool(sink is not None and principal and await revalidate_native_output_fences(
+            session_factory, sink, principal, destination_kind="remote",
+            multi_workspace_enabled=multi_workspace_enabled,
+        ))
         if not current:
             return result.model_copy(update={"answer": None})
     elif row.source_fences and result.answer is not None:
@@ -1459,12 +1465,13 @@ async def _approval_fences_current(
         destinations=frozenset(), capabilities=frozenset({"source.read"}),
     )
     try:
-        return await revalidate_native_output_fences(
-            session_factory, _restore_fences(item.source_fences), principal,
-            destination_kind="remote", multi_workspace_enabled=multi_workspace_enabled,
-        )
+        sink = _restore_fences(item.source_fences)
     except (TypeError, ValueError, KeyError):
         return False
+    return await revalidate_native_output_fences(
+        session_factory, sink, principal,
+        destination_kind="remote", multi_workspace_enabled=multi_workspace_enabled,
+    )
 
 
 async def _approval_run_is_revoked(
@@ -1672,12 +1679,13 @@ async def request_cancel(
         # Reuse the same fresh source authorization before returning an answer from any route.
         principal = _result_principal(row)
         try:
-            current = bool(principal and await revalidate_native_output_fences(
-                session_factory, _restore_fences(row.source_fences), principal, destination_kind="remote",
-                multi_workspace_enabled=multi_workspace_enabled,
-            ))
+            restored: dict[str, Any] | None = _restore_fences(row.source_fences)
         except (TypeError, ValueError, KeyError):
-            current = False
+            restored = None
+        current = bool(restored is not None and principal and await revalidate_native_output_fences(
+            session_factory, restored, principal, destination_kind="remote",
+            multi_workspace_enabled=multi_workspace_enabled,
+        ))
         if not current:
             result = result.model_copy(update={"answer": None})
     return result
