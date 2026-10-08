@@ -2446,20 +2446,6 @@ def _decode_history_cursor(cursor: str, binding: str) -> tuple[datetime, UUID]:
         raise HTTPException(status_code=422, detail="Invalid or stale ingestion cursor") from exc
 
 
-def encode_ingestion_cursor(
-    position: tuple[datetime, UUID], *, scope: Scope, access_fence: AccessFence,
-    kind: Literal["ready", "terminal"], limit: int = 100,
-) -> str:
-    """Build a pure principal-bound sweep cursor from a previously admitted page's last row.
-
-    Automation `_Reader` and `_CURSORS` callers retain per-principal state and the same
-    page kind/limit. This builder grants no admission; readers recheck current fences.
-    """
-    if kind not in {"ready", "terminal"} or not 1 <= limit <= 100:
-        raise ValueError("Invalid ingestion sweep cursor contract")
-    return _encode_history_cursor(position, _cursor_binding(scope, access_fence, kind, limit))
-
-
 async def list_source_runs(
     session: AsyncSession,
     source_id: UUID,
@@ -2648,21 +2634,25 @@ async def retry_run(
 
 
 async def list_ready_events_after(
-    session: AsyncSession, position: str | None, limit: int = 100, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession, position: tuple[datetime, UUID] | None, limit: int = 100,
+    *, scope: Scope, multi_workspace_enabled: bool,
 ) -> list[tuple[datetime, UUID, str, dict[str, Any] | None]]:
-    """Read-only cursor page of ``document.version.ready`` outbox rows for the automations sweep.
+    """Read-only keyset page of ``document.version.ready`` outbox rows for the automations sweep.
 
-    Ordered by ``(created_at, id)`` strictly after a principal-bound v2 ``position``; returns validated private metadata
-    projection including the immutable version identity, never content. It never changes delivery
-    status, so the single outbox consumer is unaffected.
+    Ordered by ``(created_at, id)`` strictly after the caller's ``(created_at, id)`` tuple
+    ``position``. The caller (the sweep) keeps that position in its workspace-keyed cursor row,
+    so the position is not an opaque token: the workspace predicate comes from ``_event_scope``
+    and precedes the ordering and LIMIT, which means a position taken from another workspace can
+    only skip rows that belong to the caller's own scope. Owner admission precedes any query.
+    Returns validated private metadata projection including the immutable version identity,
+    never content. It never changes delivery status, so the single outbox consumer is unaffected.
     """
-    access_fence = await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if not 1 <= limit <= 100:
         raise ValueError("Ready-event page size must be between 1 and 100")
     stmt = select(EventOutbox).where(EventOutbox.type == "document.version.ready", *_event_scope(scope))
     if position is not None:
-        offset = _decode_history_cursor(position, _cursor_binding(scope, access_fence, "ready", limit))
-        stmt = stmt.where(tuple_(EventOutbox.created_at, EventOutbox.id) > tuple_(*offset))
+        stmt = stmt.where(tuple_(EventOutbox.created_at, EventOutbox.id) > tuple_(*position))
     rows = (await session.scalars(stmt.order_by(EventOutbox.created_at, EventOutbox.id).limit(limit))).all()
     # A malformed row keeps its slot with a None payload so the sweep cursor still advances past it.
     return [(row.created_at, row.id, str(row.id), _ready_document_payload(row)) for row in rows]
@@ -2760,14 +2750,18 @@ async def resolve_ready_event_provenance(
 
 
 async def list_terminal_runs_after(
-    session: AsyncSession, position: str | None, limit: int = 100, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession, position: tuple[datetime, UUID] | None, limit: int = 100,
+    *, scope: Scope, multi_workspace_enabled: bool,
 ) -> list[tuple[datetime, UUID, str, dict[str, str | int]]]:
-    """Read-only cursor page of ingestion runs in a terminal state for connector sync results.
+    """Read-only keyset page of ingestion runs in a terminal state for connector sync results.
 
-    Ordered by ``(updated_at, id)`` after a principal-bound v2 position; the key combines run id and status so a later status change
-    is a new event. Payload carries original principal/source identity, status and the observation count.
+    Ordered by ``(updated_at, id)`` after the caller's ``(updated_at, id)`` tuple ``position``;
+    the key combines run id and status so a later status change is a new event. The workspace
+    predicate (``_run_scope``) precedes ordering and LIMIT, owner admission precedes any query, and
+    the tuple position is the sweep's own workspace-keyed cursor, never an opaque token.
+    Payload carries original principal/source identity, status and the observation count.
     """
-    access_fence = await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if not 1 <= limit <= 100:
         raise ValueError("Terminal-run page size must be between 1 and 100")
     stmt = select(IngestionRun).join(IngestionBatch, and_(
@@ -2775,8 +2769,7 @@ async def list_terminal_runs_after(
     )).where(IngestionRun.status.in_(("succeeded", "failed", "needs_ocr")),
              IngestionBatch.source_generation >= 1, *_run_scope(scope))
     if position is not None:
-        offset = _decode_history_cursor(position, _cursor_binding(scope, access_fence, "terminal", limit))
-        stmt = stmt.where(tuple_(IngestionRun.updated_at, IngestionRun.id) > tuple_(*offset))
+        stmt = stmt.where(tuple_(IngestionRun.updated_at, IngestionRun.id) > tuple_(*position))
     rows = (await session.scalars(stmt.order_by(IngestionRun.updated_at, IngestionRun.id).limit(limit))).all()
     # new_items = observations collected in the run's batch (one grouped count for the page).
     counts = dict((await session.execute(
