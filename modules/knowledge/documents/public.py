@@ -3973,15 +3973,22 @@ async def read_extraction_input(
     )
 
 
-async def get_first_chunk_id(session: AsyncSession, version_id: UUID) -> UUID | None:
-    """Return the first chunk ID of a version without reading any chunk content.
+async def get_first_chunk_id(
+    session: AsyncSession, version_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+) -> UUID | None:
+    """Return the first chunk ID of a version in the admitted workspace without reading chunk content.
 
-    Deterministic provider mappers anchor evidence on the title chunk; unlike
+    Members are denied before the query; a version of another workspace or an ineligible Source
+    returns None. Deterministic provider mappers anchor evidence on the title chunk; unlike
     ``read_extraction_input`` this has no chunk-count or byte ceiling, so an oversized
     body cannot make a record unmappable.
     """
+    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     return await session.scalar(
-        select(DocumentChunk.id).where(DocumentChunk.document_version_id == version_id)
+        select(DocumentChunk.id)
+        .join(DocumentVersion, DocumentVersion.id == DocumentChunk.document_version_id)
+        .join(Document, Document.id == DocumentVersion.document_id)
+        .where(DocumentChunk.document_version_id == version_id, *_document_scope(scope))
         .order_by(DocumentChunk.chunk_index).limit(1)
     )
 

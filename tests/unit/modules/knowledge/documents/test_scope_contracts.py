@@ -231,3 +231,18 @@ def test_observation_list_fingerprint_changes_with_either_revision() -> None:
     base = fp(FENCE)
     assert fp(AccessFence(WORKSPACE_ID, 1, 2, 1)) != base
     assert fp(AccessFence(WORKSPACE_ID, 1, 1, 2)) != base
+
+
+@pytest.mark.asyncio
+async def test_get_first_chunk_id_is_workspace_scoped_and_denies_members_first() -> None:
+    session = _Session()
+    assert await public.get_first_chunk_id(session, uuid4(), **SCOPE_KW) is None  # foreign/absent version
+    sql = _sql(session.statements[0])
+    assert "documents.workspace_id" in sql and "document_versions" in sql
+
+    member = WorkspaceContext(user_id=2, workspace_id=WORKSPACE_ID, role="member", membership_revision=1)
+    denied = _Session()
+    with pytest.raises(HTTPException) as exc:
+        await public.get_first_chunk_id(denied, uuid4(), scope=member, multi_workspace_enabled=True)
+    assert exc.value.status_code == 403
+    assert denied.statements == []

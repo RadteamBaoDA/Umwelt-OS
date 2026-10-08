@@ -86,9 +86,6 @@ async def test_map_github_version_threads_scope_to_every_callee() -> None:
     for name, mock in mocks.items():
         assert mock.await_count >= 1, name
         for call in mock.await_args_list:
-            if name == "documents.get_first_chunk_id":
-                assert "scope" not in call.kwargs  # identity-only D helper; re-proved by evidence refs
-                continue
             assert call.kwargs["scope"] is SCOPE, name
             assert call.kwargs["multi_workspace_enabled"] is False, name
 
@@ -261,15 +258,18 @@ def test_discovery_pages_by_source_id_after_the_cursor_before_limit() -> None:
     assert sql.index("source_id >") < sql.index("ORDER BY") < sql.index("LIMIT")
 
 
-def test_cursor_wraps_when_state_is_absent_or_page_is_short() -> None:
-    state: dict[str, str] = {}
+async def test_cursor_wraps_when_state_is_absent_or_page_is_short() -> None:
+    ctx: dict[str, object] = {"w2_cursor_state": {}}
     last = uuid4()
-    worker._write_cursor(state, "k", last)
-    assert worker._read_cursor(state, "k") == last
-    worker._write_cursor(state, "k", None)
-    assert worker._read_cursor(state, "k") is None
-    assert worker._read_cursor(None, "k") is None
-    worker._write_cursor(None, "k", last)  # no shared state installed: starts over, never raises
+    await worker._write_cursor(ctx, "connectors_workflows", last)
+    assert await worker._read_cursor(ctx, "connectors_workflows") == last
+    await worker._write_cursor(ctx, "connectors_workflows", None)
+    assert await worker._read_cursor(ctx, "connectors_workflows") is None
+    assert await worker._read_cursor(None, "connectors_workflows") is None
+    await worker._write_cursor(None, "connectors_workflows", last)  # no shared state: starts over, never raises
+    with pytest.raises(KeyError):
+        await worker._read_cursor(ctx, "not_allowed")
+    assert worker._cursor_ctx({}) is None and worker._cursor_ctx(ctx) is ctx
 
 
 # ---------------------------------------------------------------- worker credential delete
@@ -370,7 +370,7 @@ async def test_revoke_deleted_grants_skips_a_source_without_admissible_scope() -
     lock = AsyncMock()
     with patch.object(worker.sources, "resolve_source_job_scope", AsyncMock(return_value=None)), \
             patch.object(worker.provisioning, "lock_connector", lock):
-        assert await worker.revoke_deleted_source_github_grants(factory, settings, cursor_state={}) == 0
+        assert await worker.revoke_deleted_source_github_grants(factory, settings, cursor_ctx={"w2_cursor_state": {}}) == 0
     lock.assert_not_awaited()
 
 
@@ -487,7 +487,7 @@ async def test_denied_phase_three_releases_only_our_own_coordinator_claim(foreig
             patch("modules.connectors.github.oauth.revoke_github_grant", AsyncMock(side_effect=provider_revoke)), \
             patch.object(worker, "commit_with_replay", AsyncMock()), \
             patch.object(worker, "select", MagicMock()):
-        assert await worker.revoke_deleted_source_github_grants(factory, settings, cursor_state={}) == 0
+        assert await worker.revoke_deleted_source_github_grants(factory, settings, cursor_ctx={"w2_cursor_state": {}}) == 0
     if foreign:
         assert coordinator.operation_id == other and coordinator.state == "revoking"
         phase3.commit.assert_not_awaited()
@@ -508,12 +508,12 @@ def test_credential_discovery_cursor_is_a_composite_keyset() -> None:
     ).compile(dialect=postgresql.dialect()))
     assert "source_id >" in sql and "source_id =" in sql and "slot >" in sql
     assert sql.index("slot >") < sql.index("ORDER BY") < sql.index("LIMIT")
-    state: dict[str, str] = {}
-    worker._write_slot_cursor(state, "k", (after, "b"))
-    assert worker._read_slot_cursor(state, "k") == (after, "b")
-    worker._write_slot_cursor(state, "k", None)
-    assert worker._read_slot_cursor(state, "k") is None
-    assert worker._read_slot_cursor({"k": "garbage"}, "k") is None
+    ctx: dict[str, object] = {"w2_cursor_state": {}}
+    worker._write_slot_cursor(ctx, "k", (after, "b"))
+    assert worker._read_slot_cursor(ctx, "k") == (after, "b")
+    worker._write_slot_cursor(ctx, "k", None)
+    assert worker._read_slot_cursor(ctx, "k") is None
+    assert worker._read_slot_cursor({"w2_cursor_state": {"k": "garbage"}}, "k") is None
 
 
 async def test_changed_access_fence_between_start_and_record_is_denied_and_publishes_nothing() -> None:

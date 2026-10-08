@@ -14,6 +14,7 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from core.config import Settings
 from core.realtime import commit_with_replay
+from core.worker_cursors import STATE_KEY, read_cursor, write_cursor
 from core.workspaces.public import read_access_fence
 from core.workspaces.schemas import AccessFence, InternalJobScope
 from modules.connectors import provisioning
@@ -37,37 +38,38 @@ _DENIED = frozenset({401, 403, 404, 409})
 _PASS_LIMIT = 40
 
 
-def _cursor_state(ctx: dict[str, object]) -> dict[str, str] | None:
-    """Return the worker-wide fairness cursor dict installed at startup, or None without it.
+_CURSOR_KEYS = frozenset({
+    "connectors_deleted_revoke", "connectors_workflows", "connectors_unknown_create", "connectors_activation",
+})
 
-    ARQ hands each job a shallow copy of ``ctx``, so only this shared dict (contract key
-    ``w2_cursor_state``, ``dict[str, str]``, ``_``-prefixed keys reserved) survives between
-    passes. Without it every pass starts at the beginning, which is correct but not fair.
+
+def _cursor_ctx(ctx: dict[str, object]) -> dict[str, object] | None:
+    """Return ``ctx`` when the worker-wide fairness dict (``core.worker_cursors.STATE_KEY``) is installed.
+
+    ARQ hands each job a shallow copy of ``ctx``, so only that shared ``dict[str, str]`` survives
+    between passes. Without it every pass starts at the beginning, which is correct but not fair.
     """
-    state = ctx.get("w2_cursor_state")
-    return cast(dict[str, str], state) if isinstance(state, dict) else None
+    return ctx if isinstance(ctx.get(STATE_KEY), dict) else None
 
 
-def _read_cursor(state: dict[str, str] | None, key: str) -> UUID | None:
-    """Parse one stored Source-id fairness cursor; a missing or corrupt value restarts the sweep."""
-    try:
-        return UUID(state[key]) if state is not None else None
-    except (KeyError, ValueError):
-        return None
+async def _read_cursor(ctx: dict[str, object] | None, key: str) -> UUID | None:
+    """Read one Source-id fairness cursor (Redis first); missing or corrupt restarts the sweep."""
+    return await read_cursor(ctx, key, _CURSOR_KEYS) if ctx is not None else None
 
 
-def _write_cursor(state: dict[str, str] | None, key: str, last: UUID | None) -> None:
+async def _write_cursor(ctx: dict[str, object] | None, key: str, last: UUID | None) -> None:
     """Remember the last discovered Source id of a full page, or clear the key to wrap around."""
-    if state is None:
-        return
-    if last is None:
-        state.pop(key, None)
-    else:
-        state[key] = str(last)
+    if ctx is not None:
+        await write_cursor(ctx, key, last, _CURSOR_KEYS)
 
 
-def _read_slot_cursor(state: dict[str, str] | None, key: str) -> tuple[UUID, str] | None:
-    """Parse a composite ``source_id|slot`` cursor; a missing or corrupt value restarts the sweep."""
+def _slot_state(ctx: dict[str, object] | None) -> dict[str, str] | None:
+    return cast(dict[str, str], ctx[STATE_KEY]) if ctx is not None else None
+
+
+def _read_slot_cursor(ctx: dict[str, object] | None, key: str) -> tuple[UUID, str] | None:
+    """Parse a composite ``source_id|slot`` cursor (encoded string, not a core UUID cursor)."""
+    state = _slot_state(ctx)
     try:
         source_id, slot = (state[key] if state is not None else "").split("|", 1)
         return UUID(source_id), slot
@@ -75,8 +77,9 @@ def _read_slot_cursor(state: dict[str, str] | None, key: str) -> tuple[UUID, str
         return None
 
 
-def _write_slot_cursor(state: dict[str, str] | None, key: str, last: tuple[UUID, str] | None) -> None:
+def _write_slot_cursor(ctx: dict[str, object] | None, key: str, last: tuple[UUID, str] | None) -> None:
     """Remember the last (Source id, slot) of a full page, or clear the key to wrap around."""
+    state = _slot_state(ctx)
     if state is None:
         return
     if last is None:
@@ -270,7 +273,7 @@ _COORDINATOR_STALE_AFTER = timedelta(minutes=5)
 
 async def revoke_deleted_source_github_grants(
     factory: async_sessionmaker[AsyncSession], settings: Settings, *, limit: int = 10,
-    cursor_state: dict[str, str] | None = None,
+    cursor_ctx: dict[str, object] | None = None,
 ) -> int:
     """Best-effort remote revoke for grants whose last GitHub source was archived or purged.
 
@@ -295,7 +298,7 @@ async def revoke_deleted_source_github_grants(
 
     flag = settings.multi_workspace_enabled
     key = settings.connector_credential_encryption_key.get_secret_value()
-    after = _read_cursor(cursor_state, "connectors_deleted_revoke")
+    after = await _read_cursor(cursor_ctx, "connectors_deleted_revoke")
     async with factory() as session:
         pending: list[UUID] = list((await session.execute(_page(
             select(GithubOAuthGrant.source_id), GithubOAuthGrant.source_id, after,
@@ -303,7 +306,7 @@ async def revoke_deleted_source_github_grants(
             GithubOAuthGrant.encrypted_tokens.is_not(None),
         ).limit(limit))).scalars().all())
         await session.rollback()
-    _write_cursor(cursor_state, "connectors_deleted_revoke", pending[-1] if len(pending) >= limit else None)
+    await _write_cursor(cursor_ctx, "connectors_deleted_revoke", pending[-1] if len(pending) >= limit else None)
     handled = 0
     for source_id in pending:
         token: str | None = None
@@ -702,7 +705,7 @@ async def reconcile_connectors(ctx: dict[str, object]) -> int:
     settings = cast(Settings, ctx["settings"])
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     flag = settings.multi_workspace_enabled
-    state = _cursor_state(ctx)
+    state = _cursor_ctx(ctx)
     completed = await dispatch_github_webhooks(ctx)
     api_key = settings.n8n_api_key.get_secret_value()
     if not api_key:
@@ -723,18 +726,18 @@ async def reconcile_connectors(ctx: dict[str, object]) -> int:
         ))).all())
         workflow_ids = list((await session.scalars(_page(
             select(ConnectorProvisioning.source_id), ConnectorProvisioning.source_id,
-            _read_cursor(state, "connectors_workflows"),
+            await _read_cursor(state, "connectors_workflows"),
             ConnectorProvisioning.workflow_operation["step"]["state"].astext == "prepared",
         ))).all())
         unknown_create_ids = list((await session.scalars(_page(
             select(ConnectorProvisioning.source_id), ConnectorProvisioning.source_id,
-            _read_cursor(state, "connectors_unknown_create"),
+            await _read_cursor(state, "connectors_unknown_create"),
             ConnectorProvisioning.workflow_operation["step"]["state"].astext == "unknown",
             ConnectorProvisioning.workflow_operation["step"]["kind"].astext == "create",
         ))).all())
         activation_ids = list((await session.scalars(_page(
             select(ConnectorProvisioning.source_id), ConnectorProvisioning.source_id,
-            _read_cursor(state, "connectors_activation"),
+            await _read_cursor(state, "connectors_activation"),
             ConnectorProvisioning.desired_enabled.is_(True),
             ConnectorProvisioning.state == "provisioning",
             ConnectorProvisioning.workflow_operation.is_(None),
@@ -747,7 +750,7 @@ async def reconcile_connectors(ctx: dict[str, object]) -> int:
     )
     for name, found in (("connectors_workflows", workflow_ids), ("connectors_unknown_create", unknown_create_ids),
                         ("connectors_activation", activation_ids)):
-        _write_cursor(state, name, found[-1] if len(found) >= _PASS_LIMIT else None)
+        await _write_cursor(state, name, found[-1] if len(found) >= _PASS_LIMIT else None)
 
     for source_id, slot, operation_id, kind in credential_rows:
         if operation_id is None or kind != "delete":
@@ -830,7 +833,7 @@ async def dispatch_github_webhooks(ctx: dict[str, object]) -> int:
     now = datetime.now(UTC)
     progressed = await expire_github_webhook_details(factory, now=now)
     progressed += await reclaim_github_webhook_digests(factory, now=now)
-    progressed += await revoke_deleted_source_github_grants(factory, settings, cursor_state=_cursor_state(ctx))
+    progressed += await revoke_deleted_source_github_grants(factory, settings, cursor_ctx=_cursor_ctx(ctx))
     async with factory() as session:
         outbox_ids = list((await session.scalars(select(GithubWebhookOutbox.id).where(
             GithubWebhookOutbox.state.in_(("pending", "dispatched", "needs_attention")),

@@ -99,9 +99,8 @@ async def _map_version(
     Only the first (title) chunk and bounded snapshot metadata are used, never the full body,
     so oversized issue/PR/release bodies still produce entities and an event. Every Documents,
     Entities, Relationships and Timeline call carries the same admitted scope and flag.
-    ``get_first_chunk_id`` is identity-only (no scope parameter); its result is re-proved against
-    the scoped workspace, Source, generation and current version by ``read_extraction_evidence_refs``
-    before any membership, relationship or event is written.
+    The first chunk is read under the same scope; ``read_extraction_evidence_refs`` then re-proves
+    Source, generation and current version before any membership, relationship or event is written.
     """
     snapshot = (await documents.read_provider_snapshots(
         session, [ready.document_version_id], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
@@ -109,7 +108,9 @@ async def _map_version(
     record_type = (snapshot.provider_metadata.source_fields if snapshot.provider_metadata else {}).get("record_type")
     if record_type not in _RECORD_TYPES:
         return False
-    chunk_id = await documents.get_first_chunk_id(session, ready.document_version_id)
+    chunk_id = await documents.get_first_chunk_id(
+        session, ready.document_version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     if chunk_id is None:
         return False
     refs = await documents.read_extraction_evidence_refs(
