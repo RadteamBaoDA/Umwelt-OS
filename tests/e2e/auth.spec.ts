@@ -38,11 +38,17 @@ test('sign out stays a sign out when a request 401s before the logout reply', as
     await held;
     await route.fulfill({ response });
   });
-  const logoutSent = page.waitForRequest('**/api/v1/auth/logout');
-  await page.getByRole('button', { name: 'User menu' }).click();
-  await page.getByRole('menuitem', { name: 'Sign out' }).click();
-  await logoutSent;
-  await page.evaluate(() => window.dispatchEvent(new Event('bbd:unauthorized')));
-  releaseLogout();
-  await expect(page).toHaveURL(/\/login$/);
+  try {
+    const logoutSent = page.waitForRequest('**/api/v1/auth/logout');
+    await page.getByRole('button', { name: 'User menu' }).click();
+    await page.getByRole('menuitem', { name: 'Sign out' }).click();
+    await logoutSent;
+    await page.evaluate(() => window.dispatchEvent(new Event('bbd:unauthorized')));
+    releaseLogout();
+    await expect(page).toHaveURL(/\/login$/);
+    await expect(page).not.toHaveURL(/reason=expired/);
+  } finally {
+    releaseLogout();
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+  }
 });
