@@ -389,7 +389,7 @@ async def search(
                         latest, latest_mapping, latest_policy, dict(source_generation_fences or {}),
                     )
 
-            response = await gateway(config, redis, recheck_send).embed("embedding", mapping, policy, [request.query])
+            response = await gateway(config, redis, recheck_send, scope=scope).embed("embedding", mapping, policy, [request.query])
             values, returned_model = embedding_values(response, generation.dimensions)
             if returned_model != generation.response_model_id:
                 raise ValueError("Embedding response identity changed")

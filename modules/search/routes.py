@@ -123,19 +123,17 @@ async def reindex(
     """Queue reindexing only when a permitted remote embedding mapping is configured."""
     redis: Redis = request.app.state.redis
     settings: Settings = request.app.state.settings
-    config, mapping, policy = await indexing.configured_embedding(session, settings, redis, scope=workspace)
-    from core.model_gateway.policy import may_send
-
-    if config.endpoint_policy_denied or not may_send(
-        policy, "embedding", mapping, config.endpoint_destination_id or "omniroute",
-        bool(config.omniroute_api_key), "embeddings",
-    ):
+    # Admission precedes the config read; the original fence and config are compared again
+    # under the workspace generation mutex, so a change in between aborts with 409.
+    authority = await indexing.capture_authority(session, settings, redis, scope=workspace)
+    if not authority.permitted():
         raise HTTPException(status_code=409, detail="Configure and permit a remote embedding model first")
     try:
-        generation = await indexing.create_generation(
-            session, mapping, config.gateway_identity, scope=workspace,
-            multi_workspace_enabled=settings.multi_workspace_enabled,
+        generation = await indexing.create_generation_for_authority(
+            session, authority, settings, redis, scope=workspace,
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail="An index generation for another gateway is still running") from exc
+    if generation is None:
+        raise HTTPException(status_code=409, detail="Index generation is not available")
     return ReindexResponse(run_id=generation.id)

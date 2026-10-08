@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from typing import cast
 from uuid import UUID
 
+from fastapi import HTTPException
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 from sqlalchemy import Select, func, select, text
@@ -29,6 +30,8 @@ from modules.sources.models import Source
 MAX_VECTOR_DIMENSIONS = 2000  # pgvector HNSW vector index limit.
 AUTO_INDEX_CURSOR_KEY = "search:auto:generation-cursor"
 ACTIVE_INDEX_CURSOR_KEY = "search:index:generation-cursor"
+QUEUED_INDEX_CURSOR_KEY = "search:index:queued-cursor"
+SCAN_PAGE = 20  # identities scanned per status class per invocation; bounds skip cost
 AUTO_INDEX_RETRY_DELAY = timedelta(minutes=15)
 
 
@@ -42,17 +45,19 @@ async def _admit(
     expected: AccessFence | None = None,
 ) -> AccessFence:
     """Admit Search access before its own roots, with optional ordered publication locking."""
-    from fastapi import HTTPException
-
     if isinstance(scope, WorkspaceContext) and scope.role != "owner":
         raise HTTPException(status_code=403, detail="Workspace owner required")
     if lock:
         return await workspaces.lock_access_fence(
             session, scope=scope, expected=expected, multi_workspace_enabled=multi_workspace_enabled,
         )
-    return await workspaces.read_access_fence(
+    fence = await workspaces.read_access_fence(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
+    if expected is not None and fence != expected:
+        # read_access_fence has no expected keyword; compare the full detached value here.
+        raise HTTPException(status_code=409, detail="Workspace access changed")
+    return fence
 
 
 @dataclass(frozen=True)
@@ -139,11 +144,14 @@ def embedding_values(response: object, expected_dimensions: int | None = None) -
     return [float(value) for value in values], returned_model
 
 
-def gateway(config: AIExecutionConfig, redis: Redis, before_send: Callable[[], Awaitable[None]] | None = None) -> ModelGateway:
-    """Construct the model gateway with configured timeout, identity, and endpoint limits."""
+def gateway(
+    config: AIExecutionConfig, redis: Redis, before_send: Callable[[], Awaitable[None]], *, scope: Scope,
+) -> ModelGateway:
+    """Construct the model gateway bound to one scope, config revision, identity and fresh send check."""
     return ModelGateway(redis, config.omniroute_base_url, config.omniroute_api_key,
         config.endpoint_destination_id or "omniroute", config.request_timeout_seconds,
-        gateway_identity=config.gateway_identity, before_send=before_send,
+        scope=scope, gateway_identity=config.gateway_identity,
+        configuration_revision=config.configuration_revision, before_send=before_send,
         approved_endpoint_cidrs=config.endpoint_allowed_cidrs)
 
 
@@ -155,12 +163,56 @@ async def configured_embedding(
     destination = config.endpoint_destination_id
     privacy = config.privacy
     policy = RequestPolicy(
+        workspace_id=config.workspace_id,
+        actor_user_id=config.actor_user_id,
+        membership_revision=config.membership_revision,
+        gateway_identity=config.gateway_identity,
         embeddings_allowed=privacy.allow_remote_embeddings,
         permitted_destinations=frozenset({destination} if destination else set()),
         embedding_destinations=frozenset(privacy.embedding_destinations),
         configuration_revision=config.configuration_revision,
     )
     return config, config.aliases.get("embedding"), policy
+
+
+@dataclass(frozen=True)
+class EmbeddingAuthority:
+    """Detached original access fence plus config/mapping/policy observed by one invocation.
+
+    This is preparation, never authorization: every later publication compares it again
+    under the ordered locks and aborts, never rebases, when anything differs.
+    """
+    fence: AccessFence
+    config: AIExecutionConfig
+    mapping: ModelMapping | None
+    policy: RequestPolicy
+
+    def permitted(self) -> bool:
+        """Return whether the observed configuration may send embeddings at all."""
+        return (self.mapping is not None and not self.config.endpoint_policy_denied
+                and may_send(self.policy, "embedding", self.mapping,
+                             self.config.endpoint_destination_id or "omniroute",
+                             bool(self.config.omniroute_api_key), "embeddings"))
+
+    def unchanged(
+        self, config: AIExecutionConfig, mapping: ModelMapping | None, policy: RequestPolicy,
+    ) -> bool:
+        """Compare a fresh read with the original revision, gateway identity, mapping and policy."""
+        return (config.configuration_revision == self.config.configuration_revision
+                and config.gateway_identity == self.config.gateway_identity
+                and config.endpoint_destination_id == self.config.endpoint_destination_id
+                and mapping == self.mapping and policy == self.policy)
+
+
+async def capture_authority(
+    session: AsyncSession, settings: Settings, redis: Redis, *, scope: Scope,
+) -> EmbeddingAuthority:
+    """Admit the owner scope first, then read config; return the detached original snapshot."""
+    fence = await _admit(
+        session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
+    )
+    config, mapping, policy = await configured_embedding(session, settings, redis, scope=scope)
+    return EmbeddingAuthority(fence, config, mapping, policy)
 
 
 def eligible_chunks(*, workspace_id: UUID) -> Select[UUID, str, UUID]:
@@ -179,17 +231,26 @@ def eligible_chunks(*, workspace_id: UUID) -> Select[UUID, str, UUID]:
     )
 
 
-async def create_generation(
+async def _dedupe_or_create(
     session: AsyncSession, mapping: ModelMapping, gateway_identity: str, *,
-    scope: Scope, multi_workspace_enabled: bool,
-) -> IndexGeneration:
-    """Create or reuse one admitted workspace generation under its durable advisory lock."""
-    access_fence = await _admit(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True,
-    )
-    await session.execute(text(
-        "SELECT pg_advisory_xact_lock(hashtextextended('search.generation:' || :workspace_id, 0))"
-    ), {"workspace_id": str(scope.workspace_id)})
+    scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
+    honor_retry_delay: bool = False,
+) -> IndexGeneration | None:
+    """Reuse or create the workspace generation; the caller already holds the generation mutex.
+
+    Returns None only when ``honor_retry_delay`` finds a recent matching failed run, so
+    the retry decision is made under serialization rather than from a stale pre-lock read.
+    """
+    if honor_retry_delay:
+        latest = await session.scalar(select(IndexGeneration).where(
+            IndexGeneration.workspace_id == scope.workspace_id,
+        ).order_by(IndexGeneration.created_at.desc(), IndexGeneration.id).limit(1))
+        if (latest is not None and latest.status == "failed"
+                and latest.model_id == mapping.model and latest.model_version == mapping.version
+                and latest.gateway_identity == gateway_identity
+                and datetime.now(UTC) - latest.updated_at < AUTO_INDEX_RETRY_DELAY):
+            await session.rollback()
+            return None
     existing = await session.scalar(select(IndexGeneration).where(
         IndexGeneration.workspace_id == scope.workspace_id,
         IndexGeneration.status.in_(("queued", "running", "active")),
@@ -225,23 +286,114 @@ async def create_generation(
     return generation
 
 
+async def _take_generation_mutex(session: AsyncSession, scope: Scope) -> None:
+    """Serialize generation creation for one workspace with a transaction advisory lock."""
+    await session.execute(text(
+        "SELECT pg_advisory_xact_lock(hashtextextended('search.generation:' || :workspace_id, 0))"
+    ), {"workspace_id": str(scope.workspace_id)})
+
+
+async def create_generation(
+    session: AsyncSession, mapping: ModelMapping, gateway_identity: str, *,
+    scope: Scope, multi_workspace_enabled: bool,
+) -> IndexGeneration:
+    """Create or reuse one admitted workspace generation under its durable advisory lock.
+
+    Callers that observed configuration earlier use ``create_generation_for_authority``,
+    which compares the original access fence and configuration under the same mutex.
+    """
+    access_fence = await _admit(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True,
+    )
+    await _take_generation_mutex(session, scope)
+    generation = await _dedupe_or_create(
+        session, mapping, gateway_identity, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+    )
+    if generation is None:  # unreachable: retry delay is only honored by the authority seam
+        raise RuntimeError("Generation creation returned no row")
+    return generation
+
+
+async def create_generation_for_authority(
+    session: AsyncSession, authority: EmbeddingAuthority, settings: Settings, redis: Redis, *,
+    scope: Scope, honor_retry_delay: bool = False,
+) -> IndexGeneration | None:
+    """Publish a generation only if the originally observed authority still holds under the mutex.
+
+    Order: locked access fence compared with the original, generation mutex, fresh module and
+    configuration read compared with the original, failed-run retry decision, then dedupe or
+    create. A change raises 409 (never rebases); None means the retry delay applies.
+    """
+    multi_workspace_enabled = settings.multi_workspace_enabled
+    access_fence = await _admit(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True,
+        expected=authority.fence,
+    )
+    await _take_generation_mutex(session, scope)
+    if not await ai_settings.module_is_enabled(
+        session, "search", scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    ):
+        raise HTTPException(status_code=409, detail="Search module is disabled")
+    config, mapping, policy = await configured_embedding(session, settings, redis, scope=scope)
+    if mapping is None or not authority.unchanged(config, mapping, policy) or not authority.permitted():
+        raise HTTPException(status_code=409, detail="Search configuration changed")
+    return await _dedupe_or_create(
+        session, mapping, config.gateway_identity, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+        honor_retry_delay=honor_retry_delay,
+    )
+
+
+def _cursor_state(ctx: dict[str, object]) -> dict[str, str]:
+    """Return the shared worker cursor-state dict, creating a local one if the worker lacks it."""
+    return cast(dict[str, str], ctx.setdefault("w2_cursor_state", {}))
+
+
+async def _read_cursor(redis: Redis, state: dict[str, str], name: str, key: str) -> UUID | None:
+    """Read a keyset cursor from Redis, falling back to worker-local state when Redis fails."""
+    try:
+        raw = await redis.get(key)
+        if raw:
+            return UUID(raw.decode() if isinstance(raw, bytes) else str(raw))
+    except (RedisError, ValueError, UnicodeDecodeError):
+        pass
+    try:
+        return UUID(state[name]) if name in state else None
+    except ValueError:
+        return None
+
+
+async def _write_cursor(
+    redis: Redis, state: dict[str, str], name: str, key: str, value: UUID | None,
+) -> None:
+    """Persist a cursor locally always and to Redis best effort (Redis is only an optimization)."""
+    if value is None:
+        state.pop(name, None)
+    else:
+        state[name] = str(value)
+    try:
+        if value is None:
+            await redis.delete(key)
+        else:
+            await redis.set(key, str(value))
+    except RedisError:
+        pass
+
+
 async def _reconcile_automatic_generations(
     factory: async_sessionmaker[AsyncSession], settings: Settings, redis: Redis,
+    state: dict[str, str],
 ) -> None:
     """Create eligible per-workspace generations from bounded identity-only Documents discovery.
 
     Existing ready chunks are required. Each candidate is independently resolved, admitted,
     checked for module/config/privacy eligibility and committed under its workspace generation
-    lock. Unsupported or unconfigured work remains pending; this reconciliation never calls a
-    provider or sends document content.
+    mutex, which compares the original access fence and configuration and decides failed-run
+    retry. Unsupported or unconfigured work remains pending; this reconciliation never calls a
+    provider or sends document content. The cursor survives Redis loss in worker-local state.
     """
-    after: UUID | None = None
-    try:
-        raw_cursor = await redis.get(AUTO_INDEX_CURSOR_KEY)
-        if raw_cursor:
-            after = UUID(raw_cursor.decode() if isinstance(raw_cursor, bytes) else str(raw_cursor))
-    except (RedisError, ValueError, UnicodeDecodeError):
-        after = None
+    after = await _read_cursor(redis, state, "search_discovery", AUTO_INDEX_CURSOR_KEY)
     async with factory() as session:
         workspace_ids = await documents.list_indexable_workspace_ids(session, after=after, limit=100)
         await session.rollback()
@@ -250,10 +402,7 @@ async def _reconcile_automatic_generations(
             workspace_ids = await documents.list_indexable_workspace_ids(session, limit=100)
             await session.rollback()
     if not workspace_ids:
-        try:
-            await redis.delete(AUTO_INDEX_CURSOR_KEY)
-        except RedisError:
-            pass
+        await _write_cursor(redis, state, "search_discovery", AUTO_INDEX_CURSOR_KEY, None)
         return
 
     for workspace_id in workspace_ids:
@@ -269,23 +418,11 @@ async def _reconcile_automatic_generations(
                     workspace_id=workspace_id, actor_user_id=owner.user_id,
                     membership_revision=owner.membership_revision,
                 )
-                access_fence = await _admit(
-                    session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
-                    lock=True,
-                )
-                enabled = await ai_settings.module_is_enabled(
+                authority = await capture_authority(session, settings, redis, scope=scope)
+                if not await ai_settings.module_is_enabled(
                     session, "search", scope=scope,
                     multi_workspace_enabled=settings.multi_workspace_enabled,
-                )
-                if not enabled:
-                    await session.rollback()
-                    continue
-                config, mapping, policy = await configured_embedding(session, settings, redis, scope=scope)
-                destination = config.endpoint_destination_id or "omniroute"
-                if (config.endpoint_policy_denied or not may_send(
-                    policy, "embedding", mapping, destination,
-                    bool(config.omniroute_api_key), "embeddings",
-                )):
+                ) or not authority.permitted():
                     await session.rollback()
                     continue
                 has_chunks = await session.scalar(
@@ -294,117 +431,168 @@ async def _reconcile_automatic_generations(
                 if has_chunks is None:
                     await session.rollback()
                     continue
-                latest = await session.scalar(select(IndexGeneration).where(
-                    IndexGeneration.workspace_id == workspace_id,
-                ).order_by(IndexGeneration.created_at.desc(), IndexGeneration.id).limit(1))
-                if (latest is not None and latest.status == "failed"
-                        and latest.model_id == mapping.model and latest.model_version == mapping.version
-                        and latest.gateway_identity == config.gateway_identity
-                        and datetime.now(UTC) - latest.updated_at < AUTO_INDEX_RETRY_DELAY):
-                    await session.rollback()
-                    continue
-                # create_generation reacquires the same transaction lock harmlessly and commits
-                # the original access fence with any generation/event publication.
-                await create_generation(
-                    session, mapping, config.gateway_identity, scope=scope,
-                    multi_workspace_enabled=settings.multi_workspace_enabled,
+                await create_generation_for_authority(
+                    session, authority, settings, redis, scope=scope, honor_retry_delay=True,
                 )
-        except Exception as exc:  # noqa: BLE001  # one unavailable tenant must not starve later workspace IDs
-            from fastapi import HTTPException
-
-            if not isinstance(exc, HTTPException) or exc.status_code not in {401, 403, 404, 409}:
-                raise
+        except Exception as exc:  # one unavailable tenant must not starve later workspace IDs
+            if isinstance(exc, ValueError) or (
+                isinstance(exc, HTTPException) and exc.status_code in {401, 403, 404, 409}
+            ):
+                continue
+            raise
         finally:
-            try:
-                await redis.set(AUTO_INDEX_CURSOR_KEY, str(workspace_id))
-            except RedisError:
-                pass
+            await _write_cursor(redis, state, "search_discovery", AUTO_INDEX_CURSOR_KEY, workspace_id)
+
+
+async def _candidate_page(
+    factory: async_sessionmaker[AsyncSession], statuses: tuple[str, ...], after: UUID | None,
+) -> list[tuple[UUID, UUID]]:
+    """Return one bounded keyset page of (generation, workspace) identities, wrapping at the end."""
+    async with factory() as session:
+        rows: list[tuple[UUID, UUID]] = []
+        for lower in ((after, None) if after is not None else (None,)):
+            query = select(IndexGeneration.id, IndexGeneration.workspace_id).where(
+                IndexGeneration.status.in_(statuses),
+            )
+            if lower is not None:
+                query = query.where(IndexGeneration.workspace_id > lower)
+            result = await session.execute(
+                query.order_by(IndexGeneration.workspace_id, IndexGeneration.id).limit(SCAN_PAGE)
+            )
+            rows = [(row[0], row[1]) for row in result.all()]
+            if rows:
+                break
+        await session.rollback()
+    return rows
 
 
 @bounded_heavy_work
 async def index_pending_chunks(ctx: dict[str, object]) -> int:
-    """Reconcile and index one workspace at a time under current owner, module and AI policy."""
+    """Reconcile, then index one eligible workspace generation chosen from a bounded fair page.
+
+    Queued/running generations are scanned first by workspace keyset cursor, then active ones;
+    a denied, disabled or unavailable subject is skipped without touching its rows, and the
+    cursor advances past the scanned page so no single subject can monopolize indexing.
+    """
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     redis = cast(Redis, ctx["redis"])
     settings = cast(Settings, ctx["settings"])
+    state = _cursor_state(ctx)
     async with factory() as session:
         await documents.backfill_current_chunks(session, multi_workspace_enabled=settings.multi_workspace_enabled)
-    await _reconcile_automatic_generations(factory, settings, redis)
+    await _reconcile_automatic_generations(factory, settings, redis, state)
 
-    active_after: UUID | None = None
+    for name, key, statuses in (
+        ("search_queued", QUEUED_INDEX_CURSOR_KEY, ("queued", "running")),
+        ("search_active", ACTIVE_INDEX_CURSOR_KEY, ("active",)),
+    ):
+        after = await _read_cursor(redis, state, name, key)
+        last: UUID | None = None
+        done: int | None = None
+        for generation_id, workspace_id in await _candidate_page(factory, statuses, after):
+            last = workspace_id
+            done = await _index_generation(factory, redis, settings, generation_id, workspace_id)
+            if done is not None:
+                break
+        if last is not None:
+            await _write_cursor(redis, state, name, key, last)
+        if done is not None:
+            return done
+    return 0
+
+
+class _AuthorityChanged(Exception):  # control-flow signal, not an error condition
+    """The original fence, module or configuration no longer matches; discard the output."""
+
+
+async def _recheck_prepared(
+    session: AsyncSession, *, scope: Scope, settings: Settings, redis: Redis,
+    original: EmbeddingAuthority, source_id: UUID, source_generation: int | None,
+    chunk_id: UUID, content: str, workspace_id: UUID, lock: bool,
+) -> tuple[AccessFence, bool, int | None]:
+    """Re-admit against the original fence, then Source, then exact chunk, in lock order.
+
+    Returns (fence, live, source_generation). ``live`` is False when the Source is no longer
+    active/remote-eligible, its generation moved (when one was captured) or the chunk content
+    changed. Raises _AuthorityChanged when the access fence, module or configuration changed.
+    """
     try:
-        raw_cursor = await redis.get(ACTIVE_INDEX_CURSOR_KEY)
-        if raw_cursor:
-            active_after = UUID(raw_cursor.decode() if isinstance(raw_cursor, bytes) else str(raw_cursor))
-    except (RedisError, ValueError, UnicodeDecodeError):
-        active_after = None
-    async with factory() as session:
-        generation_identity = (await session.execute(
-            select(IndexGeneration.id, IndexGeneration.workspace_id)
-            .where(IndexGeneration.status.in_(("queued", "running")))
-            .order_by(IndexGeneration.created_at, IndexGeneration.id)
-            .limit(1)
-        )).one_or_none()
-        if generation_identity is None:
-            active_query = select(IndexGeneration.id, IndexGeneration.workspace_id).where(IndexGeneration.status == "active")
-            if active_after is not None:
-                active_query = active_query.where(IndexGeneration.workspace_id > active_after)
-            generation_identity = (await session.execute(
-                active_query.order_by(IndexGeneration.workspace_id).limit(1)
-            )).one_or_none()
-            if generation_identity is None and active_after is not None:
-                generation_identity = (await session.execute(select(
-                    IndexGeneration.id, IndexGeneration.workspace_id,
-                ).where(
-                    IndexGeneration.status == "active",
-                ).order_by(IndexGeneration.workspace_id).limit(1))).one_or_none()
-        if generation_identity is None:
-            return 0
-        generation_id, workspace_id = generation_identity
-        await session.rollback()
-    try:
-        await redis.set(ACTIVE_INDEX_CURSOR_KEY, str(workspace_id))
-    except RedisError:
-        pass
+        fence = await _admit(
+            session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
+            lock=lock, expected=original.fence,
+        )
+    except HTTPException as exc:
+        if exc.status_code in {401, 403, 404, 409}:
+            raise _AuthorityChanged from exc
+        raise
+    if fence != original.fence or not await ai_settings.module_is_enabled(
+        session, "search", scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
+    ):
+        raise _AuthorityChanged
+    source = await sources.lock_source(
+        session, source_id, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
+        expected_access_fence=fence,
+    )
+    current = await session.scalar(
+        select(DocumentChunk.content)
+        .join(DocumentVersion, DocumentVersion.id == DocumentChunk.document_version_id)
+        .join(Document, Document.id == DocumentVersion.document_id)
+        .where(DocumentChunk.id == chunk_id, Document.workspace_id == workspace_id,
+               Document.current_version == DocumentVersion.version_number,
+               Document.extraction_status.in_(("ready", "succeeded")))
+    )
+    generation = source.generation if source is not None else None
+    live = (source is not None and source.status == "active" and not source.local_only
+            and current == content
+            and (source_generation is None or generation == source_generation))
+    config, mapping, policy = await configured_embedding(session, settings, redis, scope=scope)
+    if not original.unchanged(config, mapping, policy):
+        raise _AuthorityChanged
+    return fence, live, generation
 
-    from fastapi import HTTPException
 
+async def _index_generation(
+    factory: async_sessionmaker[AsyncSession], redis: Redis, settings: Settings,
+    generation_id: UUID, workspace_id: UUID,
+) -> int | None:
+    """Index up to two chunks of one generation; return None when the subject is skipped.
+
+    One original AccessFence/config snapshot is captured per invocation. No DB transaction or
+    lock is open during ``embed``: preparation and the gateway ``before_send`` hook use short
+    ordered sessions (access, Source, chunk), and publication reacquires the same order and
+    compares the originals, discarding stale output instead of rebasing.
+    """
     async with factory() as session:
         owner = await workspaces.resolve_workspace_owner_context(
             session, workspace_id, multi_workspace_enabled=settings.multi_workspace_enabled,
         )
         if owner is None:
             await session.rollback()
-            return 0
+            return None
         scope = InternalJobScope(
             workspace_id=workspace_id, actor_user_id=owner.user_id,
             membership_revision=owner.membership_revision,
         )
         try:
-            access_fence = await _admit(
-                session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
-            )
+            original = await capture_authority(session, settings, redis, scope=scope)
             if not await ai_settings.module_is_enabled(
                 session, "search", scope=scope,
                 multi_workspace_enabled=settings.multi_workspace_enabled,
             ):
                 await session.rollback()
-                return 0
-            config, mapping, policy = await configured_embedding(session, settings, redis, scope=scope)
+                return None
         except HTTPException as exc:
             await session.rollback()
             if exc.status_code in {401, 403, 404, 409}:
-                return 0
+                return None
             raise
         generation = await session.scalar(select(IndexGeneration).where(
             IndexGeneration.id == generation_id, IndexGeneration.workspace_id == workspace_id,
         ))
-        if generation is None:
+        if generation is None or not original.policy.embeddings_allowed:
             await session.rollback()
-            return 0
-        if not policy.embeddings_allowed:
-            await session.rollback()
-            return 0
+            return None
+        mapping, config = original.mapping, original.config
         if (mapping is None or mapping.model != generation.model_id
                 or mapping.version != generation.model_version
                 or config.gateway_identity != generation.gateway_identity):
@@ -413,19 +601,27 @@ async def index_pending_chunks(ctx: dict[str, object]) -> int:
                 generation.status, generation.error_code = "failed", "model_unavailable"
                 await _commit_index_change(
                     session, before, generation_id=generation_id, scope=scope,
-                    multi_workspace_enabled=settings.multi_workspace_enabled, access_fence=access_fence,
+                    multi_workspace_enabled=settings.multi_workspace_enabled,
+                    access_fence=original.fence,
                 )
-            else:
-                await session.rollback()
-            return 0
+                return 0
+            await session.rollback()
+            return None
         await session.rollback()
 
     completed = 0
     for _ in range(2):
         async with factory() as session:
-            access_fence = await _admit(
-                session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
-            )
+            try:
+                access_fence = await _admit(
+                    session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
+                    lock=True, expected=original.fence,
+                )
+            except HTTPException as exc:
+                await session.rollback()
+                if exc.status_code in {401, 403, 404, 409}:
+                    break
+                raise
             if not await ai_settings.module_is_enabled(
                 session, "search", scope=scope,
                 multi_workspace_enabled=settings.multi_workspace_enabled,
@@ -493,72 +689,49 @@ async def index_pending_chunks(ctx: dict[str, object]) -> int:
                 multi_workspace_enabled=settings.multi_workspace_enabled, access_fence=access_fence,
             )
         try:
+            # Short preparation transaction: access -> Source -> chunk, then release every lock.
             async with factory() as session:
-                access_fence = await _admit(
-                    session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
+                _fence, live, source_generation = await _recheck_prepared(
+                    session, scope=scope, settings=settings, redis=redis, original=original,
+                    source_id=source_id, source_generation=None, chunk_id=chunk_id,
+                    content=content, workspace_id=workspace_id, lock=False,
                 )
-                if not await ai_settings.module_is_enabled(
-                    session, "search", scope=scope,
-                    multi_workspace_enabled=settings.multi_workspace_enabled,
-                ):
-                    await session.rollback()
-                    break
-                # Hold the source lock across transport so archive/purge cannot race a send.
-                source = await sources.lock_source(
-                    session, source_id, scope=scope,
-                    multi_workspace_enabled=settings.multi_workspace_enabled,
-                    expected_access_fence=access_fence,
+                await session.rollback()
+            if not live or source_generation is None:
+                await _drop_pending_item(
+                    factory, scope=scope, settings=settings, original=original,
+                    item_id=item_id, generation_id=generation_id, workspace_id=workspace_id,
                 )
-                current = await session.scalar(
-                    select(DocumentChunk.id)
-                    .join(DocumentVersion, DocumentVersion.id == DocumentChunk.document_version_id)
-                    .join(Document, Document.id == DocumentVersion.document_id)
-                    .where(DocumentChunk.id == chunk_id, Document.workspace_id == workspace_id,
-                           Document.current_version == DocumentVersion.version_number,
-                           Document.extraction_status.in_(("ready", "succeeded")))
-                )
-                if source is None or source.status != "active" or source.local_only or current is None:
-                    item = await session.scalar(select(SearchIndexItem).join(
-                        IndexGeneration, IndexGeneration.id == SearchIndexItem.generation_id,
-                    ).where(
-                        SearchIndexItem.id == item_id,
-                        IndexGeneration.workspace_id == workspace_id,
-                    ).with_for_update())
-                    if item is not None:
-                        before = await _index_projection(session, generation_id, scope=scope)
-                        await session.delete(item)
-                        await _commit_index_change(
-                            session, before, generation_id=generation_id, scope=scope,
-                            multi_workspace_enabled=settings.multi_workspace_enabled, access_fence=access_fence,
+                continue
+
+            async def recheck_send() -> None:
+                """Fresh short access/Source/chunk/config check before each actual request."""
+                async with factory() as check:
+                    try:
+                        _f, still_live, _g = await _recheck_prepared(
+                            check, scope=scope, settings=settings, redis=redis, original=original,
+                            source_id=source_id, source_generation=source_generation,  # noqa: B023  # awaited within this iteration
+                            chunk_id=chunk_id, content=content, workspace_id=workspace_id,  # noqa: B023  # awaited within this iteration
+                            lock=False,
                         )
-                    continue
-                config, mapping, policy = await configured_embedding(session, settings, redis, scope=scope)
-                if config.endpoint_policy_denied or not may_send(
-                    policy, "embedding", mapping, config.endpoint_destination_id or "omniroute",
-                    bool(config.omniroute_api_key), "embeddings",
-                ):
-                    await session.rollback()
-                    break
-                if (
-                    mapping is None or mapping.model != generation.model_id
-                    or mapping.version != generation.model_version
-                    or config.gateway_identity != generation.gateway_identity
-                ):
-                    raise ValueError("Embedding model or gateway identity changed")
+                    except _AuthorityChanged as exc:
+                        raise PrivacyPolicyDenied("Embedding send denied by current authority") from exc
+                    finally:
+                        await check.rollback()
+                    if not still_live:
+                        raise PrivacyPolicyDenied("Embedding source changed before send")
 
-                async def recheck_send() -> None:
-                    """Re-read AI settings before the request and enforce the current send policy."""
-                    latest, latest_mapping, latest_policy = await configured_embedding(
-                        session, settings, redis, scope=scope,
-                    )
-                    if (latest.gateway_identity != config.gateway_identity or latest_mapping != mapping  # noqa: B023  # closure is awaited within the same loop iteration
-                            or not may_send(latest_policy, "embedding", latest_mapping,
-                                            latest.endpoint_destination_id or "omniroute",
-                                            bool(latest.omniroute_api_key), "embeddings")):
-                        raise PrivacyPolicyDenied("Embedding send denied by current settings")
-
-                response = await gateway(config, redis, recheck_send).embed("embedding", mapping, policy, [content])
-                values, returned_model = embedding_values(response, dimensions)
+            response = await gateway(config, redis, recheck_send, scope=scope).embed(
+                "embedding", mapping, original.policy, [content],
+            )
+            values, returned_model = embedding_values(response, dimensions)
+            # Publication: same lock order (access -> Source -> chunk -> generation/item).
+            async with factory() as session:
+                fence, live, _g = await _recheck_prepared(
+                    session, scope=scope, settings=settings, redis=redis, original=original,
+                    source_id=source_id, source_generation=source_generation, chunk_id=chunk_id,
+                    content=content, workspace_id=workspace_id, lock=True,
+                )
                 generation = await session.scalar(select(IndexGeneration).where(
                     IndexGeneration.id == generation_id, IndexGeneration.workspace_id == workspace_id,
                 ).with_for_update())
@@ -567,14 +740,16 @@ async def index_pending_chunks(ctx: dict[str, object]) -> int:
                 ).where(
                     SearchIndexItem.id == item_id, IndexGeneration.workspace_id == workspace_id,
                 ).with_for_update())
-                if generation is None or item is None or generation.status not in {"running", "active"}:
+                if not live or generation is None or item is None or generation.status not in {"running", "active"}:
                     if item is not None:
                         before = await _index_projection(session, item.generation_id, scope=scope)
                         await session.delete(item)
                         await _commit_index_change(
                             session, before, generation_id=item.generation_id, scope=scope,
-                            multi_workspace_enabled=settings.multi_workspace_enabled, access_fence=access_fence,
+                            multi_workspace_enabled=settings.multi_workspace_enabled, access_fence=fence,
                         )
+                    else:
+                        await session.rollback()
                     continue
                 before = await _index_projection(session, generation_id, scope=scope)
                 if generation.dimensions is None:
@@ -587,7 +762,7 @@ async def index_pending_chunks(ctx: dict[str, object]) -> int:
                     item.error_code = "model_identity_changed"
                     await _commit_index_change(
                         session, before, generation_id=generation_id, scope=scope,
-                        multi_workspace_enabled=settings.multi_workspace_enabled, access_fence=access_fence,
+                        multi_workspace_enabled=settings.multi_workspace_enabled, access_fence=fence,
                     )
                     break
                 elif generation.dimensions != len(values):
@@ -598,32 +773,82 @@ async def index_pending_chunks(ctx: dict[str, object]) -> int:
                 item.error_code = None
                 await _commit_index_change(
                     session, before, generation_id=generation_id, scope=scope,
-                    multi_workspace_enabled=settings.multi_workspace_enabled, access_fence=access_fence,
+                    multi_workspace_enabled=settings.multi_workspace_enabled, access_fence=fence,
                 )
                 completed += 1
+        except _AuthorityChanged:
+            break  # stale output discarded; the item stays pending for a fresh invocation
+        except HTTPException as exc:
+            if exc.status_code in {401, 403, 404, 409}:
+                break
+            raise
         except (ModelGatewayError, RedisError, ValueError):
-            async with factory() as session:
-                try:
-                    failure_fence = await _admit(
-                        session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
-                    )
-                except HTTPException:
-                    await session.rollback()
-                    continue
-                item = await session.scalar(select(SearchIndexItem).join(
-                    IndexGeneration, IndexGeneration.id == SearchIndexItem.generation_id,
-                ).where(
-                    SearchIndexItem.id == item_id, IndexGeneration.workspace_id == workspace_id,
-                ).with_for_update())
-                if item is not None:
-                    before = await _index_projection(session, item.generation_id, scope=scope)
-                    item.status = "failed"
-                    item.error_code = "embedding_failed"
-                    await _commit_index_change(
-                        session, before, generation_id=item.generation_id, scope=scope,
-                        multi_workspace_enabled=settings.multi_workspace_enabled, access_fence=failure_fence,
-                    )
+            await _fail_item(
+                factory, scope=scope, settings=settings, original=original,
+                item_id=item_id, workspace_id=workspace_id,
+            )
     return completed
+
+
+async def _drop_pending_item(
+    factory: async_sessionmaker[AsyncSession], *, scope: Scope, settings: Settings,
+    original: EmbeddingAuthority, item_id: UUID, generation_id: UUID, workspace_id: UUID,
+) -> None:
+    """Delete a pending item whose Source/chunk is no longer eligible, under the original fence."""
+    async with factory() as session:
+        try:
+            fence = await _admit(
+                session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
+                lock=True, expected=original.fence,
+            )
+        except HTTPException:
+            await session.rollback()
+            return
+        item = await session.scalar(select(SearchIndexItem).join(
+            IndexGeneration, IndexGeneration.id == SearchIndexItem.generation_id,
+        ).where(
+            SearchIndexItem.id == item_id, IndexGeneration.workspace_id == workspace_id,
+        ).with_for_update())
+        if item is None:
+            await session.rollback()
+            return
+        before = await _index_projection(session, generation_id, scope=scope)
+        await session.delete(item)
+        await _commit_index_change(
+            session, before, generation_id=generation_id, scope=scope,
+            multi_workspace_enabled=settings.multi_workspace_enabled, access_fence=fence,
+        )
+
+
+async def _fail_item(
+    factory: async_sessionmaker[AsyncSession], *, scope: Scope, settings: Settings,
+    original: EmbeddingAuthority, item_id: UUID, workspace_id: UUID,
+) -> None:
+    """Mark one item failed, but only while the original access fence still holds."""
+    async with factory() as session:
+        try:
+            fence = await _admit(
+                session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
+                lock=True, expected=original.fence,
+            )
+        except HTTPException:
+            await session.rollback()
+            return
+        item = await session.scalar(select(SearchIndexItem).join(
+            IndexGeneration, IndexGeneration.id == SearchIndexItem.generation_id,
+        ).where(
+            SearchIndexItem.id == item_id, IndexGeneration.workspace_id == workspace_id,
+        ).with_for_update())
+        if item is None:
+            await session.rollback()
+            return
+        before = await _index_projection(session, item.generation_id, scope=scope)
+        item.status = "failed"
+        item.error_code = "embedding_failed"
+        await _commit_index_change(
+            session, before, generation_id=item.generation_id, scope=scope,
+            multi_workspace_enabled=settings.multi_workspace_enabled, access_fence=fence,
+        )
 
 
 async def activate_generation(
