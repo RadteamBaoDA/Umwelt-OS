@@ -21,9 +21,11 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from core.realtime import commit_with_replay
+from core.workspaces.schemas import Scope
 from modules.automations.models import Automation, AutomationRevision, AutomationSchedule
+from modules.automations.scope import _actor, _admit
 
-OWNER_ID = 1  # single-owner deployment
 MIN_INTERVAL_SECONDS = 120  # 3600 / execution.MAX_RUNS_PER_HOUR (30): the cron floor never exceeds the cap
 MIN_INTERVAL_AGENT_SECONDS = 300  # run_agent spends model tokens: no faster than every five minutes
 SEARCH_DAYS = 366 * 5
@@ -149,7 +151,10 @@ def validate_schedule(cron: str, timezone: str, *, spends_model: bool) -> None:
         raise ValueError(f"cron fires more often than every {floor // 60} minute(s)")
 
 
-async def tick(factory: async_sessionmaker[AsyncSession], now: datetime | None = None) -> int:
+async def tick(
+    factory: async_sessionmaker[AsyncSession], now: datetime | None = None,
+    *, scope: Scope, multi_workspace_enabled: bool,
+) -> int:
     """Sync schedule rows with live rules, then fire every due slot once (coalescing misfires).
 
     Misfire policy ``coalesce``: all slots missed while the worker was down collapse into a single
@@ -164,17 +169,21 @@ async def tick(factory: async_sessionmaker[AsyncSession], now: datetime | None =
     now = now or datetime.now(UTC)
     created = 0
     async with factory() as session:
+        fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+        mine = (Automation.workspace_id == scope.workspace_id, Automation.owner_id == _actor(scope))
         rules = (await session.execute(
             select(Automation, AutomationRevision).join(
                 AutomationRevision,
                 (AutomationRevision.automation_id == Automation.id) & (AutomationRevision.revision == Automation.revision),
             ).where(
-                Automation.owner_id == OWNER_ID, Automation.deleted_at.is_(None), Automation.enabled.is_(True),
+                *mine, Automation.deleted_at.is_(None), Automation.enabled.is_(True),
                 AutomationRevision.trigger["type"].astext == "schedule",
             ).limit(100)
         )).all()
         live = {head.id: (head, rev) for head, rev in rules}
-        existing = {row.automation_id: row for row in (await session.scalars(select(AutomationSchedule))).all()}
+        existing = {row.automation_id: row for row in (await session.scalars(
+            select(AutomationSchedule).join(Automation, Automation.id == AutomationSchedule.automation_id).where(*mine)
+        )).all()}
         for automation_id, row in existing.items():
             if automation_id not in live:
                 await session.delete(row)  # paused, deleted or no longer a schedule rule
@@ -199,7 +208,8 @@ async def tick(factory: async_sessionmaker[AsyncSession], now: datetime | None =
                 AutomationRevision,
                 (AutomationRevision.automation_id == AutomationSchedule.automation_id)
                 & (AutomationRevision.revision == AutomationSchedule.revision),
-            ).where(AutomationSchedule.next_slot <= now)
+            ).join(Automation, Automation.id == AutomationSchedule.automation_id)
+            .where(*mine, AutomationSchedule.next_slot <= now)
             .order_by(AutomationSchedule.next_slot).limit(50)
             .with_for_update(of=AutomationSchedule, skip_locked=True)
         )).all()
@@ -208,10 +218,11 @@ async def tick(factory: async_sessionmaker[AsyncSession], now: datetime | None =
             spec, tz = parse_cron(schedule.cron), ZoneInfo(schedule.timezone)
             local = slot.astimezone(tz)
             run_id = await execution.plan_run(
-                session, owner_id=OWNER_ID, rev=rev, trigger_type="schedule", trigger_key=f"slot:{slot.isoformat()}",
+                session, rev=rev, trigger_type="schedule", trigger_key=f"slot:{slot.isoformat()}",
                 trigger_event_id=None, slot=slot,
                 payload={"weekday": local.isoweekday() % 7, "hour": local.hour},
                 depth=1, origin_automation_id=None, origin_run_id=None,
+                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
             )
             created += run_id is not None
             nxt = next_slot(spec, tz, now)
@@ -220,5 +231,6 @@ async def tick(factory: async_sessionmaker[AsyncSession], now: datetime | None =
                 await session.delete(schedule)
             else:
                 schedule.next_slot = nxt
-        await session.commit()
+        await commit_with_replay(
+            session, [], scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
     return created

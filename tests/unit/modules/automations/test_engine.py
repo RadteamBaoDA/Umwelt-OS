@@ -14,6 +14,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from core.workspaces.schemas import WorkspaceContext
 from modules.automations.execution import (
     COOLDOWN_SECONDS,
     MAX_DEPTH,
@@ -33,6 +34,17 @@ from modules.automations.models import (
 )
 from modules.automations.schemas import RunRead
 
+OWNER = WorkspaceContext(user_id=7, workspace_id=uuid4(), role="owner", membership_revision=1)
+SC = {"scope": OWNER, "multi_workspace_enabled": False}
+
+
+@pytest.fixture(autouse=True)
+def _fenced():
+    """Admission and the fenced commit are covered in test_scope; here they are stubs."""
+    with patch("modules.automations.execution._admit", AsyncMock(return_value=MagicMock())), \
+         patch("modules.automations.execution.commit_with_replay", AsyncMock()) as commit:
+        yield commit
+
 
 class TestDeduplicationAndTriggerInbox:
     """Tests for producer event inbox deduplication and run identity checks."""
@@ -42,7 +54,7 @@ class TestDeduplicationAndTriggerInbox:
         """enqueue_trigger raises ValueError for schedule trigger type (schedule is owned by worker)."""
         session = AsyncMock()
         with pytest.raises(ValueError, match="trigger type cannot be offered by a producer"):
-            await enqueue_trigger(session, owner_id=1, trigger_type="schedule", event_key="k1", payload={})
+            await enqueue_trigger(session, trigger_type="schedule", event_key="k1", payload={}, **SC)
 
     @pytest.mark.asyncio
     async def test_enqueue_trigger_deduplicates_duplicate_event_key(self) -> None:
@@ -54,8 +66,8 @@ class TestDeduplicationAndTriggerInbox:
 
         with patch("modules.automations.execution.validate_sample", return_value=None):
             inserted = await enqueue_trigger(
-                session, owner_id=1, trigger_type="new_event", event_key="event-123",
-                payload={"event_id": str(uuid4())},
+                session, trigger_type="new_event", event_key="event-123",
+                payload={"event_id": str(uuid4())}, **SC,
             )
             assert inserted is False
 
@@ -66,8 +78,8 @@ class TestDeduplicationAndTriggerInbox:
         with patch("modules.automations.execution.validate_sample", return_value=None):  # noqa: SIM117  # style-only rewrite skipped to avoid touching control flow
             with pytest.raises(ValueError, match="webhook triggers need a hook name"):
                 await enqueue_trigger(
-                    session, owner_id=1, trigger_type="webhook", event_key="hook-1",
-                    payload={"event": "github.push"}, hook=None,
+                    session, trigger_type="webhook", event_key="hook-1",
+                    payload={"event": "github.push"}, hook=None, **SC,
                 )
 
     @pytest.mark.asyncio
@@ -77,7 +89,7 @@ class TestDeduplicationAndTriggerInbox:
         rev = AutomationRevision(automation_id=uuid4(), revision=1)
         session.scalar.return_value = uuid4()  # Run ID exists
 
-        assert await run_exists(session, rev, "event:key-1") is True
+        assert await run_exists(session, rev, "event:key-1", scope=OWNER) is True
 
     @pytest.mark.asyncio
     async def test_run_exists_returns_false_when_absent(self) -> None:
@@ -86,7 +98,7 @@ class TestDeduplicationAndTriggerInbox:
         rev = AutomationRevision(automation_id=uuid4(), revision=1)
         session.scalar.return_value = None
 
-        assert await run_exists(session, rev, "event:key-1") is False
+        assert await run_exists(session, rev, "event:key-1", scope=OWNER) is False
 
 
 class TestAdmissionAndCooldownWindows:
@@ -111,7 +123,7 @@ class TestAdmissionAndCooldownWindows:
         with patch("modules.automations.execution.dependencies_missing", return_value=[]):
             reason, run_at = await _admission(
                 session, rev, trigger_type="new_event", depth=MAX_DEPTH + 1,
-                origin_automation_id=None, now=now,
+                origin_automation_id=None, now=now, scope=OWNER,
             )
             assert reason == "depth_exceeded"
             assert run_at == now
@@ -127,7 +139,7 @@ class TestAdmissionAndCooldownWindows:
         with patch("modules.automations.execution.dependencies_missing", return_value=[]):
             reason, _run_at = await _admission(
                 session, rev, trigger_type="new_event", depth=1,
-                origin_automation_id=auto_id, now=now,
+                origin_automation_id=auto_id, now=now, scope=OWNER,
             )
             assert reason == "self_origin"
 
@@ -144,7 +156,7 @@ class TestAdmissionAndCooldownWindows:
         with patch("modules.automations.execution.dependencies_missing", return_value=[]):
             reason, _run_at = await _admission(
                 session, rev, trigger_type="new_event", depth=1,
-                origin_automation_id=None, now=now,
+                origin_automation_id=None, now=now, scope=OWNER,
             )
             assert reason == "rate_limited"
 
@@ -162,7 +174,7 @@ class TestAdmissionAndCooldownWindows:
         with patch("modules.automations.execution.dependencies_missing", return_value=[]):
             reason, run_at = await _admission(
                 session, rev, trigger_type="new_event", depth=1,
-                origin_automation_id=None, now=now,
+                origin_automation_id=None, now=now, scope=OWNER,
             )
             assert reason is None
             assert run_at == last_attempt + timedelta(seconds=COOLDOWN_SECONDS)
@@ -198,7 +210,7 @@ class TestActionDispatchingAndDecisions:
         mock_factory.return_value.__aenter__.return_value = mock_session
 
         redis_mock = AsyncMock()
-        enqueued = await dispatch_runs(mock_factory, redis_mock)
+        enqueued = await dispatch_runs(mock_factory, redis_mock, **SC)
 
         assert enqueued == 1
         assert run.dispatch_generation == 2
@@ -209,7 +221,7 @@ class TestActionDispatchingAndDecisions:
         assert isinstance(kwargs["_defer_until"], datetime)
 
     @pytest.mark.asyncio
-    async def test_decide_action_approve_requeues_run(self) -> None:
+    async def test_decide_action_approve_requeues_run(self, _fenced: AsyncMock) -> None:
         """decide_action with approve=True marks action approved and sets run status to queued."""
         session = AsyncMock()
         run_id = uuid4()
@@ -245,13 +257,13 @@ class TestActionDispatchingAndDecisions:
              patch("modules.automations.execution.dependencies_missing", return_value=[]), \
              patch("modules.automations.execution._reads", return_value=[MagicMock(spec=RunRead)]):
             await decide_action(
-                session, owner_id=1, session_hash="owner_sess", run_id=run_id,
-                ordinal=1, approve=True, settings=MagicMock(),
+                session, session_hash="owner_sess", run_id=run_id,
+                ordinal=1, approve=True, settings=MagicMock(), **SC,
             )
             assert action.status == "approved"
             assert action.approved_session_hash == "owner_sess"
             assert run.status == "queued"
-            session.commit.assert_called_once()
+            _fenced.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_decide_action_deny_fails_run_and_skips_pending(self) -> None:
@@ -291,14 +303,32 @@ class TestActionDispatchingAndDecisions:
              patch("modules.automations.execution.dependencies_missing", return_value=[]), \
              patch("modules.automations.execution._reads", return_value=[MagicMock(spec=RunRead)]):
             await decide_action(
-                session, owner_id=1, session_hash="owner_sess", run_id=run_id,
-                ordinal=1, approve=False, settings=MagicMock(),
+                session, session_hash="owner_sess", run_id=run_id,
+                ordinal=1, approve=False, settings=MagicMock(), **SC,
             )
             assert action.status == "denied"
             assert run.status == "failed"
             assert run.reason == "denied"
 
 
+def _ctx(factory: MagicMock) -> dict[str, object]:
+    return {"session_factory": factory, "settings": MagicMock(multi_workspace_enabled=False)}
+
+
+def _identity(session: AsyncMock) -> None:
+    """The unlocked (workspace_id, owner_id) read that precedes the scoped claim."""
+    session.execute = AsyncMock(return_value=MagicMock(first=MagicMock(return_value=(OWNER.workspace_id, OWNER.user_id))))
+
+
+@pytest.fixture
+def _owner_ok():
+    owner = MagicMock(user_id=OWNER.user_id, membership_revision=1)
+    with patch("modules.automations.execution.workspaces.resolve_workspace_owner_context", AsyncMock(return_value=owner)), \
+         patch("modules.automations.execution.settings_public.module_is_enabled", AsyncMock(return_value=True)):
+        yield
+
+
+@pytest.mark.usefixtures("_owner_ok")
 class TestAutomationEngineRunLoop:
     """Tests for process_run execution loop, concurrency, and attempt bounds."""
 
@@ -308,11 +338,12 @@ class TestAutomationEngineRunLoop:
         run_id = uuid4()
         mock_session = AsyncMock()
         mock_session.scalar.return_value = None  # No queued run found
+        _identity(mock_session)
 
         mock_factory = MagicMock()
         mock_factory.return_value.__aenter__.return_value = mock_session
 
-        outcome = await process_run({"session_factory": mock_factory}, str(run_id))
+        outcome = await process_run(_ctx(mock_factory), str(run_id))
         assert outcome == "noop"
 
     @pytest.mark.asyncio
@@ -328,13 +359,14 @@ class TestAutomationEngineRunLoop:
         )
 
         mock_session = AsyncMock()
+        _identity(mock_session)
         # 1st scalar: run, 2nd scalar: busy count (1)
         mock_session.scalar.side_effect = [run, 1]
 
         mock_factory = MagicMock()
         mock_factory.return_value.__aenter__.return_value = mock_session
 
-        outcome = await process_run({"session_factory": mock_factory}, str(run_id))
+        outcome = await process_run(_ctx(mock_factory), str(run_id))
         assert outcome == "busy"
         assert run.next_attempt_at > now
 
@@ -352,6 +384,7 @@ class TestAutomationEngineRunLoop:
         )
 
         mock_session = AsyncMock()
+        _identity(mock_session)
         # 1st scalar: run, 2nd scalar: busy count (0)
         mock_session.scalar.side_effect = [run, 0]
         mock_session.scalars.return_value = MagicMock(all=MagicMock(return_value=[]))
@@ -359,7 +392,7 @@ class TestAutomationEngineRunLoop:
         mock_factory = MagicMock()
         mock_factory.return_value.__aenter__.return_value = mock_session
 
-        outcome = await process_run({"session_factory": mock_factory}, str(run_id))
+        outcome = await process_run(_ctx(mock_factory), str(run_id))
         assert outcome == "failed"
         assert run.status == "failed"
         assert run.reason == "attempts_exhausted"

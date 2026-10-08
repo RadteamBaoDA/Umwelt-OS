@@ -20,7 +20,9 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import Settings
+from core.realtime import commit_with_replay
 from core.telemetry import RunMeta as _RunMeta
+from core.workspaces.schemas import Scope
 from modules.automations.conditions import TRIGGER_FIELDS, evaluate, validate_sample
 from modules.automations.execution import (
     ACTION_MODULE,
@@ -52,6 +54,7 @@ from modules.automations.schemas import (
     PreviewRequest,
     PreviewResult,
 )
+from modules.automations.scope import _actor, _admit
 from modules.chat.public import Conversation
 from modules.dashboard import public as dashboard
 from modules.tools.public import webhook_aliases
@@ -141,9 +144,14 @@ def _owns_brief_slot(enabled: bool, trigger: Mapping[str, Any], actions: list[An
     return enabled and trigger["type"] == "schedule" and any(a["type"] == "generate_brief" for a in actions)
 
 
-async def _sync_brief_slot(session: AsyncSession, owner_id: int, head: Automation, parts: tuple[Any, Any, Any],
-                           *, explicit_enable: bool, was_owner_candidate: bool) -> None:
+async def _sync_brief_slot(session: AsyncSession, head: Automation, parts: tuple[Any, Any, Any],
+                           *, explicit_enable: bool, was_owner_candidate: bool,
+                           scope: Scope, multi_workspace_enabled: bool) -> None:
     """Keep the daily_brief slot single-owner, in the caller's transaction (committed by the caller).
+
+    ``dashboard.claim_brief_slot``/``release_brief_slot`` lock the access fence themselves. That is safe
+    only because every caller already took ``_admit(lock=True)`` as its first statement, so the re-lock
+    is a no-op.
 
     Invariant: the slot belongs to the internal brief cron unless one enabled schedule+generate_brief
     automation has been explicitly enabled. Transfer happens only on an explicit enable (never as a
@@ -152,13 +160,13 @@ async def _sync_brief_slot(session: AsyncSession, owner_id: int, head: Automatio
     if _owns_brief_slot(head.enabled, parts[0], parts[2]):
         if explicit_enable:
             try:
-                await dashboard.claim_brief_slot(session, owner_id, head.id)
+                await dashboard.claim_brief_slot(session, head.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
             except dashboard.BriefSlotOwned as exc:
                 raise AutomationConflict("brief_slot_owned", "Another automation owns the daily brief schedule") from exc
         elif was_owner_candidate is False:
             raise PauseBeforeBriefEdit("pause the rule, then enable it to take over the daily brief schedule")
     else:
-        await dashboard.release_brief_slot(session, owner_id, head.id)
+        await dashboard.release_brief_slot(session, head.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
 
 
 def _dump(definition: AutomationDefinition) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
@@ -206,53 +214,62 @@ def _append_revision(session: AsyncSession, head: Automation, trigger: dict[str,
     return rev
 
 
-async def _owned_head(session: AsyncSession, owner_id: int, automation_id: UUID, *, lock: bool = False) -> Automation:
+async def _owned_head(session: AsyncSession, automation_id: UUID, *, lock: bool = False, scope: Scope) -> Automation:
     """Fetch a live owned rule head, optionally row-locked for revision-fenced writes."""
     stmt = select(Automation).where(
-        Automation.id == automation_id, Automation.owner_id == owner_id, Automation.deleted_at.is_(None))
+        Automation.workspace_id == scope.workspace_id, Automation.owner_id == _actor(scope),
+        Automation.id == automation_id, Automation.deleted_at.is_(None))
     head = await session.scalar(stmt.with_for_update() if lock else stmt)
     if head is None:
         raise AutomationMissing
     return head
 
 
-async def create_automation(session: AsyncSession, owner_id: int, payload: AutomationCreate,
+async def create_automation(session: AsyncSession, payload: AutomationCreate,
                             registry: Mapping[str, Any], settings: Settings, *,
-                            automation_id: UUID | None = None, commit: bool = True) -> AutomationRead:
+                            automation_id: UUID | None = None, commit: bool = True,
+                            scope: Scope, multi_workspace_enabled: bool) -> AutomationRead:
     """Validate and persist a new rule at revision 1, committing head and snapshot atomically.
 
     ``automation_id`` (stable seed ids) and ``commit=False`` (flush only, caller owns the
     transaction) exist for the explicit demo seed; routes and tools use the defaults.
     """
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
     validate_definition(payload, registry, settings)
     live = (await session.scalars(select(Automation.id).where(
-        Automation.owner_id == owner_id, Automation.deleted_at.is_(None)).limit(MAX_AUTOMATIONS_PER_OWNER))).all()
+        Automation.workspace_id == scope.workspace_id, Automation.owner_id == _actor(scope),
+        Automation.deleted_at.is_(None)).limit(MAX_AUTOMATIONS_PER_OWNER))).all()
     if len(live) >= MAX_AUTOMATIONS_PER_OWNER:
         raise AutomationConflict("quota_exceeded", "Automation limit reached")
-    head = Automation(owner_id=owner_id, name=payload.name, enabled=payload.enabled, revision=1)
+    head = Automation(
+        workspace_id=scope.workspace_id, owner_id=_actor(scope), name=payload.name, enabled=payload.enabled,
+        revision=1)
     if automation_id is not None:
         head.id = automation_id
     session.add(head)
     await session.flush()
     rev = _append_revision(session, head, *_dump(payload))
     if payload.enabled:
-        await _sync_brief_slot(session, owner_id, head, (rev.trigger, rev.conditions, rev.actions),
-                               explicit_enable=True, was_owner_candidate=False)
+        await _sync_brief_slot(session, head, (rev.trigger, rev.conditions, rev.actions),
+                               explicit_enable=True, was_owner_candidate=False, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if commit:
-        await session.commit()
+        await commit_with_replay(
+            session, [], scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
     else:
         await session.flush()
     return _read(head, rev)
 
 
-async def update_automation(session: AsyncSession, owner_id: int, automation_id: UUID, payload: AutomationUpdate,
-                            registry: Mapping[str, Any], settings: Settings) -> AutomationRead:
+async def update_automation(session: AsyncSession, automation_id: UUID, payload: AutomationUpdate,
+                            registry: Mapping[str, Any], settings: Settings, *,
+                            scope: Scope, multi_workspace_enabled: bool) -> AutomationRead:
     """Apply a revision-fenced patch by appending a new snapshot; old revisions stay untouched.
 
     Pausing (``enabled=False``) also bumps the revision so queued work fenced on the old
     revision is invalidated by dispatch while its history remains.
     """
-    head = await _owned_head(session, owner_id, automation_id, lock=True)
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    head = await _owned_head(session, automation_id, lock=True, scope=scope)
     if head.revision != payload.expected_revision:
         raise AutomationConflict("stale_revision", f"Rule is at revision {head.revision}", head.revision)
     if head.revision >= MAX_REVISION:
@@ -281,19 +298,22 @@ async def update_automation(session: AsyncSession, owner_id: int, automation_id:
         head.enabled = payload.enabled
     head.revision += 1
     rev = _append_revision(session, head, *parts)
-    await _sync_brief_slot(session, owner_id, head, parts, explicit_enable=head.enabled and not was_enabled,
-                           was_owner_candidate=was_candidate)
-    await session.commit()
+    await _sync_brief_slot(session, head, parts, explicit_enable=head.enabled and not was_enabled,
+                           was_owner_candidate=was_candidate, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await commit_with_replay(
+        session, [], scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
     return _read(head, rev)
 
 
-async def delete_automation(session: AsyncSession, owner_id: int, automation_id: UUID, expected_revision: int) -> None:
+async def delete_automation(session: AsyncSession, automation_id: UUID, expected_revision: int, *,
+                            scope: Scope, multi_workspace_enabled: bool) -> None:
     """Soft-delete and disable a rule; revisions are retained for run history.
 
     Deleting also bumps the revision and appends a disabled snapshot, so dispatch has a single
     fence: any queued or approved work citing the old revision no longer matches and is dropped.
     """
-    head = await _owned_head(session, owner_id, automation_id, lock=True)
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    head = await _owned_head(session, automation_id, lock=True, scope=scope)
     if head.revision != expected_revision:
         raise AutomationConflict("stale_revision", f"Rule is at revision {head.revision}", head.revision)
     if head.revision >= MAX_REVISION:
@@ -303,13 +323,17 @@ async def delete_automation(session: AsyncSession, owner_id: int, automation_id:
     head.enabled = False
     head.revision += 1
     _append_revision(session, head, current.trigger, current.conditions, current.actions)
-    await dashboard.release_brief_slot(session, owner_id, head.id)
-    await session.commit()
+    await dashboard.release_brief_slot(session, head.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await commit_with_replay(
+        session, [], scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
 
 
-async def get_automation(session: AsyncSession, owner_id: int, automation_id: UUID) -> AutomationRead:
+async def get_automation(
+    session: AsyncSession, automation_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+) -> AutomationRead:
     """Return one live owned rule at its current revision."""
-    head = await _owned_head(session, owner_id, automation_id)
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    head = await _owned_head(session, automation_id, scope=scope)
     return _read(head, await _current_revision(session, head))
 
 
@@ -335,21 +359,28 @@ def capabilities(registry: Mapping[str, Any], settings: Settings) -> Capabilitie
     return CapabilitiesRead(triggers=triggers, actions=actions, webhook_aliases=aliases)
 
 
-async def get_automation_conversation_id(session: AsyncSession, owner_id: int, automation_id: UUID) -> UUID | None:
+async def get_automation_conversation_id(
+    session: AsyncSession, automation_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+) -> UUID | None:
     """Return the rule's Chat conversation id (hidden from the default Chat list) or None before any agent run."""
-    await _owned_head(session, owner_id, automation_id)
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await _owned_head(session, automation_id, scope=scope)
     return await session.scalar(select(Conversation.id).where(
-        Conversation.context_kind == "automation", Conversation.context_resource_id == automation_id,
+        Conversation.workspace_id == scope.workspace_id, Conversation.context_kind == "automation", Conversation.context_resource_id == automation_id,
         Conversation.archived.is_(False)).limit(1))
 
 
-async def list_automations(session: AsyncSession, owner_id: int, *, enabled: bool | None = None,
-                           trigger_type: str | None = None) -> AutomationPage:
+async def list_automations(session: AsyncSession, *, enabled: bool | None = None,
+                           trigger_type: str | None = None, scope: Scope,
+                           multi_workspace_enabled: bool) -> AutomationPage:
     """List live owned rules (bounded), optionally by enabled flag or trigger type.
 
     Used by dispatch to find candidate rules for an incoming trigger.
     """
-    stmt = select(Automation).where(Automation.owner_id == owner_id, Automation.deleted_at.is_(None))
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    stmt = select(Automation).where(
+        Automation.workspace_id == scope.workspace_id, Automation.owner_id == _actor(scope),
+        Automation.deleted_at.is_(None))
     if enabled is not None:
         stmt = stmt.where(Automation.enabled == enabled)
     heads = (await session.scalars(stmt.order_by(Automation.created_at).limit(MAX_AUTOMATIONS_PER_OWNER))).all()
@@ -361,10 +392,14 @@ async def list_automations(session: AsyncSession, owner_id: int, *, enabled: boo
     return AutomationPage(items=items)
 
 
-async def get_revision(session: AsyncSession, owner_id: int, automation_id: UUID, revision: int) -> AutomationRead:
+async def get_revision(
+    session: AsyncSession, automation_id: UUID, revision: int, *, scope: Scope, multi_workspace_enabled: bool,
+) -> AutomationRead:
     """Return the exact immutable snapshot a run cites, even if the rule was paused or deleted since."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     head = await session.scalar(select(Automation).where(
-        Automation.id == automation_id, Automation.owner_id == owner_id))
+        Automation.workspace_id == scope.workspace_id, Automation.owner_id == _actor(scope),
+        Automation.id == automation_id))
     rev = await session.scalar(select(AutomationRevision).where(
         AutomationRevision.automation_id == automation_id, AutomationRevision.revision == revision))
     if head is None or rev is None:
@@ -379,18 +414,21 @@ def evaluate_conditions(conditions: list[dict[str, Any]], payload: Mapping[str, 
     return evaluate(conditions, dict(payload))
 
 
-async def preview(session: AsyncSession, owner_id: int, request: PreviewRequest) -> PreviewResult:
+async def preview(
+    session: AsyncSession, request: PreviewRequest, *, scope: Scope, multi_workspace_enabled: bool,
+) -> PreviewResult:
     """Dry-run conditions against a supplied metadata sample and list the actions that would run.
 
     Pure evaluation: no job is queued, no model is called, no webhook is sent and no row is
     written. A stored rule is read through the owner fence; the sample is checked against the
     trigger's declared fields. Reasons carry codes only, never sample or rule content.
     """
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if request.definition is not None:
         trigger, conditions, actions = _dump(request.definition)
     else:
         assert request.automation_id is not None  # PreviewRequest validates exactly one of automation_id/definition
-        read = await get_automation(session, owner_id, request.automation_id)
+        read = await get_automation(session, request.automation_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         trigger, conditions, actions = read.trigger, read.conditions, read.actions
         try:
             validate_sample(trigger["type"], request.sample)

@@ -5,7 +5,7 @@ import inspect
 import json
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 from uuid import uuid4
 
@@ -90,50 +90,65 @@ class ToolRegistry:
         definition = self._tools.get(name)
         return definition.model_copy(deep=True) if definition and (version is None or version == definition.version) else None
 
-    def list_tools(self, allowed_tools: frozenset[str] | None = None) -> list[ToolDefinition]:
-        """Return defensive copies of enabled contracts intersected with optional server grants."""
+    def list_tools(
+        self, allowed_tools: frozenset[str] | None = None, *, modules: Mapping[str, Any] | None = None,
+    ) -> list[ToolDefinition]:
+        """Return defensive copies of enabled contracts intersected with optional server grants.
+
+        ``modules`` is a per-call lifecycle map; None uses the registry's shared module state.
+        """
+        # ponytail: catalog reads process-wide module state set by settings/agents; invocation is authoritative.
         return sorted(
             (item.model_copy(deep=True) for item in self._tools.values()
-             if (allowed_tools is None or item.name in allowed_tools) and self._module_enabled(item.module)),
+             if (allowed_tools is None or item.name in allowed_tools) and self._module_enabled(item.module, modules)),
             key=lambda item: item.name,
         )
 
-    def _module_enabled(self, module_id: str) -> bool:
+    def _module_enabled(self, module_id: str, modules: Mapping[str, Any] | None = None) -> bool:
         """Require a present enabled owner descriptor and all of its declared dependencies."""
-        dispatcher = self._module_registry.get("tools")
+        registry = modules if modules is not None else self._module_registry
+        dispatcher = registry.get("tools")
         if dispatcher is None or not getattr(dispatcher, "enabled", False):
             return False
         if any(
-            dependency not in self._module_registry
-            or not getattr(self._module_registry[dependency], "enabled", False)
+            dependency not in registry
+            or not getattr(registry[dependency], "enabled", False)
             for dependency in getattr(dispatcher, "dependencies", ())
         ):
             return False
-        descriptor = self._module_registry.get(module_id)
+        descriptor = registry.get(module_id)
         if descriptor is None or not getattr(descriptor, "enabled", False):
             return False
         return all(
-            dependency in self._module_registry
-            and getattr(self._module_registry[dependency], "enabled", False)
+            dependency in registry
+            and getattr(registry[dependency], "enabled", False)
             for dependency in getattr(descriptor, "dependencies", ())
         )
 
-    async def _refresh_module_registry(self, context: dict[str, Any]) -> bool:
-        """Refresh persisted dependency closure at a tool admission or post-queue dispatch boundary."""
+    async def _refresh_module_registry(
+        self, context: dict[str, Any], principal: ToolExecutionPrincipal,
+    ) -> Mapping[str, Any] | None:
+        """Return the principal workspace's effective modules; never mutates shared process state.
+
+        Enablement is per workspace, so concurrent calls for different workspaces must not share
+        one registry. None means unavailable (fail closed).
+        """
         factory = context.get("session_factory")
-        if not callable(factory):
-            return False
+        flag = getattr(context.get("settings"), "multi_workspace_enabled", None)
+        if not callable(factory) or type(flag) is not bool:
+            return None
         try:
             from core.modules import effective_modules, register_modules
             from modules.settings.public import read_module_availability
 
             async with factory() as session:
-                lifecycle = await read_module_availability(session)
+                lifecycle = await read_module_availability(
+                    session, scope=principal.scope, multi_workspace_enabled=flag,
+                )
             disabled = {item.id for item in lifecycle.modules if item.explicitly_disabled}
-            self.set_module_registry(effective_modules(disabled, register_modules()))
-            return True
+            return effective_modules(disabled, register_modules())
         except Exception:  # noqa: BLE001  # fail-closed boundary: any failure denies/degrades
-            return False
+            return None
 
     async def invoke_tool(
         self,
@@ -180,9 +195,10 @@ class ToolRegistry:
         definition = self.get_tool(name, version)
         if definition is None or name not in self._handlers:
             return ToolResult(success=False, error="Unknown tool or version", error_code="tool_unavailable")
-        if not await self._refresh_module_registry(context or {}):
+        modules = await self._refresh_module_registry(context or {}, principal)
+        if modules is None:
             return ToolResult(success=False, error="Module availability could not be refreshed", error_code="tool_unavailable")
-        if name not in principal.allowed_tools or not self._module_enabled(definition.module):
+        if name not in principal.allowed_tools or not self._module_enabled(definition.module, modules):
             return ToolResult(success=False, error="Tool is unavailable for this principal", error_code="forbidden")
         if not set(definition.permissions).issubset(principal.capabilities):
             return ToolResult(success=False, error="Required tool capability is not granted", error_code="forbidden")
@@ -228,7 +244,8 @@ class ToolRegistry:
                         await principal_revalidator(principal)
                         if callable(principal_revalidator) else False
                     )
-                    module_state_current = await self._refresh_module_registry(execution_context)
+                    queued_modules = await self._refresh_module_registry(execution_context, principal)
+                    module_state_current = queued_modules is not None
                     queued_definition = self._tools.get(name)
                     try:
                         queued_approval = bool(
@@ -248,7 +265,7 @@ class ToolRegistry:
                         or self._fingerprints.get(name) != definition.schema_fingerprint
                         or registered.schema_fingerprint != definition.schema_fingerprint
                         or current_handler is not handler
-                        or not self._module_enabled(registered.module)
+                        or not self._module_enabled(registered.module, queued_modules)
                         or name not in principal.allowed_tools
                         or not set(registered.permissions).issubset(principal.capabilities)
                         or destination not in principal.destinations

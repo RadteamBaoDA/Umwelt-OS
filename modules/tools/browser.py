@@ -7,7 +7,14 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
 
+from core.realtime import commit_with_replay
 from core.tools import ToolDefinition, ToolRegistry, ToolResult, ToolRisk
+from core.workspaces import public as workspaces
+from core.workspaces.schemas import InternalJobScope, Scope
+
+
+def _actor(scope: Scope) -> int:
+    return scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
 
 
 async def _handle_browser_read(arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
@@ -56,9 +63,12 @@ async def _handle_browser_read(arguments: dict[str, Any], context: dict[str, Any
     claim = context.get("claim_generation")
     remaining_active = context.get("remaining_active_seconds")
     settings = context.get("settings")
+    scope = getattr(principal, "scope", None)
+    flag = getattr(settings, "multi_workspace_enabled", None)
     if (
         principal is None or not getattr(principal, "is_owner", False)
-        or getattr(principal, "actor_id", None) != "owner:1"
+        or scope is None or type(flag) is not bool
+        or getattr(principal, "actor_id", None) != f"owner:{_actor(scope)}"
         or not callable(factory)
         or not isinstance(run_value, str) or type(slot) is not int
         or type(claim) is not int or type(remaining_active) not in {int, float}
@@ -87,20 +97,27 @@ async def _handle_browser_read(arguments: dict[str, Any], context: dict[str, Any
             async with factory() as session:
                 # Source scope is locked before the AgentRun budget row, then
                 # the durable Tools job is inserted in that same order.
-                source = await sources.lock_source(session, source_uuid)
+                fence = await workspaces.lock_access_fence(
+                    session, scope=scope, multi_workspace_enabled=flag,
+                )
+                source = await sources.lock_source(
+                    session, source_uuid, scope=scope, multi_workspace_enabled=flag,
+                    expected_access_fence=fence,
+                )
                 if source is None or source.status != "active":
                     return ToolResult(
                         success=False, error="Browser source is not enabled", error_code="forbidden",
                     )
-                scope = await connectors.resolve_agent_browser_scope(
-                    session, 1, source_uuid
+                grant = await connectors.resolve_agent_browser_scope(
+                    session, _actor(scope), source_uuid, scope=scope, multi_workspace_enabled=flag,
                 )
-                if scope is None or not scope.enabled:
+                if grant is None or not grant.enabled:
                     return ToolResult(
                         success=False, error="Browser source is not enabled", error_code="forbidden",
                     )
                 authorization = await reserve_browser_run_budget_in_uow(
-                    session, 1, run_id, claim, slot, args_digest, pages,
+                    session, run_id, claim, slot, args_digest, pages,
+                    scope=scope, multi_workspace_enabled=flag,
                 )
                 if source_uuid not in authorization.source_ids:
                     return ToolResult(
@@ -121,14 +138,17 @@ async def _handle_browser_read(arguments: dict[str, Any], context: dict[str, Any
                         error_code="tool_unavailable",
                     )
                 job = await submit_browser_read_in_uow(
-                    session, 1, run_id, slot, authorization.auth_session_hash,
-                    scope, args, budget,
+                    session, run_id, slot, authorization.auth_session_hash,
+                    grant, args, budget, scope=scope, multi_workspace_enabled=flag, access_fence=fence,
                 )
-                await session.commit()
+                await commit_with_replay(
+                    session, [], scope=scope, multi_workspace_enabled=flag, access_fence=fence,
+                )
             if job.status == "succeeded":
                 async with factory() as session:
                     result = await read_browser_result(
-                        session, 1, authorization.auth_session_hash, job.id, factory,
+                        session, authorization.auth_session_hash, job.id, factory,
+                        scope=scope, multi_workspace_enabled=flag,
                     )
                 if result is None:
                     return ToolResult(success=False, error="Browser result is no longer current", error_code="authority_revoked")
@@ -137,6 +157,7 @@ async def _handle_browser_read(arguments: dict[str, Any], context: dict[str, Any
             else:
                 result = await execute_browser_read(
                     factory, job.id, claim, deadline=min(lease.deadline, time.monotonic() + remaining),
+                    multi_workspace_enabled=flag,
                 )
             if result.job.status != "succeeded":
                 return ToolResult(

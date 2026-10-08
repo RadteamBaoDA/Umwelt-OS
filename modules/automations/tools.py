@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.modules import register_modules
 from core.tools import ToolDefinition, ToolRegistry, ToolResult, ToolRisk
 from core.tools.registry import ToolHandler
+from core.workspaces.schemas import Scope
 from modules.automations import public
 from modules.automations.schemas import AutomationCreate
 
@@ -69,7 +70,9 @@ _CREATE_SCHEMA: dict[str, Any] = {
 async def _list(arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
     """Read the owner's live rules (definition, enabled flag, revision) so proposals avoid duplicates."""
     async with context["session_factory"]() as session:
-        page = await public.list_automations(session, 1)
+        page = await public.list_automations(
+            session, scope=context["principal"].scope,
+            multi_workspace_enabled=context["settings"].multi_workspace_enabled)
     # Compact summary keeps the result inside the byte limit even with many large rules.
     return ToolResult(success=True, data={"items": [
         {"id": str(i.id), "name": i.name, "enabled": i.enabled, "trigger": i.trigger.get("type"),
@@ -80,10 +83,12 @@ async def _create(arguments: dict[str, Any], context: dict[str, Any]) -> ToolRes
     """Persist one owner-approved proposal as a disabled draft rule and return its reference."""
     from modules.agents.internal_writes import run_approved_write
 
-    async def perform(session: AsyncSession, owner_id: int) -> str:
+    async def perform(session: AsyncSession, scope: Scope) -> str:
         """Validate the proposal and create it disabled; returns ``automation:<id>``."""
         payload = AutomationCreate.model_validate({**arguments, "enabled": False})
-        created = await public.create_automation(session, owner_id, payload, register_modules(), context["settings"])
+        created = await public.create_automation(
+            session, payload, register_modules(), context["settings"], scope=scope,
+            multi_workspace_enabled=context["settings"].multi_workspace_enabled)
         return f"automation:{created.id}"
 
     return await run_approved_write(

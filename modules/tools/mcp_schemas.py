@@ -303,6 +303,7 @@ class InboundClientIssued(McpStrictModel):
 class InboundPrincipal(McpStrictModel):
     """Verified detached inbound identity used to derive a non-owner execution principal."""
     client_id: UUID
+    workspace_id: UUID
     owner_id: int
     audience: str
     revision: int = Field(ge=1)

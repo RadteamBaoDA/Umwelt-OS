@@ -15,6 +15,7 @@ from uuid import UUID, uuid4
 import pytest
 from pydantic import BaseModel
 
+from core.workspaces.schemas import WorkspaceContext
 from modules.tools import mcp_repository
 from modules.tools.mcp_client import McpSdkClient
 from modules.tools.mcp_schemas import (
@@ -24,6 +25,8 @@ from modules.tools.mcp_schemas import (
     McpTransport,
 )
 from modules.tools.mcp_transport import McpOperationNetworkBudget, McpTransportError
+
+SCOPE = WorkspaceContext(user_id=1, workspace_id=uuid4(), role="owner", membership_revision=1)
 
 
 class DummyModel(BaseModel):
@@ -97,14 +100,14 @@ class TestMcpSdkClientManagementRevalidation:
         revalidator = AsyncMock(return_value=True)
         conn_id = uuid4()
         is_current = await client._management_request_is_current(
-            owner_id=1,
+            scope=SCOPE,
             connection_id=conn_id,
             expected_revision=2,
             management_revalidator=revalidator,
             expected_profile_hash="abc",
         )
         assert is_current is True
-        connection_is_current.assert_awaited_once_with(1, conn_id, 2, "abc")
+        connection_is_current.assert_awaited_once_with(SCOPE, conn_id, 2, "abc")
         revalidator.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -119,7 +122,7 @@ class TestMcpSdkClientManagementRevalidation:
         )
         revalidator = AsyncMock(return_value=True)
         is_current = await client._management_request_is_current(
-            owner_id=1,
+            scope=SCOPE,
             connection_id=uuid4(),
             expected_revision=1,
             management_revalidator=revalidator,
@@ -139,7 +142,7 @@ class TestMcpSdkClientManagementRevalidation:
         )
         revalidator = AsyncMock(side_effect=RuntimeError("Auth error"))
         is_current = await client._management_request_is_current(
-            owner_id=1,
+            scope=SCOPE,
             connection_id=uuid4(),
             expected_revision=None,
             management_revalidator=revalidator,
@@ -226,7 +229,7 @@ class TestMcpSdkClientOpenClient:
         )
 
         with pytest.raises(McpTransportError, match="unexpectedly carries a stdio profile identity"):
-            async with client._open_client(1, invalid_conn, "token", budget, "ordinary"):
+            async with client._open_client(SCOPE, invalid_conn, "token", budget, "ordinary"):
                 pass
 
     @pytest.mark.asyncio
@@ -246,7 +249,7 @@ class TestMcpSdkClientOpenClient:
         )
 
         with pytest.raises(mcp_repository.McpUnavailable, match="cannot use bearer credentials"):
-            async with client._open_client(1, stdio_conn, "bearer-token", budget, "ordinary"):
+            async with client._open_client(SCOPE, stdio_conn, "bearer-token", budget, "ordinary"):
                 pass
 
 
@@ -277,14 +280,14 @@ class TestMcpSdkClientCheckConnection:
 
         with patch.object(client, "_open_client", side_effect=mock_open_client):
             result = await client.check_connection(
-                owner_id=1,
+                scope=SCOPE,
                 connection_id=dummy_connection.id,
                 management_revalidator=AsyncMock(return_value=True),
             )
 
         assert result == dummy_connection
         record_draft_check.assert_awaited_once_with(
-            1, dummy_connection.id, dummy_connection.revision, "connected", None
+            SCOPE, dummy_connection.id, dummy_connection.revision, "connected", None
         )
 
     @pytest.mark.asyncio
@@ -309,13 +312,13 @@ class TestMcpSdkClientCheckConnection:
 
         with patch.object(client, "_open_client", side_effect=mock_open_client):
             await client.check_connection(
-                owner_id=1,
+                scope=SCOPE,
                 connection_id=dummy_connection.id,
                 management_revalidator=AsyncMock(return_value=True),
             )
 
         record_draft_check.assert_awaited_once_with(
-            1, dummy_connection.id, dummy_connection.revision, "timeout", None
+            SCOPE, dummy_connection.id, dummy_connection.revision, "timeout", None
         )
 
     @pytest.mark.asyncio
@@ -340,13 +343,13 @@ class TestMcpSdkClientCheckConnection:
 
         with patch.object(client, "_open_client", side_effect=mock_open_client):
             await client.check_connection(
-                owner_id=1,
+                scope=SCOPE,
                 connection_id=dummy_connection.id,
                 management_revalidator=AsyncMock(return_value=True),
             )
 
         record_draft_check.assert_awaited_once_with(
-            1, dummy_connection.id, dummy_connection.revision, "auth_error", None
+            SCOPE, dummy_connection.id, dummy_connection.revision, "auth_error", None
         )
 
     @pytest.mark.asyncio
@@ -371,13 +374,13 @@ class TestMcpSdkClientCheckConnection:
 
         with patch.object(client, "_open_client", side_effect=mock_open_client):
             await client.check_connection(
-                owner_id=1,
+                scope=SCOPE,
                 connection_id=dummy_connection.id,
                 management_revalidator=AsyncMock(return_value=True),
             )
 
         record_draft_check.assert_awaited_once_with(
-            1, dummy_connection.id, dummy_connection.revision, "unavailable", None
+            SCOPE, dummy_connection.id, dummy_connection.revision, "unavailable", None
         )
 
     @pytest.mark.asyncio
@@ -393,7 +396,7 @@ class TestMcpSdkClientCheckConnection:
 
         with pytest.raises(mcp_repository.McpConflict, match="authority is no longer current"):
             await client.check_connection(
-                owner_id=1,
+                scope=SCOPE,
                 connection_id=dummy_connection.id,
                 management_revalidator=AsyncMock(return_value=False),
             )
@@ -522,7 +525,7 @@ class TestMcpSdkClientToolAndResourceCalls:
         )
         with pytest.raises(McpTransportError, match="arguments exceed the reviewed size limit"):
             await client.call_tool(
-                owner_id=1,
+                scope=SCOPE,
                 fence=fence,
                 arguments={"payload": "x" * 200},
                 before_request=AsyncMock(return_value=True),
@@ -572,7 +575,7 @@ class TestMcpSdkClientToolAndResourceCalls:
              patch.object(client, "_list_capability_pages", AsyncMock(return_value=([descriptor], 1, 1))):  # noqa: SIM117  # style-only; nested with kept
             with pytest.raises(mcp_repository.McpConflict, match="descriptor changed"):
                 await client.call_tool(
-                    owner_id=1,
+                    scope=SCOPE,
                     fence=fence,
                     arguments={"input": "test"},
                     before_request=AsyncMock(return_value=True),
@@ -631,7 +634,7 @@ class TestMcpSdkClientToolAndResourceCalls:
         )
         with pytest.raises(mcp_repository.McpUnavailable, match="resource-template reads require"):
             await client.read_resource(
-                owner_id=1,
+                scope=SCOPE,
                 fence=fence,
                 capability_kind="resource_template",
                 before_request=AsyncMock(return_value=True),

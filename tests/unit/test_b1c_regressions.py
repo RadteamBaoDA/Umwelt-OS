@@ -509,7 +509,14 @@ async def test_notification_emit_returns_false_when_evidence_source_purged(monke
     session.execute = AsyncMock(side_effect=AssertionError("must not insert for a purged source"))
     evidence = NotificationEvidence(document_id=document_id, document_version_id=version_id)
 
-    assert await notifications.emit(session, 1, payload, evidence=evidence) is False
+    from core.workspaces.schemas import WorkspaceContext
+
+    scope = WorkspaceContext(user_id=1, workspace_id=uuid4(), role="owner", membership_revision=1)
+    monkeypatch.setattr(notifications.workspaces, "read_access_fence", AsyncMock(return_value=MagicMock()))
+
+    assert await notifications.emit(
+        session, payload, evidence=evidence, scope=scope, multi_workspace_enabled=False,
+    ) is False
 
 
 async def test_timeline_dependency_snapshot_cold_capability_cache_is_unsupported() -> None:
