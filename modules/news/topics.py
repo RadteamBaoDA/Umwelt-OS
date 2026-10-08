@@ -534,10 +534,9 @@ async def update_topic(session: AsyncSession, owner_id: int, topic_id: UUID, pay
         raise TopicConflict("stale_revision", "Topic changed since it was loaded", topic.revision)
     if topic.revision >= MAX_REVISION:
         raise TopicConflict("revision_exhausted", "Topic revision cannot be incremented", topic.revision)
-    changes = payload.model_dump(exclude_unset=True, exclude={"expected_revision"})
-    if "entity_ids" in changes and changes["entity_ids"] is not None:
-        await entities.get_entity_refs(session, changes["entity_ids"], for_write=True)
-        changes["entity_ids"] = [str(item) for item in changes["entity_ids"]]
+    changes = payload.model_dump(mode="json", exclude_unset=True, exclude={"expected_revision"})
+    if "entity_ids" in changes and payload.entity_ids is not None:
+        await entities.get_entity_refs(session, payload.entity_ids, for_write=True)
     for key, value in changes.items():
         setattr(topic, key, value)
     topic.revision += 1

@@ -269,7 +269,7 @@ async def save_ai_settings(session: AsyncSession, update: AISettingsUpdate, sett
         old_endpoint = old_endpoint or default_endpoint
         row.omniroute_base_url = old_endpoint
         if not row.aliases:
-            row.aliases = {key: value.model_dump() for key, value in (await legacy_aliases(None, settings)).items()}
+            row.aliases = {key: value.model_dump(mode="json") for key, value in (await legacy_aliases(None, settings)).items()}
         if not row.omniroute_api_key_ciphertext and default_credential:
             row.omniroute_api_key_ciphertext = _cipher(settings).encrypt(default_credential.encode()).decode()
     if update.omniroute_credential_action == "replaced":
@@ -284,7 +284,7 @@ async def save_ai_settings(session: AsyncSession, update: AISettingsUpdate, sett
     next_web_endpoint = _endpoint(str(update.web_search_endpoint) if update.web_search_endpoint else None, settings)
     current_web_destination = f"web-search:{_fingerprint(row.web_search_endpoint or '')[:32]}" if row.web_search_endpoint else None
     next_web_destination = f"web-search:{_fingerprint(next_web_endpoint or '')[:32]}" if next_web_endpoint else None
-    privacy = update.privacy.model_dump()
+    privacy = update.privacy.model_dump(mode="json")
     # Consent is bound to the endpoint selected in this same owner save.
     try:
         canonical_old_endpoint = _endpoint(old_endpoint, settings)
@@ -302,7 +302,7 @@ async def save_ai_settings(session: AsyncSession, update: AISettingsUpdate, sett
         privacy["allow_remote_web_search"] = False
     privacy["web_search_destinations"] = [next_web_destination] if privacy["allow_remote_web_search"] else []
     row.privacy = privacy
-    row.aliases = {key: value.model_dump() for key, value in update.aliases.items() if key in ALIASES}
+    row.aliases = {key: value.model_dump(mode="json") for key, value in update.aliases.items() if key in ALIASES}
     row.chat_alias, row.brief_alias = update.chat_alias, update.brief_alias
     row.web_search_provider = update.web_search_provider
     row.web_search_endpoint = next_web_endpoint

@@ -43,7 +43,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 ENDPOINT = "https://search.test"
-KEY = Fernet.generate_key().decode()
+KEY = os.getenv("TEST_AI_CREDENTIAL_ENCRYPTION_KEY", "ZmFrZS1tb2RlbC10ZXN0LWtleS0wMDAwMDAwMDAwMDA=")
 
 
 class _Redis:
