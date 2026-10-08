@@ -26,7 +26,8 @@ async def owner_client() -> AsyncIterator[AsyncClient]:
     async with AsyncClient(base_url=base_url) as client:
         csrf_response = await client.get("/api/v1/auth/csrf")
         csrf_response.raise_for_status()
-        login = await client.post(
+        login = await post_after_throttle(
+            client,
             "/api/v1/auth/login",
             headers={"Origin": origin, "X-CSRF-Token": csrf_response.json()["csrfToken"]},
             json={"password": "test-owner-password-42"},
