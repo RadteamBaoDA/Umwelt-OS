@@ -766,6 +766,16 @@ async def _fail_ingestion_stage(
 
 
 @timed("ingestion_stage_ms", stage="collect")
+async def _ingestion_enabled(session: AsyncSession, work: WorkerState, enabled: bool) -> bool:
+    """Per-workspace module gate after admission; disabled leaves the durable event untouched."""
+    from modules.settings.public import module_is_enabled
+
+    if await module_is_enabled(session, "ingestion", scope=work.scope, multi_workspace_enabled=enabled):
+        return True
+    await session.rollback()
+    return False
+
+
 async def process_ingestion_event(ctx: dict[str, object], event_id: str) -> None:
     """Commit one original scoped stage lease, release SQL for work and CAS before settlement.
 
@@ -782,7 +792,7 @@ async def process_ingestion_event(ctx: dict[str, object], event_id: str) -> None
     event_types = ("ingestion.stage.requested", "connector.crawl.requested")
     async with factory() as session:
         work = await _lock_worker_event(session, identifier, multi_workspace_enabled=enabled, event_types=event_types)
-        if work is None:
+        if work is None or not await _ingestion_enabled(session, work, enabled):
             return
         run, stage, event, state = work.run, work.stage, work.event, work.state
         now = datetime.now(UTC)
@@ -1416,7 +1426,7 @@ async def process_uploaded_file(ctx: dict[str, object], event_id: str) -> None:
     async with factory() as session:
         work = await _lock_worker_event(session, identifier, multi_workspace_enabled=enabled,
                                        event_types=("document.file.uploaded",))
-        if work is None:
+        if work is None or not await _ingestion_enabled(session, work, enabled):
             return
         run, stage, event = work.run, work.stage, work.event
         source_id = work.source.id
