@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import Settings
 from core.demo_seed import demo_seed_id
+from core.workspaces.schemas import Scope
 from modules.automations import public
 from modules.automations.schemas import AutomationCreate
 
@@ -40,7 +41,8 @@ EXAMPLES: tuple[tuple[str, dict[str, Any]], ...] = (
 
 
 async def ensure_demo_automations(
-    session: AsyncSession, owner_id: int, registry: Mapping[str, Any], settings: Settings,
+    session: AsyncSession, registry: Mapping[str, Any], settings: Settings,
+    *, scope: Scope, multi_workspace_enabled: bool,
 ) -> int:
     """Create the disabled example rules with stable ids inside the caller's transaction; return the count.
 
@@ -48,7 +50,8 @@ async def ensure_demo_automations(
     """
     for key, body in EXAMPLES:
         await public.create_automation(
-            session, owner_id, AutomationCreate(**body, enabled=False), registry, settings,
+            session, AutomationCreate(**body, enabled=False), registry, settings,
             automation_id=demo_seed_id("automation", key), commit=False,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
     return len(EXAMPLES)

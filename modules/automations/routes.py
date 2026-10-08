@@ -20,12 +20,16 @@ from fastapi import (
     status,
 )
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from sqlalchemy import select
+from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.dependencies import require_owner, require_owner_write
 from core.auth.models import AuthSession, Owner
 from core.database import get_session
+from core.realtime import commit_with_replay
+from core.workspaces import public as workspaces
+from core.workspaces.dependencies import require_workspace_read, require_workspace_write
+from core.workspaces.schemas import InternalJobScope, WorkspaceContext
 from modules.automations import public
 from modules.automations.execution import enqueue_trigger
 from modules.automations.models import AutomationTrigger, AutomationWebhookCredential
@@ -42,6 +46,7 @@ from modules.automations.schemas import (
     RunPage,
     RunRead,
 )
+from modules.automations.scope import _actor, _admit, _require_owner
 from modules.settings.public import module_dependency, module_is_enabled, register_request_activity
 
 router = APIRouter(prefix="/api/v1/automations", tags=["automations"], dependencies=[Depends(module_dependency("automations"))])
@@ -49,6 +54,8 @@ webhook_router = APIRouter(prefix="/api/v1/automations", tags=["automation-webho
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[AuthSession, Depends(require_owner)]
 OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]
+WorkspaceRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
+WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 WEBHOOK_TOKEN_TTL = timedelta(days=90)
 WEBHOOK_BODY_LIMIT = 64 * 1024
 _EVENT_KEY = re.compile(r"^[\x21-\x7e]{1,128}$")
@@ -61,9 +68,25 @@ class InboundEvent(BaseModel):
     event: str = Field(min_length=1, max_length=2000)
 
 
+def _credential_stmt(alias: str, token_digest: str) -> Select[Any]:
+    """Live (not revoked, not expired) credential for an alias and token digest; the digest is the selector."""
+    return select(AutomationWebhookCredential).where(
+        AutomationWebhookCredential.alias == alias,
+        AutomationWebhookCredential.token_hash == token_digest,
+        AutomationWebhookCredential.revoked_at.is_(None),
+        AutomationWebhookCredential.expires_at > datetime.now(UTC),
+    ).limit(2)
+
+
 def _error(code: int, name: str, message: str, details: dict[str, Any] | None = None) -> HTTPException:
     """Build the standard error envelope without echoing rule content."""
     return HTTPException(status_code=code, detail={"code": name, "message": message, "details": details or {}})
+
+
+def _flag(request: Request) -> bool:
+    """The configured multi-workspace flag; never defaulted."""
+    flag: bool = request.app.state.settings.multi_workspace_enabled
+    return flag
 
 
 async def _call[T](operation: Awaitable[T]) -> T:
@@ -88,49 +111,58 @@ async def _call[T](operation: Awaitable[T]) -> T:
 
 @router.get("", response_model=AutomationPage)
 async def list_automations(
-    session: Session, owner: OwnerRead, response: Response, enabled: bool | None = None,
-    trigger_type: Annotated[str | None, Query(max_length=32)] = None,
+    request: Request, session: Session, owner: OwnerRead, scope: WorkspaceRead, response: Response,
+    enabled: bool | None = None, trigger_type: Annotated[str | None, Query(max_length=32)] = None,
 ) -> AutomationPage:
     """List the owner's live rules; never cacheable."""
     response.headers["Cache-Control"] = "private, no-store"
-    return await public.list_automations(session, owner.owner_id, enabled=enabled, trigger_type=trigger_type)
+    return await public.list_automations(
+        session, enabled=enabled, trigger_type=trigger_type, scope=scope, multi_workspace_enabled=_flag(request))
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=AutomationRead)
 async def create_automation(
-    payload: AutomationCreate, request: Request, session: Session, owner: OwnerWrite, response: Response,
+    payload: AutomationCreate, request: Request, session: Session, owner: OwnerWrite, scope: WorkspaceWrite,
+    response: Response,
 ) -> AutomationRead:
     """Create a rule at revision 1 after CSRF-protected owner auth and dependency/allowlist checks."""
     response.headers["Cache-Control"] = "private, no-store"
     return await _call(public.create_automation(
-        session, owner.owner_id, payload, request.app.state.modules, request.app.state.settings))
+        session, payload, request.app.state.modules, request.app.state.settings,
+        scope=scope, multi_workspace_enabled=_flag(request)))
 
 
 @router.get("/capabilities", response_model=CapabilitiesRead)
-async def get_capabilities(request: Request, owner: OwnerRead, response: Response) -> CapabilitiesRead:
+async def get_capabilities(
+    request: Request, owner: OwnerRead, scope: WorkspaceRead, response: Response,
+) -> CapabilitiesRead:
     """Return editor options: trigger fields, action availability by owning module and webhook alias names."""
     response.headers["Cache-Control"] = "private, no-store"
+    _require_owner(scope)
     return public.capabilities(request.app.state.modules, request.app.state.settings)
 
 
 @router.post("/webhook-credentials/{alias}")
 async def issue_webhook_credential(
     alias: Annotated[str, Path(pattern=r"^[a-z][a-z0-9_-]{0,39}$")],
-    request: Request, session: Session, owner: OwnerWrite, response: Response,
+    request: Request, session: Session, owner: OwnerWrite, scope: WorkspaceWrite, response: Response,
 ) -> dict[str, object]:
     """Rotate one alias token and show its random bearer exactly once to the authenticated owner."""
     response.headers["Cache-Control"] = "private, no-store"
     from modules.tools.mcp_credentials import issue_inbound_token
 
+    flag = _flag(request)
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=flag, lock=True)
     raw, digest, _prefix = issue_inbound_token()
     await session.scalar(select(Owner).where(Owner.id == owner.owner_id).with_for_update())
     row = await session.scalar(select(AutomationWebhookCredential).where(
-        AutomationWebhookCredential.owner_id == owner.owner_id,
+        AutomationWebhookCredential.workspace_id == scope.workspace_id,
+        AutomationWebhookCredential.owner_id == _actor(scope),
         AutomationWebhookCredential.alias == alias,
     ).with_for_update())
     if row is None:
         row = AutomationWebhookCredential(
-            owner_id=owner.owner_id, alias=alias, token_hash=digest, revision=1,
+            workspace_id=scope.workspace_id, owner_id=_actor(scope), alias=alias, token_hash=digest, revision=1,
             expires_at=datetime.now(UTC) + WEBHOOK_TOKEN_TTL,
         )
         session.add(row)
@@ -140,7 +172,7 @@ async def issue_webhook_credential(
         row.created_at = datetime.now(UTC)
         row.expires_at = datetime.now(UTC) + WEBHOOK_TOKEN_TTL
         row.revoked_at = None
-    await session.commit()
+    await commit_with_replay(session, [], scope=scope, multi_workspace_enabled=flag, access_fence=fence)
     return {
         "alias": alias, "token": raw, "revision": row.revision,
         "expires_at": row.expires_at, "endpoint": f"/api/v1/automations/inbound/{alias}",
@@ -150,16 +182,19 @@ async def issue_webhook_credential(
 @router.delete("/webhook-credentials/{alias}", status_code=status.HTTP_204_NO_CONTENT)
 async def revoke_webhook_credential(
     alias: Annotated[str, Path(pattern=r"^[a-z][a-z0-9_-]{0,39}$")],
-    session: Session, owner: OwnerWrite,
+    request: Request, session: Session, owner: OwnerWrite, scope: WorkspaceWrite,
 ) -> Response:
     """Immediately revoke one alias credential while retaining trigger and run history."""
+    flag = _flag(request)
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=flag, lock=True)
     row = await session.scalar(select(AutomationWebhookCredential).where(
-        AutomationWebhookCredential.owner_id == owner.owner_id,
+        AutomationWebhookCredential.workspace_id == scope.workspace_id,
+        AutomationWebhookCredential.owner_id == _actor(scope),
         AutomationWebhookCredential.alias == alias,
     ).with_for_update())
     if row is not None:
         row.revoked_at = datetime.now(UTC)
-        await session.commit()
+        await commit_with_replay(session, [], scope=scope, multi_workspace_enabled=flag, access_fence=fence)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -191,19 +226,27 @@ async def receive_inbound_webhook(
                 raise HTTPException(status_code=413, detail="Webhook body exceeds 64 KiB")
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="Webhook content length is invalid") from exc
-    from modules.tools.mcp_credentials import verify_inbound_token
+    from modules.tools.mcp_credentials import hash_inbound_token, verify_inbound_token
 
-    credential = await session.scalar(select(AutomationWebhookCredential).where(
-        AutomationWebhookCredential.owner_id == 1,
-        AutomationWebhookCredential.alias == alias,
-        AutomationWebhookCredential.revoked_at.is_(None),
-        AutomationWebhookCredential.expires_at > datetime.now(UTC),
-    ))
-    if credential is None or not verify_inbound_token(token, credential.token_hash):
+    flag = _flag(request)
+    # The URL carries no workspace: alias plus the token digest is the unique selector (Recipe W).
+    try:
+        digest = hash_inbound_token(token)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail="Webhook credentials are invalid or expired") from exc
+    matches = (await session.scalars(_credential_stmt(alias, digest))).all()
+    if len(matches) != 1 or not verify_inbound_token(token, matches[0].token_hash):
         raise HTTPException(status_code=401, detail="Webhook credentials are invalid or expired")
+    credential = matches[0]
+    owner = await workspaces.resolve_workspace_owner_context(
+        session, credential.workspace_id, multi_workspace_enabled=flag)
+    if owner is None or owner.user_id != credential.owner_id:
+        raise HTTPException(status_code=401, detail="Webhook credentials are invalid or expired")
+    scope = InternalJobScope(
+        workspace_id=credential.workspace_id, actor_user_id=owner.user_id, membership_revision=owner.membership_revision)
     # External trigger ingress uses its own bearer. Check persisted availability only after it
     # authenticates, since this router deliberately has no owner-session/CSRF dependency.
-    if not await module_is_enabled(session, "automations"):
+    if not await module_is_enabled(session, "automations", scope=scope, multi_workspace_enabled=flag):
         raise HTTPException(status_code=404, detail="Automation webhooks are unavailable")
     body = bytearray()
     try:
@@ -220,82 +263,92 @@ async def receive_inbound_webhook(
         raise HTTPException(status_code=422, detail="Webhook event payload is invalid") from exc
     # Commit the global admission before taking the credential row lock used for the durable inbox write.
     await register_request_activity(request, session, "automation_webhook_ingress", alias)
-    credential = await session.scalar(select(AutomationWebhookCredential).where(
-        AutomationWebhookCredential.owner_id == 1,
-        AutomationWebhookCredential.alias == alias,
-        AutomationWebhookCredential.revoked_at.is_(None),
-        AutomationWebhookCredential.expires_at > datetime.now(UTC),
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=flag, lock=True)
+    credential = await session.scalar(_credential_stmt(alias, digest).where(
+        AutomationWebhookCredential.workspace_id == scope.workspace_id,
+        AutomationWebhookCredential.owner_id == _actor(scope),
     ).with_for_update().execution_options(populate_existing=True))
     if credential is None or not verify_inbound_token(token, credential.token_hash):
         raise HTTPException(status_code=401, detail="Webhook credentials are invalid or expired")
-    if not await module_is_enabled(session, "automations"):
+    if not await module_is_enabled(session, "automations", scope=scope, multi_workspace_enabled=flag):
         raise HTTPException(status_code=404, detail="Automation webhooks are unavailable")
     accepted = await enqueue_trigger(
-        session, 1, "webhook", f"{alias}:{event_key}",
-        {"event": payload.event}, hook=alias,
+        session, "webhook", f"{alias}:{event_key}",
+        {"event": payload.event}, hook=alias, scope=scope, multi_workspace_enabled=flag,
     )
     if not accepted:
         prior = await session.scalar(select(AutomationTrigger).where(
-            AutomationTrigger.owner_id == 1,
+            AutomationTrigger.workspace_id == scope.workspace_id,
+            AutomationTrigger.owner_id == _actor(scope),
             AutomationTrigger.trigger_type == "webhook",
             AutomationTrigger.event_key == f"{alias}:{event_key}",
         ))
         if prior is None or prior.payload != {"event": payload.event, "hook": alias}:
             raise HTTPException(status_code=409, detail="Idempotency key was already used for another event")
-    await session.commit()
+    await commit_with_replay(session, [], scope=scope, multi_workspace_enabled=flag, access_fence=fence)
     return {"accepted": accepted}
 
 
 # Declared before ``/{automation_id}`` so "preview" is never parsed as an ID.
 @router.post("/preview", response_model=PreviewResult)
 async def preview_automation(
-    payload: PreviewRequest, session: Session, owner: OwnerWrite, response: Response,
+    payload: PreviewRequest, request: Request, session: Session, owner: OwnerWrite, scope: WorkspaceRead,
+    response: Response,
 ) -> PreviewResult:
     """Dry-run a definition or stored rule against a sample; queues nothing and calls no model."""
     response.headers["Cache-Control"] = "private, no-store"
-    return await _call(public.preview(session, owner.owner_id, payload))
+    return await _call(public.preview(session, payload, scope=scope, multi_workspace_enabled=_flag(request)))
 
 
 @router.get("/{automation_id}", response_model=AutomationRead)
-async def get_automation(automation_id: UUID, session: Session, owner: OwnerRead, response: Response) -> AutomationRead:
+async def get_automation(
+    automation_id: UUID, request: Request, session: Session, owner: OwnerRead, scope: WorkspaceRead,
+    response: Response,
+) -> AutomationRead:
     """Return one rule at its current revision."""
     response.headers["Cache-Control"] = "private, no-store"
-    return await _call(public.get_automation(session, owner.owner_id, automation_id))
+    return await _call(public.get_automation(
+        session, automation_id, scope=scope, multi_workspace_enabled=_flag(request)))
 
 
 @router.patch("/{automation_id}", response_model=AutomationRead)
 async def update_automation(
     automation_id: UUID, payload: AutomationUpdate, request: Request, session: Session,
-    owner: OwnerWrite, response: Response,
+    owner: OwnerWrite, scope: WorkspaceWrite, response: Response,
 ) -> AutomationRead:
     """Append a new immutable revision from a revision-fenced patch."""
     response.headers["Cache-Control"] = "private, no-store"
     return await _call(public.update_automation(
-        session, owner.owner_id, automation_id, payload, request.app.state.modules, request.app.state.settings))
+        session, automation_id, payload, request.app.state.modules, request.app.state.settings,
+        scope=scope, multi_workspace_enabled=_flag(request)))
 
 
 @router.delete("/{automation_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_automation(
-    automation_id: UUID, session: Session, owner: OwnerWrite,
+    automation_id: UUID, request: Request, session: Session, owner: OwnerWrite, scope: WorkspaceWrite,
     expected_revision: Annotated[int, Query(ge=1)],
 ) -> Response:
     """Soft-delete a rule (history retained) when the expected revision matches."""
-    await _call(public.delete_automation(session, owner.owner_id, automation_id, expected_revision))
+    await _call(public.delete_automation(
+        session, automation_id, expected_revision, scope=scope, multi_workspace_enabled=_flag(request)))
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/{automation_id}/conversation")
 async def get_automation_conversation(
-    automation_id: UUID, session: Session, owner: OwnerRead, response: Response,
+    automation_id: UUID, request: Request, session: Session, owner: OwnerRead, scope: WorkspaceRead,
+    response: Response,
 ) -> dict[str, UUID | None]:
     """Return the per-rule Chat conversation id so run detail can open it; null until an agent action ran."""
     response.headers["Cache-Control"] = "private, no-store"
-    return {"conversation_id": await _call(public.get_automation_conversation_id(session, owner.owner_id, automation_id))}
+    return {"conversation_id": await _call(public.get_automation_conversation_id(
+        session, automation_id, scope=scope, multi_workspace_enabled=_flag(request)))}
 
 
 @router.post("/{automation_id}/run", status_code=status.HTTP_202_ACCEPTED, response_model=RunRead)
 async def run_automation(
-    automation_id: UUID, payload: ManualRunRequest, session: Session, owner: OwnerWrite, response: Response,
+    automation_id: UUID, payload: ManualRunRequest, request: Request, session: Session, owner: OwnerWrite,
+    scope: WorkspaceWrite, response: Response,
 ) -> RunRead:
     """Queue one run now; retries with the same client_request_id return the same run.
 
@@ -303,26 +356,28 @@ async def run_automation(
     """
     response.headers["Cache-Control"] = "private, no-store"
     return await _call(public.start_manual(
-        session, owner.owner_id, automation_id, payload.expected_revision, payload.client_request_id))
+        session, automation_id, payload.expected_revision, payload.client_request_id,
+        scope=scope, multi_workspace_enabled=_flag(request)))
 
 
 @router.get("/{automation_id}/runs", response_model=RunPage)
 async def list_automation_runs(
-    automation_id: UUID, session: Session, owner: OwnerRead, response: Response,
-    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    automation_id: UUID, request: Request, session: Session, owner: OwnerRead, scope: WorkspaceRead,
+    response: Response, limit: Annotated[int, Query(ge=1, le=100)] = 50,
 ) -> RunPage:
     """Newest-first run history with per-action outcomes (codes only), kept after pause or delete."""
     response.headers["Cache-Control"] = "private, no-store"
-    return await _call(public.list_runs(session, owner.owner_id, automation_id, limit))
+    return await _call(public.list_runs(
+        session, automation_id, limit, scope=scope, multi_workspace_enabled=_flag(request)))
 
 
 @router.post("/runs/{run_id}/actions/{ordinal}/decision", response_model=RunRead)
 async def decide_run_action(
     run_id: UUID, ordinal: Annotated[int, Path(ge=1, le=10)], payload: DecisionRequest, request: Request,
-    session: Session, owner: OwnerWrite, response: Response,
+    session: Session, owner: OwnerWrite, scope: WorkspaceWrite, response: Response,
 ) -> RunRead:
     """Approve or deny an action waiting for approval; approval is bound to the cited revision."""
     response.headers["Cache-Control"] = "private, no-store"
     return await _call(public.decide_action(
-        session, owner.owner_id, owner.token_hash, run_id, ordinal, payload.decision == "approve",
-        request.app.state.settings))
+        session, owner.token_hash, run_id, ordinal, payload.decision == "approve",
+        request.app.state.settings, scope=scope, multi_workspace_enabled=_flag(request)))
