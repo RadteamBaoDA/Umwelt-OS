@@ -125,7 +125,7 @@ async def _seed_supported_story(client: AsyncClient, engine: AsyncEngine, nonce:
 
 async def _assert_story_in_context(client: AsyncClient, day: object, story_id: UUID) -> None:
     """The seed is real only if the dashboard's stories widget (the brief's fact source) lists it."""
-    context = await client.get("/api/v1/dashboard/context/daily", params={"date": str(day), "timezone": TZ})
+    context = await client.get("/api/v1/context/daily", params={"date": str(day), "timezone": TZ})
     assert context.status_code == 200, context.text
     stories = next(w for w in context.json()["widgets"] if w["id"] == "stories")
     assert str(story_id) in {item["id"] for item in stories["items"]}, "seeded story missing from the brief facts"
