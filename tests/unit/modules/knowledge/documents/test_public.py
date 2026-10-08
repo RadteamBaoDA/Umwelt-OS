@@ -40,7 +40,7 @@ from modules.knowledge.documents.public import (
     news_retained_observation_allowed,
     read_extraction_input,
 )
-from tests.unit.modules.knowledge.documents.conftest import SCOPE_KW
+from tests.unit.modules.knowledge.documents._scope import SCOPE_KW
 
 
 class TestVersionHashingAndExtractionLimits:

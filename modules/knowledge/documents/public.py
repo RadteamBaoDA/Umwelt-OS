@@ -901,7 +901,7 @@ def _decode_provider_cursor(cursor: str) -> tuple[datetime, UUID]:
 
 
 async def read_provider_snapshots(
-    session: AsyncSession, version_ids: list[UUID]
+    session: AsyncSession, version_ids: list[UUID], *, scope: Scope, multi_workspace_enabled: bool,
 ) -> list[ProviderDocumentSnapshotRead]:
     """Read exact immutable provider versions for an already owner-authenticated route.
 
@@ -911,12 +911,15 @@ async def read_provider_snapshots(
     """
     if not 1 <= len(version_ids) <= 100 or len(version_ids) != len(set(version_ids)):
         raise ValueError("version_ids must contain 1 to 100 unique values")
+    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     rows = list((await session.execute(
         select(Document, DocumentVersion, Source, NormalizedVersionProvenance)
-        .join(DocumentVersion, DocumentVersion.id.in_(version_ids))
+        .select_from(Document)
+        .join(DocumentVersion, DocumentVersion.document_id == Document.id)
         .join(Source, Source.id == Document.source_id)
         .outerjoin(NormalizedVersionProvenance, NormalizedVersionProvenance.document_version_id == DocumentVersion.id)
-        .where(Document.id == DocumentVersion.document_id, Source.provider.in_(PROVIDER_IDS))
+        .where(DocumentVersion.id.in_(version_ids), Source.provider.in_(PROVIDER_IDS),
+               *_document_scope(scope))
     )).all())
     by_id = {version.id: _provider_snapshot(document, version, source, provenance)
              for document, version, source, provenance in rows
@@ -930,6 +933,8 @@ async def list_provider_snapshots(
     session: AsyncSession,
     *,
     source_ids: list[UUID],
+    scope: Scope,
+    multi_workspace_enabled: bool,
     channel_ids: list[str] | None = None,
     limit: int = 50,
     cursor: str | None = None,
@@ -948,6 +953,7 @@ async def list_provider_snapshots(
         or any(re.fullmatch(r"-?[1-9][0-9]{0,19}", item) is None for item in channel_ids)
     ):
         raise ValueError("channel_ids must contain at most 100 unique values")
+    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     statement = (
         select(Document, DocumentVersion, Source, NormalizedVersionProvenance)
         .join(Source, Source.id == Document.source_id)
@@ -958,6 +964,7 @@ async def list_provider_snapshots(
             Document.source_id.in_(source_ids),
             Source.status.in_(("active", "paused")),
             Source.provider.in_(PROVIDER_IDS),
+            *_document_scope(scope),
         )
     )
     if cursor is not None:
@@ -2375,14 +2382,17 @@ async def list_ready_document_workspace_ids(
 
 async def get_tool_document(
     session: AsyncSession, document_id: UUID, *, source_ids: frozenset[UUID],
+    scope: Scope, multi_workspace_enabled: bool,
     owner_all: bool = False, destination: ToolDestination = ToolDestination.LOCAL,
 ) -> ToolDocumentRead | None:
     """Read a query-time active/current document DTO under exact source and destination fences.
 
     Local-only source rows are excluded in SQL for remote destinations. An empty non-owner
     source set returns no rows. This query-time projection does not replace revalidation by
-    the eventual sender immediately before remote transmission.
+    the eventual sender immediately before remote transmission. ``owner_all`` means every
+    Source of the admitted workspace, never other workspaces.
     """
+    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     statement = (
         select(Document.id, DocumentVersion.id, Document.source_id, Source.generation, Document.title,
                Document.content_type, DocumentVersion.version_number, Document.created_at)
@@ -2390,6 +2400,7 @@ async def get_tool_document(
         .join(Source, Source.id == Document.source_id)
         .where(
             Document.id == document_id,
+            *_document_scope(scope),
             Document.current_version == DocumentVersion.version_number,
             Document.extraction_status.in_(("ready", "succeeded")),
             Source.status == "active",
@@ -2471,8 +2482,8 @@ async def revalidate_tool_document_fences(
 
 async def list_tool_documents(
     session: AsyncSession, *, limit: int, cursor: str | None,
-    source_ids: frozenset[UUID], owner_all: bool = False,
-    destination: ToolDestination = ToolDestination.LOCAL,
+    source_ids: frozenset[UUID], scope: Scope, multi_workspace_enabled: bool,
+    owner_all: bool = False, destination: ToolDestination = ToolDestination.LOCAL,
 ) -> ToolDocumentPage:
     """Page only active/current rows allowed by source and destination before cursor creation.
 
@@ -2481,12 +2492,14 @@ async def list_tool_documents(
     """
     if not 1 <= limit <= 100:
         raise ValueError("Document tool page size is outside its supported bound")
+    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     statement = (
         select(Document.id, DocumentVersion.id, Document.source_id, Source.generation, Document.title,
                Document.content_type, DocumentVersion.version_number, Document.created_at)
         .join(DocumentVersion, DocumentVersion.document_id == Document.id)
         .join(Source, Source.id == Document.source_id)
         .where(
+            *_document_scope(scope),
             Document.current_version == DocumentVersion.version_number,
             Document.extraction_status.in_(("ready", "succeeded")), Source.status == "active",
         )

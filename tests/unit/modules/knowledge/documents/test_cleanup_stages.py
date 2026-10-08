@@ -7,7 +7,7 @@ from uuid import uuid4
 from sqlalchemy.dialects import postgresql
 
 from modules.knowledge.documents import public, worker
-from tests.unit.modules.knowledge.documents.conftest import SCOPE_KW
+from tests.unit.modules.knowledge.documents._scope import SCOPE_KW
 
 
 class _Session:
