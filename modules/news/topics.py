@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Literal, NoReturn
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import (
     BigInteger,
@@ -35,11 +35,38 @@ from sqlalchemy.types import Uuid
 from core.auth.dependencies import require_owner, require_owner_write
 from core.auth.models import AuthSession
 from core.database import Base, get_session
+from core.realtime import commit_with_replay
+from core.workspaces import public as workspaces
+from core.workspaces.dependencies import require_workspace_read, require_workspace_write
+from core.workspaces.schemas import AccessFence, Scope, WorkspaceContext
 
 MAX_REVISION = 9_007_199_254_740_991
 MAX_KEYWORDS = 50
 MAX_KEYWORD_LENGTH = 100
 MAX_ENTITIES = 100
+
+
+def _actor(scope: Scope) -> int:
+    """Return the admitted owner actor used by this workspace-local row."""
+    return scope.user_id if isinstance(scope, WorkspaceContext) else scope.actor_user_id
+
+
+async def _admit(
+    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
+    lock: bool = False, expected: AccessFence | None = None,
+) -> AccessFence:
+    """Admit owner scope before topic or entity reads and return its publication fence."""
+    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
+    if type(multi_workspace_enabled) is not bool:
+        raise TypeError("The configured multi-workspace feature flag must be a boolean")
+    if lock:
+        return await workspaces.lock_access_fence(
+            session, scope=scope, expected=expected, multi_workspace_enabled=multi_workspace_enabled,
+        )
+    return await workspaces.read_access_fence(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
 
 
 class Topic(Base):
@@ -295,53 +322,78 @@ def _to_topic_read(topic: Topic, entity_ids: list[UUID]) -> TopicRead:
         created_at=topic.created_at, updated_at=topic.updated_at)
 
 
-async def _topic_read(session: AsyncSession, topic: Topic) -> TopicRead:
-    """Build a detached projection using entity-owner read resolution only."""
+async def _topic_read(
+    session: AsyncSession, topic: Topic, *, scope: Scope, multi_workspace_enabled: bool,
+) -> TopicRead:
+    """Build a detached topic projection through the same admitted workspace as its row."""
     from modules.knowledge.entities import public as entities
     identifiers = [UUID(value) for value in (topic.entity_ids or [])]
     try:
-        refs = await entities.get_entity_refs(session, identifiers)
+        refs = await entities.get_entity_refs(
+            session, identifiers, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
         return _to_topic_read(topic, list(dict.fromkeys(ref.canonical_id for ref in refs)))
     except LookupError:
         # Entity deletion must not make the topic owner record unreadable.
         visible = []
         for identifier in identifiers:
             try:
-                visible.append((await entities.get_entity_refs(session, [identifier]))[0].canonical_id)
+                visible.append((await entities.get_entity_refs(
+                    session, [identifier], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                ))[0].canonical_id)
             except LookupError:
                 continue
         return _to_topic_read(topic, list(dict.fromkeys(visible)))
 
 
-def _encode_topic_cursor(created_at: datetime, topic_id: UUID, owner_id: int, is_active: bool | None) -> str:
-    """Encode deterministic keyset state bound to owner and active filter."""
-    value = json.dumps([created_at.isoformat(), str(topic_id), owner_id, is_active], separators=(",", ":"))
+def _encode_topic_cursor(
+    snapshot_at: datetime, created_at: datetime, topic_id: UUID,
+    access_fence: AccessFence, is_active: bool | None,
+) -> str:
+    """Bind topic list position to workspace admission, filter, sort and snapshot."""
+    value = json.dumps([
+        2, "topics", str(access_fence.workspace_id), access_fence.user_id,
+        access_fence.membership_revision, access_fence.configuration_revision,
+        {"is_active": is_active}, "created_at_asc_id_asc", snapshot_at.isoformat(),
+        created_at.isoformat(), str(topic_id),
+    ], separators=(",", ":"))
     return base64.urlsafe_b64encode(value.encode()).decode().rstrip("=")
 
 
-def _decode_topic_cursor(cursor: str, owner_id: int, is_active: bool | None) -> tuple[datetime, UUID]:
-    """Validate canonical cursor encoding and reject cross-owner/filter reuse."""
+def _decode_topic_cursor(
+    cursor: str, access_fence: AccessFence, is_active: bool | None,
+) -> tuple[datetime, datetime, UUID]:
+    """Reject legacy, cross-workspace, stale-admission, or filter-mismatched cursors."""
     try:
+        if not cursor or len(cursor) > 2048 or "=" in cursor:
+            raise ValueError("invalid size or padding")
         raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
         if base64.urlsafe_b64encode(raw).decode().rstrip("=") != cursor:
             raise ValueError("noncanonical")
         value = json.loads(raw)
-        if not isinstance(value, list) or len(value) != 4:
-            raise ValueError("invalid shape")
-        timestamp, identifier, cursor_owner, cursor_active = value
-        if (not isinstance(timestamp, str) or not isinstance(identifier, str)
-                or type(cursor_owner) is not int
-                or (cursor_active is not None and type(cursor_active) is not bool)):
-            raise ValueError("invalid field types")
-        parsed = datetime.fromisoformat(timestamp)
-        if parsed.utcoffset() is None or cursor_owner != owner_id or cursor_active is not is_active:
-            raise ValueError("scope mismatch")
-        return parsed, UUID(identifier)
+        expected = [
+            2, "topics", str(access_fence.workspace_id), access_fence.user_id,
+            access_fence.membership_revision, access_fence.configuration_revision,
+            {"is_active": is_active}, "created_at_asc_id_asc",
+        ]
+        if not isinstance(value, list) or len(value) != 11 or value[:8] != expected:
+            raise ValueError("scope or filter mismatch")
+        snapshot_at, created_at = datetime.fromisoformat(value[8]), datetime.fromisoformat(value[9])
+        topic_id = UUID(value[10])
+        if (any(item.utcoffset() is None for item in (snapshot_at, created_at))
+                or snapshot_at.isoformat() != value[8] or created_at.isoformat() != value[9]
+                or created_at > snapshot_at or snapshot_at > datetime.now(UTC)
+                or str(topic_id) != value[10]
+                or _encode_topic_cursor(snapshot_at, created_at, topic_id, access_fence, is_active) != cursor):
+            raise ValueError("invalid cursor snapshot or position")
+        return snapshot_at, created_at, topic_id
     except (ValueError, TypeError, KeyError, json.JSONDecodeError, UnicodeDecodeError, binascii.Error) as exc:
         raise ValueError("Invalid or out-of-scope topic cursor") from exc
 
 
-async def create_topic(session: AsyncSession, owner_id: int, payload: TopicCreate) -> TopicRead:
+async def create_topic(
+    session: AsyncSession, payload: TopicCreate, *, scope: Scope, multi_workspace_enabled: bool,
+) -> TopicRead:
     """Create a validated owner profile and commit the caller's entire session.
 
     Entity references are write-validated first. The commit persists every pending
@@ -351,105 +403,146 @@ async def create_topic(session: AsyncSession, owner_id: int, payload: TopicCreat
     commit, the caller must rollback before reusing the session.
     """
     from modules.knowledge.entities import public as entities
-    await entities.get_entity_refs(session, payload.entity_ids, for_write=True)
-    topic = Topic(owner_id=owner_id, name=payload.name, description=payload.description,
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    actor = _actor(scope)
+    await entities.get_entity_refs(
+        session, payload.entity_ids, for_write=True, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    topic = Topic(workspace_id=scope.workspace_id, owner_id=actor, name=payload.name, description=payload.description,
         keywords=payload.keywords, entity_ids=[str(item) for item in payload.entity_ids],
         is_active=payload.is_active, weight=payload.weight)
     session.add(topic)
     await session.flush()
-    result = await _topic_read(session, topic)
-    await session.commit()
+    result = await _topic_read(session, topic, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await commit_with_replay(
+        session, [], scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+    )
     return result
 
 
-async def get_topic(session: AsyncSession, owner_id: int, topic_id: UUID) -> TopicRead:
+async def get_topic(session: AsyncSession, topic_id: UUID, *, scope: Scope, multi_workspace_enabled: bool) -> TopicRead:
     """Return a live topic owned by the caller or hide it as missing."""
-    topic = await session.scalar(select(Topic).where(Topic.id == topic_id, Topic.owner_id == owner_id, Topic.deleted_at.is_(None)))
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    topic = await session.scalar(select(Topic).where(
+        Topic.id == topic_id, Topic.workspace_id == scope.workspace_id,
+        Topic.owner_id == _actor(scope), Topic.deleted_at.is_(None),
+    ))
     if topic is None:
         raise TopicMissing
-    return await _topic_read(session, topic)
+    return await _topic_read(session, topic, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
 
 
-async def list_topics(session: AsyncSession, owner_id: int, filters: TopicFilter) -> TopicPage:
+async def list_topics(
+    session: AsyncSession, filters: TopicFilter, *, scope: Scope, multi_workspace_enabled: bool,
+) -> TopicPage:
     """Read a bounded owner-scoped page using a cursor tied to its filter."""
-    statement = select(Topic).where(Topic.owner_id == owner_id, Topic.deleted_at.is_(None))
-    count_statement = select(func.count()).select_from(Topic).where(Topic.owner_id == owner_id, Topic.deleted_at.is_(None))
+    access_fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    actor = _actor(scope)
+    snapshot_at, position = datetime.now(UTC), None
+    if filters.cursor:
+        snapshot_at, position_at, position_id = _decode_topic_cursor(
+            filters.cursor, access_fence, filters.is_active,
+        )
+        position = (position_at, position_id)
+    snapshot_predicates = (
+        Topic.workspace_id == scope.workspace_id, Topic.owner_id == actor,
+        Topic.deleted_at.is_(None), Topic.created_at <= snapshot_at,
+        Topic.updated_at <= snapshot_at,
+    )
+    statement = select(Topic).where(*snapshot_predicates)
+    count_statement = select(func.count()).select_from(Topic).where(*snapshot_predicates)
     if filters.is_active is not None:
         statement = statement.where(Topic.is_active == filters.is_active)
         count_statement = count_statement.where(Topic.is_active == filters.is_active)
     total = int(await session.scalar(count_statement) or 0)
-    if filters.cursor:
-        created_at, topic_id = _decode_topic_cursor(filters.cursor, owner_id, filters.is_active)
-        statement = statement.where((Topic.created_at > created_at) | ((Topic.created_at == created_at) & (Topic.id > topic_id)))
+    if position is not None:
+        statement = statement.where((Topic.created_at > position[0]) | ((Topic.created_at == position[0]) & (Topic.id > position[1])))
     statement = statement.order_by(Topic.created_at, Topic.id).limit(filters.limit + 1)
     rows = list((await session.scalars(statement)).all())
     more = len(rows) > filters.limit
     rows = rows[:filters.limit]
-    items = [await _topic_read(session, row) for row in rows]
-    next_cursor = _encode_topic_cursor(rows[-1].created_at, rows[-1].id, owner_id, filters.is_active) if more and rows else None
+    items = [await _topic_read(session, row, scope=scope, multi_workspace_enabled=multi_workspace_enabled) for row in rows]
+    next_cursor = _encode_topic_cursor(
+        snapshot_at, rows[-1].created_at, rows[-1].id, access_fence, filters.is_active,
+    ) if more and rows else None
     return TopicPage(items=items, next_cursor=next_cursor, total=total)
 
 
-def _encode_topic_export_cursor(snapshot_at: datetime, created_at: datetime, topic_id: UUID) -> str:
-    """Bind a canonical topic keyset position to one fixed export cutoff."""
-    raw = json.dumps([1, "topics", snapshot_at.isoformat(), created_at.isoformat(), str(topic_id)],
-                     separators=(",", ":")).encode()
+def _encode_topic_export_cursor(
+    snapshot_at: datetime, created_at: datetime, topic_id: UUID, access_fence: AccessFence,
+) -> str:
+    """Bind topic export position to owner scope, fixed filters, sort and cutoff."""
+    raw = json.dumps([
+        2, "topics", str(access_fence.workspace_id), access_fence.user_id,
+        access_fence.membership_revision, access_fence.configuration_revision,
+        {}, "created_at_asc_id_asc", snapshot_at.isoformat(), created_at.isoformat(), str(topic_id),
+    ], separators=(",", ":")).encode()
     return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
 
-def _decode_topic_export_cursor(cursor: str) -> tuple[datetime, datetime, UUID]:
-    """Reject oversized, noncanonical, cross-dataset, or future topic export cursors."""
+def _decode_topic_export_cursor(
+    cursor: str, access_fence: AccessFence,
+) -> tuple[datetime, datetime, UUID]:
+    """Reject legacy, cross-workspace, stale-admission, or altered topic export cursors."""
     try:
-        if len(cursor) > 512 or "=" in cursor:
+        if len(cursor) > 1024 or "=" in cursor:
             raise ValueError
         raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
         if base64.urlsafe_b64encode(raw).decode().rstrip("=") != cursor:
             raise ValueError
         value = json.loads(raw)
-        if not isinstance(value, list) or len(value) != 5 or value[:2] != [1, "topics"]:
+        expected_scope = [
+            2, "topics", str(access_fence.workspace_id), access_fence.user_id,
+            access_fence.membership_revision, access_fence.configuration_revision,
+            {}, "created_at_asc_id_asc",
+        ]
+        if not isinstance(value, list) or len(value) != 11 or value[:8] != expected_scope:
             raise ValueError
-        snapshot_at, created_at = datetime.fromisoformat(value[2]), datetime.fromisoformat(value[3])
-        topic_id = UUID(value[4])
+        snapshot_at, created_at = datetime.fromisoformat(value[8]), datetime.fromisoformat(value[9])
+        topic_id = UUID(value[10])
         if (any(item.tzinfo is None or item.utcoffset() is None for item in (snapshot_at, created_at))
-                or snapshot_at.isoformat() != value[2] or created_at.isoformat() != value[3]
+                or snapshot_at.isoformat() != value[8] or created_at.isoformat() != value[9]
                 or created_at > snapshot_at or snapshot_at > datetime.now(UTC)
-                or str(topic_id) != value[4]
-                or _encode_topic_export_cursor(snapshot_at, created_at, topic_id) != cursor):
+                or str(topic_id) != value[10]
+                or _encode_topic_export_cursor(snapshot_at, created_at, topic_id, access_fence) != cursor):
             raise ValueError
         return snapshot_at, created_at, topic_id
     except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError, binascii.Error) as exc:
         raise HTTPException(status_code=422, detail="Topic export cursor is invalid") from exc
 
 
-def _topic_export_scope(owner_id: int, snapshot_at: datetime) -> tuple[ColumnElement[bool], ...]:
+def _topic_export_scope(owner_id: int, snapshot_at: datetime, scope: Scope) -> tuple[ColumnElement[bool], ...]:
     """Select only live owner topics that existed unchanged at the export cutoff."""
     return (
-        Topic.owner_id == owner_id, Topic.deleted_at.is_(None),
+        Topic.workspace_id == scope.workspace_id, Topic.owner_id == owner_id, Topic.deleted_at.is_(None),
         Topic.created_at <= snapshot_at, Topic.updated_at <= snapshot_at,
     )
 
 
 async def export_page(
     session: AsyncSession, *, owner_id: int, record_kind: str, limit: int = 50, cursor: str | None = None,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> TopicExportPage:
     """Return a bounded canonical owner topic page without tombstones or provider content."""
-    if owner_id != 1 or record_kind != "topics" or not 1 <= limit <= 100:
+    access_fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if owner_id != _actor(scope) or record_kind != "topics" or not 1 <= limit <= 100:
         raise ValueError("Topic export owner, kind or page limit is invalid")
     if cursor is None:
         snapshot_at, position = datetime.now(UTC), None
     else:
-        snapshot_at, position_at, position_id = _decode_topic_export_cursor(cursor)
+        snapshot_at, position_at, position_id = _decode_topic_export_cursor(cursor, access_fence)
         position = (position_at, position_id)
-    scope = _topic_export_scope(owner_id, snapshot_at)
-    snapshot_count = int(await session.scalar(select(func.count()).select_from(Topic).where(*scope)) or 0)
-    statement = select(Topic).where(*scope)
+    predicates = _topic_export_scope(owner_id, snapshot_at, scope)
+    snapshot_count = int(await session.scalar(select(func.count()).select_from(Topic).where(*predicates)) or 0)
+    statement = select(Topic).where(*predicates)
     if position is not None:
         statement = statement.where(tuple_(Topic.created_at, Topic.id) > position)
     rows = list((await session.scalars(
         statement.order_by(Topic.created_at, Topic.id).limit(limit + 1).execution_options(populate_existing=True)
     )).all())
     has_more, rows = len(rows) > limit, rows[:limit]
-    items = [await _topic_read(session, row) for row in rows]
+    items = [await _topic_read(session, row, scope=scope, multi_workspace_enabled=multi_workspace_enabled) for row in rows]
     encoded = [item.model_dump_json().encode("utf-8") for item in items]
     payload_bytes = 2 + sum(map(len, encoded)) + max(0, len(items) - 1)
     if payload_bytes > 16_777_216:
@@ -461,30 +554,31 @@ async def export_page(
     return TopicExportPage(
         owner_id=owner_id, record_kind="topics", snapshot_at=snapshot_at,
         snapshot_count=snapshot_count, items=items, fences=fences, payload_bytes=payload_bytes,
-        next_cursor=_encode_topic_export_cursor(snapshot_at, rows[-1].created_at, rows[-1].id)
+        next_cursor=_encode_topic_export_cursor(snapshot_at, rows[-1].created_at, rows[-1].id, access_fence)
         if has_more and rows else None,
     )
 
 
 async def validate_export_fences(
     session: AsyncSession, *, owner_id: int, record_kind: str, snapshot_at: datetime,
-    expected_snapshot_count: int, fences: list[TopicExportFence],
+    expected_snapshot_count: int, fences: list[TopicExportFence], scope: Scope, multi_workspace_enabled: bool,
 ) -> TopicExportValidation:
     """Re-read topic projections and inventory before publishing the portable download."""
-    if owner_id != 1 or record_kind != "topics" or len(fences) > 100:
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if owner_id != _actor(scope) or record_kind != "topics" or len(fences) > 100:
         raise ValueError("Topic export validation input is invalid")
     observed = int(await session.scalar(
-        select(func.count()).select_from(Topic).where(*_topic_export_scope(owner_id, snapshot_at))
+        select(func.count()).select_from(Topic).where(*_topic_export_scope(owner_id, snapshot_at, scope))
     ) or 0)
     if observed != expected_snapshot_count:
         return TopicExportValidation(valid=False, reason="snapshot_count_changed", observed_snapshot_count=observed)
     for fence in fences:
         row = await session.scalar(select(Topic).where(
-            Topic.id == fence.id, *_topic_export_scope(owner_id, snapshot_at),
+            Topic.id == fence.id, *_topic_export_scope(owner_id, snapshot_at, scope),
         ).execution_options(populate_existing=True))
         if row is None:
             return TopicExportValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
-        item = await _topic_read(session, row)
+        item = await _topic_read(session, row, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         if (item.created_at != fence.created_at or item.updated_at != fence.updated_at
                 or item.revision != fence.revision
                 or hashlib.sha256(item.model_dump_json().encode("utf-8")).hexdigest() != fence.content_digest):
@@ -492,7 +586,9 @@ async def validate_export_fences(
     return TopicExportValidation(valid=True, reason="valid", observed_snapshot_count=observed)
 
 
-async def update_topic(session: AsyncSession, owner_id: int, topic_id: UUID, payload: TopicUpdate) -> TopicRead:
+async def update_topic(
+    session: AsyncSession, topic_id: UUID, payload: TopicUpdate, *, scope: Scope, multi_workspace_enabled: bool,
+) -> TopicRead:
     """Apply a revision-fenced patch and commit the caller's entire session.
 
     The owner row lock and expected revision are checked before changes. Entity
@@ -501,7 +597,9 @@ async def update_topic(session: AsyncSession, owner_id: int, topic_id: UUID, pay
     and must rollback after a failed commit before they reuse the session.
     """
     from modules.knowledge.entities import public as entities
-    statement = select(Topic).where(Topic.id == topic_id, Topic.owner_id == owner_id, Topic.deleted_at.is_(None)).with_for_update().execution_options(populate_existing=True)
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    statement = select(Topic).where(Topic.id == topic_id, Topic.workspace_id == scope.workspace_id,
+        Topic.owner_id == _actor(scope), Topic.deleted_at.is_(None)).with_for_update().execution_options(populate_existing=True)
     topic = await session.scalar(statement)
     if topic is None:
         raise TopicMissing
@@ -511,18 +609,21 @@ async def update_topic(session: AsyncSession, owner_id: int, topic_id: UUID, pay
         raise TopicConflict("revision_exhausted", "Topic revision cannot be incremented", topic.revision)
     changes = payload.model_dump(exclude_unset=True, exclude={"expected_revision"})
     if "entity_ids" in changes and changes["entity_ids"] is not None:
-        await entities.get_entity_refs(session, changes["entity_ids"], for_write=True)
+        await entities.get_entity_refs(session, changes["entity_ids"], for_write=True, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled)
         changes["entity_ids"] = [str(item) for item in changes["entity_ids"]]
     for key, value in changes.items():
         setattr(topic, key, value)
     topic.revision += 1
     topic.updated_at = datetime.now(UTC)
-    result = await _topic_read(session, topic)
-    await session.commit()
+    result = await _topic_read(session, topic, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await commit_with_replay(session, [], scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
     return result
 
 
-async def delete_topic(session: AsyncSession, owner_id: int, topic_id: UUID, expected_revision: int) -> None:
+async def delete_topic(
+    session: AsyncSession, topic_id: UUID, expected_revision: int, *, scope: Scope, multi_workspace_enabled: bool,
+) -> None:
     """Tombstone a profile and commit the caller's entire session.
 
     The owner-scoped lock is refreshed from the database before comparing the
@@ -530,7 +631,9 @@ async def delete_topic(session: AsyncSession, owner_id: int, topic_id: UUID, exp
     rollback/disposal after pre-commit errors and must rollback after commit
     failure before reusing the session.
     """
-    topic = await session.scalar(select(Topic).where(Topic.id == topic_id, Topic.owner_id == owner_id, Topic.deleted_at.is_(None)).with_for_update().execution_options(populate_existing=True))
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    topic = await session.scalar(select(Topic).where(Topic.id == topic_id, Topic.workspace_id == scope.workspace_id,
+        Topic.owner_id == _actor(scope), Topic.deleted_at.is_(None)).with_for_update().execution_options(populate_existing=True))
     if topic is None:
         raise TopicMissing
     if topic.revision != expected_revision:
@@ -540,7 +643,7 @@ async def delete_topic(session: AsyncSession, owner_id: int, topic_id: UUID, exp
     topic.deleted_at = datetime.now(UTC)
     topic.revision += 1
     topic.updated_at = topic.deleted_at
-    await session.commit()
+    await commit_with_replay(session, [], scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
 
 
 class TopicService:
@@ -555,25 +658,25 @@ class TopicService:
         """Bind topic operations to the caller's active unit of work."""
         self.session = session
 
-    async def create_topic(self, owner_id: int, payload: TopicCreate) -> TopicRead:
+    async def create_topic(self, payload: TopicCreate, *, scope: Scope, multi_workspace_enabled: bool) -> TopicRead:
         """Create and commit through the owner contract, including other pending session work."""
-        return await create_topic(self.session, owner_id, payload)
+        return await create_topic(self.session, payload, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
 
-    async def get_topic(self, owner_id: int, topic_id: UUID) -> TopicRead:
+    async def get_topic(self, topic_id: UUID, *, scope: Scope, multi_workspace_enabled: bool) -> TopicRead:
         """Read a live profile through the owner contract."""
-        return await get_topic(self.session, owner_id, topic_id)
+        return await get_topic(self.session, topic_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
 
-    async def list_topics(self, owner_id: int, filters: TopicFilter) -> TopicPage:
+    async def list_topics(self, filters: TopicFilter, *, scope: Scope, multi_workspace_enabled: bool) -> TopicPage:
         """Page owner profiles through the public query contract."""
-        return await list_topics(self.session, owner_id, filters)
+        return await list_topics(self.session, filters, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
 
-    async def update_topic(self, owner_id: int, topic_id: UUID, payload: TopicUpdate) -> TopicRead:
+    async def update_topic(self, topic_id: UUID, payload: TopicUpdate, *, scope: Scope, multi_workspace_enabled: bool) -> TopicRead:
         """Patch and commit through the owner contract, including other pending session work."""
-        return await update_topic(self.session, owner_id, topic_id, payload)
+        return await update_topic(self.session, topic_id, payload, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
 
-    async def delete_topic(self, owner_id: int, topic_id: UUID, expected_revision: int) -> None:
+    async def delete_topic(self, topic_id: UUID, expected_revision: int, *, scope: Scope, multi_workspace_enabled: bool) -> None:
         """Tombstone and commit through the owner contract, including other pending session work."""
-        await delete_topic(self.session, owner_id, topic_id, expected_revision)
+        await delete_topic(self.session, topic_id, expected_revision, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
 
 
 from modules.settings.public import module_dependency
@@ -582,6 +685,8 @@ router = APIRouter(prefix="/api/v1/topics", tags=["news"], dependencies=[Depends
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[AuthSession, Depends(require_owner)]
 OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]
+WorkspaceRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
+WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 
 
 def _no_store(response: Response) -> None:
@@ -601,43 +706,47 @@ def _raise_topic_error(exc: Exception) -> NoReturn:
 
 
 @router.get("", response_model=TopicPage)
-async def list_topics_route(session: Session, owner: OwnerRead, response: Response,
+async def list_topics_route(session: Session, request: Request, _owner: OwnerRead, scope: WorkspaceRead, response: Response,
     limit: Annotated[int, Query(ge=1, le=100)] = 50, cursor: Annotated[str | None, Query(max_length=512)] = None,
     is_active: Annotated[bool | None, Query()] = None) -> TopicPage:
     """Return a no-store, bounded page of current topics for the authenticated owner."""
     _no_store(response)
     try:
-        return await list_topics(session, owner.owner_id, TopicFilter(limit=limit, cursor=cursor, is_active=is_active))
+        return await list_topics(session, TopicFilter(limit=limit, cursor=cursor, is_active=is_active),
+            scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
     except ValueError as exc:
         _raise_topic_error(exc)
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=TopicRead)
-async def create_topic_route(payload: TopicCreate, session: Session, owner: OwnerWrite, response: Response) -> TopicRead:
+async def create_topic_route(payload: TopicCreate, session: Session, request: Request, _owner: OwnerWrite, scope: WorkspaceWrite, response: Response) -> TopicRead:
     """Create a topic only after owner-write authorization and entity validation."""
     _no_store(response)
     try:
-        return await create_topic(session, owner.owner_id, payload)
+        return await create_topic(session, payload, scope=scope,
+            multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
     except (LookupError, ValueError) as exc:
         raise HTTPException(422, detail={"code": "invalid_entity_reference", "message": str(exc), "details": {}}) from exc
 
 
 @router.get("/{topic_id}", response_model=TopicRead)
-async def get_topic_route(topic_id: UUID, session: Session, owner: OwnerRead, response: Response) -> TopicRead:
+async def get_topic_route(topic_id: UUID, session: Session, request: Request, _owner: OwnerRead, scope: WorkspaceRead, response: Response) -> TopicRead:
     """Read one current owner profile with private cache controls."""
     _no_store(response)
     try:
-        return await get_topic(session, owner.owner_id, topic_id)
+        return await get_topic(session, topic_id, scope=scope,
+            multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
     except (TopicMissing, TopicConflict) as exc:
         _raise_topic_error(exc)
 
 
 @router.patch("/{topic_id}", response_model=TopicRead)
-async def update_topic_route(topic_id: UUID, payload: TopicUpdate, session: Session, owner: OwnerWrite, response: Response) -> TopicRead:
+async def update_topic_route(topic_id: UUID, payload: TopicUpdate, session: Session, request: Request, _owner: OwnerWrite, scope: WorkspaceWrite, response: Response) -> TopicRead:
     """Apply a revision-fenced owner update behind write authorization."""
     _no_store(response)
     try:
-        return await update_topic(session, owner.owner_id, topic_id, payload)
+        return await update_topic(session, topic_id, payload, scope=scope,
+            multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
     except (TopicMissing, TopicConflict) as exc:
         _raise_topic_error(exc)
     except (LookupError, ValueError) as exc:
@@ -646,10 +755,11 @@ async def update_topic_route(topic_id: UUID, payload: TopicUpdate, session: Sess
 
 @router.delete("/{topic_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_topic_route(topic_id: UUID, expected_revision: Annotated[int, Query(ge=1, le=MAX_REVISION)],
-    session: Session, owner: OwnerWrite, response: Response) -> None:
+    session: Session, request: Request, _owner: OwnerWrite, scope: WorkspaceWrite, response: Response) -> None:
     """Tombstone one owner profile using the revision observed by the client."""
     _no_store(response)
     try:
-        await delete_topic(session, owner.owner_id, topic_id, expected_revision)
+        await delete_topic(session, topic_id, expected_revision, scope=scope,
+            multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
     except (TopicMissing, TopicConflict) as exc:
         _raise_topic_error(exc)

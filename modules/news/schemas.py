@@ -273,10 +273,15 @@ class RelevanceRead(BaseModel):
 
 
 class StoryCursor(BaseModel):
-    """Carry canonical keyset order and immutable filter snapshot in an opaque cursor."""
+    """Carry the admitted workspace, query, sort, snapshot and keyset position."""
 
-    owner_id: int
+    domain: Literal["news_stories"]
+    workspace_id: UUID
+    actor_user_id: int
+    membership_revision: int
+    configuration_revision: int
     filter_hash: str
+    sort: Literal["observed_at_desc_story_id_desc"]
     as_of: datetime
     after_observed_at: datetime
     after_story_id: UUID

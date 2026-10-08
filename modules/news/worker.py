@@ -3,14 +3,35 @@
 from typing import cast
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from redis.asyncio import Redis
+from fastapi import HTTPException
 
+from core.config import Settings
+from core.realtime import commit_with_replay
+from core.workspaces import public as workspaces
+from core.workspaces.schemas import InternalJobScope
 from modules.ingestion import public as ingestion
 from modules.knowledge.documents import public as documents
-from modules.news.models import NewsRecoveryCheckpoint
+from modules.news.models import NewsObservation, NewsRecoveryCheckpoint
 from modules.news.stories import cluster_observation
+from modules.settings import public as settings_public
 from modules.sources import public as sources
+
+RECOVERY_CURSOR_KEY = "news:recovery:workspace-cursor"
+RECOVERY_INIT_CURSOR_KEY = "news:recovery:initialization-cursor"
+
+
+async def _ensure_recovery_checkpoint(session: AsyncSession, workspace_id: UUID) -> None:
+    """Flush a missing workspace checkpoint after current owner admission and before commit."""
+    checkpoint = await session.scalar(select(NewsRecoveryCheckpoint).where(
+        NewsRecoveryCheckpoint.workspace_id == workspace_id,
+    ).with_for_update())
+    if checkpoint is None:
+        session.add(NewsRecoveryCheckpoint(workspace_id=workspace_id))
+        await session.flush()
 
 
 def _factory(ctx: dict[str, object]) -> async_sessionmaker[AsyncSession]:
@@ -21,121 +42,369 @@ def _factory(ctx: dict[str, object]) -> async_sessionmaker[AsyncSession]:
 async def process_news_document_ready(ctx: dict[str, object], event_id: str) -> None:
     """Cluster one immutable ready version and ACK its outbox event atomically.
 
-    The handler validates event shape, locks source before document, confirms
-    current version and generation, writes only bounded database state, then
-    acknowledges within the same session transaction. Duplicate events return
-    the existing version membership; invalid or stale evidence is safely ACKed
-    without exposing its content or recreating a stale story.
+    Admit the retained event principal first, then lock and recheck Source and
+    Document evidence before locking the Ingestion outbox row. Exact provenance
+    must still match after those domain locks; stale receipts are terminally ACKed
+    without recreating a story. No external I/O occurs in this transaction.
     """
     try:
         identifier = UUID(event_id)
     except ValueError:
         return
+    settings = cast(Settings, ctx["settings"])
+    flag = settings.multi_workspace_enabled
     async with _factory(ctx)() as session:
-        event = await ingestion.lock_news_document_ready_event(session, identifier)
-        if event is None or event.status in ("delivered", "failed"):
-            return
-        if event.version != 1 or not event.valid_payload:
-            await ingestion.fail_news_document_ready_event(session, identifier)
-            await session.commit()
+        scope = await ingestion.resolve_ingestion_event_scope(
+            session, identifier, multi_workspace_enabled=flag,
+        )
+        if scope is None:
             return
         try:
-            source_id = UUID(str(event.payload["source_id"]))
-            document_id = UUID(str(event.payload["document_id"]))
-            version_id = UUID(str(event.payload["document_version_id"]))
-            generation = int(event.payload["source_generation"])
-            version_number = int(event.payload["version_number"])
-        except (KeyError, TypeError, ValueError):
-            await ingestion.fail_news_document_ready_event(session, identifier)
-            await session.commit()
-            return
-        source = await sources.lock_source(session, source_id)
-        if source is None or source.status != "active" or source.generation != generation:
-            await ingestion.mark_news_document_ready_event_delivered(session, identifier)
-            await session.commit()
-            return
-        if not await documents.lock_document_for_extraction(session, document_id, source_id):
-            await ingestion.mark_news_document_ready_event_delivered(session, identifier)
-            await session.commit()
-            return
-        projection = await documents.get_news_document_projection(
-            session, document_id, expected_source_generation=generation,
-        )
-        if (
-            projection is None or projection.document_version_id != version_id
-            or projection.version_number != version_number or projection.source_id != source_id
-        ):
-            await ingestion.mark_news_document_ready_event_delivered(session, identifier)
-            await session.commit()
-            return
-        await cluster_observation(
-            session, document_id=document_id, expected_source_generation=generation,
-        )
-        await ingestion.mark_news_document_ready_event_delivered(session, identifier)
-        await session.commit()
+            access_fence = await workspaces.read_access_fence(
+                session, scope=scope, multi_workspace_enabled=flag,
+            )
+            if not await settings_public.module_is_enabled(
+                session, "news", scope=scope, multi_workspace_enabled=flag,
+            ):
+                return
+
+            # Discover the bounded outbox envelope without a lock. The row itself is
+            # acquired only after the exact Source and Document evidence is prepared.
+            delivery = await ingestion.get_event_delivery(
+                session, identifier, scope=scope, multi_workspace_enabled=flag,
+            )
+            if delivery is None or delivery.status in ("delivered", "failed"):
+                return
+            provenance = await ingestion.resolve_ready_event_provenance(
+                session, identifier, scope=scope, multi_workspace_enabled=flag,
+            )
+            source_fence = None
+            document_locked = False
+            if provenance is not None and (
+                provenance.workspace_id == scope.workspace_id
+                and provenance.actor_user_id == scope.actor_user_id
+                and provenance.membership_revision == scope.membership_revision
+            ):
+                source_fence = await sources.lock_source(
+                    session, provenance.source_id, scope=scope,
+                    multi_workspace_enabled=flag, expected_access_fence=access_fence,
+                )
+                if source_fence is not None and source_fence.status == "active":
+                    locked = await documents.lock_document_ids(
+                        session, [provenance.document_id], scope=scope,
+                        multi_workspace_enabled=flag,
+                    )
+                    document_locked = provenance.document_id in locked
+                if document_locked:
+                    current = await documents.get_news_document_projection(
+                        session, provenance.document_id,
+                        expected_source_generation=provenance.source_generation,
+                        scope=scope, multi_workspace_enabled=flag,
+                    )
+                    refreshed = await ingestion.resolve_ready_event_provenance(
+                        session, identifier, scope=scope, multi_workspace_enabled=flag,
+                    )
+                    current_delivery = await ingestion.get_event_delivery(
+                        session, identifier, scope=scope, multi_workspace_enabled=flag,
+                    )
+                    document_locked = (
+                        current is not None
+                        and current.source_id == provenance.source_id
+                        and current.document_version_id == provenance.document_version_id
+                        and current.version_number == provenance.version_number
+                        and current.current_source_generation == provenance.source_generation
+                        and refreshed == provenance
+                        and current_delivery == delivery
+                    )
+                else:
+                    refreshed = None
+            else:
+                refreshed = None
+
+            prepared_match = (
+                provenance is not None and refreshed == provenance
+                and provenance.workspace_id == scope.workspace_id
+                and provenance.actor_user_id == scope.actor_user_id
+                and provenance.membership_revision == scope.membership_revision
+                and source_fence is not None and source_fence.status == "active"
+                and source_fence.generation == provenance.source_generation
+                and document_locked
+            )
+            if prepared_match:
+                await cluster_observation(
+                    session, document_id=provenance.document_id,
+                    expected_source_generation=provenance.source_generation,
+                    scope=scope, multi_workspace_enabled=flag,
+                )
+
+            # Checkpoint and News writes follow the prepared Source/Document locks;
+            # the outbox row is the final lock in this transaction's evidence path.
+            await _ensure_recovery_checkpoint(session, scope.workspace_id)
+            event = await ingestion.lock_news_document_ready_event(
+                session, identifier, scope=scope, multi_workspace_enabled=flag,
+            )
+            if event is None or event.status in ("delivered", "failed"):
+                return
+            locked_delivery = await ingestion.get_event_delivery(
+                session, identifier, scope=scope, multi_workspace_enabled=flag,
+            )
+            if locked_delivery != delivery:
+                # The exact envelope changed while Source/Document evidence was prepared.
+                await session.rollback()
+                return
+            if (delivery.type != "news.document.ready" or delivery.version != 1
+                    or event.version != 1 or not event.valid_payload):
+                await ingestion.fail_news_document_ready_event(
+                    session, identifier, scope=scope, multi_workspace_enabled=flag,
+                )
+                await commit_with_replay(
+                    session, [], scope=scope, multi_workspace_enabled=flag,
+                    access_fence=access_fence,
+                )
+                return
+
+            event_matches = (
+                prepared_match
+                and event.workspace_id == provenance.workspace_id
+                and event.actor_user_id == provenance.actor_user_id
+                and event.membership_revision == provenance.membership_revision
+                and event.payload.get("source_id") == str(provenance.source_id)
+                and event.payload.get("document_id") == str(provenance.document_id)
+                and event.payload.get("document_version_id") == str(provenance.document_version_id)
+                and event.payload.get("source_generation") == provenance.source_generation
+                and event.payload.get("version_number") == provenance.version_number
+                and delivery.type == "news.document.ready"
+                and delivery.version == 1
+                and delivery.payload.get("source_id") == str(provenance.source_id)
+                and delivery.payload.get("document_id") == str(provenance.document_id)
+                and delivery.payload.get("document_version_id") == str(provenance.document_version_id)
+                and delivery.payload.get("source_generation") == provenance.source_generation
+                and delivery.payload.get("version_number") == provenance.version_number
+            )
+            if not event_matches and prepared_match:
+                # A changed receipt invalidates the uncommitted News writes above.
+                await session.rollback()
+                return
+            await ingestion.mark_news_document_ready_event_delivered(
+                session, identifier, scope=scope, multi_workspace_enabled=flag,
+            )
+            await commit_with_replay(
+                session, [], scope=scope, multi_workspace_enabled=flag,
+                access_fence=access_fence,
+            )
+        except HTTPException as exc:
+            if exc.status_code in {401, 403, 404, 409}:
+                await session.rollback()
+                return
+            raise
 
 
 async def recover_news_work(ctx: dict[str, object]) -> int:
-    """Catch up one finite page of preexisting ready documents with durable keysets.
+    """Initialize missing News checkpoints and catch up one finite ready-document page.
 
     PostgreSQL checkpoint and observation writes commit together. The source
     facade exposes only detached active identities; each page then locks sorted
     sources before sorted documents and revalidates current generation/version
-    through Documents before clustering. Repeated cron runs advance both cursors
-    and wrap only after the last active source page, so old imported documents
-    are eventually discovered without a source polling timer or ARQ-only state.
+    through Documents before clustering. A separate bounded identity scan
+    initializes legacy workspaces with no checkpoint; it advances independently
+    from the existing per-workspace recovery cursor.
     """
-    async with _factory(ctx)() as session:
-        await session.execute(text("SELECT pg_advisory_xact_lock(hashtextextended('news:legacy-catchup', 0))"))
-        checkpoint = await session.get(NewsRecoveryCheckpoint, 1, with_for_update=True)
-        if checkpoint is None:
-            checkpoint = NewsRecoveryCheckpoint(id=1)
-            session.add(checkpoint)
-            await session.flush()
-        source_page = await sources.list_active_gadget_sources(
-            session, limit=32, cursor=checkpoint.source_cursor,
+    factory = _factory(ctx)
+    settings = cast(Settings, ctx["settings"])
+    redis = cast(Redis, ctx["redis"])
+    init_local_key = f"{RECOVERY_INIT_CURSOR_KEY}:local"
+    raw_init_cursor = ctx.get(init_local_key)
+    try:
+        remote_init_cursor = await redis.get(RECOVERY_INIT_CURSOR_KEY)
+        if remote_init_cursor is not None:
+            raw_init_cursor = remote_init_cursor
+    except Exception:
+        # Redis only shortens the wrap interval; the worker context retains progress.
+        pass
+    if isinstance(raw_init_cursor, bytes):
+        raw_init_cursor = raw_init_cursor.decode("ascii", errors="ignore")
+    try:
+        init_cursor = UUID(raw_init_cursor) if isinstance(raw_init_cursor, str) else None
+    except ValueError:
+        init_cursor = None
+    async with factory() as session:
+        initialization_ids = await documents.list_ready_document_workspace_ids(
+            session, after=init_cursor, limit=100,
         )
-        source_ids = tuple(item.id for item in source_page.items)
-        if not source_ids:
-            checkpoint.source_cursor = None
-            checkpoint.document_cursor = None
-            await session.commit()
-            return 0
-        projections, document_cursor = await documents.list_news_document_projections(
-            session, source_ids=source_ids, limit=10, cursor=checkpoint.document_cursor,
-        )
-        projections.sort(key=lambda item: (str(item.source_id), str(item.document_id)))
-        fences = {}
-        for source_id in sorted(source_ids, key=str):
-            fences[source_id] = await sources.lock_source(session, source_id)
-        locked_documents = set()
-        for projection in projections:
-            if projection.document_id not in locked_documents:  # noqa: SIM102  # style-only rewrite skipped to avoid touching control flow
-                if await documents.lock_document_for_extraction(session, projection.document_id, projection.source_id):
-                    locked_documents.add(projection.document_id)
-        processed = 0
-        for projection in projections:
-            source = fences.get(projection.source_id)
-            if (
-                source is None or source.status != "active"
-                or source.generation != projection.current_source_generation
-                or projection.document_id not in locked_documents
-            ):
-                continue
-            current = await documents.get_news_document_projection(
-                session, projection.document_id, expected_source_generation=source.generation,
+        if not initialization_ids and init_cursor is not None:
+            initialization_ids = await documents.list_ready_document_workspace_ids(
+                session, after=None, limit=100,
             )
-            if current is None or current.document_version_id != projection.document_version_id:
-                continue
-            await cluster_observation(
-                session, document_id=current.document_id,
-                expected_source_generation=current.current_source_generation,
+    if initialization_ids:
+        flag = settings.multi_workspace_enabled
+        for workspace_id in initialization_ids:
+            async with factory() as session:
+                try:
+                    owner = await workspaces.resolve_workspace_owner_context(
+                        session, workspace_id, multi_workspace_enabled=flag,
+                    )
+                    if owner is None:
+                        continue
+                    scope = InternalJobScope(
+                        workspace_id=workspace_id, actor_user_id=owner.user_id,
+                        membership_revision=owner.membership_revision,
+                    )
+                    access_fence = await workspaces.read_access_fence(
+                        session, scope=scope, multi_workspace_enabled=flag,
+                    )
+                    if not await settings_public.module_is_enabled(
+                        session, "news", scope=scope, multi_workspace_enabled=flag,
+                    ):
+                        continue
+                    access_fence = await workspaces.lock_access_fence(
+                        session, scope=scope, expected=access_fence,
+                        multi_workspace_enabled=flag,
+                    )
+                    await session.execute(text(
+                        "SELECT pg_advisory_xact_lock(hashtextextended('news:legacy-catchup:' || :workspace_id, 0))"
+                    ), {"workspace_id": str(workspace_id)})
+                    await _ensure_recovery_checkpoint(session, workspace_id)
+                    await commit_with_replay(
+                        session, [], scope=scope, multi_workspace_enabled=flag,
+                        access_fence=access_fence,
+                    )
+                except HTTPException as exc:
+                    if exc.status_code in {401, 403, 404, 409}:
+                        await session.rollback()
+                        continue
+                    raise
+        ctx[init_local_key] = str(initialization_ids[-1])
+        try:
+            await redis.set(RECOVERY_INIT_CURSOR_KEY, str(initialization_ids[-1]))
+        except Exception:
+            pass
+    else:
+        ctx[init_local_key] = ""
+        try:
+            await redis.delete(RECOVERY_INIT_CURSOR_KEY)
+        except Exception:
+            pass
+
+    cursor_local_key = f"{RECOVERY_CURSOR_KEY}:local"
+    raw_cursor = ctx.get(cursor_local_key)
+    try:
+        remote_cursor = await redis.get(RECOVERY_CURSOR_KEY)
+        if remote_cursor is not None:
+            raw_cursor = remote_cursor
+    except Exception:
+        pass
+    if isinstance(raw_cursor, bytes):
+        raw_cursor = raw_cursor.decode("ascii", errors="ignore")
+    try:
+        cursor = UUID(raw_cursor) if isinstance(raw_cursor, str) else None
+    except ValueError:
+        cursor = None
+    async with factory() as session:
+        statement = select(NewsRecoveryCheckpoint.workspace_id)
+        if cursor is not None:
+            statement = statement.where(NewsRecoveryCheckpoint.workspace_id > cursor)
+        workspace_ids = list((await session.scalars(
+            statement.order_by(NewsRecoveryCheckpoint.workspace_id).limit(100)
+        )).all())
+    if not workspace_ids:
+        ctx[cursor_local_key] = ""
+        try:
+            await redis.delete(RECOVERY_CURSOR_KEY)
+        except Exception:
+            pass
+        return 0
+    total_processed = 0
+    flag = settings.multi_workspace_enabled
+    for workspace_id in workspace_ids:
+        async with factory() as session:
+            owner = await workspaces.resolve_workspace_owner_context(
+                session, workspace_id, multi_workspace_enabled=flag,
             )
-            processed += 1
-        if document_cursor is None:
-            checkpoint.source_cursor = source_page.next_cursor
-            checkpoint.document_cursor = None
-        else:
-            checkpoint.document_cursor = document_cursor
-        await session.commit()
-        return processed
+            if owner is None:
+                continue
+            scope = InternalJobScope(workspace_id=workspace_id, actor_user_id=owner.user_id,
+                membership_revision=owner.membership_revision)
+            try:
+                access_fence = await workspaces.read_access_fence(session, scope=scope,
+                    multi_workspace_enabled=flag)
+                if not await settings_public.module_is_enabled(session, "news", scope=scope,
+                        multi_workspace_enabled=flag):
+                    continue
+                checkpoint = await session.scalar(select(NewsRecoveryCheckpoint).where(
+                    NewsRecoveryCheckpoint.workspace_id == workspace_id,
+                ))
+                if checkpoint is None:
+                    continue
+                initial_source_cursor = checkpoint.source_cursor
+                initial_document_cursor = checkpoint.document_cursor
+                source_page = await sources.list_active_gadget_sources(session, scope=scope,
+                    multi_workspace_enabled=flag, limit=32, cursor=checkpoint.source_cursor)
+                source_ids = tuple(item.id for item in source_page.items)
+                projections, document_cursor = await documents.list_news_document_projections(
+                    session, source_ids=source_ids, limit=10, cursor=checkpoint.document_cursor,
+                    scope=scope, multi_workspace_enabled=flag,
+                ) if source_ids else ([], None)
+                projections.sort(key=lambda item: (str(item.source_id), str(item.document_id)))
+                fences = {}
+                for source_id in sorted(source_ids, key=str):
+                    fences[source_id] = await sources.lock_source(session, source_id, scope=scope,
+                        multi_workspace_enabled=flag, expected_access_fence=access_fence)
+                workspace_processed = 0
+                # Documents identity locks are acquired only after every sorted Source
+                # fence. Titles are display metadata and never serve as raw URI identities.
+                document_ids = sorted({item.document_id for item in projections}, key=str)
+                locked_documents = set(await documents.lock_document_ids(
+                    session, document_ids, scope=scope, multi_workspace_enabled=flag,
+                ))
+                for projection in projections:
+                    source = fences.get(projection.source_id)
+                    if (source is None or source.status != "active"
+                            or source.generation != projection.current_source_generation
+                            or projection.document_id not in locked_documents):
+                        continue
+                    current = await documents.get_news_document_projection(
+                        session, projection.document_id,
+                        expected_source_generation=source.generation,
+                        scope=scope, multi_workspace_enabled=flag,
+                    )
+                    if (current is None
+                            or current.document_version_id != projection.document_version_id
+                            or current.version_number != projection.version_number
+                            or current.source_id != projection.source_id
+                            or current.current_source_generation != projection.current_source_generation):
+                        continue
+                    await cluster_observation(session, document_id=current.document_id,
+                        expected_source_generation=current.current_source_generation, scope=scope,
+                        multi_workspace_enabled=flag)
+                    workspace_processed += 1
+                # Serialize cursor publication only after Source and Document locks, matching the
+                # domain lock order. If another worker advanced meanwhile, retry from its cursor.
+                await session.execute(text(
+                    "SELECT pg_advisory_xact_lock(hashtextextended('news:legacy-catchup:' || :workspace_id, 0))"
+                ), {"workspace_id": str(workspace_id)})
+                checkpoint = await session.scalar(select(NewsRecoveryCheckpoint).where(
+                    NewsRecoveryCheckpoint.workspace_id == workspace_id,
+                ).with_for_update().execution_options(populate_existing=True))
+                if (checkpoint is None or checkpoint.source_cursor != initial_source_cursor
+                        or checkpoint.document_cursor != initial_document_cursor):
+                    await session.rollback()
+                    continue
+                if document_cursor is None:
+                    checkpoint.source_cursor = source_page.next_cursor
+                    checkpoint.document_cursor = None
+                else:
+                    checkpoint.document_cursor = document_cursor
+                await commit_with_replay(session, [], scope=scope,
+                    multi_workspace_enabled=flag, access_fence=access_fence)
+                total_processed += workspace_processed
+            except HTTPException as exc:
+                if exc.status_code in {401, 403, 404, 409}:
+                    await session.rollback()
+                    continue
+                raise
+    ctx[cursor_local_key] = str(workspace_ids[-1])
+    try:
+        await redis.set(RECOVERY_CURSOR_KEY, str(workspace_ids[-1]))
+    except Exception:
+        pass
+    return total_processed

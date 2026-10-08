@@ -3,68 +3,206 @@
 from typing import cast
 from uuid import UUID
 
+from fastapi import HTTPException
 from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
+from core.realtime import commit_with_replay
+from core.workspaces import public as workspaces
+from core.workspaces.schemas import InternalJobScope
 from modules.dashboard import briefs, public
-from modules.dashboard.models import GadgetDefinition
+from modules.dashboard.daily_schemas import BriefSchedule
+from modules.dashboard.models import BriefSchedule as BriefScheduleRow, GadgetDefinition
+from modules.settings import public as settings_public
 
-OWNER_ID = 1  # single-owner deployment; matches settings.public.OWNER_ID
-HIGHLIGHT_CURSOR_KEY = "dashboard:highlights:definition-cursor"
+HIGHLIGHT_CURSOR_KEY = "dashboard:highlights:workspace-cursor"
+BRIEF_CURSOR_KEY = "dashboard:briefs:workspace-cursor"
+
+
+async def _read_workspace_cursor(ctx: dict[str, object], key: str) -> UUID | None:
+    """Read a bounded UUID cursor from Redis, falling back to the current ARQ context."""
+    local_key = f"{key}:local"
+    raw = ctx.get(local_key)
+    redis = cast(Redis | None, ctx.get("redis"))
+    if redis is not None:
+        try:
+            remote = await redis.get(key)
+            if remote is not None:
+                raw = remote
+        except Exception:
+            # Cursors only improve fairness latency; durable rows remain the source of work.
+            pass
+    if isinstance(raw, bytes):
+        raw = raw.decode("ascii", errors="ignore")
+    try:
+        cursor = UUID(raw) if isinstance(raw, str) else None
+    except ValueError:
+        cursor = None
+    ctx[local_key] = str(cursor) if cursor is not None else ""
+    return cursor
+
+
+async def _write_workspace_cursor(ctx: dict[str, object], key: str, cursor: UUID | None) -> None:
+    """Persist one identity-only cursor locally and opportunistically in Redis."""
+    ctx[f"{key}:local"] = str(cursor) if cursor is not None else ""
+    redis = cast(Redis | None, ctx.get("redis"))
+    if redis is None:
+        return
+    try:
+        if cursor is None:
+            await redis.delete(key)
+        else:
+            await redis.set(key, str(cursor))
+    except Exception:
+        # The local ARQ context retains progress if Redis is temporarily unavailable.
+        pass
 
 
 async def run_scheduled_highlights(ctx: dict[str, object]) -> int:
-    """Evaluate up to ten rule-bearing definitions per minute with a rotating scan cursor.
+    """Evaluate at most ten definitions globally from a fair ordered identity page.
 
-    The scan runs independently of dashboard rendering. Notification keys bind the definition
-    rule and immutable document version in PostgreSQL, so retries and repeated scans deduplicate.
+    The identity cursor advances past denied subjects as well as successful visits, so unavailable
+    owners cannot pin the scan or let a later definition starve. A 100-ID discovery bound and
+    ten-evaluation execution bound rotate by definition ID. Each selected workspace gets a fresh
+    session and current Recipe W admission; Redis is only an optimization over the ARQ fallback.
     """
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
-    redis = cast(Redis, ctx["redis"])
-    raw_cursor = await redis.get(HIGHLIGHT_CURSOR_KEY)
-    if isinstance(raw_cursor, bytes):
-        raw_cursor = raw_cursor.decode("ascii", errors="ignore")
-    cursor = None
-    if isinstance(raw_cursor, str):
-        try:
-            cursor = UUID(raw_cursor)
-        except ValueError:
-            cursor = None
+    cursor = await _read_workspace_cursor(ctx, HIGHLIGHT_CURSOR_KEY)
     async with factory() as session:
-        statement = select(GadgetDefinition.id, GadgetDefinition.owner_id).where(
+        statement = select(GadgetDefinition.id, GadgetDefinition.workspace_id, GadgetDefinition.owner_id).where(
             GadgetDefinition.renderer.in_(("highlights", "watch_rules")),
-            GadgetDefinition.highlight_rules != [],
-            GadgetDefinition.source_ids != [],
+            GadgetDefinition.highlight_rules != [], GadgetDefinition.source_ids != [],
         )
         if cursor is not None:
             statement = statement.where(GadgetDefinition.id > cursor)
-        rows = list((await session.execute(
-            statement.order_by(GadgetDefinition.id).limit(10)
+        candidates = list((await session.execute(
+            statement.order_by(GadgetDefinition.id).limit(100)
         )).all())
-    if not rows:
-        await redis.delete(HIGHLIGHT_CURSOR_KEY)
+    if not candidates:
+        await _write_workspace_cursor(ctx, HIGHLIGHT_CURSOR_KEY, None)
         return 0
-    for definition_id, owner_id in rows:
+
+    settings = cast(Settings, ctx["settings"])
+    evaluated = 0
+    last_consumed_id: UUID | None = None
+    for definition_id, workspace_id, owner_id in candidates:
+        if evaluated >= 10:
+            break
+        last_consumed_id = definition_id
         async with factory() as session:
-            await public.evaluate_gadget_highlights(
-                session, owner_id, definition_id, emit_notifications=True,
-            )
-    await redis.set(HIGHLIGHT_CURSOR_KEY, str(rows[-1][0]))
-    return len(rows)
+            try:
+                owner = await workspaces.resolve_workspace_owner_context(
+                    session, workspace_id, multi_workspace_enabled=settings.multi_workspace_enabled,
+                )
+                if owner is None or owner.user_id != owner_id:
+                    continue
+                scope = InternalJobScope(
+                    workspace_id=workspace_id, actor_user_id=owner.user_id,
+                    membership_revision=owner.membership_revision,
+                )
+                await workspaces.read_access_fence(
+                    session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
+                )
+                if not await settings_public.module_is_enabled(
+                    session, "dashboard", scope=scope,
+                    multi_workspace_enabled=settings.multi_workspace_enabled,
+                ):
+                    continue
+                await public.evaluate_gadget_highlights(
+                    session, definition_id, emit_notifications=True, scope=scope,
+                    multi_workspace_enabled=settings.multi_workspace_enabled,
+                )
+                evaluated += 1
+            except HTTPException as exc:
+                if exc.status_code in {401, 403, 404, 409}:
+                    await session.rollback()
+                    continue
+                raise
+    await _write_workspace_cursor(ctx, HIGHLIGHT_CURSOR_KEY, last_consumed_id)
+    return evaluated
 
 
 async def run_scheduled_brief(ctx: dict[str, object]) -> bool:
-    """Create today's brief once the schedule time has passed; run every minute and once at startup.
+    """Preserve default enabled schedules with a fair ten-workspace initialization bound.
 
-    The startup run is the single catch-up for the *current* day only. Returns True when a new
-    revision was saved. Model outages are swallowed by ``run_due_brief`` (15-minute cooldown) so the
-    previous brief stays untouched and the job never retries in a tight loop.
+    Bounded Workspace identity discovery includes task-only and empty workspaces. Missing schedule
+    rows receive the existing default under the original owner fence; disabled and automation-owned
+    rows are preserved. Each page visits at most ten candidates in separate sessions, and denied or
+    disabled subjects still advance the rotating cursor.
     """
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    settings = cast(Settings, ctx["settings"])
+    cursor = await _read_workspace_cursor(ctx, BRIEF_CURSOR_KEY)
     async with factory() as session:
-        created = await briefs.run_due_brief(
-            session, OWNER_ID, settings=cast(Settings, ctx["settings"]), redis=cast(Redis, ctx["redis"])
+        workspace_ids = await workspaces.list_workspace_job_candidate_ids(
+            session, after=cursor, limit=100,
         )
-        return created is not None
+    if not workspace_ids:
+        await _write_workspace_cursor(ctx, BRIEF_CURSOR_KEY, None)
+        return False
+
+    visit_ids = workspace_ids[:10]
+    created_any = False
+    for workspace_id in visit_ids:
+        async with factory() as session:
+            try:
+                owner = await workspaces.resolve_workspace_owner_context(
+                    session, workspace_id, multi_workspace_enabled=settings.multi_workspace_enabled,
+                )
+                if owner is None:
+                    continue
+                scope = InternalJobScope(
+                    workspace_id=workspace_id, actor_user_id=owner.user_id,
+                    membership_revision=owner.membership_revision,
+                )
+                access_fence = await briefs._admit(
+                    session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
+                )
+                if not await settings_public.module_is_enabled(
+                    session, "dashboard", scope=scope,
+                    multi_workspace_enabled=settings.multi_workspace_enabled,
+                ):
+                    continue
+                access_fence = await workspaces.lock_access_fence(
+                    session, scope=scope, expected=access_fence,
+                    multi_workspace_enabled=settings.multi_workspace_enabled,
+                )
+                await briefs._lock_schedule_slot(session, workspace_id)
+                schedule_row = await session.scalar(select(BriefScheduleRow).where(
+                    BriefScheduleRow.workspace_id == workspace_id,
+                    BriefScheduleRow.owner_id == owner.user_id,
+                ).with_for_update())
+                if schedule_row is None:
+                    default = BriefSchedule()
+                    schedule_row = BriefScheduleRow(
+                        workspace_id=workspace_id, owner_id=owner.user_id,
+                        enabled=default.enabled, hour=default.hour, minute=default.minute,
+                        timezone=default.timezone, schedule_owner="internal_brief", automation_id=None,
+                    )
+                    session.add(schedule_row)
+                    await session.flush()
+                    schedule = default
+                    should_run = schedule.enabled
+                    await commit_with_replay(
+                        session, [], scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
+                        access_fence=access_fence,
+                    )
+                else:
+                    schedule = BriefSchedule.model_validate(schedule_row)
+                    should_run = schedule.enabled and schedule_row.schedule_owner == "internal_brief"
+                    await session.rollback()  # release the schedule lock before possible model I/O
+                if should_run:
+                    created = await briefs.run_due_brief(
+                        session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
+                        settings=settings, redis=cast(Redis, ctx["redis"]),
+                    )
+                    created_any = created is not None or created_any
+            except HTTPException as exc:
+                if exc.status_code in {401, 403, 404, 409}:
+                    await session.rollback()
+                    continue
+                raise
+    await _write_workspace_cursor(ctx, BRIEF_CURSOR_KEY, visit_ids[-1])
+    return created_any
