@@ -28,6 +28,7 @@ from core.model_gateway.schemas import (
     RequestPolicy,
 )
 from core.realtime import commit_with_replay, make_timeline_change
+from core.worker_cursors import STATE_KEY, read_cursor, write_cursor
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import InternalJobScope, Scope
 from modules.knowledge.documents import public as documents
@@ -361,6 +362,31 @@ async def process_timeline_extraction_work(ctx: dict[str, object], work_id_value
             await session.commit()
 
 
+_WORKSPACE_CURSOR_KEY = "bbd:timeline-extraction:workspace-cursor"
+_WORKSPACE_PAGE = 100
+
+
+async def _recovery_workspace_ids(ctx: dict[str, object], factory: async_sessionmaker[AsyncSession]) -> list[UUID]:
+    """One keyset page of workspaces with work rows or ready documents (cursor via core.worker_cursors)."""
+    ctx.setdefault(STATE_KEY, {})
+    keys = (_WORKSPACE_CURSOR_KEY,)
+    after = await read_cursor(ctx, _WORKSPACE_CURSOR_KEY, keys)
+    page: list[UUID] = []
+    for lower in ((after, None) if after is not None else (None,)):
+        async with factory() as session:
+            query = select(TimelineExtractionWork.workspace_id).distinct().order_by(TimelineExtractionWork.workspace_id).limit(_WORKSPACE_PAGE)
+            if lower is not None:
+                query = query.where(TimelineExtractionWork.workspace_id > lower)
+            found = set((await session.scalars(query)).all())
+            found.update(await documents.list_ready_document_workspace_ids(session, after=lower, limit=_WORKSPACE_PAGE))
+            await session.rollback()
+        page = sorted(found)[:_WORKSPACE_PAGE]
+        if page:
+            break
+    await write_cursor(ctx, _WORKSPACE_CURSOR_KEY, page[-1] if page else None, keys)
+    return page
+
+
 async def recover_timeline_extraction_work(ctx: dict[str, object]) -> int:
     """Rescan ready versions and requeue a bounded page of durable due timeline work.
 
@@ -376,10 +402,7 @@ async def recover_timeline_extraction_work(ctx: dict[str, object]) -> int:
     multi_workspace_enabled = cast(Settings, ctx["settings"]).multi_workspace_enabled
     count = 0
     work_ids: list[UUID] = []
-    async with factory() as session:
-        workspace_ids = list((await session.scalars(select(TimelineExtractionWork.workspace_id)
-            .distinct().order_by(TimelineExtractionWork.workspace_id))).all())
-    for workspace_id in workspace_ids:
+    for workspace_id in await _recovery_workspace_ids(ctx, factory):
         async with factory() as session:
             scope = await _workspace_job_scope(
                 session, workspace_id, multi_workspace_enabled=multi_workspace_enabled,

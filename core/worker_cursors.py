@@ -61,6 +61,7 @@ async def read_cursor(ctx: dict[str, object], key: str, allowed: Collection[str]
             _log.debug("cursor read failed", exc_info=True)
     if state.get(f"_gen:{key}", "0") != gen:
         _, cursor = _parse(state.get(key))
+        gen = state.get(f"_gen:{key}", "0")  # worked from the newest local value, so our next write may land
     else:
         state[key] = str(cursor) if cursor is not None else ""
     cast(dict[str, str], ctx.setdefault(_GENS, {}))[key] = gen

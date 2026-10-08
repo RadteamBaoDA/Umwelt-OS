@@ -40,7 +40,12 @@ async def test_member_denied_before_any_context_read() -> None:
     """N-R5: the owner gate runs first, so a member triggers no widget read."""
     member = WorkspaceContext(user_id=2, workspace_id=uuid4(), role="member", membership_revision=1)
     reads = AsyncMock()
-    with patch.object(context, "_tasks_widget", reads),          patch.object(context, "_goals_widget", reads),          patch.object(context, "_stories_widget", reads),          patch.object(context, "_events_widget", reads):
+    with (
+        patch.object(context, "_tasks_widget", reads),
+        patch.object(context, "_goals_widget", reads),
+        patch.object(context, "_stories_widget", reads),
+        patch.object(context, "_events_widget", reads),
+    ):
         for builder in (context.build_daily_context, context.build_daily_widgets):
             with pytest.raises(HTTPException) as exc:
                 await builder(AsyncMock(), datetime.now(UTC).date(), "UTC", scope=member, multi_workspace_enabled=True)

@@ -446,6 +446,8 @@ async def index_pending_chunks(ctx: dict[str, object]) -> int:
     redis = cast(Redis, ctx["redis"])
     settings = cast(Settings, ctx["settings"])
     # ARQ copies ctx per job: without the worker-installed dict this is a per-job throwaway.
+    if STATE_KEY not in ctx:
+        logger.warning("w2_cursor_state missing; search cursors are per-job")
     state = cast(dict[str, str], ctx.setdefault(STATE_KEY, {}))
     async with factory() as session:
         await documents.backfill_current_chunks(session, multi_workspace_enabled=settings.multi_workspace_enabled)

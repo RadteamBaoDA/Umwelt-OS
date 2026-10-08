@@ -23,9 +23,11 @@ from pydantic import SecretStr
 
 from core.model_gateway.client import ModelGateway
 from core.model_gateway.schemas import AIExecutionConfig, ModelMapping, PrivacySettings
+from core.workspaces.schemas import InternalJobScope, WorkspaceContext
 from modules.chat.schemas import AnswerContext, AnswerContextRequest, EvidenceItem
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
+OWNER = WorkspaceContext(user_id=1, workspace_id=uuid4(), role="owner", membership_revision=1)
 
 
 def _config(**overrides: Any) -> AIExecutionConfig:
@@ -181,13 +183,15 @@ async def test_goal_export_page_yields_goal_reads(monkeypatch: pytest.MonkeyPatc
         progress=0.0, manual_progress=False, status="active", milestones=[], entity_ids=[],
         revision=1, created_at=NOW, updated_at=NOW,
     )
+    monkeypatch.setattr(goals, "_admit", AsyncMock())
     monkeypatch.setattr(goals, "_goal_export_read", AsyncMock(return_value=read))
     session = MagicMock()
     session.scalar = AsyncMock(return_value=1)
     session.scalars = AsyncMock(return_value=SimpleNamespace(all=lambda: [row]))
     session.execute = AsyncMock(side_effect=AssertionError("export must read ORM rows via scalars()"))
 
-    page = await goals.export_page(session, owner_id=1, record_kind="goals", limit=10)
+    page = await goals.export_page(
+        session, owner_id=1, record_kind="goals", limit=10, scope=OWNER, multi_workspace_enabled=False)
     assert [item.id for item in page.items] == [goal_id]
     assert page.fences[0].id == goal_id and page.snapshot_count == 1
 
@@ -481,7 +485,8 @@ async def test_brief_story_support_missing_story_is_incomplete_not_error(monkeyp
 
     monkeypatch.setattr(news, "get_story", AsyncMock(return_value=None))
     result = await news.brief_story_support(
-        MagicMock(), 1, uuid4(), expected_title="T", expected_source_ids=[str(uuid4())],
+        MagicMock(), uuid4(), expected_title="T", expected_source_ids=[str(uuid4())],
+        scope=OWNER, multi_workspace_enabled=False,
     )
     assert result.complete is False and result.evidence == []
 
@@ -517,16 +522,29 @@ async def test_timeline_dependency_snapshot_cold_capability_cache_is_unsupported
     assert supported is False and len(fingerprint) == 64
 
 
-def _recovery_session() -> MagicMock:
+def _recovery_session(workspace_id: Any) -> MagicMock:
     session = MagicMock()
     session.commit = AsyncMock()
+    session.rollback = AsyncMock()
+    session.scalars = AsyncMock(return_value=SimpleNamespace(all=lambda: [workspace_id]))
     return session
+
+
+def _recovery_setup(monkeypatch: pytest.MonkeyPatch, worker: Any) -> tuple[Any, InternalJobScope]:
+    ws = uuid4()
+    scope = InternalJobScope(workspace_id=ws, actor_user_id=1, membership_revision=1)
+    monkeypatch.setattr(worker, "_workspace_job_scope", AsyncMock(return_value=scope))
+    monkeypatch.setattr(worker.settings_public, "module_is_enabled", AsyncMock(return_value=True))
+    monkeypatch.setattr(worker.documents, "list_ready_document_workspace_ids", AsyncMock(return_value=()))
+    return ws, scope
 
 
 async def test_timeline_recovery_defers_blocked_work_when_version_no_longer_ready(monkeypatch: pytest.MonkeyPatch) -> None:
     from modules.timeline import worker
 
     blocked_id = uuid4()
+    ws, scope = _recovery_setup(monkeypatch, worker)
+    monkeypatch.setattr(worker.workspaces, "read_access_fence", AsyncMock())
     monkeypatch.setattr(worker.documents, "list_ready_version_refs", AsyncMock(return_value=([], None)))
     monkeypatch.setattr(worker.documents, "get_ready_version_ref", AsyncMock(return_value=None))
     monkeypatch.setattr(worker.timeline, "list_blocked_extraction_work", AsyncMock(
@@ -539,16 +557,19 @@ async def test_timeline_recovery_defers_blocked_work_when_version_no_longer_read
     redis.delete = AsyncMock()
 
     count = await worker.recover_timeline_extraction_work(
-        {"session_factory": _factory(_recovery_session()), "redis": redis, "settings": MagicMock()})
+        {"session_factory": _factory(_recovery_session(ws)), "redis": redis,
+         "settings": MagicMock(multi_workspace_enabled=False)})
     assert count == 0
     defer.assert_awaited_once()
     assert defer.await_args.args[1:] == (blocked_id, "fp")
+    assert defer.await_args.kwargs["scope"] is scope
 
 
 async def test_entity_recovery_defers_blocked_work_when_version_no_longer_ready(monkeypatch: pytest.MonkeyPatch) -> None:
     from modules.knowledge.entities import worker
 
     blocked_id = uuid4()
+    ws, scope = _recovery_setup(monkeypatch, worker)
     monkeypatch.setattr(worker.documents, "list_ready_version_refs", AsyncMock(return_value=([], None)))
     monkeypatch.setattr(worker.documents, "get_ready_version_ref", AsyncMock(return_value=None))
     monkeypatch.setattr(worker.entities, "list_blocked_extraction_work", AsyncMock(
@@ -563,9 +584,11 @@ async def test_entity_recovery_defers_blocked_work_when_version_no_longer_ready(
     redis.delete = AsyncMock()
 
     await worker.recover_entity_extraction_work(
-        {"session_factory": _factory(_recovery_session()), "redis": redis, "settings": MagicMock()})
+        {"session_factory": _factory(_recovery_session(ws)), "redis": redis,
+         "settings": MagicMock(multi_workspace_enabled=False)})
     defer.assert_awaited_once()
     assert defer.await_args.args[1:] == (blocked_id, "fp")
+    assert defer.await_args.kwargs["scope"] is scope
 
 
 
@@ -578,3 +601,22 @@ def test_mcp_endpoint_cidrs_subnet_check_per_ip_version() -> None:
     for bad in ("8.8.8.0/24", "2001:db8::/32", "0.0.0.0/0"):
         with pytest.raises(ValueError, match="bounded private or loopback"):
             validate({origin: (bad,)})
+
+
+@pytest.mark.parametrize("module", ["modules.timeline.worker", "modules.knowledge.entities.worker"])
+async def test_recovery_visits_ready_workspace_without_work_rows_and_is_bounded(
+    monkeypatch: pytest.MonkeyPatch, module: str,
+) -> None:
+    import importlib
+
+    worker = importlib.import_module(module)
+    ready_ws = uuid4()
+    session = MagicMock()
+    session.rollback = AsyncMock()
+    session.scalars = AsyncMock(return_value=SimpleNamespace(all=list))  # no work rows at all
+    ready = AsyncMock(return_value=(ready_ws,))
+    monkeypatch.setattr(worker.documents, "list_ready_document_workspace_ids", ready)
+    ctx: dict[str, Any] = {}
+    assert await worker._recovery_workspace_ids(ctx, _factory(session)) == [ready_ws]
+    assert ready.await_args.kwargs["limit"] <= 100
+    assert "LIMIT" in str(session.scalars.await_args.args[0]).upper()
