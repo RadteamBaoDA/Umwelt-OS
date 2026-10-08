@@ -120,15 +120,15 @@ async def test_auth_row_requires_active_account_and_default_workspace(monkeypatc
     session.scalar = AsyncMock(return_value=7)
     monkeypatch.setattr(auth_public, "revalidate_account_session", AsyncMock(return_value=True))
     monkeypatch.setattr(routes, "owner_default_scope", AsyncMock(return_value=object()))
-    assert await routes._auth_row_current(session, h) is True
+    assert await routes._auth_row_current(session, h) == 7
     monkeypatch.setattr(routes, "owner_default_scope", AsyncMock(side_effect=HTTPException(status_code=404)))
-    assert await routes._auth_row_current(session, h) is False  # default workspace gone
+    assert await routes._auth_row_current(session, h) is None  # default workspace gone
     monkeypatch.setattr(routes, "owner_default_scope", AsyncMock(return_value=object()))
     monkeypatch.setattr(auth_public, "revalidate_account_session", AsyncMock(return_value=False))
-    assert await routes._auth_row_current(session, h) is False  # account disabled
+    assert await routes._auth_row_current(session, h) is None  # account disabled
     session.scalar = AsyncMock(return_value=None)
-    assert await routes._auth_row_current(session, h) is False  # session expired
-    assert await routes._auth_row_current(session, None) is False
+    assert await routes._auth_row_current(session, h) is None  # session expired
+    assert await routes._auth_row_current(session, None) is None
 
 
 async def test_run_scope_rejects_run_of_another_workspace(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -192,3 +192,49 @@ async def test_recover_continues_when_redis_enqueue_fails() -> None:
     result = await worker.recover_chat_runs({"session_factory": lambda: _Cm(session), "redis": redis})
     assert result == {"requeued": 2, "failed": 0}
     assert redis.enqueue_job.await_count == 2  # one lost push does not block the next; next poll retries
+
+
+# ------------------------------------------- requester must own the run (cross-account)
+
+
+def _events_request() -> Any:
+    return SimpleNamespace(cookies={}, app=SimpleNamespace(state=SimpleNamespace(
+        session_factory=lambda: _Cm(MagicMock(scalar=AsyncMock(return_value=SimpleNamespace(
+            id=uuid4(), actor_user_id=1, workspace_id=WS, conversation_id=uuid4()))))),
+    ))
+
+
+async def test_other_accounts_session_cannot_stream_a_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(routes, "_session_is_current", AsyncMock(return_value=2))  # requester is account 2
+    monkeypatch.setattr(routes, "_run_scope", AsyncMock(return_value=SCOPE))  # old code stopped here
+    with pytest.raises(HTTPException) as exc:
+        await routes.get_response_events(uuid4(), _events_request(), MagicMock(close=AsyncMock()))  # type: ignore[arg-type]
+    assert exc.value.status_code == 404
+
+
+async def test_other_accounts_session_cannot_cancel_a_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    session = MagicMock(scalar=AsyncMock(return_value=SimpleNamespace(
+        id=uuid4(), actor_user_id=1, workspace_id=WS, conversation_id=uuid4())))
+    monkeypatch.setattr(routes, "owner_default_scope", AsyncMock(return_value=SimpleNamespace(workspace_id=WS)))
+    with pytest.raises(HTTPException) as exc:
+        await routes.cancel_response(uuid4(), MagicMock(), session, SimpleNamespace(owner_id=2))  # type: ignore[arg-type]
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.parametrize("requester,expected", [(1, False), (2, True), (None, True)])
+async def test_poll_ends_stream_when_requester_is_not_run_actor(
+    monkeypatch: pytest.MonkeyPatch, requester: int | None, expected: bool,
+) -> None:
+    from modules.chat.models import Conversation, ResponseRun, StreamEvent
+
+    fence = {"v": 1}
+    run = SimpleNamespace(status="streaming", conversation_id=uuid4(), actor_user_id=1, workspace_id=WS,
+                          retrieval_context={"_chat_privacy_fence": fence})
+    rows = {ResponseRun: run, StreamEvent: None, Conversation: SimpleNamespace(ephemeral=False, expires_at=None)}
+    session = MagicMock()
+    session.scalar = AsyncMock(side_effect=lambda stmt: rows[stmt.column_descriptions[0]["entity"]])
+    monkeypatch.setattr(routes, "_run_scope", AsyncMock(return_value=SCOPE))
+    monkeypatch.setattr(routes, "read_export_privacy", AsyncMock(return_value=object()))
+    monkeypatch.setattr(routes, "_privacy_fence", lambda _p: fence)
+    monkeypatch.setattr(routes, "_auth_row_current", AsyncMock(return_value=requester))
+    assert await routes._poll_needs_lock(session, uuid4(), 0, "h") is expected

@@ -55,7 +55,7 @@ class _Session:
             return SimpleNamespace(id=CID, ephemeral=False, expires_at=None)
         if entity is ResponseRun:
             return SimpleNamespace(
-                id=RID, conversation_id=CID, status=self.store.status,
+                id=RID, conversation_id=CID, status=self.store.status, actor_user_id=1,
                 retrieval_context={"_chat_privacy_fence": {}},
             )
         raise AssertionError(stmt)
@@ -77,8 +77,8 @@ class _Session:
 
 
 def _install(monkeypatch: pytest.MonkeyPatch, store: _Store, *, auth: list[bool] | None = None) -> None:
-    async def current(_request: Any) -> bool:
-        return True
+    async def current(_request: Any) -> int:
+        return 1
 
     async def lock(_session: Any) -> None:
         store.log.append("lock")
@@ -91,8 +91,8 @@ def _install(monkeypatch: pytest.MonkeyPatch, store: _Store, *, auth: list[bool]
 
     answers = list(auth or [])
 
-    async def auth_row(_session: Any, _hash: Any) -> bool:
-        return answers.pop(0) if answers else True
+    async def auth_row(_session: Any, _hash: Any) -> int | None:
+        return (1 if answers.pop(0) else None) if answers else 1
 
     async def no_citations(_session: Any, citations: Any) -> list[Any]:
         return list(citations) if isinstance(citations, list) else []
@@ -349,14 +349,14 @@ async def test_probe_takes_the_locked_path_for_every_publish_or_close_reason(
         return SimpleNamespace(store_conversation_history=True, persisted=True,
                                updated_at=datetime(2026, 10, 7, tzinfo=UTC))
 
-    async def auth_row(_session: Any, _hash: Any) -> bool:
-        return auth
+    async def auth_row(_session: Any, _hash: Any) -> int | None:
+        return 1 if auth else None
 
     monkeypatch.setattr(routes, "read_export_privacy", privacy)
     monkeypatch.setattr(routes, "_run_scope", run_scope)
     monkeypatch.setattr(routes, "_auth_row_current", auth_row)
     row = None if run is None else SimpleNamespace(
-        status=run, conversation_id=CID, retrieval_context={"_chat_privacy_fence": fence},
+        status=run, conversation_id=CID, actor_user_id=1, retrieval_context={"_chat_privacy_fence": fence},
     )
     session = _ProbeSession(row, newer, parent)
     assert await routes._poll_needs_lock(session, RID, 4, "h") is expected  # type: ignore[arg-type]

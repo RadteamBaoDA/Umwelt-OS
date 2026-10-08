@@ -184,31 +184,33 @@ def _token_hash(request: Request) -> str | None:
     return hashlib.sha256(token.encode()).hexdigest() if token else None
 
 
-async def _session_is_current(request: Request) -> bool | None:
+async def _session_is_current(request: Request) -> int | None:
     """Admit only a live session whose account still has its active default workspace.
 
     Returns:
-        True when current; False when missing, expired, disabled or without a default workspace;
-        None on timeout.
+        The requester's account id; None when missing, expired, disabled or without a default workspace.
+
+    Raises:
+        HTTPException: 503 when session verification times out.
     """
     th = _token_hash(request)
     if th is None or not _TOKEN_RE.fullmatch(th):
-        return False
+        return None
     factory: async_sessionmaker[AsyncSession] = request.app.state.session_factory
     try:
         async with asyncio.timeout(DB_READ_TIMEOUT):
             async with factory() as session:
                 return await _auth_row_current(session, th)
-    except TimeoutError:
-        return None
+    except TimeoutError as exc:
+        raise HTTPException(status_code=503, detail="Session verification temporarily unavailable") from exc
 
 
-async def _auth_row_current(session: AsyncSession, token_hash: str | None) -> bool:
-    """Account + default-workspace admission of the hashed session token, in the caller's transaction."""
+async def _auth_row_current(session: AsyncSession, token_hash: str | None) -> int | None:
+    """Account + default-workspace admission of the hashed session token; the requester's account id or None."""
     from core.auth.public import revalidate_account_session
 
     if token_hash is None or not _TOKEN_RE.fullmatch(token_hash):
-        return False
+        return None
     account_id = await session.scalar(
         select(AuthSession.owner_id).where(
             AuthSession.token_hash == token_hash,
@@ -218,12 +220,12 @@ async def _auth_row_current(session: AsyncSession, token_hash: str | None) -> bo
     if account_id is None or not await revalidate_account_session(
         session, token_hash, account_id, multi_workspace_enabled=multi_workspace_enabled(),
     ):
-        return False
+        return None
     try:
         await owner_default_scope(session, account_id)
     except HTTPException:
-        return False
-    return True
+        return None
+    return int(account_id)
 
 
 async def _run_scope(session: AsyncSession, run: ResponseRun) -> WorkspaceContext:
@@ -267,7 +269,8 @@ async def _poll_needs_lock(
     stamp = (run.retrieval_context or {}).get("_chat_privacy_fence")
     if stamp != current:
         return True
-    return not await _auth_row_current(session, token_hash)
+    account_id = await _auth_row_current(session, token_hash)
+    return account_id is None or run.actor_user_id != account_id
 
 
 async def _filter_citation_lists(session: AsyncSession, lists: list[object]) -> list[list[dict[str, object]]]:
@@ -904,10 +907,8 @@ async def get_response_events(
     # pooled connection idle in transaction (pool 10+10 < the 64-stream cap). The stream uses its own
     # short sessions from here on.
     await request_session.close()
-    initial_auth = await _session_is_current(request)
-    if initial_auth is None:
-        raise HTTPException(status_code=503, detail="Session verification temporarily unavailable")
-    if not initial_auth:
+    requester_id = await _session_is_current(request)
+    if requester_id is None:
         raise HTTPException(status_code=401, detail="Authentication required")
 
     factory: async_sessionmaker[AsyncSession] = request.app.state.session_factory
@@ -916,6 +917,9 @@ async def get_response_events(
     async with factory() as session:
         run = await session.scalar(select(ResponseRun).where(ResponseRun.id == response_id))
         if run is None:
+            raise HTTPException(status_code=404, detail="Response run not found")
+        # The stream is the requester's own run only: actor and default workspace must both match.
+        if run.actor_user_id != requester_id:
             raise HTTPException(status_code=404, detail="Response run not found")
         await _run_scope(session, run)
         parent = await session.scalar(select(Conversation).where(Conversation.id == run.conversation_id))
@@ -1006,7 +1010,8 @@ async def get_response_events(
                                     return
 
                             # Same transaction and snapshot as the write below (I5): no frame after revocation.
-                            if not await _auth_row_current(session, token_hash):
+                            account_id = await _auth_row_current(session, token_hash)
+                            if account_id is None or current_run.actor_user_id != account_id:
                                 auth_expired = True
                             else:
                                 events = list((await session.scalars(
@@ -1118,7 +1123,7 @@ async def cancel_response(
     if run_hint is None:
         raise HTTPException(status_code=404, detail="Response run not found")
     scope = await owner_default_scope(session, _owner.owner_id)
-    if run_hint.workspace_id != scope.workspace_id:
+    if run_hint.workspace_id != scope.workspace_id or run_hint.actor_user_id != _owner.owner_id:
         raise HTTPException(status_code=404, detail="Response run not found")
     conversation = await session.scalar(select(Conversation).where(Conversation.id == run_hint.conversation_id))
     if conversation is None:
