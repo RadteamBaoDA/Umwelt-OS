@@ -2039,7 +2039,7 @@ OLD_FOREIGN_KEYS = (('agent_approvals', 'agent_approvals_run_id_fkey', 'agent_ru
   ['id'],
   'CASCADE'),
  ('document_cleanup_evidence_references',
-  'document_cleanup_evidence_references_operation_id_fkey',
+  'fk_document_cleanup_evidence_operation',
   'document_cleanup_operations',
   ['operation_id'],
   ['id'],
