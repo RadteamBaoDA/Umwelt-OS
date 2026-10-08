@@ -125,7 +125,7 @@ export function FeedGadget(props: FeedGadgetProps) {
         </TabsTrigger>
       </TabsList>
       <TabsContent value="items" forceMount className="mt-0 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden"><FeedStream {...props} /></TabsContent>
-      <TabsContent value="stories" forceMount className="mt-0 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden"><NewsFeed instance={props.instance} /></TabsContent>
+      <TabsContent value="stories" className="mt-0 min-h-0 flex-1 overflow-hidden"><NewsFeed instance={props.instance} /></TabsContent>
     </Tabs>
   );
 }
@@ -328,7 +328,7 @@ function FeedStream({
             aria-pressed={onlyUnread}
             onClick={() => setOnlyUnread((prev) => !prev)}
           >
-            {onlyUnread ? t('unreadOnly') : t('allFeedItems')} ({feedItems.length})
+            {t('unreadOnly')} ({feedItems.length})
           </Button>
           {unreadCount > 0 && (
             <span className="px-2 rounded-full text-xs font-bold bg-primary/20 text-primary">
