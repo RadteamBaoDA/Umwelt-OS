@@ -259,7 +259,8 @@ async def process_document_ready(ctx: dict[str, object], event_id: str) -> None:
             session, ready, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
         if ready.local_only:
-            await timeline.block_local_only_extraction_work(session, timeline_work_id)
+            await timeline.block_local_only_extraction_work(
+                session, timeline_work_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         await ingestion.mark_event_delivered(
             session, event_uuid, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )

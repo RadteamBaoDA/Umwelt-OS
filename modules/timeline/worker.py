@@ -156,8 +156,10 @@ async def process_timeline_extraction_work(ctx: dict[str, object], work_id_value
         scope = await _workspace_job_scope(
             session, workspace_id, multi_workspace_enabled=multi_workspace_enabled,
         )
-        if scope is None:
-            await session.rollback()
+        if scope is None or not await settings_public.module_is_enabled(
+            session, "knowledge.timeline", scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        ):
+            await session.rollback()  # unavailable lineage or disabled module: leave durable work untouched
             return
         work = await timeline.claim_extraction_work(
             session, work_id, lease_owner, datetime.now(UTC), scope=scope,
@@ -325,9 +327,11 @@ async def process_timeline_extraction_work(ctx: dict[str, object], work_id_value
                 await session.rollback()
                 return
             from modules.timeline.models import TimelineExtractionResult
-            result = await session.scalar(select(TimelineExtractionResult).where(
-                TimelineExtractionResult.workspace_id == scope.workspace_id,
-                TimelineExtractionResult.work_id == work_id
+            result = await session.scalar(select(TimelineExtractionResult).join(
+                TimelineExtractionWork, TimelineExtractionWork.id == TimelineExtractionResult.work_id,
+            ).where(
+                TimelineExtractionWork.workspace_id == scope.workspace_id,
+                TimelineExtractionResult.work_id == work_id,
             ))
             event_ids = [UUID(str(item["event_id"])) for item in result.proposals_json] if result else []
             event_revisions = dict((await session.execute(select(Event.id, Event.revision).where(
@@ -378,7 +382,9 @@ async def recover_timeline_extraction_work(ctx: dict[str, object]) -> int:
             scope = await _workspace_job_scope(
                 session, workspace_id, multi_workspace_enabled=multi_workspace_enabled,
             )
-            if scope is None:
+            if scope is None or not await settings_public.module_is_enabled(
+                session, "knowledge.timeline", scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            ):
                 await session.rollback()
                 continue
             cursor_key = f"bbd:timeline-extraction:ready-cursor:{workspace_id}"

@@ -8,12 +8,11 @@ from typing import Any, cast
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
+from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy import Select, delete, desc, exists, false, func, or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
-from fastapi import HTTPException
 
-from core.auth.models import Owner
 from core.realtime import (
     ReplayDraft,
     commit_with_replay,
@@ -127,23 +126,27 @@ def _timeline_export_json(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
-def _timeline_export_statement(snapshot_at: datetime) -> Select[Event]:
-    """Select undeleted owner events and derived events with retained eligible evidence."""
-    eligible = sources.export_eligible_source_ids()
+def _timeline_export_statement(snapshot_at: datetime, *, scope: Scope) -> Select[Event]:
+    """Select undeleted workspace events and derived events with retained eligible evidence."""
+    eligible = sources.export_eligible_source_ids(scope=scope)
     support = exists(select(EventEvidence.id).where(
+        EventEvidence.workspace_id == scope.workspace_id,
         EventEvidence.event_id == Event.id, EventEvidence.source_id.in_(eligible),
         EventEvidence.document_version_id.is_not(None), EventEvidence.chunk_id.is_not(None),
     ))
     return select(Event).where(
+        Event.workspace_id == scope.workspace_id,
         Event.deleted_at.is_(None), Event.created_at <= snapshot_at, Event.updated_at <= snapshot_at,
         or_(Event.origin == "manual", support),
     )
 
 
-async def _timeline_export_count(session: AsyncSession, snapshot_at: datetime) -> int:
+async def _timeline_export_count(
+    session: AsyncSession, snapshot_at: datetime, *, scope: Scope, multi_workspace_enabled: bool,
+) -> int:
     """Count only cutoff-stable owner facts or derived events with exact retained support."""
     count, position = 0, None
-    base = _timeline_export_statement(snapshot_at)
+    base = _timeline_export_statement(snapshot_at, scope=scope)
     while True:
         statement = base
         if position is not None:
@@ -154,24 +157,29 @@ async def _timeline_export_count(session: AsyncSession, snapshot_at: datetime) -
             return count
         for event in rows:
             try:
-                await _timeline_export_record(session, event)
+                await _timeline_export_record(
+                    session, event, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
                 count += 1
             except _TimelineExportIneligible:
                 continue
         position = (rows[-1].created_at, rows[-1].id)
 
 
-async def _timeline_export_record(session: AsyncSession, event: Event) -> tuple[TimelineExportRead, str, str, list[tuple[UUID, int]]]:
+async def _timeline_export_record(
+    session: AsyncSession, event: Event, *, scope: Scope, multi_workspace_enabled: bool,
+) -> tuple[TimelineExportRead, str, str, list[tuple[UUID, int]]]:
     """Project one fresh event and its exact supported children without arbitrary metadata."""
-    participants = list((await session.scalars(select(EventParticipant).where(
-        EventParticipant.event_id == event.id,
+    participants = list((await session.scalars(select(EventParticipant).join(
+        Event, Event.id == EventParticipant.event_id,
+    ).where(
+        Event.workspace_id == scope.workspace_id, EventParticipant.event_id == event.id,
     ).order_by(EventParticipant.role, EventParticipant.entity_id).limit(101)
       .execution_options(populate_existing=True))).all())
     if len(participants) > 100:
         raise ValueError("An event export record exceeds the participant bound")
     evidence_rows = list((await session.scalars(select(EventEvidence).where(
-        EventEvidence.event_id == event.id,
-        EventEvidence.source_id.in_(sources.export_eligible_source_ids()),
+        EventEvidence.workspace_id == scope.workspace_id, EventEvidence.event_id == event.id,
+        EventEvidence.source_id.in_(sources.export_eligible_source_ids(scope=scope)),
         EventEvidence.document_version_id.is_not(None), EventEvidence.chunk_id.is_not(None),
     ).order_by(EventEvidence.id).limit(101).execution_options(populate_existing=True))).all())
     if len(evidence_rows) > 100:
@@ -189,7 +197,7 @@ async def _timeline_export_record(session: AsyncSession, event: Event) -> tuple[
             accepted_source_generation=evidence_row.source_generation,
             document_id=evidence_row.document_id, document_version_id=evidence_row.document_version_id,
             chunk_id=evidence_row.chunk_id,
-        ))
+        ), scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         if proof is None:
             continue
         valid_evidence_ids.add(evidence_row.id)
@@ -226,19 +234,22 @@ async def _timeline_export_record(session: AsyncSession, event: Event) -> tuple[
 
 
 async def export_page(session: AsyncSession, *, owner_id: int, record_kind: str, limit: int = 50,
-                      cursor: str | None = None) -> TimelineExportPage:
+                      cursor: str | None = None, scope: Scope,
+                      multi_workspace_enabled: bool) -> TimelineExportPage:
     """Return a bounded fixed-cutoff event page with independently retained owner facts and citations."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if record_kind != "events" or not 1 <= limit <= 100:
         raise ValueError("Timeline export kind or limit is invalid")
-    if owner_id != 1 or await session.scalar(select(Owner.id).where(Owner.id == owner_id)) is None:
-        raise PermissionError("Timeline export requires the current owner")
+    if owner_id != _actor(scope):
+        raise PermissionError("Timeline export requires the workspace owner")
     if cursor is None:
         snapshot, position = datetime.now(UTC), None
     else:
         snapshot, position_at, position_id = _decode_timeline_export_cursor(cursor, owner_id)
         position = (position_at, position_id)
-    count = await _timeline_export_count(session, snapshot)
-    statement = _timeline_export_statement(snapshot)
+    count = await _timeline_export_count(
+        session, snapshot, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    statement = _timeline_export_statement(snapshot, scope=scope)
     if position is not None:
         statement = statement.where(tuple_(Event.created_at, Event.id) > position)
     rows = list((await session.scalars(statement.order_by(Event.created_at, Event.id).limit(limit + 1)
@@ -249,7 +260,8 @@ async def export_page(session: AsyncSession, *, owner_id: int, record_kind: str,
     last_examined: tuple[datetime, UUID] | None = None
     for event in rows[:limit]:
         try:
-            item, participant_digest, evidence_digest, source_fences = await _timeline_export_record(session, event)
+            item, participant_digest, evidence_digest, source_fences = await _timeline_export_record(
+                session, event, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         except _TimelineExportIneligible:
             last_examined = (event.created_at, event.id)
             continue
@@ -276,23 +288,29 @@ async def export_page(session: AsyncSession, *, owner_id: int, record_kind: str,
 
 async def validate_export_fences(session: AsyncSession, *, owner_id: int, record_kind: str,
                                  snapshot_at: datetime, expected_snapshot_count: int,
-                                 fences: list[TimelineExportFence]) -> TimelineExportFenceValidation:
+                                 fences: list[TimelineExportFence], scope: Scope,
+                                 multi_workspace_enabled: bool) -> TimelineExportFenceValidation:
     """Re-read every event and child projection and reject source, revision or count drift."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if record_kind != "events" or len(fences) > 100 or expected_snapshot_count < 0:
         raise ValueError("Timeline export validation input is invalid")
-    if owner_id != 1 or await session.scalar(select(Owner.id).where(Owner.id == owner_id)) is None:
+    if owner_id != _actor(scope):
         return TimelineExportFenceValidation(valid=False, reason="owner_unavailable", observed_snapshot_count=0)
-    observed = await _timeline_export_count(session, snapshot_at)
+    observed = await _timeline_export_count(
+        session, snapshot_at, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if observed != expected_snapshot_count:
         return TimelineExportFenceValidation(valid=False, reason="snapshot_count_changed", observed_snapshot_count=observed)
     for fence in fences:
-        event = await session.scalar(select(Event).where(Event.id == fence.id).execution_options(populate_existing=True))
+        event = await session.scalar(select(Event).where(
+            Event.workspace_id == scope.workspace_id, Event.id == fence.id,
+        ).execution_options(populate_existing=True))
         if event is None or event.deleted_at is not None or (event.created_at, event.updated_at, event.revision) != (
             fence.created_at, fence.updated_at, fence.revision,
         ):
             return TimelineExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
         try:
-            item, participant_digest, evidence_digest, source_fences = await _timeline_export_record(session, event)
+            item, participant_digest, evidence_digest, source_fences = await _timeline_export_record(
+                session, event, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         except _TimelineExportIneligible:
             return TimelineExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
         record_digest = hashlib.sha256(_timeline_export_json(item.model_dump(mode="json"))).hexdigest()
@@ -301,9 +319,9 @@ async def validate_export_fences(session: AsyncSession, *, owner_id: int, record
                 or source_fences != fence.source_fences):
             return TimelineExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
         retained_sources = await sources.filter_export_eligible_sources(session, [
-            SourceExportFence(source_id=source_id, generation=generation)
+            SourceExportFence(source_id=source_id, workspace_id=scope.workspace_id, generation=generation)
             for source_id, generation in fence.source_fences
-        ])
+        ], scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         if set(retained_sources) != {source_id for source_id, _ in fence.source_fences}:
             return TimelineExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
     return TimelineExportFenceValidation(valid=True, reason="valid", observed_snapshot_count=observed)
@@ -662,7 +680,7 @@ async def _list_partition(
             _, end = day_window(query.date_to - timedelta(days=1), query.timezone)
             statement = statement.where(Event.started_at >= start, Event.started_at < end)
         if query.entity_id is not None:
-            statement = statement.where(Event.id.in_(select(EventParticipant.event_id).where(EventParticipant.workspace_id == scope.workspace_id, EventParticipant.entity_id == query.entity_id)))
+            statement = statement.where(Event.id.in_(select(EventParticipant.event_id).where(EventParticipant.entity_id == query.entity_id)))
         if key is not None:
             instant, identifier = key
             statement = statement.where(tuple_(Event.started_at, Event.id) < (datetime.fromisoformat(str(instant)), UUID(str(identifier))))
@@ -672,7 +690,7 @@ async def _list_partition(
         if query.date_from is not None:
             statement = statement.where(Event.occurred_date >= query.date_from, Event.occurred_date < query.date_to)
         if query.entity_id is not None:
-            statement = statement.where(Event.id.in_(select(EventParticipant.event_id).where(EventParticipant.workspace_id == scope.workspace_id, EventParticipant.entity_id == query.entity_id)))
+            statement = statement.where(Event.id.in_(select(EventParticipant.event_id).where(EventParticipant.entity_id == query.entity_id)))
         if key is not None:
             day, identifier = key
             statement = statement.where(tuple_(Event.occurred_date, Event.id) < (date.fromisoformat(str(day)), UUID(str(identifier))))
@@ -682,7 +700,7 @@ async def _list_partition(
         if query.precision != "unknown" and query.date_from is not None:
             statement = statement.where(false())
         if query.entity_id is not None:
-            statement = statement.where(Event.id.in_(select(EventParticipant.event_id).where(EventParticipant.workspace_id == scope.workspace_id, EventParticipant.entity_id == query.entity_id)))
+            statement = statement.where(Event.id.in_(select(EventParticipant.event_id).where(EventParticipant.entity_id == query.entity_id)))
         if key is not None:
             instant, identifier = key
             statement = statement.where(tuple_(Event.created_at, Event.id) < (datetime.fromisoformat(str(instant)), UUID(str(identifier))))
@@ -794,7 +812,9 @@ async def _set_participants(
         )),
     ))
     entity_ids = sorted({item.entity_id for item in values}, key=str)
-    refs = await entities.get_entity_refs(session, entity_ids, for_write=True) if entity_ids else []
+    refs = await entities.get_entity_refs(
+        session, entity_ids, for_write=True, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    ) if entity_ids else []
     if len(refs) != len(entity_ids):
         raise ValueError("participant entity is missing or redirected")
     for item in values:
@@ -1271,11 +1291,10 @@ async def finish_extraction_work(session: AsyncSession, work_id: UUID, lease_own
     if work is None:
         return False
     result = await session.scalar(select(TimelineExtractionResult).where(
-        TimelineExtractionResult.workspace_id == scope.workspace_id, TimelineExtractionResult.work_id == work.id
+        TimelineExtractionResult.work_id == work.id  # work was selected above under this workspace
     ).with_for_update())
     if result is None:
-        session.add(TimelineExtractionResult(workspace_id=scope.workspace_id, work_id=work.id,
-                                             proposals_json=proposals, model=model))
+        session.add(TimelineExtractionResult(work_id=work.id, proposals_json=proposals, model=model))
     else:
         result.proposals_json, result.model = proposals, model
     work.status, work.lease_owner, work.lease_expires_at = "succeeded", None, None
@@ -1647,7 +1666,8 @@ async def publish_provider_event(
             ).on_conflict_do_nothing(constraint="uq_timeline_participant_evidence"))
     await session.flush()
     if changed:
-        await _schedule_temporal_event(session, event, ["extracted"])
+        await _schedule_temporal_event(session, event, ["extracted"], scope=scope,
+                                       multi_workspace_enabled=multi_workspace_enabled)
     return event.id
 
 
@@ -1707,9 +1727,12 @@ async def support_cleanup_ids(session: AsyncSession, *, document_id: UUID | None
 
 
 async def correction_event_ids(
-    session: AsyncSession, entity_ids: list[UUID], *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession, entity_ids: list[UUID], *, scope: Scope,
 ) -> list[UUID]:
-    """Capture bounded event rows containing participants before correction locks are taken."""
+    """Capture bounded event rows containing participants before correction locks are taken.
+
+    The correction transaction already holds owner admission; this read only restricts rows to the workspace.
+    """
     if not entity_ids:
         return []
     ids = list((await session.scalars(select(EventParticipant.event_id).join(
@@ -1965,6 +1988,7 @@ async def _hide_unsupported(session: AsyncSession, event_ids: list[UUID]) -> Non
 
 async def list_changed_events_after(
     session: AsyncSession, position: tuple[datetime, UUID] | None, limit: int = 100,
+    *, scope: Scope, multi_workspace_enabled: bool,
 ) -> list[tuple[datetime, UUID, str, dict[str, Any] | None]]:
     """Read-only cursor page of timeline events by ``(updated_at, id)`` for the automations sweep.
 
@@ -1972,7 +1996,8 @@ async def list_changed_events_after(
     carries type, source id and importance only (no title or summary). Soft-deleted events stay in
     the page with a None payload so the cursor advances past them without offering them.
     """
-    stmt = select(Event)
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    stmt = select(Event).where(Event.workspace_id == scope.workspace_id)
     if position is not None:
         stmt = stmt.where(tuple_(Event.updated_at, Event.id) > tuple_(*position))
     rows = (await session.scalars(stmt.order_by(Event.updated_at, Event.id).limit(limit))).all()

@@ -6,9 +6,9 @@ from datetime import UTC, datetime
 from hashlib import sha256
 from uuid import UUID, uuid4
 
+from fastapi import HTTPException
 from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from fastapi import HTTPException
 
 from core.realtime import ReplayDraft, commit_with_replay, make_graph_change
 from core.workspaces import public as workspaces
@@ -591,7 +591,8 @@ async def delete_canonical_entity(
             relationship_ids=final.relationship_ids,
         )
     after = final
-    await _temporal_before_relationships(session, relationship_ids, scope=scope)
+    await _temporal_before_relationships(
+        session, relationship_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     await _temporal_correction(session, after.memberships,
                                [(row.id, row.revision) for row in after.entity_rows], "deleted",
                                scope=scope, multi_workspace_enabled=multi_workspace_enabled, deleted=True)
@@ -642,7 +643,9 @@ async def delete_canonical_entity(
     await session.flush()
     drafts: list[ReplayDraft] = [make_graph_change(entity_id=identifier, deleted=True, scope=scope) for identifier in after.entity_ids]
     drafts.extend(make_graph_change(relationship_id=identifier, deleted=True, scope=scope) for identifier in relationship_ids)
-    drafts.extend(await timeline.revise_corrected_events(session, changed_timeline_ids, entity_id=entity_id, scope=scope))
+    drafts.extend(await timeline.revise_corrected_events(
+        session, changed_timeline_ids, entity_id=entity_id, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled))
     await commit_with_replay(
         session, drafts, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         access_fence=fence,
@@ -870,7 +873,8 @@ async def merge_entity(
         multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
         include_target_memberships=True,
     )
-    await _temporal_before_relationships(session, closure.relationship_ids, scope=scope)
+    await _temporal_before_relationships(
+        session, closure.relationship_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     source, target, memberships, target_aliases, source_aliases = await _validate_merge_request(source_id, payload, closure)
     previous_revisions: dict[str, int | None] = {str(source.id): source.revision, str(target.id): target.revision}
     for field_name in ("name", "description"):
@@ -984,7 +988,9 @@ async def merge_entity(
     )
     drafts: list[ReplayDraft] = [make_graph_change(entity_id=target.id, scope=scope)]
     drafts.extend(make_graph_change(relationship_id=new, scope=scope) for _, new in replacements)
-    drafts.extend(await timeline.revise_corrected_events(session, changed_timeline_ids, entity_id=target.id, scope=scope))
+    drafts.extend(await timeline.revise_corrected_events(
+        session, changed_timeline_ids, entity_id=target.id, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled))
     await _temporal_correction(session, closure.memberships,
                                [(source.id, source.revision), (target.id, target.revision)], "merge",
                                scope=scope, multi_workspace_enabled=multi_workspace_enabled)
@@ -1013,7 +1019,8 @@ async def split_entity(
         access_fence=fence,
     )
     source, selected = await _validate_split_request(entity_id, payload, closure)
-    await _temporal_before_relationships(session, closure.relationship_ids, scope=scope)
+    await _temporal_before_relationships(
+        session, closure.relationship_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     selected_ids = set(payload.evidence_ids)
     new_id = uuid4()
     new_entity = Entity(
@@ -1105,7 +1112,9 @@ async def split_entity(
     )
     drafts: list[ReplayDraft] = [make_graph_change(entity_id=source.id, scope=scope), make_graph_change(entity_id=new_id, scope=scope)]
     drafts.extend(make_graph_change(relationship_id=new, scope=scope) for _, new in replacements)
-    drafts.extend(await timeline.revise_corrected_events(session, changed_timeline_ids, entity_id=source.id, scope=scope))
+    drafts.extend(await timeline.revise_corrected_events(
+        session, changed_timeline_ids, entity_id=source.id, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled))
     await _temporal_correction(session, closure.memberships,
                                [(source.id, source.revision), (new_entity.id, new_entity.revision)], "split",
                                scope=scope, multi_workspace_enabled=multi_workspace_enabled)
@@ -1202,11 +1211,12 @@ async def suppress_candidates(
 
 
 async def _temporal_before_relationships(
-    session: AsyncSession, relationship_ids: list[UUID], *, scope: Scope,
+    session: AsyncSession, relationship_ids: list[UUID], *, scope: Scope, multi_workspace_enabled: bool,
 ) -> None:
     """Record actual pre-correction owner state before endpoint memberships move; history starts at this observation."""
     for relationship_id in relationship_ids:
-        await relationships.record_relationship_history(session, relationship_id, scope=scope)
+        await relationships.record_relationship_history(
+            session, relationship_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
 
 
 async def _temporal_correction(session: AsyncSession, memberships: list[EntityEvidenceMembership], entity_revisions: list[tuple[UUID, int]],
