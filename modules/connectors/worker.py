@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 
 import httpx
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -66,13 +66,40 @@ def _write_cursor(state: dict[str, str] | None, key: str, last: UUID | None) -> 
         state[key] = str(last)
 
 
+def _read_slot_cursor(state: dict[str, str] | None, key: str) -> tuple[UUID, str] | None:
+    """Parse a composite ``source_id|slot`` cursor; a missing or corrupt value restarts the sweep."""
+    try:
+        source_id, slot = (state[key] if state is not None else "").split("|", 1)
+        return UUID(source_id), slot
+    except (KeyError, ValueError):
+        return None
+
+
+def _write_slot_cursor(state: dict[str, str] | None, key: str, last: tuple[UUID, str] | None) -> None:
+    """Remember the last (Source id, slot) of a full page, or clear the key to wrap around."""
+    if state is None:
+        return
+    if last is None:
+        state.pop(key, None)
+    else:
+        state[key] = f"{last[0]}|{last[1]}"
+
+
 def _page(
     statement: Any, id_column: Any, after: UUID | None, *where: ColumnElement[bool], order: tuple[Any, ...] = (),
+    slot_column: Any = None, after_slot: str | None = None,
 ) -> Any:
-    """Order a Source-id discovery by id after the cursor; denied subjects cannot starve later ones."""
+    """Order a Source-id discovery by id after the cursor; denied subjects cannot starve later ones.
+
+    With ``slot_column`` and ``after_slot`` the keyset is the composite (id, slot), so a page that
+    ended mid-Source resumes at that Source's next slot instead of skipping its remaining slots.
+    """
     statement = statement.where(*where)
     if after is not None:
-        statement = statement.where(id_column > after)
+        if slot_column is not None and after_slot is not None:
+            statement = statement.where(or_(id_column > after, and_(id_column == after, slot_column > after_slot)))
+        else:
+            statement = statement.where(id_column > after)
     return statement.order_by(id_column, *order).limit(_PASS_LIMIT)
 
 
@@ -375,6 +402,17 @@ async def revoke_deleted_source_github_grants(
                 await session.rollback()
                 if exc.status_code not in _DENIED:
                     raise
+                if claim is not None:
+                    # Account-scoped row, no workspace data: undo only this job's own claim so the
+                    # actor's OAuth routes in other workspaces are not wedged by lost access here.
+                    coordinator = await session.scalar(
+                        select(GithubOAuthCoordinator).where(GithubOAuthCoordinator.owner_id == actor).with_for_update()
+                    )
+                    if coordinator is not None and coordinator.operation_id == claim:
+                        coordinator.state, coordinator.operation_id, coordinator.error_code = "idle", None, None
+                        await session.commit()
+                    else:
+                        await session.rollback()
                 logger.warning("deleted-source grant revoke result not recorded: HTTP %s", exc.status_code)
                 continue
         handled += 1
@@ -671,15 +709,17 @@ async def reconcile_connectors(ctx: dict[str, object]) -> int:
         return completed
     credentials = N8nCredentials(str(settings.n8n_service_url), api_key)
     api = N8nApi(str(settings.n8n_service_url), api_key)
+    credential_after = _read_slot_cursor(state, "connectors_credentials")
     async with factory() as session:
         credential_rows: list[Any] = list((await session.execute(_page(
             select(ConnectorManagedCredential.source_id, ConnectorManagedCredential.slot,
                    ConnectorManagedCredential.operation_id, ConnectorManagedCredential.operation_envelope["kind"].astext),
-            ConnectorManagedCredential.source_id, _read_cursor(state, "connectors_credentials"),
+            ConnectorManagedCredential.source_id, (credential_after or (None, None))[0],
             ConnectorManagedCredential.operation_envelope["state"].astext == "prepared",
             ConnectorManagedCredential.operation_envelope["kind"].astext == "delete",
             ConnectorManagedCredential.operation_id.is_not(None),
             order=(ConnectorManagedCredential.slot,),
+            slot_column=ConnectorManagedCredential.slot, after_slot=(credential_after or (None, None))[1],
         ))).all())
         workflow_ids = list((await session.scalars(_page(
             select(ConnectorProvisioning.source_id), ConnectorProvisioning.source_id,
@@ -701,7 +741,10 @@ async def reconcile_connectors(ctx: dict[str, object]) -> int:
             ConnectorProvisioning.activation_intent.is_not(None),
         ))).all())
         await session.rollback()
-    _write_cursor(state, "connectors_credentials", credential_rows[-1][0] if len(credential_rows) >= _PASS_LIMIT else None)
+    _write_slot_cursor(
+        state, "connectors_credentials",
+        (credential_rows[-1][0], credential_rows[-1][1]) if len(credential_rows) >= _PASS_LIMIT else None,
+    )
     for name, found in (("connectors_workflows", workflow_ids), ("connectors_unknown_create", unknown_create_ids),
                         ("connectors_activation", activation_ids)):
         _write_cursor(state, name, found[-1] if len(found) >= _PASS_LIMIT else None)

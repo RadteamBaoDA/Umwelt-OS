@@ -179,7 +179,7 @@ async def test_collection_fence_orders_access_source_provisioning() -> None:
             patch("modules.connectors.provisioning.require_collection_fence", provisioning_fence):
         assert await mcp._collection_fence(
             MagicMock(), SOURCE_ID, 4, 2, scope=SCOPE, multi_workspace_enabled=False,
-        ) is True
+        ) == FENCE
     assert calls == ["access", "source", "provisioning"]
 
 
@@ -188,7 +188,7 @@ async def test_collection_fence_denied_admission_is_not_current(status) -> None:
     with patch.object(mcp, "lock_access_fence", AsyncMock(side_effect=HTTPException(status_code=status))):
         assert await mcp._collection_fence(
             MagicMock(), SOURCE_ID, 4, 2, scope=SCOPE, multi_workspace_enabled=False,
-        ) is False
+        ) is None
 
 
 async def test_record_result_uses_original_fence_and_replay_gate() -> None:
@@ -438,3 +438,100 @@ async def test_reconciliation_mark_writes_nothing_when_original_access_is_gone()
 async def test_receiver_checks_build_availability_not_a_global_database_flag() -> None:
     source = inspect.getsource(routes.receive_github_webhook)
     assert "module_is_enabled" not in source and "register_modules" in source
+
+
+# ---------------------------------------------------------------- fix round 1
+
+
+def _session() -> MagicMock:
+    session = MagicMock()
+    for name in ("rollback", "commit", "execute", "scalar"):
+        setattr(session, name, AsyncMock())
+    return session
+
+
+@pytest.mark.parametrize("foreign", [False, True])
+async def test_denied_phase_three_releases_only_our_own_coordinator_claim(foreign) -> None:
+
+    settings = SimpleNamespace(
+        multi_workspace_enabled=False,
+        connector_credential_encryption_key=SimpleNamespace(get_secret_value=lambda: "k"),
+    )
+    grant = SimpleNamespace(
+        encrypted_tokens=b"x", error_code=worker._DELETED_SOURCE_REVOKE, source_id=SOURCE_ID,
+        operation_id=uuid4(), source_generation=4, configuration_revision=1, token_revision=1,
+    )
+    coordinator = SimpleNamespace(
+        state="idle", operation_id=None, error_code=None, updated_at=datetime.now(UTC),
+    )
+    listing, phase1, phase3 = _session(), _session(), _session()
+    listing.execute.return_value = SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: [SOURCE_ID]))
+    phase1.scalar.side_effect = [grant, coordinator]
+    phase3.scalar.side_effect = [coordinator]
+    sessions = iter([listing, phase1, phase3])
+    factory = MagicMock()
+    factory.side_effect = lambda: MagicMock(
+        __aenter__=AsyncMock(return_value=next(sessions)), __aexit__=AsyncMock(return_value=False),
+    )
+    other = uuid4()
+
+    async def provider_revoke(*_args):
+        if foreign:
+            coordinator.operation_id = other
+
+    with patch.object(worker, "_admit_source_job", AsyncMock(return_value=(SCOPE, FENCE))), \
+            patch.object(worker.provisioning, "lock_connector", AsyncMock(
+                side_effect=[(object(), None, ()), HTTPException(status_code=403)])), \
+            patch.object(worker.provisioning, "github_grant_has_active_peer", AsyncMock(return_value=False)), \
+            patch("modules.connectors.github.oauth._open_token_cipher", return_value={"access_token": "t"}), \
+            patch("modules.connectors.github.oauth.revoke_github_grant", AsyncMock(side_effect=provider_revoke)), \
+            patch.object(worker, "commit_with_replay", AsyncMock()), \
+            patch.object(worker, "select", MagicMock()):
+        assert await worker.revoke_deleted_source_github_grants(factory, settings, cursor_state={}) == 0
+    if foreign:
+        assert coordinator.operation_id == other and coordinator.state == "revoking"
+        phase3.commit.assert_not_awaited()
+    else:
+        assert (coordinator.state, coordinator.operation_id, coordinator.error_code) == ("idle", None, None)
+        phase3.commit.assert_awaited_once()
+
+
+def test_credential_discovery_cursor_is_a_composite_keyset() -> None:
+    from sqlalchemy import select
+
+    from modules.connectors.models import ConnectorManagedCredential as Credential
+
+    after = uuid4()
+    sql = str(worker._page(
+        select(Credential.source_id, Credential.slot), Credential.source_id, after,
+        order=(Credential.slot,), slot_column=Credential.slot, after_slot="b",
+    ).compile(dialect=postgresql.dialect()))
+    assert "source_id >" in sql and "source_id =" in sql and "slot >" in sql
+    assert sql.index("slot >") < sql.index("ORDER BY") < sql.index("LIMIT")
+    state: dict[str, str] = {}
+    worker._write_slot_cursor(state, "k", (after, "b"))
+    assert worker._read_slot_cursor(state, "k") == (after, "b")
+    worker._write_slot_cursor(state, "k", None)
+    assert worker._read_slot_cursor(state, "k") is None
+    assert worker._read_slot_cursor({"k": "garbage"}, "k") is None
+
+
+async def test_changed_access_fence_between_start_and_record_is_denied_and_publishes_nothing() -> None:
+    session = MagicMock()
+    session.rollback = AsyncMock()
+    factory = MagicMock()
+    factory.return_value.__aenter__ = AsyncMock(return_value=session)
+    factory.return_value.__aexit__ = AsyncMock(return_value=False)
+    source = SimpleNamespace(id=SOURCE_ID, generation=4)
+    record, replay = AsyncMock(), AsyncMock()
+    stale = AccessFence(WORKSPACE_ID, 7, 3, 4)
+    access = AsyncMock(side_effect=HTTPException(status_code=409))
+    with patch.object(mcp, "lock_access_fence", access), \
+            patch.object(mcp.sources, "record_collection_result", record), \
+            patch.object(mcp, "commit_with_replay", replay):
+        await mcp._record_result(
+            factory, source, None, scope=SCOPE, multi_workspace_enabled=False, expected_access_fence=stale,
+        )
+    assert access.await_args.kwargs["expected"] == stale
+    record.assert_not_awaited()
+    replay.assert_not_awaited()
