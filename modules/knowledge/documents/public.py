@@ -100,6 +100,7 @@ __all__ = [
     "ObservationExportEvidenceCandidate",
     "ProviderRecordMetadata",
     "TimelineExportEvidenceCandidate",
+    "count_source_documents",
 ]
 
 EXTRACTION_CHUNK_LIMIT = 100

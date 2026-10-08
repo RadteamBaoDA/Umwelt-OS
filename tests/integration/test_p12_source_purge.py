@@ -478,3 +478,28 @@ async def test_purge_is_not_reported_successful_while_a_historical_cleanup_recei
     row = (await _rows(engine, "SELECT * FROM memories WHERE id = :id", id=orphan))[0]
     assert row["content"] == "" and row["status"] == "forgotten"
     assert await _occurrences(engine, secret) == {}
+
+
+async def test_impact_counts_seeded_gadget_and_chat_citation(
+    ready_owner_client: AsyncClient, committed_engine: AsyncEngine,
+) -> None:
+    """Seed one gadget definition and one cited chat (worker key shape) and expect non-zero counts."""
+    client, engine = ready_owner_client, committed_engine
+    source_id = await _create_source(client, f"impact {uuid4().hex[:8]}")
+    owner_id = await _scalar(engine, "SELECT id FROM owner LIMIT 1")
+    conversation_id = uuid4()
+    async with engine.begin() as connection:
+        await connection.execute(text(
+            "INSERT INTO gadget_definitions (id, owner_id, name, renderer, source_ids) "
+            "VALUES (gen_random_uuid(), :owner, 'impact gadget', 'list', CAST(:ids AS jsonb))"
+        ), {"owner": owner_id, "ids": f'["{source_id}"]'})
+        await connection.execute(text(
+            "INSERT INTO chat_conversations (id, title) VALUES (:id, 'impact chat')"
+        ), {"id": conversation_id})
+        await connection.execute(text(
+            "INSERT INTO chat_messages (id, conversation_id, role, content, citations) "
+            "VALUES (gen_random_uuid(), :id, 'assistant', 'x', CAST(:cites AS jsonb))"
+        ), {"id": conversation_id, "cites": f'[{{"source_id": "{source_id}"}}]'})
+    impact = (await client.get(f"/api/v1/sources/{source_id}/impact")).json()
+    assert impact["gadget_definition_count"] == 1
+    assert impact["conversation_count"] == 1

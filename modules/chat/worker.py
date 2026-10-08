@@ -948,7 +948,7 @@ async def run_response_generation(
                         provider=web_run.provider, retrievedAt=web_run.retrieved_at or datetime.now(UTC),
                     ).model_dump(mode="json"))
         final_answer = renumber_citation_markers(answer_text, number_map, total_count)
-        valid_citations = [c.model_dump(by_alias=True) for c in validated.citations] + web_citations
+        valid_citations = [c.model_dump(mode="json", by_alias=True) for c in validated.citations] + web_citations
 
         async with session_factory() as session:
             _, live_run = await _lock_live_response(session, response_id, conversation_id, privacy_fence)
