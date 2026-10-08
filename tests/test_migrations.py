@@ -2,6 +2,12 @@ import os
 import subprocess
 import sys
 
+from alembic.config import Config
+from alembic.script import ScriptDirectory
+
+# Derive the head so later additive revisions (provider terms/quota, translation) never hardcode here.
+HEAD = ScriptDirectory.from_config(Config("alembic.ini")).get_current_head()
+
 
 def test_empty_database_migration_emits_single_owner_and_session_schema() -> None:
     result = subprocess.run(
@@ -26,10 +32,10 @@ def _alembic(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_single_head_is_cleanup_authority() -> None:
+def test_single_head_matches_script_directory() -> None:
     result = _alembic("heads")
     assert result.returncode == 0, result.stderr
-    assert result.stdout.split() == ["p14_cleanup_authority", "(head)"]
+    assert result.stdout.split() == [HEAD, "(head)"]
 
 
 def test_offline_base_to_head_renders_cleanup_authority_checks() -> None:
@@ -47,7 +53,7 @@ def test_offline_upgrade_removes_empty_replay_head_and_guards_populated_database
 
 
 def test_offline_downgrade_refuses_cleanly() -> None:
-    result = _alembic("downgrade", "p14_cleanup_authority:base", "--sql")
+    result = _alembic("downgrade", f"{HEAD}:base", "--sql")
     assert result.returncode != 0
     assert "run it online" in result.stderr
     assert "get_bind" not in result.stderr

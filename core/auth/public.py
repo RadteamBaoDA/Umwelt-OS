@@ -4,6 +4,7 @@ This module keeps AuthSession persistence private while accepting only detached 
 identifiers from callers. Callers own the short session lifetime and must not retain it over I/O.
 """
 
+import asyncio
 from datetime import UTC, datetime
 from collections.abc import Iterable
 
@@ -266,7 +267,7 @@ async def provision_invited_account_in_uow(
     if (google_subject is None) != (google_issuer is None):
         raise ValueError("Incomplete Google identity")
     normalized = normalize_account_email(email)
-    owner = Owner(email=normalized, password_hash=hash_password(password), account_state="active")
+    owner = Owner(email=normalized, password_hash=await asyncio.to_thread(hash_password, password), account_state="active")
     if google_subject is not None:
         from core.auth.google import GOOGLE_ISSUER
 
