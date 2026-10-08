@@ -14,6 +14,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.workspaces.schemas import Scope
 from modules.news.correlation import build_correlations
 from modules.news.relevance import score_relevance
 from modules.news.schemas import (
@@ -101,8 +102,9 @@ __all__ = [
 
 
 async def brief_story_support(
-    session: AsyncSession, owner_id: int, story_id: UUID, *,
+    session: AsyncSession, story_id: UUID, *,
     expected_title: str | None, expected_source_ids: list[str],
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> BriefStorySupport:
     """Resolve the exact complete live support set for one Dashboard story fact.
 
@@ -121,7 +123,8 @@ async def brief_story_support(
         return BriefStorySupport(
             story_id=story_id, title=expected_title or "", source_ids=[], evidence=[], complete=False,
         )
-    detail = await get_story(session, owner_id, story_id, source_ids, evidence_limit=100)
+    detail = await get_story(session, story_id, source_ids, evidence_limit=100,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     story = detail.story if detail else None
     if (detail is None or story is None or detail.evidence_cursor is not None or story.incomplete_reasons
             or (expected_title is not None and story.title != expected_title)

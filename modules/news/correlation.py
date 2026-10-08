@@ -6,6 +6,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.workspaces.schemas import Scope
 from modules.connectors import public as connectors
 from modules.knowledge.observations import public as observations
 from modules.knowledge.observations.schemas import ObservationQuery
@@ -15,13 +16,16 @@ from modules.news.schemas import (
     CorrelationQuery,
     CorrelationResult,
 )
+from modules.news.stories import _admit
 from modules.sources import public as sources
 from modules.timeline import public as timeline
 
 _DOMAINS = ("military", "economic", "disaster", "escalation")
 
 
-async def build_correlations(session: AsyncSession, query: CorrelationQuery) -> CorrelationResult:
+async def build_correlations(
+    session: AsyncSession, query: CorrelationQuery, *, scope: Scope, multi_workspace_enabled: bool,
+) -> CorrelationResult:
     """Group a fixed number of live event/measurement evidence signals by region and UTC hour.
 
     This method counts exact owner-public evidence identities only. It performs no
@@ -29,6 +33,7 @@ async def build_correlations(session: AsyncSession, query: CorrelationQuery) -> 
     causation claim, or prediction. Each domain receives its own finite event cap;
     current Alpha Vantage observations are a separate economic evidence input.
     """
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     coverage_counts = {domain: 0 for domain in _DOMAINS}
     coverage_truncated = {domain: False for domain in _DOMAINS}
     coverage_omitted = {domain: 0 for domain in _DOMAINS}
@@ -41,6 +46,7 @@ async def build_correlations(session: AsyncSession, query: CorrelationQuery) -> 
         page = await timeline.list_correlation_signals(
             session, domain=domain, from_at=query.from_at, to_at=query.to_at,
             regions=query.regions, source_ids=query.source_ids, limit=query.limit_per_domain,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
         coverage_counts[domain] = len(page.items)
         coverage_truncated[domain] = page.truncated
@@ -59,10 +65,12 @@ async def build_correlations(session: AsyncSession, query: CorrelationQuery) -> 
 
     alpha_sources = []
     for source_id in query.source_ids:
-        source = await sources.get_connector_source(session, source_id)
+        source = await sources.get_connector_source(session, source_id, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled)
         snapshot = await connectors.get_current_provider_scope(
             session, source_id,
             source.generation if source is not None and source.status == "active" else -1,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
         if snapshot is not None and snapshot.provider_id == "alpha_vantage":
             alpha_sources.append(source_id)
@@ -76,7 +84,7 @@ async def build_correlations(session: AsyncSession, query: CorrelationQuery) -> 
             to_at=query.to_at, limit=remaining_economic,
         )
         points, next_cursor, scan_truncated, _ = await observations.list_observations(
-            session, observation_query,
+            session, observation_query, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
         coverage_truncated["economic"] = coverage_truncated["economic"] or bool(next_cursor) or scan_truncated
         seen_observations: set[str] = set()

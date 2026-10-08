@@ -6,16 +6,18 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.workspaces.schemas import Scope
 from modules.knowledge.documents import public as documents
 from modules.news.models import NewsObservation
 from modules.news.schemas import TrendFilter, TrendPage, TrendRead
-from modules.news.stories import ALGORITHM_VERSION, _live_story_rows, _resolve_source_scope
+from modules.news.stories import ALGORITHM_VERSION, _admit, _live_story_rows, _resolve_source_scope
 
 MAX_HISTORY_OBSERVATIONS = 5000
 
 
 async def list_trends(
-    session: AsyncSession, owner_id: int, filters: TrendFilter, *, as_of: datetime | None = None,
+    session: AsyncSession, filters: TrendFilter, *, scope: Scope, multi_workspace_enabled: bool,
+    as_of: datetime | None = None,
 ) -> TrendPage:
     """Compare 24 current hours with a bounded seven-day retained baseline.
 
@@ -25,14 +27,15 @@ async def list_trends(
     provider scope. Counts deduplicate by source/document; rising requires three
     current items, two current sources, and 2x growth when baseline is sufficient.
     """
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     now = (as_of or datetime.now(UTC)).astimezone(UTC)
     current_start = now - timedelta(hours=24)
     baseline_start = now - timedelta(days=8)
     source_ids, source_selection_incomplete = await _resolve_source_scope(
-        session, tuple(filters.source_ids),
+        session, tuple(filters.source_ids), scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
     live = await _live_story_rows(
-        session, owner_id, source_ids, now, candidate_limit=50,
+        session, source_ids, now, scope=scope, multi_workspace_enabled=multi_workspace_enabled, candidate_limit=50,
     )
     story_ids = [story.id for story, _observations, _evidence in live]
     baseline_by_story: dict[UUID, set[tuple[UUID, UUID]]] = {story_id: set() for story_id in story_ids}
@@ -40,6 +43,7 @@ async def list_trends(
     if story_ids:
         baseline_rows = list((await session.scalars(
             select(NewsObservation).where(
+                NewsObservation.workspace_id == scope.workspace_id,
                 NewsObservation.story_id.in_(story_ids),
                 NewsObservation.source_id.in_(source_ids),
                 NewsObservation.algorithm_version == ALGORITHM_VERSION,
@@ -62,6 +66,7 @@ async def list_trends(
                     session, document_id=observation.document_id,
                     source_id=observation.source_id,
                     expected_source_generation=observation.source_generation,
+                    scope=scope, multi_workspace_enabled=multi_workspace_enabled,
                 )
                 authority_cache[key] = allowed
             if allowed:
@@ -72,7 +77,7 @@ async def list_trends(
     # Baseline authorization can await many retained-document checks; reproject
     # current titles and window evidence after that work, immediately before output.
     live = await _live_story_rows(
-        session, owner_id, source_ids, now, candidate_limit=50,
+        session, source_ids, now, scope=scope, multi_workspace_enabled=multi_workspace_enabled, candidate_limit=50,
     )
 
     result = []

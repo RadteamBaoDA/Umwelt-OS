@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.workspaces.schemas import Scope
 from modules.goals import public as goals
 from modules.goals.schemas import GoalFilter
 from modules.news import topics
@@ -22,7 +23,8 @@ def _empty(method: str = "missing_owner_contract") -> RecordedSignal:
 
 
 async def score_relevance(
-    session: AsyncSession, owner_id: int, story: StoryRead, *, as_of: datetime | None = None,
+    session: AsyncSession, story: StoryRead, *, scope: Scope, multi_workspace_enabled: bool,
+    as_of: datetime | None = None,
 ) -> RelevanceRead:
     """Score a live story with equal bounded weights and explicit provenance for seven signals.
 
@@ -44,7 +46,7 @@ async def score_relevance(
 
     for item in story.evidence[:100]:
         current = await documents.get_news_document_projection(
-            session, item.document_id,
+            session, item.document_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
         if current is None or current.document_version_id != item.document_version_id:
             continue
@@ -55,6 +57,7 @@ async def score_relevance(
         try:
             refs = await entities.list_version_membership_refs(
                 session, item.document_version_id, [chunk.id for chunk in current.chunks],
+                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
             )
         except ValueError:
             # A bounded membership overflow makes only the optional entity signal
@@ -67,7 +70,8 @@ async def score_relevance(
     cursor = None
     topic_complete = True
     for _ in range(10):
-        page = await topics.list_topics(session, owner_id, TopicFilter(is_active=True, limit=100, cursor=cursor))
+        page = await topics.list_topics(session, TopicFilter(is_active=True, limit=100, cursor=cursor),
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         topic_records.extend(page.items)
         cursor = page.next_cursor
         if cursor is None:
@@ -97,7 +101,8 @@ async def score_relevance(
     cursor = None
     goal_complete = True
     for _ in range(10):
-        goal_page = await goals.list_goals(session, owner_id, GoalFilter(status="active", limit=100, cursor=cursor))
+        goal_page = await goals.list_goals(session, GoalFilter(status="active", limit=100, cursor=cursor),
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         goal_records.extend(goal_page.items)
         cursor = goal_page.next_cursor
         if cursor is None:

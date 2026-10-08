@@ -25,6 +25,8 @@ from core.config import Settings
 from core.model_gateway.client import ModelGateway, ModelGatewayError
 from core.model_gateway.schemas import RequestPolicy
 from core.realtime import commit_with_replay, make_dashboard_change
+from core.workspaces import public as workspaces
+from core.workspaces.schemas import AccessFence, Scope, WorkspaceContext
 from modules.dashboard.daily_schemas import (
     BriefCleanupProgress,
     BriefLegacyCoverage,
@@ -46,6 +48,34 @@ MAX_PROMPT_TITLE = 200
 _CITATION = re.compile(r"\[(\d{1,3})\]")
 
 
+def _actor(scope: Scope) -> int:
+    """Return the admitted owner actor used by workspace-local brief rows."""
+    return scope.user_id if isinstance(scope, WorkspaceContext) else scope.actor_user_id
+
+
+async def _admit(
+    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
+    lock: bool = False, expected: AccessFence | None = None,
+) -> AccessFence:
+    """Admit the owner before brief effects and optionally hold its expected workspace fence."""
+    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="Workspace owner required")
+    if type(multi_workspace_enabled) is not bool:
+        raise TypeError("The configured multi-workspace feature flag must be a boolean")
+    if lock:
+        return await workspaces.lock_access_fence(
+            session, scope=scope, expected=expected, multi_workspace_enabled=multi_workspace_enabled,
+        )
+    return await workspaces.read_access_fence(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+
+
+async def _lock_schedule_slot(session: AsyncSession, workspace_id: UUID) -> None:
+    """Serialize creation or ownership changes for one workspace's daily brief slot."""
+    await session.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+        {"key": f"dashboard:brief-schedule:{workspace_id}"})
+
+
 class BriefEmpty(Exception):
     """Raised when the selected day has no usable facts, so no brief is generated."""
 
@@ -54,7 +84,10 @@ class BriefUnavailable(Exception):
     """Raised when the model is unconfigured, denied by privacy policy, down, or returned unusable text."""
 
 
-async def _with_live_status(session: AsyncSession, rows: list[DailyBrief]) -> list[BriefRead]:
+async def _with_live_status(
+    session: AsyncSession, rows: list[DailyBrief], *, scope: Scope, multi_workspace_enabled: bool,
+    access_fence: AccessFence | None = None,
+) -> list[BriefRead]:
     """Return saved output only when its full captured prompt is exactly current.
 
     Reads never write. Citation-only legacy rows and changed support snapshots are
@@ -63,10 +96,14 @@ async def _with_live_status(session: AsyncSession, rows: list[DailyBrief]) -> li
     if not rows:
         return []
     result_by_id: dict[UUID, BriefRead] = {}
-    await prelock_captured_inputs(session, [row.id for row in rows])
+    access_fence = await prelock_captured_inputs(
+        session, [row.id for row in rows], scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+    )
     for row in rows:
         try:
-            captured = await _captured_inputs_match(session, row)
+            captured = await _captured_inputs_match(session, row, scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
         except (BriefUnavailable, ValueError, TypeError, KeyError):
             captured = False
         if captured:
@@ -83,37 +120,40 @@ async def _with_live_status(session: AsyncSession, rows: list[DailyBrief]) -> li
     return [result_by_id[row.id] for row in rows]
 
 
-async def latest_brief(session: AsyncSession, owner_id: int, day: date, timezone: str) -> BriefRead | None:
+async def latest_brief(session: AsyncSession, day: date, timezone: str, *, scope: Scope, multi_workspace_enabled: bool) -> BriefRead | None:
     """Return the highest saved revision for the local day (with read-time staleness), or None."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     row = await session.scalar(
         select(DailyBrief).where(
-            DailyBrief.owner_id == owner_id, DailyBrief.brief_date == day, DailyBrief.timezone == timezone
+            DailyBrief.workspace_id == scope.workspace_id, DailyBrief.owner_id == _actor(scope), DailyBrief.brief_date == day, DailyBrief.timezone == timezone
         ).order_by(DailyBrief.revision.desc()).limit(1)
     )
-    return (await _with_live_status(session, [row]))[0] if row else None
+    return (await _with_live_status(session, [row], scope=scope, multi_workspace_enabled=multi_workspace_enabled))[0] if row else None
 
 
-async def revision_count(session: AsyncSession, owner_id: int, day: date, timezone: str) -> int:
+async def revision_count(session: AsyncSession, day: date, timezone: str, *, scope: Scope, multi_workspace_enabled: bool) -> int:
     """Count saved revisions for the local day."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     return await session.scalar(
         select(func.count()).select_from(DailyBrief).where(
-            DailyBrief.owner_id == owner_id, DailyBrief.brief_date == day, DailyBrief.timezone == timezone
+            DailyBrief.workspace_id == scope.workspace_id, DailyBrief.owner_id == _actor(scope), DailyBrief.brief_date == day, DailyBrief.timezone == timezone
         )
     ) or 0
 
 
-async def list_briefs(session: AsyncSession, owner_id: int, day: date, timezone: str) -> list[BriefRead]:
+async def list_briefs(session: AsyncSession, day: date, timezone: str, *, scope: Scope, multi_workspace_enabled: bool) -> list[BriefRead]:
     """List every saved revision of a day, newest first, so history is never silently replaced."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     rows = (await session.scalars(
         select(DailyBrief).where(
-            DailyBrief.owner_id == owner_id, DailyBrief.brief_date == day, DailyBrief.timezone == timezone
+            DailyBrief.workspace_id == scope.workspace_id, DailyBrief.owner_id == _actor(scope), DailyBrief.brief_date == day, DailyBrief.timezone == timezone
         ).order_by(DailyBrief.revision.desc()).limit(50)
     )).all()
-    return await _with_live_status(session, list(rows))
+    return await _with_live_status(session, list(rows), scope=scope, multi_workspace_enabled=multi_workspace_enabled)
 
 
 async def _facts(
-    session: AsyncSession, widgets: Sequence[DailyWidget], *, owner_id: int, lock_events: bool = False,
+    session: AsyncSession, widgets: Sequence[DailyWidget], *, scope: Scope, multi_workspace_enabled: bool, lock_events: bool = False,
 ) -> list[dict[str, Any]]:
     """Flatten current owner widgets into numbered citable facts under source privacy policy.
 
@@ -143,7 +183,8 @@ async def _facts(
     for start in range(0, len(ordered), 32):
         chunk = tuple(UUID(item) for item in ordered[start:start + 32])
         allowed.update(
-            str(item.id) for item in await sources.get_gadget_sources(session, chunk)
+            str(item.id) for item in await sources.get_gadget_sources(session, chunk,
+                scope=scope, multi_workspace_enabled=multi_workspace_enabled)
             if item.status == "active" and not item.local_only
         )
     facts = [fact for fact in candidates if set(fact["source_ids"]) <= allowed][:MAX_FACTS]
@@ -153,13 +194,15 @@ async def _facts(
     if lock_events:
         await timeline.lock_brief_events(
             session, [UUID(fact["id"]) for fact in facts if fact["kind"] == "events"],
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
     all_supports: set[tuple[str, str, str]] = set()
     for fact in facts:
         if fact["kind"] == "stories":
             support = await news.brief_story_support(
-                session, owner_id, UUID(fact["id"]),
+                session, UUID(fact["id"]),
                 expected_title=fact["_canonical_title"], expected_source_ids=fact["source_ids"],
+                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
             )
             if not support.complete:
                 raise BriefUnavailable("A story fact has incomplete exact document support")
@@ -173,6 +216,7 @@ async def _facts(
             event_support = await timeline.brief_event_support(
                 session, UUID(fact["id"]), expected_title=fact["_canonical_title"],
                 expected_source_ids=fact["source_ids"],
+                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
             )
             if not event_support.complete:
                 raise BriefUnavailable("A timeline fact has incomplete exact document support")
@@ -213,7 +257,8 @@ def _evidence_identity(item: dict[str, str]) -> tuple[str, str, str]:
 
 
 async def _lock_fact_dependencies(
-    session: AsyncSession, facts: list[dict[str, Any]], *, extra_brief_ids: Sequence[UUID] = (),
+    session: AsyncSession, facts: list[dict[str, Any]], *, scope: Scope, multi_workspace_enabled: bool,
+    access_fence: AccessFence, extra_brief_ids: Sequence[UUID] = (),
 ) -> None:
     """Fence prompt Documents by locking sorted Sources before sorted Documents.
 
@@ -229,17 +274,23 @@ async def _lock_fact_dependencies(
     await prelock_captured_inputs(
         session, extra_brief_ids, extra_sources=source_ids, extra_documents=document_ids,
         extra_events={UUID(fact["id"]) for fact in facts if fact["kind"] == "events"},
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
     )
-    fences = {sid: await sources.lock_source(session, sid) for sid in source_ids}
+    fences = {sid: await sources.lock_source(session, sid, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=access_fence) for sid in source_ids}
     if any(f is None or f.status != "active" or f.local_only for f in fences.values()):
         raise BriefUnavailable("A cited source is no longer eligible")
-    locked = await documents.lock_document_ids(session, sorted(document_ids, key=str))
+    locked = await documents.lock_document_ids(
+        session, sorted(document_ids, key=str), scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
     if set(locked) != document_ids:
         raise BriefUnavailable("A cited document is no longer retained")
 
 
 async def _lock_dependency_sets(
     session: AsyncSession, source_ids: set[UUID], document_ids: set[UUID], event_ids: AbstractSet[UUID] = frozenset(),
+    *, scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
 ) -> tuple[dict[UUID, Any], set[UUID]]:
     """Lock Sources, then Documents, then Events, each globally sorted, in bounded chunks.
 
@@ -249,24 +300,31 @@ async def _lock_dependency_sets(
     """
     fences: dict[UUID, Any] = {}
     for source_id in sorted(source_ids, key=str):
-        fences[source_id] = await sources.lock_source(session, source_id)
+        fences[source_id] = await sources.lock_source(session, source_id, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=access_fence)
     ordered_documents = sorted(document_ids, key=str)
     locked: set[UUID] = set()
     for start in range(0, len(ordered_documents), 100):
-        locked.update(await documents.lock_document_ids(session, ordered_documents[start:start + 100]))
+        locked.update(await documents.lock_document_ids(
+            session, ordered_documents[start:start + 100], scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        ))
     from modules.timeline import public as timeline
 
     ordered_events = sorted(event_ids, key=str)
     for start in range(0, len(ordered_events), 40):
-        await timeline.lock_brief_events(session, ordered_events[start:start + 40])
+        await timeline.lock_brief_events(session, ordered_events[start:start + 40],
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     return fences, locked
 
 
 async def prelock_captured_inputs(
     session: AsyncSession, brief_ids: Sequence[UUID], *,
+    scope: Scope, multi_workspace_enabled: bool,
+    access_fence: AccessFence | None = None,
     extra_sources: AbstractSet[UUID] = frozenset(), extra_documents: AbstractSet[UUID] = frozenset(),
     extra_events: AbstractSet[UUID] = frozenset(),
-) -> None:
+) -> AccessFence:
     """Lock the union of a bounded brief page's detached dependencies once, in canonical order.
 
     History and export validate many revisions in one transaction; locking per revision would
@@ -289,14 +347,18 @@ async def prelock_captured_inputs(
                 event_ids.add(UUID(fact_id))
             except (TypeError, ValueError):
                 continue  # malformed marker; the per-row checker rejects it
+    fence = access_fence or await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     await _lock_dependency_sets(
         session, {row[0] for row in rows if row[0] is not None} | set(extra_sources),
         {row[1] for row in rows if row[1] is not None} | set(extra_documents), event_ids | set(extra_events),
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
     )
+    return fence
 
 
 async def _captured_inputs_match(
-    session: AsyncSession, row: DailyBrief, *, lock: bool = True,
+    session: AsyncSession, row: DailyBrief, *, scope: Scope, multi_workspace_enabled: bool,
+    access_fence: AccessFence | None = None, lock: bool = True,
 ) -> bool:
     """Validate the full prompted-fact manifest and current exact support eligibility.
 
@@ -397,18 +459,26 @@ async def _captured_inputs_match(
     # Page-level prelocking already holds these in canonical order; re-locking a held row cannot block.
     for source_id in sorted(captured_sources, key=str):
         if lock:
-            source = await sources.lock_source(session, source_id)
+            if access_fence is None:
+                raise ValueError("Locked brief support validation requires its original access fence")
+            source = await sources.lock_source(session, source_id, scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=access_fence)
         else:
-            source = await sources.get_source_fence(session, source_id)
+            source = await sources.get_source_fence(session, source_id, scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled)
         if source is None or source.status != "active" or source.local_only:
             return False
     if lock:
-        locked = await documents.lock_document_ids(session, sorted(captured_documents, key=str))
+        locked = await documents.lock_document_ids(
+            session, sorted(captured_documents, key=str), scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
         if set(locked) != captured_documents:
             return False
     else:
         for document_id in captured_documents:
-            if await documents.get_document(session, document_id) is None:
+            if not await documents.existing_document_ids(session, [document_id], scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled):
                 return False
     from modules.news import public as news
     from modules.timeline import public as timeline
@@ -422,7 +492,8 @@ async def _captured_inputs_match(
     except (TypeError, ValueError):
         return False
     if lock:
-        await timeline.lock_brief_events(session, event_ids)
+        await timeline.lock_brief_events(session, event_ids, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled)
     for reference in range(1, row.evidence_fact_count + 1):
         fact_rows = grouped[reference]
         exemplar = fact_rows[0]
@@ -438,8 +509,9 @@ async def _captured_inputs_match(
         expected_sources = sorted({str(item.source_id) for item in fact_rows if item.source_id is not None})
         if exemplar.fact_kind == "stories":
             support = await news.brief_story_support(
-                session, row.owner_id, fact_uuid, expected_title=None,
+                session, fact_uuid, expected_title=None,
                 expected_source_ids=expected_sources,
+                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
             )
             if not support.complete:
                 return False
@@ -455,6 +527,7 @@ async def _captured_inputs_match(
             event_support = await timeline.brief_event_support(
                 session, fact_uuid, expected_title=None,
                 expected_source_ids=expected_sources,
+                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
             )
             if not event_support.complete or event_support.independent:
                 return False
@@ -503,7 +576,7 @@ def _messages(day: date, facts: list[dict[str, Any]]) -> list[dict[str, str]]:
 
 
 async def generate_brief(
-    session: AsyncSession, owner_id: int, day: date, timezone: str, *,
+    session: AsyncSession, day: date, timezone: str, *, scope: Scope, multi_workspace_enabled: bool,
     settings: Settings, redis: Redis, force: bool,
 ) -> BriefRead:
     """Generate and persist the next brief revision for a local day.
@@ -514,24 +587,31 @@ async def generate_brief(
     """
     from modules.dashboard import context  # local import: context imports this module
 
+    access_fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    owner_id = _actor(scope)
     # Fact-only widgets: reading saved history here would take Event locks before Source locks.
     relation = context.relation_to_today(day, timezone)
-    widgets = await context.build_daily_widgets(session, owner_id, day, timezone, relation=relation)
-    initial_facts = await _facts(session, widgets, owner_id=owner_id)
+    widgets = await context.build_daily_widgets(session, day, timezone, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, relation=relation)
+    initial_facts = await _facts(session, widgets, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     facts = initial_facts
     if not facts:
         raise BriefEmpty
     # Plain read: pins which saved revision's dependencies join the single ordered lock acquisition.
     reuse_candidate = await session.scalar(
         select(DailyBrief).where(
-            DailyBrief.owner_id == owner_id, DailyBrief.brief_date == day, DailyBrief.timezone == timezone
+            DailyBrief.workspace_id == scope.workspace_id, DailyBrief.owner_id == owner_id,
+            DailyBrief.brief_date == day, DailyBrief.timezone == timezone
         ).order_by(DailyBrief.revision.desc()).limit(1)
     )
     await _lock_fact_dependencies(
-        session, initial_facts, extra_brief_ids=[reuse_candidate.id] if reuse_candidate else [],
+        session, initial_facts, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence, extra_brief_ids=[reuse_candidate.id] if reuse_candidate else [],
     )
-    locked_widgets = await context.build_daily_widgets(session, owner_id, day, timezone)
-    facts = await _facts(session, locked_widgets, owner_id=owner_id, lock_events=True)
+    locked_widgets = await context.build_daily_widgets(session, day, timezone, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled)
+    facts = await _facts(session, locked_widgets, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, lock_events=True)
     if _fingerprint(day, timezone, initial_facts) != _fingerprint(day, timezone, facts):
         await session.rollback()
         raise BriefUnavailable("Daily brief facts changed before model egress")
@@ -541,24 +621,28 @@ async def generate_brief(
     # Canonical source/document/event locks precede the Dashboard day-generation lock.
     await session.execute(
         text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
-        {"key": f"brief:{owner_id}:{day}:{timezone}"},
+        {"key": f"brief:{scope.workspace_id}:{day}:{timezone}"},
     )
     fingerprint = _fingerprint(day, timezone, facts)
     latest = await session.scalar(
         select(DailyBrief).where(
-            DailyBrief.owner_id == owner_id, DailyBrief.brief_date == day, DailyBrief.timezone == timezone
+            DailyBrief.workspace_id == scope.workspace_id, DailyBrief.owner_id == owner_id,
+            DailyBrief.brief_date == day, DailyBrief.timezone == timezone
         ).order_by(DailyBrief.revision.desc()).limit(1)
     )
     # ponytail: a revision appended after the unlocked read has unlocked dependencies, so it is not
     # reused (an extra revision beats a lock-order inversion); revisit if races become common.
     if (latest is not None and reuse_candidate is not None and latest.id == reuse_candidate.id  # noqa: SIM102  # style-only rewrite skipped to avoid touching control flow
             and latest.input_fingerprint == fingerprint and latest.status == "current" and not force):
-        if await _captured_inputs_match(session, latest):
-            result = (await _with_live_status(session, [latest]))[0]
+        if await _captured_inputs_match(session, latest, scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence):
+            result = (await _with_live_status(session, [latest], scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence))[0]
             await session.rollback()
             return result
 
-    config = await settings_public.get_ai_execution_config(session, settings, redis)
+    config = await settings_public.get_ai_execution_config(session, settings, redis,
+        scope=scope)
     alias = config.brief_alias
     mapping = config.aliases.get(alias)
     destination = config.endpoint_destination_id
@@ -585,16 +669,17 @@ async def generate_brief(
         await session.rollback()
         raise BriefUnavailable("model returned an uncited brief")
 
-    current_widgets = await context.build_daily_widgets(session, owner_id, day, timezone)
+    current_widgets = await context.build_daily_widgets(session, day, timezone, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled)
     current_facts = await _facts(
-        session, current_widgets, owner_id=owner_id, lock_events=True,
+        session, current_widgets, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock_events=True,
     )
     if _fingerprint(day, timezone, current_facts) != fingerprint:
         await session.rollback()
         raise BriefUnavailable("Daily brief facts changed before saved publication")
 
     row = DailyBrief(
-        owner_id=owner_id, brief_date=day, timezone=timezone,
+        workspace_id=scope.workspace_id, owner_id=owner_id, brief_date=day, timezone=timezone,
         revision=(latest.revision + 1) if latest else 1, input_fingerprint=fingerprint,
         content=content[:4000], model_alias=alias,
         evidence_capture_version=1, evidence_capture_status="captured", evidence_fact_count=len(facts),
@@ -621,20 +706,21 @@ async def generate_brief(
                 for index, item in enumerate(fact["_supports"])
             ])
     await session.flush()
-    await notifications.emit(session, owner_id, NotificationEmit(
+    await notifications.emit(session, NotificationEmit(
         dedupe_key=f"brief:{day}:{timezone}:{row.revision}", kind="brief.ready",
         params={"date": day.isoformat(), "revision": row.revision},
         link=f"/app?date={day.isoformat()}",
-    ))
+    ), scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     open_tasks = [w for w in current_widgets if w.id == "tasks"]
     due = sum(1 for w in open_tasks for t in w.items if t["status"] not in ("done", "cancelled"))
     if relation == "today" and due:
-        await notifications.emit(session, owner_id, NotificationEmit(
+        await notifications.emit(session, NotificationEmit(
             dedupe_key=f"tasks.due:{day}:{timezone}", kind="tasks.due",
             params={"count": due}, link=f"/app?date={day.isoformat()}",
-        ))
+        ), scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     # Atomic commit + replay row: realtime clients invalidate the day context and notification bell.
-    await commit_with_replay(session, [make_dashboard_change("brief", row.id, row.revision)])
+    await commit_with_replay(session, [make_dashboard_change("brief", row.id, row.revision, scope=scope)],
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
     return BriefRead.model_validate(row).model_copy(update={"lineage_status": "captured"})
 
 
@@ -716,20 +802,28 @@ async def legacy_brief_coverage(
     return BriefLegacyCoverage(candidate_ids=page, next_cursor=page[-1] if len(ids) > limit else None)
 
 
-async def read_schedule(session: AsyncSession, owner_id: int) -> BriefSchedule:
+async def read_schedule(session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool) -> BriefSchedule:
     """Return the owner schedule, or the 07:00 Asia/Ho_Chi_Minh default when never edited."""
-    row = await session.get(BriefScheduleRow, owner_id)
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    row = await session.scalar(select(BriefScheduleRow).where(
+        BriefScheduleRow.workspace_id == scope.workspace_id, BriefScheduleRow.owner_id == _actor(scope),
+    ))
     return BriefSchedule.model_validate(row) if row else BriefSchedule()
 
 
-async def save_schedule(session: AsyncSession, owner_id: int, value: BriefSchedule) -> BriefSchedule:
+async def save_schedule(session: AsyncSession, value: BriefSchedule, *, scope: Scope, multi_workspace_enabled: bool) -> BriefSchedule:
     """Upsert the owner's brief schedule."""
-    row = await session.get(BriefScheduleRow, owner_id, with_for_update=True)
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    actor = _actor(scope)
+    await _lock_schedule_slot(session, scope.workspace_id)
+    row = await session.scalar(select(BriefScheduleRow).where(
+        BriefScheduleRow.workspace_id == scope.workspace_id, BriefScheduleRow.owner_id == actor,
+    ).with_for_update())
     if row is None:
-        row = BriefScheduleRow(owner_id=owner_id)
+        row = BriefScheduleRow(workspace_id=scope.workspace_id, owner_id=actor)
         session.add(row)
     row.enabled, row.hour, row.minute, row.timezone = value.enabled, value.hour, value.minute, value.timezone
-    await session.commit()
+    await commit_with_replay(session, [], scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
     return value
 
 
@@ -737,9 +831,12 @@ class BriefSlotOwned(Exception):
     """Raised when another automation already owns the daily brief slot."""
 
 
-async def read_slot_owner(session: AsyncSession, owner_id: int) -> dict[str, object]:
+async def read_slot_owner(session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool) -> dict[str, object]:
     """Return the schedule-ownership record for the logical job ``daily_brief``."""
-    row = await session.get(BriefScheduleRow, owner_id)
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    row = await session.scalar(select(BriefScheduleRow).where(
+        BriefScheduleRow.workspace_id == scope.workspace_id, BriefScheduleRow.owner_id == _actor(scope),
+    ))
     return {
         "logical_job": "daily_brief",
         "schedule_owner": row.schedule_owner if row else "internal_brief",
@@ -747,51 +844,65 @@ async def read_slot_owner(session: AsyncSession, owner_id: int) -> dict[str, obj
     }
 
 
-async def claim_brief_slot(session: AsyncSession, owner_id: int, automation_id: UUID) -> None:
+async def claim_brief_slot(session: AsyncSession, automation_id: UUID, *, scope: Scope, multi_workspace_enabled: bool) -> None:
     """Transfer the daily brief slot to ``automation_id`` inside the caller's transaction (no commit).
 
     Invariant: one scheduler owner per logical job. The schedule row is created if absent, then
     locked, so concurrent claims serialize; a different automation holding the slot is refused.
     The internal cron skips while ``schedule_owner == 'automation'``.
     """
-    await session.execute(pg_insert(BriefScheduleRow).values(owner_id=owner_id).on_conflict_do_nothing())
-    row = await session.scalar(select(BriefScheduleRow).where(BriefScheduleRow.owner_id == owner_id).with_for_update())
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    actor = _actor(scope)
+    await _lock_schedule_slot(session, scope.workspace_id)
+    await session.execute(pg_insert(BriefScheduleRow).values(
+        workspace_id=scope.workspace_id, owner_id=actor,
+    ).on_conflict_do_nothing())
+    row = await session.scalar(select(BriefScheduleRow).where(
+        BriefScheduleRow.workspace_id == scope.workspace_id, BriefScheduleRow.owner_id == actor,
+    ).with_for_update())
     assert row is not None
     if row.schedule_owner == "automation" and row.automation_id != automation_id:
         raise BriefSlotOwned
     row.schedule_owner, row.automation_id = "automation", automation_id
 
 
-async def release_brief_slot(session: AsyncSession, owner_id: int, automation_id: UUID) -> None:
+async def release_brief_slot(session: AsyncSession, automation_id: UUID, *, scope: Scope, multi_workspace_enabled: bool) -> None:
     """Return the slot to the internal cron if (and only if) ``automation_id`` holds it; no commit."""
-    row = await session.scalar(select(BriefScheduleRow).where(BriefScheduleRow.owner_id == owner_id).with_for_update())
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    await _lock_schedule_slot(session, scope.workspace_id)
+    row = await session.scalar(select(BriefScheduleRow).where(
+        BriefScheduleRow.workspace_id == scope.workspace_id, BriefScheduleRow.owner_id == _actor(scope),
+    ).with_for_update())
     if row is not None and row.automation_id == automation_id:
         row.schedule_owner, row.automation_id = "internal_brief", None
 
 
 async def run_due_brief(
-    session: AsyncSession, owner_id: int, *, settings: Settings, redis: Redis, now: datetime | None = None
+    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
+    settings: Settings, redis: Redis, now: datetime | None = None
 ) -> BriefRead | None:
     """Create today's brief once when the schedule time has passed and none exists yet.
 
     Covers the startup catch-up too: it only ever considers the *current* local day, never missed
     historical days. A short Redis cooldown stops a model outage from being retried every minute.
     """
-    schedule = await read_schedule(session, owner_id)
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    schedule = await read_schedule(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if not schedule.enabled:
         return None
-    if (await read_slot_owner(session, owner_id))["schedule_owner"] != "internal_brief":
+    if (await read_slot_owner(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled))["schedule_owner"] != "internal_brief":
         return None  # an enabled automation owns the daily_brief slot (single scheduler owner)
     local = (now or datetime.now(UTC)).astimezone(ZoneInfo(schedule.timezone))
     if (local.hour, local.minute) < (schedule.hour, schedule.minute):
         return None
-    if await revision_count(session, owner_id, local.date(), schedule.timezone):
+    if await revision_count(session, local.date(), schedule.timezone, scope=scope, multi_workspace_enabled=multi_workspace_enabled):
         return None
-    if not await redis.set(f"dashboard:brief-attempt:{owner_id}:{local.date()}", "1", nx=True, ex=900):
+    if not await redis.set(f"dashboard:brief-attempt:{scope.workspace_id}:{local.date()}", "1", nx=True, ex=900):
         return None
     try:
         return await generate_brief(
-            session, owner_id, local.date(), schedule.timezone, settings=settings, redis=redis, force=False
+            session, local.date(), schedule.timezone, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            settings=settings, redis=redis, force=False
         )
     except (BriefEmpty, BriefUnavailable):
         return None

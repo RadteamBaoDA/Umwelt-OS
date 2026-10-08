@@ -17,6 +17,8 @@ from pydantic import ValidationError
 from sqlalchemy import func, select, text, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.workspaces import public as workspaces
+from core.workspaces.schemas import AccessFence, Scope, WorkspaceContext
 from modules.knowledge.documents import public as documents
 from modules.knowledge.entities import public as entities
 from modules.news import topics
@@ -36,6 +38,17 @@ ALGORITHM_VERSION = 1
 MAX_CANDIDATES = 100
 FUZZY_WINDOW = timedelta(hours=72)
 FUZZY_THRESHOLD = 0.92
+
+
+async def _admit(session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool) -> AccessFence:
+    """Admit owner story reads before source selection, counts, or enrichment."""
+    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
+    if type(multi_workspace_enabled) is not bool:
+        raise TypeError("The configured multi-workspace feature flag must be a boolean")
+    return await workspaces.read_access_fence(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
 
 
 class LiveStoryRows(list[tuple[NewsStory, list[NewsObservation], list[StoryEvidence]]]):
@@ -100,6 +113,7 @@ def _initial_signal_provenance() -> dict[str, object]:
 
 async def cluster_observation(
     session: AsyncSession, *, document_id: UUID, expected_source_generation: int,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> UUID | None:
     """Persist one ready version's exact identity or conservative fuzzy grouping decision.
 
@@ -110,10 +124,12 @@ async def cluster_observation(
     """
     projection = await documents.get_news_document_projection(
         session, document_id, expected_source_generation=expected_source_generation,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
     if projection is None:
         return None
     prior = await session.scalar(select(NewsObservation).where(
+        NewsObservation.workspace_id == scope.workspace_id,
         NewsObservation.document_version_id == projection.document_version_id,
         NewsObservation.source_generation == projection.current_source_generation,
         NewsObservation.algorithm_version == ALGORITHM_VERSION,
@@ -127,6 +143,7 @@ async def cluster_observation(
     try:
         memberships = await entities.list_version_membership_refs(
             session, projection.document_version_id, [chunk.id for chunk in projection.chunks],
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
         entity_ids = sorted({str(item.entity_id) for item in memberships})
     except ValueError:
@@ -146,11 +163,14 @@ async def cluster_observation(
     for identity_kind, identity_key in identities:
         identity = await session.scalar(select(NewsStoryIdentity).where(
             NewsStoryIdentity.identity_key == identity_key,
+            NewsStoryIdentity.workspace_id == scope.workspace_id,
             NewsStoryIdentity.algorithm_version == ALGORITHM_VERSION,
         ))
         if identity is not None:
             kind, key = identity_kind, identity_key
-            story = await session.scalar(select(NewsStory).where(NewsStory.id == identity.story_id).with_for_update())
+            story = await session.scalar(select(NewsStory).where(
+                NewsStory.id == identity.story_id, NewsStory.workspace_id == scope.workspace_id,
+            ).with_for_update())
             break
     match_method = kind
     match_evidence: dict[str, object] = {
@@ -159,26 +179,28 @@ async def cluster_observation(
     if story is None:
         fuzzy = await _fuzzy_candidate(
             session, projection=projection, current_entity_ids=set(entity_ids), observed_at=observed_at,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
         if fuzzy is not None:
             story, fuzzy_evidence = fuzzy
             match_method = "embedding_entity_time"
             match_evidence.update(fuzzy_evidence)
     if story is None:
-        story = NewsStory(identity_key=key, identity_kind=kind, algorithm_version=ALGORITHM_VERSION)
+        story = NewsStory(workspace_id=scope.workspace_id, identity_key=key, identity_kind=kind, algorithm_version=ALGORITHM_VERSION)
         session.add(story)
         await session.flush()
     for identity_kind, identity_key in identities:
         if await session.scalar(select(NewsStoryIdentity.id).where(
             NewsStoryIdentity.identity_key == identity_key,
+            NewsStoryIdentity.workspace_id == scope.workspace_id,
             NewsStoryIdentity.algorithm_version == ALGORITHM_VERSION,
         )) is None:
             session.add(NewsStoryIdentity(
-                story_id=story.id, identity_key=identity_key, identity_kind=identity_kind,
+                workspace_id=scope.workspace_id, story_id=story.id, identity_key=identity_key, identity_kind=identity_kind,
                 algorithm_version=ALGORITHM_VERSION,
             ))
     session.add(NewsObservation(
-        story_id=story.id, document_id=projection.document_id,
+        workspace_id=scope.workspace_id, story_id=story.id, document_id=projection.document_id,
         document_version_id=projection.document_version_id, chunk_id=representative.id,
         source_id=projection.source_id, source_generation=projection.current_source_generation,
         version_number=projection.version_number, canonical_url=_canonical_url(projection.canonical_url),
@@ -195,7 +217,7 @@ async def cluster_observation(
 
 async def _fuzzy_candidate(
     session: AsyncSession, *, projection: documents.NewsDocumentProjection,
-    current_entity_ids: set[str], observed_at: datetime,
+    current_entity_ids: set[str], observed_at: datetime, scope: Scope, multi_workspace_enabled: bool,
 ) -> tuple[NewsStory, dict[str, object]] | None:
     """Select one high-confidence same-generation vector/entity/time candidate from at most 100 rows."""
     if projection.local_only or not current_entity_ids:
@@ -204,6 +226,8 @@ async def _fuzzy_candidate(
         select(NewsObservation, NewsStory)
         .join(NewsStory, NewsStory.id == NewsObservation.story_id)
         .where(
+            NewsObservation.workspace_id == scope.workspace_id,
+            NewsStory.workspace_id == scope.workspace_id,
             NewsObservation.source_id != projection.source_id,
             NewsObservation.observed_at >= observed_at - FUZZY_WINDOW,
             NewsObservation.observed_at <= observed_at + FUZZY_WINDOW,
@@ -218,6 +242,7 @@ async def _fuzzy_candidate(
             continue
         candidate_projection = await documents.get_news_document_projection(
             session, observation.document_id, expected_source_generation=observation.source_generation,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
         if (
             candidate_projection is None
@@ -227,6 +252,7 @@ async def _fuzzy_candidate(
             continue
         refs = await entities.list_version_membership_refs(
             session, observation.document_version_id, [observation.chunk_id],
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
         overlap = sorted(current_entity_ids.intersection(str(item.entity_id) for item in refs))
         if overlap:
@@ -237,6 +263,7 @@ async def _fuzzy_candidate(
     similarity = await search.compare_news_evidence_embeddings(
         session, projection.chunks[0].id,
         tuple(item.chunk_id for item, _story, _entity_overlap in scored_rows),
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
     scores = {item.right_chunk_id: item for item in similarity.items}
     ranked = sorted(
@@ -270,12 +297,23 @@ def _encode_cursor(cursor: StoryCursor) -> str:
     return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
 
 
-def _decode_cursor(value: str, owner_id: int, filters: StoryFilter) -> StoryCursor:
-    """Reject noncanonical, cross-owner, or filter-mismatched keyset cursors."""
+def _decode_cursor(value: str, access_fence: AccessFence, filters: StoryFilter) -> StoryCursor:
+    """Reject legacy, cross-workspace, stale-admission, or query-mismatched cursors."""
     try:
+        if not value or len(value) > 4096 or "=" in value:
+            raise ValueError
         raw = base64.urlsafe_b64decode(value + "=" * (-len(value) % 4)).decode()
         cursor = StoryCursor.model_validate_json(raw)
-        if _encode_cursor(cursor) != value or cursor.owner_id != owner_id or cursor.filter_hash != _filter_hash(filters):
+        if (
+            _encode_cursor(cursor) != value
+            or cursor.domain != "news_stories"
+            or cursor.workspace_id != access_fence.workspace_id
+            or cursor.actor_user_id != access_fence.user_id
+            or cursor.membership_revision != access_fence.membership_revision
+            or cursor.configuration_revision != access_fence.configuration_revision
+            or cursor.filter_hash != _filter_hash(filters)
+            or cursor.sort != "observed_at_desc_story_id_desc"
+        ):
             raise ValueError
         return cursor
     except (ValueError, UnicodeDecodeError, ValidationError) as exc:
@@ -283,7 +321,7 @@ def _decode_cursor(value: str, owner_id: int, filters: StoryFilter) -> StoryCurs
 
 
 async def _resolve_source_scope(
-    session: AsyncSession, requested_source_ids: tuple[UUID, ...],
+    session: AsyncSession, requested_source_ids: tuple[UUID, ...], *, scope: Scope, multi_workspace_enabled: bool,
 ) -> tuple[tuple[UUID, ...], bool]:
     """Resolve explicit active sources or one bounded default-source page.
 
@@ -292,15 +330,18 @@ async def _resolve_source_scope(
     active sources existed without exposing their configuration or count.
     """
     if requested_source_ids:
-        selected = await sources.get_gadget_sources(session, requested_source_ids)
+        selected = await sources.get_gadget_sources(session, requested_source_ids,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         return tuple(item.id for item in selected if item.status == "active"), False
-    page = await sources.list_active_gadget_sources(session, limit=32)
+    page = await sources.list_active_gadget_sources(session, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, limit=32)
     return tuple(item.id for item in page.items), page.next_cursor is not None
 
 
 async def _live_story_rows(
-    session: AsyncSession, owner_id: int, source_ids: tuple[UUID, ...], as_of: datetime,
-    *, after: tuple[datetime, UUID] | None = None, story_id: UUID | None = None,
+    session: AsyncSession, source_ids: tuple[UUID, ...], as_of: datetime, *,
+    scope: Scope, multi_workspace_enabled: bool,
+    after: tuple[datetime, UUID] | None = None, story_id: UUID | None = None,
     evidence_after: tuple[UUID, UUID, UUID] | None = None,
     support_limit: int = 100,
     candidate_limit: int = 50,
@@ -313,16 +354,18 @@ async def _live_story_rows(
     """
     if not source_ids:
         return LiveStoryRows([], False)
-    selections = await sources.get_gadget_sources(session, source_ids)
+    selections = await sources.get_gadget_sources(session, source_ids,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     active = {item.id for item in selections if item.status == "active"}
     if not active:
         return LiveStoryRows([], False)
     scope_status = await documents.news_current_scope_status(
-        session, tuple(sorted(active, key=str)),
+        session, tuple(sorted(active, key=str)), scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
     incomplete_reasons: set[str] = set(scope_status.incomplete_reasons)
     latest_observed = func.max(NewsObservation.observed_at)
     candidate_query = select(NewsObservation.story_id, latest_observed.label("latest_observed_at")).where(
+        NewsObservation.workspace_id == scope.workspace_id,
         NewsObservation.source_id.in_(active),
         NewsObservation.algorithm_version == ALGORITHM_VERSION,
         NewsObservation.created_at <= as_of,
@@ -358,6 +401,7 @@ async def _live_story_rows(
             order_by=support_order_by,
         ).label("support_rank"),
     ).where(
+        NewsObservation.workspace_id == scope.workspace_id,
         NewsObservation.story_id.in_(candidate_ids),
         NewsObservation.source_id.in_(active),
         NewsObservation.algorithm_version == ALGORITHM_VERSION,
@@ -372,7 +416,8 @@ async def _live_story_rows(
         select(NewsStory, NewsObservation, support_rank.c.support_rank)
         .join(NewsObservation, NewsObservation.story_id == NewsStory.id)
         .join(support_rank, support_rank.c.observation_id == NewsObservation.id)
-        .where(support_rank.c.support_rank <= support_limit + 1)
+        .where(support_rank.c.support_rank <= support_limit + 1,
+               NewsStory.workspace_id == scope.workspace_id, NewsObservation.workspace_id == scope.workspace_id)
         .order_by(*(
             (NewsObservation.story_id, NewsObservation.source_id,
              NewsObservation.document_version_id, NewsObservation.chunk_id)
@@ -392,11 +437,13 @@ async def _live_story_rows(
             observation.source_id, observation.document_version_id, observation.chunk_id,
         )
         current = await documents.get_news_document_projection(
-            session, observation.document_id, expected_source_generation=observation.source_generation,
+        session, observation.document_id, expected_source_generation=observation.source_generation,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
         if current is None or current.document_version_id != observation.document_version_id:
             if current is None and await documents.news_projection_scope_unavailable(
                 session, observation.document_id, observation.source_generation,
+                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
             ):
                 incomplete_reasons.add("scope_unavailable")
             continue
@@ -430,7 +477,7 @@ async def _live_story_rows(
 
 
 async def _current_entity_ids(
-    session: AsyncSession, observations: list[NewsObservation],
+    session: AsyncSession, observations: list[NewsObservation], *, scope: Scope, multi_workspace_enabled: bool,
 ) -> tuple[set[str], str | None]:
     """Resolve current entity IDs, returning a reason when a bounded scan is incomplete.
 
@@ -443,6 +490,7 @@ async def _current_entity_ids(
     for observation in observations[:100]:
         current = await documents.get_news_document_projection(
             session, observation.document_id, expected_source_generation=observation.source_generation,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
         if current is None or current.document_version_id != observation.document_version_id:
             continue
@@ -453,6 +501,7 @@ async def _current_entity_ids(
         try:
             refs = await entities.list_version_membership_refs(
                 session, current.document_version_id, [item.id for item in current.chunks],
+                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
             )
         except ValueError:
             output.clear()
@@ -462,12 +511,15 @@ async def _current_entity_ids(
     return output, incomplete_reason
 
 
-async def list_stories(session: AsyncSession, owner_id: int, filters: StoryFilter) -> StoryPage:
+async def list_stories(
+    session: AsyncSession, filters: StoryFilter, *, scope: Scope, multi_workspace_enabled: bool,
+) -> StoryPage:
     """Return a bounded keyset page whose titles and counts use live authorized supports only."""
+    access_fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if filters.date_from and filters.date_to and filters.date_from >= filters.date_to:
         raise HTTPException(status_code=422, detail="date_from must be earlier than date_to")
     as_of = datetime.now(UTC)
-    cursor = _decode_cursor(filters.cursor, owner_id, filters) if filters.cursor else None
+    cursor = _decode_cursor(filters.cursor, access_fence, filters) if filters.cursor else None
     if cursor:
         as_of = cursor.as_of
         source_ids = tuple(cursor.resolved_source_ids)
@@ -475,10 +527,11 @@ async def list_stories(session: AsyncSession, owner_id: int, filters: StoryFilte
         after = (cursor.after_observed_at, cursor.after_story_id)
     else:
         source_ids, source_selection_incomplete = await _resolve_source_scope(
-            session, tuple(filters.source_ids),
+            session, tuple(filters.source_ids), scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
         after = None
-    live = await _live_story_rows(session, owner_id, source_ids, as_of, after=after)
+    live = await _live_story_rows(session, source_ids, as_of, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, after=after)
     filtered = []
     page_incomplete_reasons = set(live.incomplete_reasons)
     if source_selection_incomplete:
@@ -486,7 +539,8 @@ async def list_stories(session: AsyncSession, owner_id: int, filters: StoryFilte
     query_tokens = _tokens(filters.q or "")
     profile = None
     if filters.topic_id:
-        profile = await topics.get_topic(session, owner_id, filters.topic_id)
+        profile = await topics.get_topic(session, filters.topic_id, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled)
         if not profile.is_active:
             return StoryPage(items=[], next_cursor=None, as_of=as_of)
     for story, observations, evidence in live:
@@ -502,7 +556,8 @@ async def list_stories(session: AsyncSession, owner_id: int, filters: StoryFilte
             continue
         current_entities: set[str] | None = None
         if filters.entity_id or profile:
-            current_entities, membership_incomplete = await _current_entity_ids(session, observations)
+            current_entities, membership_incomplete = await _current_entity_ids(session, observations,
+                scope=scope, multi_workspace_enabled=multi_workspace_enabled)
             if membership_incomplete:
                 story_incomplete_reasons.add(membership_incomplete)
                 page_incomplete_reasons.add(membership_incomplete)
@@ -535,7 +590,8 @@ async def list_stories(session: AsyncSession, owner_id: int, filters: StoryFilte
 
     scored = []
     for item in items:
-        relevance = await score_relevance(session, owner_id, item, as_of=as_of)
+        relevance = await score_relevance(session, item, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled, as_of=as_of)
         entity_reason = {
             "membership_limit": "entity_membership_limit",
             "chunk_limit": "chunk_limit",
@@ -562,6 +618,7 @@ async def list_stories(session: AsyncSession, owner_id: int, filters: StoryFilte
             current = await documents.get_news_document_projection(
                 session, story_evidence.document_id,
                 expected_source_generation=generation_by_document.get(story_evidence.document_id),
+                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
             )
             if (
                 current is None or current.document_version_id != story_evidence.document_version_id
@@ -581,7 +638,11 @@ async def list_stories(session: AsyncSession, owner_id: int, filters: StoryFilte
         continuation_key = live.next_candidate
     if continuation_key is not None:
         next_cursor = _encode_cursor(StoryCursor(
-            owner_id=owner_id, filter_hash=_filter_hash(filters), as_of=as_of,
+            domain="news_stories", workspace_id=access_fence.workspace_id,
+            actor_user_id=access_fence.user_id,
+            membership_revision=access_fence.membership_revision,
+            configuration_revision=access_fence.configuration_revision,
+            filter_hash=_filter_hash(filters), sort="observed_at_desc_story_id_desc", as_of=as_of,
             after_observed_at=continuation_key[0], after_story_id=continuation_key[1],
             resolved_source_ids=list(source_ids), source_selection_incomplete=source_selection_incomplete,
         ))
@@ -593,14 +654,73 @@ async def list_stories(session: AsyncSession, owner_id: int, filters: StoryFilte
                      capability="partial" if page_reasons or any(item.relevance_state != "available" for item in scored) else "available")
 
 
+DETAIL_CURSOR_DOMAIN = "news_story_detail"
+DETAIL_CURSOR_SORT = "support_key_asc"
+_DETAIL_CURSOR_FIELDS = {
+    "v", "domain", "workspace_id", "actor_user_id", "membership_revision", "configuration_revision",
+    "story_id", "source_ids", "as_of", "after", "source_selection_incomplete", "sort",
+}
+
+
+def _encode_detail_cursor(
+    fence: AccessFence, story_id: UUID, source_ids: tuple[UUID, ...], as_of: datetime,
+    after: tuple[UUID, UUID, UUID], source_selection_incomplete: bool,
+) -> str:
+    """Bind a Story detail evidence token to the admitted workspace, actor, revisions and snapshot."""
+    raw = json.dumps({
+        "v": 2, "domain": DETAIL_CURSOR_DOMAIN, "workspace_id": str(fence.workspace_id),
+        "actor_user_id": str(fence.user_id), "membership_revision": fence.membership_revision,
+        "configuration_revision": fence.configuration_revision, "story_id": str(story_id),
+        "source_ids": sorted(str(value) for value in source_ids), "as_of": as_of.isoformat(),
+        "after": [str(value) for value in after], "source_selection_incomplete": source_selection_incomplete,
+        "sort": DETAIL_CURSOR_SORT,
+    }, sort_keys=True, separators=(",", ":"))
+    return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+
+
+def _decode_detail_cursor(
+    value: str, fence: AccessFence, story_id: UUID, requested_source_ids: tuple[UUID, ...],
+) -> tuple[tuple[UUID, ...], datetime, tuple[UUID, UUID, UUID], bool]:
+    """Reject legacy (six-field), cross-workspace, stale-revision or mismatched detail tokens with HTTP 422."""
+    try:
+        raw = base64.urlsafe_b64decode(value + "=" * (-len(value) % 4)).decode()
+        parts = json.loads(raw)
+        if (
+            not isinstance(parts, dict) or set(parts) != _DETAIL_CURSOR_FIELDS
+            or parts["v"] != 2 or parts["domain"] != DETAIL_CURSOR_DOMAIN or parts["sort"] != DETAIL_CURSOR_SORT
+            or parts["workspace_id"] != str(fence.workspace_id)
+            or parts["actor_user_id"] != str(fence.user_id)
+            or parts["membership_revision"] != fence.membership_revision
+            or parts["configuration_revision"] != fence.configuration_revision
+            or parts["story_id"] != str(story_id)
+            or not isinstance(parts["source_ids"], list) or len(parts["source_ids"]) > 32
+            or len(set(parts["source_ids"])) != len(parts["source_ids"])
+            or (requested_source_ids and sorted(map(str, requested_source_ids)) != sorted(parts["source_ids"]))
+            or not isinstance(parts["source_selection_incomplete"], bool)
+            or not isinstance(parts["after"], list) or len(parts["after"]) != 3
+            or base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=") != value
+        ):
+            raise ValueError
+        as_of = datetime.fromisoformat(parts["as_of"])
+        if as_of.utcoffset() is None:
+            raise ValueError
+        after = (UUID(parts["after"][0]), UUID(parts["after"][1]), UUID(parts["after"][2]))
+        return tuple(UUID(item) for item in parts["source_ids"]), as_of, after, parts["source_selection_incomplete"]
+    except (ValueError, TypeError, KeyError, UnicodeDecodeError, binascii.Error) as exc:
+        raise HTTPException(status_code=422, detail="Invalid story evidence cursor") from exc
+
+
 async def get_story(
-    session: AsyncSession, owner_id: int, story_id: UUID, source_ids: tuple[UUID, ...],
-    *, evidence_limit: int = 100, evidence_cursor: str | None = None,
+    session: AsyncSession, story_id: UUID, source_ids: tuple[UUID, ...], *,
+    evidence_limit: int = 100, evidence_cursor: str | None = None,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> StoryDetail | None:
     """Return current excerpts or a title-free partial page with bounded continuation.
 
-    The opaque cursor binds owner, story, the resolved source snapshot, fixed
-    ``as_of``, default-source truncation state, and last scanned support key.
+    The opaque v2 cursor binds workspace, actor, membership/configuration revision,
+    the Story-detail domain, story, the resolved source snapshot, fixed ``as_of``,
+    default-source truncation state, sort, and last scanned support key; the
+    legacy six-field token is rejected.
     Historical/current authority is reprojected on each page; omitted source IDs
     during continuation reuse the pinned scope and can never widen it. A stale
     support window returns no title or evidence but retains a cursor when later
@@ -608,41 +728,24 @@ async def get_story(
     Invalid cursors raise HTTP 422, and current document/source fences are checked
     before detached content is returned.
     """
+    access_fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if not 1 <= evidence_limit <= 100:
         raise ValueError("Evidence page size must be between 1 and 100")
     after_key: tuple[UUID, UUID, UUID] | None = None
     as_of = datetime.now(UTC)
     source_selection_incomplete = False
     if evidence_cursor:
-        try:
-            raw = base64.urlsafe_b64decode(evidence_cursor + "=" * (-len(evidence_cursor) % 4)).decode()
-            parts = json.loads(raw)
-            if (
-                not isinstance(parts, dict)
-                or set(parts) != {"owner_id", "story_id", "source_ids", "as_of", "after", "source_selection_incomplete"}
-                or parts["owner_id"] != owner_id or parts["story_id"] != str(story_id)
-                or not isinstance(parts["source_ids"], list) or len(parts["source_ids"]) > 32
-                or len(set(parts["source_ids"])) != len(parts["source_ids"])
-                or (source_ids and sorted(map(str, source_ids)) != sorted(parts["source_ids"]))
-                or not isinstance(parts["source_selection_incomplete"], bool)
-                or not isinstance(parts["after"], list) or len(parts["after"]) != 3
-                or base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=") != evidence_cursor
-            ):
-                raise ValueError
-            source_ids = tuple(UUID(value) for value in parts["source_ids"])
-            as_of = datetime.fromisoformat(parts["as_of"])
-            if as_of.utcoffset() is None:
-                raise ValueError
-            after_key = (UUID(parts["after"][0]), UUID(parts["after"][1]), UUID(parts["after"][2]))
-            source_selection_incomplete = parts["source_selection_incomplete"]
-        except (ValueError, TypeError, KeyError, UnicodeDecodeError, binascii.Error) as exc:
-            raise HTTPException(status_code=422, detail="Invalid story evidence cursor") from exc
+        source_ids, as_of, after_key, source_selection_incomplete = _decode_detail_cursor(
+            evidence_cursor, access_fence, story_id, source_ids,
+        )
     else:
-        source_ids, source_selection_incomplete = await _resolve_source_scope(session, source_ids)
-    base_live = await _live_story_rows(session, owner_id, source_ids, as_of, story_id=story_id)
+        source_ids, source_selection_incomplete = await _resolve_source_scope(session, source_ids,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    base_live = await _live_story_rows(session, source_ids, as_of, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, story_id=story_id)
     match = next((item for item in base_live if item[0].id == story_id), None)
     page_live = await _live_story_rows(
-        session, owner_id, source_ids, as_of, story_id=story_id,
+        session, source_ids, as_of, scope=scope, multi_workspace_enabled=multi_workspace_enabled, story_id=story_id,
         evidence_after=after_key, support_limit=evidence_limit,
     )
     page_match = next((item for item in page_live if item[0].id == story_id), None)
@@ -650,13 +753,9 @@ async def get_story(
     evidence_page = evidence[:evidence_limit]
     next_evidence_cursor = None
     if page_live.next_evidence is not None:
-        raw = json.dumps({
-            "owner_id": owner_id, "story_id": str(story_id),
-            "source_ids": sorted(str(value) for value in source_ids),
-            "as_of": as_of.isoformat(), "after": [str(value) for value in page_live.next_evidence],
-            "source_selection_incomplete": source_selection_incomplete,
-        }, sort_keys=True, separators=(",", ":"))
-        next_evidence_cursor = base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+        next_evidence_cursor = _encode_detail_cursor(
+            access_fence, story_id, source_ids, as_of, page_live.next_evidence, source_selection_incomplete,
+        )
     # A stale support prefix can hide later current evidence. Continue that
     # bounded scan without borrowing a title from stale observations.
     if match is None and page_match is None:
@@ -692,6 +791,7 @@ async def get_story(
         current = await documents.get_news_document_projection(
             session, item.document_id,
             expected_source_generation=generation_by_document.get(item.document_id),
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
         if (
             current is None or current.document_version_id != item.document_version_id
