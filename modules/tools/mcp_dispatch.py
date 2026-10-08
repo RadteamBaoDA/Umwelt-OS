@@ -9,6 +9,7 @@ from uuid import UUID
 
 from core.tools.registry import ToolRegistry
 from core.tools.schemas import ToolDefinition, ToolExecutionPrincipal, ToolRisk
+from core.workspaces.schemas import Scope
 from modules.tools import mcp_repository
 from modules.tools.mcp_client import McpSdkClient
 from modules.tools.mcp_schemas import (
@@ -83,8 +84,8 @@ class McpDispatchAdapter:
         registry: ToolRegistry,
         client: McpSdkClient,
         *,
-        resolve_fence: Callable[[int, UUID, UUID, str], Awaitable[ExecutionFence]],
-        revalidate_fence: Callable[[int, ExecutionFence], Awaitable[bool]],
+        resolve_fence: Callable[[Scope, UUID, UUID, str], Awaitable[ExecutionFence]],
+        revalidate_fence: Callable[[Scope, ExecutionFence], Awaitable[bool]],
     ) -> None:
         """Install the native registry and server-owned fresh MCP/source authorization callbacks.
 
@@ -101,7 +102,7 @@ class McpDispatchAdapter:
 
     def register_selected_capabilities(
         self,
-        owner_id: int,
+        workspace_id: UUID,
         connection: ConnectionRead,
         discovery: DiscoveryRead,
         grants: tuple[GrantRead, ...],
@@ -131,7 +132,7 @@ class McpDispatchAdapter:
                     continue
                 definition = self._build_definition(connection, discovery.id, capability, grant)
                 handler = self._build_async_handler(
-                    owner_id,
+                    workspace_id,
                     connection.id,
                     capability.id,
                     grant.id,
@@ -170,7 +171,7 @@ class McpDispatchAdapter:
 
     def _build_async_handler(
         self,
-        owner_id: int,
+        workspace_id: UUID,
         connection_id: UUID,
         capability_id: UUID,
         grant_id: UUID,
@@ -181,7 +182,7 @@ class McpDispatchAdapter:
         """Bind immutable selection identity to the async method accepted by ToolRegistry."""
         return partial(
             self._invoke_tool,
-            owner_id,
+            workspace_id,
             connection_id,
             capability_id,
             grant_id,
@@ -192,7 +193,7 @@ class McpDispatchAdapter:
 
     async def _revalidate_execution(
         self,
-        owner_id: int,
+        scope: Scope,
         fence: ExecutionFence,
         principal: ToolExecutionPrincipal,
         destination_id: str,
@@ -220,14 +221,14 @@ class McpDispatchAdapter:
         try:
             if await principal_revalidator(principal) is not True:
                 return False
-            return await self._revalidate_fence(owner_id, fence) is True
+            return await self._revalidate_fence(scope, fence) is True
         except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
             # Guard failures are collapsed to denial so the registry never exposes callback details.
             return False
 
     async def _invoke_tool(
         self,
-        owner_id: int,
+        workspace_id: UUID,
         connection_id: UUID,
         capability_id: UUID,
         grant_id: UUID,
@@ -249,7 +250,11 @@ class McpDispatchAdapter:
                 or principal.owner_all_sources and not principal.is_owner
                 or destination_id not in principal.destinations):
             raise McpTransportError("Native MCP principal has no source scope")
-        fence = await self._resolve_fence(owner_id, connection_id, grant_id, destination_id)
+        # The registry is process-global: another workspace's principal must not reach this connection.
+        if principal.scope.workspace_id != workspace_id:
+            raise McpTransportError("MCP connection is outside the caller workspace")
+        scope = principal.scope
+        fence = await self._resolve_fence(scope, connection_id, grant_id, destination_id)
         if (
             fence.connection_id != connection_id
             or fence.grant_id != grant_id
@@ -268,7 +273,7 @@ class McpDispatchAdapter:
         registered_tool_name = f"mcp.{connection_id.hex}.{capability_id.hex}"
         before_request = partial(
             self._revalidate_execution,
-            owner_id,
+            scope,
             fence,
             principal,
             destination_id,
@@ -277,7 +282,7 @@ class McpDispatchAdapter:
         )
         if capability_kind == "tool":
             return await self._client.call_tool(
-                owner_id,
+                scope,
                 fence,
                 arguments,
                 before_request,
@@ -286,7 +291,7 @@ class McpDispatchAdapter:
             if arguments:
                 raise McpTransportError("Selected MCP resource does not accept caller-supplied URI arguments")
             return await self._client.read_resource(
-                owner_id,
+                scope,
                 fence,
                 capability_kind,
                 before_request,

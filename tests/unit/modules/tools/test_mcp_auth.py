@@ -31,6 +31,7 @@ def dummy_principal() -> InboundPrincipal:
     """Return a mock InboundPrincipal for testing."""
     return InboundPrincipal(
         client_id=uuid4(),
+        workspace_id=uuid4(),
         owner_id=1,
         audience="https://example.com/api/v1/mcp/",
         revision=1,

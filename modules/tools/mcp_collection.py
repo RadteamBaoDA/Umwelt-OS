@@ -12,6 +12,7 @@ from typing import Any
 from uuid import UUID
 
 from core.tools.validator import validate_json_schema
+from core.workspaces.schemas import Scope
 from modules.sources import public as sources_public
 from modules.tools import mcp_repository
 from modules.tools.mcp_runtime import McpRuntime
@@ -37,7 +38,6 @@ class McpCollectionRead:
 
 async def read_collection_capability(
     runtime: McpRuntime,
-    owner_id: int,
     *,
     connection_id: UUID,
     grant_id: UUID,
@@ -45,6 +45,8 @@ async def read_collection_capability(
     source_generation: int,
     arguments: dict[str, Any],
     authorize_extra: Callable[[], Awaitable[bool]] | None = None,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> McpCollectionRead:
     """Read one tool or resource through a collection grant scoped to exactly ``source_id``.
 
@@ -53,11 +55,11 @@ async def read_collection_capability(
     generation, or arguments do not satisfy the reviewed input schema. Nothing is sent in those
     cases. Every outbound request and the final result return re-run the same checks.
     """
-    fence = await runtime.resolve_fence(owner_id, connection_id, grant_id, COLLECTION_DESTINATION)
+    fence = await runtime.resolve_fence(scope, connection_id, grant_id, COLLECTION_DESTINATION)
     if fence.purpose != "collection" or fence.source_ids != (source_id,):
         raise mcp_repository.McpConflict("Grant is not a collection grant for this source")
     async with runtime.session_factory() as session:
-        selection = await mcp_repository.get_current_selection(session, owner_id, connection_id)
+        selection = await mcp_repository.get_current_selection(session, connection_id, scope=scope)
     if selection is None:
         raise mcp_repository.McpUnavailable("MCP discovery is unavailable")
     connection, discovery, grants = selection
@@ -80,10 +82,11 @@ async def read_collection_capability(
             return False
         try:
             async with runtime.session_factory() as session:
-                if not await mcp_repository.revalidate_capability_fence(session, owner_id, fence):
+                if not await mcp_repository.revalidate_capability_fence(session, fence, scope=scope):
                     return False
-                current = await mcp_repository.get_current_selection(session, owner_id, connection_id)
-                source = await sources_public.get_source_fence(session, source_id)
+                current = await mcp_repository.get_current_selection(session, connection_id, scope=scope)
+                source = await sources_public.get_source_fence(
+                    session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
             if current is None or source is None:
                 return False
             live, live_discovery, live_grants = current
@@ -106,9 +109,9 @@ async def read_collection_capability(
             return False
 
     if capability.kind == "tool":
-        payload = await runtime.client.call_tool(owner_id, fence, arguments, authorized)
+        payload = await runtime.client.call_tool(scope, fence, arguments, authorized)
     else:
-        payload = await runtime.client.read_resource(owner_id, fence, "resource", authorized)
+        payload = await runtime.client.read_resource(scope, fence, "resource", authorized)
     return McpCollectionRead(
         connection_id=connection.id, grant_id=grant.id, grant_revision=grant.grant_revision,
         connection_revision=connection.revision, kind=capability.kind,
