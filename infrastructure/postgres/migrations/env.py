@@ -127,6 +127,7 @@ from modules.timeline.models import (
     TimelineExtractionWork,
 )
 from modules.tools.models import BrowserPageEvidence, BrowserReadJob
+import modules.translations.models  # noqa: F401
 
 _auth_models = (AuthSession, GoogleIdentity, Owner)
 _workspace_models = (Workspace, WorkspaceMembership, WorkspaceInvitation)

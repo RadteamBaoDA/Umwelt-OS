@@ -26,14 +26,14 @@ def _alembic(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_single_head_is_collection_receipts() -> None:
+def test_single_head_is_translation() -> None:
     result = _alembic("heads")
     assert result.returncode == 0, result.stderr
-    assert result.stdout.split() == ["p14_collection_receipts", "(head)"]
+    assert result.stdout.split() == ["p14_translation", "(head)"]
 
 
 def test_offline_upgrade_renders_collection_receipts() -> None:
-    result = _alembic("upgrade", "p14_provider_terms_quota:head", "--sql")
+    result = _alembic("upgrade", "p14_provider_terms_quota:p14_collection_receipts", "--sql")
     assert result.returncode == 0, result.stderr
     assert "ingestion_collection_receipts" in result.stdout
     assert "continuation_state" in result.stdout

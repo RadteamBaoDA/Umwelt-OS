@@ -11,7 +11,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "p14_translation"
-down_revision: str | Sequence[str] | None = "p14_provider_terms_quota"
+down_revision: str | Sequence[str] | None = "p14_collection_receipts"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

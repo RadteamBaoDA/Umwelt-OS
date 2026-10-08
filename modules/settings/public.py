@@ -31,6 +31,7 @@ from modules.settings.models import AISettingsRecord, OwnerPreferencesRecord, le
 from modules.settings.models import list_capabilities as list_capabilities
 from modules.settings.models import new_capability_result as new_capability_result
 from modules.settings.models import save_capability as save_capability
+from modules.settings.schemas import TranslationSettingsRead  # noqa: F401  (annotation of get_translation_settings)
 from modules.settings.schemas import (
     ModuleLifecycleRead,
     OwnerPreferencesRead,
@@ -535,3 +536,9 @@ async def save_owner_preferences(
         locale=row.locale,
         timezone=row.timezone,
     )
+
+
+async def get_translation_settings(session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool) -> "TranslationSettingsRead":
+    """Workspace translation choice for T2/T3 consumers; member-safe, admission before query."""
+    from modules.translations.public import read_translation_settings  # lazy: avoids a settings<->translations import cycle
+    return await read_translation_settings(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
