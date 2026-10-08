@@ -2870,6 +2870,7 @@ async def lock_collection_request_in_uow(
 async def settle_collection_in_uow(
     session: AsyncSession, ref: "CollectionRequestRef", *,
     outcome: Literal["succeeded", "no_changes"], ingestion_run_id: UUID | None,
+    accepted_receipt_id: UUID | None = None,
 ) -> bool:
     """Flush a request's accepted terminal state and free its slot inside the caller's transaction.
 
@@ -2879,4 +2880,12 @@ async def settle_collection_in_uow(
     from modules.connectors import scheduler
 
     return await scheduler.settle_admission_in_uow(
-        session, ref.request_id, ref.admission_token, outcome=outcome, ingestion_run_id=ingestion_run_id)
+        session, ref.request_id, ref.admission_token, outcome=outcome, ingestion_run_id=ingestion_run_id,
+        accepted_receipt_id=accepted_receipt_id)
+
+
+async def recoverable_collection_request_ids(session: AsyncSession, request_ids: list[UUID]) -> set[UUID]:
+    """Return which of ``request_ids`` are still queued/running, i.e. whose receipt must be kept."""
+    from modules.connectors import scheduler
+
+    return await scheduler.recoverable_request_ids(session, request_ids)

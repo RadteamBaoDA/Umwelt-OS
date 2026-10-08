@@ -72,7 +72,8 @@ async def test_request_ref_without_connector_revision_fails_closed(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_settle_is_noop_without_ref_and_409_when_attempt_is_stale(monkeypatch):
-    await ingestion._settle_request(None, None, outcome="succeeded", run_id=None)
+    ids = {"scope": SCOPE, "source_id": uuid4(), "source_generation": 1, "connector_revision": 2}
+    await ingestion._settle_request(None, None, outcome="succeeded", run_id=None, **ids)
     calls = []
 
     async def stale(session, ref, **kwargs):
@@ -81,5 +82,77 @@ async def test_settle_is_noop_without_ref_and_409_when_attempt_is_stale(monkeypa
 
     monkeypatch.setattr(connectors, "settle_collection_in_uow", stale)
     with pytest.raises(HTTPException) as exc:
-        await ingestion._settle_request(None, REF, outcome="no_changes", run_id=None)
-    assert exc.value.status_code == 409 and calls == [{"outcome": "no_changes", "ingestion_run_id": None}]
+        await ingestion._settle_request(RecSession(), REF, outcome="no_changes", run_id=None, **ids)
+    assert exc.value.status_code == 409 and calls[0]["outcome"] == "no_changes" and calls[0]["accepted_receipt_id"]
+
+
+# ---------------------------------------------------------------- C3b receipts and retention
+
+class RecSession:
+    def __init__(self, existing=None, rows=None):
+        self.existing, self.rows, self.added, self.executed = existing, rows, [], []
+
+    async def scalar(self, *_a, **_k):
+        return self.existing
+
+    def add(self, row):
+        self.added.append(row)
+
+    async def flush(self):
+        return None
+
+    async def execute(self, stmt):
+        self.executed.append(stmt)
+        return SimpleNamespace(all=lambda: self.rows)
+
+
+async def _settle(session, monkeypatch, **kwargs):
+    seen = {}
+
+    async def settle(_session, ref, **kw):
+        seen.update(kw)
+        return True
+
+    monkeypatch.setattr(connectors, "settle_collection_in_uow", settle)
+    await ingestion._settle_request(
+        session, REF, outcome=kwargs.pop("outcome", "no_changes"), run_id=None, scope=SCOPE,
+        source_id=uuid4(), source_generation=3, connector_revision=2, **kwargs)
+    return seen
+
+
+@pytest.mark.asyncio
+async def test_acceptance_writes_a_receipt_and_links_the_request_in_the_same_flush(monkeypatch):
+    from modules.ingestion.schemas import CollectionStateUpdate
+
+    session = RecSession()
+    seen = await _settle(session, monkeypatch, state_update=CollectionStateUpdate(
+        update_validators=True, etag='"e"', coverage="complete"), cursor_before="a", cursor_after="b")
+    (receipt,) = session.added
+    assert receipt.request_id == REF.request_id and receipt.outcome == "no_changes" and receipt.etag == '"e"'
+    assert receipt.cursor_before == "a" and receipt.cursor_after == "b" and receipt.retain_until > receipt.accepted_at
+    assert seen["accepted_receipt_id"] == receipt.id
+
+
+@pytest.mark.asyncio
+async def test_replay_reuses_the_existing_receipt_and_never_inserts_a_second(monkeypatch):
+    existing = uuid4()
+    session = RecSession(existing=existing)
+    seen = await _settle(session, monkeypatch)
+    assert session.added == [] and seen["accepted_receipt_id"] == existing
+
+
+@pytest.mark.asyncio
+async def test_cleanup_keeps_receipts_whose_request_is_still_recoverable(monkeypatch):
+    live, done = uuid4(), uuid4()
+    rows = [SimpleNamespace(id=uuid4(), request_id=live), SimpleNamespace(id=uuid4(), request_id=done)]
+    session = RecSession(rows=rows)
+
+    async def recoverable(_session, ids):
+        assert set(ids) == {live, done}
+        return {live}
+
+    monkeypatch.setattr(connectors, "recoverable_collection_request_ids", recoverable)
+    assert await ingestion.purge_expired_collection_receipts(session) == 1
+    assert len(session.executed) == 2  # candidate select, then one delete for the unrecoverable receipt only
+    assert rows[1].id in session.executed[1].compile().params["id_1"]
+    assert rows[0].id not in session.executed[1].compile().params["id_1"]

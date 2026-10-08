@@ -26,10 +26,17 @@ def _alembic(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_single_head_is_provider_terms_quota() -> None:
+def test_single_head_is_collection_receipts() -> None:
     result = _alembic("heads")
     assert result.returncode == 0, result.stderr
-    assert result.stdout.split() == ["p14_provider_terms_quota", "(head)"]
+    assert result.stdout.split() == ["p14_collection_receipts", "(head)"]
+
+
+def test_offline_upgrade_renders_collection_receipts() -> None:
+    result = _alembic("upgrade", "p14_provider_terms_quota:head", "--sql")
+    assert result.returncode == 0, result.stderr
+    assert "ingestion_collection_receipts" in result.stdout
+    assert "continuation_state" in result.stdout
 
 
 def test_offline_base_to_head_renders_cleanup_authority_checks() -> None:

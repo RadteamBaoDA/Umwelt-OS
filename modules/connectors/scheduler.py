@@ -436,6 +436,7 @@ async def settle_admission_in_uow(
     session: AsyncSession, request_id: UUID, admission_token: UUID, *, outcome: Outcome,
     error_code: str | None = None, ingestion_run_id: UUID | None = None,
     retryable: bool = False, provider_deadline: datetime | None = None,
+    accepted_receipt_id: UUID | None = None,
 ) -> bool:
     """Flush a request outcome and free its slot if the token is still current; no commit.
 
@@ -462,6 +463,7 @@ async def settle_admission_in_uow(
         request.provider_deadline = provider_deadline
     if outcome in ("succeeded", "no_changes"):
         request.status, request.error_code, request.ingestion_run_id = outcome, None, ingestion_run_id
+        request.accepted_receipt_id = accepted_receipt_id
         if schedule is not None:
             schedule.failure_count, schedule.next_eligible_at = 0, None
     elif outcome == "cancelled":
@@ -485,6 +487,17 @@ async def settle_admission_in_uow(
         _penalize(schedule, request.provider_deadline)
     await session.flush()
     return True
+
+
+async def recoverable_request_ids(session: AsyncSession, request_ids: list[UUID]) -> set[UUID]:
+    """Return the subset of ids whose request is nonterminal (queued or running)."""
+    if not request_ids:
+        return set()
+    rows = await session.scalars(
+        select(ConnectorCollectionRequest.id).where(
+            ConnectorCollectionRequest.id.in_(request_ids),
+            ConnectorCollectionRequest.status.in_(("queued", "running"))))
+    return set(rows)
 
 
 async def settle_admission(session: AsyncSession, request_id: UUID, admission_token: UUID, **kwargs: object) -> bool:

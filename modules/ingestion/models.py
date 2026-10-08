@@ -24,6 +24,8 @@ from core.database import Base
 
 # 15 minutes exceeds five 120s attempts plus their maximum 30s backoff; expiry releases abandoned runs.
 COLLECTION_LEASE = timedelta(minutes=15)
+# Far exceeds the longest request recovery window (five attempts plus backoff, well under a day).
+RECEIPT_RETENTION = timedelta(days=30)
 
 
 class IngestionBatch(Base):
@@ -175,7 +177,48 @@ class SourceIngestionState(Base):
     lease_run_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("ingestion_runs.id", ondelete="SET NULL"))
     collection_lease_token: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Conditional-GET validators and the exact pagination checkpoint; written only with an accepted commit.
+    etag: Mapped[str | None] = mapped_column(String(512))
+    last_modified: Mapped[str | None] = mapped_column(String(128))
+    validators_revision: Mapped[int | None] = mapped_column(Integer)
+    continuation_state: Mapped[str | None] = mapped_column(Text)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class CollectionReceipt(Base):
+    """Retain one request's acceptance outcome; no FK to sources/requests so lineage outlives purge.
+
+    ``request_id`` UNIQUE is the final idempotency guard. ``batch_id`` is not unique: identical
+    content may be accepted for several distinct requests. Cleanup honours ``retain_until`` and
+    never deletes a receipt whose request is still recoverable.
+    """
+    __tablename__ = "ingestion_collection_receipts"
+    __table_args__ = (
+        CheckConstraint("outcome IN ('accepted', 'no_changes')", name="ck_ingestion_collection_receipts_outcome"),
+        CheckConstraint("coverage IN ('complete', 'partial')", name="ck_ingestion_collection_receipts_coverage"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_ingestion_collection_receipts_workspace", ondelete="RESTRICT"),
+        Index("ix_ingestion_collection_receipts_source", "workspace_id", "source_id", "accepted_at"),
+        Index("ix_ingestion_collection_receipts_retain", "retain_until"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    request_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False, unique=True)
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    source_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    connector_revision: Mapped[int | None] = mapped_column(Integer)
+    admission_token: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(16), nullable=False)
+    batch_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    run_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    payload_digest: Mapped[str | None] = mapped_column(String(64))
+    cursor_before: Mapped[str | None] = mapped_column(Text)
+    cursor_after: Mapped[str | None] = mapped_column(Text)
+    coverage: Mapped[str] = mapped_column(String(16), nullable=False, server_default="complete")
+    etag: Mapped[str | None] = mapped_column(String(512))
+    last_modified: Mapped[str | None] = mapped_column(String(128))
+    accepted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    retain_until: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class CollectorCredential(Base):
