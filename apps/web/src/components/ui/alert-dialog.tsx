@@ -9,7 +9,7 @@ export const AlertDialogTrigger = AlertDialogPrimitive.Trigger;
 
 /** Renders alert-dialog content in its portal while forwarding primitive props. */
 export function AlertDialogContent({ children, ...props }: React.ComponentProps<typeof AlertDialogPrimitive.Content>) {
-  return <AlertDialogPrimitive.Portal><AlertDialogPrimitive.Overlay className="fixed inset-0 z-50 bg-foreground/50" /><AlertDialogPrimitive.Content {...props} className={`fixed left-1/2 top-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-lg border bg-background p-6 shadow-lg outline-none sm:max-w-lg ${props.className ?? ''}`}>{children}</AlertDialogPrimitive.Content></AlertDialogPrimitive.Portal>;
+  return <AlertDialogPrimitive.Portal><AlertDialogPrimitive.Overlay className="fixed inset-0 z-50 bg-foreground/50" /><AlertDialogPrimitive.Content {...props} className={`fixed left-1/2 top-1/2 z-50 grid max-h-[calc(100dvh-2rem-env(safe-area-inset-top)-env(safe-area-inset-bottom))] w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto overscroll-contain rounded-lg border bg-background p-6 shadow-lg outline-none sm:max-w-lg ${props.className ?? ''}`}>{children}</AlertDialogPrimitive.Content></AlertDialogPrimitive.Portal>;
 }
 
 /** Groups the alert-dialog title and description using the shared header layout. */
