@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import HTTPException
 from sqlalchemy import ColumnElement, delete, func, select, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.expression import Exists
 
@@ -111,7 +112,7 @@ PREVIEW_MAX_MATCHES = 100
 def _owner_tzinfo(name: str) -> tzinfo:
     try:
         return ZoneInfo(name)
-    except (ZoneInfoNotFoundError, ValueError):
+    except (ZoneInfoNotFoundError, ValueError, OSError):
         return UTC
 
 
@@ -126,7 +127,7 @@ async def evaluate_gadget_highlights(
     rechecks the selected current version and keeps that provenance out of its public DTO.
     """
     from modules.dashboard.highlights import compile_rules, match_compiled, notification_allowed
-    from modules.dashboard.models import GadgetHighlightProgress
+    from modules.dashboard.models import GadgetHighlightProgress, GadgetHighlightSuppression
     from modules.dashboard.schemas import HighlightRule
     from modules.knowledge.documents import public as documents
     from modules.notifications.public import NotificationEmit, NotificationEvidence, emit
@@ -171,6 +172,9 @@ async def evaluate_gadget_highlights(
             progress.cursor_created_at = None
             progress.cursor_version_id = None
             progress.rule_last_notified = {}
+            await session.execute(delete(GadgetHighlightSuppression).where(
+                GadgetHighlightSuppression.definition_id == definition.id,
+            ))
         compiled = compile_rules(rules, await _rule_topic_terms(session, owner_id, rules))
         page = await documents.list_gadget_highlight_projection_page(
             session, source_ids=source_ids, limit=HIGHLIGHT_SCAN_PAGE_LIMIT,
@@ -198,35 +202,57 @@ async def evaluate_gadget_highlights(
         tz: tzinfo = UTC
         if any(rule.quiet_start for rule in rules):
             tz = _owner_tzinfo((await settings_public.read_owner_preferences(session)).timezone)
+        found = [
+            (item, match) for item in page.items
+            if not item_scope or str(item.document_id) in item_scope
+            for match in match_compiled(item.excerpt, compiled, source_id=item.source_id)
+        ]
+
+        def key_of(item: Any, match: Any) -> str:
+            return (
+                f"highlight:{definition.id}:{definition.revision}:"
+                f"{rules_fingerprint}:{match.rule_id}:{item.document_version_id}"
+            )
+
+        # BM-34: quiet hours/cooldown/expiry SUPPRESS. The decision is stored so a later rescan of
+        # the same version cannot deliver it. Writes happen under the definition lock held above.
+        suppressed_keys: set[str] = set()
+        if found:
+            suppressed_keys = set((await session.execute(
+                select(GadgetHighlightSuppression.dedupe_key).where(
+                    GadgetHighlightSuppression.definition_id == definition.id,
+                    GadgetHighlightSuppression.dedupe_key.in_([key_of(i, m) for i, m in found]),
+                )
+            )).scalars())
         matches: list[DashboardHighlightRead] = []
-        for item in page.items:
-            if item_scope and str(item.document_id) not in item_scope:
-                continue
-            for match in match_compiled(item.excerpt, compiled, source_id=item.source_id):
-                deliver = match.notify and notification_allowed(
+        for item, match in found:
+            dedupe_key = key_of(item, match)
+            deliver = False
+            if match.notify and dedupe_key not in suppressed_keys:
+                deliver = notification_allowed(
                     rules_by_id[match.rule_id], now, tz, last_notified.get(str(match.rule_id)),
                 )
-                matches.append(DashboardHighlightRead(
-                    document_id=item.document_id, document_version_id=item.document_version_id,
-                    source_id=item.source_id, title=item.title, observed_at=item.observed_at,
-                    rule_id=match.rule_id, matched_keywords=list(match.matched_keywords),
-                    severity=match.severity, notify=match.notify, reason=match.reason,
-                ))
-                if deliver:
-                    last_notified[str(match.rule_id)] = now
-                    await emit(session, owner_id, NotificationEmit(
-                        dedupe_key=(
-                            f"highlight:{definition.id}:{definition.revision}:"
-                            f"{rules_fingerprint}:{match.rule_id}:{item.document_version_id}"
-                        ),
-                        kind="dashboard_highlight", title=item.title[:300],
-                        body=match.reason[:1000],
-                        params={"severity": match.severity, "definition_id": str(definition.id),
-                                "definition_revision": definition.revision},
-                        link="/dashboard",
-                    ), evidence=NotificationEvidence(
-                        document_id=item.document_id, document_version_id=item.document_version_id,
-                    ))
+                if not deliver:
+                    await session.execute(pg_insert(GadgetHighlightSuppression).values(
+                        definition_id=definition.id, dedupe_key=dedupe_key,
+                    ).on_conflict_do_nothing())
+            matches.append(DashboardHighlightRead(
+                document_id=item.document_id, document_version_id=item.document_version_id,
+                source_id=item.source_id, title=item.title, observed_at=item.observed_at,
+                rule_id=match.rule_id, matched_keywords=list(match.matched_keywords),
+                severity=match.severity, notify=match.notify, reason=match.reason,
+            ))
+            if deliver and await emit(session, owner_id, NotificationEmit(
+                dedupe_key=dedupe_key,
+                kind="dashboard_highlight", title=item.title[:300],
+                body=match.reason[:1000],
+                params={"severity": match.severity, "definition_id": str(definition.id),
+                        "definition_revision": definition.revision},
+                link="/dashboard",
+            ), evidence=NotificationEvidence(
+                document_id=item.document_id, document_version_id=item.document_version_id,
+            )):
+                last_notified[str(match.rule_id)] = now
         progress.rule_last_notified = {key: value.isoformat() for key, value in last_notified.items()}
         # Progress and notifications form one transaction: a retry can neither skip an alert nor
         # advance beyond a page whose notifications were not committed.

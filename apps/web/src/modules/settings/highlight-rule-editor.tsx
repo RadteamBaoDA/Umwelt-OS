@@ -159,13 +159,13 @@ function RuleList({ def }: { def: GadgetDefinition }) {
         <label className="field"><Checkbox checked={editing.notify} onCheckedChange={(checked) => setEditing({ ...editing, notify: checked === true })} /> {t('notify')}</label>
         <fieldset className="field"><legend className="label">{t('ruleDelivery')}</legend><span className="muted text-xs">{t('ruleDeliveryHelp')}</span>
           <div className="grid gap-3 sm:grid-cols-2">
-            <label className="field"><span className="label">{t('ruleCooldown')}</span><Input type="number" min={0} max={MAX_COOLDOWN} step={1} inputMode="numeric" value={editing.cooldown} aria-invalid={touched && !deliveryValid} onChange={(event) => setEditing({ ...editing, cooldown: event.target.value })} /><span className="muted text-xs">{t('ruleCooldownHelp')}</span></label>
+            <label className="field"><span className="label">{t('ruleCooldown')}</span><Input type="number" min={0} max={MAX_COOLDOWN} step={1} inputMode="numeric" value={editing.cooldown} aria-invalid={touched && !deliveryValid} aria-describedby={touched && !deliveryValid ? 'rule-cooldown-help rule-delivery-error' : 'rule-cooldown-help'} onChange={(event) => setEditing({ ...editing, cooldown: event.target.value })} /><span id="rule-cooldown-help" className="muted text-xs">{t('ruleCooldownHelp')}</span></label>
             <label className="field"><span className="label">{t('ruleExpires')}</span><Input type="datetime-local" value={editing.expires} onChange={(event) => setEditing({ ...editing, expires: event.target.value })} /><span className="muted text-xs">{t('ruleExpiresHelp')}</span></label>
-            <label className="field"><span className="label">{t('ruleQuietStart')}</span><Input type="time" value={editing.quietStart} aria-invalid={touched && !deliveryValid} onChange={(event) => setEditing({ ...editing, quietStart: event.target.value })} /></label>
-            <label className="field"><span className="label">{t('ruleQuietEnd')}</span><Input type="time" value={editing.quietEnd} aria-invalid={touched && !deliveryValid} onChange={(event) => setEditing({ ...editing, quietEnd: event.target.value })} /></label>
+            <label className="field"><span className="label">{t('ruleQuietStart')}</span><Input type="time" value={editing.quietStart} aria-invalid={touched && !deliveryValid} aria-describedby={touched && !deliveryValid ? 'rule-delivery-error rule-quiet-note' : 'rule-quiet-note'} onChange={(event) => setEditing({ ...editing, quietStart: event.target.value })} /></label>
+            <label className="field"><span className="label">{t('ruleQuietEnd')}</span><Input type="time" value={editing.quietEnd} aria-invalid={touched && !deliveryValid} aria-describedby={touched && !deliveryValid ? 'rule-delivery-error rule-quiet-note' : 'rule-quiet-note'} onChange={(event) => setEditing({ ...editing, quietEnd: event.target.value })} /></label>
           </div>
-          <span className="muted text-xs">{t('ruleQuietNote')}</span>
-          {touched && !deliveryValid && <span className="error" role="alert">{t('ruleDeliveryInvalid')}</span>}
+          <span id="rule-quiet-note" className="muted text-xs">{t('ruleQuietNote')}</span>
+          {touched && !deliveryValid && <span id="rule-delivery-error" className="error" role="alert">{t('ruleDeliveryInvalid')}</span>}
         </fieldset>
       </fieldset>
       {write.error && <p className="error" role="alert">{t((highlightRuleErrorKey(write.error) ?? apiFailureKey(write.error) ?? 'saveFailed') as 'saveFailed')}</p>}

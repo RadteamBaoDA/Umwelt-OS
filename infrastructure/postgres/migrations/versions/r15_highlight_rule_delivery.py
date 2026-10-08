@@ -18,8 +18,17 @@ def upgrade() -> None:
         "gadget_highlight_progress",
         sa.Column("rule_last_notified", postgresql.JSONB(), nullable=False, server_default="{}"),
     )
+    op.create_table(
+        "gadget_highlight_suppression",
+        sa.Column("definition_id", sa.Uuid(), nullable=False),
+        sa.Column("dedupe_key", sa.String(length=200), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.ForeignKeyConstraint(["definition_id"], ["gadget_definitions.id"], ondelete="CASCADE"),
+        sa.PrimaryKeyConstraint("definition_id", "dedupe_key"),
+    )
 
 
 def downgrade() -> None:
     """Drop the column; cooldown state is transient and rebuilds on the next notification."""
+    op.drop_table("gadget_highlight_suppression")
     op.drop_column("gadget_highlight_progress", "rule_last_notified")

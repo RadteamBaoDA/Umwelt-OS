@@ -101,6 +101,20 @@ class GadgetDefinition(Base):
     )
 
 
+class GadgetHighlightSuppression(Base):
+    """Notification keys suppressed by rule delivery policy; never re-evaluated (BM-34)."""
+
+    __tablename__ = "gadget_highlight_suppression"
+
+    definition_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("gadget_definitions.id", ondelete="CASCADE"), primary_key=True
+    )
+    dedupe_key: Mapped[str] = mapped_column(String(200), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class GadgetHighlightProgress(Base):
     """Durable immutable-version scan cursor bound to one definition revision and rule set."""
 
