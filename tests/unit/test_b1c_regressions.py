@@ -353,7 +353,8 @@ async def test_chat_completion_persists_message_with_citations(monkeypatch: pyte
     failed.assert_not_awaited()  # pre-fix: `.answer` on a str raised AttributeError and failed the run
     message = next(obj for obj in added if isinstance(obj, Message))
     assert "The guidelines say so [1]." in message.content
-    assert [c["chunk_id"] for c in message.citations] == [item.chunk_id]
+    json.dumps(message.citations)  # JSONB-serialisable (UUIDs must be strings)
+    assert [c["chunk_id"] for c in message.citations] == [str(item.chunk_id)]
     done = next(obj for obj in added if isinstance(obj, StreamEvent) and obj.event_type == "message.done")
     assert done.data["status"] == "completed" and done.data["citations"] == message.citations
     events = [obj for obj in added if isinstance(obj, StreamEvent)]
@@ -361,7 +362,7 @@ async def test_chat_completion_persists_message_with_citations(monkeypatch: pyte
     assert types.count("message.citations") == 1 and types.index("message.citations") > types.index("message.delta")
     assert types.index("message.citations") < types.index("message.done")
     cites = next(e for e in events if e.event_type == "message.citations")
-    assert [c["chunk_id"] for c in cites.data["citations"]] == [item.chunk_id]
+    assert [c["chunk_id"] for c in cites.data["citations"]] == [str(item.chunk_id)]
 
 
 async def test_chat_completion_uncited_answer_emits_no_citations(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -470,7 +471,7 @@ async def test_chat_completion_renumbers_markers_in_first_cited_order(monkeypatc
     added, _ = await _run_chat_with_answer(monkeypatch, [e1, e2, e3], "A [3] B [1][9] in [2023].")
     message = next(obj for obj in added if isinstance(obj, Message))
     assert message.content == "A [1] B [2] in [2023]."
-    assert [c["chunk_id"] for c in message.citations] == [e3.chunk_id, e1.chunk_id]
+    assert [c["chunk_id"] for c in message.citations] == [str(e3.chunk_id), str(e1.chunk_id)]
 
 
 # ---------------------------------------------------- restored None handling

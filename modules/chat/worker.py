@@ -727,7 +727,7 @@ async def run_response_generation(
             if (key := _evidence_key(n)) in kept
         }
         final_answer = renumber_citation_markers(validated.answer, number_map, len(answer_context.evidence))
-        valid_citations = [c.model_dump(by_alias=True) for c in validated.citations]
+        valid_citations = [c.model_dump(mode="json", by_alias=True) for c in validated.citations]
 
         async with session_factory() as session:
             _, live_run = await _lock_live_response(session, response_id, conversation_id, privacy_fence)
