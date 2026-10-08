@@ -48,7 +48,7 @@ async def test_system_health_times_out_stalled_dependency_probes(monkeypatch) ->
 
 @pytest.mark.asyncio
 async def test_readiness_times_out_a_stalled_database_probe(monkeypatch) -> None:
-    monkeypatch.setattr(system_routes, "PROBE_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(system_routes, "READY_TIMEOUT_SECONDS", 0.01)
     app = create_app(Settings())
 
     class SlowSession:
@@ -90,3 +90,7 @@ async def test_missing_chat_worker_heartbeat_degrades_health() -> None:
     assert result["components"]["worker"]["status"] == "healthy"
     assert result["components"]["chat_worker"]["status"] == "unavailable"
     assert result["overall"] == "degraded"
+
+
+def test_ready_timeout_exceeds_health_probe_and_fits_compose_healthcheck() -> None:
+    assert health_module.PROBE_TIMEOUT_SECONDS < system_routes.READY_TIMEOUT_SECONDS < 4
