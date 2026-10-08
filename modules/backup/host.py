@@ -1361,8 +1361,8 @@ def restore_backup(
             compose.quiet("up", "-d", "redis")
             worker_baseline = _worker_generation_digest(_worker_generation(compose))
             _clear_worker_generation(compose)
-            compose.quiet("up", "-d", "api", "worker")
-            _verify_services_running(compose, {"postgres", "redis", "api", "worker"})
+            compose.quiet("up", "-d", "api", "worker", "chat-worker")
+            _verify_services_running(compose, {"postgres", "redis", "api", "worker", "chat-worker"})
             _wait_for_api_ready(compose)
             _wait_for_worker_ready(
                 compose, generation_baseline=worker_baseline, require_new_generation=True,
