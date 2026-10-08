@@ -6,11 +6,13 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
+import anyio
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from starlette.requests import ClientDisconnect
 from starlette.types import Receive, Scope, Send
 
 from core.auth.dependencies import SESSION_COOKIE
@@ -110,13 +112,19 @@ class _PermitResponse(StreamingResponse):
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         try:
-            await super().__call__(scope, receive, send)
+            # No listen_for_disconnect task group (Starlette spec < 2.4): its scope cancel would land inside the
+            # body generator mid-DB-await and cancel the session rollback. Both generators poll
+            # request.is_disconnected(), so they exit at a clean point; uvicorn's send is a no-op after disconnect.
+            await self.stream_response(send)
+        except OSError:
+            raise ClientDisconnect() from None  # spec 2.4 servers raise on send once the client is gone
         finally:
-            # Starlette never closes body_iterator (e.g. a disconnect cancels the send task mid-stream);
-            # close it here so the generator's finally (permit release, rollback) runs now, not at GC.
+            # Starlette never closes body_iterator; close it here so the generator's finally (permit
+            # release, rollback) runs now, not at GC. Shielded + bounded for servers that cancel the task.
             aclose = getattr(self.body_iterator, "aclose", None)
             if aclose is not None:
-                await aclose()
+                with anyio.CancelScope(shield=True), anyio.move_on_after(2):
+                    await aclose()
             if not self._started.is_set():
                 self._started.set()  # idempotent guard against double release
                 self._semaphore.release()

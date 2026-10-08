@@ -6,7 +6,7 @@ import { apiRequest } from '@/core/api';
 import { WorkspaceShell } from '@/core/app-shell/workspace-shell';
 
 type SystemHealth = { overall: string; components: Record<string, { status: string; connectivity?: string }> };
-const labels: Record<string, string> = { postgres: 'Database', redis: 'Background queue', worker: 'Worker', model_gateway: 'OmniRoute', graph: 'Knowledge graph', n8n: 'Connector workflows', browser: 'Browser collection' };
+const labels: Record<string, string> = { postgres: 'Database', redis: 'Background queue', worker: 'Worker', chat_worker: 'Chat worker', model_gateway: 'OmniRoute', graph: 'Knowledge graph', n8n: 'Connector workflows', browser: 'Browser collection' };
 
 /** Fetches and displays health for core services and configured integrations, with retry on request failure. */
 function SystemStatus() {

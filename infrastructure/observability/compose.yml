@@ -12,3 +12,6 @@ services:
 
   worker:
     environment: *langfuse-environment
+
+  chat-worker:
+    environment: *langfuse-environment

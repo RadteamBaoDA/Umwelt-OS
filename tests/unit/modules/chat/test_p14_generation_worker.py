@@ -3,7 +3,7 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -182,7 +182,7 @@ async def test_fence_failure_between_flushes_drops_buffer_and_redacts(monkeypatc
 async def test_recover_requeues_pending_and_fails_abandoned_streaming(monkeypatch: pytest.MonkeyPatch) -> None:
     pending_id, stale_id = uuid4(), uuid4()
     session = MagicMock()
-    session.scalars = AsyncMock(return_value=[pending_id])
+    session.scalars = AsyncMock(side_effect=[[pending_id], []])
     session.execute = AsyncMock(return_value=SimpleNamespace(
         all=lambda: [(stale_id, {"_chat_privacy_fence": {"rev": 3}})]))
     session.scalar = AsyncMock(return_value=7)
@@ -349,3 +349,104 @@ async def test_legacy_aliases_overlay_accepts_bytes_keys() -> None:
     redis = SimpleNamespace(hgetall=AsyncMock(return_value={alias.encode(): value}))
     mappings = await legacy_aliases(redis, Settings(csrf_signing_secret="s"))  # type: ignore[arg-type]
     assert mappings[alias].model == "m"
+
+
+async def test_recover_fails_expired_pending_instead_of_requeueing(monkeypatch: pytest.MonkeyPatch) -> None:
+    old_id = uuid4()
+    session = MagicMock()
+    session.scalars = AsyncMock(side_effect=[[], [old_id]])
+    session.execute = AsyncMock(return_value=SimpleNamespace(all=list))
+    run = SimpleNamespace(
+        status="pending", conversation_id=uuid4(),
+        updated_at=datetime.now(UTC) - worker.RECOVER_PENDING_MAX_AGE - timedelta(seconds=1),
+    )
+    session.scalar = AsyncMock(side_effect=[run, object(), run, 0])
+    session.add = MagicMock()
+    session.commit = AsyncMock()
+    monkeypatch.setattr(worker, "lock_export_privacy", AsyncMock())
+    monkeypatch.setattr(worker, "_next_event_seq", AsyncMock(return_value=1))
+    redis = SimpleNamespace(enqueue_job=AsyncMock())
+    result = await worker.recover_chat_runs({"session_factory": _factory(session), "redis": redis})
+    assert result == {"requeued": 0, "failed": 1}
+    redis.enqueue_job.assert_not_awaited()
+    assert run.status == "failed" and session.add.call_args.args[0].data["status"] == "failed"
+
+
+async def test_stream_iterator_closed_and_cancel_check_throttled(monkeypatch: pytest.MonkeyPatch) -> None:
+    gen = _Gen(monkeypatch, [])
+    closed: list[bool] = []
+
+    async def stream(**_k: Any) -> AsyncIterator[str]:
+        try:
+            for _ in range(50):
+                yield "data: " + json.dumps({"choices": [{"delta": {"content": ""}}]})
+            yield "data: [DONE]"
+        finally:
+            closed.append(True)
+
+    monkeypatch.setattr(worker, "ModelGateway", lambda **kw: SimpleNamespace(stream=stream))
+    checks = worker.is_run_cancelled
+    await gen.run()
+    assert closed == [True]
+    # 50 instantaneous lines: the throttle allows no per-line check (only claim/flush checks remain)
+    assert checks.await_count <= 3  # type: ignore[attr-defined]
+
+
+async def test_early_stop_closes_gateway_stream(monkeypatch: pytest.MonkeyPatch) -> None:
+    gen = _Gen(monkeypatch, [])
+    closed: list[bool] = []
+
+    async def stream(**_k: Any) -> AsyncIterator[str]:
+        try:
+            started.append(True)
+            while True:  # never exhausts: only aclosing can run the finally
+                await asyncio.sleep(0.3)
+                yield "data: " + json.dumps({"choices": [{"delta": {"content": "x"}}]})
+        finally:
+            closed.append(True)
+
+    monkeypatch.setattr(worker, "ModelGateway", lambda **kw: SimpleNamespace(stream=stream))
+    started: list[bool] = []
+    monkeypatch.setattr(worker, "is_run_cancelled", AsyncMock(side_effect=lambda *a, **k: bool(started)))
+    monkeypatch.setattr(worker, "_mark_cancelled", AsyncMock())
+    await gen.run()
+    assert closed == [True]
+
+
+async def test_cancel_during_claim_commit_releases_and_reraises(monkeypatch: pytest.MonkeyPatch) -> None:
+    gen = _Gen(monkeypatch, [])
+    gen.session.commit = AsyncMock(side_effect=asyncio.CancelledError)
+    release = AsyncMock()
+    monkeypatch.setattr(worker, "_release_on_shutdown", release)
+    with pytest.raises(asyncio.CancelledError):
+        await gen.run()
+    release.assert_awaited_once()
+
+
+async def test_recover_pending_age_uses_updated_at() -> None:
+    stmts: list[str] = []
+    session = MagicMock()
+
+    async def scalars(stmt: Any) -> list[Any]:
+        stmts.append(str(stmt))
+        return []
+
+    session.scalars = scalars
+    session.execute = AsyncMock(return_value=SimpleNamespace(all=list))
+    await worker.recover_chat_runs({"session_factory": _factory(session), "redis": SimpleNamespace()})
+    # pending (re-enqueue) and expired queries bound the max age by updated_at (refreshed on release-to-pending)
+    assert all("chat_response_runs.updated_at" in s for s in stmts[:2])
+
+
+async def test_fail_expired_pending_skips_run_released_to_pending_before_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+    # listed as expired, then claimed and released back to pending (fresh updated_at) before the row lock
+    run = SimpleNamespace(status="pending", conversation_id=uuid4(), updated_at=datetime.now(UTC))
+    session = MagicMock()
+    session.scalar = AsyncMock(side_effect=[run, object(), run])
+    session.add = MagicMock()
+    session.commit = AsyncMock()
+    monkeypatch.setattr(worker, "lock_export_privacy", AsyncMock())
+    await worker._fail_expired_pending(uuid4(), _factory(session))
+    assert run.status == "pending"
+    session.add.assert_not_called()
+    session.commit.assert_not_awaited()

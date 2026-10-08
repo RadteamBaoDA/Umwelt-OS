@@ -1,10 +1,12 @@
 """Background generation worker and ARQ task handler for chat model generation."""
 
 import asyncio
+import contextlib
 import json
 import logging
 import time
 from dataclasses import dataclass
+from collections.abc import AsyncGenerator
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
@@ -63,9 +65,11 @@ CHAT_QUEUE = "arq:chat"
 CHAT_JOB_TIMEOUT = 600  # arq job_timeout for ChatWorkerSettings (single source)
 SHUTDOWN_TIMEOUT_MARGIN = 30.0
 RECOVER_PENDING_AFTER = timedelta(seconds=15)
+RECOVER_PENDING_MAX_AGE = timedelta(minutes=15)  # (measured from updated_at) pending runs fail instead of re-enqueueing forever
+CANCEL_CHECK_INTERVAL = 0.25  # per-line Redis cancel check throttle; flushes always check
 RECOVER_STREAMING_AFTER = timedelta(seconds=660)  # arq job_timeout 600 s plus margin
 EPHEMERAL_TTL = timedelta(hours=24)
-SHUTDOWN_RELEASE_TIMEOUT = 5.0  # docker stop grace is 10 s; arq awaits the job task before closing
+SHUTDOWN_RELEASE_TIMEOUT = 5.0  # compose stop_grace_period is 30 s; arq awaits the job task before closing
 WEB_SEARCH_STOP_SECONDS = 3.0  # search cleanup is a rollback; keeps stop + shutdown release (3 + 5) inside 10 s
 # Web search egress fence: lock wait + DNS + connect + request body, while the privacy key is held (review P2-1).
 WEB_SEARCH_FENCE_SECONDS = 4.0
@@ -545,36 +549,45 @@ async def run_response_generation(
     seq = 0
 
     # 1. Claim run atomically
-    async with session_factory() as session:
-        result = await session.execute(
-            update(ResponseRun)
-            .where(ResponseRun.id == response_id, ResponseRun.status == "pending")
-            .values(status="streaming")
-            .returning(
-                ResponseRun.conversation_id, ResponseRun.user_message_id,
-                ResponseRun.retrieval_context, ResponseRun.ephemeral,
+    try:
+        async with session_factory() as session:
+            result = await session.execute(
+                update(ResponseRun)
+                .where(ResponseRun.id == response_id, ResponseRun.status == "pending")
+                .values(status="streaming")
+                .returning(
+                    ResponseRun.conversation_id, ResponseRun.user_message_id,
+                    ResponseRun.retrieval_context, ResponseRun.ephemeral,
+                )
             )
-        )
-        claimed = result.fetchone()
-        if claimed is None:
-            # Run was already claimed or cancelled before start
-            return
+            claimed = result.fetchone()
+            if claimed is None:
+                # Run was already claimed or cancelled before start
+                return
 
-        conversation_id, user_message_id, raw_context_req, run_ephemeral = cast(
-            "tuple[UUID, UUID, dict[str, Any] | None, bool]", tuple(claimed),
-        )
-        seq += 1
-        event_id = make_event_id(response_id, seq)
-        session.add(
-            StreamEvent(
-                response_id=response_id,
-                seq=seq,
-                event_type="status",
-                event_id=event_id,
-                data={"status": "streaming"},
+            conversation_id, user_message_id, raw_context_req, run_ephemeral = cast(
+                "tuple[UUID, UUID, dict[str, Any] | None, bool]", tuple(claimed),
             )
-        )
-        await session.commit()
+            seq += 1
+            event_id = make_event_id(response_id, seq)
+            session.add(
+                StreamEvent(
+                    response_id=response_id,
+                    seq=seq,
+                    event_type="status",
+                    event_id=event_id,
+                    data={"status": "streaming"},
+                )
+            )
+            await session.commit()
+    except asyncio.CancelledError:
+        # Cancelled around the claim commit: the run may be `streaming` with nothing published. Hand it back
+        # now (no-op unless it is `streaming`) instead of waiting RECOVER_STREAMING_AFTER.
+        try:
+            await asyncio.wait_for(_release_on_shutdown(response_id, session_factory, None), SHUTDOWN_RELEASE_TIMEOUT)
+        except Exception as exc:  # noqa: BLE001  # boundary: recovery is the safety net
+            logger.warning("Chat run claim-cancel release failed for %s (%s)", response_id, type(exc).__name__)
+        raise
     claimed_at = time.monotonic()
 
     # 2. Retrieve user message and grounding context
@@ -864,31 +877,35 @@ async def run_response_generation(
             last_flush = loop.time()
             return True
 
-        async for raw_line in stream_iter:
-            if await is_run_cancelled(response_id, redis):
-                await _mark_cancelled(response_id, session_factory, seq, privacy_fence)
-                return
+        last_cancel_check = loop.time()
+        async with contextlib.aclosing(cast("AsyncGenerator[str, None]", stream_iter)) as lines:
+            async for raw_line in lines:
+                if loop.time() - last_cancel_check >= CANCEL_CHECK_INTERVAL:
+                    last_cancel_check = loop.time()
+                    if await is_run_cancelled(response_id, redis):
+                        await _mark_cancelled(response_id, session_factory, seq, privacy_fence)
+                        return
 
-            line = raw_line.strip()
-            if not line or line == "data: [DONE]":
-                continue
-            if line.startswith("data: "):
-                payload_str = line[6:]
-                try:
-                    chunk_obj = json.loads(payload_str)
-                    choices = chunk_obj.get("choices", [])
-                    if choices and isinstance(choices, list):
-                        delta = choices[0].get("delta", {})
-                        content_delta = delta.get("content", "")
-                        if content_delta:
-                            pending += content_delta
-                            due = len(pending) >= STREAM_FLUSH_CHARS or (
-                                loop.time() - last_flush >= STREAM_FLUSH_SECONDS
-                            )
-                            if due and await _flush_pending() is None:
-                                return
-                except (json.JSONDecodeError, AttributeError):
-                    pass
+                line = raw_line.strip()
+                if not line or line == "data: [DONE]":
+                    continue
+                if line.startswith("data: "):
+                    payload_str = line[6:]
+                    try:
+                        chunk_obj = json.loads(payload_str)
+                        choices = chunk_obj.get("choices", [])
+                        if choices and isinstance(choices, list):
+                            delta = choices[0].get("delta", {})
+                            content_delta = delta.get("content", "")
+                            if content_delta:
+                                pending += content_delta
+                                due = len(pending) >= STREAM_FLUSH_CHARS or (
+                                    loop.time() - last_flush >= STREAM_FLUSH_SECONDS
+                                )
+                                if due and await _flush_pending() is None:
+                                    return
+                    except (json.JSONDecodeError, AttributeError):
+                        pass
 
         if await _flush_pending() is None:
             return
@@ -1273,12 +1290,41 @@ async def process_chat_response(ctx: dict[str, object], response_id: str) -> Non
     await run_response_generation(UUID(response_id), session_factory, settings, redis)
 
 
+async def _fail_expired_pending(response_id: UUID, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    """Fail a run that never started (nothing published); privacy -> conversation -> run lock order."""
+    async with session_factory() as session:
+        await lock_export_privacy(session)
+        hint = await session.scalar(select(ResponseRun).where(ResponseRun.id == response_id))
+        if hint is None:
+            return
+        await session.scalar(select(Conversation).where(
+            Conversation.id == hint.conversation_id,
+        ).with_for_update().execution_options(populate_existing=True))
+        run = await session.scalar(select(ResponseRun).where(
+            ResponseRun.id == response_id,
+        ).with_for_update().execution_options(populate_existing=True))
+        if run is None or run.status != "pending" or run.updated_at >= datetime.now(UTC) - RECOVER_PENDING_MAX_AGE:
+            return  # released back to pending (fresh updated_at) between select and lock: re-enqueue instead
+        run.status = "failed"
+        run.error_code = "TimeoutError"
+        run.error_message = "chat worker unavailable"
+        run.completed_at = func.now()
+        seq = await _next_event_seq(session, response_id, 0)
+        session.add(StreamEvent(
+            response_id=response_id, seq=seq, event_type="status",
+            event_id=make_event_id(response_id, seq),
+            data={"status": "failed", "error": "chat worker unavailable"},
+        ))
+        await session.commit()
+
+
 async def recover_chat_runs(ctx: dict[str, object]) -> dict[str, int]:
     """Re-enqueue stuck pending runs and fail streaming runs whose generator is gone.
 
     Re-enqueue is safe: the pending->streaming claim is atomic and the arq job id is fixed. Abandoned
     runs go through `_mark_failed`, which keeps the privacy -> conversation -> run lock order and the
-    privacy-redaction fallback.
+    privacy-redaction fallback. Pending runs untouched for RECOVER_PENDING_MAX_AGE (by `updated_at`, which
+    a release-to-pending refreshes) are failed instead of re-enqueued.
     """
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     redis = cast(Any, ctx["redis"])
@@ -1286,7 +1332,16 @@ async def recover_chat_runs(ctx: dict[str, object]) -> dict[str, int]:
     async with factory() as session:
         pending_ids = list(await session.scalars(
             select(ResponseRun.id)
-            .where(ResponseRun.status == "pending", ResponseRun.created_at < now - RECOVER_PENDING_AFTER)
+            .where(
+                ResponseRun.status == "pending",
+                ResponseRun.created_at < now - RECOVER_PENDING_AFTER,
+                ResponseRun.updated_at >= now - RECOVER_PENDING_MAX_AGE,
+            )
+            .order_by(ResponseRun.created_at).limit(50)
+        ))
+        expired = list(await session.scalars(
+            select(ResponseRun.id)
+            .where(ResponseRun.status == "pending", ResponseRun.updated_at < now - RECOVER_PENDING_MAX_AGE)
             .order_by(ResponseRun.created_at).limit(50)
         ))
         last_event = (
@@ -1303,6 +1358,8 @@ async def recover_chat_runs(ctx: dict[str, object]) -> dict[str, int]:
             )
             .order_by(ResponseRun.updated_at).limit(50)
         )).all()
+    for expired_id in expired:
+        await _fail_expired_pending(expired_id, factory)
     for run_id in pending_ids:
         try:
             await redis.enqueue_job(
@@ -1318,4 +1375,4 @@ async def recover_chat_runs(ctx: dict[str, object]) -> dict[str, int]:
                 StreamEvent.response_id == stale_id,
             )) or 0
         await _mark_failed(cast(UUID, stale_id), factory, seq, fence, TimeoutError("generation abandoned"))
-    return {"requeued": len(pending_ids), "failed": len(stale)}
+    return {"requeued": len(pending_ids), "failed": len(stale) + len(expired)}

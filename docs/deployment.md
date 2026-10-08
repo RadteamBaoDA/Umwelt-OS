@@ -9,10 +9,11 @@ The web port binds to loopback by default. For remote access, terminate HTTPS at
 | Variable | Default | Effect |
 |---|---|---|
 | `DB_POOL_SIZE` / `DB_MAX_OVERFLOW` | `10` / `10` | API SQLAlchemy pool per process (pool timeout 5 s, recycle 1800 s). Size total connections across API processes, workers and admin below PostgreSQL `max_connections`. |
-| `DB_STATEMENT_TIMEOUT_MS` | `60000` | API `statement_timeout` (also bounds lock waits). `0` disables. The main worker never sets a statement timeout; the chat-worker sets 60 s. |
+| `DB_STATEMENT_TIMEOUT_MS` | `60000` | API and chat-worker `statement_timeout` (also bounds lock waits). `0` disables. The main worker never sets a statement timeout. The chat-worker pool is fixed at 10 + 10 (not affected by `DB_POOL_SIZE` / `DB_MAX_OVERFLOW`). |
 | `DB_IDLE_TX_TIMEOUT_MS` | `240000` | `idle_in_transaction_session_timeout` for API and worker connections; a backstop above the longest legitimate send-fence hold. `0` disables. |
 | `MAX_REQUEST_BODY_BYTES` | `5242880` | Request body cap returning 413; `POST /api/v1/documents/upload` allows `UPLOAD_MAX_BYTES` plus 1 MiB. |
 | `WEB_CONCURRENCY` | `2` (image `ENV`) | API process count. Above 1 (also `UVICORN_WORKERS` > 1) the API refuses to start unless `CSRF_SIGNING_SECRET` is set, so every process signs sessions with the same secret. |
+| `PARSED_TEXT_MAX_CHARS` | `10485760` | Cap on parsed document text. Text past it is truncated, a `parsed_text_truncated` warning is recorded, and the document is shown with a notice (only the first part is searchable). |
 | `AUTH_TRUST_FORWARDED_FOR` | `false` | Key the per-IP auth rate limit on the rightmost `X-Forwarded-For` entry. Default `false` keys on the TCP peer (the web container, so effectively one shared 5/min bucket per action). Set `true` only behind the front proxy configuration in "Client IP and `X-Forwarded-For`" below. |
 
 **`WEB_CONCURRENCY` is the only supported way to set the API process count.** uvicorn reads it as the `--workers` default, and `create_app()` reads it to enforce the shared-secret guard. Running `uvicorn --workers N` with `WEB_CONCURRENCY` unset (or `1`) starts N processes that bypass the guard and sign sessions with different random secrets; do not pass `--workers`. The production image `CMD` omits it on purpose.
@@ -26,14 +27,14 @@ The web port binds to loopback by default. For remote access, terminate HTTPS at
 | api | 1 GiB / 512 MiB | 1024 | `WEB_CONCURRENCY=2`, uvicorn `asyncio` + `httptools` via `apps.api.protocol:NoDelayHttpToolsProtocol` (sets TCP_NODELAY; pre-bound multi-worker sockets lack it) (no `--proxy-headers`: uvicorn never takes the client address from request headers), keep-alive 15 s, graceful shutdown 8 s, `--limit-concurrency 400`; `stop_grace_period` 15 s |
 | worker | 1 GiB / 256 MiB | 512 | `max_jobs=6`, DB pool 7 + 10 |
 | chat-worker | 768 MiB / 256 MiB | 512 | `max_jobs=15`, `job_timeout=600`, DB pool 10 + 10 |
-| web | 768 MiB / 256 MiB | 512 | `NODE_OPTIONS=--max-old-space-size=512`, `experimental.proxyTimeout=120000` |
+| web | 768 MiB / 256 MiB | 512 | `NODE_OPTIONS=--max-old-space-size=512`, `experimental.proxyTimeout=210000` (above the worst-case brief: lease wait + `request_timeout_seconds` up to 180 s; keep it larger than that setting) |
 | migrate | 512 MiB (one-shot, exits before the others start) | - | - |
 
 Memory limits sum to 6.4 GiB (2.5 + 0.375 + 1 + 1 + 0.75 + 0.75), leaving about 1.6 GiB for the OS and page cache. The optional connectors overlay adds limits of 768 MiB + 1.5 GiB (2.25 GiB), so with it the limits total about 8.65 GiB, above 8 GiB: they are caps, not reservations, and the stack relies on actual RSS (about 4.2 GiB steady, plus connectors) staying below RAM. CPU shares apply only under contention (no hard CPU caps).
 
 Connection budget (`max_connections=100`): API 2 x (10 + 10) = 40, main worker 7 + 10 = 17, chat-worker 10 + 10 = 20, total 77. The main worker also opens one non-pooled agent checkpoint connection per running agent run (at most 6, so worker worst case 23); plus migrate, backup and admin about 5 gives a worst case of about 88, leaving about 12 spare. If you change `WEB_CONCURRENCY`, `DB_POOL_SIZE` or `DB_MAX_OVERFLOW`, recompute this before applying.
 
-Redis clients use `socket_timeout=5`, `socket_connect_timeout=2`, `health_check_interval=30` and at most 100 connections. Each API process allows 32 concurrent Realtime SSE streams. No global `lock_timeout` is set because it would turn waits on the Memory privacy lock into errors.
+Redis clients use `socket_timeout=5`, `socket_connect_timeout=2`, `health_check_interval=30` and at most 100 connections. Each API process allows 32 concurrent Realtime SSE streams and 64 concurrent chat response streams (503 beyond). No global `lock_timeout` is set because it would turn waits on the Memory privacy lock into errors.
 
 ## Client IP and `X-Forwarded-For`
 
@@ -46,7 +47,14 @@ Only then set `AUTH_TRUST_FORWARDED_FOR=true` to get a separate bucket per clien
 
 ## Deploys and in-flight chats
 
-arq cancels running jobs on SIGTERM; `stop_grace_period` only covers shutdown hooks. A chat generation in flight during `docker compose up -d` is not resumed: its run stays `streaming` until `recover_chat_runs` fails it after `RECOVER_STREAMING_AFTER` (660 s), after which the owner can resend. A prompt-recovery shutdown hook is not implemented because it needs changes inside `modules/chat/`; schedule deploys when no chat is generating. Main-worker jobs are retried automatically.
+arq cancels running jobs on SIGTERM; `stop_grace_period` only covers shutdown hooks. On SIGTERM (compose `stop_grace_period` is 30 s) a chat run that has published nothing returns to `pending` and is re-enqueued within about 15-30 s. A run that has already published content is failed immediately, and the owner can resend. A run killed without the hook (SIGKILL or OOM) is failed by `recover_chat_runs` after `RECOVER_STREAMING_AFTER` (660 s). Pending runs not updated for 15 minutes (for example after a long chat-worker outage) are failed instead of re-enqueued. Main-worker jobs are retried automatically.
+
+## Known ceilings
+
+- **Global privacy lock.** Every chat flush (10 Hz per active chat, `STREAM_FLUSH_SECONDS = 0.1`), every SSE batch publish and every export takes the exclusive owner-wide advisory lock. If waits grow, raise `STREAM_FLUSH_SECONDS` to 0.25 (2.5x fewer lock acquisitions, at most 150 ms more delta latency); the real fix is shared locks for chat/SSE readers.
+- **Exports hold the lock** through collection, rendering and the final fences, so chat streaming pauses during an export.
+- **MCP registry is per API process.** With `WEB_CONCURRENCY=2` a connection refresh updates only the process that served it; the other process keeps its startup registry until restart. Execution re-checks the database, so it is safe but inconsistent.
+- **Redis `noeviction` at 256 MB.** When Redis is full, login fails closed, arq enqueue fails (chat stays pending until recovery) and gateway leases fail. Alert on `components.redis.memory`.
 
 ## Realtime event stream
 
@@ -93,7 +101,7 @@ After successful activation, retain chat_link_required when rolling back applica
 
 ### Model gateway
 
-Before enabling OmniRoute, set `AI_ALLOWED_ENDPOINT_HOSTS` to exact hostnames or `host:port` entries and `AI_ALLOWED_ENDPOINT_CIDRS` to the approved IPv4/IPv6 CIDRs in the protected deployment environment. Both lists are required: every DNS answer must fall within the approved CIDRs, and the client connects to a checked numeric address while retaining the original Host and TLS hostname. Empty CIDR policy denies gateway connections. Include a specific private CIDR for a self-hosted gateway; do not use broad private ranges unless the deployment operator intends to authorize them. Redirects and environment proxy variables are disabled for these SDK requests. A private certificate authority must be configured explicitly in the trusted TLS context; certificate verification stays enabled.
+Before enabling OmniRoute or a configured web-search endpoint, set `AI_ALLOWED_ENDPOINT_HOSTS` to exact hostnames or `host:port` entries and `AI_ALLOWED_ENDPOINT_CIDRS` to the approved IPv4/IPv6 CIDRs in the protected deployment environment. Both lists are required: every DNS answer must fall within the approved CIDRs, and the client connects to a checked numeric address while retaining the original Host and TLS hostname. Empty CIDR policy denies gateway connections. Include a specific private CIDR for a self-hosted gateway; do not use broad private ranges unless the deployment operator intends to authorize them. Redirects and environment proxy variables are disabled for these SDK requests. DNS resolution, the TCP connect and the TLS handshake are each bounded to 5 s (at most 15 s per attempt, 30 s over the 2 attempts). Lock order: a gateway slot is taken first, and database locks (the Memory privacy lock and evidence row locks) are taken only inside `before_send`, so a lock is never held while waiting for a slot; the lock is held per attempt, from `before_send` until `after_send` runs once the request body is written, so the worst-case hold is one attempt's connect phases (at most 15 s) plus the body write, and a failed first attempt releases it before the retry. `MODEL_GATEWAY_SLOTS` (default 24) caps concurrent model calls across the api, worker and chat-worker; a chat stream holds one slot for its whole answer and waits up to 120 s for it (other calls wait 10 s), so keep it above chat `max_jobs` plus worker `max_jobs`. A private certificate authority must be configured explicitly in the trusted TLS context; certificate verification stays enabled.
 
 ### Web search
 

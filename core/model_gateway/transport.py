@@ -11,6 +11,9 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+# The send fence holds the privacy lock through resolution, so DNS must fail fast.
+DNS_TIMEOUT_SECONDS = 5.0
+
 # Set by the gateway around one SDK call only when the caller passed ``after_send``; read by
 # ApprovedEndpointTransport in the caller's task (httpx/httpcore never hop tasks).
 body_sent: ContextVar[Callable[[], Awaitable[None]] | None] = ContextVar("body_sent", default=None)
@@ -147,14 +150,17 @@ class ApprovedEndpointTransport(httpx.AsyncBaseTransport):
             addresses = [_address(request_host)]
         else:
             try:
-                answers = await asyncio.get_running_loop().getaddrinfo(
-                    request_host,
-                    self._port,
-                    family=socket.AF_UNSPEC,
-                    type=socket.SOCK_STREAM,
-                    proto=socket.IPPROTO_TCP,
+                answers = await asyncio.wait_for(
+                    asyncio.get_running_loop().getaddrinfo(
+                        request_host,
+                        self._port,
+                        family=socket.AF_UNSPEC,
+                        type=socket.SOCK_STREAM,
+                        proto=socket.IPPROTO_TCP,
+                    ),
+                    DNS_TIMEOUT_SECONDS,
                 )
-            except OSError as exc:
+            except (OSError, TimeoutError) as exc:
                 raise EndpointNetworkPolicyError("Gateway address resolution failed") from exc
             addresses = []
             for answer in answers:

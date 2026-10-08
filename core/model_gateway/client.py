@@ -5,7 +5,7 @@ import random
 import secrets
 import time
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
-from contextlib import aclosing, asynccontextmanager
+from contextlib import AbstractAsyncContextManager, aclosing, asynccontextmanager
 from typing import Any, cast
 
 import httpx
@@ -15,6 +15,7 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import RedisError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
+from core.config import Settings
 from core.model_gateway.cache import capability_key
 from core.model_gateway.policy import may_send
 from core.model_gateway.schemas import ModelMapping, RequestPolicy
@@ -22,8 +23,11 @@ from core.model_gateway.transport import EndpointNetworkPolicyError, approved_ht
 from core.telemetry import record_model_call
 
 _LEASE_PREFIX = "bbd:model-gateway:slot:"
-_SLOTS = 8
+_SLOTS = Settings().model_gateway_slots  # MODEL_GATEWAY_SLOTS, read once per process
 _LEASE_WAIT_SECONDS = 10.0
+# A stream holds its slot for the whole generation, so it queues longer than short calls (no DB locks held while waiting).
+_STREAM_LEASE_WAIT_SECONDS = 120.0
+_CONNECT_TIMEOUT_SECONDS = 5.0
 _LEASE_TTL_SECONDS = 60
 _LEASE_REFRESH_SECONDS = 20.0
 _REFRESH = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('pexpire', KEYS[1], ARGV[2]) else return 0 end"
@@ -31,6 +35,12 @@ _REFRESH = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('pex
 _ACQUIRE = "for i, k in ipairs(KEYS) do if redis.call('set', k, ARGV[1], 'NX', 'PX', ARGV[2]) then return i - 1 end end return -1"
 # Token-checked; one key (normal release) or all slots (sweep after an acquire cut short mid-flight).
 _RELEASE = "local n = 0 for _, k in ipairs(KEYS) do if redis.call('get', k) == ARGV[1] then n = n + redis.call('del', k) end end return n"
+
+
+def _raise_if_policy_denied(exc: BaseException) -> None:
+    """The SDK wraps transport errors as APIConnectionError; surface a network-policy denial without retrying."""
+    if isinstance(exc.__cause__, EndpointNetworkPolicyError):
+        raise ModelGatewayError("Model gateway network policy denied the destination") from exc
 
 
 class ModelGatewayError(RuntimeError):
@@ -87,8 +97,16 @@ class ModelGateway:
             except RedisError:
                 pass
 
+    def _slot(self) -> AbstractAsyncContextManager[None]:
+        """Lease a gateway slot with the default (short) acquisition wait."""
+        return self._lease(_LEASE_WAIT_SECONDS)
+
+    def _timeout(self) -> httpx.Timeout:
+        """Overall timeout with a short connect bound so a silent-drop host fails fast."""
+        return httpx.Timeout(self.timeout_seconds, connect=min(_CONNECT_TIMEOUT_SECONDS, self.timeout_seconds))
+
     @asynccontextmanager
-    async def _slot(self) -> AsyncIterator[None]:
+    async def _lease(self, wait_seconds: float) -> AsyncIterator[None]:
         """Acquire one of the Redis-backed gateway leases (bounded wait), hold it with a refreshed TTL, release only our token.
 
         The timeout bounds lease acquisition only; the body runs outside it.
@@ -100,7 +118,7 @@ class ModelGateway:
         refresher: asyncio.Task[None] | None = None
         try:
             try:
-                async with asyncio.timeout(_LEASE_WAIT_SECONDS):
+                async with asyncio.timeout(wait_seconds):
                     while key is None:
                         attempted = True
                         try:
@@ -175,7 +193,7 @@ class ModelGateway:
             async with AsyncOpenAI(
                 base_url=base_url,
                 api_key=self.api_key or "not-configured",
-                timeout=self.timeout_seconds,
+                timeout=self._timeout(),
                 max_retries=0,
                 http_client=self._http_client(base_url),
             ) as client:
@@ -206,6 +224,7 @@ class ModelGateway:
                             if after_send is not None:
                                 await after_send()
                     except (APITimeoutError, APIConnectionError) as exc:
+                        _raise_if_policy_denied(exc)
                         if attempt == 0:
                             continue
                         raise ModelGatewayError("Model gateway request failed") from exc
@@ -217,8 +236,6 @@ class ModelGateway:
                         if exc.status_code in {400, 404, 405, 422}:
                             raise CapabilityUnsupported("The configured gateway rejected this capability") from exc
                         raise ModelGatewayError(f"Model gateway returned HTTP {exc.status_code}") from exc
-                    except EndpointNetworkPolicyError as exc:
-                        raise ModelGatewayError("Model gateway network policy denied the destination") from exc
                     if hasattr(response, "model_dump"):
                         return response.model_dump(mode="json", exclude_none=True)
                     if isinstance(response, dict):
@@ -247,14 +264,13 @@ class ModelGateway:
             if self.before_send is not None:
                 await self.before_send()
             async with AsyncOpenAI(base_url=base_url, api_key=self.api_key,
-                                   timeout=self.timeout_seconds, max_retries=0,
+                                   timeout=self._timeout(), max_retries=0,
                                    http_client=self._http_client(base_url)) as client:
                 try:
                     page = await client.models.list()
                 except (APIConnectionError, APITimeoutError, APIStatusError) as exc:
+                    _raise_if_policy_denied(exc)
                     raise ModelGatewayError("Model gateway discovery failed") from exc
-                except EndpointNetworkPolicyError as exc:
-                    raise ModelGatewayError("Model gateway network policy denied the destination") from exc
                 model_ids: list[str] = [item.id for item in page.data if isinstance(item.id, str) and item.id]
                 return model_ids
 
@@ -338,12 +354,12 @@ class ModelGateway:
                     or capability_result.get("model") != mapping.model
                     or capability_result.get("version") != mapping.version):
                 raise ModelGatewayError("Streaming capability has not been verified")
-        async with self._slot():
+        async with self._lease(_STREAM_LEASE_WAIT_SECONDS):
             base_url = self.base_url if self.base_url.endswith("/v1") else f"{self.base_url}/v1"
             async with AsyncOpenAI(
                 base_url=base_url,
                 api_key=self.api_key or "not-configured",
-                timeout=self.timeout_seconds,
+                timeout=self._timeout(),
                 max_retries=0,
                 http_client=self._http_client(base_url),
             ) as client:
@@ -375,6 +391,7 @@ class ModelGateway:
                         yield "data: [DONE]"
                         return
                     except (APITimeoutError, APIConnectionError, TimeoutError) as exc:
+                        _raise_if_policy_denied(exc)
                         if attempt == 1 or emitted:
                             raise ModelGatewayError("Model gateway stream failed") from exc
                     except RedisError as exc:
@@ -387,8 +404,6 @@ class ModelGateway:
                         if exc.status_code in {400, 404, 405, 422}:
                             raise CapabilityUnsupported("The configured gateway rejected streaming") from exc
                         raise ModelGatewayError(f"Model gateway returned HTTP {exc.status_code}") from exc
-                    except EndpointNetworkPolicyError as exc:
-                        raise ModelGatewayError("Model gateway network policy denied the destination") from exc
 
     async def embed(
         self, alias: str, mapping: ModelMapping | None, policy: RequestPolicy,

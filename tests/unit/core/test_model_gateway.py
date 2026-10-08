@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from openai import APIStatusError, APITimeoutError
+from openai import APIConnectionError, APIStatusError, APITimeoutError
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import RedisError
 
@@ -454,7 +454,7 @@ class TestModelGatewayCapacityAndTimeouts:
             live -= 1
             return "ok"
 
-        with patch("core.model_gateway.client._LEASE_WAIT_SECONDS", 0.2):
+        with patch("core.model_gateway.client._LEASE_WAIT_SECONDS", 0.2),              patch("core.model_gateway.client._SLOTS", 8):
             results = await asyncio.gather(*(gw._with_slot(work) for _ in range(9)), return_exceptions=True)
         errors = [r for r in results if isinstance(r, ModelGatewayError)]
         assert peak == 8 and results.count("ok") == 8
@@ -858,3 +858,110 @@ class TestBodySentHook:
             await gw.chat("fast", _MAPPING, _POLICY, [], before_send=before, after_send=after)
         assert during == {"before": None, "create": after}
         assert body_sent.get() is None
+
+
+class TestG1GatewayTimeouts:
+    """P2-1/P2-2: configurable slots, long stream lease wait, short connect and DNS bounds."""
+
+    def test_slots_default_is_24(self) -> None:
+        from core.config import Settings
+        assert Settings.model_fields["model_gateway_slots"].default == 24
+
+    @pytest.mark.asyncio
+    async def test_stream_uses_its_own_lease_wait_not_the_short_one(self) -> None:
+        gw = _lease_gateway(_LeaseRedis())
+        with patch("core.model_gateway.client._SLOTS", 1),              patch("core.model_gateway.client._LEASE_WAIT_SECONDS", 30.0),              patch("core.model_gateway.client._STREAM_LEASE_WAIT_SECONDS", 0.2):
+            async with gw._slot():
+                t0 = time.monotonic()
+                with pytest.raises(ModelGatewayError, match="capacity"):
+                    await gw.stream("fast", _MAPPING, _POLICY, [], probe=True).__anext__()
+                assert time.monotonic() - t0 < 5  # stream wait (0.2 s), not the 30 s call wait
+
+    @pytest.mark.asyncio
+    async def test_short_calls_keep_short_wait_while_stream_wait_is_long(self) -> None:
+        gw = _lease_gateway(_LeaseRedis())
+        with patch("core.model_gateway.client._SLOTS", 1),              patch("core.model_gateway.client._LEASE_WAIT_SECONDS", 0.1),              patch("core.model_gateway.client._STREAM_LEASE_WAIT_SECONDS", 30.0):
+            async with gw._slot():
+                with pytest.raises(ModelGatewayError, match="capacity"):
+                    await gw._with_slot(lambda: asyncio.sleep(0))
+
+    def test_connect_timeout_is_bounded_to_five_seconds(self) -> None:
+        t = _lease_gateway(_LeaseRedis(), timeout=180)._timeout()
+        assert t.connect == 5.0 and t.read == 180
+        assert _lease_gateway(_LeaseRedis(), timeout=2)._timeout().connect == 2
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("op", ["chat", "stream", "discover"])
+    async def test_sdk_receives_bounded_connect_timeout(self, op: str) -> None:
+        seen: dict[str, Any] = {}
+
+        @asynccontextmanager
+        async def fake_openai(*_a: object, **k: Any):  # type: ignore[no-untyped-def]
+            seen.update(k)
+            raise ModelGatewayError("stop")
+            yield
+
+        gw = _lease_gateway(_LeaseRedis(), timeout=180)
+        calls = {
+            "chat": lambda: gw.chat("fast", _MAPPING, _POLICY, [], probe=True),
+            "stream": lambda: gw.stream("fast", _MAPPING, _POLICY, [], probe=True).__anext__(),
+            "discover": lambda: gw.discover_models(),
+        }
+        with patch("core.model_gateway.client.AsyncOpenAI", side_effect=fake_openai),              patch.object(gw, "_http_client", return_value=MagicMock()), pytest.raises(ModelGatewayError):
+            await calls[op]()
+        assert seen["timeout"].connect == 5.0
+
+    @pytest.mark.asyncio
+    async def test_waiting_stream_proceeds_when_slot_is_released(self) -> None:
+        gw = _lease_gateway(_LeaseRedis())
+        reached: list[bool] = []
+
+        @asynccontextmanager
+        async def fake_openai(*_a: object, **_k: Any):  # type: ignore[no-untyped-def]
+            reached.append(True)
+            raise ModelGatewayError("stop")
+            yield
+
+        async def hold() -> None:
+            async with gw._slot():
+                await asyncio.sleep(0.3)
+
+        with patch("core.model_gateway.client._SLOTS", 1),              patch("core.model_gateway.client._STREAM_LEASE_WAIT_SECONDS", 5.0),              patch("core.model_gateway.client.AsyncOpenAI", side_effect=fake_openai),              patch.object(gw, "_http_client", return_value=MagicMock()):
+            holder = asyncio.create_task(hold())
+            await asyncio.sleep(0.05)
+            with pytest.raises(ModelGatewayError, match="stop"):
+                await gw.stream("fast", _MAPPING, _POLICY, [], probe=True).__anext__()
+            await holder
+        assert reached
+
+    @pytest.mark.asyncio
+    async def test_policy_denial_wrapped_by_sdk_is_not_retried(self) -> None:
+        from core.model_gateway.transport import EndpointNetworkPolicyError
+
+        cause = EndpointNetworkPolicyError("denied")
+        err = APIConnectionError(request=httpx.Request("POST", "https://x/v1/chat/completions"))
+        err.__cause__ = cause
+        create = AsyncMock(side_effect=err)
+        gw = _lease_gateway(_LeaseRedis())
+        with patch("core.model_gateway.client.AsyncOpenAI", side_effect=_fake_openai_with(create)),              patch.object(gw, "_http_client", return_value=MagicMock()),              pytest.raises(ModelGatewayError, match="network policy denied"):
+            await gw.chat("fast", _MAPPING, _POLICY, [], probe=True)
+        assert create.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_dns_resolution_timeout_maps_to_policy_error(self) -> None:
+        from core.model_gateway import transport as tr
+
+        class Delegate(httpx.AsyncBaseTransport):
+            async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+                raise AssertionError
+
+        t = tr.ApprovedEndpointTransport(httpx.URL("http://gw.example:80"), ("10.0.0.0/8",), Delegate())
+
+        async def hang(*_a: object, **_k: object) -> None:
+            await asyncio.sleep(30)
+
+        loop = asyncio.get_running_loop()
+        t0 = time.monotonic()
+        with patch.object(tr, "DNS_TIMEOUT_SECONDS", 0.1), patch.object(loop, "getaddrinfo", hang),              pytest.raises(tr.EndpointNetworkPolicyError, match="resolution"):
+            await t.handle_async_request(httpx.Request("GET", "http://gw.example:80/"))
+        assert time.monotonic() - t0 < 2
