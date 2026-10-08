@@ -8,8 +8,11 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import HTTPException
 
 from core.realtime import ReplayDraft, commit_with_replay, make_graph_change
+from core.workspaces import public as workspaces
+from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
 from modules.knowledge.documents import public as documents
 from modules.knowledge.entities import public as entities
 from modules.knowledge.entities.models import (
@@ -38,6 +41,32 @@ from modules.timeline import public as timeline
 MAX_CORRECTION_ENTITIES = 100
 MAX_CORRECTION_MEMBERSHIPS = 200
 MAX_CORRECTION_EVIDENCE_REFS = 100
+
+
+def _actor(scope: Scope) -> int:
+    """Return the authenticated workspace owner or durable job actor."""
+    return scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
+
+
+async def _admit(
+    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
+    lock: bool = False, expected: AccessFence | None = None,
+) -> AccessFence:
+    """Admit the owner workspace before correction discovery and lock acquisition."""
+    if not isinstance(scope, (WorkspaceContext, InternalJobScope)):
+        raise TypeError("An explicit correction workspace scope is required")
+    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
+    if type(multi_workspace_enabled) is not bool:
+        raise TypeError("The configured multi-workspace feature flag must be a boolean")
+    if lock:
+        return await workspaces.lock_access_fence(
+            session, scope=scope, expected=expected,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+    return await workspaces.read_access_fence(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
 
 
 class CorrectionConflictError(ValueError):
@@ -151,35 +180,55 @@ def _conflict(code: str, message: str, *, entity_ids: list[UUID] = [],  # noqa: 
 
 
 async def _discover(
-    session: AsyncSession, entity_ids: list[UUID], *, include_target_memberships: bool = False
+    session: AsyncSession, entity_ids: list[UUID], *, scope: Scope,
+    include_target_memberships: bool = False,
 ) -> _Closure:
     """Read and bound the merge/split support graph before acquiring its locks."""
     ids = sorted(set(entity_ids), key=str)
     entity_rows = list((await session.scalars(
-        select(Entity).where(Entity.id.in_(ids)).order_by(Entity.id).execution_options(populate_existing=True)
+        select(Entity).where(Entity.workspace_id == scope.workspace_id, Entity.id.in_(ids))
+        .order_by(Entity.id).execution_options(populate_existing=True)
     )).all()) if ids else []
     if len(entity_rows) != len(ids):
         raise _conflict("entity_missing", "A correction entity no longer exists", entity_ids=ids)
     source_memberships = list((await session.scalars(
-        select(EntityEvidenceMembership).where(EntityEvidenceMembership.entity_id == ids[0]).order_by(EntityEvidenceMembership.id).limit(MAX_CORRECTION_MEMBERSHIPS + 1).execution_options(populate_existing=True)
+        select(EntityEvidenceMembership).where(
+            EntityEvidenceMembership.workspace_id == scope.workspace_id,
+            EntityEvidenceMembership.entity_id == ids[0],
+        ).order_by(EntityEvidenceMembership.id).limit(MAX_CORRECTION_MEMBERSHIPS + 1).execution_options(populate_existing=True)
     )).all()) if ids else []
     if include_target_memberships and len(ids) > 1:
         target_memberships = list((await session.scalars(
-            select(EntityEvidenceMembership).where(EntityEvidenceMembership.entity_id == ids[1]).order_by(EntityEvidenceMembership.id).limit(MAX_CORRECTION_MEMBERSHIPS + 1).execution_options(populate_existing=True)
+            select(EntityEvidenceMembership).where(
+                EntityEvidenceMembership.workspace_id == scope.workspace_id,
+                EntityEvidenceMembership.entity_id == ids[1],
+            ).order_by(EntityEvidenceMembership.id).limit(MAX_CORRECTION_MEMBERSHIPS + 1).execution_options(populate_existing=True)
         )).all())
         source_memberships.extend(target_memberships)
     if len(source_memberships) > MAX_CORRECTION_MEMBERSHIPS:
         raise _conflict("correction_too_large", "Correction membership closure exceeds 200", entity_ids=ids)
     aliases = list((await session.scalars(
-        select(EntityAlias).where(EntityAlias.entity_id.in_(ids)).order_by(EntityAlias.id).limit(MAX_CORRECTION_MEMBERSHIPS + 1).execution_options(populate_existing=True)
+        select(EntityAlias).join(Entity, Entity.id == EntityAlias.entity_id).where(
+            Entity.workspace_id == scope.workspace_id, EntityAlias.entity_id.in_(ids),
+        ).order_by(EntityAlias.id).limit(MAX_CORRECTION_MEMBERSHIPS + 1).execution_options(populate_existing=True)
     )).all()) if ids else []
     if len(aliases) > MAX_CORRECTION_MEMBERSHIPS:
         raise _conflict("correction_too_large", "Correction alias closure exceeds 200", entity_ids=ids)
     alias_supports = list((await session.scalars(
-        select(EntityAliasEvidence).where(EntityAliasEvidence.alias_id.in_([item.id for item in aliases])).order_by(EntityAliasEvidence.id).limit(MAX_CORRECTION_MEMBERSHIPS + 1).execution_options(populate_existing=True)
+        select(EntityAliasEvidence).join(
+            EntityEvidenceMembership, EntityEvidenceMembership.id == EntityAliasEvidence.membership_id,
+        ).where(
+            EntityEvidenceMembership.workspace_id == scope.workspace_id,
+            EntityAliasEvidence.alias_id.in_([item.id for item in aliases]),
+        ).order_by(EntityAliasEvidence.id).limit(MAX_CORRECTION_MEMBERSHIPS + 1).execution_options(populate_existing=True)
     )).all()) if aliases else []
     field_supports = list((await session.scalars(
-        select(EntityFieldEvidence).where(EntityFieldEvidence.entity_id.in_(ids)).order_by(EntityFieldEvidence.id).limit(MAX_CORRECTION_MEMBERSHIPS + 1).execution_options(populate_existing=True)
+        select(EntityFieldEvidence).join(
+            EntityEvidenceMembership, EntityEvidenceMembership.id == EntityFieldEvidence.membership_id,
+        ).where(
+            EntityEvidenceMembership.workspace_id == scope.workspace_id,
+            EntityFieldEvidence.entity_id.in_(ids),
+        ).order_by(EntityFieldEvidence.id).limit(MAX_CORRECTION_MEMBERSHIPS + 1).execution_options(populate_existing=True)
     )).all()) if ids else []
     if len(alias_supports) > MAX_CORRECTION_MEMBERSHIPS or len(field_supports) > MAX_CORRECTION_MEMBERSHIPS:
         raise _conflict("correction_too_large", "Correction derived support closure exceeds 200", entity_ids=ids)
@@ -193,6 +242,7 @@ async def _discover(
     redirect_frontier = set(ids)
     while redirect_frontier:
         children = list((await session.scalars(select(EntityRedirect).where(
+            EntityRedirect.workspace_id == scope.workspace_id,
             EntityRedirect.target_entity_id.in_(redirect_frontier)
         ).order_by(EntityRedirect.old_entity_id).limit(MAX_CORRECTION_ENTITIES + 1).execution_options(populate_existing=True))).all())
         if len(children) > MAX_CORRECTION_ENTITIES:
@@ -212,12 +262,19 @@ async def _discover(
     redirect_entity_ids = set(redirect_rows_by_old_id)
     if redirect_entity_ids:
         retained_memberships = list((await session.scalars(select(EntityEvidenceMembership.id).where(
+            EntityEvidenceMembership.workspace_id == scope.workspace_id,
             EntityEvidenceMembership.entity_id.in_(redirect_entity_ids)
         ).order_by(EntityEvidenceMembership.id).limit(1))).all())
-        retained_aliases = list((await session.scalars(select(EntityAlias.id).where(
+        retained_aliases = list((await session.scalars(select(EntityAlias.id).join(
+            Entity, Entity.id == EntityAlias.entity_id,
+        ).where(
+            Entity.workspace_id == scope.workspace_id,
             EntityAlias.entity_id.in_(redirect_entity_ids)
         ).order_by(EntityAlias.id).limit(1))).all())
-        retained_fields = list((await session.scalars(select(EntityFieldEvidence.id).where(
+        retained_fields = list((await session.scalars(select(EntityFieldEvidence.id).join(
+            EntityEvidenceMembership, EntityEvidenceMembership.id == EntityFieldEvidence.membership_id,
+        ).where(
+            EntityEvidenceMembership.workspace_id == scope.workspace_id,
             EntityFieldEvidence.entity_id.in_(redirect_entity_ids)
         ).order_by(EntityFieldEvidence.id).limit(1))).all())
         if retained_memberships or retained_aliases or retained_fields:
@@ -226,7 +283,9 @@ async def _discover(
     if len(entity_closure_ids) > MAX_CORRECTION_ENTITIES:
         raise _conflict("correction_too_large", "Correction redirect closure exceeds 100 entities", entity_ids=entity_closure_ids)
     try:
-        relationship_refs = await relationships.list_correction_relationship_refs(session, entity_closure_ids)
+        relationship_refs = await relationships.list_correction_relationship_refs(
+            session, entity_closure_ids, scope=scope,
+        )
     except ValueError as exc:
         raise _conflict("correction_too_large", str(exc), entity_ids=entity_closure_ids) from exc
     closure_entity_ids = sorted(set(entity_closure_ids) | {
@@ -236,7 +295,9 @@ async def _discover(
         raise _conflict("correction_too_large", "Correction neighbor closure exceeds 100 entities", entity_ids=closure_entity_ids)
     if closure_entity_ids != ids:
         entity_rows = list((await session.scalars(
-            select(Entity).where(Entity.id.in_(closure_entity_ids)).order_by(Entity.id).execution_options(populate_existing=True)
+            select(Entity).where(
+                Entity.workspace_id == scope.workspace_id, Entity.id.in_(closure_entity_ids),
+            ).order_by(Entity.id).execution_options(populate_existing=True)
         )).all())
         if len(entity_rows) != len(closure_entity_ids):
             raise _conflict("entity_missing", "A correction neighbor no longer exists", entity_ids=closure_entity_ids)
@@ -264,7 +325,7 @@ async def _discover(
     if len(document_ids) > MAX_CORRECTION_EVIDENCE_REFS:
         raise _conflict("correction_too_large", "Correction document lock closure exceeds 100", entity_ids=closure_entity_ids)
     try:
-        timeline_event_ids = await timeline.correction_event_ids(session, closure_entity_ids)
+        timeline_event_ids = await timeline.correction_event_ids(session, closure_entity_ids, scope=scope)
     except ValueError as exc:
         raise _conflict("correction_too_large", str(exc), entity_ids=closure_entity_ids) from exc
     return _Closure(
@@ -344,9 +405,11 @@ async def _validate_split_request(
     return source, selected
 
 
-async def _discover_delete_closure(session: AsyncSession, entity_id: UUID) -> _DeleteClosure:
+async def _discover_delete_closure(session: AsyncSession, entity_id: UUID, *, scope: Scope) -> _DeleteClosure:
     """Discover bounded redirect, evidence, alias, decision, and incident-edge rows."""
-    root = await session.scalar(select(Entity).where(Entity.id == entity_id).execution_options(populate_existing=True))
+    root = await session.scalar(select(Entity).where(
+        Entity.id == entity_id, Entity.workspace_id == scope.workspace_id,
+    ).execution_options(populate_existing=True))
     if root is None:
         raise _conflict("entity_missing", "Entity no longer exists", entity_ids=[entity_id])
     entity_ids = {entity_id}
@@ -354,7 +417,10 @@ async def _discover_delete_closure(session: AsyncSession, entity_id: UUID) -> _D
     redirect_rows: dict[UUID, EntityRedirect] = {}
     while frontier:
         children = list((await session.scalars(
-            select(EntityRedirect).where(EntityRedirect.target_entity_id.in_(frontier))
+            select(EntityRedirect).where(
+                EntityRedirect.workspace_id == scope.workspace_id,
+                EntityRedirect.target_entity_id.in_(frontier),
+            )
             .order_by(EntityRedirect.old_entity_id).limit(MAX_CORRECTION_ENTITIES + 1).execution_options(populate_existing=True)
         )).all())
         if len(children) > MAX_CORRECTION_ENTITIES:
@@ -369,38 +435,56 @@ async def _discover_delete_closure(session: AsyncSession, entity_id: UUID) -> _D
             raise _conflict("deletion_too_large", "Entity redirect closure exceeds 100", entity_ids=sorted(entity_ids, key=str))
         frontier = next_frontier
     redirect_rows.update({item.old_entity_id: item for item in (await session.scalars(
-        select(EntityRedirect).where(EntityRedirect.old_entity_id.in_(entity_ids)).order_by(EntityRedirect.old_entity_id).execution_options(populate_existing=True)
+        select(EntityRedirect).where(
+            EntityRedirect.workspace_id == scope.workspace_id,
+            EntityRedirect.old_entity_id.in_(entity_ids),
+        ).order_by(EntityRedirect.old_entity_id).execution_options(populate_existing=True)
     )).all()})
     if entity_id in redirect_rows:
         if redirect_rows[entity_id].target_entity_id is None:
             raise _conflict("entity_missing", "Entity was deleted", entity_ids=[entity_id])
         raise _conflict("entity_redirected", "Only canonical entities can be deleted", entity_ids=[entity_id])
-    entity_rows = list((await session.scalars(select(Entity).where(Entity.id.in_(entity_ids)).order_by(Entity.id).execution_options(populate_existing=True))).all())
+    entity_rows = list((await session.scalars(select(Entity).where(
+        Entity.workspace_id == scope.workspace_id, Entity.id.in_(entity_ids),
+    ).order_by(Entity.id).execution_options(populate_existing=True))).all())
     if len(entity_rows) != len(entity_ids):
         raise _conflict("deletion_closure_changed", "Redirect entity disappeared during deletion discovery", entity_ids=sorted(entity_ids, key=str))
     memberships = list((await session.scalars(select(EntityEvidenceMembership).where(
+        EntityEvidenceMembership.workspace_id == scope.workspace_id,
         EntityEvidenceMembership.entity_id.in_(entity_ids)
     ).order_by(EntityEvidenceMembership.id).limit(MAX_CORRECTION_MEMBERSHIPS + 1).execution_options(populate_existing=True))).all())
-    aliases = list((await session.scalars(select(EntityAlias).where(
-        EntityAlias.entity_id.in_(entity_ids)
+    aliases = list((await session.scalars(select(EntityAlias).join(Entity, Entity.id == EntityAlias.entity_id).where(
+        Entity.workspace_id == scope.workspace_id, EntityAlias.entity_id.in_(entity_ids)
     ).order_by(EntityAlias.id).limit(MAX_CORRECTION_MEMBERSHIPS + 1).execution_options(populate_existing=True))).all())
     decisions = list((await session.scalars(select(EntityCorrectionDecision).where(
+        EntityCorrectionDecision.workspace_id == scope.workspace_id,
         or_(EntityCorrectionDecision.entity_id.in_(entity_ids), EntityCorrectionDecision.membership_id.in_(
-            select(EntityEvidenceMembership.id).where(EntityEvidenceMembership.entity_id.in_(entity_ids))
+            select(EntityEvidenceMembership.id).where(
+                EntityEvidenceMembership.workspace_id == scope.workspace_id,
+                EntityEvidenceMembership.entity_id.in_(entity_ids),
+            )
         )))
         .order_by(EntityCorrectionDecision.id).limit(MAX_CORRECTION_MEMBERSHIPS + 1).execution_options(populate_existing=True))).all())
     if len(memberships) > MAX_CORRECTION_MEMBERSHIPS or len(aliases) > MAX_CORRECTION_MEMBERSHIPS or len(decisions) > MAX_CORRECTION_MEMBERSHIPS:
         raise _conflict("deletion_too_large", "Entity deletion closure exceeds 200 owned rows", entity_ids=sorted(entity_ids, key=str))
     alias_supports = list((await session.scalars(select(EntityAliasEvidence).where(
-        EntityAliasEvidence.alias_id.in_([item.id for item in aliases])
+        EntityAliasEvidence.alias_id.in_([item.id for item in aliases]),
+        EntityAliasEvidence.membership_id.in_(select(EntityEvidenceMembership.id).where(
+            EntityEvidenceMembership.workspace_id == scope.workspace_id,
+        )),
     ).order_by(EntityAliasEvidence.id).limit(MAX_CORRECTION_MEMBERSHIPS + 1).execution_options(populate_existing=True))).all()) if aliases else []
     field_supports = list((await session.scalars(select(EntityFieldEvidence).where(
-        EntityFieldEvidence.entity_id.in_(entity_ids)
+        EntityFieldEvidence.entity_id.in_(entity_ids),
+        EntityFieldEvidence.membership_id.in_(select(EntityEvidenceMembership.id).where(
+            EntityEvidenceMembership.workspace_id == scope.workspace_id,
+        )),
     ).order_by(EntityFieldEvidence.id).limit(MAX_CORRECTION_MEMBERSHIPS + 1).execution_options(populate_existing=True))).all())
     if len(alias_supports) > MAX_CORRECTION_MEMBERSHIPS or len(field_supports) > MAX_CORRECTION_MEMBERSHIPS:
         raise _conflict("deletion_too_large", "Entity deletion support closure exceeds 200", entity_ids=sorted(entity_ids, key=str))
     try:
-        relationship_refs = await relationships.list_correction_relationship_refs(session, sorted(entity_ids, key=str))
+        relationship_refs = await relationships.list_correction_relationship_refs(
+            session, sorted(entity_ids, key=str), scope=scope,
+        )
     except ValueError as exc:
         raise _conflict("deletion_too_large", str(exc), entity_ids=sorted(entity_ids, key=str)) from exc
     neighbor_ids = {endpoint for item in relationship_refs for endpoint in (item.source_entity_id, item.target_entity_id)}
@@ -408,10 +492,12 @@ async def _discover_delete_closure(session: AsyncSession, entity_id: UUID) -> _D
     if len(lock_entity_ids) > MAX_CORRECTION_ENTITIES:
         raise _conflict("deletion_too_large", "Entity deletion graph closure exceeds 100", entity_ids=sorted(neighbor_ids | entity_ids, key=str), relationship_ids=[item.id for item in relationship_refs])
     try:
-        timeline_event_ids = await timeline.correction_event_ids(session, lock_entity_ids)
+        timeline_event_ids = await timeline.correction_event_ids(session, lock_entity_ids, scope=scope)
     except ValueError as exc:
         raise _conflict("deletion_too_large", str(exc), entity_ids=lock_entity_ids) from exc
-    lock_entity_rows = list((await session.scalars(select(Entity).where(Entity.id.in_(lock_entity_ids)).order_by(Entity.id).execution_options(populate_existing=True))).all())
+    lock_entity_rows = list((await session.scalars(select(Entity).where(
+        Entity.workspace_id == scope.workspace_id, Entity.id.in_(lock_entity_ids),
+    ).order_by(Entity.id).execution_options(populate_existing=True))).all())
     if len(lock_entity_rows) != len(lock_entity_ids):
         raise _conflict("deletion_closure_changed", "An incident graph entity disappeared during deletion discovery", entity_ids=lock_entity_ids, relationship_ids=[item.id for item in relationship_refs])
     pairs = sorted({(item.document_version_id, item.chunk_id) for item in memberships} | {
@@ -437,37 +523,54 @@ async def _discover_delete_closure(session: AsyncSession, entity_id: UUID) -> _D
 
 
 async def delete_canonical_entity(
-    session: AsyncSession, entity_id: UUID, *, actor_id: int, reason: str,
+    session: AsyncSession, entity_id: UUID, *, scope: Scope, multi_workspace_enabled: bool, reason: str,
 ) -> bool:
     """Delete a canonical root and its bounded support closure with an audit record.
 
-    The owner-write route supplies authorization and ``actor_id`` for the audit.
+    The admitted workspace scope supplies actor provenance for the audit.
     The function locks and revalidates the closure, removes owned support, and
     retains cleared redirect stubs with ``target_entity_id=None`` so deleted IDs
     stay terminal. It commits audit/realtime changes; oversized, changing, or
     noncanonical closures raise ``CorrectionConflictError``.
     """
-    before = await _discover_delete_closure(session, entity_id)
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    before = await _discover_delete_closure(session, entity_id, scope=scope)
     before_signature = before.signature()
     for source_id in before.source_ids:
-        await sources.lock_source(session, source_id)
+        await sources.lock_source(
+            session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            expected_access_fence=fence,
+        )
     if before.document_ids:
         # Documents deleted before this correction are already terminal; lock
         # every retained document that still exists without requiring historical
         # chunks/sources to remain readable.
-        await documents.lock_document_ids(session, before.document_ids)
-    await entities.lock_entity_ids(session, before.lock_entity_ids)
+        await documents.lock_document_ids(
+            session, before.document_ids, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+    await entities.lock_entity_ids(
+        session, before.lock_entity_ids, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
     redirect_ids = sorted({item.old_entity_id for item in before.redirect_rows}, key=str)
     if redirect_ids:
         await session.scalars(select(EntityRedirect.old_entity_id).where(
+            EntityRedirect.workspace_id == scope.workspace_id,
             EntityRedirect.old_entity_id.in_(redirect_ids)
         ).order_by(EntityRedirect.old_entity_id).with_for_update())
     try:
-        relationship_ids, support_ids = await relationships.lock_delete_closure(session, before.entity_ids)
+        relationship_ids, support_ids = await relationships.lock_delete_closure(
+            session, before.entity_ids, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
     except ValueError as exc:
         raise _conflict("deletion_too_large", str(exc), entity_ids=before.entity_ids, relationship_ids=before.relationship_ids) from exc
-    await timeline.lock_event_ids(session, before.timeline_event_ids)
-    after = await _discover_delete_closure(session, entity_id)
+    await timeline.lock_event_ids(
+        session, before.timeline_event_ids, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    after = await _discover_delete_closure(session, entity_id, scope=scope)
     if before_signature != after.signature() or relationship_ids != after.relationship_ids:
         raise _conflict("deletion_closure_changed", "Incident relationships changed while locks were acquired; retry", entity_ids=after.entity_ids, relationship_ids=relationship_ids)
     member_ids = sorted({item.id for item in after.memberships} | {
@@ -475,8 +578,11 @@ async def delete_canonical_entity(
         for identifier in (support.source_membership_id, support.target_membership_id) if identifier is not None
     } | {item.membership_id for item in after.alias_supports} | {item.membership_id for item in after.field_supports}, key=str)
     if member_ids:
-        await entities.get_membership_refs(session, member_ids, for_write=True)
-    final = await _discover_delete_closure(session, entity_id)
+        await entities.get_membership_refs(
+            session, member_ids, for_write=True, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+    final = await _discover_delete_closure(session, entity_id, scope=scope)
     if before_signature != final.signature():
         raise _conflict(
             "deletion_closure_changed",
@@ -485,14 +591,20 @@ async def delete_canonical_entity(
             relationship_ids=final.relationship_ids,
         )
     after = final
-    await _temporal_before_relationships(session, relationship_ids)
+    await _temporal_before_relationships(session, relationship_ids, scope=scope)
     await _temporal_correction(session, after.memberships,
-                               [(row.id, row.revision) for row in after.entity_rows], "deleted", deleted=True)
+                               [(row.id, row.revision) for row in after.entity_rows], "deleted",
+                               scope=scope, multi_workspace_enabled=multi_workspace_enabled, deleted=True)
     try:
-        await relationships.remove_entity_closure(session, after.entity_ids, relationship_ids, support_ids)
+        await relationships.remove_entity_closure(
+            session, after.entity_ids, relationship_ids, support_ids,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
     except ValueError as exc:
         raise _conflict("deletion_closure_changed", str(exc), entity_ids=after.entity_ids, relationship_ids=relationship_ids) from exc
-    changed_timeline_ids = await timeline.remove_entity_participants(session, after.entity_ids)
+    changed_timeline_ids = await timeline.remove_entity_participants(
+        session, after.entity_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     await session.execute(delete(EntityAliasEvidence).where(EntityAliasEvidence.alias_id.in_([item.id for item in after.aliases])))
     await session.execute(delete(EntityFieldEvidence).where(EntityFieldEvidence.entity_id.in_(after.entity_ids)))
     await session.execute(delete(EntityCorrectionDecision).where(or_(
@@ -523,54 +635,80 @@ async def delete_canonical_entity(
         *(item.id for item in after.decisions),
     }, key=str)
     await entities.record_owner_action(
-        session, actor_id=actor_id, operation="entity_delete", reason=reason,
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        operation="entity_delete", reason=reason,
         affected_ids=affected_ids, revisions=previous_revisions,
     )
     await session.flush()
-    drafts: list[ReplayDraft] = [make_graph_change(entity_id=identifier, deleted=True) for identifier in after.entity_ids]
-    drafts.extend(make_graph_change(relationship_id=identifier, deleted=True) for identifier in relationship_ids)
-    drafts.extend(await timeline.revise_corrected_events(session, changed_timeline_ids, entity_id=entity_id))
-    await commit_with_replay(session, drafts)
+    drafts: list[ReplayDraft] = [make_graph_change(entity_id=identifier, deleted=True, scope=scope) for identifier in after.entity_ids]
+    drafts.extend(make_graph_change(relationship_id=identifier, deleted=True, scope=scope) for identifier in relationship_ids)
+    drafts.extend(await timeline.revise_corrected_events(session, changed_timeline_ids, entity_id=entity_id, scope=scope))
+    await commit_with_replay(
+        session, drafts, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=fence,
+    )
     return True
 
 
 async def _locked_closure(
-    session: AsyncSession, entity_ids: list[UUID], *, include_target_memberships: bool = False
+    session: AsyncSession, entity_ids: list[UUID], *, scope: Scope,
+    multi_workspace_enabled: bool, access_fence: AccessFence,
+    include_target_memberships: bool = False,
 ) -> _Closure:
     """Lock evidence owners and sorted graph rows, then reject any changed snapshot."""
-    before = await _discover(session, entity_ids, include_target_memberships=include_target_memberships)
+    before = await _discover(
+        session, entity_ids, scope=scope, include_target_memberships=include_target_memberships,
+    )
     before_signature = before.signature()
     try:
-        evidence_refs = await documents.read_evidence_refs(session, before.evidence_pairs)
+        evidence_refs = await documents.read_evidence_refs(
+            session, before.evidence_pairs, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
     except ValueError as exc:
         raise _conflict("evidence_unavailable", "Correction evidence is no longer retained", entity_ids=before.entity_ids) from exc
     source_ids = sorted(set(before.source_ids) | {item.source_id for item in evidence_refs}, key=str)
     for source_id in source_ids:
-        if await sources.lock_source(session, source_id) is None:
+        if await sources.lock_source(
+            session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            expected_access_fence=access_fence,
+        ) is None:
             raise _conflict("source_unavailable", "Correction source dependency is no longer retained", entity_ids=before.entity_ids)
     document_ids = sorted(set(before.document_ids) | {item.document_id for item in evidence_refs}, key=str)
     if document_ids:
-        await documents.lock_document_ids(session, document_ids)
+        await documents.lock_document_ids(
+            session, document_ids, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
     try:
-        verified_refs = await documents.read_evidence_refs(session, before.evidence_pairs)
+        verified_refs = await documents.read_evidence_refs(
+            session, before.evidence_pairs, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
     except ValueError as exc:
         raise _conflict("evidence_unavailable", "Correction evidence changed before locking", entity_ids=before.entity_ids) from exc
     if verified_refs != evidence_refs:
         raise _conflict("evidence_unavailable", "Correction evidence changed before locking", entity_ids=before.entity_ids)
     await session.scalars(select(Entity.id).where(
-        Entity.id.in_(before.entity_ids)
+        Entity.workspace_id == scope.workspace_id, Entity.id.in_(before.entity_ids)
     ).order_by(Entity.id).with_for_update().execution_options(populate_existing=True))
     redirect_ids = sorted({item.old_entity_id for item in before.redirect_rows}, key=str)
     if redirect_ids:
         await session.scalars(select(EntityRedirect.old_entity_id).where(
-            EntityRedirect.old_entity_id.in_(redirect_ids)
+            EntityRedirect.workspace_id == scope.workspace_id, EntityRedirect.old_entity_id.in_(redirect_ids)
         ).order_by(EntityRedirect.old_entity_id).with_for_update().execution_options(populate_existing=True))
     try:
-        await relationships.lock_correction_closure(session, before.relationship_entity_ids, set(before.relationship_ids))
+        await relationships.lock_correction_closure(
+            session, before.relationship_entity_ids, set(before.relationship_ids),
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
     except ValueError as exc:
         raise _conflict("correction_closure_changed", str(exc), entity_ids=before.entity_ids, relationship_ids=before.relationship_ids) from exc
-    await timeline.lock_event_ids(session, before.timeline_event_ids)
-    after = await _discover(session, entity_ids, include_target_memberships=include_target_memberships)
+    await timeline.lock_event_ids(
+        session, before.timeline_event_ids, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    after = await _discover(session, entity_ids, scope=scope, include_target_memberships=include_target_memberships)
     if before_signature != after.signature():
         raise _conflict("correction_closure_changed", "Correction closure changed while locks were acquired; retry", entity_ids=before.entity_ids, membership_ids=[item.id for item in before.memberships], relationship_ids=before.relationship_ids)
     memberships = sorted({item.id for item in after.memberships} | {
@@ -582,22 +720,29 @@ async def _locked_closure(
     if len(memberships) > MAX_CORRECTION_MEMBERSHIPS:
         raise _conflict("correction_too_large", "Correction membership closure exceeds 200", entity_ids=after.entity_ids)
     if memberships:
-        await entities.get_membership_refs(session, memberships, for_write=True)
-    verified = await _discover(session, entity_ids, include_target_memberships=include_target_memberships)
+        await entities.get_membership_refs(
+            session, memberships, for_write=True, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+    verified = await _discover(session, entity_ids, scope=scope, include_target_memberships=include_target_memberships)
     if before_signature != verified.signature():
         raise _conflict("correction_closure_changed", "Correction support closure changed while membership locks were acquired; retry", entity_ids=before.entity_ids, membership_ids=[item.id for item in before.memberships], relationship_ids=before.relationship_ids)
     after = verified
     return after
 
 
-async def preview_merge(session: AsyncSession, source_id: UUID, payload: EntityMergeRequest) -> EntityCorrectionPreview:
+async def preview_merge(
+    session: AsyncSession, source_id: UUID, payload: EntityMergeRequest, *,
+    scope: Scope, multi_workspace_enabled: bool,
+) -> EntityCorrectionPreview:
     """Return merge impact and conflicts without writing or locking a correction closure."""
     try:
+        await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         if source_id == payload.into_id:
             raise _conflict("self_merge", "An entity cannot be merged into itself", entity_ids=[source_id])
-        if await entities.resolve_canonical_entity_id(session, source_id) != source_id or await entities.resolve_canonical_entity_id(session, payload.into_id) != payload.into_id:
+        if await entities.resolve_canonical_entity_id(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled) != source_id or await entities.resolve_canonical_entity_id(session, payload.into_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled) != payload.into_id:
             raise _conflict("redirected_entity", "Use canonical entity IDs for corrections", entity_ids=[source_id, payload.into_id])
-        closure = await _discover(session, [source_id, payload.into_id], include_target_memberships=True)
+        closure = await _discover(session, [source_id, payload.into_id], scope=scope, include_target_memberships=True)
         await _validate_merge_request(source_id, payload, closure)
         return EntityCorrectionPreview(
             operation="merge", entity_ids=closure.entity_ids,
@@ -615,12 +760,16 @@ async def preview_merge(session: AsyncSession, source_id: UUID, payload: EntityM
         return EntityCorrectionPreview(operation="merge", entity_ids=[source_id, payload.into_id], membership_ids=[], relationship_ids=[], evidence_ref_count=0, conflicts=[conflict])
 
 
-async def preview_split(session: AsyncSession, entity_id: UUID, payload: EntitySplitRequest) -> EntityCorrectionPreview:
+async def preview_split(
+    session: AsyncSession, entity_id: UUID, payload: EntitySplitRequest, *,
+    scope: Scope, multi_workspace_enabled: bool,
+) -> EntityCorrectionPreview:
     """Return split impact and conflicts without applying the requested correction."""
     try:
-        if await entities.resolve_canonical_entity_id(session, entity_id) != entity_id:
+        await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        if await entities.resolve_canonical_entity_id(session, entity_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled) != entity_id:
             raise _conflict("redirected_entity", "Use the canonical entity ID for corrections", entity_ids=[entity_id])
-        closure = await _discover(session, [entity_id])
+        closure = await _discover(session, [entity_id], scope=scope)
         await _validate_split_request(entity_id, payload, closure)
         return EntityCorrectionPreview(
             operation="split", entity_ids=closure.entity_ids,
@@ -652,7 +801,7 @@ async def _check_future_scope(
 
 async def _record_assignments(
     session: AsyncSession, memberships: list[EntityEvidenceMembership], target_id: UUID, *,
-    actor_id: int, reason: str, future_document_id: UUID | None,
+    scope: Scope, actor_id: int, reason: str, future_document_id: UUID | None,
 ) -> None:
     """Upsert evidence- and optional document-scoped owner assignment decisions."""
     now = datetime.now(UTC)
@@ -661,11 +810,13 @@ async def _record_assignments(
         if fingerprint is None:
             continue
         old = await session.scalar(select(EntityCorrectionDecision).where(
+            EntityCorrectionDecision.workspace_id == scope.workspace_id,
             EntityCorrectionDecision.scope == "evidence",
             EntityCorrectionDecision.membership_id == membership.id,
         ).with_for_update())
         if old is None:
             session.add(EntityCorrectionDecision(
+                workspace_id=scope.workspace_id,
                 decision="assign", scope="evidence", entity_id=target_id,
                 membership_id=membership.id, match_fingerprint=fingerprint,
                 actor_id=actor_id, reason=reason, created_at=now,
@@ -676,6 +827,7 @@ async def _record_assignments(
     scoped = await _check_future_scope(future_document_id, memberships)
     for fingerprint in sorted({item.match_fingerprint for item in scoped if item.match_fingerprint is not None}):
         prior = (await session.scalars(select(EntityCorrectionDecision).where(
+            EntityCorrectionDecision.workspace_id == scope.workspace_id,
             EntityCorrectionDecision.scope == "document",
             EntityCorrectionDecision.document_id == future_document_id,
             EntityCorrectionDecision.match_fingerprint == fingerprint,
@@ -688,6 +840,7 @@ async def _record_assignments(
             rule.actor_id, rule.reason, rule.created_at = actor_id, reason, now
         else:
             session.add(EntityCorrectionDecision(
+                workspace_id=scope.workspace_id,
                 decision="assign", scope="document", entity_id=target_id,
                 document_id=future_document_id, match_fingerprint=fingerprint,
                 actor_id=actor_id, reason=reason, created_at=now,
@@ -695,7 +848,8 @@ async def _record_assignments(
 
 
 async def merge_entity(
-    session: AsyncSession, source_id: UUID, payload: EntityMergeRequest, *, actor_id: int
+    session: AsyncSession, source_id: UUID, payload: EntityMergeRequest, *,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> EntityCorrectionResult:
     """Merge two canonical entities and commit their audited support migration.
 
@@ -705,12 +859,18 @@ async def merge_entity(
     and rebinds only relationships whose support remains valid. Conflicts raise
     ``CorrectionConflictError`` and successful changes commit with graph events.
     """
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    actor_id = _actor(scope)
     if source_id == payload.into_id:
         raise _conflict("self_merge", "An entity cannot be merged into itself", entity_ids=[source_id])
-    if await entities.resolve_canonical_entity_id(session, source_id) != source_id or await entities.resolve_canonical_entity_id(session, payload.into_id) != payload.into_id:
+    if await entities.resolve_canonical_entity_id(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled) != source_id or await entities.resolve_canonical_entity_id(session, payload.into_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled) != payload.into_id:
         raise _conflict("redirected_entity", "Use canonical entity IDs for corrections", entity_ids=[source_id, payload.into_id])
-    closure = await _locked_closure(session, [source_id, payload.into_id], include_target_memberships=True)
-    await _temporal_before_relationships(session, closure.relationship_ids)
+    closure = await _locked_closure(
+        session, [source_id, payload.into_id], scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+        include_target_memberships=True,
+    )
+    await _temporal_before_relationships(session, closure.relationship_ids, scope=scope)
     source, target, memberships, target_aliases, source_aliases = await _validate_merge_request(source_id, payload, closure)
     previous_revisions: dict[str, int | None] = {str(source.id): source.revision, str(target.id): target.revision}
     for field_name in ("name", "description"):
@@ -724,6 +884,9 @@ async def merge_entity(
                 target.canonical_name = canonicalize_name(source_value) if source_value else None
             await session.execute(delete(EntityFieldEvidence).where(
                 EntityFieldEvidence.entity_id == target.id, EntityFieldEvidence.field_name == field_name,
+                EntityFieldEvidence.membership_id.in_(select(EntityEvidenceMembership.id).where(
+                    EntityEvidenceMembership.workspace_id == scope.workspace_id,
+                )),
             ))
         elif source_value and getattr(target, field_name) is None and source_origin == "derived":
             setattr(target, field_name, source_value)
@@ -767,7 +930,10 @@ async def merge_entity(
                 target_support.confidence = max(target_support.confidence, alias_support.confidence)
                 await session.delete(support)
         await session.delete(alias)
-    await _record_assignments(session, memberships, target.id, actor_id=actor_id, reason=payload.reason, future_document_id=payload.future_document_id)
+    await _record_assignments(
+        session, memberships, target.id, scope=scope, actor_id=actor_id, reason=payload.reason,
+        future_document_id=payload.future_document_id,
+    )
     for membership in memberships:
         membership.entity_id = target.id
     for support in closure.field_supports:
@@ -783,16 +949,20 @@ async def merge_entity(
         replacements = await relationships.apply_entity_merge(
             session, source.id, target.id, set(closure.relationship_ids),
             closure.relationship_entity_ids, {row.old_entity_id for row in closure.redirect_rows},
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
     except ValueError as exc:
         raise _conflict("relationship_merge_conflict", str(exc), entity_ids=[source.id, target.id], relationship_ids=closure.relationship_ids) from exc
     changed_timeline_ids = await timeline.apply_entity_merge(
         session, source_id=source.id, target_id=target.id,
-        event_ids=closure.timeline_event_ids,
+        event_ids=closure.timeline_event_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
     for redirect in closure.redirect_rows:
         redirect.target_entity_id = target.id
-    session.add(EntityRedirect(old_entity_id=source.id, target_entity_id=target.id, actor_id=actor_id, reason=" ".join(payload.reason.split()), created_at=datetime.now(UTC)))
+    session.add(EntityRedirect(
+        workspace_id=scope.workspace_id, old_entity_id=source.id, target_entity_id=target.id,
+        actor_id=actor_id, reason=" ".join(payload.reason.split()), created_at=datetime.now(UTC),
+    ))
     if source.name_origin == "derived":
         source.name = source.canonical_name = None
         source.name_origin = None
@@ -802,7 +972,8 @@ async def merge_entity(
     source.revision += 1
     target.revision += 1
     await entities.record_owner_action(
-        session, actor_id=actor_id, operation="entity_merge", reason=payload.reason,
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        operation="entity_merge", reason=payload.reason,
         affected_ids=[source.id, target.id, *[row.old_entity_id for row in closure.redirect_rows], *[old for old, _ in replacements]], revisions=previous_revisions,
     )
     await session.flush()
@@ -811,17 +982,19 @@ async def merge_entity(
         replacement_entity_ids=sorted({new for _, new in replacements}, key=str),
         revision=target.revision,
     )
-    drafts: list[ReplayDraft] = [make_graph_change(entity_id=target.id)]
-    drafts.extend(make_graph_change(relationship_id=new) for _, new in replacements)
-    drafts.extend(await timeline.revise_corrected_events(session, changed_timeline_ids, entity_id=target.id))
+    drafts: list[ReplayDraft] = [make_graph_change(entity_id=target.id, scope=scope)]
+    drafts.extend(make_graph_change(relationship_id=new, scope=scope) for _, new in replacements)
+    drafts.extend(await timeline.revise_corrected_events(session, changed_timeline_ids, entity_id=target.id, scope=scope))
     await _temporal_correction(session, closure.memberships,
-                               [(source.id, source.revision), (target.id, target.revision)], "merge")
-    await commit_with_replay(session, drafts)
+                               [(source.id, source.revision), (target.id, target.revision)], "merge",
+                               scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await commit_with_replay(session, drafts, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
     return result
 
 
 async def split_entity(
-    session: AsyncSession, entity_id: UUID, payload: EntitySplitRequest, *, actor_id: int
+    session: AsyncSession, entity_id: UUID, payload: EntitySplitRequest, *,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> EntityCorrectionResult:
     """Move selected evidence into a new owner-authored entity and commit the audit.
 
@@ -831,15 +1004,20 @@ async def split_entity(
     owner-authored rather than inheriting derived field support. Conflicts raise
     ``CorrectionConflictError``.
     """
-    if await entities.resolve_canonical_entity_id(session, entity_id) != entity_id:
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    actor_id = _actor(scope)
+    if await entities.resolve_canonical_entity_id(session, entity_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled) != entity_id:
         raise _conflict("redirected_entity", "Use the canonical entity ID for corrections", entity_ids=[entity_id])
-    closure = await _locked_closure(session, [entity_id])
+    closure = await _locked_closure(
+        session, [entity_id], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=fence,
+    )
     source, selected = await _validate_split_request(entity_id, payload, closure)
-    await _temporal_before_relationships(session, closure.relationship_ids)
+    await _temporal_before_relationships(session, closure.relationship_ids, scope=scope)
     selected_ids = set(payload.evidence_ids)
     new_id = uuid4()
     new_entity = Entity(
-        id=new_id, type=payload.new_entity.type, name=payload.new_entity.name,
+        workspace_id=scope.workspace_id, id=new_id, type=payload.new_entity.type, name=payload.new_entity.name,
         canonical_name=canonicalize_name(payload.new_entity.name), description=payload.new_entity.description,
         name_origin="owner", description_origin="owner" if payload.new_entity.description is not None else None,
         metadata_json=payload.new_entity.metadata, revision=1,
@@ -853,7 +1031,10 @@ async def split_entity(
     session.add_all(new_aliases)
     await session.flush()
     previous_revision = source.revision
-    await _record_assignments(session, selected, new_id, actor_id=actor_id, reason=payload.reason, future_document_id=payload.future_document_id)
+    await _record_assignments(
+        session, selected, new_id, scope=scope, actor_id=actor_id,
+        reason=payload.reason, future_document_id=payload.future_document_id,
+    )
     selected_supports = [item for item in closure.alias_supports if item.membership_id in selected_ids]
     for support in selected_supports:
         alias = next(item for item in closure.aliases if item.id == support.alias_id)
@@ -888,7 +1069,8 @@ async def split_entity(
             if entity_id in (ref.source_entity_id, ref.target_entity_id)
         }
         replacements = await relationships.apply_entity_split(
-            session, entity_id, new_id, selected_ids, source_relationship_ids
+            session, entity_id, new_id, selected_ids, source_relationship_ids,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
     except ValueError as exc:
         raise _conflict("relationship_split_conflict", str(exc), entity_ids=[entity_id], relationship_ids=closure.relationship_ids) from exc
@@ -896,6 +1078,7 @@ async def split_entity(
         session, source_id=entity_id, target_id=new_id,
         event_ids=closure.timeline_event_ids,
         selected_pairs={(item.document_version_id, item.chunk_id) for item in selected},
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
     for field_name in ("name", "description"):
         if getattr(source, f"{field_name}_origin") != "derived":
@@ -910,7 +1093,8 @@ async def split_entity(
                 source.canonical_name = None
     source.revision += 1
     await entities.record_owner_action(
-        session, actor_id=actor_id, operation="entity_split", reason=payload.reason,
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        operation="entity_split", reason=payload.reason,
         affected_ids=[source.id, new_id, *selected_ids, *[old for old, _ in replacements]],
         revisions={str(source.id): previous_revision, str(new_id): 1},
     )
@@ -919,17 +1103,19 @@ async def split_entity(
         operation="split", entity_id=source.id, canonical_entity_id=source.id,
         replacement_entity_ids=[new_id], revision=source.revision,
     )
-    drafts: list[ReplayDraft] = [make_graph_change(entity_id=source.id), make_graph_change(entity_id=new_id)]
-    drafts.extend(make_graph_change(relationship_id=new) for _, new in replacements)
-    drafts.extend(await timeline.revise_corrected_events(session, changed_timeline_ids, entity_id=source.id))
+    drafts: list[ReplayDraft] = [make_graph_change(entity_id=source.id, scope=scope), make_graph_change(entity_id=new_id, scope=scope)]
+    drafts.extend(make_graph_change(relationship_id=new, scope=scope) for _, new in replacements)
+    drafts.extend(await timeline.revise_corrected_events(session, changed_timeline_ids, entity_id=source.id, scope=scope))
     await _temporal_correction(session, closure.memberships,
-                               [(source.id, source.revision), (new_entity.id, new_entity.revision)], "split")
-    await commit_with_replay(session, drafts)
+                               [(source.id, source.revision), (new_entity.id, new_entity.revision)], "split",
+                               scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await commit_with_replay(session, drafts, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
     return result
 
 
 async def suppress_candidates(
-    session: AsyncSession, entity_id: UUID, payload: EntitySuppressionRequest, *, actor_id: int
+    session: AsyncSession, entity_id: UUID, payload: EntitySuppressionRequest, *,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> EntityCorrectionResult:
     """Commit owner suppression rules for selected evidence and future documents.
 
@@ -939,9 +1125,14 @@ async def suppress_candidates(
     or incrementing the entity revision; conflicts raise
     ``CorrectionConflictError``.
     """
-    if await entities.resolve_canonical_entity_id(session, entity_id) != entity_id:
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    actor_id = _actor(scope)
+    if await entities.resolve_canonical_entity_id(session, entity_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled) != entity_id:
         raise _conflict("redirected_entity", "Use the canonical entity ID for corrections", entity_ids=[entity_id])
-    closure = await _locked_closure(session, [entity_id])
+    closure = await _locked_closure(
+        session, [entity_id], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=fence,
+    )
     entity = next((item for item in closure.entity_rows if item.id == entity_id), None)
     if entity is None:
         raise _conflict("entity_missing", "Entity no longer exists", entity_ids=[entity_id])
@@ -957,11 +1148,13 @@ async def suppress_candidates(
         if membership.match_fingerprint is None:
             continue
         existing = await session.scalar(select(EntityCorrectionDecision).where(
+            EntityCorrectionDecision.workspace_id == scope.workspace_id,
             EntityCorrectionDecision.scope == "evidence",
             EntityCorrectionDecision.membership_id == membership.id,
         ).with_for_update())
         if existing is None:
             session.add(EntityCorrectionDecision(
+                workspace_id=scope.workspace_id,
                 decision="suppress", scope="evidence", membership_id=membership.id,
                 match_fingerprint=membership.match_fingerprint, actor_id=actor_id,
                 reason=payload.reason, created_at=now,
@@ -972,6 +1165,7 @@ async def suppress_candidates(
             existing.reason, existing.created_at = payload.reason, now
     for fingerprint in sorted({item.match_fingerprint for item in scoped if item.match_fingerprint is not None}):
         prior = (await session.scalars(select(EntityCorrectionDecision).where(
+            EntityCorrectionDecision.workspace_id == scope.workspace_id,
             EntityCorrectionDecision.scope == "document",
             EntityCorrectionDecision.document_id == payload.future_document_id,
             EntityCorrectionDecision.match_fingerprint == fingerprint,
@@ -984,34 +1178,44 @@ async def suppress_candidates(
             rule.actor_id, rule.reason, rule.created_at = actor_id, payload.reason, now
         else:
             session.add(EntityCorrectionDecision(
+                workspace_id=scope.workspace_id,
                 decision="suppress", scope="document", document_id=payload.future_document_id,
                 match_fingerprint=fingerprint, actor_id=actor_id, reason=payload.reason,
                 created_at=now,
             ))
     await entities.record_owner_action(
-        session, actor_id=actor_id, operation="entity_suppress", reason=payload.reason,
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        operation="entity_suppress", reason=payload.reason,
         affected_ids=[entity_id, *payload.evidence_ids], revisions={str(entity_id): entity.revision},
     )
     result = EntityCorrectionResult(
         operation="suppress", entity_id=entity_id, canonical_entity_id=entity_id,
         replacement_entity_ids=[], revision=entity.revision,
     )
-    await _temporal_correction(session, selected, [(entity.id, entity.revision)], "suppression")
-    await commit_with_replay(session, [make_graph_change(entity_id=entity_id)])
+    await _temporal_correction(session, selected, [(entity.id, entity.revision)], "suppression", scope=scope,
+                               multi_workspace_enabled=multi_workspace_enabled)
+    await commit_with_replay(
+        session, [make_graph_change(entity_id=entity_id, scope=scope)], scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+    )
     return result
 
 
-async def _temporal_before_relationships(session: AsyncSession, relationship_ids: list[UUID]) -> None:
+async def _temporal_before_relationships(
+    session: AsyncSession, relationship_ids: list[UUID], *, scope: Scope,
+) -> None:
     """Record actual pre-correction owner state before endpoint memberships move; history starts at this observation."""
     for relationship_id in relationship_ids:
-        await relationships.record_relationship_history(session, relationship_id)
+        await relationships.record_relationship_history(session, relationship_id, scope=scope)
 
 
 async def _temporal_correction(session: AsyncSession, memberships: list[EntityEvidenceMembership], entity_revisions: list[tuple[UUID, int]],
-                               operation: str, *, deleted: bool = False) -> None:
+                               operation: str, *, scope: Scope, multi_workspace_enabled: bool,
+                               deleted: bool = False) -> None:
     """Flush identifier-only desired-state changes with the canonical correction's existing atomic commit."""
     from modules.knowledge.temporal import public as temporal
     pairs = sorted({(member.document_version_id, member.chunk_id) for member in memberships}, key=str)
     for entity_id, revision in entity_revisions:
         await temporal.schedule_canonical_change(session, kind="entity", canonical_id=entity_id,
-            revision=revision, fields=[operation], support=pairs, origin="owner", deleted=deleted)
+            revision=revision, fields=[operation], support=pairs, origin="owner", deleted=deleted,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled)

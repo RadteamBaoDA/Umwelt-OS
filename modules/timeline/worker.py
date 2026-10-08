@@ -28,6 +28,8 @@ from core.model_gateway.schemas import (
     RequestPolicy,
 )
 from core.realtime import commit_with_replay, make_timeline_change
+from core.workspaces import public as workspaces
+from core.workspaces.schemas import InternalJobScope, Scope
 from modules.knowledge.documents import public as documents
 from modules.knowledge.entities import public as entities
 from modules.settings import public as settings_public
@@ -51,10 +53,26 @@ def _factory(ctx: dict[str, object]) -> async_sessionmaker[AsyncSession]:
     return cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
 
 
-async def _dependency_snapshot(config: AIExecutionConfig, redis: Redis) -> tuple[str, bool]:
+async def _workspace_job_scope(
+    session: AsyncSession, workspace_id: UUID, *, multi_workspace_enabled: bool,
+) -> InternalJobScope | None:
+    """Resolve an owner-backed scope from the durable extraction workspace binding."""
+    owner = await workspaces.resolve_workspace_owner_context(
+        session, workspace_id, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if owner is None:
+        return None
+    return InternalJobScope(
+        workspace_id=workspace_id, actor_user_id=owner.user_id,
+        membership_revision=owner.membership_revision,
+    )
+
+
+async def _dependency_snapshot(config: AIExecutionConfig, redis: Redis, *, scope: Scope) -> tuple[str, bool]:
     """Fingerprint nonsecret extraction policy and verify a current structured capability result."""
     mapping = config.aliases.get(ALIAS)
-    key = capability_key(ALIAS, mapping.model, mapping.version, "structured", config.gateway_identity) if mapping else None
+    key = capability_key(ALIAS, mapping.model, mapping.version, "structured", config.gateway_identity,
+                         workspace_id=scope.workspace_id) if mapping else None
     raw = await redis.get(key) if key else None
     if isinstance(raw, bytes):
         raw = raw.decode("utf-8", errors="replace")
@@ -125,11 +143,26 @@ async def process_timeline_extraction_work(ctx: dict[str, object], work_id_value
     factory = _factory(ctx)
     redis = cast(Redis, ctx["redis"])
     settings = cast(Settings, ctx["settings"])
+    multi_workspace_enabled = settings.multi_workspace_enabled
     work_id = UUID(work_id_value)
     lease_owner = hashlib.sha256(f"{work_id}:{datetime.now(UTC).isoformat()}".encode()).hexdigest()[:48]
     dependency_fingerprint: str | None = None
     async with factory() as session:
-        work = await timeline.claim_extraction_work(session, work_id, lease_owner, datetime.now(UTC))
+        workspace_id = await session.scalar(select(TimelineExtractionWork.workspace_id).where(
+            TimelineExtractionWork.id == work_id,
+        ))
+        if workspace_id is None:
+            return
+        scope = await _workspace_job_scope(
+            session, workspace_id, multi_workspace_enabled=multi_workspace_enabled,
+        )
+        if scope is None:
+            await session.rollback()
+            return
+        work = await timeline.claim_extraction_work(
+            session, work_id, lease_owner, datetime.now(UTC), scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
         if work is None:
             await session.commit()
             return
@@ -137,59 +170,83 @@ async def process_timeline_extraction_work(ctx: dict[str, object], work_id_value
         await session.commit()
     try:
         async with factory() as session:
-            locator = await documents.get_ready_version_ref(session, version_id)
+            access_fence = await workspaces.read_access_fence(
+                session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
+            locator = await documents.get_ready_version_ref(
+                session, version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
             if locator is None or locator.source_generation != generation:
-                await timeline.set_extraction_work_error(session, work_id, lease_owner, "document_unavailable", blocked=True)
+                await timeline.set_extraction_work_error(session, work_id, lease_owner, "document_unavailable", blocked=True,
+                    scope=scope, multi_workspace_enabled=multi_workspace_enabled)
                 await session.commit()
                 return
-            source = await sources.lock_source(session, locator.source_id)
+            source = await sources.lock_source(session, locator.source_id, scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=access_fence)
             if source is None or source.status != "active" or source.generation != generation:
-                await timeline.set_extraction_work_error(session, work_id, lease_owner, "source_generation_changed", blocked=True)
+                await timeline.set_extraction_work_error(session, work_id, lease_owner, "source_generation_changed", blocked=True,
+                    scope=scope, multi_workspace_enabled=multi_workspace_enabled)
                 await session.commit()
                 return
-            if not await documents.lock_document_for_extraction(session, locator.document_id, source.id):
-                await timeline.set_extraction_work_error(session, work_id, lease_owner, "document_unavailable", blocked=True)
+            if not await documents.lock_document_for_extraction(
+                session, locator.document_id, source.id, scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+                source_fence=source, expected_raw_uri=locator.raw_uri, expected_mime_type=locator.mime_type,
+            ):
+                await timeline.set_extraction_work_error(session, work_id, lease_owner, "document_unavailable", blocked=True,
+                    scope=scope, multi_workspace_enabled=multi_workspace_enabled)
                 await session.commit()
                 return
             # Keep this transaction's source/document locks across inference and publication.
-            ready = await documents.get_ready_version_ref(session, version_id)
+            ready = await documents.get_ready_version_ref(
+                session, version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
             if ready is None or ready.source_generation != generation or ready.document_id != locator.document_id:
-                await timeline.set_extraction_work_error(session, work_id, lease_owner, "document_unavailable", blocked=True)
+                await timeline.set_extraction_work_error(session, work_id, lease_owner, "document_unavailable", blocked=True,
+                    scope=scope, multi_workspace_enabled=multi_workspace_enabled)
                 await session.commit()
                 return
             if source.local_only:
-                await timeline.set_extraction_work_error(session, work_id, lease_owner, "local_only_source", blocked=True)
+                await timeline.set_extraction_work_error(session, work_id, lease_owner, "local_only_source", blocked=True,
+                    scope=scope, multi_workspace_enabled=multi_workspace_enabled)
                 await session.commit()
                 return
-            data = await documents.read_extraction_input(session, version_id)
+            data = await documents.read_extraction_input(
+                session, version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
             if data is None or data.source_generation != generation:
-                await timeline.set_extraction_work_error(session, work_id, lease_owner, "document_unavailable", blocked=True)
+                await timeline.set_extraction_work_error(session, work_id, lease_owner, "document_unavailable", blocked=True,
+                    scope=scope, multi_workspace_enabled=multi_workspace_enabled)
                 await session.commit()
                 return
             try:
                 membership_refs = await entities.list_version_membership_refs(
-                    session, version_id, [item.id for item in data.chunks],
+                    session, version_id, [item.id for item in data.chunks], scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
                 )
             except ValueError:
-                await timeline.set_extraction_work_error(session, work_id, lease_owner, "membership_context_bounded", blocked=True)
+                await timeline.set_extraction_work_error(session, work_id, lease_owner, "membership_context_bounded", blocked=True,
+                    scope=scope, multi_workspace_enabled=multi_workspace_enabled)
                 await session.commit()
                 return
-            config = await settings_public.get_ai_execution_config(session, settings, redis)
+            config = await settings_public.get_ai_execution_config(session, settings, redis, scope=scope)
             mapping = config.aliases.get(ALIAS)
             destination = config.endpoint_destination_id
-            fingerprint, capability_supported = await _dependency_snapshot(config, redis)
+            fingerprint, capability_supported = await _dependency_snapshot(config, redis, scope=scope)
             dependency_fingerprint = fingerprint
             if not capability_supported:
                 await timeline.set_extraction_work_error(
                     session, work_id, lease_owner, "structured_unsupported", blocked=True,
-                    dependency_fingerprint=fingerprint,
+                    dependency_fingerprint=fingerprint, scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
                 )
                 await session.commit()
                 return
             if not _allowed(config, mapping, destination, source.local_only):
                 await timeline.set_extraction_work_error(
                     session, work_id, lease_owner, "ai_policy_denied", blocked=True,
-                    dependency_fingerprint=fingerprint,
+                    dependency_fingerprint=fingerprint, scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
                 )
                 await session.commit()
                 return
@@ -197,10 +254,10 @@ async def process_timeline_extraction_work(ctx: dict[str, object], work_id_value
             async def before_send() -> None:
                 """Recheck destination, configuration revision, capability, and policy immediately before egress."""
                 async with factory() as check_session:
-                    current = await settings_public.get_ai_execution_config(check_session, settings, redis)
+                    current = await settings_public.get_ai_execution_config(check_session, settings, redis, scope=scope)
                     current_mapping = current.aliases.get(ALIAS)
                     current_destination = current.endpoint_destination_id
-                    current_fingerprint, current_supported = await _dependency_snapshot(current, redis)
+                    current_fingerprint, current_supported = await _dependency_snapshot(current, redis, scope=scope)
                     if (
                         current.configuration_revision != config.configuration_revision
                         or current.gateway_identity != config.gateway_identity
@@ -209,7 +266,9 @@ async def process_timeline_extraction_work(ctx: dict[str, object], work_id_value
                         or not _allowed(current, current_mapping, current_destination, source.local_only)
                     ):
                         raise PrivacyPolicyDenied("Timeline extraction policy changed before send")
-                current_ready = await documents.get_ready_version_ref(session, version_id)
+                current_ready = await documents.get_ready_version_ref(
+                    session, version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                )
                 if (
                     current_ready is None or current_ready.document_id != data.document_id
                     or current_ready.source_id != source.id
@@ -235,10 +294,10 @@ async def process_timeline_extraction_work(ctx: dict[str, object], work_id_value
                 raise ValueError("invalid_model_response")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
             proposals, model = response_content(response)
             async with factory() as check_session:
-                current_config = await settings_public.get_ai_execution_config(check_session, settings, redis)
+                current_config = await settings_public.get_ai_execution_config(check_session, settings, redis, scope=scope)
                 current_mapping = current_config.aliases.get(ALIAS)
                 current_destination = current_config.endpoint_destination_id
-                current_fingerprint, current_supported = await _dependency_snapshot(current_config, redis)
+                current_fingerprint, current_supported = await _dependency_snapshot(current_config, redis, scope=scope)
                 if (
                     current_config.configuration_revision != config.configuration_revision
                     or current_config.gateway_identity != config.gateway_identity
@@ -249,7 +308,9 @@ async def process_timeline_extraction_work(ctx: dict[str, object], work_id_value
                     # Keep the attempted-request fingerprint so recovery sees
                     # a changed, already-permitted configuration as retryable.
                     raise PrivacyPolicyDenied("Timeline extraction policy changed before publication")
-            current_ready = await documents.get_ready_version_ref(session, version_id)
+            current_ready = await documents.get_ready_version_ref(
+                session, version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
             if (
                 current_ready is None or current_ready.document_id != data.document_id
                 or current_ready.source_generation != generation or current_ready.source_id != source.id
@@ -259,33 +320,37 @@ async def process_timeline_extraction_work(ctx: dict[str, object], work_id_value
                 session, work_id=work_id, lease_owner=lease_owner,
                 ready=data, proposals=proposals, model=model,
                 membership_revisions={item.membership_id: item.entity_revision for item in membership_refs},
+                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
             ):
                 await session.rollback()
                 return
             from modules.timeline.models import TimelineExtractionResult
             result = await session.scalar(select(TimelineExtractionResult).where(
+                TimelineExtractionResult.workspace_id == scope.workspace_id,
                 TimelineExtractionResult.work_id == work_id
             ))
             event_ids = [UUID(str(item["event_id"])) for item in result.proposals_json] if result else []
             event_revisions = dict((await session.execute(select(Event.id, Event.revision).where(
-                Event.id.in_(event_ids)
+                Event.workspace_id == scope.workspace_id, Event.id.in_(event_ids)
             ))).all()) if event_ids else {}
             await commit_with_replay(session, [
-                make_timeline_change(event_id, event_revisions[event_id])
+                make_timeline_change(event_id, event_revisions[event_id], scope=scope)
                 for event_id in sorted(set(event_ids), key=str) if event_id in event_revisions
-            ])
+            ], scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
     except (CapabilityUnsupported, PrivacyPolicyDenied) as exc:
         async with factory() as session:
             await timeline.set_extraction_work_error(
                 session, work_id, lease_owner,
                 "structured_unsupported" if isinstance(exc, CapabilityUnsupported) else "ai_policy_denied",
-                blocked=True, dependency_fingerprint=dependency_fingerprint,
+                blocked=True, dependency_fingerprint=dependency_fingerprint, scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
             )
             await session.commit()
     except (ModelGatewayError, ValueError, LookupError) as exc:
         async with factory() as session:
             await timeline.set_extraction_work_error(
-                session, work_id, lease_owner, type(exc).__name__.lower(),
+                session, work_id, lease_owner, type(exc).__name__.lower(), scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
             )
             await session.commit()
 
@@ -302,85 +367,140 @@ async def recover_timeline_extraction_work(ctx: dict[str, object]) -> int:
     """
     factory = _factory(ctx)
     redis = cast(ArqRedis, ctx["redis"])
+    multi_workspace_enabled = cast(Settings, ctx["settings"]).multi_workspace_enabled
     count = 0
-    raw_cursor = await redis.get("bbd:timeline-extraction:ready-cursor")
-    cursor = raw_cursor.decode() if isinstance(raw_cursor, bytes) else raw_cursor if isinstance(raw_cursor, str) else None
-    if cursor is not None and len(cursor) > 512:
-        cursor = None
+    work_ids: list[UUID] = []
     async with factory() as session:
-        refs, next_cursor = await documents.list_ready_version_refs(session, limit=25, cursor=cursor)
-        await session.commit()
-    for ref in refs:
+        workspace_ids = list((await session.scalars(select(TimelineExtractionWork.workspace_id)
+            .distinct().order_by(TimelineExtractionWork.workspace_id))).all())
+    for workspace_id in workspace_ids:
         async with factory() as session:
-            source = await sources.lock_source(session, ref.source_id)
-            current = await documents.get_ready_version_ref(session, ref.document_version_id)
-            if (
-                source is None or source.status != "active" or current is None
-                or current.document_id != ref.document_id or current.source_id != source.id
-                or current.source_generation != source.generation
-                or current.source_generation != ref.source_generation
-            ):
-                await session.commit()
-                continue
-            if not await documents.lock_document_for_extraction(session, current.document_id, source.id):
-                await session.commit()
-                continue
-            current = await documents.get_ready_version_ref(session, ref.document_version_id)
-            if current is None or current.source_generation != source.generation:
-                await session.commit()
-                continue
-            work_id = await timeline.schedule_extraction_work(
-                session, current, EXTRACTOR_VERSION, PROMPT_VERSION,
+            scope = await _workspace_job_scope(
+                session, workspace_id, multi_workspace_enabled=multi_workspace_enabled,
             )
-            if current.local_only:
-                work = await session.get(TimelineExtractionWork, work_id, with_for_update=True)
-                if work is not None and work.status != "succeeded":
-                    work.status, work.error_code = "blocked", "local_only_source"
-                    work.next_attempt_at = datetime.max.replace(tzinfo=UTC)
-                    work.lease_owner = work.lease_expires_at = None
+            if scope is None:
+                await session.rollback()
+                continue
+            cursor_key = f"bbd:timeline-extraction:ready-cursor:{workspace_id}"
+            raw_cursor = await redis.get(cursor_key)
+            cursor = raw_cursor.decode() if isinstance(raw_cursor, bytes) else raw_cursor if isinstance(raw_cursor, str) else None
+            if cursor is not None and len(cursor) > 512:
+                cursor = None
+            refs, next_cursor = await documents.list_ready_version_refs(
+                session, limit=25, cursor=cursor, scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+            )
             await session.commit()
-    if next_cursor:
-        await redis.set("bbd:timeline-extraction:ready-cursor", next_cursor)
-    else:
-        await redis.delete("bbd:timeline-extraction:ready-cursor")
-    requeued_ids: list[UUID] = []
-    async with factory() as session:
-        blocked_items = await timeline.list_blocked_extraction_work(session, limit=25)
-    for blocked_id, version_id, captured_generation, error_code, old_fingerprint in blocked_items:
-        if error_code not in {"ai_policy_denied", "structured_unsupported"} or not old_fingerprint:
-            continue
-        async with factory() as session:
-            ready = await documents.get_ready_version_ref(session, version_id)
-            source = await sources.lock_source(session, ready.source_id) if ready is not None else None
-            current = await documents.get_ready_version_ref(session, version_id) if ready is not None else None
-            if (
-                ready is None or source is None or source.status != "active" or source.local_only
-                or source.generation != captured_generation or current is None
-                or current.document_id != ready.document_id or current.source_id != source.id
-                or current.source_generation != captured_generation
-            ):
-                await timeline.defer_blocked_extraction_recheck(session, blocked_id, old_fingerprint)
-                await session.commit()
-                continue
-            config = await settings_public.get_ai_execution_config(
-                session, cast(Settings, ctx["settings"]), redis,
-            )
-            mapping = config.aliases.get(ALIAS)
-            fingerprint, capability_supported = await _dependency_snapshot(config, redis)
-            if (
-                capability_supported and _allowed(config, mapping, config.endpoint_destination_id, source.local_only)
-                and await timeline.requeue_blocked_extraction_work(
-                    session, blocked_id, old_fingerprint, fingerprint,
+        for ref in refs:
+            async with factory() as session:
+                access_fence = await workspaces.read_access_fence(
+                    session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
                 )
-            ):
-                requeued_ids.append(blocked_id)
-            else:
-                await timeline.defer_blocked_extraction_recheck(session, blocked_id, old_fingerprint)
+                source = await sources.lock_source(session, ref.source_id, scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=access_fence)
+                current = await documents.get_ready_version_ref(
+                    session, ref.document_version_id, scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
+                )
+                if (
+                    source is None or source.status != "active" or current is None
+                    or current.document_id != ref.document_id or current.source_id != source.id
+                    or current.source_generation != source.generation
+                    or current.source_generation != ref.source_generation
+                ):
+                    await session.commit()
+                    continue
+                if not await documents.lock_document_for_extraction(
+                    session, current.document_id, source.id, scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+                    source_fence=source, expected_raw_uri=current.raw_uri,
+                    expected_mime_type=current.mime_type,
+                ):
+                    await session.commit()
+                    continue
+                current = await documents.get_ready_version_ref(
+                    session, ref.document_version_id, scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
+                )
+                if current is None or current.source_generation != source.generation:
+                    await session.commit()
+                    continue
+                work_id = await timeline.schedule_extraction_work(
+                    session, current, EXTRACTOR_VERSION, PROMPT_VERSION, scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
+                )
+                if current.local_only:
+                    work = await session.scalar(select(TimelineExtractionWork).where(
+                        TimelineExtractionWork.workspace_id == scope.workspace_id,
+                        TimelineExtractionWork.id == work_id,
+                    ).with_for_update())
+                    if work is not None and work.status != "succeeded":
+                        work.status, work.error_code = "blocked", "local_only_source"
+                        work.next_attempt_at = datetime.max.replace(tzinfo=UTC)
+                        work.lease_owner = work.lease_expires_at = None
+                await session.commit()
+        if next_cursor:
+            await redis.set(cursor_key, next_cursor)
+        else:
+            await redis.delete(cursor_key)
+        requeued_ids: list[UUID] = []
+        async with factory() as session:
+            blocked_items = await timeline.list_blocked_extraction_work(
+                session, limit=25, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
+        for blocked_id, version_id, captured_generation, error_code, old_fingerprint in blocked_items:
+            if error_code not in {"ai_policy_denied", "structured_unsupported"} or not old_fingerprint:
+                continue
+            async with factory() as session:
+                access_fence = await workspaces.read_access_fence(
+                    session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                )
+                ready = await documents.get_ready_version_ref(
+                    session, version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                )
+                source = await sources.lock_source(session, ready.source_id, scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=access_fence) if ready is not None else None
+                current = await documents.get_ready_version_ref(
+                    session, version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                ) if ready is not None else None
+                if (
+                    ready is None or source is None or source.status != "active" or source.local_only
+                    or source.generation != captured_generation or current is None
+                    or current.document_id != ready.document_id or current.source_id != source.id
+                    or current.source_generation != captured_generation
+                ):
+                    await timeline.defer_blocked_extraction_recheck(
+                        session, blocked_id, old_fingerprint, scope=scope,
+                        multi_workspace_enabled=multi_workspace_enabled,
+                    )
+                    await session.commit()
+                    continue
+                config = await settings_public.get_ai_execution_config(
+                    session, cast(Settings, ctx["settings"]), redis, scope=scope,
+                )
+                mapping = config.aliases.get(ALIAS)
+                fingerprint, capability_supported = await _dependency_snapshot(config, redis, scope=scope)
+                if (
+                    capability_supported and _allowed(config, mapping, config.endpoint_destination_id, source.local_only)
+                    and await timeline.requeue_blocked_extraction_work(
+                        session, blocked_id, old_fingerprint, fingerprint, scope=scope,
+                        multi_workspace_enabled=multi_workspace_enabled,
+                    )
+                ):
+                    requeued_ids.append(blocked_id)
+                else:
+                    await timeline.defer_blocked_extraction_recheck(
+                        session, blocked_id, old_fingerprint, scope=scope,
+                        multi_workspace_enabled=multi_workspace_enabled,
+                    )
+                await session.commit()
+        async with factory() as session:
+            work_ids.extend(await timeline.list_recoverable_extraction_work(
+                session, 25, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            ))
             await session.commit()
-    async with factory() as session:
-        work_ids = await timeline.list_recoverable_extraction_work(session, 25)
-        await session.commit()
-    work_ids = list(dict.fromkeys([*work_ids, *requeued_ids]))
+        work_ids.extend(requeued_ids)
+    work_ids = list(dict.fromkeys(work_ids))
     for work_id in work_ids:
         await redis.enqueue_job(
             "process_timeline_extraction_work", str(work_id),

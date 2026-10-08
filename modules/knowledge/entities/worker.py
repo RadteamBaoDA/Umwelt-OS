@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 
 from arq.connections import ArqRedis
 from redis.asyncio import Redis
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
@@ -29,8 +30,9 @@ from core.model_gateway.schemas import (
     RequestPolicy,
 )
 from core.realtime import commit_with_replay, make_graph_change
-from modules.ingestion.dispatcher import mark_event_delivered
-from modules.ingestion.models import EventOutbox
+from core.workspaces import public as workspaces
+from core.workspaces.schemas import InternalJobScope, Scope
+from modules.ingestion import public as ingestion
 from modules.knowledge.documents import public as documents
 from modules.knowledge.entities import public as entities
 from modules.knowledge.entities.extraction import (
@@ -41,6 +43,7 @@ from modules.knowledge.entities.extraction import (
     response_content,
     response_schema,
 )
+from modules.knowledge.entities.models import EntityExtractionWork
 from modules.knowledge.entities.resolution import candidate_match_fingerprint, resolve_candidate
 from modules.knowledge.entities.schemas import canonicalize_name
 from modules.knowledge.relationships import public as relationships
@@ -57,7 +60,22 @@ def _factory(ctx: dict[str, object]) -> async_sessionmaker[AsyncSession]:
     return cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
 
 
-async def _dependency_snapshot(config: AIExecutionConfig, redis: Redis) -> tuple[str, bool]:
+async def _workspace_job_scope(
+    session: AsyncSession, workspace_id: UUID, *, multi_workspace_enabled: bool,
+) -> InternalJobScope | None:
+    """Resolve the current owner for a durable entity-work workspace binding."""
+    owner = await workspaces.resolve_workspace_owner_context(
+        session, workspace_id, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if owner is None:
+        return None
+    return InternalJobScope(
+        workspace_id=workspace_id, actor_user_id=owner.user_id,
+        membership_revision=owner.membership_revision,
+    )
+
+
+async def _dependency_snapshot(config: AIExecutionConfig, redis: Redis, *, scope: Scope) -> tuple[str, bool]:
     """Fingerprint non-secret extraction policy and report current capability.
 
     Cached capability data is accepted only when model, gateway, revision, and
@@ -72,7 +90,10 @@ async def _dependency_snapshot(config: AIExecutionConfig, redis: Redis) -> tuple
     capability_value: dict[str, object] | None = None
     key: str | None = None
     if mapping is not None:
-        key = capability_key(alias, mapping.model, mapping.version, "structured", gateway_identity)
+        key = capability_key(
+            alias, mapping.model, mapping.version, "structured", gateway_identity,
+            workspace_id=scope.workspace_id,
+        )
         raw = await redis.get(key)
         if isinstance(raw, bytes):
             raw = raw.decode("utf-8", errors="replace")
@@ -140,40 +161,81 @@ async def process_document_ready(ctx: dict[str, object], event_id: str) -> None:
     """Create or schedule extraction work for a durable ready-document event."""
     factory = _factory(ctx)
     event_uuid = UUID(event_id)
+    multi_workspace_enabled = cast(Settings, ctx["settings"]).multi_workspace_enabled
     async with factory() as session:
-        event = await session.get(EventOutbox, event_uuid, with_for_update=True)
+        scope = await ingestion.resolve_ingestion_event_scope(
+            session, event_uuid, multi_workspace_enabled=multi_workspace_enabled,
+        )
+        if scope is None:
+            return
+        fence = await workspaces.read_access_fence(
+            session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
+        event = await ingestion.get_event_delivery(
+            session, event_uuid, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
         if event is None or event.status == "delivered":
             return
         if event.type != "document.version.ready" or event.version != 1:
-            event.status = "failed"
+            await ingestion.set_event_delivery(
+                session, event_uuid, "failed", scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+            )
             await session.commit()
             return
         version_id = UUID(str(event.payload["document_version_id"]))
-        ready = await documents.get_ready_version_ref(session, version_id)
+        ready = await documents.get_ready_version_ref(
+            session, version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
         if ready is None or ready.document_id != UUID(str(event.payload["document_id"])):
-            await mark_event_delivered(session, event_uuid)
+            await ingestion.mark_event_delivered(
+                session, event_uuid, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
+            await session.commit()
             return
-        source = await sources.lock_source(session, ready.source_id)
-        ready = await documents.get_ready_version_ref(session, version_id)
+        source = await sources.lock_source(
+            session, ready.source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            expected_access_fence=fence,
+        )
+        ready = await documents.get_ready_version_ref(
+            session, version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
         if (
             source is None or source.status != "active" or ready is None
             or ready.source_id != UUID(str(event.payload["source_id"]))
             or source.generation != ready.source_generation
             or ready.source_generation != int(event.payload["source_generation"])
         ):
-            await mark_event_delivered(session, event_uuid)
+            await ingestion.mark_event_delivered(
+                session, event_uuid, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
+            await session.commit()
             return
         # Keep both owners behind the source/document fence until their durable rows
         # and the single outbox acknowledgement commit together.
-        if not await documents.lock_document_for_extraction(session, ready.document_id, ready.source_id):
-            await mark_event_delivered(session, event_uuid)
+        if not await documents.lock_document_for_extraction(
+            session, ready.document_id, ready.source_id, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+            source_fence=source, expected_raw_uri=ready.raw_uri,
+            expected_mime_type=ready.mime_type,
+        ):
+            await ingestion.mark_event_delivered(
+                session, event_uuid, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
+            await session.commit()
             return
-        ready = await documents.get_ready_version_ref(session, version_id)
+        ready = await documents.get_ready_version_ref(
+            session, version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
         if ready is None or ready.source_generation != source.generation:
-            await mark_event_delivered(session, event_uuid)
+            await ingestion.mark_event_delivered(
+                session, event_uuid, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
+            await session.commit()
             return
         work = await entities.schedule_extraction_work(
             session, version_id, ready.source_generation, EXTRACTOR_VERSION, PROMPT_VERSION,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
         if ready.local_only:
             work.status = "blocked"
@@ -183,17 +245,25 @@ async def process_document_ready(ctx: dict[str, object], event_id: str) -> None:
         work_id = work.id
         from modules.timeline import public as timeline
         timeline_work_id = await timeline.schedule_extraction_work(
-            session, ready, "events-v1", "events-prompt-v1",
+            session, ready, "events-v1", "events-prompt-v1", scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
         from modules.knowledge.temporal import public as temporal
-        await temporal.schedule_version(session, ready)
+        await temporal.schedule_version(
+            session, ready, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
         # Deterministic provider mapping (no model egress, so also valid for local-only
         # sources) shares this transaction and the source/document fences held above.
         from modules.connectors import public as connectors
-        await connectors.map_github_version(session, ready)
+        await connectors.map_github_version(
+            session, ready, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
         if ready.local_only:
             await timeline.block_local_only_extraction_work(session, timeline_work_id)
-        await mark_event_delivered(session, event_uuid)
+        await ingestion.mark_event_delivered(
+            session, event_uuid, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
+        await session.commit()
     if ready.local_only:
         return
     await process_entity_extraction_work(ctx, str(work_id))
@@ -203,97 +273,152 @@ async def process_document_ready(ctx: dict[str, object], event_id: str) -> None:
 
 
 async def recover_entity_extraction_work(ctx: dict[str, object]) -> int:
-    """Recover eligible durable extraction jobs and return the queued count."""
+    """Recover bounded extraction work under each durable workspace binding."""
     factory = _factory(ctx)
     redis = cast(ArqRedis, ctx["redis"])
+    multi_workspace_enabled = cast(Settings, ctx["settings"]).multi_workspace_enabled
     enqueued = 0
-    requeued_ids: list[UUID] = []
-    raw_cursor = await redis.get("bbd:entity-extraction:ready-cursor")
-    cursor = raw_cursor.decode() if isinstance(raw_cursor, bytes) else raw_cursor if isinstance(raw_cursor, str) else None
-    if cursor is not None and len(cursor) > 512:
-        cursor = None
     async with factory() as session:
-        refs, next_cursor = await documents.list_ready_version_refs(session, limit=25, cursor=cursor)
-    for ref in refs:
+        workspace_ids = list((await session.scalars(
+            select(EntityExtractionWork.workspace_id).distinct().order_by(EntityExtractionWork.workspace_id)
+        )).all())
+    for workspace_id in workspace_ids:
         async with factory() as session:
-            source = await sources.lock_source(session, ref.source_id)
-            current = await documents.get_ready_version_ref(session, ref.document_version_id)
-            if (
-                source is None or source.status != "active" or current is None
-                or current.document_id != ref.document_id or current.source_id != source.id
-                or current.source_generation != source.generation
-                or current.source_generation != ref.source_generation
-            ):
-                await session.commit()
-                continue
-            work = await entities.schedule_extraction_work(
-                session, ref.document_version_id, source.generation, EXTRACTOR_VERSION, PROMPT_VERSION,
+            scope = await _workspace_job_scope(
+                session, workspace_id, multi_workspace_enabled=multi_workspace_enabled,
             )
-            if current.local_only and work.status != "succeeded" and not (
-                work.status == "running" and work.lease_expires_at is not None
-                and work.lease_expires_at > datetime.now(UTC)
-            ):
-                work.status = "blocked"
-                work.error_code = "local_only_source"
-                work.next_attempt_at = datetime.max.replace(tzinfo=UTC)
-                work.lease_owner = None
-                work.lease_expires_at = None
-                work.dependency_fingerprint = None
-            # Idempotent self-heal: re-run deterministic provider mapping for every ready
-            # current version (covers pre-T3 versions and earlier failed attempts).
-            from modules.connectors import public as connectors
-            # Own savepoint plus catch-all: an unexpected mapper error must neither wedge recovery
-            # for other sources nor roll back this version's extraction scheduling above.
-            try:
-                async with session.begin_nested():
-                    await connectors.map_github_version(session, current)
-            except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
-                logger.warning(
-                    "github mapping recovery failed for version %s (%s)",
-                    ref.document_version_id, type(exc).__name__,
-                )
-            await session.commit()
-    async with factory() as session:
-        blocked_items = await entities.list_blocked_extraction_work(session, limit=25)
-        await entities.terminalize_exhausted_extraction_work(session, limit=25)
-        work_ids = await entities.list_recoverable_extraction_work(session, limit=25)
-        await session.commit()
-    for blocked_id, version_id, captured_generation, error_code, old_fingerprint in blocked_items:
-        if error_code not in {"ai_policy_denied", "structured_unsupported"} or old_fingerprint is None:
-            continue
-        async with factory() as session:
-            ready = await documents.get_ready_version_ref(session, version_id)
-            source = await sources.lock_source(session, ready.source_id) if ready is not None else None
-            current = await documents.get_ready_version_ref(session, version_id) if ready is not None else None
-            if (
-                ready is None or source is None or source.status != "active" or source.local_only
-                or source.generation != captured_generation or current is None
-                or current.document_id != ready.document_id or current.source_id != source.id
-                or current.source_generation != captured_generation
-            ):
-                await entities.defer_blocked_extraction_recheck(session, blocked_id, old_fingerprint)
-                await session.commit()
+            if scope is None:
                 continue
-            config = await settings_public.get_ai_execution_config(session, cast(Settings, ctx["settings"]), cast(Redis, ctx["redis"]))
-            fingerprint, capability_supported = await _dependency_snapshot(config, cast(Redis, ctx["redis"]))
-            mapping = config.aliases.get(EXTRACTION_ALIAS)
-            if (
-                capability_supported
-                and _policy_allows_extraction(config, mapping, config.endpoint_destination_id, source.local_only)
-                and await entities.requeue_blocked_extraction_work(session, blocked_id, old_fingerprint, fingerprint)
-            ):
-                requeued_ids.append(blocked_id)
-            else:
-                await entities.defer_blocked_extraction_recheck(session, blocked_id, old_fingerprint)
+            cursor_key = f"bbd:entity-extraction:ready-cursor:{workspace_id}"
+            raw_cursor = await redis.get(cursor_key)
+            cursor = raw_cursor.decode() if isinstance(raw_cursor, bytes) else raw_cursor if isinstance(raw_cursor, str) else None
+            if cursor is not None and len(cursor) > 512:
+                cursor = None
+            refs, next_cursor = await documents.list_ready_version_refs(
+                session, limit=25, cursor=cursor, scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+            )
             await session.commit()
-    work_ids = list(dict.fromkeys([*work_ids, *requeued_ids]))
-    if next_cursor:
-        await redis.set("bbd:entity-extraction:ready-cursor", next_cursor)
-    else:
-        await redis.delete("bbd:entity-extraction:ready-cursor")
-    for work_id in work_ids:
-        await redis.enqueue_job("process_entity_extraction_work", str(work_id), _job_id=f"entity-extraction:{work_id}")
-        enqueued += 1
+        for ref in refs:
+            async with factory() as session:
+                access_fence = await workspaces.read_access_fence(
+                    session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                )
+                source = await sources.lock_source(
+                    session, ref.source_id, scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
+                    expected_access_fence=access_fence,
+                )
+                current = await documents.get_ready_version_ref(
+                    session, ref.document_version_id, scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
+                )
+                if (
+                    source is None or source.status != "active" or current is None
+                    or current.document_id != ref.document_id or current.source_id != source.id
+                    or current.source_generation != source.generation
+                    or current.source_generation != ref.source_generation
+                ):
+                    await session.commit()
+                    continue
+                work = await entities.schedule_extraction_work(
+                    session, ref.document_version_id, source.generation, EXTRACTOR_VERSION,
+                    PROMPT_VERSION, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                )
+                if current.local_only and work.status != "succeeded" and not (
+                    work.status == "running" and work.lease_expires_at is not None
+                    and work.lease_expires_at > datetime.now(UTC)
+                ):
+                    work.status = "blocked"
+                    work.error_code = "local_only_source"
+                    work.next_attempt_at = datetime.max.replace(tzinfo=UTC)
+                    work.lease_owner = None
+                    work.lease_expires_at = None
+                    work.dependency_fingerprint = None
+                from modules.connectors import public as connectors
+                try:
+                    async with session.begin_nested():
+                        await connectors.map_github_version(
+                            session, current, scope=scope,
+                            multi_workspace_enabled=multi_workspace_enabled,
+                        )
+                except Exception as exc:  # noqa: BLE001  # recovery proceeds for other sources
+                    logger.warning(
+                        "github mapping recovery failed for version %s (%s)",
+                        ref.document_version_id, type(exc).__name__,
+                    )
+                await session.commit()
+        async with factory() as session:
+            blocked_items = await entities.list_blocked_extraction_work(
+                session, limit=25, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
+            await entities.terminalize_exhausted_extraction_work(
+                session, limit=25, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
+            work_ids = await entities.list_recoverable_extraction_work(
+                session, limit=25, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
+            await session.commit()
+        for blocked_id, version_id, captured_generation, error_code, old_fingerprint in blocked_items:
+            if error_code not in {"ai_policy_denied", "structured_unsupported"} or old_fingerprint is None:
+                continue
+            async with factory() as session:
+                ready = await documents.get_ready_version_ref(
+                    session, version_id, scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
+                )
+                source = await sources.lock_source(
+                    session, ready.source_id, scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
+                ) if ready is not None else None
+                current = await documents.get_ready_version_ref(
+                    session, version_id, scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
+                ) if ready is not None else None
+                if (
+                    ready is None or source is None or source.status != "active" or source.local_only
+                    or source.generation != captured_generation or current is None
+                    or current.document_id != ready.document_id or current.source_id != source.id
+                    or current.source_generation != captured_generation
+                ):
+                    await entities.defer_blocked_extraction_recheck(
+                        session, blocked_id, old_fingerprint, scope=scope,
+                        multi_workspace_enabled=multi_workspace_enabled,
+                    )
+                    await session.commit()
+                    continue
+                config = await settings_public.get_ai_execution_config(
+                    session, cast(Settings, ctx["settings"]), cast(Redis, ctx["redis"]), scope=scope,
+                )
+                fingerprint, capability_supported = await _dependency_snapshot(
+                    config, cast(Redis, ctx["redis"]), scope=scope,
+                )
+                mapping = config.aliases.get(EXTRACTION_ALIAS)
+                if (
+                    capability_supported
+                    and _policy_allows_extraction(config, mapping, config.endpoint_destination_id, source.local_only)
+                    and await entities.requeue_blocked_extraction_work(
+                        session, blocked_id, old_fingerprint, fingerprint, scope=scope,
+                        multi_workspace_enabled=multi_workspace_enabled,
+                    )
+                ):
+                    work_ids.append(blocked_id)
+                else:
+                    await entities.defer_blocked_extraction_recheck(
+                        session, blocked_id, old_fingerprint, scope=scope,
+                        multi_workspace_enabled=multi_workspace_enabled,
+                    )
+                await session.commit()
+        if next_cursor:
+            await redis.set(cursor_key, next_cursor)
+        else:
+            await redis.delete(cursor_key)
+        for work_id in dict.fromkeys(work_ids):
+            await redis.enqueue_job(
+                "process_entity_extraction_work", str(work_id),
+                _job_id=f"entity-extraction:{work_id}",
+            )
+            enqueued += 1
     return enqueued
 
 
@@ -312,12 +437,26 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
     """
     factory = _factory(ctx)
     settings = cast(Settings, ctx["settings"])
+    multi_workspace_enabled = settings.multi_workspace_enabled
     redis = cast(Redis, ctx["redis"])
     work_id = UUID(work_id_value)
     lease_owner = hashlib.sha256(f"{work_id}:{datetime.now(UTC).isoformat()}".encode()).hexdigest()[:48]
     dependency_fingerprint: str | None = None
     async with factory() as session:
-        work = await entities.claim_extraction_work(session, work_id, lease_owner, datetime.now(UTC))
+        workspace_id = await session.scalar(select(EntityExtractionWork.workspace_id).where(
+            EntityExtractionWork.id == work_id,
+        ))
+        if workspace_id is None:
+            return
+        scope = await _workspace_job_scope(
+            session, workspace_id, multi_workspace_enabled=multi_workspace_enabled,
+        )
+        if scope is None:
+            return
+        work = await entities.claim_extraction_work(
+            session, work_id, lease_owner, datetime.now(UTC), scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
         if work is None:
             await session.commit()
             return
@@ -327,44 +466,66 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
 
     try:
         async with factory() as session:
-            ready = await documents.get_ready_version_ref(session, version_id)
+            access_fence = await workspaces.read_access_fence(
+                session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
+            ready = await documents.get_ready_version_ref(
+                session, version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
             if ready is None:
-                await entities.set_extraction_work_error(session, work_id, lease_owner, "document_unavailable", blocked=True)
+                await entities.set_extraction_work_error(session, work_id, lease_owner, "document_unavailable", blocked=True,
+                    scope=scope, multi_workspace_enabled=multi_workspace_enabled)
                 await session.commit()
                 return
             expected_document_id = ready.document_id
-            source = await sources.lock_source(session, ready.source_id)
+            source = await sources.lock_source(
+                session, ready.source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                expected_access_fence=access_fence,
+            )
             if source is None or source.status != "active" or source.generation != captured_generation:
-                await entities.set_extraction_work_error(session, work_id, lease_owner, "source_generation_changed", blocked=True)
+                await entities.set_extraction_work_error(session, work_id, lease_owner, "source_generation_changed", blocked=True,
+                    scope=scope, multi_workspace_enabled=multi_workspace_enabled)
                 await session.commit()
                 return
-            if not await documents.lock_document_for_extraction(session, ready.document_id, ready.source_id):
-                await entities.set_extraction_work_error(session, work_id, lease_owner, "document_unavailable", blocked=True)
+            if not await documents.lock_document_for_extraction(
+                session, ready.document_id, ready.source_id, scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+                source_fence=source, expected_raw_uri=ready.raw_uri, expected_mime_type=ready.mime_type,
+            ):
+                await entities.set_extraction_work_error(session, work_id, lease_owner, "document_unavailable", blocked=True,
+                    scope=scope, multi_workspace_enabled=multi_workspace_enabled)
                 await session.commit()
                 return
             # Keep source/document fences while remote work runs so deletion or generation changes cannot race publication.
-            ready = await documents.get_ready_version_ref(session, version_id)
+            ready = await documents.get_ready_version_ref(
+                session, version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
             if (
                 ready is None or ready.document_id != expected_document_id
                 or ready.source_id != source.id or ready.source_generation != captured_generation
             ):
-                await entities.set_extraction_work_error(session, work_id, lease_owner, "document_unavailable", blocked=True)
+                await entities.set_extraction_work_error(session, work_id, lease_owner, "document_unavailable", blocked=True,
+                    scope=scope, multi_workspace_enabled=multi_workspace_enabled)
                 await session.commit()
                 return
             if source.local_only:
-                await entities.set_extraction_work_error(session, work_id, lease_owner, "local_only_source", blocked=True)
+                await entities.set_extraction_work_error(session, work_id, lease_owner, "local_only_source", blocked=True,
+                    scope=scope, multi_workspace_enabled=multi_workspace_enabled)
                 await session.commit()
                 return
-            data = await documents.read_extraction_input(session, version_id)
+            data = await documents.read_extraction_input(
+                session, version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
             if data is None or data.source_generation != source.generation or data.source_generation != captured_generation:
-                await entities.set_extraction_work_error(session, work_id, lease_owner, "document_unavailable", blocked=True)
+                await entities.set_extraction_work_error(session, work_id, lease_owner, "document_unavailable", blocked=True,
+                    scope=scope, multi_workspace_enabled=multi_workspace_enabled)
                 await session.commit()
                 return
-            config = await settings_public.get_ai_execution_config(session, settings, redis)
+            config = await settings_public.get_ai_execution_config(session, settings, redis, scope=scope)
             alias = EXTRACTION_ALIAS
             mapping = config.aliases.get(alias)
             destination = config.endpoint_destination_id
-            dependency_fingerprint, _ = await _dependency_snapshot(config, redis)
+            dependency_fingerprint, _ = await _dependency_snapshot(config, redis, scope=scope)
             policy = RequestPolicy(
                 reasoning_allowed=config.privacy.allow_remote_reasoning,
                 local_only=source.local_only,
@@ -375,7 +536,8 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
             if not _policy_allows_extraction(config, mapping, destination, source.local_only):
                 await entities.set_extraction_work_error(
                     session, work_id, lease_owner, "ai_policy_denied", blocked=True,
-                    dependency_fingerprint=dependency_fingerprint,
+                    dependency_fingerprint=dependency_fingerprint, scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
                 )
                 await session.commit()
                 return
@@ -383,7 +545,9 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
             async def before_send() -> None:
                 """Recheck saved settings and privacy policy immediately before remote use."""
                 async with factory() as current_session:
-                    current = await settings_public.get_ai_execution_config(current_session, settings, redis)
+                    current = await settings_public.get_ai_execution_config(
+                        current_session, settings, redis, scope=scope,
+                    )
                     current_mapping = current.aliases.get(alias)
                     current_destination = current.endpoint_destination_id
                     if (
@@ -404,7 +568,9 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
                         current.omniroute_credential_configured, "structured",
                     ):
                         raise PrivacyPolicyDenied("Extraction policy denied before send")
-                current_ready = await documents.get_ready_version_ref(session, version_id)
+                current_ready = await documents.get_ready_version_ref(
+                    session, version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                )
                 if (
                     current_ready is None or current_ready.document_id != data.document_id
                     or current_ready.source_id != data.source_id
@@ -426,7 +592,9 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
             if not isinstance(response, dict):
                 raise ValueError("invalid_model_response")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
             extracted, actual_model, usage = response_content(response)
-            current_ready = await documents.get_ready_version_ref(session, version_id)
+            current_ready = await documents.get_ready_version_ref(
+                session, version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
             if (
                 current_ready is None or current_ready.document_id != data.document_id
                 or current_ready.source_id != data.source_id
@@ -447,6 +615,7 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
                 session, document_id=data.document_id, document_version_id=version_id,
                 source_id=data.source_id, source_generation=captured_generation,
                 chunk_ids=membership_chunk_ids,
+                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
             ) if membership_chunk_ids else []
             if evidence_refs is None:
                 raise ValueError("document_unavailable")
@@ -456,7 +625,10 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
                 candidate_names_by_type.setdefault(candidate.type, []).append(candidate.name)
             known_cache: dict[str, tuple[list[dict[str, object]], bool]] = {}
             for entity_type, names in candidate_names_by_type.items():
-                known_cache[entity_type] = await entities.list_resolution_candidates(session, entity_type, names)
+                known_cache[entity_type] = await entities.list_resolution_candidates(
+                    session, entity_type, names, scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
+                )
             resolution_plan: dict[str, tuple[str, str | None, list[str], str | None]] = {}
             candidate_by_key = {candidate.key: candidate for candidate in extracted.entities}
             for candidate in extracted.entities:
@@ -502,7 +674,8 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
                 for candidate in extracted.entities
             }
             initial_decisions = await entities.get_document_correction_decisions(
-                session, data.document_id, version_id, candidate_bindings
+                session, data.document_id, version_id, candidate_bindings,
+                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
             )
             canonical_decisions: dict[str, tuple[UUID, str, UUID | None] | None] = {}
             for candidate in extracted.entities:
@@ -514,7 +687,10 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
                 decision_id, action, target_id = decision
                 if target_id is not None:
                     try:
-                        target_id = await entities.resolve_canonical_entity_id(session, target_id)
+                        target_id = await entities.resolve_canonical_entity_id(
+                            session, target_id, scope=scope,
+                            multi_workspace_enabled=multi_workspace_enabled,
+                        )
                     except (LookupError, ValueError):
                         action, target_id = "conflict", None
                 canonical = (decision_id, action, target_id)
@@ -533,7 +709,10 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
             locked_refs = {}
             if existing_ids:
                 try:
-                    refs = await entities.get_entity_refs(session, existing_ids, for_write=True)
+                    refs = await entities.get_entity_refs(
+                        session, existing_ids, for_write=True, scope=scope,
+                        multi_workspace_enabled=multi_workspace_enabled,
+                    )
                     locked_refs = {ref.requested_id: ref for ref in refs}
                 except (LookupError, ValueError):
                     for key, (resolution, match_id, possible, reason) in list(resolution_plan.items()):
@@ -545,9 +724,13 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
             # review-only; never acquire a late entity lock out of order.
             refreshed: dict[str, tuple[list[dict[str, object]], bool]] = {}
             for entity_type, names in candidate_names_by_type.items():
-                refreshed[entity_type] = await entities.list_resolution_candidates(session, entity_type, names)
+                refreshed[entity_type] = await entities.list_resolution_candidates(
+                    session, entity_type, names, scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
+                )
             current_decisions = await entities.get_document_correction_decisions(
-                session, data.document_id, version_id, candidate_bindings, for_update=True
+                session, data.document_id, version_id, candidate_bindings, for_update=True,
+                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
             )
             for candidate in extracted.entities:
                 old_resolution, old_id, _old_possible, old_reason = resolution_plan[candidate.key]
@@ -563,7 +746,10 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
                     decision_id, action, target_id = decision
                     if target_id is not None:
                         try:
-                            target_id = await entities.resolve_canonical_entity_id(session, target_id)
+                            target_id = await entities.resolve_canonical_entity_id(
+                                session, target_id, scope=scope,
+                                multi_workspace_enabled=multi_workspace_enabled,
+                            )
                         except (LookupError, ValueError):
                             target_id = None
                     current_owner_decision = (decision_id, action, target_id)
@@ -633,7 +819,10 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
                     })
                     continue
                 new_entity = resolution == "new"
-                entity_id = UUID(match_id) if match_id else await entities.create_extracted_entity(session, candidate.type)
+                entity_id = UUID(match_id) if match_id else await entities.create_extracted_entity(
+                    session, candidate.type, scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
+                )
                 key_to_entity[candidate.key] = entity_id
                 candidate_key = hashlib.sha256(f"{candidate.type}:{candidate.key}".encode()).hexdigest()
                 for chunk_id in candidate.chunk_ids:
@@ -643,17 +832,20 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
                         extraction_identity=str(work_id), candidate_key=candidate_key,
                         match_fingerprint=match_fingerprints[candidate.key],
                         observed_at=data.observed_at, confidence=candidate.confidence,
+                        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
                     )
                     membership_for[(candidate.key, chunk_id)] = membership_id
                     if new_entity:
                         await entities.publish_derived_field(
                             session, entity_id=entity_id, membership_id=membership_id,
-                            field_name="name", value=candidate.name,
+                            field_name="name", value=candidate.name, scope=scope,
+                            multi_workspace_enabled=multi_workspace_enabled,
                         )
                         if candidate.description:
                             await entities.publish_derived_field(
                                 session, entity_id=entity_id, membership_id=membership_id,
-                                field_name="description", value=candidate.description,
+                                field_name="description", value=candidate.description, scope=scope,
+                                multi_workspace_enabled=multi_workspace_enabled,
                             )
                 facts.append({"entity_id": str(entity_id), "candidate_key": candidate.key, "confidence": candidate.confidence})
             def retain_relationship_review(relation: ExtractedRelationship, reason: str, possible: list[str]) -> None:
@@ -685,17 +877,22 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
                     relationship_type=relation.type, document_version_id=version_id,
                     chunk_id=relation.chunk_id, source_membership_id=source_membership,
                     target_membership_id=target_membership, confidence=relation.confidence,
+                    scope=scope, multi_workspace_enabled=multi_workspace_enabled,
                 )
                 if relationship_id is not None:
                     facts.append({"relationship_id": str(relationship_id), "relationship": relation.type, "source_entity_id": str(source_id), "target_entity_id": str(target_id), "chunk_id": str(relation.chunk_id), "confidence": relation.confidence})
             assert mapping is not None
             if await entities.finish_extraction_work(
                 session, work_id, lease_owner, facts=facts, review=review,
-                model=actual_model or mapping.model, usage=usage,
+                model=actual_model or mapping.model, usage=usage, scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
             ):
                 await commit_with_replay(
                     session,
-                    [make_graph_change(entity_id=entity_id) for entity_id in sorted(set(key_to_entity.values()), key=str)],
+                    [make_graph_change(entity_id=entity_id, scope=scope)
+                     for entity_id in sorted(set(key_to_entity.values()), key=str)],
+                    scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                    access_fence=access_fence,
                 )
             else:
                 await session.rollback()
@@ -705,6 +902,7 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
                 session, work_id, lease_owner,
                 "ai_policy_denied" if isinstance(exc, PrivacyPolicyDenied) else "structured_unsupported",
                 blocked=True, dependency_fingerprint=dependency_fingerprint,
+                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
             )
             await session.commit()
     except ModelGatewayError as exc:
@@ -714,6 +912,7 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
             await entities.set_extraction_work_error(
                 session, work_id, lease_owner, error_code, blocked=blocked,
                 dependency_fingerprint=dependency_fingerprint if blocked else None,
+                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
             )
             await session.commit()
         logger.warning("Entity extraction deferred work_id=%s error_code=%s", work_id, error_code)
@@ -724,6 +923,9 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
             "invalid_relationship_endpoint", "document_unavailable",
         } else "extraction_failed"
         async with factory() as session:
-            await entities.set_extraction_work_error(session, work_id, lease_owner, error_code, blocked=blocked)
+            await entities.set_extraction_work_error(
+                session, work_id, lease_owner, error_code, blocked=blocked,
+                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
             await session.commit()
         logger.warning("Entity extraction failed work_id=%s error_code=%s", work_id, error_code)

@@ -9,10 +9,13 @@ from uuid import UUID
 
 from sqlalchemy import Select, delete, desc, exists, false, func, or_, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import HTTPException
 
 from core.auth.models import Owner
 from core.pagination import decode_cursor, encode_cursor
 from core.realtime import commit_with_replay, make_graph_change
+from core.workspaces import public as workspaces
+from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
 from modules.knowledge.documents import public as documents
 from modules.knowledge.entities import public as entities
 from modules.knowledge.relationships.models import (
@@ -44,6 +47,31 @@ from modules.knowledge.relationships.seed import (
 from modules.sources import public as sources
 from modules.sources.schemas import SourceExportFence
 
+
+def _actor(scope: Scope) -> int:
+    """Return the principal recorded by a real workspace or durable job scope."""
+    return scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
+
+
+async def _admit(
+    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
+    lock: bool = False, expected: AccessFence | None = None,
+) -> AccessFence:
+    """Require owner scope and capture or lock authorization before relationship locks."""
+    if not isinstance(scope, (WorkspaceContext, InternalJobScope)):
+        raise TypeError("An explicit relationship workspace scope is required")
+    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
+    if type(multi_workspace_enabled) is not bool:
+        raise TypeError("The configured multi-workspace feature flag must be a boolean")
+    if lock:
+        return await workspaces.lock_access_fence(
+            session, scope=scope, expected=expected, multi_workspace_enabled=multi_workspace_enabled,
+        )
+    return await workspaces.read_access_fence(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+
 # Explicit re-exports consumed by other modules (mypy strict forbids implicit re-export).
 __all__ = [
     "RelationshipSnapshot",
@@ -54,7 +82,8 @@ MAX_CLEANUP_SUPPORTS = 10_000
 
 
 async def record_relationship_history(
-    session: AsyncSession, relationship_id: UUID, *, deleted: bool = False,
+    session: AsyncSession, relationship_id: UUID, *, deleted: bool = False, scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> None:
     """Flush one presently observed owner snapshot; never backdate canonical truth.
 
@@ -62,11 +91,12 @@ async def record_relationship_history(
     titles and URLs are excluded; derived state is physically cleared on purge.
     Complete exact support is bounded and no missing historical state is invented.
     """
-    snapshot = await get_relationship_snapshot(session, relationship_id)
+    snapshot = await get_relationship_snapshot(session, relationship_id, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled)
     if snapshot is None:
         return
     session.add(RelationshipSnapshotHistory(
-        relationship_id=relationship_id, deleted=deleted,
+        workspace_id=scope.workspace_id, relationship_id=relationship_id, deleted=deleted,
         state=snapshot.relationship.model_dump(mode="json", exclude={"evidence"}),
         support=snapshot.supports,
     ))
@@ -108,26 +138,31 @@ async def purge_history_support(session: AsyncSession, refs: list[tuple[UUID, UU
 
 async def _schedule_relationship_change(
     session: AsyncSession, relationship_id: UUID, fields: list[str], *, deleted: bool = False,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> None:
     """Queue detached exact support in the same owner transaction before commit."""
     from modules.knowledge.temporal import public as temporal
-    row = await session.get(Relationship, relationship_id)
+    row = await session.scalar(select(Relationship).where(
+        Relationship.workspace_id == scope.workspace_id, Relationship.id == relationship_id,
+    ))
     if row is None:
         return
     support = list((await session.execute(select(
         RelationshipEvidence.document_version_id, RelationshipEvidence.chunk_id,
-    ).where(RelationshipEvidence.relationship_id == relationship_id).limit(MAX_CLEANUP_SUPPORTS + 1))).all())
+    ).where(RelationshipEvidence.workspace_id == scope.workspace_id,
+            RelationshipEvidence.relationship_id == relationship_id).limit(MAX_CLEANUP_SUPPORTS + 1))).all())
     if len(support) > MAX_CLEANUP_SUPPORTS:
         raise ValueError("Relationship change exceeds complete support bound")
     await temporal.schedule_canonical_change(
         session, kind="relationship", canonical_id=relationship_id, revision=None,
         fields=fields, support=[(version, chunk) for version, chunk in support],
-        origin=row.origin, deleted=deleted,
+        origin=row.origin, deleted=deleted, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
 
 
 async def get_relationship_snapshot(
-    session: AsyncSession, relationship_id: UUID,
+    session: AsyncSession, relationship_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
 ) -> RelationshipSnapshot | None:
     """Detach complete current fact/support state under caller-held owner fences.
 
@@ -136,10 +171,14 @@ async def get_relationship_snapshot(
     over10000 support fails closed. Caller holds source/document then entity/fact
     publication locks when comparing for writes; this query never commits.
     """
-    row = await session.get(Relationship, relationship_id)
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    row = await session.scalar(select(Relationship).where(
+        Relationship.workspace_id == scope.workspace_id, Relationship.id == relationship_id,
+    ))
     if row is None:
         return None
     supports = list((await session.scalars(select(RelationshipEvidence).where(
+        RelationshipEvidence.workspace_id == scope.workspace_id,
         RelationshipEvidence.relationship_id == relationship_id,
     ).order_by(RelationshipEvidence.id).limit(MAX_CLEANUP_SUPPORTS + 1))).all())
     if len(supports) > MAX_CLEANUP_SUPPORTS:
@@ -148,17 +187,20 @@ async def get_relationship_snapshot(
         raise LookupError("Derived relationship has no permitted support")
     evidence = []
     for offset in range(0, len(supports), 100):
-        batch = await _evidence_read(session, supports[offset:offset + 100])
+        batch = await _evidence_read(session, supports[offset:offset + 100], scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled)
         if len(batch) != len(supports[offset:offset + 100]):
             raise LookupError("Relationship support is unavailable")
         evidence.extend(batch)
-    endpoint_refs = await entities.get_entity_refs(session, [row.source_entity_id, row.target_entity_id])
+    endpoint_refs = await entities.get_entity_refs(session, [row.source_entity_id, row.target_entity_id],
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     membership_ids = sorted({identifier for item in supports for identifier in (
         item.source_membership_id, item.target_membership_id,
     ) if identifier is not None})
     memberships = []
     for offset in range(0, len(membership_ids), 200):
-        memberships.extend(await entities.get_membership_refs(session, membership_ids[offset:offset + 200]))
+        memberships.extend(await entities.get_membership_refs(session, membership_ids[offset:offset + 200],
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled))
     by_id = {item.id: item for item in memberships}
     for item in supports:
         if row.origin == "derived" and (item.source_membership_id is None or item.target_membership_id is None):
@@ -171,7 +213,8 @@ async def get_relationship_snapshot(
     from modules.sources import public as sources
     generations = {}
     for identifier in sorted({item.source_id for item in evidence}):
-        source = await sources.get_connector_source(session, identifier)
+        source = await sources.get_connector_source(session, identifier, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled)
         if source is None or source.status != "active":
             raise LookupError("Relationship source is unavailable")
         generations[str(identifier)] = source.generation
@@ -364,6 +407,8 @@ async def publish_extracted_relationship(
     source_membership_id: UUID,
     target_membership_id: UUID,
     confidence: float,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> UUID | None:
     """Publish exact extraction support, observed history and temporal desired state.
 
@@ -372,9 +417,11 @@ async def publish_extracted_relationship(
     """
     if source_entity_id == target_entity_id:
         return None
-    refs = await documents.read_evidence_refs(session, [(document_version_id, chunk_id)])
+    refs = await documents.read_evidence_refs(session, [(document_version_id, chunk_id)], scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled)
     memberships = await entities.get_membership_refs(
-        session, [source_membership_id, target_membership_id], for_write=True
+        session, [source_membership_id, target_membership_id], for_write=True, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled
     )
     by_id = {item.id: item for item in memberships}
     source_membership, target_membership = by_id[source_membership_id], by_id[target_membership_id]
@@ -383,6 +430,7 @@ async def publish_extracted_relationship(
             raise ValueError("Relationship evidence memberships do not match the cited chunk")
     ref = refs[0]
     relationship = await session.scalar(select(Relationship).where(
+        Relationship.workspace_id == scope.workspace_id,
         Relationship.source_entity_id == source_entity_id,
         Relationship.target_entity_id == target_entity_id,
         Relationship.type == relationship_type,
@@ -393,12 +441,13 @@ async def publish_extracted_relationship(
     created = relationship is None
     if relationship is None:
         relationship = Relationship(
-            source_entity_id=source_entity_id, target_entity_id=target_entity_id,
+            workspace_id=scope.workspace_id, source_entity_id=source_entity_id, target_entity_id=target_entity_id,
             type=relationship_type, origin="derived", confidence=confidence,
         )
         session.add(relationship)
         await session.flush()
     evidence = await session.scalar(select(RelationshipEvidence).where(
+        RelationshipEvidence.workspace_id == scope.workspace_id,
         RelationshipEvidence.relationship_id == relationship.id,
         RelationshipEvidence.document_version_id == document_version_id,
         RelationshipEvidence.chunk_id == chunk_id,
@@ -408,7 +457,7 @@ async def publish_extracted_relationship(
     support_changed = evidence is None or confidence > evidence.confidence
     if evidence is None:
         session.add(RelationshipEvidence(
-            relationship_id=relationship.id, document_version_id=document_version_id,
+            workspace_id=scope.workspace_id, relationship_id=relationship.id, document_version_id=document_version_id,
             chunk_id=chunk_id, document_id=ref.document_id, source_id=ref.source_id,
             observed_at=ref.observed_at, confidence=confidence,
             source_membership_id=source_membership_id, target_membership_id=target_membership_id,
@@ -417,6 +466,7 @@ async def publish_extracted_relationship(
         evidence.confidence = max(evidence.confidence, confidence)
     await session.flush()
     supported_confidence = await session.scalar(select(func.max(RelationshipEvidence.confidence)).where(
+        RelationshipEvidence.workspace_id == scope.workspace_id,
         RelationshipEvidence.relationship_id == relationship.id,
     ))
     confidence_changed = supported_confidence is not None and supported_confidence != relationship.confidence
@@ -424,17 +474,23 @@ async def publish_extracted_relationship(
         relationship.confidence = supported_confidence
     await session.flush()
     if created or support_changed or confidence_changed:
-        await record_relationship_history(session, relationship.id)
-        await _schedule_relationship_change(session, relationship.id, ["support", "confidence"])
+        await record_relationship_history(session, relationship.id, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled)
+        await _schedule_relationship_change(session, relationship.id, ["support", "confidence"],
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     return relationship.id
 
 
-async def _evidence_read(session: AsyncSession, rows: list[RelationshipEvidence]) -> list[EvidenceRead]:
+async def _evidence_read(
+    session: AsyncSession, rows: list[RelationshipEvidence], *, scope: Scope,
+    multi_workspace_enabled: bool,
+) -> list[EvidenceRead]:
     """Join support rows to document-owned provenance and excerpts."""
     if not rows:
         return []
     pairs = list(dict.fromkeys((row.document_version_id, row.chunk_id) for row in rows))
-    refs = await documents.read_evidence_refs(session, pairs)
+    refs = await documents.read_evidence_refs(session, pairs, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled)
     by_pair = {(ref.document_version_id, ref.chunk_id): ref for ref in refs}
     return [
         EvidenceRead(

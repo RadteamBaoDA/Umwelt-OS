@@ -22,6 +22,9 @@ from sqlalchemy import ColumnElement, func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.pagination import decode_cursor, encode_cursor
+from core.realtime import commit_with_replay
+from core.workspaces import public as workspaces
+from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
 from modules.goals.models import Goal
 from modules.goals.schemas import (
     GoalCreate,
@@ -45,6 +48,31 @@ from modules.goals.seed import (
 __all__ = [
     "ensure_demo_goals",
 ]
+
+
+def _actor(scope: Scope) -> int:
+    """Return the principal recorded by a real workspace or durable job scope."""
+    return scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
+
+
+async def _admit(
+    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
+    lock: bool = False, expected: AccessFence | None = None,
+) -> AccessFence:
+    """Require owner scope and capture or lock authorization before goal/task locks."""
+    if not isinstance(scope, (WorkspaceContext, InternalJobScope)):
+        raise TypeError("An explicit goal workspace scope is required")
+    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
+    if type(multi_workspace_enabled) is not bool:
+        raise TypeError("The configured multi-workspace feature flag must be a boolean")
+    if lock:
+        return await workspaces.lock_access_fence(
+            session, scope=scope, expected=expected, multi_workspace_enabled=multi_workspace_enabled,
+        )
+    return await workspaces.read_access_fence(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
 
 MAX_REVISION = 9_007_199_254_740_991
 GOAL_EXPORT_PAGE_BYTES = 16_777_216
@@ -83,39 +111,47 @@ def _decode_goal_export_cursor(cursor: str) -> tuple[datetime, datetime, UUID]:
         raise HTTPException(status_code=422, detail="Goal export cursor is invalid") from exc
 
 
-def _goal_export_scope(owner_id: int, snapshot_at: datetime) -> tuple[ColumnElement[bool], ...]:
+def _goal_export_scope(scope: Scope, snapshot_at: datetime) -> tuple[ColumnElement[bool], ...]:
     """Select one owner's stored goal revisions present at the export cutoff."""
-    return Goal.owner_id == owner_id, Goal.created_at <= snapshot_at, Goal.updated_at <= snapshot_at
+    return Goal.workspace_id == scope.workspace_id, Goal.created_at <= snapshot_at, Goal.updated_at <= snapshot_at
 
 
-async def _goal_export_read(session: AsyncSession, row: Goal) -> GoalRead:
+async def _goal_export_read(
+    session: AsyncSession, row: Goal, *, scope: Scope, multi_workspace_enabled: bool,
+) -> GoalRead:
     """Reuse Goal's task/entity public projections while excluding internal replay manifests."""
     task_ids = _milestone_task_ids(row.milestones or [])
-    task_states = await _task_rows_for_goal(session, row.owner_id, task_ids, row.id)
+    task_states = await _task_rows_for_goal(
+        session, task_ids, row.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     result = await _reconcile_goal(row, task_states)
-    return await _current_entity_projection(session, result)
+    return await _current_entity_projection(session, result, scope=scope,
+                                            multi_workspace_enabled=multi_workspace_enabled)
 
 
 async def export_page(
-    session: AsyncSession, *, owner_id: int, record_kind: str, limit: int = 50, cursor: str | None = None,
+    session: AsyncSession, *, owner_id: int, record_kind: str, scope: Scope,
+    multi_workspace_enabled: bool, limit: int = 50, cursor: str | None = None,
 ) -> GoalExportPage:
     """Return a bounded owner page of stored goal fields with final-validation digests."""
-    if owner_id != 1 or record_kind != "goals" or not 1 <= limit <= 100:
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if owner_id != _actor(scope) or record_kind != "goals" or not 1 <= limit <= 100:
         raise ValueError("Goal export owner, kind or page limit is invalid")
     if cursor is None:
         snapshot_at, position = datetime.now(UTC), None
     else:
         snapshot_at, position_at, position_id = _decode_goal_export_cursor(cursor)
         position = (position_at, position_id)
-    scope = _goal_export_scope(owner_id, snapshot_at)
-    snapshot_count = int(await session.scalar(select(func.count()).select_from(Goal).where(*scope)) or 0)
-    statement = select(Goal).where(*scope).execution_options(populate_existing=True)
+    snapshot_predicates = _goal_export_scope(scope, snapshot_at)
+    snapshot_count = int(await session.scalar(select(func.count()).select_from(Goal).where(*snapshot_predicates)) or 0)
+    statement = select(Goal).where(*snapshot_predicates).execution_options(populate_existing=True)
     if position is not None:
         statement = statement.where(tuple_(Goal.created_at, Goal.id) > position)
     # PRODUCTION FIX: execute().all() yields Row[Goal] tuples, not Goal instances; scalars() returns the ORM rows.
     rows = list((await session.scalars(statement.order_by(Goal.created_at, Goal.id).limit(limit + 1))).all())
     has_more, rows = len(rows) > limit, rows[:limit]
-    items = [await _goal_export_read(session, row) for row in rows]
+    items = [await _goal_export_read(session, row, scope=scope,
+                                     multi_workspace_enabled=multi_workspace_enabled) for row in rows]
     encoded = [item.model_dump_json().encode("utf-8") for item in items]
     payload_bytes = 2 + sum(map(len, encoded)) + max(0, len(items) - 1)
     if payload_bytes > GOAL_EXPORT_PAGE_BYTES:
@@ -134,23 +170,27 @@ async def export_page(
 
 async def validate_export_fences(
     session: AsyncSession, *, owner_id: int, record_kind: str, snapshot_at: datetime,
-    expected_snapshot_count: int, fences: list[GoalExportFence],
+    expected_snapshot_count: int, fences: list[GoalExportFence], scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> GoalExportValidation:
     """Recheck each goal digest and the fixed-cutoff owner inventory before publication."""
-    if owner_id != 1 or record_kind != "goals" or len(fences) > 100:
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if owner_id != _actor(scope) or record_kind != "goals" or len(fences) > 100:
         raise ValueError("Goal export validation input is invalid")
     observed = int(await session.scalar(
-        select(func.count()).select_from(Goal).where(*_goal_export_scope(owner_id, snapshot_at))
+        select(func.count()).select_from(Goal).where(*_goal_export_scope(scope, snapshot_at))
     ) or 0)
     if observed != expected_snapshot_count:
         return GoalExportValidation(valid=False, reason="snapshot_count_changed", observed_snapshot_count=observed)
     for fence in fences:
         row = await session.scalar(select(Goal).where(
-            Goal.id == fence.id, *_goal_export_scope(owner_id, snapshot_at),
+            Goal.id == fence.id, *_goal_export_scope(scope, snapshot_at),
         ).execution_options(populate_existing=True))
         if row is None:
             return GoalExportValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
-        item = await _goal_export_read(session, row)
+        item = await _goal_export_read(
+            session, row, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
         if (item.created_at != fence.created_at or item.updated_at != fence.updated_at
                 or item.revision != fence.revision
                 or hashlib.sha256(item.model_dump_json().encode("utf-8")).hexdigest() != fence.content_digest):
@@ -220,7 +260,9 @@ def _to_goal_read(goal: Goal) -> GoalRead:
     )
 
 
-async def _current_entity_projection(session: AsyncSession, result: GoalRead) -> GoalRead:
+async def _current_entity_projection(
+    session: AsyncSession, result: GoalRead, *, scope: Scope, multi_workspace_enabled: bool,
+) -> GoalRead:
     """Project only current canonical entities through the entity owner's read contract."""
     if not result.entity_ids:
         return result
@@ -229,7 +271,9 @@ async def _current_entity_projection(session: AsyncSession, result: GoalRead) ->
     visible = []
     for entity_id in result.entity_ids:
         try:
-            refs = await entities.get_entity_refs(session, [entity_id])
+            refs = await entities.get_entity_refs(
+                session, [entity_id], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
         except LookupError:
             continue
         visible.append(refs[0].canonical_id)
@@ -237,27 +281,31 @@ async def _current_entity_projection(session: AsyncSession, result: GoalRead) ->
     return result
 
 
-async def _lock_goal(session: AsyncSession, owner_id: int, goal_id: UUID) -> Goal:
+async def _lock_goal(
+    session: AsyncSession, goal_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+) -> Goal:
     """Acquire an owner-scoped goal row lock used as the first domain lock."""
     row = await session.scalar(select(Goal).where(
-        Goal.id == goal_id, Goal.owner_id == owner_id,
+        Goal.id == goal_id, Goal.workspace_id == scope.workspace_id,
     ).with_for_update().execution_options(populate_existing=True))
     if row is None:
         raise GoalMissing
     return row
 
 
-async def require_active_goal_link(session: AsyncSession, owner_id: int, goal_id: UUID) -> None:
+async def require_active_goal_link(
+    session: AsyncSession, goal_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+) -> None:
     """Reject task links to missing, foreign, or non-active goals."""
     goal = await session.scalar(select(Goal.id).where(
-        Goal.id == goal_id, Goal.owner_id == owner_id, Goal.status == "active",
+        Goal.id == goal_id, Goal.workspace_id == scope.workspace_id, Goal.status == "active",
     ))
     if goal is None:
         raise ValueError("goal_id must identify an active goal owned by this account")
 
 
 async def lock_owned_goal_links(
-    session: AsyncSession, owner_id: int, goal_ids: Sequence[UUID]
+    session: AsyncSession, goal_ids: Sequence[UUID], *, scope: Scope, multi_workspace_enabled: bool,
 ) -> None:
     """Lock at most two existing owner goals in stable ID order before task locks."""
     if len(goal_ids) > 2 or len(set(goal_ids)) != len(goal_ids):
@@ -265,19 +313,22 @@ async def lock_owned_goal_links(
     if not goal_ids:
         return
     rows = list((await session.scalars(select(Goal).where(
-        Goal.id.in_(goal_ids), Goal.owner_id == owner_id,
+        Goal.id.in_(goal_ids), Goal.workspace_id == scope.workspace_id,
     ).order_by(Goal.id).with_for_update())).all())
     if {row.id for row in rows} != set(goal_ids):
         raise ValueError("Goal link is missing or foreign")
 
 
 async def _task_rows_for_goal(
-    session: AsyncSession, owner_id: int, task_ids: Sequence[UUID], goal_id: UUID
+    session: AsyncSession, task_ids: Sequence[UUID], goal_id: UUID, *,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> dict[UUID, bool]:
     """Read completion states through the task owner's bounded detached DTO contract."""
     from modules.tasks import public as tasks
 
-    return await tasks.linked_task_completion(session, owner_id, task_ids, goal_id)
+    return await tasks.linked_task_completion(
+        session, task_ids, goal_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
 
 
 async def _reconcile_goal(goal: Goal, task_states: dict[UUID, bool]) -> GoalRead:
@@ -294,7 +345,8 @@ async def _reconcile_goal(goal: Goal, task_states: dict[UUID, bool]) -> GoalRead
 
 
 async def reconcile_task_milestone(
-    session: AsyncSession, owner_id: int, task_id: UUID, locked_goal_ids: Sequence[UUID],
+    session: AsyncSession, task_id: UUID, locked_goal_ids: Sequence[UUID], *,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> None:
     """Persist final task linkage/completion into each affected already-locked goal once."""
     from modules.tasks import public as tasks
@@ -302,13 +354,17 @@ async def reconcile_task_milestone(
     if len(locked_goal_ids) > 2:
         raise ValueError("Task progress reconciliation is bounded to two goals")
     for goal_id in locked_goal_ids:
-        goal = await session.get(Goal, goal_id)
-        if goal is None or goal.owner_id != owner_id:
+        goal = await session.scalar(select(Goal).where(
+            Goal.id == goal_id, Goal.workspace_id == scope.workspace_id,
+        ))
+        if goal is None:
             continue
         changed = False
         # JSONB values are nested mutable structures; detached copies make change detection reliable.
         milestones = deepcopy(goal.milestones or [])
-        state = await tasks.linked_task_completion(session, owner_id, [task_id], goal_id)
+        state = await tasks.linked_task_completion(
+            session, [task_id], goal_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
         effective = state.get(task_id, False)
         for milestone in milestones:
             if milestone.get("task_id") == str(task_id):
@@ -327,7 +383,9 @@ async def reconcile_task_milestone(
         goal.revision += 1
 
 
-async def create_goal(session: AsyncSession, owner_id: int, payload: GoalCreate) -> GoalRead:
+async def create_goal(
+    session: AsyncSession, payload: GoalCreate, *, scope: Scope, multi_workspace_enabled: bool,
+) -> GoalRead:
     """Create an owner goal with manual or milestone-derived progress."""
     if any(item.task_id is not None for item in payload.milestones):
         raise ValueError("A new goal cannot link tasks before it exists")
@@ -335,10 +393,13 @@ async def create_goal(session: AsyncSession, owner_id: int, payload: GoalCreate)
         raise ValueError("A goal may contain at most 100 milestone and entity references")
     from modules.tasks import public as tasks
 
-    await tasks.validate_entity_references_for_write(session, payload.entity_ids)
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    await tasks.validate_entity_references_for_write(
+        session, payload.entity_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     values = [item.model_dump(mode="json") for item in payload.milestones]
     goal = Goal(
-        owner_id=owner_id, title=payload.title, description=payload.description,
+        workspace_id=scope.workspace_id, owner_id=_actor(scope), title=payload.title, description=payload.description,
         desired_outcome=payload.desired_outcome, deadline=payload.deadline,
         progress=payload.progress if payload.manual_progress and payload.progress is not None else (0.0 if payload.manual_progress else _calculate_progress(values)),
         manual_progress=payload.manual_progress, status=payload.status,
@@ -346,18 +407,23 @@ async def create_goal(session: AsyncSession, owner_id: int, payload: GoalCreate)
         accepted_proposals=[], revision=1,
     )
     session.add(goal)
-    await session.commit()
+    await commit_with_replay(session, [], scope=scope,
+                             multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
     await session.refresh(goal)
-    return await _current_entity_projection(session, _to_goal_read(goal))
+    return await _current_entity_projection(session, _to_goal_read(goal), scope=scope,
+                                            multi_workspace_enabled=multi_workspace_enabled)
 
 
-async def update_goal(session: AsyncSession, owner_id: int, goal_id: UUID, payload: GoalUpdate) -> GoalRead:
+async def update_goal(
+    session: AsyncSession, goal_id: UUID, payload: GoalUpdate, *, scope: Scope, multi_workspace_enabled: bool,
+) -> GoalRead:
     """Patch an owner goal with revision checks and null-as-clear semantics.
 
     Distinct task IDs are sent to the bounded task-owner queries, while every milestone
     remains in the stored list and contributes independently to progress.
     """
-    goal = await _lock_goal(session, owner_id, goal_id)
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    goal = await _lock_goal(session, goal_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if payload.expected_revision != goal.revision:
         raise GoalConflict("stale_revision", f"Expected revision {payload.expected_revision} but goal is at {goal.revision}", goal.revision)
     if goal.revision >= MAX_REVISION:
@@ -378,10 +444,12 @@ async def update_goal(session: AsyncSession, owner_id: int, goal_id: UUID, paylo
         from modules.tasks import public as tasks
 
         await tasks.validate_linked_tasks(
-            session, owner_id, linked_ids, goal.id,
+            session, linked_ids, goal.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
             allow_deleted_ids=list(set(linked_ids) & prior_links),
         )
-        task_states = await tasks.linked_task_completion(session, owner_id, linked_ids, goal.id)
+        task_states = await tasks.linked_task_completion(
+            session, linked_ids, goal.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
         for item in next_milestones:
             if item.get("task_id"):
                 item["completed"] = task_states.get(UUID(str(item["task_id"])), False)
@@ -396,7 +464,9 @@ async def update_goal(session: AsyncSession, owner_id: int, goal_id: UUID, paylo
     if "entity_ids" in fields:
         from modules.tasks import public as tasks
 
-        await tasks.validate_entity_references_for_write(session, current_entities)
+        await tasks.validate_entity_references_for_write(
+            session, current_entities, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
     for name in ("title", "description", "desired_outcome", "deadline", "status"):
         if name in fields:
             setattr(goal, name, getattr(payload, name))
@@ -412,26 +482,32 @@ async def update_goal(session: AsyncSession, owner_id: int, goal_id: UUID, paylo
     else:
         goal.progress = _calculate_progress(goal.milestones or [])
     goal.revision += 1
-    await session.commit()
+    await commit_with_replay(session, [], scope=scope,
+                             multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
     await session.refresh(goal)
-    return await _current_entity_projection(session, _to_goal_read(goal))
+    return await _current_entity_projection(session, _to_goal_read(goal), scope=scope,
+                                            multi_workspace_enabled=multi_workspace_enabled)
 
 
-async def get_goal(session: AsyncSession, owner_id: int, goal_id: UUID) -> GoalRead:
+async def get_goal(session: AsyncSession, goal_id: UUID, *, scope: Scope, multi_workspace_enabled: bool) -> GoalRead:
     """Fetch a goal inside the authenticated owner's scope."""
-    goal = await session.scalar(select(Goal).where(Goal.id == goal_id, Goal.owner_id == owner_id))
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    goal = await session.scalar(select(Goal).where(Goal.id == goal_id, Goal.workspace_id == scope.workspace_id))
     if goal is None:
         raise GoalMissing
     task_ids = _milestone_task_ids(goal.milestones or [])
     result = await _reconcile_goal(
-        goal, await _task_rows_for_goal(session, owner_id, task_ids, goal_id)
+        goal, await _task_rows_for_goal(session, task_ids, goal_id, scope=scope,
+                                       multi_workspace_enabled=multi_workspace_enabled)
     )
-    return await _current_entity_projection(session, result)
+    return await _current_entity_projection(session, result, scope=scope,
+                                            multi_workspace_enabled=multi_workspace_enabled)
 
 
-async def list_goals(session: AsyncSession, owner_id: int, filter: GoalFilter) -> GoalPage:
+async def list_goals(session: AsyncSession, filter: GoalFilter, *, scope: Scope, multi_workspace_enabled: bool) -> GoalPage:
     """Return a bounded cursor page of owner goals, with linked progress refreshed."""
-    statement = select(Goal).where(Goal.owner_id == owner_id)
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    statement = select(Goal).where(Goal.workspace_id == scope.workspace_id)
     if filter.status is not None: statement = statement.where(Goal.status == filter.status)
     if filter.q and filter.q.strip():
         term = f"%{filter.q.strip()}%"
@@ -446,16 +522,21 @@ async def list_goals(session: AsyncSession, owner_id: int, filter: GoalFilter) -
     for goal in rows:
         task_ids = _milestone_task_ids(goal.milestones or [])
         result = await _reconcile_goal(
-            goal, await _task_rows_for_goal(session, owner_id, task_ids, goal.id)
+            goal, await _task_rows_for_goal(session, task_ids, goal.id, scope=scope,
+                                           multi_workspace_enabled=multi_workspace_enabled)
         )
-        results.append(await _current_entity_projection(session, result))
+        results.append(await _current_entity_projection(session, result, scope=scope,
+                                                        multi_workspace_enabled=multi_workspace_enabled))
     cursor = encode_cursor(rows[-1].created_at, rows[-1].id) if more and rows else None
     return GoalPage(items=results, next_cursor=cursor)
 
 
-async def delete_goal(session: AsyncSession, owner_id: int, goal_id: UUID, expected_revision: int) -> None:
+async def delete_goal(
+    session: AsyncSession, goal_id: UUID, expected_revision: int, *, scope: Scope, multi_workspace_enabled: bool,
+) -> None:
     """Delete a revision-fenced goal after its task owner contract detaches linked tasks."""
-    goal = await _lock_goal(session, owner_id, goal_id)
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    goal = await _lock_goal(session, goal_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if goal.revision != expected_revision:
         raise GoalConflict("stale_revision", f"Expected revision {expected_revision} but goal is at {goal.revision}", goal.revision)
     if goal.revision >= MAX_REVISION:
@@ -463,11 +544,13 @@ async def delete_goal(session: AsyncSession, owner_id: int, goal_id: UUID, expec
     from modules.tasks import public as tasks
 
     try:
-        await tasks.detach_goal_tasks(session, owner_id, goal_id)
+        await tasks.detach_goal_tasks(session, goal_id, scope=scope,
+                                      multi_workspace_enabled=multi_workspace_enabled)
     except tasks.TaskConflict as exc:
         raise GoalConflict(exc.code, str(exc), exc.current_revision) from exc
     await session.delete(goal)
-    await session.commit()
+    await commit_with_replay(session, [], scope=scope,
+                             multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
 
 
 def _proposal_hash(proposal: PlanProposal) -> str:
@@ -480,9 +563,12 @@ def _proposal_hash(proposal: PlanProposal) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
-async def accept_plan(session: AsyncSession, owner_id: int, goal_id: UUID, proposal: PlanProposal) -> PlanAcceptanceResult:
+async def accept_plan(
+    session: AsyncSession, goal_id: UUID, proposal: PlanProposal, *, scope: Scope, multi_workspace_enabled: bool,
+) -> PlanAcceptanceResult:
     """Atomically accept a content-bound proposal once and replay its stored task manifest."""
-    goal = await _lock_goal(session, owner_id, goal_id)
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    goal = await _lock_goal(session, goal_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     fingerprint = _proposal_hash(proposal)
     manifest = list(goal.accepted_proposals or [])
     previous = next((item for item in manifest if item.get("proposal_id") == proposal.proposal_id), None)
@@ -491,9 +577,13 @@ async def accept_plan(session: AsyncSession, owner_id: int, goal_id: UUID, propo
             raise GoalConflict("idempotency_key_reused", "proposal_id was already accepted with different content", goal.revision)
         from modules.tasks import public as tasks
 
-        live, deleted = await tasks.accepted_task_results(session, owner_id, [UUID(item) for item in previous.get("task_ids", [])])
+        live, deleted = await tasks.accepted_task_results(
+            session, [UUID(item) for item in previous.get("task_ids", [])], scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
         return PlanAcceptanceResult(
-            goal=await _current_entity_projection(session, _to_goal_read(goal)),
+            goal=await _current_entity_projection(session, _to_goal_read(goal), scope=scope,
+                                                  multi_workspace_enabled=multi_workspace_enabled),
             created_tasks=live, deleted_task_ids=deleted,
             accepted_goal_revision=previous["accepted_goal_revision"],
             accepted_milestone_ids=[UUID(item) for item in previous.get("milestone_ids", [])],
@@ -536,7 +626,9 @@ async def accept_plan(session: AsyncSession, owner_id: int, goal_id: UUID, propo
     entity_lock_ids = sorted(set(proposal_entity_ids), key=str)
     if len(entity_lock_ids) > 100:
         raise ValueError("A proposal may reference at most 100 unique entities")
-    await tasks.validate_entity_references_for_write(session, entity_lock_ids)
+    await tasks.validate_entity_references_for_write(
+        session, entity_lock_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
 
     milestone_values = deepcopy(existing_milestones)
     task_ids: list[UUID] = []
@@ -546,11 +638,12 @@ async def accept_plan(session: AsyncSession, owner_id: int, goal_id: UUID, propo
         payload = TaskProposal.model_validate(task.model_dump())
         from modules.tasks.schemas import TaskCreate
 
-        created.append(await tasks.create_task_in_uow(session, owner_id, TaskCreate(
+        created.append(await tasks.create_task_in_uow(session, TaskCreate(
             title=payload.title, description=payload.description, status=payload.status,
             due_date=payload.due_date, due_at=payload.due_at, goal_id=goal.id,
             entity_ids=payload.entity_ids,
-        ), idempotency_key=(goal.id, proposal.proposal_id, index)))
+        ), scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            idempotency_key=(goal.id, proposal.proposal_id, index)))
         task_ids.append(created[-1].id)
     for index, item in enumerate(proposal.milestones):
         milestone_id = item.id or uuid5(goal.id, f"accepted:{proposal.proposal_id}:milestone:{index}")
@@ -570,10 +663,12 @@ async def accept_plan(session: AsyncSession, owner_id: int, goal_id: UUID, propo
         "accepted_goal_revision": goal.revision,
     })
     goal.accepted_proposals = manifest
-    await session.commit()
+    await commit_with_replay(session, [], scope=scope,
+                             multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
     await session.refresh(goal)
     return PlanAcceptanceResult(
-        goal=await _current_entity_projection(session, _to_goal_read(goal)),
+        goal=await _current_entity_projection(session, _to_goal_read(goal), scope=scope,
+                                              multi_workspace_enabled=multi_workspace_enabled),
         created_tasks=created, deleted_task_ids=[],
         accepted_goal_revision=goal.revision,
         accepted_milestone_ids=proposal_milestone_ids,
@@ -588,33 +683,51 @@ class GoalService:
         """Store the session used by the service facade."""
         self.session = session
 
-    async def create_goal(self, owner_id: int, payload: GoalCreate) -> GoalRead:
-        """Create an owner goal through the public contract."""
-        return await create_goal(self.session, owner_id, payload)
+    async def create_goal(
+        self, payload: GoalCreate, *, scope: Scope, multi_workspace_enabled: bool,
+    ) -> GoalRead:
+        """Create a goal through the required admitted workspace contract."""
+        return await create_goal(self.session, payload, scope=scope,
+                                 multi_workspace_enabled=multi_workspace_enabled)
 
-    async def update_goal(self, owner_id: int, goal_id: UUID, payload: GoalUpdate) -> GoalRead:
-        """Patch an owner goal through the public contract."""
-        return await update_goal(self.session, owner_id, goal_id, payload)
+    async def update_goal(
+        self, goal_id: UUID, payload: GoalUpdate, *, scope: Scope, multi_workspace_enabled: bool,
+    ) -> GoalRead:
+        """Patch a goal through its workspace-scoped revision contract."""
+        return await update_goal(self.session, goal_id, payload, scope=scope,
+                                 multi_workspace_enabled=multi_workspace_enabled)
 
-    async def get_goal(self, owner_id: int, goal_id: UUID) -> GoalRead:
-        """Read an owner goal through the public contract."""
-        return await get_goal(self.session, owner_id, goal_id)
+    async def get_goal(
+        self, goal_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+    ) -> GoalRead:
+        """Read a goal through its admitted workspace contract."""
+        return await get_goal(self.session, goal_id, scope=scope,
+                              multi_workspace_enabled=multi_workspace_enabled)
 
-    async def list_goals(self, owner_id: int, filter: GoalFilter) -> GoalPage:
-        """List goals through the public bounded query contract."""
-        return await list_goals(self.session, owner_id, filter)
+    async def list_goals(
+        self, filter: GoalFilter, *, scope: Scope, multi_workspace_enabled: bool,
+    ) -> GoalPage:
+        """List goals through the bounded workspace query contract."""
+        return await list_goals(self.session, filter, scope=scope,
+                                multi_workspace_enabled=multi_workspace_enabled)
 
-    async def delete_goal(self, owner_id: int, goal_id: UUID, expected_revision: int) -> None:
-        """Delete a revision-fenced goal through the public contract."""
-        await delete_goal(self.session, owner_id, goal_id, expected_revision)
+    async def delete_goal(
+        self, goal_id: UUID, expected_revision: int, *, scope: Scope, multi_workspace_enabled: bool,
+    ) -> None:
+        """Delete a goal through its workspace-scoped revision contract."""
+        await delete_goal(self.session, goal_id, expected_revision, scope=scope,
+                          multi_workspace_enabled=multi_workspace_enabled)
 
-    async def accept_plan(self, owner_id: int, goal_id: UUID, proposal: PlanProposal) -> PlanAcceptanceResult:
-        """Accept or replay one owner-approved proposal through the public UoW."""
-        return await accept_plan(self.session, owner_id, goal_id, proposal)
+    async def accept_plan(
+        self, goal_id: UUID, proposal: PlanProposal, *, scope: Scope, multi_workspace_enabled: bool,
+    ) -> PlanAcceptanceResult:
+        """Accept or replay a proposal through its admitted workspace UoW."""
+        return await accept_plan(self.session, goal_id, proposal, scope=scope,
+                                 multi_workspace_enabled=multi_workspace_enabled)
 
 
 async def list_deadlines_within(
-    session: AsyncSession, owner_id: int, lead_days: int, limit: int = 100,
+    session: AsyncSession, lead_days: int, limit: int = 100, *, scope: Scope, multi_workspace_enabled: bool,
 ) -> list[tuple[UUID, str, str, int, float]]:
     """Active goals whose deadline is within ``lead_days`` ahead (or up to one day past), bounded.
 
@@ -624,9 +737,10 @@ async def list_deadlines_within(
 
     from sqlalchemy import select
 
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     today = datetime.now(UTC).date()
     rows = (await session.scalars(select(Goal).where(
-        Goal.owner_id == owner_id, Goal.status == "active", Goal.deadline.is_not(None),
+        Goal.workspace_id == scope.workspace_id, Goal.status == "active", Goal.deadline.is_not(None),
         Goal.deadline.between(today - timedelta(days=1), today + timedelta(days=lead_days)),
     ).order_by(Goal.deadline, Goal.id).limit(limit))).all()
     return [(g.id, g.status, d.isoformat(), (d - today).days, float(g.progress)) for g in rows if (d := g.deadline) is not None]
