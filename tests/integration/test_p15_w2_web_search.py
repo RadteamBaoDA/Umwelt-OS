@@ -179,6 +179,33 @@ async def test_end_to_end_search_sends_only_literal_query_and_persists_cited_res
         await _cleanup(factory, conversation_id)
 
 
+async def test_same_url_results_persist_one_citation(
+    factory: async_sessionmaker[AsyncSession], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    message = "dup news [fake:search=dup]"
+    conversation_id, run_id, _ = await _run(factory, message)
+
+    async def stream(**kwargs: Any) -> AsyncIterator[str]:
+        yield 'data: {"choices": [{"delta": {"content": "A [1] B [2]"}}]}'
+
+    monkeypatch.setattr(worker, "approved_web_search_transport", _fake_provider)
+    monkeypatch.setattr(worker, "build_context", AsyncMock(return_value=AnswerContext(query=message, evidence=[])))
+    monkeypatch.setattr(worker, "ModelGateway", lambda **_k: SimpleNamespace(stream=stream))
+    try:
+        with patch.object(asyncio.get_running_loop(), "getaddrinfo", AsyncMock(return_value=[_answer("93.184.216.34")])):
+            await worker.run_response_generation(run_id, factory, _settings(), _Redis())  # type: ignore[arg-type]
+        async with factory() as session:
+            run = await session.get(ResponseRun, run_id)
+            assert run is not None and run.status == "completed"
+            assert run.retrieval_context[WEB_SEARCH_OUTCOME_KEY]["result_count"] == 2
+            answer = await session.get(Message, run.assistant_message_id)
+            assert answer is not None and answer.content == "A [1] B [1]"
+            assert [c["url"] for c in answer.citations] == ["https://example.org/two"]
+            assert answer.citations[0]["title"] == "Dup A"
+    finally:
+        await _cleanup(factory, conversation_id)
+
+
 async def test_consent_revoked_while_fence_waits_sends_nothing(
     factory: async_sessionmaker[AsyncSession], committed_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -301,6 +301,14 @@ def test_sanitize_url_host_rules() -> None:
     assert cyrillic is not None and cyrillic[1] == "xn--pple-43d.com"
     upper = ws.sanitize_url("https://EX.com/")
     assert upper is not None and upper[1] == "ex.com"
+    assert ws.sanitize_url("https://Example.COM:8080/A#f") == ("https://example.com:8080/A", "example.com")
+    assert ws.sanitize_url("https://Example.COM/a") == ws.sanitize_url("https://example.com/a")
+
+
+def test_host_case_variants_share_one_url_for_citation_dedupe() -> None:
+    items = [{"title": "A", "url": "https://Example.COM/a", "content": "c"},
+             {"title": "B", "url": "https://example.com/a", "content": "c"}]
+    assert len({r.url for r in ws.parse_results("tavily", {"results": items})}) == 1  # worker dedupes by url
 
 
 def test_content_type_exact_media_type() -> None:

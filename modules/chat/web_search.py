@@ -103,7 +103,7 @@ def sanitize_url(raw: str) -> tuple[str, str] | None:
         return None
     if not _HOST_OK.fullmatch(host):
         return None
-    return urlunsplit(parts._replace(fragment="")), host
+    return urlunsplit(parts._replace(netloc=parts.netloc.lower(), fragment="")), host  # no userinfo here, so netloc is host[:port]
 
 
 def _result(title: Any, url: Any, snippet: Any) -> WebSearchResult | None:

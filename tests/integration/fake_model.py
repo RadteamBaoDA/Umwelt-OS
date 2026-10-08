@@ -7,7 +7,7 @@ with a `[fake:tokens=N,delay_ms=M,first_delay_ms=F,cite=K]` marker anywhere in t
 
 Web search (P15): Tavily-shaped `POST /search` and Brave-shaped `GET /res/v1/web/search`. The same marker in
 the query selects `search=down` (503), `search=slow` (sleep FAKE_SEARCH_SLOW_MS, default 10 s),
-`search=inject` (prompt-injection snippet), `search=empty` (zero results) and `search_delay_ms=N`.
+`search=inject` (prompt-injection snippet), `search=empty` (zero results), `search=dup` (two results, same URL up to the fragment) and `search_delay_ms=N`.
 Env `FAKE_SEARCH_MODE` / `FAKE_SEARCH_DELAY_MS` set the defaults. Every request is logged (path, query, body,
 header names, auth present) at `GET /_fake/search-log`; `DELETE /_fake/search-log` clears it.
 Non-stream chat honours `first_delay_ms` too (slept after the body is read, before the headers).
@@ -141,11 +141,17 @@ async def _search(request: Request, query: str, body: object, shape: str) -> Res
         await asyncio.sleep(delay / 1000)
     if mode == "down":
         return JSONResponse({"error": "unavailable"}, status_code=503)
-    items = [] if mode == "empty" else [
-        {"title": "Fake result one", "url": "https://example.com/one", "snippet": "First fake snippet."},
-        {"title": "Fake result two", "url": "https://example.org/two#frag",
-         "snippet": _INJECT if mode == "inject" else "Second fake snippet."},
-    ]
+    if mode == "dup":
+        items = [
+            {"title": "Dup A", "url": "https://example.org/two#frag", "snippet": "Dup snippet A."},
+            {"title": "Dup B", "url": "https://example.org/two", "snippet": "Dup snippet B."},
+        ]
+    else:
+        items = [] if mode == "empty" else [
+            {"title": "Fake result one", "url": "https://example.com/one", "snippet": "First fake snippet."},
+            {"title": "Fake result two", "url": "https://example.org/two#frag",
+             "snippet": _INJECT if mode == "inject" else "Second fake snippet."},
+        ]
     if shape == "tavily":
         return JSONResponse({"results": [{"title": i["title"], "url": i["url"], "content": i["snippet"]} for i in items]})
     return JSONResponse({"web": {"results": [
