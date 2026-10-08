@@ -40,6 +40,7 @@ from modules.knowledge.documents.public import (
     news_retained_observation_allowed,
     read_extraction_input,
 )
+from tests.unit.modules.knowledge.documents._scope import SCOPE_KW
 
 
 class TestVersionHashingAndExtractionLimits:
@@ -66,7 +67,7 @@ class TestVersionHashingAndExtractionLimits:
         session = AsyncMock()
         session.execute = AsyncMock(return_value=MagicMock(one_or_none=MagicMock(return_value=None)))
 
-        result = await read_extraction_input(session, version_id=uuid4())
+        result = await read_extraction_input(session, version_id=uuid4(), **SCOPE_KW)
         assert result is None
 
     @pytest.mark.asyncio
@@ -78,17 +79,17 @@ class TestVersionHashingAndExtractionLimits:
 
         # Empty allowed_chunk_ids
         with pytest.raises(ValueError, match="Extraction chunk IDs must be unique and bounded"):
-            await read_extraction_input(session, version_id=uuid4(), allowed_chunk_ids=[])
+            await read_extraction_input(session, version_id=uuid4(), allowed_chunk_ids=[], **SCOPE_KW)
 
         # Over 100 items
         oversized = [uuid4() for _ in range(EXTRACTION_CHUNK_LIMIT + 1)]
         with pytest.raises(ValueError, match="Extraction chunk IDs must be unique and bounded"):
-            await read_extraction_input(session, version_id=uuid4(), allowed_chunk_ids=oversized)
+            await read_extraction_input(session, version_id=uuid4(), allowed_chunk_ids=oversized, **SCOPE_KW)
 
         # Duplicate IDs
         dup_id = uuid4()
         with pytest.raises(ValueError, match="Extraction chunk IDs must be unique and bounded"):
-            await read_extraction_input(session, version_id=uuid4(), allowed_chunk_ids=[dup_id, dup_id])
+            await read_extraction_input(session, version_id=uuid4(), allowed_chunk_ids=[dup_id, dup_id], **SCOPE_KW)
 
     @pytest.mark.asyncio
     async def test_read_extraction_input_chunk_count_zero_raises_limit_error(self) -> None:
@@ -103,7 +104,7 @@ class TestVersionHashingAndExtractionLimits:
         ])
 
         with pytest.raises(ExtractionInputLimitError, match="Extraction input exceeds its chunk or byte limit"):
-            await read_extraction_input(session, version_id=uuid4())
+            await read_extraction_input(session, version_id=uuid4(), **SCOPE_KW)
 
     @pytest.mark.asyncio
     async def test_read_extraction_input_chunk_count_exceeded_raises_limit_error(self) -> None:
@@ -117,7 +118,7 @@ class TestVersionHashingAndExtractionLimits:
         ])
 
         with pytest.raises(ExtractionInputLimitError, match="Extraction input exceeds its chunk or byte limit"):
-            await read_extraction_input(session, version_id=uuid4())
+            await read_extraction_input(session, version_id=uuid4(), **SCOPE_KW)
 
     @pytest.mark.asyncio
     async def test_read_extraction_input_bytes_exceeded_raises_limit_error(self) -> None:
@@ -131,7 +132,7 @@ class TestVersionHashingAndExtractionLimits:
         ])
 
         with pytest.raises(ExtractionInputLimitError, match="Extraction input exceeds its chunk or byte limit"):
-            await read_extraction_input(session, version_id=uuid4())
+            await read_extraction_input(session, version_id=uuid4(), **SCOPE_KW)
 
     @pytest.mark.asyncio
     async def test_read_extraction_input_success(self) -> None:
@@ -153,7 +154,7 @@ class TestVersionHashingAndExtractionLimits:
             MagicMock(all=MagicMock(return_value=chunks_data)),
         ])
 
-        extraction = await read_extraction_input(session, version_id=ver_id)
+        extraction = await read_extraction_input(session, version_id=ver_id, **SCOPE_KW)
         assert isinstance(extraction, ExtractionInput)
         assert extraction.document_id == doc_id
         assert extraction.document_version_id == ver_id
@@ -260,15 +261,15 @@ class TestCursorEncoding:
         dt = datetime(2026, 10, 5, 12, 0, 0, tzinfo=UTC)
         doc_id = uuid4()
 
-        cursor = _encode_news_projection_cursor(dt, doc_id)
+        cursor = _encode_news_projection_cursor(dt, doc_id, "f" * 64)
         assert isinstance(cursor, str)
 
-        decoded_dt, decoded_id = _decode_news_projection_cursor(cursor)
+        decoded_dt, decoded_id = _decode_news_projection_cursor(cursor, "f" * 64)
         assert decoded_dt == dt
         assert decoded_id == doc_id
 
         with pytest.raises(ValueError, match="Invalid News projection cursor"):
-            _decode_news_projection_cursor("")
+            _decode_news_projection_cursor("", "f" * 64)
 
     def test_version_cursor_roundtrip_and_errors(self) -> None:
         """Verify encode_version_cursor and decode_version_cursor roundtrip."""
@@ -294,7 +295,7 @@ class TestRetentionAndDeletionValidation:
         session.execute = AsyncMock(return_value=MagicMock(all=MagicMock(return_value=[])))
 
         allowed = await news_retained_observation_allowed(
-            session, document_id=uuid4(), source_id=uuid4(), expected_source_generation=1,
+            session, document_id=uuid4(), source_id=uuid4(), expected_source_generation=1, **SCOPE_KW,
         )
         assert allowed is False
 
@@ -307,7 +308,7 @@ class TestRetentionAndDeletionValidation:
         session.execute = AsyncMock(return_value=MagicMock(all=MagicMock(return_value=rows)))
 
         allowed = await news_retained_observation_allowed(
-            session, document_id=uuid4(), source_id=uuid4(), expected_source_generation=2,
+            session, document_id=uuid4(), source_id=uuid4(), expected_source_generation=2, **SCOPE_KW,
         )
         assert allowed is False
 
@@ -319,7 +320,7 @@ class TestRetentionAndDeletionValidation:
         session.execute = AsyncMock(return_value=MagicMock(all=MagicMock(return_value=rows)))
 
         allowed = await news_retained_observation_allowed(
-            session, document_id=uuid4(), source_id=uuid4(), expected_source_generation=1,
+            session, document_id=uuid4(), source_id=uuid4(), expected_source_generation=1, **SCOPE_KW,
         )
         assert allowed is True
 
@@ -330,7 +331,7 @@ class TestRetentionAndDeletionValidation:
         session.execute = AsyncMock(return_value=MagicMock(one_or_none=MagicMock(return_value=None)))
 
         unavailable = await news_projection_scope_unavailable(
-            session, document_id=uuid4(), expected_source_generation=1,
+            session, document_id=uuid4(), expected_source_generation=1, **SCOPE_KW,
         )
         assert unavailable is False
 

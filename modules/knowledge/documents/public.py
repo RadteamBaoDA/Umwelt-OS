@@ -32,7 +32,6 @@ from sqlalchemy import (
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.auth.models import Owner
 from core.chunking import chunk_text
 from core.events import DomainEvent
 from core.pagination import decode_cursor, encode_cursor
@@ -84,7 +83,7 @@ from modules.knowledge.documents.schemas import (
 )
 from modules.sources import public as sources
 from modules.sources.models import Source
-from modules.sources.schemas import SourceExportFence, SourceFence
+from modules.sources.schemas import ConnectorSource, SourceExportFence, SourceFence
 
 if TYPE_CHECKING:
     from modules.connectors.public import ProviderScopeSnapshot
@@ -92,8 +91,12 @@ if TYPE_CHECKING:
 _log = logging.getLogger(__name__)
 
 
-async def observability_quality_summary(session: AsyncSession) -> dict[str, int]:
-    """Return document-owned aggregate counts without exposing document metadata."""
+async def observability_quality_summary(
+    session: AsyncSession, *, instance_operator: bool,
+) -> dict[str, int]:
+    """Return global document counts only to an explicitly admitted instance operator."""
+    if instance_operator is not True:
+        raise HTTPException(status_code=403, detail="Instance operator required")
     document_count = int(await session.scalar(select(func.count()).select_from(Document)) or 0)
     orphan_chunks = int(await session.scalar(select(func.count()).select_from(DocumentChunk).outerjoin(
         DocumentVersion, DocumentVersion.id == DocumentChunk.document_version_id,
@@ -102,10 +105,10 @@ async def observability_quality_summary(session: AsyncSession) -> dict[str, int]
 
 # Explicit re-exports consumed by other modules (mypy strict forbids implicit re-export).
 __all__ = [
-    "NormalizedDocumentValidationRejected",
+    "EvidenceReferenceRead",
     "NormalizedDocumentKeyState",
     "NormalizedDocumentPreparation",
-    "EvidenceReferenceRead",
+    "NormalizedDocumentValidationRejected",
     "ObservationExportEvidenceCandidate",
     "ProviderRecordMetadata",
     "TimelineExportEvidenceCandidate",
@@ -217,11 +220,16 @@ async def pending_document_copied_stage_cleanup_ids(
 
 
 def _encode_document_export_cursor(
-    owner_id: int, record_kind: str, snapshot_at: datetime, position_at: datetime, position_id: UUID,
+    owner_id: int, workspace_id: UUID, record_kind: str, snapshot_at: datetime,
+    position_at: datetime, position_id: UUID, access_fence: AccessFence,
 ) -> str:
-    """Encode a canonical owner/kind/cutoff-bound keyset cursor for document exports."""
+    """Encode a canonical export cursor bound to owner, filters, cutoff and admission revisions."""
+    if owner_id != access_fence.user_id or workspace_id != access_fence.workspace_id:
+        raise ValueError("Document export cursor identity does not match its access fence")
     payload = {
-        "v": 1, "owner": owner_id, "kind": record_kind,
+        "v": 3, "owner": owner_id, "workspace": str(workspace_id), "kind": record_kind,
+        "membership_revision": access_fence.membership_revision,
+        "configuration_revision": access_fence.configuration_revision,
         "snapshot": snapshot_at.astimezone(UTC).isoformat(),
         "at": position_at.astimezone(UTC).isoformat(), "id": str(position_id),
     }
@@ -230,17 +238,24 @@ def _encode_document_export_cursor(
 
 
 def _decode_document_export_cursor(
-    cursor: str, owner_id: int, record_kind: str,
+    cursor: str, owner_id: int, workspace_id: UUID, record_kind: str, access_fence: AccessFence,
 ) -> tuple[datetime, datetime, UUID]:
-    """Decode a canonical bounded cursor and reject cross-owner or cross-domain replay."""
+    """Decode a canonical cursor and reject owner, filter, or admission-revision changes."""
     try:
         if not cursor or len(cursor) > 1024 or "=" in cursor:
             raise ValueError("Invalid document export cursor")
         raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
         payload = json.loads(raw)
-        if not isinstance(payload, dict) or set(payload) != {"v", "owner", "kind", "snapshot", "at", "id"}:
+        if not isinstance(payload, dict) or set(payload) != {
+            "v", "owner", "workspace", "kind", "membership_revision", "configuration_revision",
+            "snapshot", "at", "id",
+        }:
             raise ValueError("Invalid document export cursor")
-        if payload["v"] != 1 or payload["owner"] != owner_id or payload["kind"] != record_kind:
+        if (payload["v"] != 3 or payload["owner"] != owner_id
+                or payload["workspace"] != str(workspace_id) or payload["kind"] != record_kind
+                or owner_id != access_fence.user_id or workspace_id != access_fence.workspace_id
+                or payload["membership_revision"] != access_fence.membership_revision
+                or payload["configuration_revision"] != access_fence.configuration_revision):
             raise ValueError("Document export cursor belongs to another owner or record kind")
         snapshot_at = datetime.fromisoformat(payload["snapshot"])
         position_at = datetime.fromisoformat(payload["at"])
@@ -250,7 +265,9 @@ def _decode_document_export_cursor(
         if snapshot_at > datetime.now(UTC):
             raise ValueError("Document export cursor cutoff cannot be in the future")
         position_id = UUID(payload["id"])
-        if _encode_document_export_cursor(owner_id, record_kind, snapshot_at, position_at, position_id) != cursor:
+        if _encode_document_export_cursor(
+            owner_id, workspace_id, record_kind, snapshot_at, position_at, position_id, access_fence,
+        ) != cursor:
             raise ValueError("Document export cursor is not canonical")
         return snapshot_at, position_at, position_id
     except (ValueError, TypeError, KeyError, UnicodeDecodeError, binascii.Error, json.JSONDecodeError) as exc:
@@ -288,10 +305,16 @@ def _export_item_bytes(item: BaseModel) -> int:
     return len(json.dumps(item.model_dump(mode="json"), ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
 
 
-async def _require_document_export_owner(session: AsyncSession, owner_id: int) -> None:
-    """Require the live singleton owner before projecting source-owned documents."""
-    if owner_id != 1 or await session.scalar(select(Owner.id).where(Owner.id == owner_id)) is None:
-        raise PermissionError("Document export requires the current owner")
+async def _require_document_export_owner(
+    session: AsyncSession, owner_id: int, *, scope: Scope, multi_workspace_enabled: bool,
+) -> AccessFence:
+    """Admit the explicit owner scope before projecting source-owned documents."""
+    actor_id = scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
+    if owner_id != actor_id:
+        raise ValueError("Document export actor does not match the admitted scope")
+    return await _admit_document_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
 
 
 def _document_export_scope(snapshot_at: datetime) -> tuple[ColumnElement[bool], ...]:
@@ -300,14 +323,15 @@ def _document_export_scope(snapshot_at: datetime) -> tuple[ColumnElement[bool], 
 
 
 async def _document_export_count(
-    session: AsyncSession, record_kind: str, snapshot_at: datetime,
+    session: AsyncSession, record_kind: str, snapshot_at: datetime, *, scope: Scope,
 ) -> int:
     """Count owner-visible rows at the fixed cutoff so callers can detect export drift."""
     if record_kind == "documents":
         statement = select(func.count()).select_from(Document).join(Source, Source.id == Document.source_id)
         statement = statement.where(
+            Document.workspace_id == scope.workspace_id,
             *_document_export_scope(snapshot_at),
-            Document.source_id.in_(sources.export_eligible_source_ids()),
+            Document.source_id.in_(sources.export_eligible_source_ids(scope=scope)),
         )
     else:
         statement = (
@@ -315,8 +339,9 @@ async def _document_export_count(
             .join(Document, Document.id == DocumentVersion.document_id)
             .join(Source, Source.id == Document.source_id)
             .where(
+                Document.workspace_id == scope.workspace_id,
                 *_document_export_scope(snapshot_at), DocumentVersion.created_at <= snapshot_at,
-                Document.source_id.in_(sources.export_eligible_source_ids()),
+                Document.source_id.in_(sources.export_eligible_source_ids(scope=scope)),
             )
         )
     return int(await session.scalar(statement) or 0)
@@ -329,6 +354,8 @@ async def export_page(
     record_kind: str,
     limit: int = 50,
     cursor: str | None = None,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> DocumentExportPage:
     """Return safe document headers or full retained revisions through a bounded stable page.
 
@@ -340,14 +367,18 @@ async def export_page(
     """
     if record_kind not in {"documents", "versions"} or not 1 <= limit <= 100:
         raise ValueError("Document export kind or page limit is invalid")
-    await _require_document_export_owner(session, owner_id)
+    access_fence = await _require_document_export_owner(
+        session, owner_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     if cursor is None:
         snapshot_at = datetime.now(UTC)
         position = None
     else:
-        snapshot_at, position_at, position_id = _decode_document_export_cursor(cursor, owner_id, record_kind)
+        snapshot_at, position_at, position_id = _decode_document_export_cursor(
+            cursor, owner_id, scope.workspace_id, record_kind, access_fence,
+        )
         position = (position_at, position_id)
-    snapshot_count = await _document_export_count(session, record_kind, snapshot_at)
+    snapshot_count = await _document_export_count(session, record_kind, snapshot_at, scope=scope)
     items: list[DocumentExportRead | DocumentVersionExportRead] = []
     fences: list[DocumentExportFence] = []
     has_more = False
@@ -372,8 +403,9 @@ async def export_page(
             ))
             .outerjoin(NormalizedVersionProvenance, NormalizedVersionProvenance.document_version_id == DocumentVersion.id)
             .where(
+                Document.workspace_id == scope.workspace_id,
                 *_document_export_scope(snapshot_at),
-                Document.source_id.in_(sources.export_eligible_source_ids()),
+                Document.source_id.in_(sources.export_eligible_source_ids(scope=scope)),
             )
         )
         if position is not None:
@@ -414,7 +446,10 @@ async def export_page(
         if len(rows) > len(items):
             has_more = True
         next_cursor = (
-            _encode_document_export_cursor(owner_id, record_kind, snapshot_at, items[-1].created_at, items[-1].id)
+            _encode_document_export_cursor(
+                owner_id, scope.workspace_id, record_kind, snapshot_at, items[-1].created_at, items[-1].id,
+                access_fence,
+            )
             if has_more and items else None
         )
     else:
@@ -445,8 +480,9 @@ async def export_page(
             .join(DocumentVersion, DocumentVersion.document_id == Document.id)
             .outerjoin(NormalizedVersionProvenance, NormalizedVersionProvenance.document_version_id == DocumentVersion.id)
             .where(
+                Document.workspace_id == scope.workspace_id,
                 *_document_export_scope(snapshot_at), DocumentVersion.created_at <= snapshot_at,
-                Document.source_id.in_(sources.export_eligible_source_ids()),
+                Document.source_id.in_(sources.export_eligible_source_ids(scope=scope)),
             )
         )
         if position is not None:
@@ -498,7 +534,10 @@ async def export_page(
         finally:
             await result.close()
         next_cursor = (
-            _encode_document_export_cursor(owner_id, record_kind, snapshot_at, items[-1].created_at, items[-1].id)
+            _encode_document_export_cursor(
+                owner_id, scope.workspace_id, record_kind, snapshot_at, items[-1].created_at, items[-1].id,
+                access_fence,
+            )
             if has_more and items else None
         )
 
@@ -520,33 +559,39 @@ async def validate_export_fences(
     snapshot_at: datetime,
     expected_snapshot_count: int,
     fences: Sequence[DocumentExportFence],
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> DocumentExportFenceValidation:
     """Recheck bounded document identity, source generation, deletion, and count before publication."""
     if record_kind not in {"documents", "versions"} or not 0 <= expected_snapshot_count <= 2**63 - 1:
         raise ValueError("Document export revalidation input is invalid")
     if len(fences) > 100:
         raise ValueError("Document export revalidation is limited to 100 records")
-    if owner_id != 1 or await session.scalar(select(Owner.id).where(Owner.id == owner_id)) is None:
-        return DocumentExportFenceValidation(valid=False, reason="owner_unavailable", observed_snapshot_count=0)
+    actor_id = scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
+    if owner_id != actor_id:
+        raise ValueError("Document export actor does not match the admitted scope")
+    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     source_generations: dict[UUID, int] = {}
     for fence in fences:
         previous = source_generations.setdefault(fence.source_id, fence.current_source_generation)
         if previous != fence.current_source_generation:
-            observed_count = await _document_export_count(session, record_kind, snapshot_at)
+            observed_count = await _document_export_count(session, record_kind, snapshot_at, scope=scope)
             return DocumentExportFenceValidation(
                 valid=False, reason="source_generation_changed", observed_snapshot_count=observed_count,
             )
     source_fences = [
-        SourceExportFence(source_id=source_id, generation=generation)
+        SourceExportFence(source_id=source_id, workspace_id=scope.workspace_id, generation=generation)
         for source_id, generation in source_generations.items()
     ]
-    eligible_source_ids = set(await sources.filter_export_eligible_sources(session, source_fences))
+    eligible_source_ids = set(await sources.filter_export_eligible_sources(
+        session, source_fences, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    ))
     if len(eligible_source_ids) != len(source_fences):
-        observed_count = await _document_export_count(session, record_kind, snapshot_at)
+        observed_count = await _document_export_count(session, record_kind, snapshot_at, scope=scope)
         return DocumentExportFenceValidation(
             valid=False, reason="source_generation_changed", observed_snapshot_count=observed_count,
         )
-    observed_count = await _document_export_count(session, record_kind, snapshot_at)
+    observed_count = await _document_export_count(session, record_kind, snapshot_at, scope=scope)
     if observed_count != expected_snapshot_count:
         return DocumentExportFenceValidation(valid=False, reason="snapshot_count_changed", observed_snapshot_count=observed_count)
     for fence in fences:
@@ -554,7 +599,7 @@ async def validate_export_fences(
             select(Document.created_at, Document.updated_at, Document.current_version,
                    Source.id.label("source_id"), Source.status, Source.generation)
             .join(Source, Source.id == Document.source_id)
-            .where(Document.id == fence.document_id)
+            .where(Document.id == fence.document_id, Document.workspace_id == scope.workspace_id)
         )).one_or_none()
         if row is None or (
             row.created_at != fence.document_created_at
@@ -607,6 +652,7 @@ async def current_observation_evidence_versions(
     session: AsyncSession,
     candidates: Sequence[ObservationEvidenceCandidate],
     current_scopes: dict[UUID, object],
+    *, scope: Scope, multi_workspace_enabled: bool,
 ) -> dict[UUID, int]:
     """Return current evidence revisions backed by matching document and provider fences.
 
@@ -614,6 +660,7 @@ async def current_observation_evidence_versions(
     paired with their current version numbers; foreign modules never receive Document ORM
     rows or provenance bodies.
     """
+    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if not candidates or len(candidates) > 256:
         return {}
     rows: Any = (await session.execute(
@@ -627,7 +674,10 @@ async def current_observation_evidence_versions(
         .join(DocumentVersion, DocumentVersion.document_id == Document.id)
         .join(Source, Source.id == Document.source_id)
         .join(NormalizedVersionProvenance, NormalizedVersionProvenance.document_version_id == DocumentVersion.id)
-        .where(DocumentVersion.id.in_({item.document_version_id for item in candidates}))
+        .where(
+            DocumentVersion.id.in_({item.document_version_id for item in candidates}),
+            *_document_scope(scope),
+        )
     )).all()
     by_identity: dict[tuple[UUID, UUID], list[tuple[UUID, int, int, int, str, int, dict[str, object]]]] = {}
     for (
@@ -669,6 +719,7 @@ async def current_observation_evidence_versions(
 async def export_observation_evidence(
     session: AsyncSession, candidate: ObservationExportEvidenceCandidate,
     current_scope: "ProviderScopeSnapshot",
+    *, scope: Scope, multi_workspace_enabled: bool,
 ) -> ObservationExportEvidenceRead | None:
     """Prove retained observation provenance without requiring its accepted source generation to be current.
 
@@ -684,6 +735,7 @@ async def export_observation_evidence(
             or current_scope.provider_id != candidate.provider
             or current_scope.discriminator != candidate.provider_scope_discriminator):
         return None
+    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     rows = (await session.execute(select(
         Source.id.label("source_id"), Source.status.label("source_status"),
         Source.generation.label("current_source_generation"), Document.id.label("document_id"),
@@ -698,7 +750,9 @@ async def export_observation_evidence(
       .join(NormalizedVersionProvenance, NormalizedVersionProvenance.document_version_id == DocumentVersion.id)
       .where(
           Source.id == candidate.source_id, Source.generation == current_scope.source_generation,
-          Source.status.in_(("active", "paused", "archived")), Source.id.in_(sources.export_eligible_source_ids()),
+          Source.status.in_(("active", "paused", "archived")),
+          Source.id.in_(sources.export_eligible_source_ids(scope=scope)),
+          Document.workspace_id == scope.workspace_id,
           Document.id == candidate.document_id, DocumentVersion.id == candidate.document_version_id,
           Document.current_version == DocumentVersion.version_number,
           NormalizedVersionProvenance.source_generation == candidate.accepted_source_generation,
@@ -722,7 +776,8 @@ async def export_observation_evidence(
 
 
 async def export_timeline_evidence(
-    session: AsyncSession, candidate: TimelineExportEvidenceCandidate,
+    session: AsyncSession, candidate: TimelineExportEvidenceCandidate, *,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> TimelineExportEvidenceRead | None:
     """Prove a retained exact chunk and accepted generation, while separately fencing its current source.
 
@@ -730,6 +785,7 @@ async def export_timeline_evidence(
     archived. The source owner's purge eligibility and fresh scalar projection keep the evidence usable
     only while its exact source/document/version/chunk and accepted provenance remain retained.
     """
+    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     count = func.count(NormalizedVersionProvenance.id)
     minimum_generation = func.min(NormalizedVersionProvenance.source_generation)
     maximum_generation = func.max(NormalizedVersionProvenance.source_generation)
@@ -746,7 +802,8 @@ async def export_timeline_evidence(
       .where(
           Source.id == candidate.source_id,
           Source.status.in_(("active", "paused", "archived")),
-          Source.id.in_(sources.export_eligible_source_ids()),
+          Source.id.in_(sources.export_eligible_source_ids(scope=scope)),
+          Document.workspace_id == scope.workspace_id,
           Document.id == candidate.document_id,
           DocumentVersion.id == candidate.document_version_id,
           DocumentChunk.id == candidate.chunk_id,
@@ -844,7 +901,7 @@ def _decode_provider_cursor(cursor: str) -> tuple[datetime, UUID]:
 
 
 async def read_provider_snapshots(
-    session: AsyncSession, version_ids: list[UUID]
+    session: AsyncSession, version_ids: list[UUID], *, scope: Scope, multi_workspace_enabled: bool,
 ) -> list[ProviderDocumentSnapshotRead]:
     """Read exact immutable provider versions for an already owner-authenticated route.
 
@@ -854,12 +911,15 @@ async def read_provider_snapshots(
     """
     if not 1 <= len(version_ids) <= 100 or len(version_ids) != len(set(version_ids)):
         raise ValueError("version_ids must contain 1 to 100 unique values")
+    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     rows = list((await session.execute(
         select(Document, DocumentVersion, Source, NormalizedVersionProvenance)
-        .join(DocumentVersion, DocumentVersion.id.in_(version_ids))
+        .select_from(Document)
+        .join(DocumentVersion, DocumentVersion.document_id == Document.id)
         .join(Source, Source.id == Document.source_id)
         .outerjoin(NormalizedVersionProvenance, NormalizedVersionProvenance.document_version_id == DocumentVersion.id)
-        .where(Document.id == DocumentVersion.document_id, Source.provider.in_(PROVIDER_IDS))
+        .where(DocumentVersion.id.in_(version_ids), Source.provider.in_(PROVIDER_IDS),
+               *_document_scope(scope))
     )).all())
     by_id = {version.id: _provider_snapshot(document, version, source, provenance)
              for document, version, source, provenance in rows
@@ -873,6 +933,8 @@ async def list_provider_snapshots(
     session: AsyncSession,
     *,
     source_ids: list[UUID],
+    scope: Scope,
+    multi_workspace_enabled: bool,
     channel_ids: list[str] | None = None,
     limit: int = 50,
     cursor: str | None = None,
@@ -891,6 +953,7 @@ async def list_provider_snapshots(
         or any(re.fullmatch(r"-?[1-9][0-9]{0,19}", item) is None for item in channel_ids)
     ):
         raise ValueError("channel_ids must contain at most 100 unique values")
+    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     statement = (
         select(Document, DocumentVersion, Source, NormalizedVersionProvenance)
         .join(Source, Source.id == Document.source_id)
@@ -901,6 +964,7 @@ async def list_provider_snapshots(
             Document.source_id.in_(source_ids),
             Source.status.in_(("active", "paused")),
             Source.provider.in_(PROVIDER_IDS),
+            *_document_scope(scope),
         )
     )
     if cursor is not None:
@@ -961,6 +1025,8 @@ class ReadyVersionRef:
     version_number: int
     created_at: datetime
     local_only: bool
+    raw_uri: str | None
+    mime_type: str | None
 
 
 @dataclass(frozen=True)
@@ -1034,7 +1100,8 @@ class NewsProjectionStatus:
 
 
 async def get_news_document_projection(
-    session: AsyncSession, document_id: UUID, *, expected_source_generation: int | None = None,
+    session: AsyncSession, document_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+    expected_source_generation: int | None = None,
 ) -> NewsDocumentProjection | None:
     """Return a current, ready document projection only under its active source generation.
 
@@ -1044,7 +1111,8 @@ async def get_news_document_projection(
     non-snapshot metadata provenance rather than inferred historical metadata.
     """
     components = await _current_document_components(
-        session, document_id, expected_source_generation=expected_source_generation,
+        session, document_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        expected_source_generation=expected_source_generation,
     )
     if components is None:
         return None
@@ -1086,19 +1154,23 @@ async def get_news_document_projection(
 
 
 async def _current_document_components(
-    session: AsyncSession, document_id: UUID, *, expected_source_generation: int | None = None,
+    session: AsyncSession, document_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+    expected_source_generation: int | None = None, admitted: bool = False,
 ) -> tuple[Document, DocumentVersion, Source, NormalizedVersionProvenance | None] | None:
     """Resolve one active current revision and verify its accepted provider scope without reading chunks.
 
     The Documents owner uses this shared gate for content projections and exact selections so a
     normalized record cannot inherit a new source generation or mutable provider configuration.
     """
+    if not admitted:
+        await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     row = (await session.execute(
         select(Document, DocumentVersion, Source)
         .join(DocumentVersion, DocumentVersion.document_id == Document.id)
         .join(Source, Source.id == Document.source_id)
         .where(
             Document.id == document_id,
+            *_document_scope(scope),
             Document.current_version == DocumentVersion.version_number,
             Document.extraction_status.in_(("ready", "succeeded")),
             Source.status == "active",
@@ -1131,6 +1203,7 @@ async def _current_document_components(
 
             current_scope = await connectors.get_current_provider_scope(
                 session, source.id, source.generation,
+                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
             )
             accepted_scope = provenance.provenance_json.get("provider_scope_discriminator")
             if (
@@ -1149,58 +1222,24 @@ async def _current_document_components(
 
 async def validate_gadget_document_selection_fences(
     session: AsyncSession, fences: tuple[GadgetDocumentSelectionFence, ...], *,
-    lock_rows: bool = True, max_documents: int = 32,
+    scope: Scope, multi_workspace_enabled: bool, lock_rows: bool = True, max_documents: int = 32,
 ) -> bool:
     """Revalidate exact selected versions and provider policy before content or remote use.
 
-    Selection count, source count, and lock order are bounded. Source rows are share-locked in UUID
-    order before document rows; accepted provenance is then checked against the live provider scope.
-    Locks remain held by the caller's transaction until its next commit or rollback.
+    Selection count, source count, and lock order are bounded. The original admitted fence is
+    compared while Source rows are share-locked in UUID order before document rows; accepted
+    provenance is then checked against live provider scope. Locks last through caller transaction end.
     """
-    if (
-        not fences or len(fences) > max_documents or max_documents > 100
-        or len({item.document_id for item in fences}) != len(fences)
-        or len({item.source_id for item in fences}) > 32
-    ):
-        raise ValueError("Selection fences exceed their bounded unique-document or source limit")
-    source_ids = sorted({item.source_id for item in fences}, key=str)
-    document_ids = sorted({item.document_id for item in fences}, key=str)
-    if lock_rows:
-        # Scope/configuration writers lock Source before changing documents; keep the same order here.
-        locked_sources = (await session.scalars(
-            select(Source).where(Source.id.in_(source_ids)).order_by(Source.id).with_for_update(read=True)
-        )).all()
-        if len(locked_sources) != len(source_ids):
-            return False
-        locked_documents = (await session.scalars(
-            select(Document).where(Document.id.in_(document_ids)).order_by(Document.id).with_for_update(read=True)
-        )).all()
-        if len(locked_documents) != len(document_ids):
-            return False
-    for fence in fences:
-        components = await _current_document_components(
-            session, fence.document_id, expected_source_generation=fence.source_generation,
-        )
-        if components is None:
-            return False
-        _document, version, source, provenance = components
-        accepted_scope = provenance.provenance_json.get("provider_scope_discriminator") if provenance else None
-        if (
-            version.id != fence.document_version_id
-            or source.id != fence.source_id
-            or source.generation != fence.source_generation
-            or source.type != fence.source_type
-            or source.provider != fence.provider
-            or source.local_only != fence.local_only
-            or accepted_scope != fence.scope_discriminator
-        ):
-            return False
-    return True
+    access_fence = await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    return await _validate_gadget_document_selection_fences_admitted(
+        session, fences, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        expected_access_fence=access_fence, lock_rows=lock_rows, max_documents=max_documents,
+    )
 
 
 async def news_retained_observation_allowed(
     session: AsyncSession, *, document_id: UUID, source_id: UUID,
-    expected_source_generation: int,
+    expected_source_generation: int, scope: Scope, multi_workspace_enabled: bool,
 ) -> bool:
     """Confirm a retained News count still belongs to the current active source scope.
 
@@ -1209,6 +1248,7 @@ async def news_retained_observation_allowed(
     the document's present ready revision, active source generation, and current
     provider scope without loading chunks or exposing metadata to News.
     """
+    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     rows: list[Any] = list((await session.execute(
         select(
             Source.type, Source.generation,
@@ -1223,6 +1263,7 @@ async def news_retained_observation_allowed(
         )
         .where(
             Document.id == document_id, Document.source_id == source_id,
+            *_document_scope(scope),
             Document.current_version == DocumentVersion.version_number,
             Document.extraction_status.in_(("ready", "succeeded")),
             Source.status == "active", Source.generation == expected_source_generation,
@@ -1246,24 +1287,28 @@ async def news_retained_observation_allowed(
 
     current_scope = await connectors.get_current_provider_scope(
         session, source_id, expected_source_generation,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
     return current_scope is not None and current_scope.discriminator == accepted_scope
 
 
 async def news_projection_scope_unavailable(
-    session: AsyncSession, document_id: UUID, expected_source_generation: int,
+    session: AsyncSession, document_id: UUID, expected_source_generation: int, *,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> bool:
     """Report only whether a supported provider scope fence prevents News evidence output.
 
     The result contains no source configuration, item identifiers, or counts. Deleted,
     replaced, inactive, or stale-generation documents are not classified as scope failures.
     """
+    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     row = (await session.execute(
         select(Document, DocumentVersion, Source)
         .join(DocumentVersion, DocumentVersion.document_id == Document.id)
         .join(Source, Source.id == Document.source_id)
         .where(
             Document.id == document_id,
+            *_document_scope(scope),
             Document.current_version == DocumentVersion.version_number,
             Document.extraction_status.in_(("ready", "succeeded")),
             Source.status == "active", Source.generation == expected_source_generation,
@@ -1289,12 +1334,16 @@ async def news_projection_scope_unavailable(
         return True
     from modules.connectors import public as connectors
 
-    current_scope = await connectors.get_current_provider_scope(session, source.id, source.generation)
+    current_scope = await connectors.get_current_provider_scope(
+        session, source.id, source.generation, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
     return current_scope is None or accepted_scope != current_scope.discriminator
 
 
 async def news_current_scope_status(
-    session: AsyncSession, source_ids: tuple[UUID, ...],
+    session: AsyncSession, source_ids: tuple[UUID, ...], *,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> NewsProjectionStatus:
     """Summarize current provider-scope omissions for at most 100 selected documents.
 
@@ -1303,6 +1352,7 @@ async def news_current_scope_status(
     """
     if not source_ids or len(source_ids) > 32 or len(set(source_ids)) != len(source_ids):
         raise ValueError("News scope status requires 1 to 32 unique sources")
+    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     rows: list[Any] = list((await session.execute(
         select(
             Document.id, Source.id, Source.type, Source.generation,
@@ -1317,6 +1367,7 @@ async def news_current_scope_status(
         )
         .where(
             Document.source_id.in_(source_ids),
+            *_document_scope(scope),
             Document.current_version == DocumentVersion.version_number,
             Document.extraction_status.in_(("ready", "succeeded")),
             Source.status == "active",
@@ -1333,7 +1384,10 @@ async def news_current_scope_status(
         if source_type in provider_types and source_id not in source_scope:
             from modules.connectors import public as connectors
 
-            snapshot = await connectors.get_current_provider_scope(session, source_id, generation)
+            snapshot = await connectors.get_current_provider_scope(
+                session, source_id, generation, scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+            )
             source_scope[source_id] = snapshot.discriminator if snapshot else None
     for _document_id, source_id, source_type, generation, accepted_generation, provenance in rows[:100]:
         if source_type not in provider_types:
@@ -1350,22 +1404,28 @@ async def news_current_scope_status(
 async def list_news_document_projections(
     session: AsyncSession, *, source_ids: tuple[UUID, ...], limit: int = 50,
     cursor: str | None = None, observed_since: datetime | None = None,
-    channel_ids: tuple[str, ...] | None = None,
+    channel_ids: tuple[str, ...] | None = None, scope: Scope, multi_workspace_enabled: bool,
 ) -> tuple[list[NewsDocumentProjection], str | None]:
     """Page bounded current ready versions from explicitly authorized active sources."""
     if not source_ids or len(source_ids) > 32 or len(set(source_ids)) != len(source_ids) or not 1 <= limit <= 100:
         raise ValueError("News source page must contain 1 to 32 unique sources and a bounded limit")
+    access_fence = await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if channel_ids is not None and (
         len(channel_ids) > 32 or len(set(channel_ids)) != len(channel_ids)
         or any(re.fullmatch(r"-?[1-9][0-9]{0,19}", item) is None for item in channel_ids)
     ):
         raise ValueError("Channel scope must contain at most 32 unique numeric identifiers")
+    fingerprint = _news_projection_cursor_fingerprint(
+        access_fence=access_fence, source_ids=source_ids,
+        observed_since=observed_since, channel_ids=channel_ids,
+    )
     statement = (
         select(Document.id, Document.created_at)
         .join(DocumentVersion, DocumentVersion.document_id == Document.id)
         .join(Source, Source.id == Document.source_id)
         .where(
             Document.source_id.in_(source_ids), Document.current_version == DocumentVersion.version_number,
+            *_document_scope(scope),
             Document.extraction_status.in_(("ready", "succeeded")), Source.status == "active",
             select(DocumentChunk.id).where(DocumentChunk.document_version_id == DocumentVersion.id).exists(),
         )
@@ -1382,14 +1442,16 @@ async def list_news_document_projections(
             ).exists(),
         )
     if cursor:
-        created_at, document_cursor = _decode_news_projection_cursor(cursor)
+        created_at, document_cursor = _decode_news_projection_cursor(cursor, fingerprint)
         statement = statement.where(tuple_(Document.created_at, Document.id) < (created_at, document_cursor))
     rows = list((await session.execute(statement.order_by(Document.created_at.desc(), Document.id.desc()).limit(limit + 1))).all())
     more = len(rows) > limit
     rows = rows[:limit]
     projections = []
     for document_id, _created_at in rows:
-        item = await get_news_document_projection(session, document_id)
+        item = await get_news_document_projection(
+            session, document_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
         if item is not None and item.source_id in source_ids:
             if channel_ids is not None and (
                 item.provider_metadata is None
@@ -1399,27 +1461,35 @@ async def list_news_document_projections(
             ):
                 continue
             projections.append(item)
-    next_cursor = _encode_news_projection_cursor(rows[-1][1], rows[-1][0]) if more and rows else None
+    next_cursor = _encode_news_projection_cursor(
+        rows[-1][1], rows[-1][0], fingerprint,
+    ) if more and rows else None
     return projections, next_cursor
 
 
 async def list_gadget_document_projections(
-    session: AsyncSession, *, owner_id: int, source_ids: tuple[UUID, ...], limit: int = 50,
+    session: AsyncSession, *, source_ids: tuple[UUID, ...], limit: int = 50,
     cursor: str | None = None, channel_ids: tuple[str, ...] | None = None,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> GadgetDocumentProjectionList:
     """Return active, current, ready source records as a small dashboard projection page.
 
-    Documents retains source-generation and provider-scope validation. Only short excerpts and
-    typed immutable provider fields leave this owner boundary; full text stays out of dashboard APIs.
+    Interaction state is read for the admitted actor. Documents retains source-generation and
+    provider-scope validation; only short excerpts and typed provider fields leave this boundary.
+    Full text stays out of dashboard APIs.
     """
+    access_fence = await _admit_document_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    actor_id = access_fence.user_id
     projections, next_cursor = await list_news_document_projections(
         session, source_ids=source_ids, limit=limit, cursor=cursor,
-        channel_ids=channel_ids,
+        channel_ids=channel_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
     version_ids = [item.document_version_id for item in projections]
     interaction_rows = (await session.scalars(
         select(DocumentInteraction).where(
-            DocumentInteraction.owner_id == owner_id,
+            DocumentInteraction.owner_id == actor_id,
             DocumentInteraction.document_version_id.in_(version_ids),
         )
     )).all() if version_ids else []
@@ -1482,6 +1552,7 @@ def _as_gadget_document_projection(
 async def list_gadget_highlight_projection_page(
     session: AsyncSession, *, source_ids: tuple[UUID, ...], limit: int = 100,
     cursor_created_at: datetime | None = None, cursor_version_id: UUID | None = None,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> GadgetHighlightProjectionPage:
     """Page current accepted evidence by immutable-version creation order for durable highlight scans.
 
@@ -1494,12 +1565,14 @@ async def list_gadget_highlight_projection_page(
         or (cursor_created_at is None) != (cursor_version_id is None)
     ):
         raise ValueError("Highlight projection page has an invalid source set, limit, or version cursor")
+    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     statement = (
         select(Document.id, DocumentVersion.id, DocumentVersion.created_at)
         .join(DocumentVersion, DocumentVersion.document_id == Document.id)
         .join(Source, Source.id == Document.source_id)
         .where(
             Document.source_id.in_(source_ids),
+            *_document_scope(scope),
             Document.current_version == DocumentVersion.version_number,
             Document.extraction_status.in_(("ready", "succeeded")),
             Source.status == "active",
@@ -1518,7 +1591,9 @@ async def list_gadget_highlight_projection_page(
     items: list[GadgetDocumentProjectionRead] = []
     fences: list[GadgetDocumentSelectionFence] = []
     for document_id, version_id, _created_at in candidates:
-        projection = await get_news_document_projection(session, document_id)
+        projection = await get_news_document_projection(
+            session, document_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
         if (
             projection is None or projection.document_version_id != version_id
             or projection.source_id not in source_ids
@@ -1546,21 +1621,36 @@ async def list_gadget_highlight_projection_page(
 
 
 async def set_gadget_document_interaction(
-    session: AsyncSession, *, owner_id: int, document_id: UUID, version_number: int,
-    payload: GadgetDocumentInteractionPatch,
+    session: AsyncSession, *, document_id: UUID, version_number: int,
+    payload: GadgetDocumentInteractionPatch, scope: Scope, multi_workspace_enabled: bool,
 ) -> GadgetDocumentInteractionRead | None:
-    """Persist exact-version read/bookmark state only while that version is active and current."""
-    # Serialize a first insert and competing read/bookmark changes against this document row.
+    """Persist exact-version state for the admitted actor and publish under the original access fence."""
+    access_fence = await _admit_document_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    actor_id = access_fence.user_id
+    source_id = await session.scalar(select(Document.source_id).where(
+        Document.id == document_id, *_document_scope(scope),
+    ))
+    if source_id is None:
+        return None
+    await sources.lock_source_for_document(
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        expected_access_fence=access_fence,
+    )
     document = await session.scalar(
-        select(Document).where(Document.id == document_id).with_for_update()
+        select(Document).where(Document.id == document_id, *_document_scope(scope))
+        .with_for_update().execution_options(populate_existing=True)
     )
     if document is None:
         return None
-    projection = await get_news_document_projection(session, document_id)
+    projection = await get_news_document_projection(
+        session, document_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     if projection is None or projection.version_number != version_number:
         return None
     row = await session.get(
-        DocumentInteraction, (owner_id, projection.document_version_id),
+        DocumentInteraction, (actor_id, projection.document_version_id),
     )
     now = datetime.now(UTC)
     read_at = (now if payload.read else None) if payload.read is not None else (row.read_at if row else None)
@@ -1570,7 +1660,7 @@ async def set_gadget_document_interaction(
             await session.delete(row)
     elif row is None:
         row = DocumentInteraction(
-            owner_id=owner_id, document_version_id=projection.document_version_id,
+            owner_id=actor_id, document_version_id=projection.document_version_id,
             read_at=read_at, bookmarked_at=bookmarked_at,
         )
         session.add(row)
@@ -1578,28 +1668,52 @@ async def set_gadget_document_interaction(
         row.read_at = read_at
         row.bookmarked_at = bookmarked_at
         row.updated_at = now
-    await session.commit()
+    await commit_with_replay(
+        session, [], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+    )
     return GadgetDocumentInteractionRead(
         document_version_id=projection.document_version_id,
         read_at=read_at, bookmarked_at=bookmarked_at,
     )
 
 
-def _encode_news_projection_cursor(created_at: datetime, document_id: UUID) -> str:
-    """Encode the bounded News projection keyset as canonical unpadded URL-safe base64."""
-    raw = f"{created_at.isoformat()}|{document_id}"
+def _news_projection_cursor_fingerprint(
+    *, access_fence: AccessFence, source_ids: tuple[UUID, ...], observed_since: datetime | None,
+    channel_ids: tuple[str, ...] | None,
+) -> str:
+    """Hash News filters with the admitted actor/workspace and membership/configuration revisions."""
+    context = {
+        "workspace": str(access_fence.workspace_id),
+        "actor": access_fence.user_id,
+        "membership_revision": access_fence.membership_revision,
+        "configuration_revision": access_fence.configuration_revision,
+        "sources": sorted(str(item) for item in source_ids),
+        "observed_since": observed_since.astimezone(UTC).isoformat() if observed_since else None,
+        "channels": sorted(channel_ids) if channel_ids is not None else None,
+    }
+    return hashlib.sha256(json.dumps(context, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _encode_news_projection_cursor(created_at: datetime, document_id: UUID, fingerprint: str) -> str:
+    """Encode the bounded keyset and its exact owner/source/filter context."""
+    raw = json.dumps([created_at.astimezone(UTC).isoformat(), str(document_id), fingerprint], separators=(",", ":"))
     return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
 
 
-def _decode_news_projection_cursor(cursor: str) -> tuple[datetime, UUID]:
-    """Decode and validate a canonical projection cursor without exposing parse errors."""
+def _decode_news_projection_cursor(cursor: str, fingerprint: str) -> tuple[datetime, UUID]:
+    """Decode a canonical projection cursor bound to its owner/source/filter context."""
     try:
         raw = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)).decode()
-        timestamp, identifier = raw.split("|", 1)
+        timestamp, identifier, actual_fingerprint = json.loads(raw)
         parsed = datetime.fromisoformat(timestamp)
-        if parsed.tzinfo is None or _encode_news_projection_cursor(parsed, UUID(identifier)) != cursor:
+        parsed_id = UUID(identifier)
+        if (
+            parsed.tzinfo is None or actual_fingerprint != fingerprint
+            or _encode_news_projection_cursor(parsed, parsed_id, fingerprint) != cursor
+        ):
             raise ValueError
-        return parsed, UUID(identifier)
+        return parsed, parsed_id
     except (ValueError, UnicodeDecodeError, binascii.Error) as exc:
         raise ValueError("Invalid News projection cursor") from exc
 
@@ -1738,7 +1852,7 @@ async def backfill_current_chunks(session: AsyncSession, limit: int = 2, *, mult
             scope = (await sources.resolve_source_job_scope(
                 session, hint.source_id, multi_workspace_enabled=multi_workspace_enabled,
             )) if hint else None
-            if scope is None:
+            if hint is None or scope is None:
                 await session.rollback()
                 _log.warning("chunk backfill skipped version %s: no admissible scope", version_id)
                 continue
@@ -2161,14 +2275,19 @@ async def create_document(
     return document
 
 
-async def document_metadata(session: AsyncSession, document_ids: list[UUID]) -> dict[UUID, tuple[str, str | None]]:
+async def document_metadata(
+    session: AsyncSession, document_ids: list[UUID], *, scope: Scope, multi_workspace_enabled: bool,
+) -> dict[UUID, tuple[str, str | None]]:
     """Return ``{document_id: (title, mime_type)}`` for the given ids (metadata only, never content).
 
     Read-only batch projection for the automations producer sweep; callers pass at most one
     sweep page of ids. Unknown ids are simply absent.
     """
+    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if len(document_ids) > 100 or len(set(document_ids)) != len(document_ids):
+        raise ValueError("Document metadata page must contain at most 100 unique IDs")
     rows = await session.execute(select(Document.id, Document.title, Document.mime_type).where(
-        Document.id.in_(document_ids)))
+        Document.id.in_(document_ids), *_document_scope(scope)).limit(100))
     return {row[0]: (row[1], row[2]) for row in rows.all()}
 
 
@@ -2187,16 +2306,95 @@ async def get_document(
     ).execution_options(populate_existing=True))
 
 
+async def existing_document_ids(
+    session: AsyncSession, document_ids: list[UUID], *, scope: Scope, multi_workspace_enabled: bool,
+) -> list[UUID]:
+    """Return sorted IDs for at most 100 retained documents in the admitted owner workspace.
+
+    This identifier-only helper is safe for cross-domain selection: SQL applies workspace and
+    unfinished-purge fences before returning any ID. It neither locks rows nor reads content.
+    """
+    if len(document_ids) > 100 or any(type(identifier) is not UUID for identifier in document_ids):
+        raise ValueError("Document identity batch exceeds 100 IDs")
+    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if not document_ids:
+        return []
+    rows = await session.scalars(select(Document.id).where(
+        Document.id.in_(set(document_ids)), *_document_scope(scope),
+    ).order_by(Document.id).limit(100))
+    return list(rows.all())
+
+
+async def list_indexable_workspace_ids(
+    session: AsyncSession, *, after: UUID | None = None, limit: int = 100,
+) -> tuple[UUID, ...]:
+    """Discover at most 100 workspaces with ready current chunks for automatic indexing.
+
+    Results are identity-only candidates, not authority. The Search worker must resolve the
+    durable owner and perform current workspace/module/config/privacy admission before effects.
+    No content, credentials, foreign workspace/settings ORM, commit or provider call is used.
+    """
+    if type(limit) is not int or limit < 1 or (after is not None and type(after) is not UUID):
+        raise ValueError("Workspace discovery requires a positive limit and UUID cursor")
+    statement = (
+        select(Document.workspace_id)
+        .join(DocumentVersion, DocumentVersion.document_id == Document.id)
+        .join(DocumentChunk, DocumentChunk.document_version_id == DocumentVersion.id)
+        .join(Source, Source.id == Document.source_id)
+        .where(
+            Document.current_version == DocumentVersion.version_number,
+            Document.extraction_status.in_(("ready", "succeeded")),
+            Source.status == "active", Source.local_only.is_(False),
+        )
+    )
+    if after is not None:
+        statement = statement.where(Document.workspace_id > after)
+    result = await session.scalars(
+        statement.distinct().order_by(Document.workspace_id).limit(min(limit, 100)),
+    )
+    return tuple(result.all())
+
+
+async def list_ready_document_workspace_ids(
+    session: AsyncSession, *, after: UUID | None = None, limit: int = 100,
+) -> tuple[UUID, ...]:
+    """Discover bounded workspace identities with a ready current Document version.
+
+    This is a worker candidate seam only. A returned workspace conveys no authority; the
+    caller must resolve and admit its actual owner and module scope before any protected read
+    or effect. The query exposes no content, chunks, Source, Workspace or account state.
+    """
+    if type(limit) is not int or limit < 1 or (after is not None and type(after) is not UUID):
+        raise ValueError("Workspace discovery requires a positive limit and UUID cursor")
+    statement = (
+        select(Document.workspace_id)
+        .join(DocumentVersion, DocumentVersion.document_id == Document.id)
+        .where(
+            Document.current_version == DocumentVersion.version_number,
+            Document.extraction_status.in_(("ready", "succeeded")),
+        )
+    )
+    if after is not None:
+        statement = statement.where(Document.workspace_id > after)
+    result = await session.scalars(
+        statement.distinct().order_by(Document.workspace_id).limit(min(limit, 100)),
+    )
+    return tuple(result.all())
+
+
 async def get_tool_document(
     session: AsyncSession, document_id: UUID, *, source_ids: frozenset[UUID],
+    scope: Scope, multi_workspace_enabled: bool,
     owner_all: bool = False, destination: ToolDestination = ToolDestination.LOCAL,
 ) -> ToolDocumentRead | None:
     """Read a query-time active/current document DTO under exact source and destination fences.
 
     Local-only source rows are excluded in SQL for remote destinations. An empty non-owner
     source set returns no rows. This query-time projection does not replace revalidation by
-    the eventual sender immediately before remote transmission.
+    the eventual sender immediately before remote transmission. ``owner_all`` means every
+    Source of the admitted workspace, never other workspaces.
     """
+    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     statement = (
         select(Document.id, DocumentVersion.id, Document.source_id, Source.generation, Document.title,
                Document.content_type, DocumentVersion.version_number, Document.created_at)
@@ -2204,6 +2402,7 @@ async def get_tool_document(
         .join(Source, Source.id == Document.source_id)
         .where(
             Document.id == document_id,
+            *_document_scope(scope),
             Document.current_version == DocumentVersion.version_number,
             Document.extraction_status.in_(("ready", "succeeded")),
             Source.status == "active",
@@ -2224,6 +2423,8 @@ async def revalidate_tool_document_fences(
     fences: Sequence[ToolOutputFence],
     *,
     source_ids: frozenset[UUID],
+    scope: Scope,
+    multi_workspace_enabled: bool,
     owner_all: bool = False,
     destination: ToolDestination = ToolDestination.REMOTE,
 ) -> bool:
@@ -2232,6 +2433,7 @@ async def revalidate_tool_document_fences(
     A single missing, changed, out-of-scope, inactive, unready or remote-local-only row denies the
     full page, including its cursor. The projection returns no persistence models or write access.
     """
+    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if len(fences) > 100:
         return False
     expected: dict[UUID, tuple[UUID, UUID, int]] = {}
@@ -2260,6 +2462,7 @@ async def revalidate_tool_document_fences(
         .join(Source, Source.id == Document.source_id)
         .where(
             Document.id.in_(expected),
+            *_document_scope(scope),
             Document.current_version == DocumentVersion.version_number,
             Document.extraction_status.in_(("ready", "succeeded")),
             Source.status == "active",
@@ -2281,8 +2484,8 @@ async def revalidate_tool_document_fences(
 
 async def list_tool_documents(
     session: AsyncSession, *, limit: int, cursor: str | None,
-    source_ids: frozenset[UUID], owner_all: bool = False,
-    destination: ToolDestination = ToolDestination.LOCAL,
+    source_ids: frozenset[UUID], scope: Scope, multi_workspace_enabled: bool,
+    owner_all: bool = False, destination: ToolDestination = ToolDestination.LOCAL,
 ) -> ToolDocumentPage:
     """Page only active/current rows allowed by source and destination before cursor creation.
 
@@ -2291,12 +2494,14 @@ async def list_tool_documents(
     """
     if not 1 <= limit <= 100:
         raise ValueError("Document tool page size is outside its supported bound")
+    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     statement = (
         select(Document.id, DocumentVersion.id, Document.source_id, Source.generation, Document.title,
                Document.content_type, DocumentVersion.version_number, Document.created_at)
         .join(DocumentVersion, DocumentVersion.document_id == Document.id)
         .join(Source, Source.id == Document.source_id)
         .where(
+            *_document_scope(scope),
             Document.current_version == DocumentVersion.version_number,
             Document.extraction_status.in_(("ready", "succeeded")), Source.status == "active",
         )
@@ -2341,7 +2546,7 @@ async def _normalized_source_proof(
     session: AsyncSession, source_id: UUID, source_generation: int, *,
     scope: Scope, multi_workspace_enabled: bool,
     access_fence: AccessFence, source_fence: SourceFence,
-) -> sources.ConnectorSource:
+) -> ConnectorSource:
     """Freshly compare complete original access/Source fences without taking locks.
 
     Owner public reads enforce real owner/default-workspace admission and a bound
@@ -2350,7 +2555,7 @@ async def _normalized_source_proof(
     membership/epoch rebasing, mutation, commit or remote I/O.
     """
     if not isinstance(access_fence, AccessFence) or not isinstance(source_fence, SourceFence):
-        raise RuntimeError("normalized_preparation_fence_required")
+        raise RuntimeError("normalized_preparation_fence_required")  # noqa: TRY004 - fence contract raises RuntimeError by design
     current_access = await read_access_fence(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
@@ -2430,7 +2635,7 @@ async def prepare_normalized_document_keys(
         raise ValueError("Normalized preparation requires at most32 exact external keys")
     external_ids = tuple(dict.fromkeys(external_ids))
     if not isinstance(source_fence, SourceFence):
-        raise RuntimeError("normalized_preparation_fence_required")
+        raise RuntimeError("normalized_preparation_fence_required")  # noqa: TRY004 - fence contract raises RuntimeError by design
     await _normalized_source_proof(
         session, source_id, source_fence.generation, scope=scope,
         multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence,
@@ -2563,7 +2768,7 @@ async def upsert_normalized_document_in_uow(
 
 
 async def _apply_normalized_document(
-    session: AsyncSession, payload: NormalizedDocumentInput, source_projection: sources.ConnectorSource,
+    session: AsyncSession, payload: NormalizedDocumentInput, source_projection: ConnectorSource,
     document: Document | None, identity: NormalizedDocumentIdentity | None, workspace_id: UUID,
 ) -> tuple[NormalizedDocumentResult, Document | None, NormalizedDocumentIdentity | None]:
     """Share validation-first immutable revisions and provider ranking under held roots.
@@ -2976,7 +3181,7 @@ async def prepare_uploaded_document_in_uow(
     the later initializer; no token, registry, placeholder, mutation, event or commit exists.
     """
     if not isinstance(source_fence, SourceFence):
-        raise RuntimeError("upload_original_fence_required")
+        raise RuntimeError("upload_original_fence_required")  # noqa: TRY004 - fence contract raises RuntimeError by design
     await _normalized_source_proof(session, source_id, source_fence.generation, scope=scope,
         multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence)
     documents, identities = await _upload_document_state(session, source_id=source_id,
@@ -3015,7 +3220,7 @@ async def add_uploaded_document(
     return UUID without commit/event/I/O. Caller owns atomic publication and raw rollback.
     """
     if not isinstance(source_fence, SourceFence):
-        raise RuntimeError("upload_original_fence_required")
+        raise RuntimeError("upload_original_fence_required")  # noqa: TRY004 - fence contract raises RuntimeError by design
     await _normalized_source_proof(session, source_id, source_fence.generation, scope=scope,
         multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence)
     documents, identities = await _upload_document_state(session, source_id=source_id,
@@ -3054,7 +3259,7 @@ async def _extraction_document(
     missing/moved/deleted/raw-input mismatch returns None before mutation.
     """
     if not isinstance(source_fence, SourceFence):
-        raise RuntimeError("extraction_original_fence_required")
+        raise RuntimeError("extraction_original_fence_required")  # noqa: TRY004 - fence contract raises RuntimeError by design
     await _normalized_source_proof(
         session, source_id, source_fence.generation, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         access_fence=access_fence, source_fence=source_fence,
@@ -3288,7 +3493,7 @@ def _decode_document_owner_cursor(
         raise HTTPException(status_code=422, detail="Invalid document cursor") from exc
     if payload[3:5] != [fence.membership_revision, fence.configuration_revision]:
         raise HTTPException(status_code=409, detail="Document page context changed")
-    return cast(str, payload[6])
+    return str(payload[6])
 
 
 async def list_documents(
@@ -3705,13 +3910,15 @@ async def append_content(
 
 
 async def read_extraction_input(
-    session: AsyncSession, version_id: UUID, allowed_chunk_ids: list[UUID] | None = None
+    session: AsyncSession, version_id: UUID, allowed_chunk_ids: list[UUID] | None = None, *,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> ExtractionInput | None:
     """Return chunks for the active source's ready current version within extraction bounds.
 
     Raise ExtractionInputLimitError for empty, oversized or over-count input;
     unrelated selection validation remains ValueError. No partial input is returned.
     """
+    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     statement = (
         select(
             Document.id, Document.source_id, Source.generation, Source.local_only,
@@ -3724,6 +3931,7 @@ async def read_extraction_input(
             Document.current_version == DocumentVersion.version_number,
             Document.extraction_status.in_(("ready", "succeeded")),
             Source.status == "active",
+            *_document_scope(scope),
         )
     )
     row = (await session.execute(statement)).one_or_none()
@@ -3776,8 +3984,11 @@ async def read_extraction_evidence_refs(
     source_id: UUID,
     source_generation: int,
     chunk_ids: list[UUID],
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> list[ExtractionEvidenceRef] | None:
     """Validate a bounded set of current extraction chunks and return detached evidence refs."""
+    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if not chunk_ids or len(chunk_ids) > 150 or len(set(chunk_ids)) != len(chunk_ids):
         raise ValueError("Extraction membership evidence must be nonempty and bounded")
     rows = (await session.execute(
@@ -3787,6 +3998,7 @@ async def read_extraction_evidence_refs(
         .join(Source, Source.id == Document.source_id)
         .where(
             Document.id == document_id,
+            *_document_scope(scope),
             Document.source_id == source_id,
             DocumentVersion.id == document_version_id,
             Document.current_version == DocumentVersion.version_number,
@@ -3806,15 +4018,20 @@ async def read_extraction_evidence_refs(
 
 
 async def list_ready_version_refs(
-    session: AsyncSession, limit: int = 50, cursor: str | None = None
+    session: AsyncSession, limit: int = 50, cursor: str | None = None, *,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> tuple[list[ReadyVersionRef], str | None]:
     """Page through active-source current versions that have ready chunks."""
+    access_fence = await _admit_document_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     if not 1 <= limit <= 100:
         raise ValueError("Ready-version page size must be between 1 and 100")
     statement = (
         select(
             Document.id, Document.created_at, Source.id, Source.generation,
             DocumentVersion.id, DocumentVersion.version_number, Source.local_only,
+            Document.raw_uri, Document.mime_type,
         )
         .join(DocumentVersion, DocumentVersion.document_id == Document.id)
         .join(Source, Source.id == Document.source_id)
@@ -3823,11 +4040,15 @@ async def list_ready_version_refs(
             Document.extraction_status.in_(("ready", "succeeded")),
             DocumentVersion.content != "",
             Source.status == "active",
+            *_document_scope(scope),
             select(DocumentChunk.id).where(DocumentChunk.document_version_id == DocumentVersion.id).exists(),
         )
     )
     if cursor:
-        created_at, identifier = decode_cursor(cursor)
+        scoped_cursor = _decode_document_owner_cursor(
+            cursor, kind="ready_versions", fence=access_fence, resource_id=None,
+        )
+        created_at, identifier = decode_cursor(scoped_cursor)
         statement = statement.where(tuple_(Document.created_at, Document.id) < (created_at, identifier))
     rows = list((await session.execute(statement.order_by(desc(Document.created_at), desc(Document.id)).limit(limit + 1))).all())
     more = len(rows) > limit
@@ -3835,22 +4056,32 @@ async def list_ready_version_refs(
     result = [ReadyVersionRef(
         document_id=document_id, document_version_id=version_id, source_id=source_id,
         source_generation=generation, version_number=version_number, created_at=created_at,
-        local_only=local_only,
-    ) for document_id, created_at, source_id, generation, version_id, version_number, local_only in rows]
-    return result, encode_cursor(rows[-1][1], rows[-1][0]) if more and rows else None
+        local_only=local_only, raw_uri=raw_uri, mime_type=mime_type,
+    ) for (document_id, created_at, source_id, generation, version_id, version_number, local_only,
+           raw_uri, mime_type) in rows]
+    next_cursor = (_encode_document_owner_cursor(
+        encode_cursor(rows[-1][1], rows[-1][0]), kind="ready_versions",
+        fence=access_fence, resource_id=None,
+    ) if more and rows else None)
+    return result, next_cursor
 
 
-async def get_ready_version_ref(session: AsyncSession, version_id: UUID) -> ReadyVersionRef | None:
+async def get_ready_version_ref(
+    session: AsyncSession, version_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+) -> ReadyVersionRef | None:
     """Resolve one version only while it remains the ready current version."""
+    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     row = (await session.execute(
         select(
             Document.id, Document.created_at, Source.id, Source.generation,
             DocumentVersion.id, DocumentVersion.version_number, Source.local_only,
+            Document.raw_uri, Document.mime_type,
         )
         .join(DocumentVersion, DocumentVersion.document_id == Document.id)
         .join(Source, Source.id == Document.source_id)
         .where(
             DocumentVersion.id == version_id,
+            *_document_scope(scope),
             Document.current_version == DocumentVersion.version_number,
             Document.extraction_status.in_(("ready", "succeeded")),
             DocumentVersion.content != "",
@@ -3860,11 +4091,12 @@ async def get_ready_version_ref(session: AsyncSession, version_id: UUID) -> Read
     )).one_or_none()
     if row is None:
         return None
-    document_id, created_at, source_id, generation, actual_version_id, version_number, local_only = row
+    (document_id, created_at, source_id, generation, actual_version_id, version_number, local_only,
+     raw_uri, mime_type) = row
     return ReadyVersionRef(
         document_id=document_id, document_version_id=actual_version_id, source_id=source_id,
         source_generation=generation, version_number=version_number,
-        created_at=created_at, local_only=local_only,
+        created_at=created_at, local_only=local_only, raw_uri=raw_uri, mime_type=mime_type,
     )
 
 
@@ -3963,29 +4195,45 @@ async def get_version(
 
 
 async def read_evidence_refs(
-    session: AsyncSession, refs: list[tuple[UUID, UUID]], *, for_write: bool = False
+    session: AsyncSession, refs: list[tuple[UUID, UUID]], *, scope: Scope,
+    multi_workspace_enabled: bool, for_write: bool = False,
 ) -> list[EvidenceReferenceRead]:
-    """Resolve unique bounded version/chunk references, locking owners for writes."""
+    """Resolve unique bounded references and compare original admission before ordered write locks."""
+    access_fence = await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if len(refs) > 100 or len(set(refs)) != len(refs):
         raise ValueError("Evidence references must be unique and contain at most 100 items")
     if not refs:
         return []
-    result = await _read_evidence_ref_rows(session, refs)
     if for_write:
         from modules.sources import public as sources_public
 
-        for source_id in sorted({item.source_id for item in result}, key=str):
-            if await sources_public.lock_source(session, source_id) is None:
+        source_ids = list((await session.scalars(
+            select(Source.id).join(Document, Document.source_id == Source.id)
+            .join(DocumentVersion, DocumentVersion.document_id == Document.id)
+            .join(DocumentChunk, DocumentChunk.document_version_id == DocumentVersion.id)
+            .where(tuple_(DocumentVersion.id, DocumentChunk.id).in_(refs), *_document_scope(scope))
+            .distinct().order_by(Source.id)
+        )).all())
+        if source_ids:
+            source_set = await sources_public.lock_source_set(
+                session, source_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                expected_access_fence=access_fence,
+            )
+            if len(source_set.fences) != len(source_ids):
                 raise ValueError("Evidence source no longer exists")
-        document_ids = sorted({item.document_id for item in result}, key=str)
+        document_ids = list((await session.scalars(
+            select(Document.id).join(DocumentVersion, DocumentVersion.document_id == Document.id)
+            .join(DocumentChunk, DocumentChunk.document_version_id == DocumentVersion.id)
+            .where(tuple_(DocumentVersion.id, DocumentChunk.id).in_(refs), *_document_scope(scope))
+            .distinct().order_by(Document.id)
+        )).all())
         await session.scalars(
             select(Document)
-            .where(Document.id.in_(document_ids))
+            .where(Document.id.in_(document_ids), *_document_scope(scope))
             .order_by(Document.id)
             .with_for_update()
         )
-        result = await _read_evidence_ref_rows(session, refs)
-    return result
+    return await _read_evidence_ref_rows(session, refs, scope=scope)
 
 
 async def review_version_locator(
@@ -4000,11 +4248,11 @@ async def review_version_locator(
     Existing held callers acquire no earlier locks and supply the actual flag;
     this locator is read-only, never proof of write authority or retention locks.
     """
-    await read_access_fence(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     row = (await session.execute(
         select(Document.id, Document.source_id)
         .join(DocumentVersion, DocumentVersion.document_id == Document.id)
-        .where(DocumentVersion.id == version_id, Document.workspace_id == scope.workspace_id)
+        .where(DocumentVersion.id == version_id, *_document_scope(scope))
     )).one_or_none()
     if row is None:
         return None
@@ -4013,27 +4261,36 @@ async def review_version_locator(
     return (row[0], row[1]) if source is not None else None
 
 
-async def cleanup_evidence_version_document(session: AsyncSession, version_id: UUID) -> UUID | None:
+async def cleanup_evidence_version_document(
+    session: AsyncSession, version_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+    source_id: UUID | None = None,
+) -> UUID | None:
     """Return the Document that owned a version, from the retained cleanup evidence of a deleted Document.
 
     Fallback for callers whose live ``review_version_locator`` no longer resolves a version. Reads only
     immutable receipt references (no lock), so it cannot invert the privacy -> receipt -> owner order.
     """
-    return await session.scalar(
+    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    statement = (
         select(DocumentCleanupOperation.document_id)
         .join(DocumentCleanupEvidenceReference, DocumentCleanupEvidenceReference.operation_id == DocumentCleanupOperation.id)
         .where(
+            DocumentCleanupOperation.workspace_id == scope.workspace_id,
+            DocumentCleanupEvidenceReference.workspace_id == scope.workspace_id,
             DocumentCleanupEvidenceReference.document_version_id == version_id,
             DocumentCleanupEvidenceReference.reference_kind == "version",
         )
-        .limit(1)
     )
+    if source_id is not None:
+        statement = statement.where(DocumentCleanupOperation.source_id == source_id)
+    return await session.scalar(statement.order_by(DocumentCleanupOperation.id).limit(1))
 
 
 async def review_version_fences(
-    session: AsyncSession, version_ids: list[UUID],
+    session: AsyncSession, version_ids: list[UUID], *, scope: Scope, multi_workspace_enabled: bool,
 ) -> dict[UUID, ReviewVersionFence]:
     """Return source-generation snapshots for a bounded de-duplicated version set."""
+    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     ids = list(dict.fromkeys(version_ids))
     if len(ids) > 100:
         raise ValueError("Review version fence set exceeds its page limit")
@@ -4043,7 +4300,7 @@ async def review_version_fences(
         select(DocumentVersion.id, Document.id, Document.source_id, Source.generation, Source.name, DocumentVersion.version_number)
         .join(Document, Document.id == DocumentVersion.document_id)
         .join(Source, Source.id == Document.source_id)
-        .where(DocumentVersion.id.in_(ids))
+        .where(DocumentVersion.id.in_(ids), *_document_scope(scope))
     )).all()
     return {
         version_id: ReviewVersionFence(document_id, source_id, generation, source_name, version_number)
@@ -4053,13 +4310,14 @@ async def review_version_fences(
 
 async def lock_review_version_evidence(
     session: AsyncSession, *, document_id: UUID, source_id: UUID, version_id: UUID,
-    source_generation: int, chunk_ids: list[UUID],
+    source_generation: int, chunk_ids: list[UUID], scope: Scope, multi_workspace_enabled: bool,
 ) -> list[ReviewEvidenceRef] | None:
     """Fence a bounded owner correction to retained immutable evidence, including history."""
+    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if not chunk_ids or len(chunk_ids) > 5 or len(set(chunk_ids)) != len(chunk_ids):
         raise ValueError("Review evidence must contain unique bounded chunks")
     document = await session.scalar(
-        select(Document).where(Document.id == document_id, Document.source_id == source_id)
+        select(Document).where(Document.id == document_id, Document.source_id == source_id, *_document_scope(scope))
         .with_for_update().execution_options(populate_existing=True)
     )
     if document is None:
@@ -4072,7 +4330,10 @@ async def lock_review_version_evidence(
     if version is None or generation != source_generation:
         return None
     assert source_name is not None  # generation matched, so the source row exists
-    refs = await read_evidence_refs(session, [(version_id, chunk_id) for chunk_id in chunk_ids])
+    refs = await read_evidence_refs(
+        session, [(version_id, chunk_id) for chunk_id in chunk_ids],
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     if len(refs) != len(chunk_ids) or any(
         ref.document_id != document_id or ref.source_id != source_id for ref in refs
     ):
@@ -4093,21 +4354,25 @@ async def lock_review_version_evidence(
     ) for ref in refs]
 
 
-async def lock_document_ids(session: AsyncSession, document_ids: list[UUID]) -> list[UUID]:
+async def lock_document_ids(
+    session: AsyncSession, document_ids: list[UUID], *, scope: Scope, multi_workspace_enabled: bool,
+) -> list[UUID]:
     """Lock a bounded, sorted set of retained document rows for owner transactions."""
+    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     ids = sorted(set(document_ids), key=str)
     if len(ids) > 100:
         raise ValueError("Document lock set exceeds its atomic limit")
     if not ids:
         return []
     locked = list((await session.scalars(
-        select(Document.id).where(Document.id.in_(ids)).order_by(Document.id).with_for_update()
+        select(Document.id).where(Document.id.in_(ids), *_document_scope(scope))
+        .order_by(Document.id).with_for_update()
     )).all())
     return locked
 
 
 async def _read_evidence_ref_rows(
-    session: AsyncSession, refs: list[tuple[UUID, UUID]]
+    session: AsyncSession, refs: list[tuple[UUID, UUID]], *, scope: Scope,
 ) -> list[EvidenceReferenceRead]:
     """Build fresh ordered evidence DTOs with version provenance and exact reference validation.
 
@@ -4119,7 +4384,7 @@ async def _read_evidence_ref_rows(
         .join(DocumentVersion, DocumentVersion.document_id == Document.id)
         .join(DocumentChunk, DocumentChunk.document_version_id == DocumentVersion.id)
         .join(Source, Source.id == Document.source_id)
-        .where(tuple_(DocumentVersion.id, DocumentChunk.id).in_(refs))
+        .where(tuple_(DocumentVersion.id, DocumentChunk.id).in_(refs), *_document_scope(scope))
         .execution_options(populate_existing=True)
     )).all()
     provenance_rows = (await session.scalars(
@@ -4151,6 +4416,52 @@ async def _read_evidence_ref_rows(
     if set(by_ref) != set(refs):
         raise ValueError("Evidence reference is missing or does not match its document revision")
     return [by_ref[ref] for ref in refs]
+
+
+async def _validate_gadget_document_selection_fences_admitted(
+    session: AsyncSession, fences: tuple[GadgetDocumentSelectionFence, ...], *,
+    scope: Scope, multi_workspace_enabled: bool, expected_access_fence: AccessFence,
+    lock_rows: bool, max_documents: int,
+) -> bool:
+    """Validate an exact selection under its original admission fence without rereading access."""
+    if (
+        not fences or len(fences) > max_documents or max_documents > 100
+        or len({item.document_id for item in fences}) != len(fences)
+        or len({item.source_id for item in fences}) > 32
+    ):
+        raise ValueError("Selection fences exceed their bounded unique-document or source limit")
+    source_ids = sorted({item.source_id for item in fences}, key=str)
+    document_ids = sorted({item.document_id for item in fences}, key=str)
+    if lock_rows:
+        source_set = await sources.lock_source_set(
+            session, source_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            expected_access_fence=expected_access_fence,
+        )
+        if len(source_set.fences) != len(source_ids):
+            return False
+        locked_documents = (await session.scalars(
+            select(Document).where(Document.id.in_(document_ids), *_document_scope(scope))
+            .order_by(Document.id).with_for_update(read=True)
+        )).all()
+        if len(locked_documents) != len(document_ids):
+            return False
+    for fence in fences:
+        components = await _current_document_components(
+            session, fence.document_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            expected_source_generation=fence.source_generation, admitted=True,
+        )
+        if components is None:
+            return False
+        _document, version, source, provenance = components
+        accepted_scope = provenance.provenance_json.get("provider_scope_discriminator") if provenance else None
+        if (
+            version.id != fence.document_version_id or source.id != fence.source_id
+            or source.generation != fence.source_generation or source.type != fence.source_type
+            or source.provider != fence.provider or source.local_only != fence.local_only
+            or accepted_scope != fence.scope_discriminator
+        ):
+            return False
+    return True
 
 
 @dataclass(frozen=True)
@@ -4201,6 +4512,7 @@ async def read_chat_evidence_chunks(
     require_active_source: bool = True,
     require_current_version: bool = False,
     selection_fences: tuple[GadgetDocumentSelectionFence, ...] | None = None,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> list[ChatEvidenceChunk]:
     """Read bounded detached evidence chunks with exact content and source privacy fence.
 
@@ -4227,12 +4539,13 @@ async def read_chat_evidence_chunks(
         ValueError: If refs list exceeds 100 items or contains duplicates. Exact selected reads also
             fail when a requested reference is missing instead of silently shrinking the selection.
     """
+    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if len(refs) > 100 or len(set(refs)) != len(refs):
         raise ValueError("Evidence references must be unique and contain at most 100 items")
     if not refs:
         return []
     if selection_fences is not None and not await validate_gadget_document_selection_fences(
-        session, selection_fences,
+        session, selection_fences, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     ):
         raise ValueError("Selected document version or source privacy scope is stale")
 
@@ -4241,7 +4554,7 @@ async def read_chat_evidence_chunks(
         .join(DocumentVersion, DocumentVersion.document_id == Document.id)
         .join(DocumentChunk, DocumentChunk.document_version_id == DocumentVersion.id)
         .join(Source, Source.id == Document.source_id)
-        .where(tuple_(DocumentVersion.id, DocumentChunk.id).in_(refs))
+        .where(tuple_(DocumentVersion.id, DocumentChunk.id).in_(refs), *_document_scope(scope))
     )
     if require_active_source:
         statement = statement.where(Source.status == "active")
@@ -4259,7 +4572,7 @@ async def read_chat_evidence_chunks(
             NormalizedVersionProvenance.document_version_id.in_(
                 {version.id for _, version, _, _ in rows}
             )
-        )
+        ).execution_options(populate_existing=True)
     )).all()
     provenance_by_version = {item.document_version_id: item for item in provenance_rows}
 
@@ -4299,60 +4612,66 @@ async def lock_chat_evidence_chunks(
     require_active_source: bool = True,
     require_current_version: bool = False,
     selection_fences: tuple[GadgetDocumentSelectionFence, ...] | None = None,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> list[ChatEvidenceChunk]:
     """Hold key-share locks on exact evidence through Chat's short publication transaction.
 
-    Lock order matches Documents deletion and append: Source, Document, immutable version,
-    then chunk. A hard delete cannot commit between this current-evidence check and the caller's
-    publication commit; callers must release these locks promptly by committing or rolling back.
+    Retained scoped identities are captured before locking in Source, Document, immutable version,
+    then chunk order. A hard delete cannot commit between this current-evidence check and the
+    caller's publication commit; callers must release locks promptly by committing or rolling back.
     """
+    access_fence = await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if len(refs) > 100 or len(set(refs)) != len(refs):
         raise ValueError("Evidence references must be unique and contain at most 100 items")
     if not refs:
         return []
-    if selection_fences is not None and not await validate_gadget_document_selection_fences(
-        session, selection_fences,
+    if selection_fences is not None and not await _validate_gadget_document_selection_fences_admitted(
+        session, selection_fences, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        expected_access_fence=access_fence, lock_rows=False, max_documents=32,
     ):
         raise ValueError("Selected document version or source privacy scope is stale")
     ref_filter = tuple_(DocumentVersion.id, DocumentChunk.id).in_(refs)
-    source_ids = list((await session.scalars(
-        select(Source.id).join(Document, Document.source_id == Source.id)
+    scoped_refs = list((await session.execute(
+        select(Source.id, Document.id, DocumentVersion.id, DocumentChunk.id)
+        .join(Document, Document.source_id == Source.id)
         .join(DocumentVersion, DocumentVersion.document_id == Document.id)
         .join(DocumentChunk, DocumentChunk.document_version_id == DocumentVersion.id)
-        .where(ref_filter).distinct().order_by(Source.id)
+        .where(ref_filter, *_document_scope(scope))
+        .order_by(Source.id, Document.id, DocumentVersion.id, DocumentChunk.id)
     )).all())
+    source_ids = sorted({row[0] for row in scoped_refs}, key=str)
+    document_ids = sorted({row[1] for row in scoped_refs}, key=str)
+    version_ids = sorted({row[2] for row in scoped_refs}, key=str)
+    chunk_ids = sorted({row[3] for row in scoped_refs}, key=str)
     if source_ids:
-        await session.scalars(
-            select(Source.id).where(Source.id.in_(source_ids)).order_by(Source.id)
-            .with_for_update(read=True, key_share=True, of=Source)
+        await sources.lock_source_set(
+            session, source_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            expected_access_fence=access_fence,
         )
-    document_ids = list((await session.scalars(
-        select(Document.id).join(DocumentVersion, DocumentVersion.document_id == Document.id)
-        .join(DocumentChunk, DocumentChunk.document_version_id == DocumentVersion.id)
-        .where(ref_filter).distinct().order_by(Document.id)
-    )).all())
     if document_ids:
         await session.scalars(
-            select(Document.id).where(Document.id.in_(document_ids)).order_by(Document.id)
+        select(Document.id).where(Document.id.in_(document_ids), *_document_scope(scope)).order_by(Document.id)
             .with_for_update(read=True, key_share=True, of=Document)
         )
-    version_ids = list((await session.scalars(
-        select(DocumentVersion.id).join(DocumentChunk, DocumentChunk.document_version_id == DocumentVersion.id)
-        .where(ref_filter).distinct().order_by(DocumentVersion.id)
-    )).all())
     if version_ids:
         await session.scalars(
             select(DocumentVersion.id).where(DocumentVersion.id.in_(version_ids)).order_by(DocumentVersion.id)
             .with_for_update(read=True, key_share=True, of=DocumentVersion)
         )
-    chunk_ids = [chunk_id for _, chunk_id in refs]
-    await session.scalars(
-        select(DocumentChunk.id).where(DocumentChunk.id.in_(chunk_ids)).order_by(DocumentChunk.id)
-        .with_for_update(read=True, key_share=True, of=DocumentChunk)
-    )
+    if chunk_ids:
+        await session.scalars(
+            select(DocumentChunk.id).where(DocumentChunk.id.in_(chunk_ids)).order_by(DocumentChunk.id)
+            .with_for_update(read=True, key_share=True, of=DocumentChunk)
+        )
+    if selection_fences is not None and not await _validate_gadget_document_selection_fences_admitted(
+        session, selection_fences, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        expected_access_fence=access_fence, lock_rows=False, max_documents=32,
+    ):
+        raise ValueError("Selected document version or source privacy scope is stale")
     evidence = await read_chat_evidence_chunks(
         session, refs, require_active_source=require_active_source,
         require_current_version=require_current_version,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
     if selection_fences is not None and len(evidence) != len(refs):
         raise ValueError("One or more exact selected evidence chunks are unavailable")

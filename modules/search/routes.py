@@ -9,6 +9,8 @@ from core.auth.dependencies import require_owner, require_owner_write
 from core.auth.models import AuthSession
 from core.config import Settings
 from core.database import get_session
+from core.workspaces.dependencies import require_workspace_read, require_workspace_write
+from core.workspaces.schemas import WorkspaceContext
 from modules.goals.schemas import GoalFilter
 from modules.search import indexing, public
 from modules.search.schemas import (
@@ -26,6 +28,8 @@ router = APIRouter(prefix="/api/v1/search", tags=["search"], dependencies=[Depen
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[AuthSession, Depends(require_owner)]
 OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]
+WorkspaceRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
+WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 
 
 @router.get("/global", response_model=GlobalSearchResponse)
@@ -33,6 +37,7 @@ async def global_search(
     request: Request,
     session: Session,
     owner: OwnerRead,
+    workspace: WorkspaceRead,
     q: Annotated[str, Query(min_length=1, max_length=300)],
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     document_cursor: Annotated[str | None, Query(max_length=256)] = None,
@@ -61,7 +66,10 @@ async def global_search(
         cursor=document_cursor,
         filters=SearchFilters(),
     )
-    doc_response = await public.search(session, request.app.state.redis, request.app.state.settings, doc_request)
+    doc_response = await public.search(
+        session, request.app.state.redis, request.app.state.settings, doc_request,
+        scope=workspace, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+    )
     try:
         task_filter = TaskFilter(q=q, limit=limit, cursor=task_cursor)
         goal_filter = GoalFilter(q=q, limit=limit, cursor=goal_cursor)
@@ -69,7 +77,8 @@ async def global_search(
         raise HTTPException(status_code=422, detail="Invalid internal search filter or cursor") from exc
 
     task_page, goal_page = await public.search_tasks_and_goals(
-        session, owner.owner_id, task_filter, goal_filter
+        session, task_filter, goal_filter, scope=workspace,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
     )
     total = len(doc_response.items) + len(task_page.items) + len(goal_page.items)
     return GlobalSearchResponse(
@@ -84,27 +93,47 @@ async def global_search(
 
 
 @router.post("", response_model=SearchResponse)
-async def search(payload: SearchRequest, request: Request, session: Session, _owner: OwnerRead) -> SearchResponse:
-    """Run owner-authenticated search using the request-scoped Redis and settings."""
-    return await public.search(session, request.app.state.redis, request.app.state.settings, payload)
+async def search(
+    payload: SearchRequest, request: Request, session: Session, _owner: OwnerRead,
+    workspace: WorkspaceRead,
+) -> SearchResponse:
+    """Run owner-authenticated search within the selected admitted default workspace."""
+    return await public.search(
+        session, request.app.state.redis, request.app.state.settings, payload,
+        scope=workspace, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+    )
 
 
 @router.get("/index", response_model=SearchIndexStatus)
-async def index_status(session: Session, _owner: OwnerRead) -> SearchIndexStatus:
-    """Return owner-only status for the active or latest index generation."""
-    return await public.index_status(session)
+async def index_status(
+    request: Request, session: Session, _owner: OwnerRead, workspace: WorkspaceRead,
+) -> SearchIndexStatus:
+    """Return this admitted workspace's generation and truthful automatic-index readiness state."""
+    return await public.index_status(
+        session, scope=workspace,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        settings=request.app.state.settings, redis=request.app.state.redis,
+    )
 
 
 @router.post("/reindex", response_model=ReindexResponse, status_code=202)
-async def reindex(request: Request, session: Session, _owner: OwnerWrite) -> ReindexResponse:
+async def reindex(
+    request: Request, session: Session, _owner: OwnerWrite, workspace: WorkspaceWrite,
+) -> ReindexResponse:
     """Queue reindexing only when a permitted remote embedding mapping is configured."""
     redis: Redis = request.app.state.redis
     settings: Settings = request.app.state.settings
-    config, mapping, policy = await indexing.configured_embedding(session, settings, redis)
-    if mapping is None or not mapping.model.strip() or mapping.destination != "remote" or not policy.embeddings_allowed:
+    # Admission precedes the config read; the original fence and config are compared again
+    # under the workspace generation mutex, so a change in between aborts with 409.
+    authority = await indexing.capture_authority(session, settings, redis, scope=workspace)
+    if not authority.permitted():
         raise HTTPException(status_code=409, detail="Configure and permit a remote embedding model first")
     try:
-        generation = await indexing.create_generation(session, mapping, config.gateway_identity)
+        generation = await indexing.create_generation_for_authority(
+            session, authority, settings, redis, scope=workspace,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail="An index generation for another gateway is still running") from exc
+    if generation is None:
+        raise HTTPException(status_code=409, detail="Index generation is not available")
     return ReindexResponse(run_id=generation.id)
