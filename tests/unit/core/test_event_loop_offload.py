@@ -108,16 +108,16 @@ async def test_large_chunking_keeps_loop_responsive() -> None:
 
 async def test_save_upload_oversize_removes_temp_file(tmp_path: Path) -> None:
     upload = UploadFile(io.BytesIO(b"y" * (2 * 1024 * 1024)), filename="a.txt")
-    doc = uuid4()
+    doc, workspace = uuid4(), uuid4()
     with pytest.raises(ValueError, match="size limit"):
-        await storage.save_upload(tmp_path, upload, doc, ".txt", 1024 * 1024)
-    assert list((tmp_path / "documents" / str(doc)).iterdir()) == []
+        await storage.save_upload(tmp_path, upload, doc, ".txt", 1024 * 1024, workspace_id=workspace)
+    assert list((tmp_path / "workspaces" / str(workspace) / "documents" / str(doc)).iterdir()) == []
 
 
 async def test_save_upload_digest_matches(tmp_path: Path) -> None:
     payload = b"hello world" * 1000
     upload = UploadFile(io.BytesIO(payload), filename="a.txt")
-    _, size, digest = await storage.save_upload(tmp_path, upload, uuid4(), ".txt", 10**7)
+    _, size, digest = await storage.save_upload(tmp_path, upload, uuid4(), ".txt", 10**7, workspace_id=uuid4())
     assert size == len(payload)
     assert digest == hashlib.sha256(payload).hexdigest()
 
@@ -141,14 +141,14 @@ async def test_save_upload_blocks_run_off_loop(tmp_path: Path, monkeypatch: pyte
 
     monkeypatch.setattr(storage, "_write_block", slow_write)
     upload = UploadFile(io.BytesIO(b"x" * 1000), filename="a.txt")
-    lag = await _lag_while(storage.save_upload(tmp_path, upload, uuid4(), ".txt", 10**6))
+    lag = await _lag_while(storage.save_upload(tmp_path, upload, uuid4(), ".txt", 10**6, workspace_id=uuid4()))
     assert lag < 0.1
     assert idents and threading.get_ident() not in idents
 
 
 async def test_auth_hashing_runs_off_loop(monkeypatch: pytest.MonkeyPatch) -> None:
     idents: list[int] = []
-    monkeypatch.setattr(auth_routes, "verify_password", _slow(idents, False))
+    monkeypatch.setattr(auth_routes, "verify_login_password", _slow(idents, False))
     monkeypatch.setattr(auth_routes, "hash_password", _slow(idents, "hash"))
     monkeypatch.setattr(auth_routes, "_origin_allowed", lambda *_: True)
     monkeypatch.setattr(auth_routes, "_valid_csrf", lambda *_: True)
@@ -166,14 +166,19 @@ async def test_auth_hashing_runs_off_loop(monkeypatch: pytest.MonkeyPatch) -> No
         async def commit(self) -> None:
             return None
 
+    async def provision(*_a: Any, **_k: Any) -> None:
+        return None
+
     monkeypatch.setattr(auth_routes, "_allow_attempt", allow)
+    monkeypatch.setattr(auth_routes, "admit_identity_write", allow)
+    monkeypatch.setattr(auth_routes, "provision_bootstrap_account_in_uow", provision)
     monkeypatch.setattr(auth_routes, "_lock_owner", lock)
     settings = SimpleNamespace(setup_token=SecretStr("tok"))
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(settings=settings)), cookies={})
 
     async def login() -> None:
         with pytest.raises(HTTPException):
-            await auth_routes.login(request, Response(), SimpleNamespace(password="p"), Sess(), None)  # type: ignore[arg-type]
+            await auth_routes.login(request, Response(), SimpleNamespace(password="p", identifier=None), Sess(), None)  # type: ignore[arg-type]
 
     async def setup() -> None:
         await auth_routes.create_owner(
@@ -190,13 +195,19 @@ async def test_feed_records_run_off_loop(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(feed_catalog, "_records_from_feed", _slow(idents, "page"))
     monkeypatch.setattr(feed_catalog, "provider_feed_url", lambda _s: "https://example.test/feed")
 
-    async def read(_url: str) -> bytes:
+    async def read(_url: str, _before_request: Any) -> bytes:
         return b"<feed/>"
 
     monkeypatch.setattr(feed_catalog, "_read_feed", read)
     source = SimpleNamespace(provider="youtube")
+
+    async def allow_request() -> None:
+        return None
+
     lag = await _lag_while(
-        feed_catalog.collect_provider_feed(source, collected_at=datetime.now(UTC), session_factory=None)  # type: ignore[arg-type]
+        feed_catalog.collect_provider_feed(  # type: ignore[arg-type]
+            source, collected_at=datetime.now(UTC), session_factory=None, before_request=allow_request,
+        )
     )
     assert lag < 0.1 and idents and threading.get_ident() not in idents
 
@@ -210,15 +221,27 @@ async def test_cleanup_orphans_run_off_loop(monkeypatch: pytest.MonkeyPatch) -> 
             return self
 
         async def __aenter__(self) -> Any:
-            return object()
+            return SimpleNamespace(commit=_noop)
 
         async def __aexit__(self, *_a: object) -> None:
             return None
 
-    async def raw_uris(_s: Any) -> set[str]:
+    async def _noop() -> None:
+        return None
+
+    async def raw_uris(_s: Any, **_k: Any) -> set[str]:
         return set()
 
+    async def active(*_a: Any, **_k: Any) -> Any:
+        return object()
+
+    async def activity(*_a: Any, **_k: Any) -> Any:
+        return object()
+
     monkeypatch.setattr(worker.documents, "raw_uris", raw_uris)
+    monkeypatch.setattr("core.auth.public.get_active_account", active)
+    monkeypatch.setattr("modules.settings.public.register_activity", activity)
+    monkeypatch.setattr("modules.settings.public.finish_activity", activity)
     ctx = {"session_factory": Factory(), "settings": Settings(data_dir=Path("."))}
     assert await _lag_while(worker.cleanup_storage_orphans(ctx)) < 0.1  # type: ignore[arg-type]
     assert idents and threading.get_ident() not in idents
@@ -254,7 +277,10 @@ async def test_export_render_off_loop_then_fence_and_bytes_identical(
     monkeypatch.setattr(export_routes, "_collect_dataset", collect)
     monkeypatch.setattr(export_routes, "_validate_final_fences", fence)
     result = await export_routes._build_export_response(
-        fmt, object(), SimpleNamespace(owner_id=1), Response(),  # type: ignore[arg-type]
+        fmt, object(), SimpleNamespace(owner_id=1),
+        SimpleNamespace(user_id=1),
+        SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(settings=SimpleNamespace(multi_workspace_enabled=False)))),
+        Response(),  # type: ignore[arg-type]
     )
     assert order == ["render", "fence"]
     assert idents and threading.get_ident() not in idents

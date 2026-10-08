@@ -16,13 +16,22 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.requests import ClientDisconnect
-from starlette.types import Message, Receive, Scope as ASGIScope, Send
+from starlette.types import Message, Receive, Send
+from starlette.types import Scope as ASGIScope
 
 from core.auth.dependencies import require_account
 from core.auth.public import authenticated_session_ref, get_active_account
 from core.auth.schemas import AccountRead, AccountSessionRef
 from core.database import get_session
-from core.realtime import MAX_CURSOR_LENGTH, MAX_REPLAY_BATCH, ReplayCursor, ReplayRecord, ReplayState, current_head, parse_cursor
+from core.realtime import (
+    MAX_CURSOR_LENGTH,
+    MAX_REPLAY_BATCH,
+    ReplayCursor,
+    ReplayRecord,
+    ReplayState,
+    current_head,
+    parse_cursor,
+)
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, WorkspaceContext
 
@@ -34,7 +43,7 @@ HEARTBEAT_INTERVAL_SECONDS = 15
 DB_READ_TIMEOUT_SECONDS = 3
 SEND_TIMEOUT_SECONDS = 2
 CLEANUP_TIMEOUT_SECONDS = 2
-MAX_STREAMS_PER_API_PROCESS = 4
+MAX_STREAMS_PER_API_PROCESS = 32  # D3: gated on a T8 rerun (no pool exhaustion / idle-in-transaction growth)
 _PRIVATE_HEADERS = {"Cache-Control": "private, no-store", "Vary": "Cookie, X-Workspace-ID"}
 
 
@@ -365,8 +374,10 @@ async def _read_replay_page(
                     or (not records and head.sequence > position.sequence)
                     or (records and len(records) < MAX_REPLAY_BATCH and records[-1].sequence != head.sequence)):
                 reason = "replay_gap"
-            messages = () if reason else tuple((ReplayCursor(epoch=row.epoch, sequence=row.sequence), _sse_record(row))
-                                               for row in records)
+            # One chunk per page: the stream does one guarded (fence-locked) send for the whole batch.
+            messages = (() if reason or not records else
+                        ((ReplayCursor(epoch=records[-1].epoch, sequence=records[-1].sequence),
+                          "".join(_sse_record(row) for row in records)),))
             return _RealtimePage(head=head, messages=messages, reason=reason)
     finally:
         await _cleanup_session(session)
@@ -398,7 +409,6 @@ async def stream_events(
     initial_reason = ("epoch_changed" if initial.epoch != head.epoch
                       else "cursor_expired" if initial.sequence < head.floor_sequence - 1 else None)
 
-    started = asyncio.Event()
 
     async def body() -> AsyncIterator[str]:
         """Yield detached same-stream events/resync or15s heartbeat; no SQL transaction survives a yield."""

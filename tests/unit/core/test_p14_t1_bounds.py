@@ -164,14 +164,14 @@ def test_csrf_secret_required_with_multiple_workers(monkeypatch: pytest.MonkeyPa
 
 
 class _FakeSession:
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *exc):
-        return False
-
     async def scalars(self, _query):
         return SimpleNamespace(all=lambda: _RECORDS)
+
+    async def rollback(self) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
 
 
 _EPOCH = uuid4()
@@ -180,54 +180,33 @@ _RECORDS = [
 ]
 
 
-def test_realtime_batch_is_one_chunk_with_one_auth_check(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_realtime_replay_page_is_one_chunk_with_one_fence_lock(monkeypatch: pytest.MonkeyPatch) -> None:
     head = SimpleNamespace(epoch=_EPOCH, sequence=3, floor_sequence=1)
-    calls = 0
+    locks = 0
 
-    async def fake_head(_s):
+    async def fake_head(_s, **_kw):
         return head
 
-    async def fake_current(_r):
-        nonlocal calls
-        calls += 1
-        return True
-
-    token_checks = 0
-
-    async def fake_token(_session, _hash):
-        nonlocal token_checks
-        token_checks += 1
-        return True
-
-    monkeypatch.setattr(realtime_routes, "_token_is_current", fake_token)
-    monkeypatch.setattr(realtime_routes, "_token_hash", lambda _r: "h")
+    async def fake_lock(_s, **_kw):
+        nonlocal locks
+        locks += 1
 
     monkeypatch.setattr(realtime_routes, "current_head", fake_head)
-    monkeypatch.setattr(realtime_routes, "_session_is_current", fake_current)
+    monkeypatch.setattr(realtime_routes.workspaces, "lock_access_fence", fake_lock)
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+        session_factory=lambda: _FakeSession(), settings=SimpleNamespace(multi_workspace_enabled=False),
+    )))
 
-    async def disconnected() -> bool:
-        return False
-
-    request = SimpleNamespace(
-        is_disconnected=disconnected,
-        cookies={},
-        app=SimpleNamespace(state=SimpleNamespace(
-            session_factory=lambda: _FakeSession(), realtime_connections=asyncio.Semaphore(1),
-        )),
-    )
-
-    async def run() -> tuple[str, int]:
-        cursor = ReplayCursor(epoch=_EPOCH, sequence=0).encode()
-        response = await realtime_routes.stream_events(request, cursor=cursor, last_event_id=None)
-        chunk = await anext(response.body_iterator)
-        before = calls
-        await response.body_iterator.aclose()  # type: ignore[attr-defined]
-        return chunk, before
-
-    chunk, polls_checked = asyncio.run(run())
+    page = asyncio.run(realtime_routes._read_replay_page(
+        request, workspace=SimpleNamespace(workspace_id=uuid4(), user_id=1), fence=SimpleNamespace(),
+        auth_session=SimpleNamespace(), position=ReplayCursor(epoch=_EPOCH, sequence=0),
+    ))
+    assert page.reason is None
+    assert len(page.messages) == 1  # one guarded send per page, not per record
+    cursor, chunk = page.messages[0]
     assert chunk.count("event: t") == 3
-    assert polls_checked == 1  # admission only; the poll check reuses the read session
-    assert token_checks == 1
+    assert cursor == ReplayCursor(epoch=_EPOCH, sequence=3)
+    assert locks == 1
 
 
 def test_web_concurrency_non_integer_is_clear_error(monkeypatch: pytest.MonkeyPatch) -> None:
