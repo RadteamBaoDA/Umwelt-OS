@@ -8,13 +8,15 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.dependencies import require_owner
 from core.auth.models import AuthSession
 from core.database import get_session
+from core.workspaces.dependencies import require_default_workspace_read
+from core.workspaces.schemas import WorkspaceContext
 from modules.chat import public as chat_public
 from modules.dashboard import public as dashboard_public
 from modules.goals import public as goals_public
@@ -31,6 +33,7 @@ from modules.timeline import public as timeline_public
 router = APIRouter(prefix="/api/v1/exports", tags=["exports"])
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[AuthSession, Depends(require_owner)]
+DefaultWorkspaceRead = Annotated[WorkspaceContext, Depends(require_default_workspace_read)]
 PAGE_SIZE = 100
 MAX_EXPORT_BYTES = 32 * 1024 * 1024
 DATASETS = (
@@ -110,7 +113,7 @@ def _render_csv(payload: dict[str, Any]) -> bytes:
 
 async def _collect_dataset(
     session: AsyncSession, owner_id: int, dataset: str, record_kind: str, public: Any,
-    byte_budget: list[int],
+    byte_budget: list[int], *, scope: WorkspaceContext, multi_workspace_enabled: bool,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], tuple[Any, Any, list[BaseModel]]]:
     """Drain one public cursor under page, 100,000-row and 32 MiB bounds, retaining final fences."""
     cursor = None
@@ -121,6 +124,7 @@ async def _collect_dataset(
     while True:
         page = await public.export_page(
             session, owner_id=owner_id, record_kind=record_kind, limit=PAGE_SIZE, cursor=cursor,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
         if snapshot is None:
             snapshot = page.snapshot_at
@@ -165,14 +169,17 @@ async def _collect_dataset(
 
 async def _validate_final_fences(
     session: AsyncSession, owner_id: int, metadata: dict[str, dict[str, Any]],
-    pending: dict[str, tuple[Any, Any, list[BaseModel]]],
+    pending: dict[str, tuple[Any, Any, list[BaseModel]]], *, scope: WorkspaceContext,
+    multi_workspace_enabled: bool,
 ) -> None:
     """Recheck every captured owner fence in bounded batches after all datasets are collected."""
     for dataset, (public, snapshot, fences) in pending.items():
         dataset_meta = metadata[dataset]
         # Disabled retained chat history must remain disabled from page read through publication.
         if dataset in {"conversations", "messages"} and not dataset_meta["available"]:
-            privacy = await memory_public.read_export_privacy(session)
+            privacy = await memory_public.read_export_privacy(
+                session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
             if (privacy.store_conversation_history or privacy.persisted != dataset_meta.get("privacy_persisted")
                     or privacy.updated_at != dataset_meta.get("privacy_updated_at")):
                 raise HTTPException(status_code=409, detail="Conversation export privacy changed; retry the download")
@@ -187,7 +194,7 @@ async def _validate_final_fences(
                     "news_topics": "topics",
                 }.get(dataset, dataset),
                 "snapshot_at": snapshot, "expected_snapshot_count": dataset_meta["snapshot_count"],
-                "fences": batch,
+                "fences": batch, "scope": scope, "multi_workspace_enabled": multi_workspace_enabled,
             }
             if "privacy_persisted" in dataset_meta:
                 arguments["privacy_persisted"] = dataset_meta["privacy_persisted"]
@@ -201,9 +208,19 @@ async def _build_export_response(
     output_format: ExportFormat,
     session: Session,
     owner: OwnerRead,
+    scope: WorkspaceContext,
+    request: Request,
     response: Response,
 ) -> Response:
-    """Build a credential-free download with bounded dataset rows/bytes and final owner fences."""
+    """Build a credential-free download with bounded dataset rows/bytes and final owner fences.
+
+    The bootstrap operator exports only its own admitted default workspace: an actor that differs
+    from the scope is refused before any dataset query, and every page and fence recheck carries
+    the same scope and rollout gate.
+    """
+    if scope.user_id != owner.owner_id:
+        raise HTTPException(status_code=403, detail="Export actor does not match the workspace owner")
+    multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
     collected: dict[str, list[dict[str, Any]]] = {}
     dataset_metadata: dict[str, dict[str, Any]] = {}
     pending: dict[str, tuple[Any, Any, list[BaseModel]]] = {}
@@ -211,6 +228,7 @@ async def _build_export_response(
     for dataset, record_kind, public in DATASETS:
         records, metadata, final_fences = await _collect_dataset(
             session, owner.owner_id, dataset, record_kind, public, byte_budget,
+            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
         collected[dataset] = records
         dataset_metadata[dataset] = metadata
@@ -250,7 +268,10 @@ async def _build_export_response(
     response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
     # Render and enforce the final byte cap before the last awaited owner check; no async work
     # occurs between this final fence pass and constructing the response body.
-    await _validate_final_fences(session, owner.owner_id, dataset_metadata, pending)
+    await _validate_final_fences(
+        session, owner.owner_id, dataset_metadata, pending,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     return Response(content=content, media_type=media_type, headers=dict(response.headers))
 
 
@@ -259,13 +280,15 @@ async def download_export(
     output_format: ExportFormat,
     session: Session,
     owner: OwnerRead,
+    scope: DefaultWorkspaceRead,
+    request: Request,
     response: Response,
 ) -> Response:
     """Return a no-store owner download and mark every route-level error response no-store too."""
     response.headers["Cache-Control"] = "private, no-store, max-age=0"
     response.headers["Pragma"] = "no-cache"
     try:
-        return await _build_export_response(output_format, session, owner, response)
+        return await _build_export_response(output_format, session, owner, scope, request, response)
     except HTTPException as exc:
         headers = dict(exc.headers or {})
         headers.update({"Cache-Control": "private, no-store, max-age=0", "Pragma": "no-cache"})
