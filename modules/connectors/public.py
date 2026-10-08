@@ -54,7 +54,7 @@ from modules.sources.schemas import ConnectorSource, SourceFence
 
 if TYPE_CHECKING:
     from core.config import Settings
-    from modules.connectors.collection_schemas import CollectionAdmissionRead, CollectionAdmissionRequest, CollectionRequestRead
+    from modules.connectors.collection_schemas import CollectionAdmissionRead, CollectionAdmissionRequest, CollectionRequestRead, CollectionRequestRef
     from modules.connectors.github.schemas import GitHubBindingFence, GitHubSegmentProof
     from modules.connectors.github.sync import GitHubValidatedSegment
     from modules.connectors.github.webhooks import (
@@ -2852,3 +2852,31 @@ async def admit_managed_collection(
 
     return await scheduler.admit_managed_collection(
         session, scope, source_id, fence, trigger=trigger, multi_workspace_enabled=multi_workspace_enabled)
+
+
+async def lock_collection_request_in_uow(
+    session: AsyncSession, ref: "CollectionRequestRef", *, source_id: UUID, source_generation: int,
+    connector_revision: int, scope: Scope,
+) -> bool:
+    """Lock and prove one admitted collection attempt for the ingestion owner; flush-only, no commit."""
+    from modules.connectors import scheduler
+
+    return await scheduler.lock_running_request_in_uow(
+        session, ref.request_id, ref.admission_token, source_id=source_id,
+        source_generation=source_generation, connector_revision=connector_revision,
+        workspace_id=scope.workspace_id)
+
+
+async def settle_collection_in_uow(
+    session: AsyncSession, ref: "CollectionRequestRef", *,
+    outcome: Literal["succeeded", "no_changes"], ingestion_run_id: UUID | None,
+) -> bool:
+    """Flush a request's accepted terminal state and free its slot inside the caller's transaction.
+
+    The ingestion owner calls this immediately before its single commit, so the batch, cursor,
+    outbox, request outcome and slot release become durable together or not at all.
+    """
+    from modules.connectors import scheduler
+
+    return await scheduler.settle_admission_in_uow(
+        session, ref.request_id, ref.admission_token, outcome=outcome, ingestion_run_id=ingestion_run_id)

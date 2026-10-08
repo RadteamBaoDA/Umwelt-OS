@@ -353,6 +353,33 @@ async def admit_collection_request(
     return result
 
 
+async def lock_running_request_in_uow(
+    session: AsyncSession, request_id: UUID, admission_token: UUID, *, source_id: UUID,
+    source_generation: int, connector_revision: int, workspace_id: UUID,
+) -> bool:
+    """Lock the request row and prove this exact attempt may still publish; no commit.
+
+    True only for a running request owning an unexpired slot under the same admission token,
+    source, workspace and captured generation/revision. An expired or superseded attempt gets
+    False, so an old worker can never publish results or advance a cursor.
+    """
+    request = await session.scalar(
+        select(ConnectorCollectionRequest).where(ConnectorCollectionRequest.id == request_id)
+        .with_for_update().execution_options(populate_existing=True))
+    if (
+        request is None or request.status != "running" or request.active_admission_token != admission_token
+        or request.source_id != source_id or request.workspace_id != workspace_id
+        or request.source_generation != source_generation or request.connector_revision != connector_revision
+    ):
+        return False
+    slot = await session.scalar(
+        select(ConnectorAdmissionSlot.slot_id).where(
+            ConnectorAdmissionSlot.occupied_request_id == request_id,
+            ConnectorAdmissionSlot.admission_token == admission_token,
+            ConnectorAdmissionSlot.expires_at > datetime.now(UTC)))
+    return slot is not None
+
+
 async def renew_admission(
     session: AsyncSession, request_id: UUID, admission_token: UUID, *, multi_workspace_enabled: bool,
 ) -> bool:
