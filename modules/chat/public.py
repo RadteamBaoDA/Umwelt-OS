@@ -188,27 +188,28 @@ async def delete_conversation(
     Owner and any requested pin filter are checked after the parent lock is acquired. This function
     never commits; the route or owning service commits after its unit of work.
     """
-    from modules.memory.public import lock_export_privacy
-
-    await lock_export_privacy(session)
-    conversation = await session.scalar(
-        _select(Conversation)
-        .where(Conversation.id == conversation_id)
-        .with_for_update()
-        .execution_options(populate_existing=True)
-    )
-    if conversation is None:
-        return False
-    owner = await session.scalar(_select(_Owner.id).where(_Owner.id == owner_id))
-    if owner is None or (skip_pinned and conversation.pinned):
-        return False
+    from fastapi import HTTPException
 
     from modules.agents.public import purge_conversation_actions
     from modules.chat.scope import multi_workspace_enabled, owner_default_scope
+    from modules.memory.public import lock_export_privacy
+
+    try:
+        scope = await owner_default_scope(session, owner_id)
+    except HTTPException:
+        return False
+    await lock_export_privacy(session)
+    conversation = await session.scalar(
+        _select(Conversation)
+        .where(Conversation.id == conversation_id, Conversation.workspace_id == scope.workspace_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if conversation is None or (skip_pinned and conversation.pinned):
+        return False
 
     await purge_conversation_actions(
-        session, conversation_id, scope=await owner_default_scope(session, owner_id),
-        multi_workspace_enabled=multi_workspace_enabled(),
+        session, conversation_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled(),
     )
     await session.delete(conversation)
     return True
@@ -753,7 +754,9 @@ async def read_memory_export_origin(
     if not history_enabled:
         return None
     now = _datetime.now(_UTC)
-    conversation_scope = _chat_export_scope(now, now)
+    from modules.chat.scope import owner_default_scope
+
+    conversation_scope = _chat_export_scope(now, now, (await owner_default_scope(session, owner_id)).workspace_id)
     row = (await session.execute(
         _select(
             Conversation.id.label("conversation_id"),
@@ -814,9 +817,12 @@ async def _chat_export_privacy(
     return privacy.store_conversation_history, persisted, updated_at
 
 
-def _chat_export_scope(snapshot_at: _datetime, now: _datetime) -> tuple[ColumnElement[bool], ...]:
-    """Filter to retained, non-automation conversation history unchanged at the cutoff."""
+def _chat_export_scope(
+    snapshot_at: _datetime, now: _datetime, workspace_id: UUID,
+) -> tuple[ColumnElement[bool], ...]:
+    """Filter to the workspace's retained, non-automation conversation history unchanged at the cutoff."""
     return (
+        Conversation.workspace_id == workspace_id,
         Conversation.created_at <= snapshot_at,
         Conversation.updated_at <= snapshot_at,
         Conversation.ephemeral.is_(False),
@@ -825,10 +831,12 @@ def _chat_export_scope(snapshot_at: _datetime, now: _datetime) -> tuple[ColumnEl
     )
 
 
-async def _chat_export_count(session: AsyncSession, record_kind: str, snapshot_at: _datetime) -> int:
-    """Count current owner-visible rows at a fixed export cutoff."""
+async def _chat_export_count(
+    session: AsyncSession, record_kind: str, snapshot_at: _datetime, workspace_id: UUID,
+) -> int:
+    """Count current owner-visible rows of one workspace at a fixed export cutoff."""
     now = _datetime.now(_UTC)
-    scope = _chat_export_scope(snapshot_at, now)
+    scope = _chat_export_scope(snapshot_at, now, workspace_id)
     if record_kind == "conversations":
         statement = _select(_func.count()).select_from(Conversation).where(*scope)
     else:
@@ -928,9 +936,9 @@ async def export_page(
             next_cursor=None, available=False, omission_reason="conversation_history_disabled",
             privacy_persisted=privacy_persisted, privacy_updated_at=privacy_updated_at, history_enabled=False,
         )
-    snapshot_count = await _chat_export_count(session, record_kind, snapshot_at)
+    snapshot_count = await _chat_export_count(session, record_kind, snapshot_at, scope.workspace_id)
     now = _datetime.now(_UTC)
-    row_scope = _chat_export_scope(snapshot_at, now)
+    row_scope = _chat_export_scope(snapshot_at, now, scope.workspace_id)
     items: list[ChatExportConversationRead | ChatExportMessageRead] = []
     fences: list[ChatExportFence] = []
     has_more = False
@@ -1145,7 +1153,7 @@ async def validate_export_fences(
             valid=False, reason="privacy_changed", observed_snapshot_count=0,
             privacy_persisted=current_privacy_persisted, privacy_updated_at=current_privacy_updated_at,
         )
-    observed_count = await _chat_export_count(session, record_kind, snapshot_at)
+    observed_count = await _chat_export_count(session, record_kind, snapshot_at, scope.workspace_id)
     if observed_count != expected_snapshot_count:
         return ChatExportFenceValidation(
             valid=False, reason="snapshot_count_changed", observed_snapshot_count=observed_count,
@@ -1157,7 +1165,7 @@ async def validate_export_fences(
         conversation = (await session.execute(
             _select(Conversation.created_at, Conversation.updated_at, Conversation.ephemeral,
                     Conversation.expires_at, Conversation.context_kind)
-            .where(Conversation.id == fence.conversation_id)
+            .where(Conversation.id == fence.conversation_id, Conversation.workspace_id == scope.workspace_id)
         )).one_or_none()
         if conversation is None or (
             conversation.created_at != fence.conversation_created_at

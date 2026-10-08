@@ -355,7 +355,7 @@ async def test_chat_completion_persists_message_with_citations(monkeypatch: pyte
     ])
     session = MagicMock()
     session.execute = AsyncMock(return_value=SimpleNamespace(
-        fetchone=lambda: (conversation_id, user_message_id, {}, False)))
+        fetchone=lambda: (conversation_id, user_message_id, {}, False, OWNER.workspace_id, 1)))
     session.scalar = AsyncMock(side_effect=lambda *a, **k: next(scalar_results, None))
     session.scalars = AsyncMock(return_value=SimpleNamespace(all=list))
     session.add = added.append
@@ -372,7 +372,7 @@ async def test_chat_completion_persists_message_with_citations(monkeypatch: pyte
     monkeypatch.setattr(worker, "revalidate_context_fence", AsyncMock(return_value=(True, [])))
     monkeypatch.setattr(worker, "_next_event_seq", AsyncMock(side_effect=lambda *a, **k: next(seq)))
     monkeypatch.setattr(worker, "build_context", AsyncMock(return_value=context))
-    monkeypatch.setattr("modules.chat.scope.owner_default_scope", AsyncMock(return_value=OWNER))
+    monkeypatch.setattr(worker, "_admit_job", AsyncMock(return_value=(OWNER, MagicMock())))
     monkeypatch.setattr(worker.settings_public, "get_ai_execution_config", AsyncMock(return_value=_config(aliases={})))
     monkeypatch.setattr(worker, "ModelGateway", lambda **kw: SimpleNamespace(stream=stream))
     failed = AsyncMock()
@@ -414,7 +414,7 @@ async def test_chat_completion_uncited_answer_emits_no_citations(monkeypatch: py
     ])
     session = MagicMock()
     session.execute = AsyncMock(return_value=SimpleNamespace(
-        fetchone=lambda: (conversation_id, user_message_id, {}, False)))
+        fetchone=lambda: (conversation_id, user_message_id, {}, False, OWNER.workspace_id, 1)))
     session.scalar = AsyncMock(side_effect=lambda *a, **k: next(scalar_results, None))
     session.scalars = AsyncMock(return_value=SimpleNamespace(all=list))
     session.add = added.append
@@ -431,7 +431,7 @@ async def test_chat_completion_uncited_answer_emits_no_citations(monkeypatch: py
     monkeypatch.setattr(worker, "revalidate_context_fence", AsyncMock(return_value=(True, [])))
     monkeypatch.setattr(worker, "_next_event_seq", AsyncMock(side_effect=lambda *a, **k: next(seq)))
     monkeypatch.setattr(worker, "build_context", AsyncMock(return_value=context))
-    monkeypatch.setattr("modules.chat.scope.owner_default_scope", AsyncMock(return_value=OWNER))
+    monkeypatch.setattr(worker, "_admit_job", AsyncMock(return_value=(OWNER, MagicMock())))
     monkeypatch.setattr(worker.settings_public, "get_ai_execution_config", AsyncMock(return_value=_config(aliases={})))
     monkeypatch.setattr(worker, "ModelGateway", lambda **kw: SimpleNamespace(stream=stream))
     monkeypatch.setattr(worker, "_mark_failed", AsyncMock())
@@ -461,7 +461,7 @@ async def _run_chat_with_answer(
     ])
     session = MagicMock()
     session.execute = AsyncMock(return_value=SimpleNamespace(
-        fetchone=lambda: (conversation_id, user_message_id, {}, False)))
+        fetchone=lambda: (conversation_id, user_message_id, {}, False, OWNER.workspace_id, 1)))
     session.scalar = AsyncMock(side_effect=lambda *a, **k: next(scalar_results, None))
     session.scalars = AsyncMock(return_value=SimpleNamespace(all=list))
     session.add = added.append
@@ -480,7 +480,7 @@ async def _run_chat_with_answer(
     monkeypatch.setattr(worker, "revalidate_context_fence", AsyncMock(return_value=(True, [])))
     monkeypatch.setattr(worker, "_next_event_seq", AsyncMock(side_effect=lambda *a, **k: next(seq)))
     monkeypatch.setattr(worker, "build_context", AsyncMock(return_value=context))
-    monkeypatch.setattr("modules.chat.scope.owner_default_scope", AsyncMock(return_value=OWNER))
+    monkeypatch.setattr(worker, "_admit_job", AsyncMock(return_value=(OWNER, MagicMock())))
     monkeypatch.setattr(worker.settings_public, "get_ai_execution_config", AsyncMock(return_value=_config(aliases={})))
     monkeypatch.setattr(worker, "ModelGateway", lambda **kw: SimpleNamespace(stream=stream))
     monkeypatch.setattr(worker, "_mark_failed", AsyncMock())

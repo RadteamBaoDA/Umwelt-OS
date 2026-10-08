@@ -83,8 +83,11 @@ def _install(monkeypatch: pytest.MonkeyPatch, store: _Store, *, auth: list[bool]
     async def lock(_session: Any) -> None:
         store.log.append("lock")
 
-    async def fence(_session: Any, _stamp: Any) -> None:
+    async def fence(_session: Any, _stamp: Any, **_kw: Any) -> None:
         return None
+
+    async def run_scope(_session: Any, _run: Any) -> Any:
+        return SimpleNamespace()
 
     answers = list(auth or [])
 
@@ -100,6 +103,7 @@ def _install(monkeypatch: pytest.MonkeyPatch, store: _Store, *, auth: list[bool]
 
     monkeypatch.setattr(routes, "_session_is_current", current)
     monkeypatch.setattr(routes, "_poll_needs_lock", probe)
+    monkeypatch.setattr(routes, "_run_scope", run_scope)
     monkeypatch.setattr(routes, "lock_export_privacy", lock)
     monkeypatch.setattr(routes, "_require_privacy_fence", fence)
     monkeypatch.setattr(routes, "_auth_row_current", auth_row)
@@ -338,7 +342,10 @@ async def test_probe_takes_the_locked_path_for_every_publish_or_close_reason(
 ) -> None:
     from datetime import UTC, datetime
 
-    async def privacy(_session: Any) -> Any:
+    async def run_scope(_session: Any, _run: Any) -> Any:
+        return SimpleNamespace()
+
+    async def privacy(_session: Any, **_kw: Any) -> Any:
         return SimpleNamespace(store_conversation_history=True, persisted=True,
                                updated_at=datetime(2026, 10, 7, tzinfo=UTC))
 
@@ -346,6 +353,7 @@ async def test_probe_takes_the_locked_path_for_every_publish_or_close_reason(
         return auth
 
     monkeypatch.setattr(routes, "read_export_privacy", privacy)
+    monkeypatch.setattr(routes, "_run_scope", run_scope)
     monkeypatch.setattr(routes, "_auth_row_current", auth_row)
     row = None if run is None else SimpleNamespace(
         status=run, conversation_id=CID, retrieval_context={"_chat_privacy_fence": fence},
@@ -426,6 +434,13 @@ async def test_conversation_citations_batched_identical_to_per_message(monkeypat
         ]
 
     monkeypatch.setattr(documents_public, "lock_chat_evidence_chunks", lock_chunks)
+
+    async def scope_kwargs(_session: Any, owner_id: int = 1) -> dict[str, object]:
+        return {"scope": SimpleNamespace(), "multi_workspace_enabled": False}
+
+    from modules.chat import scope as chat_scope
+
+    monkeypatch.setattr(chat_scope, "owner_scope_kwargs", scope_kwargs)
     messages: list[object] = [
         [_cite(v, c, source, document) for v, c in pairs[i:i + 30]] for i in range(0, 150, 30)
     ]

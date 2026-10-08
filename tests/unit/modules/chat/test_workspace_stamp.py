@@ -15,6 +15,7 @@ from modules.chat.schemas import MessageMutationRequest, SendMessageRequest
 
 WS = uuid4()
 CTX = WorkspaceContext(user_id=1, workspace_id=WS, role="owner", membership_revision=1)
+OWNER = SimpleNamespace(owner_id=1, token_hash="h")
 
 
 def _conv(**kw):
@@ -56,7 +57,7 @@ async def test_create_conversation_stamps_scope(monkeypatch):
     session = _session()
     from modules.chat.schemas import ConversationCreate
     with pytest.raises(Exception):  # noqa: B017 - response building on a bare ORM object is out of scope
-        await routes.create_conversation(ConversationCreate(), session, None)
+        await routes.create_conversation(ConversationCreate(), session, OWNER)
     (conv,) = _added(session, Conversation)
     assert conv.workspace_id == WS and conv.actor_user_id == 1
 
@@ -67,7 +68,7 @@ async def test_send_message_run_stamps_workspace(monkeypatch):
     _patch_routes(monkeypatch, conv)
     session = _session()
     await routes.send_message(
-        conv.id, SendMessageRequest(content="hi"), MagicMock(), session, None,
+        conv.id, SendMessageRequest(content="hi"), MagicMock(), session, OWNER,
     )
     (run,) = _added(session, ResponseRun)
     assert run.workspace_id == WS and run.actor_user_id == 1
@@ -86,7 +87,7 @@ async def test_mutate_message_run_stamps_workspace(monkeypatch):
         action="edit", base_content_hash=hashlib.sha256(b"old").hexdigest(),
         client_request_id="r1", content="new",
     )
-    await routes.mutate_message(conv.id, target.id, payload, MagicMock(), session, None)
+    await routes.mutate_message(conv.id, target.id, payload, MagicMock(), session, OWNER)
     (new_run,) = _added(session, ResponseRun)
     assert new_run.workspace_id == WS and new_run.actor_user_id == 1
     assert _added(session, Message)
