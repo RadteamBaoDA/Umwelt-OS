@@ -15,8 +15,7 @@ import {
   dashboardKeys, evaluateGadgetHighlights, getGadgetDefinitionUsage, highlightRuleErrorKey, listGadgetDefinitions, listGadgetSources, patchGadgetDefinition, previewHighlightRules,
   type GadgetDefinition, type HighlightRule,
 } from '@/modules/dashboard/api';
-import { fetchTopics } from '@/modules/news/api';
-import type { Topic } from '@/modules/news/types';
+import { fetchAllTopics } from '@/modules/news/api';
 import { parseKeywordList } from './gadget-library';
 
 type Severity = HighlightRule['severity'];
@@ -24,23 +23,8 @@ type SourceMode = 'any' | 'only' | 'exclude';
 type RuleDraft = { id: string; keywords: string; severity: Severity; notify: boolean; topicIds: string[]; sourceModes: Record<string, SourceMode>; cooldown: string; expires: string; quietStart: string; quietEnd: string };
 const MAX_COOLDOWN = 7 * 24 * 60;
 const MAX_TOPICS = 8;
-const TOPIC_PAGE = 100;
-const TOPIC_MAX_PAGES = 10; // 1000 active topics; the owner topic cap is far below this
 
 const sourceModeKeys = { any: 'sourceAny', only: 'sourceOnly', exclude: 'sourceExclude' } as const;
-
-/** Reads every active owner topic (bounded pages) so a selected topic is never hidden behind a page cap. */
-async function fetchActiveTopics(signal?: AbortSignal): Promise<Topic[]> {
-  const items: Topic[] = [];
-  let cursor: string | undefined;
-  for (let page = 0; page < TOPIC_MAX_PAGES; page += 1) {
-    const result = await fetchTopics({ isActive: true, limit: TOPIC_PAGE, cursor, signal });
-    items.push(...result.items);
-    if (!result.next_cursor) break;
-    cursor = result.next_cursor;
-  }
-  return items;
-}
 
 /** ISO instant to the `datetime-local` value in the browser time zone. */
 const toLocalInput = (iso?: string | null) => {
@@ -98,7 +82,7 @@ function RuleList({ def }: { def: GadgetDefinition }) {
   const rules = def.highlight_rules ?? [];
   const usage = useQuery({ queryKey: [...dashboardKeys.definition(def.id), 'usage'], queryFn: ({ signal }) => getGadgetDefinitionUsage(def.id, signal) });
   const usageNames = (usage.data ?? []).map((item) => item.name).join(', ');
-  const topics = useQuery({ queryKey: ['highlight-rule-topics'], queryFn: ({ signal }) => fetchActiveTopics(signal) });
+  const topics = useQuery({ queryKey: ['highlight-rule-topics'], queryFn: ({ signal }) => fetchAllTopics({ isActive: true, signal }) });
   const sources = useQuery({ queryKey: ['highlight-rule-sources'], queryFn: ({ signal }) => listGadgetSources(100, undefined, signal) });
   const sourceName = (id: string) => sources.data?.items.find((item) => item.id === id)?.name ?? id;
   const preview = useMutation({ mutationFn: (rule: HighlightRule) => previewHighlightRules({ source_ids: def.source_ids, rules: [rule], days: 7, source_item_ids: def.scope.source_item_ids }, session.csrfToken) });

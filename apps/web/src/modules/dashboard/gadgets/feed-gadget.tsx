@@ -173,7 +173,14 @@ function FeedStream({
   const [searchText, setSearchText] = useState('');
   const [sourceFilter, setSourceFilter] = useState('all');
   const [language, setLanguage] = useState('any');
-  const [timeWindow, setTimeWindow] = useState('any');
+  const [timeWindow, setTimeWindowRaw] = useState('any');
+  // Lower bound captured when the window is chosen, so every page and refetch shares it.
+  const [windowSince, setWindowSince] = useState<string | undefined>();
+  const setTimeWindow = (value: string) => {
+    const hours = WINDOW_HOURS[value];
+    setWindowSince(hours ? windowStart(hours) : undefined);
+    setTimeWindowRaw(value);
+  };
   // Optimistic "Not relevant": version ids hidden locally until the server filter catches up (a new
   // version of the same document is not hidden); lastHidden powers Undo. Scope: dashboard feeds and highlights only.
   const [hiddenIds, setHiddenIds] = useState<ReadonlySet<string>>(new Set());
@@ -187,14 +194,13 @@ function FeedStream({
 
   // Query documents as live feed items
   const docsQuery = useInfiniteQuery({
-    queryKey: [...documentKeys.all, 'gadget', sourceIds, channelIds, language, timeWindow],
+    queryKey: [...documentKeys.all, 'gadget', sourceIds, channelIds, language, windowSince],
     initialPageParam: undefined as string | undefined,
     queryFn: async ({ pageParam }) => {
       if (sourceIds.length === 0) return { items: [], next_cursor: null };
-      const hours = WINDOW_HOURS[timeWindow];
       return listGadgetDocumentProjections(sourceIds, channelIds, pageParam, {
         language: language === 'any' ? undefined : language,
-        since: hours ? windowStart(hours) : undefined,
+        since: windowSince,
       });
     },
     getNextPageParam: (last) => last.next_cursor ?? undefined,

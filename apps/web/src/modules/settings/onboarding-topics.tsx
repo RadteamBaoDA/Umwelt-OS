@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
-import { createTopic, fetchTopics, updateTopic } from '@/modules/news/api';
+import { createTopic, fetchAllTopics, updateTopic } from '@/modules/news/api';
 import type { Topic } from '@/modules/news/types';
 
 /** Stable English topic names: the stored name is the identity so re-running onboarding in any locale never duplicates. */
@@ -18,31 +18,17 @@ const PRESETS = [
   { id: 'Sports', vi: 'thể thao', label: 'topicSports' },
   { id: 'Culture', vi: 'văn hóa', label: 'topicCulture' },
 ] as const;
-const MAX_PAGES = 10;
 const key = ['topics', 'onboarding'] as const;
 
 /** Chip-owned topics are name matches without entity links; entity Follow topics (entity_ids set) are never touched. */
 const ownsPreset = (topic: Topic, id: string) => topic.entity_ids.length === 0 && topic.name.toLowerCase() === id.toLowerCase();
-
-/** Reads every owner topic (bounded) so selected state never depends on one page. */
-async function fetchAll(): Promise<Topic[]> {
-  const items: Topic[] = [];
-  let cursor: string | undefined;
-  for (let page = 0; page < MAX_PAGES; page += 1) {
-    const result = await fetchTopics({ limit: 100, cursor });
-    items.push(...result.items);
-    if (!result.next_cursor) break;
-    cursor = result.next_cursor;
-  }
-  return items;
-}
 
 /** Topic chips: select = reactivate-or-create, deselect = deactivate (never deletes user data). */
 export function OnboardingTopics() {
   const t = useTranslations('onboarding');
   const { csrfToken } = useWorkspaceSession();
   const client = useQueryClient();
-  const topics = useQuery({ queryKey: key, queryFn: fetchAll });
+  const topics = useQuery({ queryKey: key, queryFn: ({ signal }) => fetchAllTopics({ signal }) });
   const toggle = useMutation({
     mutationFn: async (preset: (typeof PRESETS)[number]) => {
       const matches = topics.data?.filter((topic) => ownsPreset(topic, preset.id)) ?? [];

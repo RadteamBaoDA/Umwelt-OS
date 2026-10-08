@@ -9,6 +9,19 @@ export function fetchTopics(options: { isActive?: boolean; limit?: number; curso
   return apiRequest<TopicPage>(`/api/v1/topics?${params}`, { signal: options.signal });
 }
 
+/** Reads every owner topic (bounded to 10 pages) so state never depends on one page. */
+export async function fetchAllTopics(options: { isActive?: boolean; signal?: AbortSignal } = {}): Promise<Topic[]> {
+  const items: Topic[] = [];
+  let cursor: string | undefined;
+  for (let page = 0; page < 10; page += 1) {
+    const result = await fetchTopics({ ...options, limit: 100, cursor });
+    items.push(...result.items);
+    if (!result.next_cursor) break;
+    cursor = result.next_cursor;
+  }
+  return items;
+}
+
 /** Fetches a single current owner topic for conflict review. */
 export function getTopic(id: string): Promise<Topic> {
   return apiRequest<Topic>(`/api/v1/topics/${id}`);

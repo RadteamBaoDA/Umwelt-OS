@@ -19,6 +19,9 @@ const KNOWN_REASONS = ['not_configured', 'query_too_long', 'empty_query', 'local
 /** Announced notice for a requested web search that was skipped or unavailable; renders nothing otherwise. */
 function WebSearchNotice({ outcome, live = false }: { outcome?: WebSearchOutcome | null; live?: boolean }) {
   const t = useTranslations('chat');
+  if (outcome?.status === 'used' && outcome.reason === 'no_results') {
+    return <p role={live ? 'status' : undefined} data-testid="web-search-notice" className="mt-1 text-[11px] text-muted-foreground">{t('webNoResults')}</p>;
+  }
   if (!outcome || (outcome.status !== 'unavailable' && outcome.status !== 'skipped')) return null;
   const reason = outcome.reason && KNOWN_REASONS.includes(outcome.reason) ? t(`webReason_${outcome.reason}`) : t('webReason_unknown');
   const title = outcome.status === 'skipped' ? t('webSkipped') : t('webUnavailable');

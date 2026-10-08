@@ -4,7 +4,8 @@ import { apiRequest, csrfHeaders } from '@/core/api';
  * Citation evidence reference pointing to an exact grounded revision chunk.
  */
 export interface DocumentCitation {
-  sourceType: 'document';
+  /** Server dumps this as `source_type`, so it is usually absent after parsing; discriminate with `=== 'web'`, never `=== 'document'`. */
+  sourceType?: 'document';
   sourceId: string;
   documentId: string;
   documentVersionId: string;
@@ -526,7 +527,7 @@ export async function streamResponseEvents(
 export const ATTACHMENT_ACCEPT = '.txt,.md,.markdown,.json,.csv,.pdf,.docx';
 /** Server-enforced per-message cap on Chat attachments. */
 export const MAX_ATTACHMENTS = 5;
-/** Mirrors the server's default upload cap (`upload_max_bytes` in `core/config.py`); the server stays authoritative. */
+/** Local pre-check only, mirroring the server's default `upload_max_bytes`; the server stays authoritative and its 413 is mapped to copy without a number. */
 export const ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
 
 /** One chat attachment Document and whether it can be referenced as chat context. */
