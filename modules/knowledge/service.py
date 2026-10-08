@@ -9,7 +9,7 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
-from core.workspaces.schemas import Scope, WorkspaceContext
+from core.workspaces.schemas import Scope
 from modules.knowledge.documents import public as documents
 from modules.knowledge.entities import public as entities
 from modules.knowledge.relationships import public as relationships
@@ -51,7 +51,7 @@ class KnowledgeService:
             multi_workspace_enabled: Actual application feature gate for this operation.
         """
         if type(multi_workspace_enabled) is not bool:
-            raise ValueError("An explicit workspace feature flag is required")
+            raise TypeError("An explicit workspace feature flag is required")
         self.session = session
         self.scope = scope
         self.multi_workspace_enabled = multi_workspace_enabled
@@ -91,12 +91,11 @@ class KnowledgeService:
 
     async def assign_review_candidate(self, candidate_id: UUID, payload: EntityReviewAssignmentRequest, *, actor_id: int,
     ) -> EntityReviewAssignmentResult:
-        """Delegate a review assignment after matching the authenticated actor to the bound scope.
+        """Delegate a review assignment under the bound scope.
 
-        The entity owner performs access admission, workspace scoping and the write transaction.
+        The entity owner admits the scope and rejects an actor that differs from the admitted scope
+        actor (403), then performs workspace scoping and the write transaction.
         """
-        if actor_id != _scope_actor_id(self.scope):
-            raise ValueError("Authenticated review actor does not match the bound workspace actor")
         return await entities.assign_review_candidate(
             self.session, candidate_id, payload, actor_id=actor_id,
             scope=self.scope, multi_workspace_enabled=self.multi_workspace_enabled,
@@ -104,12 +103,11 @@ class KnowledgeService:
 
     async def resolve_relationship_review(self, candidate_id: UUID, payload: EntityRelationshipReviewRequest, *, actor_id: int,
     ) -> EntityRelationshipReviewResult:
-        """Delegate relationship review after matching its actor to the bound scope.
+        """Delegate relationship review under the bound scope.
 
-        The entity owner performs access admission, workspace scoping and the write transaction.
+        The entity owner admits the scope and rejects an actor that differs from the admitted scope
+        actor (403), then performs workspace scoping and the write transaction.
         """
-        if actor_id != _scope_actor_id(self.scope):
-            raise ValueError("Authenticated review actor does not match the bound workspace actor")
         return await entities.resolve_relationship_review(
             self.session, candidate_id, payload, actor_id=actor_id,
             scope=self.scope, multi_workspace_enabled=self.multi_workspace_enabled,
@@ -255,9 +253,3 @@ class KnowledgeService:
         return await MemoryService(self.session).get_active_memory_context(
             limit=limit, scope=self.scope, multi_workspace_enabled=self.multi_workspace_enabled,
         )
-
-
-def _scope_actor_id(scope: Scope) -> int:
-    """Return the actor identifier carried by an authenticated or durable workspace scope."""
-    return scope.user_id if isinstance(scope, WorkspaceContext) else scope.actor_user_id
-

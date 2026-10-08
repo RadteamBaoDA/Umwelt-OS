@@ -151,7 +151,7 @@ async def list_workspace_job_candidate_ids(
         raise ValueError("Workspace candidate page limit must be a positive integer")
     if after is not None and not isinstance(after, UUID):
         raise ValueError("Workspace candidate cursor must be a UUID")
-    query = select(Workspace.id).distinct()
+    query = select(Workspace.id)
     if after is not None:
         query = query.where(Workspace.id > after)
     rows = await session.scalars(query.order_by(Workspace.id).limit(min(limit, 100)))
