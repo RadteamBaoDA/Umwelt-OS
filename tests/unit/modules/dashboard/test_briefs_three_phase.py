@@ -20,6 +20,7 @@ from modules.dashboard.models import DailyBrief
 DAY = date(2026, 10, 7)
 TZ = "Asia/Ho_Chi_Minh"
 SOURCE = str(uuid4())
+SCOPE = SimpleNamespace(workspace_id=uuid4(), actor_user_id=1)
 
 
 def _fact() -> dict[str, Any]:
@@ -74,10 +75,14 @@ class _Env:
         self.may_send = True
         self.attempts = 1
         self.tx_during_wait: list[bool] = []
+        self.tx_at_call: list[bool] = []
         self.on_wait: Callable[[int], None] | None = None
         self.on_config: Callable[[int], None] | None = None
         self.config_calls = 0
         self.committed: list[DailyBrief] = []
+        self.fence = "fence-1"
+        self.log_admit = False
+        self.on_admit: Callable[[], None] | None = None
         self.session = _Session(self)
 
     def config(self) -> SimpleNamespace:
@@ -85,7 +90,8 @@ class _Env:
             brief_alias="brief", aliases={"brief": "mapping"}, endpoint_destination_id="dest",
             privacy=SimpleNamespace(allow_remote_reasoning=True, reasoning_destinations=["dest"]),
             configuration_revision=self.revision, omniroute_base_url="http://gw", omniroute_api_key="k",
-            request_timeout_seconds=5, gateway_identity="g", endpoint_allowed_cidrs=[],
+            request_timeout_seconds=5, gateway_identity="a" * 64, endpoint_allowed_cidrs=[],
+            workspace_id=SCOPE.workspace_id, actor_user_id=1, membership_revision=1,
         )
 
 
@@ -98,18 +104,18 @@ def env(monkeypatch: pytest.MonkeyPatch) -> _Env:
         world.log.append("widgets")
         return []
 
-    async def facts(session: _Session, _widgets: object, *, owner_id: int, lock_events: bool = False) -> list:
+    async def facts(session: _Session, _widgets: object, *, lock_events: bool = False, **_scope: object) -> list:
         session.tx = True
         world.log.append("facts+events" if lock_events else "facts")
         return copy.deepcopy(world.facts)
 
-    async def lock(session: _Session, _facts: object, *, extra_brief_ids: object = ()) -> None:
+    async def lock(session: _Session, _facts: object, *, extra_brief_ids: object = (), **_scope: object) -> None:
         session.tx = True
         world.log.append("lock")
         if world.purged:
             raise briefs.BriefUnavailable("A source sent to the model is no longer eligible")
 
-    async def config(session: _Session, *_args: object) -> SimpleNamespace:
+    async def config(session: _Session, *_args: object, **_kwargs: object) -> SimpleNamespace:
         session.tx = True
         world.config_calls += 1
         world.log.append("config")
@@ -117,22 +123,23 @@ def env(monkeypatch: pytest.MonkeyPatch) -> _Env:
             world.on_config(world.config_calls)
         return world.config()
 
-    async def emit(*_args: object) -> None:
+    async def emit(*_args: object, **_kwargs: object) -> None:
         world.log.append("notify")
 
-    async def commit(session: _Session, _changes: object) -> None:
+    async def commit(session: _Session, _changes: object, **_kwargs: object) -> None:
         world.log.append("commit")
         world.committed.extend(obj for obj in session.added if isinstance(obj, DailyBrief))
         session.tx = False
 
     class Gateway:
-        def __init__(self, **_kwargs: object) -> None:
-            pass
+        def __init__(self, *, before_send: Any, **_kwargs: object) -> None:
+            self.before_send = before_send
 
-        async def chat(self, *_args: object, before_send: Any, after_send: Any, **_kwargs: object) -> Any:
+        async def chat(self, *_args: object, after_send: Any, **_kwargs: object) -> Any:
+            world.tx_at_call.append(world.session.in_transaction())
             # Mirrors ModelGateway._request: before_send is outside the after_send finally.
             for attempt in range(1, world.attempts + 1):
-                await before_send()
+                await self.before_send()
                 try:
                     world.log.append("egress")
                     await after_send()  # transport body-written hook
@@ -153,15 +160,22 @@ def env(monkeypatch: pytest.MonkeyPatch) -> _Env:
     monkeypatch.setattr(briefs.settings_public, "get_ai_execution_config", config)
     monkeypatch.setattr(briefs.notifications, "emit", emit)
     monkeypatch.setattr(briefs, "commit_with_replay", commit)
+    async def admit(*_args: object, **_kwargs: object) -> str:
+        if world.on_admit is not None:
+            world.on_admit()
+        return world.fence
+
     monkeypatch.setattr(briefs, "ModelGateway", Gateway)
+    monkeypatch.setattr(briefs, "_admit", admit)
+    monkeypatch.setattr(briefs, "make_dashboard_change", lambda *_args, **_kwargs: object())
     monkeypatch.setattr(briefs, "may_send", lambda *_args: world.may_send)
     return world
 
 
 async def _generate(world: _Env, *, guard: Any = None, force: bool = False) -> Any:
     return await briefs.generate_brief(
-        world.session, 1, DAY, TZ, settings=SimpleNamespace(), redis=SimpleNamespace(), force=force,
-        publish_guard=guard,
+        world.session, DAY, TZ, scope=SCOPE, multi_workspace_enabled=False,
+        settings=SimpleNamespace(), redis=SimpleNamespace(), force=force, publish_guard=guard,
     )
 
 
@@ -332,3 +346,33 @@ async def test_publish_guard_is_rechecked_before_egress_and_before_publish(env: 
     assert env.committed == [] and not env.session.in_transaction()
     # The guard always precedes the brief's own locks in its phase.
     assert env.log[env.log.index(f"guard{phase}") - 1] in {"rollback", "wait"}
+
+
+async def test_access_fence_change_before_egress_is_denied(env: _Env) -> None:
+    """W2 drift check kept: workspace access re-admitted per attempt and compared to the Phase A fence."""
+    def drift() -> None:
+        if "egress" not in env.log and "rollback" in env.log:  # first admit after Phase A
+            env.fence = "fence-2"
+
+    env.on_admit = drift
+    with pytest.raises(briefs.BriefUnavailable, match="Workspace access changed"):
+        await _generate(env)
+    assert "egress" not in env.log and not env.session.in_transaction()
+
+
+async def test_gateway_identity_drift_before_egress_is_denied(env: _Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    def drift(call: int) -> None:
+        if call == 2:
+            env.config = lambda: SimpleNamespace(**{**vars(_Env.config(env)), "gateway_identity": "b" * 64})  # type: ignore[method-assign]
+
+    env.on_config = drift
+    with pytest.raises(briefs.BriefUnavailable, match="Gateway configuration changed"):
+        await _generate(env)
+    assert "egress" not in env.log
+
+
+async def test_no_transaction_is_open_when_the_gateway_is_called(env: _Env) -> None:
+    """R16: Phase A locks are released (rollback) before any gateway I/O begins."""
+    await _generate(env)
+    assert env.tx_at_call == [False]
+    assert env.tx_during_wait == [False]

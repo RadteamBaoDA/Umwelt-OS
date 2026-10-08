@@ -93,7 +93,7 @@ async def _stories_widget(
 async def _events_widget(session: AsyncSession, day: date, timezone: str, *, scope: Scope, multi_workspace_enabled: bool) -> DailyWidget:
     """Timeline events on the day; with no calendar connector only manual/imported events appear."""
     page = await timeline.list_timeline(
-        session, TimelineQuery(date_from=day, date_to=day, timezone=timezone), limit=MAX_ITEMS, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        session, TimelineQuery(date_from=day, date_to=day + timedelta(days=1), timezone=timezone), limit=MAX_ITEMS, scope=scope, multi_workspace_enabled=multi_workspace_enabled
     )
     return DailyWidget(
         id="events", module="timeline", title_key="dayEvents", status="ok" if page.items else "empty",
