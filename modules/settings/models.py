@@ -5,6 +5,7 @@ from typing import Any, cast
 
 from redis.asyncio import Redis
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -159,6 +160,28 @@ class ModuleLifecycleRecord(Base):
     owner_id: Mapped[int] = mapped_column(ForeignKey("owner.id", ondelete="CASCADE"), primary_key=True)
     configuration_revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     disabled_modules: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class TranslationSettingsRecord(Base):
+    """Persist one workspace's translation choice; unrelated to any viewer's UI locale.
+
+    Absent row means disabled/vi/revision 1. Revision changes invalidate every cache fingerprint.
+    """
+
+    __tablename__ = "translation_settings"
+    __table_args__ = (
+        CheckConstraint("configuration_revision > 0", name="ck_translation_settings_revision"),
+        CheckConstraint("target_language IN ('vi', 'en')", name="ck_translation_settings_target"),
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_translation_settings_workspace", ondelete="RESTRICT"),
+    )
+
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    target_language: Mapped[str] = mapped_column(String(2), nullable=False, server_default="vi")
+    configuration_revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    updated_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("owner.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
