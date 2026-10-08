@@ -31,7 +31,7 @@ def _actor(scope: Scope) -> int:
     return scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
 
 
-def _ws_id(scope: Scope, seed_id: UUID | str) -> UUID:
+def _ws_id(scope: Scope, seed_id: object) -> UUID:
     """Derive a workspace-local stable ID so one workspace's fixtures never collide with another's."""
     return uuid5(NAMESPACE_URL, f"bbd-os.demo.seed:{scope.workspace_id}:{seed_id}")
 

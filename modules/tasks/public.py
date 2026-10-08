@@ -413,6 +413,7 @@ async def update_task(
 
 async def get_task(session: AsyncSession, task_id: UUID, *, scope: Scope, multi_workspace_enabled: bool) -> TaskRead:
     """Return one non-deleted task visible to its owner."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     task = await session.scalar(select(Task).where(
         Task.id == task_id, Task.workspace_id == scope.workspace_id, Task.deleted_at.is_(None),
     ))

@@ -1555,8 +1555,9 @@ async def summarize_source_events(
     """Count visible derived events per type for one source and return the latest observation time.
 
     Applies the same visibility rule as timeline listing (not deleted, backed by exact evidence)
-    so counts never exceed what the Timeline can show. Read-only; no authorization of its own.
+    so counts never exceed what the Timeline can show. Read-only; admits the owner workspace scope before reading.
     """
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     escaped = type_prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     rows = (await session.execute(
         select(Event.type, func.count(), func.max(Event.observed_at)).where(
@@ -1693,6 +1694,7 @@ async def temporal_event_refs(
     session: AsyncSession, version_ids: list[UUID], *, scope: Scope, multi_workspace_enabled: bool,
 ) -> list[dict[str, Any]]:
     """Expose complete bounded canonical event/support identity for selected temporal versions; no private reads by callers."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if len(set(version_ids)) > 100:
         raise ValueError("Temporal event scope exceeds100 versions")
     rows = (await session.execute(select(Event, EventEvidence).join(
@@ -1749,6 +1751,7 @@ async def lock_event_ids(
     session: AsyncSession, event_ids: list[UUID], *, scope: Scope, multi_workspace_enabled: bool,
 ) -> None:
     """Acquire captured event row locks in global UUID order after entity and relationship locks."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if event_ids:
         await session.execute(select(Event.id).where(Event.workspace_id == scope.workspace_id,
             Event.id.in_(sorted(set(event_ids), key=str))).order_by(Event.id).with_for_update())

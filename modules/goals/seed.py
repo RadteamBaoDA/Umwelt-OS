@@ -1,6 +1,7 @@
 """Owner-local fictional Phase 8 goal fixtures and linked milestone records."""
 
 from datetime import date
+from typing import Any, cast
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from fastapi import HTTPException
@@ -31,7 +32,7 @@ def _actor(scope: Scope) -> int:
     return scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
 
 
-def _ws_id(scope: Scope, seed_id: UUID | str) -> UUID:
+def _ws_id(scope: Scope, seed_id: object) -> UUID:
     """Derive a workspace-local stable ID so one workspace's fixtures never collide with another's."""
     return uuid5(NAMESPACE_URL, f"bbd-os.demo.seed:{scope.workspace_id}:{seed_id}")
 
@@ -128,7 +129,7 @@ async def ensure_demo_goals(
             manual_progress=False, status="active", milestones=[
                 {**item, "id": str(_ws_id(scope, item["id"])),
                  "task_id": str(_ws_id(scope, item["task_id"])) if item["task_id"] else None}
-                for item in seed["milestones"]
+                for item in cast(list[dict[str, Any]], seed["milestones"])
             ],
             entity_ids=[], accepted_proposals=[], revision=1,
         ))

@@ -10,13 +10,12 @@ from hashlib import sha256
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
 
+from fastapi import HTTPException
 from sqlalchemy import and_, delete, desc, exists, func, or_, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from fastapi import HTTPException
 
-from core.auth.models import Owner
 from core.pagination import decode_cursor, encode_cursor
 from core.realtime import commit_with_replay, make_graph_change
 from core.workspaces import public as workspaces

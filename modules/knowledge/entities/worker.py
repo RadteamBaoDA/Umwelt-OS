@@ -166,8 +166,10 @@ async def process_document_ready(ctx: dict[str, object], event_id: str) -> None:
         scope = await ingestion.resolve_ingestion_event_scope(
             session, event_uuid, multi_workspace_enabled=multi_workspace_enabled,
         )
-        if scope is None:
-            return
+        if scope is None or not await settings_public.module_is_enabled(
+            session, "knowledge.entities", scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        ):
+            return  # unavailable lineage or disabled module: leave the event unacknowledged
         fence = await workspaces.read_access_fence(
             session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
@@ -288,7 +290,9 @@ async def recover_entity_extraction_work(ctx: dict[str, object]) -> int:
             scope = await _workspace_job_scope(
                 session, workspace_id, multi_workspace_enabled=multi_workspace_enabled,
             )
-            if scope is None:
+            if scope is None or not await settings_public.module_is_enabled(
+                session, "knowledge.entities", scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            ):
                 continue
             cursor_key = f"bbd:entity-extraction:ready-cursor:{workspace_id}"
             raw_cursor = await redis.get(cursor_key)
@@ -452,7 +456,9 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
         scope = await _workspace_job_scope(
             session, workspace_id, multi_workspace_enabled=multi_workspace_enabled,
         )
-        if scope is None:
+        if scope is None or not await settings_public.module_is_enabled(
+            session, "knowledge.entities", scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        ):
             return
         work = await entities.claim_extraction_work(
             session, work_id, lease_owner, datetime.now(UTC), scope=scope,

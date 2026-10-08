@@ -1,9 +1,10 @@
 """Owner-local fictional knowledge entity fixtures for the explicit P12 demo seed."""
 
+from uuid import NAMESPACE_URL, uuid5
+
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from fastapi import HTTPException
-from uuid import NAMESPACE_URL, uuid5
 
 from core.demo_seed import p12_demo_seed_id
 from core.workspaces import public as workspaces
