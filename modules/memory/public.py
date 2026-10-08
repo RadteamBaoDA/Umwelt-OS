@@ -15,6 +15,7 @@ if TYPE_CHECKING:
         DocumentCleanupEvidenceScope,
         EvidenceReferenceRead,
     )
+    from modules.sources.schemas import SourceFence
 
 from fastapi import HTTPException
 from redis.asyncio import Redis
@@ -73,6 +74,11 @@ def _privacy_select(scope: Scope) -> Select[MemoryPrivacyRecord]:
 def _actor(scope: Scope) -> int:
     """Return the principal recorded by a real workspace or durable job scope."""
     return scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
+
+
+def _owned(model: Any, scope: Scope) -> tuple[ColumnElement[bool], ColumnElement[bool]]:
+    """Workspace and actor predicates for a Memory/Candidate statement (never read unscoped)."""
+    return model.workspace_id == scope.workspace_id, model.actor_user_id == _actor(scope)
 
 
 async def _admit(
@@ -518,6 +524,20 @@ async def lock_export_privacy(session: AsyncSession) -> None:
     )
 
 
+async def lock_export_privacy_in_uow(
+    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
+) -> None:
+    """Take the privacy advisory lock only when the caller's held admission is still current.
+
+    The non-locking owner read must equal the fence the caller already holds (otherwise 409), so
+    a revoked membership or changed configuration never reaches the shared privacy lock.
+    """
+    if await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled) != access_fence:
+        raise HTTPException(status_code=409, detail="Memory cleanup access fence is stale")
+    # ponytail: global privacy lock; per-workspace key if contention matters
+    await lock_export_privacy(session)
+
+
 async def _lock_live_provenance_evidence(
     session: AsyncSession, provenance: object, *, require_copy_evidence: bool,
     scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence | None = None,
@@ -784,10 +804,12 @@ def _scrub_candidate(item: MemoryCandidate, now: datetime) -> None:
 
 async def purge_document_copied_evidence_page(
     session: AsyncSession,
-    scope: "DocumentCleanupEvidenceScope",
+    evidence: "DocumentCleanupEvidenceScope",
     *,
     cursor: str | None,
     limit: int = 100,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> DocumentMemoryCleanupProgress:
     """Flush one bounded Memory/Candidate sweep for a detached deleted-Document scope.
 
@@ -800,34 +822,37 @@ async def purge_document_copied_evidence_page(
     """
     if not 1 <= limit <= 100:
         raise ValueError("Memory cleanup page size must be between 1 and 100")
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if evidence.workspace_id != scope.workspace_id or evidence.actor_user_id != _actor(scope):
+        raise HTTPException(status_code=409, detail="Document cleanup evidence belongs to another workspace")
     await bound_cleanup_lock_waits(session)
-    kind, after = _decode_document_memory_cleanup_cursor(cursor, scope) if cursor else ("memories", None)
+    kind, after = _decode_document_memory_cleanup_cursor(cursor, evidence) if cursor else ("memories", None)
     scrubbed_memories = scrubbed_candidates = unresolved = examined = 0
     now = datetime.now(UTC)
 
     while examined < limit and kind in {"memories", "candidates"}:
         remaining = limit - examined
         if kind == "memories":
-            statement = select(Memory).order_by(Memory.id).limit(remaining + 1)
+            statement = select(Memory).where(*_owned(Memory, scope)).order_by(Memory.id).limit(remaining + 1)
             if after is not None:
                 statement = statement.where(Memory.id > after)
             rows = list((await session.scalars(statement.with_for_update())).all())
             has_more = len(rows) > remaining
             rows = rows[:remaining]
             for item in rows:
-                matched, uncertain = _document_provenance_match(item.provenance, scope)
+                matched, uncertain = _document_provenance_match(item.provenance, evidence)
                 candidate = None
                 if item.candidate_id is not None:
                     candidate = await session.scalar(select(MemoryCandidate).where(
-                        MemoryCandidate.id == item.candidate_id,
+                        MemoryCandidate.id == item.candidate_id, *_owned(MemoryCandidate, scope),
                     ).with_for_update().execution_options(populate_existing=True))
                 candidate_match, candidate_uncertain = (
-                    _document_provenance_match(candidate.provenance, scope)
+                    _document_provenance_match(candidate.provenance, evidence)
                     if candidate is not None else (False, False)
                 )
                 if item.is_manual is True:
                     if matched:
-                        scrubbed = _scrub_manual_document_provenance(item.provenance, scope)
+                        scrubbed = _scrub_manual_document_provenance(item.provenance, evidence)
                         if scrubbed is not None and scrubbed != item.provenance:
                             item.provenance = scrubbed
                             item.updated_at = now
@@ -840,14 +865,14 @@ async def purge_document_copied_evidence_page(
                 examined += 1
             last = rows[-1].id if rows else after
             if has_more:
-                next_cursor = _encode_document_memory_cleanup_cursor(scope, kind, last)
+                next_cursor = _encode_document_memory_cleanup_cursor(evidence, kind, last)
                 break
             kind, after = "candidates", None
-            next_cursor = _encode_document_memory_cleanup_cursor(scope, kind, None)
+            next_cursor = _encode_document_memory_cleanup_cursor(evidence, kind, None)
             if examined == limit:
                 break
         else:
-            id_statement = select(MemoryCandidate.id).order_by(MemoryCandidate.id).limit(remaining + 1)
+            id_statement = select(MemoryCandidate.id).where(*_owned(MemoryCandidate, scope)).order_by(MemoryCandidate.id).limit(remaining + 1)
             if after is not None:
                 id_statement = id_statement.where(MemoryCandidate.id > after)
             candidate_ids = list((await session.scalars(id_statement)).all())
@@ -855,11 +880,11 @@ async def purge_document_copied_evidence_page(
             candidate_ids = candidate_ids[:remaining]
             for candidate_id in candidate_ids:
                 candidate = await session.scalar(select(MemoryCandidate).where(
-                    MemoryCandidate.id == candidate_id,
+                    MemoryCandidate.id == candidate_id, *_owned(MemoryCandidate, scope),
                 ).with_for_update().execution_options(populate_existing=True))
                 if candidate is None:
                     continue
-                matched, uncertain = _document_provenance_match(candidate.provenance, scope)
+                matched, uncertain = _document_provenance_match(candidate.provenance, evidence)
                 if matched:
                     _scrub_candidate(candidate, now)
                     scrubbed_candidates += 1
@@ -868,7 +893,7 @@ async def purge_document_copied_evidence_page(
                 examined += 1
             last = candidate_ids[-1] if candidate_ids else after
             if has_more:
-                next_cursor = _encode_document_memory_cleanup_cursor(scope, kind, last)
+                next_cursor = _encode_document_memory_cleanup_cursor(evidence, kind, last)
                 break
             next_cursor = None
             break
@@ -939,10 +964,14 @@ def _source_progress(
     )
 
 
-async def purge_source_copied_evidence_page(
+async def purge_source_copied_evidence_page_in_uow(
     session: AsyncSession,
-    scope: SourceCopiedEvidenceScope,
+    evidence: SourceCopiedEvidenceScope,
     *,
+    scope: InternalJobScope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
+    source_fence: "SourceFence",
     cursor: str | None = None,
     limit: int = 100,
 ) -> SourceMemoryCleanupProgress:
@@ -959,12 +988,21 @@ async def purge_source_copied_evidence_page(
     annotations, exactly as the accepted Document page classifies ``is_manual`` records; a linked
     candidate is swept with the rest of the Source's candidates. The caller owns
     the transaction, privacy/Source/operation locks, stage receipt, commit and cache eviction.
+    The held ``access_fence`` must still equal a fresh owner read (else 409) and the locked
+    ``source_fence`` must match the receipt's Source, generation and this workspace; every
+    statement carries the workspace and actor predicates.
     """
     if not 1 <= limit <= 100:
         raise ValueError("Source Memory cleanup page size must be between 1 and 100")
+    if await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled) != access_fence:
+        raise HTTPException(status_code=409, detail="Memory cleanup access fence is stale")
+    if (source_fence.workspace_id != scope.workspace_id or source_fence.id != evidence.source_id
+            or source_fence.generation != evidence.generation
+            or scope.source_id != evidence.source_id or scope.source_generation != evidence.generation):
+        raise HTTPException(status_code=409, detail="Source cleanup fence does not match the receipt")
     await bound_cleanup_lock_waits(session)
-    kind, after = _decode_source_memory_cursor(cursor, scope) if cursor else ("memories", None)
-    source_text = str(scope.source_id)
+    kind, after = _decode_source_memory_cursor(cursor, evidence) if cursor else ("memories", None)
+    source_text = str(evidence.source_id)
     now = datetime.now(UTC)
     changed = False
     unresolved = processed = 0
@@ -972,8 +1010,9 @@ async def purge_source_copied_evidence_page(
     if kind == "memories":
         linked_candidates = select(MemoryCandidate.id).where(
             MemoryCandidate.provenance["source_id"].astext == source_text,
+            *_owned(MemoryCandidate, scope),
         )
-        statement = select(Memory).where(or_(
+        statement = select(Memory).where(*_owned(Memory, scope), or_(
             Memory.provenance["source_id"].astext == source_text,
             Memory.candidate_id.in_(linked_candidates),
         )).order_by(Memory.id).limit(limit + 1)
@@ -986,14 +1025,14 @@ async def purge_source_copied_evidence_page(
         rows = rows[:limit]
         for item in rows:
             own = isinstance(item.provenance, dict) and (
-                _provenance_uuid(item.provenance.get("source_id")) == scope.source_id)
+                _provenance_uuid(item.provenance.get("source_id")) == evidence.source_id)
             candidate = None
             if item.candidate_id is not None:
                 candidate = await session.scalar(select(MemoryCandidate).where(
-                    MemoryCandidate.id == item.candidate_id,
+                    MemoryCandidate.id == item.candidate_id, *_owned(MemoryCandidate, scope),
                 ).with_for_update().execution_options(populate_existing=True))
             candidate_linked = candidate is not None and isinstance(candidate.provenance, dict) and (
-                _provenance_uuid(candidate.provenance.get("source_id")) == scope.source_id)
+                _provenance_uuid(candidate.provenance.get("source_id")) == evidence.source_id)
             if item.is_manual is True:
                 # Same rule as the accepted Document page: manual is independent, strip annotations only.
                 if own:
@@ -1008,19 +1047,20 @@ async def purge_source_copied_evidence_page(
             processed += 1
         if has_more:
             return _source_progress(
-                scope, "memories", rows[-1].id, complete=False,
+                evidence, "memories", rows[-1].id, complete=False,
                 processed=processed, unresolved=unresolved, changed=changed,
             )
         kind, after = "candidates", None
         if processed >= limit:
             return _source_progress(
-                scope, kind, None, complete=False,
+                evidence, kind, None, complete=False,
                 processed=processed, unresolved=unresolved, changed=changed,
             )
 
     remaining = limit - processed
     candidate_statement = select(MemoryCandidate).where(
         MemoryCandidate.provenance["source_id"].astext == source_text,
+        *_owned(MemoryCandidate, scope),
     ).order_by(MemoryCandidate.id).limit(remaining + 1)
     if after is not None:
         candidate_statement = candidate_statement.where(MemoryCandidate.id > after)
@@ -1034,7 +1074,7 @@ async def purge_source_copied_evidence_page(
         changed = True
         processed += 1
     return _source_progress(
-        scope, "candidates", candidates[-1].id if candidates else after, complete=not has_more,
+        evidence, "candidates", candidates[-1].id if candidates else after, complete=not has_more,
         processed=processed, unresolved=unresolved, changed=changed,
     )
 

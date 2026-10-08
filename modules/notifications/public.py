@@ -297,6 +297,7 @@ async def set_read(
 async def scrub_document_evidence(
     session: AsyncSession, *, operation_id: UUID, document_id: UUID, version_ids: tuple[UUID, ...],
     final_reference_page: bool = False, after: UUID | None = None, limit: int = MAX_CLEANUP_PAGE,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> NotificationCleanupProgress:
     """Flush-only scrub exact Document-backed highlight titles in a stable bounded notification page.
 
@@ -304,15 +305,21 @@ async def scrub_document_evidence(
     grammar and the caller's detached immutable-version receipt. If evidence is paged, the caller's
     durable cursor retains the operation ID and both page positions. Unsupported candidate identities
     are provisional until the caller declares the final reference page, then remain explicitly unavailable.
-    The caller owns commit and cursor.
+    The caller owns commit and cursor. The owner is admitted (non-locking) before any query and
+    every statement is bound to the caller's workspace and actor.
     """
     if not 1 <= limit <= MAX_CLEANUP_PAGE or len(version_ids) > MAX_CLEANUP_PAGE:
         raise ValueError("Notification evidence cleanup exceeds its page bound")
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     known_versions = set(version_ids)
-    candidates = select(Notification).where(or_(
-        Notification.document_id == document_id,
-        and_(Notification.kind == "dashboard_highlight", Notification.dedupe_key.like("highlight:%")),
-    ))
+    candidates = select(Notification).where(
+        Notification.workspace_id == scope.workspace_id,
+        Notification.owner_id == _actor(scope),
+        or_(
+            Notification.document_id == document_id,
+            and_(Notification.kind == "dashboard_highlight", Notification.dedupe_key.like("highlight:%")),
+        ),
+    )
     if after is not None:
         candidates = candidates.where(Notification.id > after)
     rows = list((await session.scalars(
@@ -368,12 +375,16 @@ async def scrub_document_evidence(
             from modules.knowledge.documents import public as documents
 
             # Report only genuinely undecidable legacy rows; a version that resolves elsewhere is foreign.
-            locator = await documents.review_version_locator(session, version_id)
+            locator = await documents.review_version_locator(
+                session, version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
             if locator is not None and locator[0] != document_id:
                 continue
             # A Document already deleted (its own receipt not yet scrubbed) resolves from retained evidence.
             if locator is None:
-                retained = await documents.cleanup_evidence_version_document(session, version_id)
+                retained = await documents.cleanup_evidence_version_document(
+                    session, version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                )
                 if retained is not None and retained != document_id:
                     continue
             (unavailable if final_reference_page else provisional).append(row.id)

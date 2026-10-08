@@ -845,6 +845,9 @@ async def _agent_cleanup_candidate_ids(
     records: list[dict[str, object]],
     after: UUID | None,
     limit: int,
+    *,
+    workspace_id: UUID,
+    owner_id: int,
 ) -> list[UUID]:
     """Read a bounded UUID keyset page using exact JSONB containment and durable operation receipts."""
     run_clauses = []
@@ -861,6 +864,7 @@ async def _agent_cleanup_candidate_ids(
     )) if records else False
     related_approval = exists(select(AgentApproval.id).where(
         AgentApproval.run_id == AgentRun.id,
+        AgentApproval.workspace_id == workspace_id,
         or_(*[AgentApproval.source_fences.contains({"records": [
             {key: record[key] for key in ("document_id", "document_version_id", "source_id", "chunk_id")}
         ]}) for record in records]),
@@ -883,24 +887,39 @@ async def _agent_cleanup_candidate_ids(
     )
     marker_exists = exists(select(AgentEvidenceCleanup.id).where(
         AgentEvidenceCleanup.run_id == AgentRun.id,
+        AgentEvidenceCleanup.workspace_id == workspace_id,
         AgentEvidenceCleanup.operation_id == scope.operation_id,
     ))
     cleanup_clauses: list[Any] = [
         *run_clauses, related_call, related_approval, legacy_active,
         legacy_unreconciled_active, marker_exists,
     ]
-    query = select(AgentRun.id).where(or_(*cleanup_clauses))
+    query = select(AgentRun.id).where(
+        AgentRun.workspace_id == workspace_id, AgentRun.owner_id == owner_id, or_(*cleanup_clauses),
+    )
     if after is not None:
         query = query.where(AgentRun.id > after)
     return list((await session.scalars(query.order_by(AgentRun.id).limit(limit + 1))).all())
 
 
+async def _admit_cleanup_evidence(
+    session: AsyncSession, evidence: DocumentCleanupEvidenceScope, *, scope: Scope,
+    multi_workspace_enabled: bool,
+) -> None:
+    """Admit the owner (members denied before SQL) and bind the detached page to this workspace."""
+    await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if evidence.workspace_id != scope.workspace_id or evidence.actor_user_id != actor(scope):
+        raise HTTPException(status_code=409, detail="Document cleanup evidence belongs to another workspace")
+
+
 async def preflight_document_copied_evidence_lease(
     session: AsyncSession,
-    scope: DocumentCleanupEvidenceScope,
+    evidence: DocumentCleanupEvidenceScope,
     *,
     cursor: str | None = None,
     limit: int = AGENT_CLEANUP_LIMIT,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> AgentCleanupLeasePreflight:
     """Acquire a pending run's nonblocking saver lease before Documents/Memory locks.
 
@@ -909,15 +928,22 @@ async def preflight_document_copied_evidence_lease(
     """
     if type(limit) is not int or not 1 <= limit <= AGENT_CLEANUP_LIMIT:
         raise ValueError(f"Agent cleanup page size must be between 1 and {AGENT_CLEANUP_LIMIT}")
-    records = _agent_cleanup_records(scope)
-    fingerprint = _agent_cleanup_fingerprint(scope, records)
-    after, _ = _decode_agent_cleanup_cursor(cursor, scope, fingerprint) if cursor else (None, False)
-    candidate_ids = await _agent_cleanup_candidate_ids(session, scope, records, after, 1)
+    await _admit_cleanup_evidence(
+        session, evidence, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    workspace_id, owner_id = scope.workspace_id, actor(scope)
+    records = _agent_cleanup_records(evidence)
+    fingerprint = _agent_cleanup_fingerprint(evidence, records)
+    after, _ = _decode_agent_cleanup_cursor(cursor, evidence, fingerprint) if cursor else (None, False)
+    candidate_ids = await _agent_cleanup_candidate_ids(
+        session, evidence, records, after, 1, workspace_id=workspace_id, owner_id=owner_id,
+    )
     run_id = candidate_ids[0] if candidate_ids else None
     marker = None
     if run_id is not None:
         marker = await session.scalar(select(AgentEvidenceCleanup).where(
-            AgentEvidenceCleanup.operation_id == scope.operation_id,
+            AgentEvidenceCleanup.operation_id == evidence.operation_id,
+            AgentEvidenceCleanup.workspace_id == workspace_id,
             AgentEvidenceCleanup.run_id == run_id,
         ))
     marker_state = "none" if run_id is None else (
@@ -930,23 +956,27 @@ async def preflight_document_copied_evidence_lease(
         if lease_required and run_id is not None else False
     )
     return AgentCleanupLeasePreflight(
-        scope.operation_id, fingerprint, run_id, cursor,
+        evidence.operation_id, fingerprint, run_id, cursor,
         marker_state, lease_required, lease_acquired, lease_required and not lease_acquired,
     )
 
 
 async def _agent_cleanup_ledgers(
-    session: AsyncSession, run_id: UUID,
+    session: AsyncSession, run_id: UUID, *, workspace_id: UUID,
 ) -> tuple[list[AgentApproval], list[AgentEffect], list[AgentToolCall]]:
-    """Lock the Agent action ledger in run→approval→effect→call order."""
+    """Lock the Agent action ledger in run→approval→effect→call order, inside one workspace."""
     approvals = list((await session.scalars(select(AgentApproval).where(
-        AgentApproval.run_id == run_id,
+        AgentApproval.run_id == run_id, AgentApproval.workspace_id == workspace_id,
     ).order_by(AgentApproval.id).with_for_update())).all())
     effects = list((await session.scalars(select(AgentEffect).where(
-        AgentEffect.run_id == run_id,
+        AgentEffect.run_id == run_id, AgentEffect.workspace_id == workspace_id,
     ).order_by(AgentEffect.action_id).with_for_update())).all())
     calls = list((await session.scalars(select(AgentToolCall).where(
         AgentToolCall.run_id == run_id,
+        # AgentToolCall carries no workspace column; bind it through its workspace-scoped run.
+        AgentToolCall.run_id.in_(select(AgentRun.id).where(
+            AgentRun.id == run_id, AgentRun.workspace_id == workspace_id,
+        )),
     ).order_by(AgentToolCall.ordinal).with_for_update())).all())
     return approvals, effects, calls
 
@@ -1005,10 +1035,13 @@ def _scrub_agent_scope_payloads(
     return unavailable
 
 
-async def _agent_unavailable_run_count(session: AsyncSession, operation_id: UUID) -> int:
+async def _agent_unavailable_run_count(
+    session: AsyncSession, operation_id: UUID, workspace_id: UUID,
+) -> int:
     """Count distinct per-operation/run unavailable receipts through their unique lookup index."""
     return int(await session.scalar(select(func.count(AgentEvidenceCleanup.id)).where(
         AgentEvidenceCleanup.operation_id == operation_id,
+        AgentEvidenceCleanup.workspace_id == workspace_id,
         AgentEvidenceCleanup.state == "unavailable",
     )) or 0)
 
@@ -1044,10 +1077,12 @@ def _agent_cleanup_marker_state(marker: AgentEvidenceCleanup | None) -> str:
 
 async def purge_document_copied_evidence_page(
     session: AsyncSession,
-    scope: DocumentCleanupEvidenceScope,
+    evidence: DocumentCleanupEvidenceScope,
     *,
     cursor: str | None = None,
     limit: int = AGENT_CLEANUP_LIMIT,
+    scope: Scope,
+    multi_workspace_enabled: bool,
     preflight: AgentCleanupLeasePreflight,
 ) -> AgentCopiedEvidenceCleanupProgress:
     """Revoke and selectively scrub one bounded Agent page for a detached Documents cleanup scope.
@@ -1059,11 +1094,15 @@ async def purge_document_copied_evidence_page(
     """
     if type(limit) is not int or not 1 <= limit <= AGENT_CLEANUP_LIMIT:
         raise ValueError(f"Agent cleanup page size must be between 1 and {AGENT_CLEANUP_LIMIT}")
-    records = _agent_cleanup_records(scope)
-    page_fingerprint = _agent_cleanup_fingerprint(scope, records)
-    scope_fingerprint = _agent_cleanup_scope_fingerprint(scope)
+    await _admit_cleanup_evidence(
+        session, evidence, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    workspace_id, owner_id = scope.workspace_id, actor(scope)
+    records = _agent_cleanup_records(evidence)
+    page_fingerprint = _agent_cleanup_fingerprint(evidence, records)
+    scope_fingerprint = _agent_cleanup_scope_fingerprint(evidence)
     after, unavailable = (
-        _decode_agent_cleanup_cursor(cursor, scope, page_fingerprint) if cursor else (None, False)
+        _decode_agent_cleanup_cursor(cursor, evidence, page_fingerprint) if cursor else (None, False)
     )
     async def progress(
         next_cursor: str | None, complete: bool, rows_processed: int, unavailable_result: bool,
@@ -1073,19 +1112,21 @@ async def purge_document_copied_evidence_page(
         """Count operation-wide unique unavailable receipts; leave flush and commit to the caller's UoW."""
         return AgentCopiedEvidenceCleanupProgress(
             next_cursor, complete, rows_processed, unavailable_result,
-            await _agent_unavailable_run_count(session, scope.operation_id), lease_pending,
+            await _agent_unavailable_run_count(session, evidence.operation_id, workspace_id), lease_pending,
             preflight_stale,
         )
 
     # One run per transaction keeps the caller's detached lease preflight aligned with the
     # exact candidate whose Agent rows this hook may lock. Later runs use this opaque cursor.
-    if preflight.operation_id != scope.operation_id or preflight.agent_cursor != cursor:
+    if preflight.operation_id != evidence.operation_id or preflight.agent_cursor != cursor:
         raise ValueError("Agent cleanup lease preflight does not match the Documents cursor")
     if preflight.scope_fingerprint != page_fingerprint:
         raise ValueError("Agent cleanup lease preflight does not match the Documents evidence scope")
     if preflight.blocked:
         return await progress(cursor, False, 0, unavailable)
-    candidate_ids = await _agent_cleanup_candidate_ids(session, scope, records, after, 1)
+    candidate_ids = await _agent_cleanup_candidate_ids(
+        session, evidence, records, after, 1, workspace_id=workspace_id, owner_id=owner_id,
+    )
     more_candidates = len(candidate_ids) > 1
     page = candidate_ids[:1]
     if (page[0] if page else None) != preflight.candidate_run_id:
@@ -1098,7 +1139,8 @@ async def purge_document_copied_evidence_page(
         # Marker read is intentionally unlocked. Its durable state is checked again after lease
         # acquisition and before locking mutable Agent rows.
         marker = await session.scalar(select(AgentEvidenceCleanup).where(
-            AgentEvidenceCleanup.operation_id == scope.operation_id,
+            AgentEvidenceCleanup.operation_id == evidence.operation_id,
+            AgentEvidenceCleanup.workspace_id == workspace_id,
             AgentEvidenceCleanup.run_id == run_id,
         ))
         current_marker_state = _agent_cleanup_marker_state(marker)
@@ -1110,11 +1152,11 @@ async def purge_document_copied_evidence_page(
                 ))):
             return await progress(cursor, False, 0, unavailable, preflight_stale=True)
         if marker is not None and (
-            marker.source_id != scope.source_id or marker.document_id != scope.document_id
+            marker.source_id != evidence.source_id or marker.document_id != evidence.document_id
             or marker.scope_fingerprint != scope_fingerprint
         ):
             return await progress(
-                _encode_agent_cleanup_cursor(scope, page_fingerprint, last_processed, True),
+                _encode_agent_cleanup_cursor(evidence, page_fingerprint, last_processed, True),
                 False, processed, True,
             )
         if marker is not None and (marker.state == "finalized" or marker.finalized_at is not None):
@@ -1123,15 +1165,17 @@ async def purge_document_copied_evidence_page(
             await lock_export_privacy(session)
             run = await session.scalar(select(AgentRun).where(
                 AgentRun.id == run_id,
+                AgentRun.workspace_id == workspace_id, AgentRun.owner_id == owner_id,
             ).with_for_update())
             marker = await session.scalar(select(AgentEvidenceCleanup).where(
-                AgentEvidenceCleanup.operation_id == scope.operation_id,
+                AgentEvidenceCleanup.operation_id == evidence.operation_id,
+            AgentEvidenceCleanup.workspace_id == workspace_id,
                 AgentEvidenceCleanup.run_id == run_id,
             ).with_for_update().execution_options(populate_existing=True))
             if _agent_cleanup_marker_state(marker) != preflight.marker_state:
                 return await progress(cursor, False, processed, unavailable, preflight_stale=True)
             if run is not None:
-                approvals, effects, calls = await _agent_cleanup_ledgers(session, run_id)
+                approvals, effects, calls = await _agent_cleanup_ledgers(session, run_id, workspace_id=workspace_id)
                 unresolved = _scrub_agent_scope_payloads(
                     approvals, effects, calls, records, datetime.now(UTC),
                 )
@@ -1147,9 +1191,11 @@ async def purge_document_copied_evidence_page(
             await lock_export_privacy(session)
             run = await session.scalar(select(AgentRun).where(
                 AgentRun.id == run_id,
+                AgentRun.workspace_id == workspace_id, AgentRun.owner_id == owner_id,
             ).with_for_update())
             marker = await session.scalar(select(AgentEvidenceCleanup).where(
-                AgentEvidenceCleanup.operation_id == scope.operation_id,
+                AgentEvidenceCleanup.operation_id == evidence.operation_id,
+            AgentEvidenceCleanup.workspace_id == workspace_id,
                 AgentEvidenceCleanup.run_id == run_id,
             ).with_for_update().execution_options(populate_existing=True))
             if _agent_cleanup_marker_state(marker) != preflight.marker_state:
@@ -1158,7 +1204,7 @@ async def purge_document_copied_evidence_page(
                 last_processed, processed = run_id, processed + 1
                 unavailable = True
                 continue
-            approvals, effects, calls = await _agent_cleanup_ledgers(session, run_id)
+            approvals, effects, calls = await _agent_cleanup_ledgers(session, run_id, workspace_id=workspace_id)
             matching = _find_agent_scope_match(run, approvals, calls, records)
             if matching is None:
                 last_processed, processed = run_id, processed + 1
@@ -1176,7 +1222,7 @@ async def purge_document_copied_evidence_page(
             run.updated_at = datetime.now(UTC)
             await session.flush()
             return await progress(
-                _encode_agent_cleanup_cursor(scope, page_fingerprint, last_processed, True),
+                _encode_agent_cleanup_cursor(evidence, page_fingerprint, last_processed, True),
                 False, processed + 1, True, lease_pending=True,
             )
 
@@ -1186,28 +1232,30 @@ async def purge_document_copied_evidence_page(
             await lock_export_privacy(session)
             run = await session.scalar(select(AgentRun).where(
                 AgentRun.id == run_id,
+                AgentRun.workspace_id == workspace_id, AgentRun.owner_id == owner_id,
             ).with_for_update())
             if run is None:
                 last_processed, processed = run_id, processed + 1
                 continue
             marker = await session.scalar(select(AgentEvidenceCleanup).where(
-                AgentEvidenceCleanup.operation_id == scope.operation_id,
+                AgentEvidenceCleanup.operation_id == evidence.operation_id,
+            AgentEvidenceCleanup.workspace_id == workspace_id,
                 AgentEvidenceCleanup.run_id == run_id,
             ).with_for_update())
             if _agent_cleanup_marker_state(marker) != preflight.marker_state:
                 return await progress(cursor, False, processed, unavailable, preflight_stale=True)
             if marker is not None and marker.scope_fingerprint != scope_fingerprint:
                 return await progress(
-                        _encode_agent_cleanup_cursor(scope, page_fingerprint, last_processed, True),
+                        _encode_agent_cleanup_cursor(evidence, page_fingerprint, last_processed, True),
                         False, processed, True,
                 )
             if marker is not None and marker.state == "pending":
                 return await progress(
-                        _encode_agent_cleanup_cursor(scope, page_fingerprint, last_processed, unavailable),
+                        _encode_agent_cleanup_cursor(evidence, page_fingerprint, last_processed, unavailable),
                         False, processed, unavailable,
                 )
             if marker is not None:
-                approvals, effects, calls = await _agent_cleanup_ledgers(session, run_id)
+                approvals, effects, calls = await _agent_cleanup_ledgers(session, run_id, workspace_id=workspace_id)
                 if marker.state == "unavailable" and marker.finalized_at is None:
                     matching = _find_agent_scope_match(run, approvals, calls, records)
                     if matching is None:
@@ -1224,7 +1272,7 @@ async def purge_document_copied_evidence_page(
                     run.updated_at = datetime.now(UTC)
                     await session.flush()
                     return await progress(
-                        _encode_agent_cleanup_cursor(scope, page_fingerprint, last_processed, True),
+                        _encode_agent_cleanup_cursor(evidence, page_fingerprint, last_processed, True),
                         False, processed + 1, True,
                     )
                 unresolved = _scrub_agent_scope_payloads(
@@ -1235,14 +1283,14 @@ async def purge_document_copied_evidence_page(
                 unavailable = unavailable or unresolved or marker.state == "unavailable"
                 last_processed, processed = run_id, processed + 1
                 continue
-            approvals, effects, calls = await _agent_cleanup_ledgers(session, run_id)
+            approvals, effects, calls = await _agent_cleanup_ledgers(session, run_id, workspace_id=workspace_id)
             matching = _find_agent_scope_match(run, approvals, calls, records)
             if matching is None:
                 # An unclassified active legacy row is only a coverage gate. Persist it once so
                 # keyset replay is finite, but never revoke, erase, or otherwise mutate that run.
                 marker = AgentEvidenceCleanup(
-                    operation_id=scope.operation_id, run_id=run_id,
-                    source_id=scope.source_id, document_id=scope.document_id,
+                    workspace_id=workspace_id, operation_id=evidence.operation_id, run_id=run_id,
+                    source_id=evidence.source_id, document_id=evidence.document_id,
                     scope_fingerprint=scope_fingerprint,
                     matched_identity=None, state="unavailable",
                 )
@@ -1252,8 +1300,8 @@ async def purge_document_copied_evidence_page(
                 unavailable = True
                 continue
             marker = AgentEvidenceCleanup(
-                operation_id=scope.operation_id, run_id=run_id,
-                source_id=scope.source_id, document_id=scope.document_id,
+                workspace_id=workspace_id, operation_id=evidence.operation_id, run_id=run_id,
+                source_id=evidence.source_id, document_id=evidence.document_id,
                 scope_fingerprint=scope_fingerprint, matched_identity=matching, state="pending",
             )
             session.add(marker)
@@ -1267,7 +1315,7 @@ async def purge_document_copied_evidence_page(
             run.updated_at = datetime.now(UTC)
             await session.flush()
             return await progress(
-                _encode_agent_cleanup_cursor(scope, page_fingerprint, last_processed, unavailable),
+                _encode_agent_cleanup_cursor(evidence, page_fingerprint, last_processed, unavailable),
                 False, processed + 1, unavailable, lease_pending=True,
             )
 
@@ -1275,15 +1323,17 @@ async def purge_document_copied_evidence_page(
         # Memory privacy or Agent rows. Contention leaves this run at the current cursor position.
         if preflight.blocked or (preflight.lease_required and not preflight.lease_acquired):
             return await progress(
-                _encode_agent_cleanup_cursor(scope, page_fingerprint, last_processed, unavailable),
+                _encode_agent_cleanup_cursor(evidence, page_fingerprint, last_processed, unavailable),
                 False, processed, unavailable,
             )
         await lock_export_privacy(session)
         run = await session.scalar(select(AgentRun).where(
             AgentRun.id == run_id,
+            AgentRun.workspace_id == workspace_id, AgentRun.owner_id == owner_id,
         ).with_for_update())
         marker = await session.scalar(select(AgentEvidenceCleanup).where(
-            AgentEvidenceCleanup.operation_id == scope.operation_id,
+            AgentEvidenceCleanup.operation_id == evidence.operation_id,
+            AgentEvidenceCleanup.workspace_id == workspace_id,
             AgentEvidenceCleanup.run_id == run_id,
         ).with_for_update())
         if (_agent_cleanup_marker_state(marker) != preflight.marker_state
@@ -1293,10 +1343,10 @@ async def purge_document_copied_evidence_page(
             return await progress(cursor, False, processed, unavailable, preflight_stale=True)
         if run is None or marker is None or marker.scope_fingerprint != scope_fingerprint:
             return await progress(
-                _encode_agent_cleanup_cursor(scope, page_fingerprint, last_processed, True),
+                _encode_agent_cleanup_cursor(evidence, page_fingerprint, last_processed, True),
                 False, processed, True,
             )
-        approvals, effects, calls = await _agent_cleanup_ledgers(session, run_id)
+        approvals, effects, calls = await _agent_cleanup_ledgers(session, run_id, workspace_id=workspace_id)
         now = datetime.now(UTC)
         unresolved = _scrub_agent_scope_payloads(approvals, effects, calls, records, now)
         if marker.state == "finalized" or marker.finalized_at is not None:
@@ -1306,7 +1356,7 @@ async def purge_document_copied_evidence_page(
             continue
         if marker.state != "pending":
             return await progress(
-                _encode_agent_cleanup_cursor(scope, page_fingerprint, last_processed, True),
+                _encode_agent_cleanup_cursor(evidence, page_fingerprint, last_processed, True),
                 False, processed, True,
             )
         run.answer = None
@@ -1327,7 +1377,7 @@ async def purge_document_copied_evidence_page(
         last_processed, processed = run_id, processed + 1
 
     next_cursor = (
-        _encode_agent_cleanup_cursor(scope, page_fingerprint, last_processed, unavailable)
+        _encode_agent_cleanup_cursor(evidence, page_fingerprint, last_processed, unavailable)
         if more_candidates else None
     )
     return await progress(next_cursor, not more_candidates, processed, unavailable)

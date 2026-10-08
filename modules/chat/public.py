@@ -14,6 +14,7 @@ from urllib.parse import urlsplit as _urlsplit
 from urllib.parse import urlunsplit as _urlunsplit
 from uuid import UUID
 
+from fastapi import HTTPException
 from pydantic import BaseModel
 from sqlalchemy import ColumnElement
 from sqlalchemy import func as _func
@@ -24,6 +25,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.models import Owner as _Owner
 from core.telemetry import RunMeta as _RunMeta
+from core.workspaces import public as _workspaces
+from core.workspaces.schemas import InternalJobScope, WorkspaceContext
 from modules.chat.citations import (
     INSUFFICIENT_EVIDENCE_MESSAGE,
     ensure_grounded_answer,
@@ -1404,10 +1407,12 @@ async def filter_current_citations(
 
 async def purge_document_copied_evidence_page(
     session: AsyncSession,
-    scope: DocumentCleanupEvidenceScope,
+    evidence: DocumentCleanupEvidenceScope,
     *,
     cursor: str | None = None,
     limit: int = 100,
+    scope: WorkspaceContext | InternalJobScope,
+    multi_workspace_enabled: bool,
 ) -> CopiedEvidenceCleanupProgress:
     """Clean one bounded Chat table page using detached identities captured before hard deletion.
 
@@ -1416,16 +1421,31 @@ async def purge_document_copied_evidence_page(
     append-only mutation receipts, and every existing stream/event/run identity. The Documents
     caller persists the returned cursor and page mutations in the same transaction. Version-only
     and chunk identity records can fall on different scope pages; each exact chunk pair matches
-    independently of the separate version-only record.
+    independently of the separate version-only record. The owner is admitted (non-locking, members
+    denied before SQL), the detached page must belong to this workspace and actor, and every
+    statement is bound to that workspace and actor.
     """
     if not 1 <= limit <= 100:
         raise ValueError("Chat copied-evidence page size must be between 1 and 100")
-    if len(scope.references) > 100:
+    if len(evidence.references) > 100:
         raise ValueError("Chat copied-evidence identity page exceeds 100 references")
+    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
+    if type(multi_workspace_enabled) is not bool:
+        raise TypeError("The configured multi-workspace feature flag must be a boolean")
+    await _workspaces.read_access_fence(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    workspace_id = scope.workspace_id
+    actor_id = scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
+    if evidence.workspace_id != workspace_id or evidence.actor_user_id != actor_id:
+        raise HTTPException(status_code=409, detail="Document cleanup evidence belongs to another workspace")
+    own_conversation = (Conversation.workspace_id == workspace_id, Conversation.actor_user_id == actor_id)
+    own_run = (ResponseRun.workspace_id == workspace_id, ResponseRun.actor_user_id == actor_id)
     if cursor is None:
         kind, after = "messages", None
     else:
-        kind, after = _decode_cleanup_cursor(cursor, scope)
+        kind, after = _decode_cleanup_cursor(cursor, evidence)
     from modules.memory.public import bound_cleanup_lock_waits, lock_export_privacy
 
     await lock_export_privacy(session)
@@ -1441,20 +1461,21 @@ async def purge_document_copied_evidence_page(
         if kind == "messages":
             found = list((await session.execute(
                 _select(Message.id, Message.conversation_id)
-                .where(*([Message.id > after] if after else []))
+                .join(Conversation, Conversation.id == Message.conversation_id)
+                .where(*own_conversation, *([Message.id > after] if after else []))
                 .order_by(Message.id).limit(remaining + 1)
             )).all())
         elif kind == "runs":
             found = list((await session.execute(
                 _select(ResponseRun.id, ResponseRun.conversation_id)
-                .where(*([ResponseRun.id > after] if after else []))
+                .where(*own_run, *([ResponseRun.id > after] if after else []))
                 .order_by(ResponseRun.id).limit(remaining + 1)
             )).all())
         else:
             found = list((await session.execute(
                 _select(StreamEvent.id, StreamEvent.response_id, ResponseRun.conversation_id)
                 .join(ResponseRun, ResponseRun.id == StreamEvent.response_id)
-                .where(*([StreamEvent.id > after] if after else []))
+                .where(*own_run, *([StreamEvent.id > after] if after else []))
                 .order_by(StreamEvent.id).limit(remaining + 1)
             )).all())
         has_more = len(found) > remaining
@@ -1464,7 +1485,7 @@ async def purge_document_copied_evidence_page(
             if kind == "messages":
                 row_id, conversation_id = candidate
                 parent = await session.scalar(_select(Conversation).where(
-                    Conversation.id == conversation_id,
+                    Conversation.id == conversation_id, *own_conversation,
                 ).with_for_update().execution_options(populate_existing=True))
                 if parent is None:
                     continue
@@ -1473,8 +1494,8 @@ async def purge_document_copied_evidence_page(
                 ).with_for_update().execution_options(populate_existing=True))
                 if message is None:
                     continue
-                citations, citations_changed = _filter_citation_values(message.citations, scope)
-                metadata, metadata_changed = _scrub_cleanup_payload(message.metadata_json or {}, scope)
+                citations, citations_changed = _filter_citation_values(message.citations, evidence)
+                metadata, metadata_changed = _scrub_cleanup_payload(message.metadata_json or {}, evidence)
                 if citations_changed or metadata_changed:
                     message.citations = citations
                     message.metadata_json = metadata if isinstance(metadata, dict) else {}
@@ -1482,17 +1503,17 @@ async def purge_document_copied_evidence_page(
             elif kind == "runs":
                 row_id, conversation_id = candidate
                 parent = await session.scalar(_select(Conversation).where(
-                    Conversation.id == conversation_id,
+                    Conversation.id == conversation_id, *own_conversation,
                 ).with_for_update().execution_options(populate_existing=True))
                 if parent is None:
                     continue
                 run = await session.scalar(_select(ResponseRun).where(
-                    ResponseRun.id == row_id, ResponseRun.conversation_id == conversation_id,
+                    ResponseRun.id == row_id, ResponseRun.conversation_id == conversation_id, *own_run,
                 ).with_for_update().execution_options(populate_existing=True))
                 if run is None:
                     continue
-                citations, citations_changed = _filter_citation_values(run.citations, scope)
-                context, context_changed = _scrub_cleanup_payload(run.retrieval_context or {}, scope)
+                citations, citations_changed = _filter_citation_values(run.citations, evidence)
+                context, context_changed = _scrub_cleanup_payload(run.retrieval_context or {}, evidence)
                 if citations_changed or context_changed:
                     run.citations = citations
                     run.retrieval_context = context if isinstance(context, dict) else {}
@@ -1502,12 +1523,12 @@ async def purge_document_copied_evidence_page(
             else:
                 row_id, response_id, conversation_id = candidate
                 parent = await session.scalar(_select(Conversation).where(
-                    Conversation.id == conversation_id,
+                    Conversation.id == conversation_id, *own_conversation,
                 ).with_for_update().execution_options(populate_existing=True))
                 if parent is None:
                     continue
                 run = await session.scalar(_select(ResponseRun).where(
-                    ResponseRun.id == response_id, ResponseRun.conversation_id == conversation_id,
+                    ResponseRun.id == response_id, ResponseRun.conversation_id == conversation_id, *own_run,
                 ).with_for_update().execution_options(populate_existing=True))
                 if run is None:
                     continue
@@ -1516,7 +1537,7 @@ async def purge_document_copied_evidence_page(
                 ).with_for_update().execution_options(populate_existing=True))
                 if event is None:
                     continue
-                payload, payload_changed = _scrub_cleanup_payload(event.data or {}, scope)
+                payload, payload_changed = _scrub_cleanup_payload(event.data or {}, evidence)
                 if payload_changed:
                     event.data = payload if isinstance(payload, dict) else {}
                     changed += 1
@@ -1525,14 +1546,14 @@ async def purge_document_copied_evidence_page(
         if has_more:
             last_id = rows[-1][0]
             return CopiedEvidenceCleanupProgress(
-                next_cursor=_encode_cleanup_cursor(scope, kind, last_id),
+                next_cursor=_encode_cleanup_cursor(evidence, kind, last_id),
                 complete=False, rows_examined=examined, rows_changed=changed,
             )
         after = None
         index += 1
         if examined >= limit and index < len(kinds):
             return CopiedEvidenceCleanupProgress(
-                next_cursor=_encode_cleanup_cursor(scope, kinds[index], None),
+                next_cursor=_encode_cleanup_cursor(evidence, kinds[index], None),
                 complete=False, rows_examined=examined, rows_changed=changed,
             )
     return CopiedEvidenceCleanupProgress(

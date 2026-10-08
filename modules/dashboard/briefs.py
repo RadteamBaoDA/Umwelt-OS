@@ -726,7 +726,7 @@ async def generate_brief(
 
 async def clean_document_brief_evidence(
     session: AsyncSession, document_id: UUID, *, after_brief_id: UUID | None = None,
-    limit: int = 100,
+    limit: int = 100, scope: Scope, multi_workspace_enabled: bool,
 ) -> BriefCleanupProgress:
     """Scrub saved briefs whose captured prompt depended on one exact Document.
 
@@ -742,7 +742,12 @@ async def clean_document_brief_evidence(
     """
     if not 1 <= limit <= 100:
         raise ValueError("Brief cleanup page limit must be between 1 and 100")
-    statement = select(DailyBriefEvidence.brief_id).where(
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    # The sidecar has no workspace column: bind it through its workspace-scoped brief.
+    statement = select(DailyBriefEvidence.brief_id).join(
+        DailyBrief, DailyBrief.id == DailyBriefEvidence.brief_id,
+    ).where(
+        DailyBrief.workspace_id == scope.workspace_id, DailyBrief.owner_id == _actor(scope),
         DailyBriefEvidence.document_id == document_id,
     ).distinct()
     if after_brief_id is not None:
@@ -755,7 +760,8 @@ async def clean_document_brief_evidence(
     if not page:
         return BriefCleanupProgress(processed_count=0, scrubbed_count=0, next_cursor=None)
     rows = list((await session.scalars(select(DailyBrief).where(
-        DailyBrief.id.in_(page),
+        DailyBrief.id.in_(page), DailyBrief.workspace_id == scope.workspace_id,
+        DailyBrief.owner_id == _actor(scope),
     ).order_by(DailyBrief.id).with_for_update())).all())
     scrubbed = 0
     for row in rows:
@@ -775,7 +781,7 @@ async def clean_document_brief_evidence(
 
 async def legacy_brief_coverage(
     session: AsyncSession, *, after_brief_id: UUID | None = None, limit: int = 100,
-    not_before: datetime | None = None,
+    not_before: datetime | None = None, scope: Scope, multi_workspace_enabled: bool,
 ) -> BriefLegacyCoverage:
     """Page legacy briefs whose Document dependencies are unknown and cannot be scrubbed exactly.
 
@@ -790,7 +796,9 @@ async def legacy_brief_coverage(
     if not 1 <= limit <= 100:
         raise ValueError("Legacy brief coverage page limit must be between 1 and 100")
     # ponytail: unindexed legacy filter is fine at owner scale; add a partial index if it grows.
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     statement = select(DailyBrief.id).where(
+        DailyBrief.workspace_id == scope.workspace_id, DailyBrief.owner_id == _actor(scope),
         DailyBrief.evidence_capture_version.is_(None), DailyBrief.content != "",
     )
     if not_before is not None:

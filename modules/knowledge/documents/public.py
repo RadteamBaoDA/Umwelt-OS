@@ -151,6 +151,8 @@ class DocumentCleanupEvidenceScope:
     document_id: UUID
     references: tuple[DocumentCleanupEvidenceIdentity, ...]
     next_cursor: UUID | None
+    workspace_id: UUID
+    actor_user_id: int
 
 
 @dataclass(frozen=True)
@@ -2086,15 +2088,27 @@ async def list_document_cleanup_evidence_scope(
     *,
     after: UUID | None = None,
     limit: int = 100,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> DocumentCleanupEvidenceScope | None:
-    """Return one deterministic bounded identity page for the durable Chat cleanup cursor."""
+    """Return one deterministic bounded identity page for the durable cleanup cursors.
+
+    Owner admission (non-locking fence read; members denied before SQL) precedes every query, and
+    the operation and reference pages are bound to the caller's workspace and actor.
+    """
     if not 1 <= limit <= 100:
         raise ValueError("Document cleanup evidence page size must be between 1 and 100")
-    operation = await session.get(DocumentCleanupOperation, operation_id)
+    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    operation = await session.scalar(select(DocumentCleanupOperation).where(
+        DocumentCleanupOperation.id == operation_id,
+        DocumentCleanupOperation.workspace_id == scope.workspace_id,
+        DocumentCleanupOperation.actor_user_id == _actor(scope),
+    ))
     if operation is None:
         return None
     statement = select(DocumentCleanupEvidenceReference).where(
         DocumentCleanupEvidenceReference.operation_id == operation_id,
+        DocumentCleanupEvidenceReference.workspace_id == scope.workspace_id,
     )
     if after is not None:
         statement = statement.where(DocumentCleanupEvidenceReference.id > after)
@@ -2116,6 +2130,8 @@ async def list_document_cleanup_evidence_scope(
             for row in rows
         ),
         next_cursor=rows[-1].id if has_more and rows else None,
+        workspace_id=operation.workspace_id,
+        actor_user_id=operation.actor_user_id,
     )
 
 

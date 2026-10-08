@@ -2,12 +2,24 @@
 
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
 from sqlalchemy.dialects import postgresql
 
+from core.workspaces.schemas import WorkspaceContext
 from modules.dashboard import briefs
+
+CTX = {
+    "scope": WorkspaceContext(user_id=1, workspace_id=uuid4(), role="owner", membership_revision=1),
+    "multi_workspace_enabled": False,
+}
+
+
+@pytest.fixture(autouse=True)
+def _admitted(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(briefs, "_admit", AsyncMock())
 
 
 class _Session:
@@ -26,14 +38,14 @@ def _sql(session) -> str:
 async def test_not_before_excludes_briefs_generated_before_the_document() -> None:
     bound = datetime(2026, 1, 1, tzinfo=UTC)
     session = _Session([])
-    await briefs.legacy_brief_coverage(session, not_before=bound)
+    await briefs.legacy_brief_coverage(session, not_before=bound, **CTX)
     assert "generated_at >=" in _sql(session)
     assert bound in session.statement.compile().params.values()
 
 
 async def test_without_not_before_every_legacy_brief_is_a_candidate() -> None:
     session = _Session([])
-    await briefs.legacy_brief_coverage(session)
+    await briefs.legacy_brief_coverage(session, **CTX)
     sql = _sql(session)
     assert "generated_at >=" not in sql
     assert "evidence_capture_version IS NULL" in sql
@@ -41,10 +53,10 @@ async def test_without_not_before_every_legacy_brief_is_a_candidate() -> None:
 
 async def test_pages_with_keyset_cursor_and_rejects_bad_limits() -> None:
     ids = sorted(uuid4() for _ in range(3))
-    page = await briefs.legacy_brief_coverage(_Session(ids), limit=2)
+    page = await briefs.legacy_brief_coverage(_Session(ids), limit=2, **CTX)
     assert page.candidate_ids == ids[:2] and page.next_cursor == ids[1]
-    last = await briefs.legacy_brief_coverage(_Session(ids[:2]), limit=2)
+    last = await briefs.legacy_brief_coverage(_Session(ids[:2]), limit=2, **CTX)
     assert last.next_cursor is None
     for limit in (0, 101):
         with pytest.raises(ValueError):
-            await briefs.legacy_brief_coverage(_Session([]), limit=limit)
+            await briefs.legacy_brief_coverage(_Session([]), limit=limit, **CTX)
