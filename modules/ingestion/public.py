@@ -223,6 +223,23 @@ def _source_purge_event_subject(
     return UUID(payload["operation_id"]), retained
 
 
+def _document_cleanup_operation_id(event_id: UUID, version: int, producer: str, payload: object) -> UUID:
+    """Parse the exact operation-only Documents cleanup envelope; any deviation is a ValueError."""
+    message = "Document cleanup event requires exact operation-only envelope"
+    if (type(version) is not int or version != 1 or producer != "modules.knowledge.documents"
+            or not isinstance(payload, dict) or set(payload) != {"operation_id"}):
+        raise ValueError(message)
+    raw = payload["operation_id"]
+    try:
+        operation_id = UUID(raw) if isinstance(raw, str) else None
+    except ValueError:
+        operation_id = None
+    if (operation_id is None or str(operation_id) != raw
+            or event_id != uuid5(operation_id, "document-cleanup-requested")):
+        raise ValueError(message)
+    return operation_id
+
+
 async def resolve_collector_job_scope(
     session: AsyncSession, token: str, *, source_id: UUID, credential_scope: str = "ingestion:write",
     multi_workspace_enabled: bool,
@@ -581,7 +598,21 @@ async def publish_event(session: AsyncSession, event: DomainEvent, *, scope: Sco
     for key, value in identity.items():
         if key in payload and (type(payload[key]) is not type(value) or payload[key] != value):
             raise HTTPException(status_code=404, detail="Event identity not found")
-    if event.type in _SOURCE_PURGE_PRODUCERS:
+    if event.type == "document.cleanup.requested":
+        operation_id = _document_cleanup_operation_id(event.id, event.version, event.producer, payload)
+        receipt = await documents.read_document_cleanup_job_identity(
+            session, operation_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
+        # The operation-only payload is preserved: principal columns come from ``scope`` below.
+        if (
+            receipt is None or receipt.workspace_id != scope.workspace_id
+            or receipt.actor_user_id != _actor_id(scope)
+            or receipt.membership_revision != scope.membership_revision
+            or isinstance(scope, InternalJobScope) and scope.source_id is not None
+            and (receipt.source_id != scope.source_id or receipt.source_generation != scope.source_generation)
+        ):
+            raise HTTPException(status_code=404, detail="Document cleanup receipt not found")
+    elif event.type in _SOURCE_PURGE_PRODUCERS:
         subject = _source_purge_event_subject(
             event.type, event.version, event.producer, payload, scope=scope,
         )

@@ -31,7 +31,7 @@ def _sql(statement) -> str:
 
 async def _progress(row, *, capture_recorded=True):
     return await public.source_cleanup_progress(
-        _Session(row=row), uuid4(), source_id=uuid4(), capture_recorded=capture_recorded,
+        _Session(row=row), uuid4(), source_id=uuid4(), capture_recorded=capture_recorded, **SCOPE_KW,
     )
 
 
@@ -62,7 +62,7 @@ async def test_aggregate_incomplete_until_capture_recorded_and_names_owners() ->
 
 async def test_aggregate_sql_checks_every_stage_and_the_cache_obligation() -> None:
     session = _Session(row=_CLEAN)
-    await public.source_cleanup_progress(session, uuid4(), source_id=uuid4(), capture_recorded=True)
+    await public.source_cleanup_progress(session, uuid4(), source_id=uuid4(), capture_recorded=True, **SCOPE_KW)
     sql = _sql(session.statement)
     for column in (
         "raw_status", "chat_status", "memory_status", "agent_status", "materialization_status",

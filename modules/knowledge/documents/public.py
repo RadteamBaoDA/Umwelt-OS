@@ -37,7 +37,7 @@ from core.events import DomainEvent
 from core.pagination import decode_cursor, encode_cursor
 from core.realtime import ReplayDraft, commit_with_replay, make_knowledge_change
 from core.tools.schemas import ToolDestination, ToolOutputFence
-from core.workspaces.public import read_access_fence
+from core.workspaces.public import authorize_internal_job, read_access_fence
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
 from modules.knowledge.documents.models import (
     Document,
@@ -85,10 +85,20 @@ from modules.knowledge.documents.schemas import (
 )
 from modules.sources import public as sources
 from modules.sources.models import Source
-from modules.sources.schemas import ConnectorSource, SourceExportFence, SourceFence
+from modules.sources.schemas import (
+    ConnectorSource,
+    SourceExportFence,
+    SourceFence,
+    SourcePurgeJobIdentity,
+)
 
 if TYPE_CHECKING:
     from modules.connectors.public import ProviderScopeSnapshot
+    from modules.knowledge.entities.public import EntitySupportClosure
+    from modules.knowledge.observations.public import ObservationCleanupClosure
+    from modules.knowledge.relationships.public import RelationshipSupportClosure
+    from modules.knowledge.temporal.public import TemporalCleanupClosure
+    from modules.timeline.public import TimelineSupportClosure
 
 _log = logging.getLogger(__name__)
 
@@ -1794,22 +1804,26 @@ async def ensure_demo_article(
 
 
 async def list_evidence_ref_keys(
-    session: AsyncSession, *, document_id: UUID | None = None, source_id: UUID | None = None,
+    session: AsyncSession, *, scope: Scope, source_id: UUID, document_id: UUID | None = None,
     limit: int = 10_000,
-) -> list[tuple[UUID, UUID]]:
-    """List version/chunk evidence keys for exactly one bounded document or source."""
-    if (document_id is None) == (source_id is None) or not 1 <= limit <= 10_000:
-        raise ValueError("Specify one document or source and a bounded limit")
+) -> tuple[list[tuple[UUID, UUID]], bool]:
+    """List workspace-qualified version/chunk evidence keys for one Source or Document, with overflow.
+
+    Discovery never raises on overflow: it returns the first ``limit`` sorted keys and True so the
+    closure coordinator can report a dependency-limit error before any lock or effect.
+    """
+    if not 1 <= limit <= 10_000:
+        raise ValueError("Specify a bounded limit")
     statement = (
         select(DocumentVersion.id, DocumentChunk.id)
         .join(DocumentChunk, DocumentChunk.document_version_id == DocumentVersion.id)
         .join(Document, Document.id == DocumentVersion.document_id)
+        .where(Document.workspace_id == scope.workspace_id, Document.source_id == source_id)
     )
-    statement = statement.where(Document.id == document_id) if document_id else statement.where(Document.source_id == source_id)
+    if document_id is not None:
+        statement = statement.where(Document.id == document_id)
     rows = list((await session.execute(statement.order_by(DocumentVersion.id, DocumentChunk.id).limit(limit + 1))).all())
-    if len(rows) > limit:
-        raise ValueError("Evidence cleanup exceeds its atomic support limit")
-    return [(version_id, chunk_id) for version_id, chunk_id in rows]
+    return [(version_id, chunk_id) for version_id, chunk_id in rows[:limit]], len(rows) > limit
 
 
 async def add_content_chunks(session: AsyncSession, version: DocumentVersion) -> int:
@@ -1916,39 +1930,153 @@ async def lock_raw_uri_identity(session: AsyncSession, raw_uri: str) -> None:
     )
 
 
+def _actor(scope: Scope) -> int:
+    return scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
+
+
+_CLEANUP_IDENTITY_COLUMNS = (
+    DocumentCleanupOperation.id, DocumentCleanupOperation.workspace_id, DocumentCleanupOperation.actor_user_id,
+    DocumentCleanupOperation.membership_revision, DocumentCleanupOperation.configuration_revision,
+    DocumentCleanupOperation.source_id, DocumentCleanupOperation.source_generation,
+    DocumentCleanupOperation.document_id,
+)
+
+
+def _cleanup_identity(row: Any) -> DocumentCleanupJobIdentity | None:
+    """Build the frozen tuple only when every captured epoch is present and valid (else legacy/None)."""
+    if row is None or None in (row.membership_revision, row.configuration_revision, row.source_generation):
+        return None
+    try:
+        return DocumentCleanupJobIdentity(
+            operation_id=row.id, workspace_id=row.workspace_id, actor_user_id=row.actor_user_id,
+            membership_revision=row.membership_revision, configuration_revision=row.configuration_revision,
+            source_id=row.source_id, source_generation=row.source_generation, document_id=row.document_id,
+        )
+    except ValueError:
+        return None
+
+
+async def read_document_cleanup_job_identity(
+    session: AsyncSession, operation_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+) -> DocumentCleanupJobIdentity | None:
+    """Read one receipt's exact captured authority tuple without locks.
+
+    NULL (legacy) epochs, a different actor/membership, a stale configuration or (for a
+    Source-bound job scope) a different Source/generation return None; never rebased.
+    """
+    _require_document_owner(scope)
+    fence = await read_access_fence(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    row = (await session.execute(select(*_CLEANUP_IDENTITY_COLUMNS).where(
+        DocumentCleanupOperation.id == operation_id,
+        DocumentCleanupOperation.workspace_id == scope.workspace_id,
+        DocumentCleanupOperation.actor_user_id == _actor(scope),
+        DocumentCleanupOperation.membership_revision == scope.membership_revision,
+    ))).one_or_none()
+    identity = _cleanup_identity(row)
+    if identity is None or identity.configuration_revision != fence.configuration_revision:
+        return None
+    if isinstance(scope, InternalJobScope) and scope.source_id is not None and (
+        identity.source_id != scope.source_id or identity.source_generation != scope.source_generation
+    ):
+        return None
+    return identity
+
+
+async def resolve_document_cleanup_job_identity(
+    session: AsyncSession, operation_id: UUID, *, multi_workspace_enabled: bool,
+) -> DocumentCleanupJobIdentity | None:
+    """Admit one receipt's retained actor/membership/configuration/source tuple (worker entry).
+
+    Identity-only discovery; NULL (legacy, ``cleanup_authority_unavailable``) epochs return None
+    before any authorization. An admitted fence that differs from the captured tuple is stale
+    (``cleanup_authority_stale``): None, never rebased. Actual permission loss propagates.
+    """
+    row = (await session.execute(select(*_CLEANUP_IDENTITY_COLUMNS).where(
+        DocumentCleanupOperation.id == operation_id,
+    ))).one_or_none()
+    captured = _cleanup_identity(row)
+    if captured is None:
+        return None
+    try:
+        scope = InternalJobScope(
+            workspace_id=captured.workspace_id, actor_user_id=captured.actor_user_id,
+            membership_revision=captured.membership_revision, source_id=captured.source_id,
+            source_generation=captured.source_generation,
+        )
+        expected = AccessFence(
+            workspace_id=captured.workspace_id, user_id=captured.actor_user_id,
+            membership_revision=captured.membership_revision,
+            configuration_revision=captured.configuration_revision,
+        )
+    except ValueError:
+        return None
+    fence = await authorize_internal_job(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if fence != expected:
+        return None
+    reread = await read_document_cleanup_job_identity(
+        session, operation_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    return reread if reread == captured else None
+
+
 async def get_document_cleanup_operation(
-    session: AsyncSession, operation_id: UUID,
+    session: AsyncSession, operation_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
 ) -> DocumentCleanupOperation | None:
-    """Read a Documents-owned cleanup receipt without exposing its captured raw URI."""
-    return await session.get(DocumentCleanupOperation, operation_id)
+    """Read an owner's Documents cleanup receipt (workspace + actor scoped) without its raw URI exposure."""
+    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    return await session.scalar(select(DocumentCleanupOperation).where(
+        DocumentCleanupOperation.id == operation_id,
+        DocumentCleanupOperation.workspace_id == scope.workspace_id,
+        DocumentCleanupOperation.actor_user_id == _actor(scope),
+    ))
+
+
+async def cleanup_authority_error(
+    session: AsyncSession, operation: DocumentCleanupOperation, *, scope: Scope, multi_workspace_enabled: bool,
+) -> str | None:
+    """Project action-required status for an unfinished receipt: unavailable (legacy) or stale epoch."""
+    if operation.status == "succeeded":
+        return None
+    if operation.membership_revision is None or operation.configuration_revision is None:
+        return "cleanup_authority_unavailable"
+    fence = await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if (operation.membership_revision, operation.configuration_revision) != (
+        fence.membership_revision, fence.configuration_revision,
+    ):
+        return "cleanup_authority_stale"
+    return None
 
 
 async def capture_document_cleanup_evidence(session: AsyncSession, operation: DocumentCleanupOperation) -> None:
     """Snapshot exact version-only and chunk identities into the operation before its FK cascade.
 
     Both inserts are owner-local SQL ``INSERT … SELECT`` statements, so document history size
-    does not create an unbounded Python snapshot. The child identities intentionally have no
+    does not create an unbounded Python snapshot. They write the receipt's NOT NULL workspace
+    and are qualified through the workspace Document. The child identities intentionally have no
     foreign keys back to evidence rows and remain readable until the cleanup receipt is removed.
     """
     # DB-recorded bound for legacy brief coverage; read before the canonical rows are deleted.
     operation.earliest_version_created_at = await session.scalar(
-        select(func.min(DocumentVersion.created_at)).where(DocumentVersion.document_id == operation.document_id)
+        select(func.min(DocumentVersion.created_at)).join(Document, Document.id == DocumentVersion.document_id)
+        .where(DocumentVersion.document_id == operation.document_id, Document.workspace_id == operation.workspace_id)
     )
-    identity_columns = ["id", "operation_id", "document_version_id", "chunk_id", "reference_kind"]
+    identity_columns = ["id", "workspace_id", "operation_id", "document_version_id", "chunk_id", "reference_kind"]
     await session.execute(insert(DocumentCleanupEvidenceReference).from_select(
         identity_columns,
         select(
-            func.gen_random_uuid(), literal(operation.id), DocumentVersion.id,
+            func.gen_random_uuid(), literal(operation.workspace_id), literal(operation.id), DocumentVersion.id,
             literal(None), literal("version"),
-        ).where(DocumentVersion.document_id == operation.document_id),
+        ).join(Document, Document.id == DocumentVersion.document_id)
+        .where(DocumentVersion.document_id == operation.document_id, Document.workspace_id == operation.workspace_id),
     ))
     await session.execute(insert(DocumentCleanupEvidenceReference).from_select(
         identity_columns,
         select(
-            func.gen_random_uuid(), literal(operation.id), DocumentChunk.document_version_id,
-            DocumentChunk.id, literal("chunk"),
+            func.gen_random_uuid(), literal(operation.workspace_id), literal(operation.id),
+            DocumentChunk.document_version_id, DocumentChunk.id, literal("chunk"),
         ).join(DocumentVersion, DocumentVersion.id == DocumentChunk.document_version_id)
-        .where(DocumentVersion.document_id == operation.document_id),
+        .join(Document, Document.id == DocumentVersion.document_id)
+        .where(DocumentVersion.document_id == operation.document_id, Document.workspace_id == operation.workspace_id),
     ))
 
 
@@ -1997,6 +2125,8 @@ async def source_cleanup_progress(
     *,
     source_id: UUID,
     capture_recorded: bool,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> SourceCleanupProgress:
     """Aggregate every retained same-source receipt in one SQL statement; return counts only.
 
@@ -2009,8 +2139,22 @@ async def source_cleanup_progress(
     read afresh: a stage that is pending or failed is never cached as complete. A receipt whose
     captured evidence identities are unavailable is failed; one still ``capturing`` is pending.
     Memory cache eviction is an independent pending obligation until its postcommit retry clears it.
+    The aggregate is workspace-qualified. A receipt whose authority epochs are missing (legacy) is
+    failed, and one whose captured membership/configuration epoch is stale and not yet finished is
+    failed too (action required): neither can ever be resumed, so neither may leave the Source
+    purge pending forever or complete.
     """
+    fence = await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    authority_lost = or_(
+        DocumentCleanupOperation.membership_revision.is_(None),
+        DocumentCleanupOperation.configuration_revision.is_(None),
+        and_(DocumentCleanupOperation.status != "succeeded", or_(
+            DocumentCleanupOperation.membership_revision != fence.membership_revision,
+            DocumentCleanupOperation.configuration_revision != fence.configuration_revision,
+        )),
+    )
     failed = or_(
+        authority_lost,
         DocumentCleanupOperation.evidence_scope_status == "unavailable",
         DocumentCleanupOperation.raw_status == "failed",
         DocumentCleanupOperation.chat_status == "failed",
@@ -2066,7 +2210,10 @@ async def source_cleanup_progress(
         func.count(receipt_id).filter(and_(~failed, materialization_pending)),
         func.count(receipt_id).filter(and_(~failed, brief_pending)),
         func.count(receipt_id).filter(linked, ~failed, or_(raw_pending, chat_pending)),
-    ).where(DocumentCleanupOperation.source_id == source_id))).one()
+    ).where(
+        DocumentCleanupOperation.workspace_id == scope.workspace_id,
+        DocumentCleanupOperation.source_id == source_id,
+    ))).one()
     (child_count, historical_count, pending_count, failed_count, historical_pending, historical_failed,
      raw_waiting, chat_waiting, memory_waiting, agent_waiting, materialization_waiting, brief_waiting,
      linked_active) = (int(value or 0) for value in row)
@@ -2104,48 +2251,77 @@ async def source_cleanup_progress(
     )
 
 
-async def publish_source_cleanup_wakeup(
-    session: AsyncSession,
-    operation: DocumentCleanupOperation,
-    *,
-    progress_key: str,
-) -> None:
-    """Publish idempotent Source aggregate events for one durable child-stage transition.
+@dataclass(frozen=True)
+class SourceCleanupWakeup:
+    """Detached, content-free hint that one cleanup receipt made durable progress."""
 
-    The child receipt transaction owns this outbox change. Payloads identify only Source purge
-    operations, so this path never locks Source rows or Sources models under a URI lock. The
-    linked operation (if any) keeps its original deterministic event ID. Every other unfinished
-    same-source operation, including historical NULL linkage, is found through the Sources public
-    observer seam (<=100 exact IDs; unfinished coverage first) and receives a stable
-    observer-specific UUID. Observers beyond the first page are not dropped: Sources' persisted
-    coverage reconciler re-arms every unfinished operation independently of these hints.
-    The caller supplies a bounded ASCII status/revision token with no content data while holding
-    the child receipt lock; deriving distinct UUIDs deduplicates repeated transitions without
-    allowing an older observer to consume a newer wakeup.
-    """
+    child_operation_id: UUID
+    workspace_id: UUID
+    source_id: UUID
+    linked_operation_id: UUID | None
+    progress_key: str
+
+
+def source_cleanup_wakeup_hint(operation: DocumentCleanupOperation, *, progress_key: str) -> SourceCleanupWakeup:
+    """Snapshot the scalars a wakeup needs while the child receipt is still held (no ORM after commit)."""
     if not re.fullmatch(r"[a-z0-9:_;=-]{1,128}", progress_key):
         raise ValueError("Source cleanup progress key must be a bounded lowercase status token")
+    return SourceCleanupWakeup(
+        child_operation_id=operation.id, workspace_id=operation.workspace_id, source_id=operation.source_id,
+        linked_operation_id=operation.source_purge_operation_id, progress_key=progress_key,
+    )
+
+
+async def publish_source_cleanup_wakeup(
+    session: AsyncSession, hint: SourceCleanupWakeup, observer_id: UUID, *, multi_workspace_enabled: bool,
+) -> bool:
+    """Publish one idempotent Source aggregate wakeup for one observer; True only if newly published.
+
+    Call in a fresh session holding no locks, after the child stage committed. The observer's own
+    retained authority is admitted (never the child's), it must still be an open observer of the
+    hinted Source, and the stable event ID is derived per observer so an older observer cannot
+    consume a newer wakeup. A same-ID row of any other principal is never adopted. The persisted
+    Source coverage reconciler remains the durable fallback for any failure.
+    """
     from modules.ingestion import public as ingestion
 
-    linked = operation.source_purge_operation_id
-    targets: list[tuple[UUID, UUID]] = []
-    if linked is not None:
-        targets.append((linked, uuid5(operation.id, f"source-purge-progress:{progress_key}")))
-    for observer_id in await sources.list_source_purge_observer_ids(session, operation.source_id, limit=100):
-        if observer_id != linked:
-            targets.append((observer_id, uuid5(
-                operation.id, f"source-purge-progress:{observer_id}:{progress_key}",
-            )))
-    for target_id, event_id in targets:
-        if await ingestion.get_event_delivery(session, event_id) is None:
-            await ingestion.publish_event(session, DomainEvent(
-                id=event_id,
-                type="source.purge.progressed",
-                version=1,
-                occurred_at=datetime.now(UTC),
-                producer="modules.knowledge.documents",
-                payload={"operation_id": str(target_id)},
-            ))
+    scope = await sources.resolve_source_purge_job_scope(
+        session, observer_id, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if scope is None or scope.workspace_id != hint.workspace_id or scope.source_id != hint.source_id:
+        return False
+    predecessor = UUID(int=observer_id.int - 1) if observer_id.int else None
+    if observer_id not in await sources.list_source_purge_observer_ids(
+        session, hint.source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        after=predecessor, limit=1,
+    ):
+        return False
+    key = hint.progress_key
+    event_id = (
+        uuid5(hint.child_operation_id, f"source-purge-progress:{key}")
+        if observer_id == hint.linked_operation_id
+        else uuid5(hint.child_operation_id, f"source-purge-progress:{observer_id}:{key}")
+    )
+    if await ingestion.get_event_delivery(
+        session, event_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    ) is not None:
+        return False
+    assert scope.source_id is not None and scope.source_generation is not None  # proven by the resolver
+    try:
+        await ingestion.publish_event(session, DomainEvent(
+            id=event_id, type="source.purge.progressed", version=1, occurred_at=datetime.now(UTC),
+            producer="modules.knowledge.documents",
+            payload={
+                "operation_id": str(observer_id), "workspace_id": str(scope.workspace_id),
+                "actor_user_id": scope.actor_user_id, "membership_revision": scope.membership_revision,
+                "source_id": str(scope.source_id), "source_generation": scope.source_generation,
+            },
+        ), scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        return False
+    return True
 
 
 def _require_document_owner(scope: Scope) -> None:
@@ -3573,34 +3749,275 @@ async def update_document(
     return document
 
 
+_CLEANUP_LIMIT = 10_000
+
+
+@dataclass(frozen=True)
+class _CleanupClosure:
+    """Discovered ID closure of one Document or Source cleanup across Documents and graph owners."""
+
+    source_id: UUID
+    document_id: UUID | None
+    document_ids: tuple[UUID, ...]
+    version_ids: tuple[UUID, ...]
+    chunk_ids: tuple[UUID, ...]
+    provenance_ids: tuple[UUID, ...]
+    identity_ids: tuple[UUID, ...]
+    refs: tuple[tuple[UUID, UUID], ...]
+    observations: "ObservationCleanupClosure"
+    entities: "EntitySupportClosure"
+    relationships: "RelationshipSupportClosure"
+    timeline: "TimelineSupportClosure"
+    temporal: "TemporalCleanupClosure"
+    entity_union: tuple[UUID, ...]
+
+
+async def _require_cleanup_authority(
+    session: AsyncSession, *, source_id: UUID, scope: Scope, flag: bool,
+    access_fence: AccessFence, source_fence: SourceFence,
+) -> None:
+    """Nonlocking proof that the caller-held fences are the current admission and own Source."""
+    actual = await _admit_document_scope(session, scope=scope, multi_workspace_enabled=flag)
+    if actual != access_fence or source_fence.id != source_id or source_fence.workspace_id != scope.workspace_id:
+        raise HTTPException(status_code=409, detail="Cleanup authority changed")
+
+
+async def _bounded_ids(session: AsyncSession, statement: Any) -> tuple[tuple[UUID, ...], bool]:
+    ids = list((await session.scalars(statement.limit(_CLEANUP_LIMIT + 1))).all())
+    return tuple(ids[:_CLEANUP_LIMIT]), len(ids) > _CLEANUP_LIMIT
+
+
+async def _prepare_cleanup_closure(
+    session: AsyncSession, *, source_id: UUID, document_id: UUID | None, scope: Scope, flag: bool,
+    access_fence: AccessFence, source_fence: SourceFence,
+) -> _CleanupClosure | DocumentCleanupPreparationLimitError:
+    """Discover (nonlocking, ID-only) the whole cleanup closure; report, never raise, an owner overflow.
+
+    Documents children first, then Observations, Entities, Relationships, Timeline, Temporal. The
+    first overflowed owner in allowlist order is returned as the limit error before any lock.
+    """
+    from modules.knowledge.entities import public as entities
+    from modules.knowledge.observations import public as observations
+    from modules.knowledge.relationships import public as relationships
+    from modules.knowledge.temporal import public as temporal
+    from modules.timeline import public as timeline
+
+    await _require_cleanup_authority(
+        session, source_id=source_id, scope=scope, flag=flag, access_fence=access_fence, source_fence=source_fence,
+    )
+    where = [Document.workspace_id == scope.workspace_id, Document.source_id == source_id]
+    if document_id is not None:
+        where.append(Document.id == document_id)
+    document_ids, over_documents = await _bounded_ids(
+        session, select(Document.id).where(*where).order_by(Document.id))
+    version_ids, over_versions = await _bounded_ids(session, select(DocumentVersion.id).join(
+        Document, Document.id == DocumentVersion.document_id).where(*where).order_by(DocumentVersion.id))
+    chunk_ids, over_chunks = await _bounded_ids(session, select(DocumentChunk.id).join(
+        DocumentVersion, DocumentVersion.id == DocumentChunk.document_version_id).join(
+        Document, Document.id == DocumentVersion.document_id).where(*where).order_by(DocumentChunk.id))
+    provenance_ids, over_provenance = await _bounded_ids(session, select(NormalizedVersionProvenance.id).join(
+        Document, Document.id == NormalizedVersionProvenance.document_id).where(*where)
+        .order_by(NormalizedVersionProvenance.id))
+    identity_where = [
+        NormalizedDocumentIdentity.workspace_id == scope.workspace_id,
+        NormalizedDocumentIdentity.source_id == source_id,
+    ]
+    if document_id is not None:
+        identity_where.append(or_(
+            NormalizedDocumentIdentity.document_id == document_id,
+            NormalizedDocumentIdentity.external_id.in_(
+                select(Document.external_id).where(*where, Document.external_id.is_not(None))),
+        ))
+    identity_ids, over_identities = await _bounded_ids(
+        session, select(NormalizedDocumentIdentity.id).where(*identity_where).order_by(NormalizedDocumentIdentity.id))
+    refs, over_refs = await list_evidence_ref_keys(session, scope=scope, source_id=source_id, document_id=document_id)
+    if over_documents or over_versions or over_chunks or over_provenance or over_identities or over_refs:
+        return DocumentCleanupPreparationLimitError("documents")
+    closure_o = await observations.observation_cleanup_ids(
+        session, source_id=source_id, document_id=document_id, scope=scope, multi_workspace_enabled=flag)
+    if closure_o.overflow:
+        return DocumentCleanupPreparationLimitError("observations")
+    closure_e = await entities.support_cleanup_ids(
+        session, source_id=source_id, document_id=document_id, scope=scope, multi_workspace_enabled=flag)
+    if closure_e.overflow:
+        return DocumentCleanupPreparationLimitError("entities")
+    closure_r = await relationships.support_cleanup_ids(
+        session, refs=refs, source_id=source_id, document_id=document_id,
+        membership_ids=closure_e.membership_ids, scope=scope, multi_workspace_enabled=flag)
+    if closure_r.overflow:
+        return DocumentCleanupPreparationLimitError("relationships")
+    closure_t = await timeline.support_cleanup_ids(
+        session, source_id=source_id, document_id=document_id, scope=scope, multi_workspace_enabled=flag)
+    if closure_t.overflow:
+        return DocumentCleanupPreparationLimitError("timeline")
+    closure_g = await temporal.tombstone_cleanup_ids(
+        session, source_id=source_id, document_id=document_id, scope=scope, multi_workspace_enabled=flag)
+    if closure_g.overflow:
+        return DocumentCleanupPreparationLimitError("temporal")
+    union = tuple(sorted(
+        set(closure_e.entity_ids) | set(closure_r.endpoint_entity_ids) | set(closure_t.participant_entity_ids)))
+    return _CleanupClosure(
+        source_id=source_id, document_id=document_id, document_ids=document_ids, version_ids=version_ids,
+        chunk_ids=chunk_ids, provenance_ids=provenance_ids, identity_ids=identity_ids, refs=tuple(refs),
+        observations=closure_o, entities=closure_e, relationships=closure_r, timeline=closure_t,
+        temporal=closure_g, entity_union=union,
+    )
+
+
+async def _lock_cleanup_closure(
+    session: AsyncSession, closure: _CleanupClosure, *, scope: Scope, flag: bool,
+    access_fence: AccessFence, source_fence: SourceFence,
+) -> None:
+    """Lock the discovered closure in the canonical order; mutation-free.
+
+    Documents, Document children, distinct raw-URI identities, normalized identities, then
+    Observations, Entities (combined union), Relationships, Timeline and Temporal.
+    """
+    from modules.knowledge.entities import public as entities
+    from modules.knowledge.observations import public as observations
+    from modules.knowledge.relationships import public as relationships
+    from modules.knowledge.temporal import public as temporal
+    from modules.timeline import public as timeline
+
+    workspace_id = scope.workspace_id
+    if closure.document_ids:
+        await session.scalars(select(Document.id).where(
+            Document.workspace_id == workspace_id, Document.id.in_(closure.document_ids),
+        ).order_by(Document.id).with_for_update())
+    if closure.version_ids:
+        await session.scalars(select(DocumentVersion.id).where(
+            DocumentVersion.id.in_(closure.version_ids)).order_by(DocumentVersion.id).with_for_update())
+    if closure.chunk_ids:
+        await session.scalars(select(DocumentChunk.id).where(
+            DocumentChunk.id.in_(closure.chunk_ids)).order_by(DocumentChunk.id).with_for_update())
+    if closure.provenance_ids:
+        await session.scalars(select(NormalizedVersionProvenance.id).where(
+            NormalizedVersionProvenance.id.in_(closure.provenance_ids),
+        ).order_by(NormalizedVersionProvenance.id).with_for_update())
+    # Materialize and order identities in PostgreSQL; the lock calls do not emit URI values to Python.
+    scoped_document = " AND id = :document_id" if closure.document_id is not None else ""
+    parameters: dict[str, Any] = {"workspace_id": workspace_id, "source_id": closure.source_id}
+    if closure.document_id is not None:
+        parameters["document_id"] = closure.document_id
+    await session.execute(text(
+        "WITH identities AS MATERIALIZED ("
+        " SELECT DISTINCT raw_uri FROM documents"
+        " WHERE workspace_id = :workspace_id AND source_id = :source_id"
+        f"{scoped_document} AND raw_uri IS NOT NULL AND raw_uri <> ''"
+        " ORDER BY raw_uri"
+        "), locks AS MATERIALIZED ("
+        " SELECT pg_advisory_xact_lock(hashtextextended('documents.raw:' || raw_uri, 0)) AS acquired"
+        " FROM identities ORDER BY raw_uri"
+        ") SELECT count(*) FROM locks"
+    ), parameters)
+    if closure.identity_ids:
+        await session.scalars(select(NormalizedDocumentIdentity.id).where(
+            NormalizedDocumentIdentity.workspace_id == workspace_id,
+            NormalizedDocumentIdentity.id.in_(closure.identity_ids),
+        ).order_by(NormalizedDocumentIdentity.id).with_for_update())
+    await observations.prepare_document_cleanup_in_uow(
+        session, closure.observations, scope=scope, multi_workspace_enabled=flag,
+        access_fence=access_fence, source_fence=source_fence)
+    await entities.prepare_support_cleanup_in_uow(
+        session, closure.entities, entity_ids=closure.entity_union, scope=scope, multi_workspace_enabled=flag,
+        access_fence=access_fence, source_fence=source_fence)
+    await relationships.prepare_support_cleanup_in_uow(
+        session, closure.relationships, scope=scope, multi_workspace_enabled=flag,
+        access_fence=access_fence, source_fence=source_fence)
+    await timeline.prepare_support_cleanup_in_uow(
+        session, closure.timeline, scope=scope, multi_workspace_enabled=flag,
+        access_fence=access_fence, source_fence=source_fence)
+    await temporal.prepare_tombstone_scope_in_uow(
+        session, closure.temporal, scope=scope, multi_workspace_enabled=flag,
+        access_fence=access_fence, source_fence=source_fence)
+
+
+async def _apply_graph_cleanup(
+    session: AsyncSession, closure: _CleanupClosure, *, scope: Scope, flag: bool,
+    access_fence: AccessFence, source_fence: SourceFence,
+) -> list[ReplayDraft]:
+    """Apply the prepared graph/timeline cleanup under held locks; returns timeline replay drafts.
+
+    Temporal tombstone first (detached identity before any cascade), relationship history
+    support is stripped before relationship/entity/timeline support is removed. A changed or
+    overflowed closure raises inside the owners and aborts the whole transaction.
+    """
+    from modules.knowledge.entities import public as entities
+    from modules.knowledge.relationships import public as relationships
+    from modules.knowledge.temporal import public as temporal
+    from modules.timeline import public as timeline
+
+    refs = list(closure.refs)
+    await temporal.tombstone_scope_in_uow(
+        session, closure.temporal, scope=scope, multi_workspace_enabled=flag,
+        access_fence=access_fence, source_fence=source_fence)
+    await relationships.purge_history_support(
+        session, closure.relationships, refs, scope=scope, multi_workspace_enabled=flag,
+        access_fence=access_fence, source_fence=source_fence)
+    if closure.document_id is not None:
+        await relationships.remove_document_support(
+            session, closure.relationships, refs=refs, membership_ids=closure.entities.membership_ids,
+            scope=scope, multi_workspace_enabled=flag, access_fence=access_fence, source_fence=source_fence)
+        await entities.remove_document_support(
+            session, closure.entities, scope=scope, multi_workspace_enabled=flag,
+            access_fence=access_fence, source_fence=source_fence)
+        return await timeline.remove_document_support(
+            session, closure.timeline, scope=scope, multi_workspace_enabled=flag,
+            access_fence=access_fence, source_fence=source_fence)
+    await relationships.remove_source_support(
+        session, closure.relationships, refs=refs, membership_ids=closure.entities.membership_ids,
+        scope=scope, multi_workspace_enabled=flag, access_fence=access_fence, source_fence=source_fence)
+    await entities.remove_source_support(
+        session, closure.entities, scope=scope, multi_workspace_enabled=flag,
+        access_fence=access_fence, source_fence=source_fence)
+    return await timeline.remove_source_support(
+        session, closure.timeline, scope=scope, multi_workspace_enabled=flag,
+        access_fence=access_fence, source_fence=source_fence)
+
+
 async def delete_document(
     session: AsyncSession, document_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
 ) -> DocumentCleanupOperation | None:
     """Commit access revocation, detached evidence IDs, and durable asynchronous cleanup stages.
 
-    Lock order is Source then Document then raw-URI identity then normalized identity and
-    graph support. The operation snapshots raw storage and exact immutable version/chunk IDs
-    before canonical rows are removed; its event and deletion/tombstone replay commit atomically.
-    A cleanup event is always emitted, including documents with no raw URI. The caller owns
-    authorization; a successful return means canonical access is revoked, not that any cleanup
-    owner stage has completed.
+    The route already holds the exact access fence. Lock order is access fence, Source, Document,
+    then the discovered closure (Document children, raw-URI identity, normalized identity,
+    Observations, Entities, Relationships, Timeline, Temporal, Ingestion). A dependency-limit
+    error is raised before any lock or effect. The receipt captures the admitted epochs and
+    Source generation; its operation-only event and the deletion/tombstone replay commit
+    atomically. The caller owns authorization; a successful return means canonical access is
+    revoked, not that any cleanup owner stage has completed.
     """
-    identity = await session.execute(select(Document.source_id).where(Document.id == document_id))
-    source_id = identity.scalar_one_or_none()
+    from modules.ingestion import public as ingestion
+    from modules.knowledge.observations import public as observations
+
+    flag = multi_workspace_enabled
+    source_id = await _read_document_source_id(session, document_id, scope=scope, multi_workspace_enabled=flag)
     if source_id is None:
         return None
-    source = await sources.lock_source(session, source_id)
-    if source is None:
-        return None
-    document = await session.scalar(
-        select(Document).where(Document.id == document_id, Document.source_id == source_id).with_for_update()
-    )
+    locked = await sources.lock_source_set(session, (source_id,), scope=scope, multi_workspace_enabled=flag)
+    source_fence, access_fence = locked.fences[0], locked.access_fence
+    document = await session.scalar(select(Document).where(
+        Document.id == document_id, Document.source_id == source_id, *_document_scope(scope),
+    ).with_for_update().execution_options(populate_existing=True))
     if document is None:
         return None
-    if document.raw_uri:
-        # Upload publication takes the same identity lock before accepting a new reference.
-        await lock_raw_uri_identity(session, document.raw_uri)
+    closure = await _prepare_cleanup_closure(
+        session, source_id=source_id, document_id=document_id, scope=scope, flag=flag,
+        access_fence=access_fence, source_fence=source_fence)
+    if isinstance(closure, DocumentCleanupPreparationLimitError):
+        raise closure
+    await _lock_cleanup_closure(
+        session, closure, scope=scope, flag=flag, access_fence=access_fence, source_fence=source_fence)
+    await ingestion.prepare_document_materializations_in_uow(
+        session, document_id, source_id=source_id, scope=scope, multi_workspace_enabled=flag,
+        access_fence=access_fence, source_fence=source_fence)
     operation = DocumentCleanupOperation(
+        workspace_id=scope.workspace_id,
+        actor_user_id=_actor(scope),
+        membership_revision=access_fence.membership_revision,
+        configuration_revision=access_fence.configuration_revision,
+        source_generation=source_fence.generation,
         source_id=source_id,
         document_id=document.id,
         raw_uri=document.raw_uri,
@@ -3614,8 +4031,6 @@ async def delete_document(
     await session.flush()
     await capture_document_cleanup_evidence(session, operation)
     operation.evidence_scope_status = "captured"
-    from modules.ingestion import public as ingestion
-
     await ingestion.publish_event(session, DomainEvent(
         id=uuid5(operation.id, "document-cleanup-requested"),
         type="document.cleanup.requested",
@@ -3623,18 +4038,19 @@ async def delete_document(
         occurred_at=datetime.now(UTC),
         producer="modules.knowledge.documents",
         payload={"operation_id": str(operation.id)},
-    ))
-    from modules.knowledge.observations import public as observations
-    await observations.purge_document_in_uow(session, document.id)
+    ), scope=scope, multi_workspace_enabled=flag)
+    await observations.purge_document_in_uow(
+        session, document.id, source_id=source_id, closure=closure.observations, scope=scope,
+        multi_workspace_enabled=flag, access_fence=access_fence, source_fence=source_fence)
     if document.external_id is not None:
-        doc_identity = await session.scalar(
-            select(NormalizedDocumentIdentity).where(
-                NormalizedDocumentIdentity.source_id == source_id,
-                NormalizedDocumentIdentity.external_id == document.external_id,
-            ).with_for_update()
-        )
+        doc_identity = await session.scalar(select(NormalizedDocumentIdentity).where(
+            NormalizedDocumentIdentity.workspace_id == scope.workspace_id,
+            NormalizedDocumentIdentity.source_id == source_id,
+            NormalizedDocumentIdentity.external_id == document.external_id,
+        ))  # rows were locked by the closure; a missing row is created under the held Source lock
         if doc_identity is None:
             doc_identity = NormalizedDocumentIdentity(
+                workspace_id=scope.workspace_id,
                 source_id=source_id,
                 external_id=document.external_id,
                 document_id=document.id,
@@ -3643,97 +4059,93 @@ async def delete_document(
         await session.flush()
         doc_identity.tombstoned_at = datetime.now(UTC)
         doc_identity.document_id = None
-        from modules.ingestion import public as ingestion
-        await ingestion.tombstone_document_materializations(session, document.id)
-    timeline_drafts = await _remove_graph_support(
-        session, document_id=document_id, replay_source_id=source_id,
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-    )
-    result = await session.scalars(
+    await ingestion.tombstone_document_materializations(
+        session, document.id, scope=scope, multi_workspace_enabled=flag)
+    timeline_drafts = await _apply_graph_cleanup(
+        session, closure, scope=scope, flag=flag, access_fence=access_fence, source_fence=source_fence)
+    deleted = (await session.scalars(
         delete(Document)
-        .where(Document.id == document_id, Document.source_id == source_id)
+        .where(Document.id == document_id, Document.source_id == source_id,
+               Document.workspace_id == scope.workspace_id)
         .returning(Document.id)
-    )
-    deleted = result.first() is not None
-    drafts: list[ReplayDraft] = [*timeline_drafts]
-    if deleted:
-        drafts.append(make_knowledge_change(source_id, document_id, deleted=True))
+    )).first() is not None
     if not deleted:
         raise RuntimeError("Locked document disappeared during its cleanup transaction")
-    await commit_with_replay(session, drafts)
+    drafts: list[ReplayDraft] = [
+        *timeline_drafts, make_knowledge_change(source_id, document_id, deleted=True, scope=scope),
+    ]
+    await commit_with_replay(
+        session, drafts, scope=scope, multi_workspace_enabled=flag, access_fence=access_fence)
     await session.refresh(operation)
     return operation
 
 
 async def _capture_source_document_cleanup(
-    session: AsyncSession, source_id: UUID, source_purge_operation_id: UUID,
+    session: AsyncSession, source_id: UUID, source_purge_operation_id: UUID, *,
+    capture: SourcePurgeJobIdentity, scope: Scope, multi_workspace_enabled: bool,
 ) -> None:
     """Create one durable cleanup receipt and exact evidence children for every source document.
 
-    The caller owns the Source lock, transaction, and already-locked Documents set. This helper
-    locks raw identities in exact URI order,
-    then uses owner-local INSERT SELECT statements so versions, chunks, and URIs are never
-    assembled into an unbounded Python snapshot. Child events commit with the canonical cascade.
+    The caller owns the Source lock, transaction, and already-locked Documents set (raw-URI
+    identities were locked by ``lock_source_documents_for_purge_in_uow``; no lock is taken here).
+    Owner-local INSERT SELECT statements write the NOT NULL workspace/actor identity and the
+    captured membership/configuration/Source-generation epochs, so versions, chunks and URIs are
+    never assembled into an unbounded Python snapshot. Child events commit with the canonical cascade.
     """
-    # Materialize and order identities in PostgreSQL; the lock calls do not emit URI values to Python.
-    await session.execute(text(
-        "WITH identities AS MATERIALIZED ("
-        " SELECT DISTINCT raw_uri FROM documents"
-        " WHERE source_id = :source_id AND raw_uri IS NOT NULL AND raw_uri <> ''"
-        " ORDER BY raw_uri"
-        "), locks AS MATERIALIZED ("
-        " SELECT pg_advisory_xact_lock(hashtextextended('documents.raw:' || raw_uri, 0)) AS acquired"
-        " FROM identities ORDER BY raw_uri"
-        ") SELECT count(*) FROM locks"
-    ), {"source_id": source_id})
-
+    workspace_id = scope.workspace_id
     await session.execute(insert(DocumentCleanupOperation).from_select(
         [
-            "id", "source_id", "document_id", "source_purge_operation_id", "raw_uri",
+            "id", "workspace_id", "actor_user_id", "membership_revision", "configuration_revision",
+            "source_generation", "source_id", "document_id", "source_purge_operation_id", "raw_uri",
             "record_status", "graph_status", "raw_status", "evidence_scope_status",
             "copied_status", "chat_status", "status", "earliest_version_created_at",
         ],
         select(
-            func.gen_random_uuid(), Document.source_id, Document.id,
+            func.gen_random_uuid(), literal(capture.workspace_id), literal(capture.actor_user_id),
+            literal(capture.membership_revision), literal(capture.configuration_revision),
+            literal(capture.source_generation), Document.source_id, Document.id,
             literal(source_purge_operation_id), Document.raw_uri,
             literal("deleted"), literal("tombstoned"),
             case(((Document.raw_uri.is_not(None) & (Document.raw_uri != "")), "queued"), else_="not_present"),
             literal("capturing"), literal("queued"), literal("queued"), literal("queued"),
             select(func.min(DocumentVersion.created_at))
             .where(DocumentVersion.document_id == Document.id).scalar_subquery(),
-        ).where(Document.source_id == source_id),
+        ).where(Document.workspace_id == workspace_id, Document.source_id == source_id),
     ))
 
-    columns = ["id", "operation_id", "document_version_id", "chunk_id", "reference_kind"]
+    columns = ["id", "workspace_id", "operation_id", "document_version_id", "chunk_id", "reference_kind"]
+    receipt_scope = and_(
+        DocumentCleanupOperation.workspace_id == workspace_id,
+        DocumentCleanupOperation.source_purge_operation_id == source_purge_operation_id,
+        DocumentCleanupOperation.document_id == DocumentVersion.document_id,
+    )
     await session.execute(insert(DocumentCleanupEvidenceReference).from_select(
         columns,
         select(
-            func.gen_random_uuid(), DocumentCleanupOperation.id, DocumentVersion.id,
-            literal(None), literal("version"),
-        ).join(DocumentCleanupOperation, and_(
-            DocumentCleanupOperation.source_purge_operation_id == source_purge_operation_id,
-            DocumentCleanupOperation.document_id == DocumentVersion.document_id,
-        )),
+            func.gen_random_uuid(), DocumentCleanupOperation.workspace_id, DocumentCleanupOperation.id,
+            DocumentVersion.id, literal(None), literal("version"),
+        ).join(DocumentCleanupOperation, receipt_scope),
     ))
     await session.execute(insert(DocumentCleanupEvidenceReference).from_select(
         columns,
         select(
-            func.gen_random_uuid(), DocumentCleanupOperation.id, DocumentChunk.document_version_id,
-            DocumentChunk.id, literal("chunk"),
+            func.gen_random_uuid(), DocumentCleanupOperation.workspace_id, DocumentCleanupOperation.id,
+            DocumentChunk.document_version_id, DocumentChunk.id, literal("chunk"),
         ).join(DocumentVersion, DocumentVersion.id == DocumentChunk.document_version_id)
-        .join(DocumentCleanupOperation, and_(
-            DocumentCleanupOperation.source_purge_operation_id == source_purge_operation_id,
-            DocumentCleanupOperation.document_id == DocumentVersion.document_id,
-        )),
+        .join(DocumentCleanupOperation, receipt_scope),
     ))
     await session.execute(update(DocumentCleanupOperation).where(
+        DocumentCleanupOperation.workspace_id == workspace_id,
         DocumentCleanupOperation.source_purge_operation_id == source_purge_operation_id,
     ).values(evidence_scope_status="captured"))
 
     # At most 10,000 receipts exist by the gate above; keyset them to bound event batches.
+    from modules.ingestion import public as ingestion
+
     after: UUID | None = None
     while True:
         statement = select(DocumentCleanupOperation.id).where(
+            DocumentCleanupOperation.workspace_id == workspace_id,
             DocumentCleanupOperation.source_purge_operation_id == source_purge_operation_id,
         )
         if after is not None:
@@ -3744,8 +4156,6 @@ async def _capture_source_document_cleanup(
         if not receipt_ids:
             break
         now = datetime.now(UTC)
-        from modules.ingestion import public as ingestion
-
         for receipt_id in receipt_ids:
             await ingestion.publish_event(session, DomainEvent(
                 id=uuid5(receipt_id, "document-cleanup-requested"),
@@ -3754,103 +4164,75 @@ async def _capture_source_document_cleanup(
                 occurred_at=now,
                 producer="modules.knowledge.documents",
                 payload={"operation_id": str(receipt_id)},
-            ))
+            ), scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         after = receipt_ids[-1]
 
 
-async def delete_source_documents(
-    session: AsyncSession,
-    source_id: UUID,
-    *,
-    source_purge_operation_id: UUID,
-    scope: Scope,
-    multi_workspace_enabled: bool,
-) -> list[ReplayDraft]:
-    """Capture exact cleanup children before deleting source-owned canonical data.
+async def lock_source_documents_for_purge_in_uow(
+    session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+    access_fence: AccessFence, source_fence: SourceFence,
+) -> None:
+    """Early Source-purge preparation: lock the whole Documents/graph closure after the Source lock.
 
-    The caller holds the Source row and commits this unit of work. The Documents owner locks
-    at most 10,001 rows to enforce its existing 10,000-document atomic ceiling, serializes raw
-    URI tombstones with publication, and emits bounded child events in the same transaction;
-    no filesystem work or cross-owner row mutation occurs here.
+    Nonlocking fence proof, bounded discovery (more than 10,000 Documents or any owner overflow
+    returns None so the late delete reports the exact limit), then the canonical lock phase. No
+    mutation, receipt or event.
     """
-    document_ids = list((await session.scalars(
-        select(Document.id).where(Document.source_id == source_id).order_by(Document.id).limit(10_001).with_for_update()
-    )).all())
-    if len(document_ids) > 10_000:
-        raise ValueError("Source graph cleanup exceeds its atomic document limit")
-    await _capture_source_document_cleanup(session, source_id, source_purge_operation_id)
+    flag = multi_workspace_enabled
+    closure = await _prepare_cleanup_closure(
+        session, source_id=source_id, document_id=None, scope=scope, flag=flag,
+        access_fence=access_fence, source_fence=source_fence)
+    if isinstance(closure, DocumentCleanupPreparationLimitError):
+        return
+    await _lock_cleanup_closure(
+        session, closure, scope=scope, flag=flag, access_fence=access_fence, source_fence=source_fence)
+
+
+async def delete_source_documents_in_uow(
+    session: AsyncSession, source_id: UUID, *, source_purge_operation_id: UUID, scope: Scope,
+    multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+) -> list[ReplayDraft]:
+    """Capture exact cleanup children, then delete source-owned canonical data under held locks.
+
+    Late phase: the Source row, retained operation and outbox union are locked and the closure was
+    locked early. The retained capture must equal the held fences. More than 10,000 Documents
+    raises the exact atomic-limit ValueError and an owner overflow raises the preparation limit
+    error, both before any effect. No lock is taken here; no filesystem or cross-owner I/O occurs.
+    """
     from modules.knowledge.observations import public as observations
-    await observations.purge_source_in_uow(session, source_id)
-    timeline_drafts = await _remove_graph_support(
-        session, source_id=source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-    )
-    await session.execute(
-        delete(NormalizedDocumentIdentity).where(NormalizedDocumentIdentity.source_id == source_id)
-    )
-    await session.execute(delete(Document).where(Document.source_id == source_id))
-    return timeline_drafts
 
-
-async def _remove_graph_support(
-    session: AsyncSession, *, document_id: UUID | None = None, source_id: UUID | None = None,
-    replay_source_id: UUID | None = None, scope: Scope, multi_workspace_enabled: bool,
-) -> list[ReplayDraft]:
-    """Remove evidence-backed graph and timeline support in source/document → entities → relationships → events order.
-
-    ``document_id`` and ``source_id`` select exactly one cleanup scope.
-    Document deletion separately passes its locked source identity for the
-    timeline collection invalidation after the document row is deleted.
-    """
-    if (document_id is None) == (source_id is None):
-        raise ValueError("Specify one document or source for graph cleanup")
-    if replay_source_id is not None and document_id is None:
-        raise ValueError("A replay source identity is valid only for document cleanup")
-    from modules.knowledge.entities import public as entities
-    from modules.knowledge.relationships import public as relationships
-    from modules.knowledge.temporal import public as temporal
-    from modules.timeline import public as timeline
-
-    refs = await list_evidence_ref_keys(session, document_id=document_id, source_id=source_id)
-    membership_ids, entity_ids = await entities.support_cleanup_ids(
-        session, document_id=document_id, source_id=source_id
-    )
-    relationship_ids, relationship_entity_ids = await relationships.support_cleanup_ids(
-        session, refs=refs, document_id=document_id, source_id=source_id, membership_ids=membership_ids
-    )
-    timeline_entity_ids, timeline_event_ids = await timeline.support_cleanup_ids(
-        session, document_id=document_id, source_id=source_id
-    )
-    all_entity_ids = sorted(set(entity_ids) | set(relationship_entity_ids) | set(timeline_entity_ids), key=str)
-    # Lock entity rows before relationship rows consistently with correction transactions.
-    await entities.lock_entity_ids(
-        session, all_entity_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    await relationships.lock_relationship_ids(
-        session, relationship_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    # Keep the cross-module lock order stable: event locks follow all graph locks.
-    await timeline.lock_event_ids(
-        session, timeline_event_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    # Capture detached graph cleanup before any evidence/source cascade; this helper
-    # performs no provider work and shares the caller's canonical deletion commit.
-    await temporal.tombstone_scope(session, document_id=document_id, source_id=source_id)
-    await relationships.purge_history_support(session, refs)
-    if document_id is not None:
-        await relationships.remove_document_support(
-            session, document_id=document_id, refs=refs, membership_ids=membership_ids
-        )
-        await entities.remove_document_support(session, document_id)
-        cleanup_source_id = replay_source_id
-        if cleanup_source_id is None:
-            cleanup_source_id = await session.scalar(select(Document.source_id).where(Document.id == document_id))
-        if cleanup_source_id is None:
-            raise ValueError("Document support cleanup requires its locked source identity")
-        timeline_drafts = await timeline.remove_document_support(session, document_id=document_id, source_id=cleanup_source_id)
-    else:
-        assert source_id is not None  # document_id is None only for source-scoped cleanup
-        await relationships.remove_source_support(
-            session, source_id=source_id, refs=refs, membership_ids=membership_ids
-        )
-        await entities.remove_source_support(session, source_id)
-        timeline_drafts = await timeline.remove_source_support(session, source_id=source_id)
+    flag = multi_workspace_enabled
+    await _require_cleanup_authority(
+        session, source_id=source_id, scope=scope, flag=flag, access_fence=access_fence, source_fence=source_fence)
+    capture = await sources.read_source_purge_job_capture(
+        session, source_purge_operation_id, scope=scope, multi_workspace_enabled=flag)
+    if (capture is None or capture.membership_revision != access_fence.membership_revision
+            or capture.configuration_revision != access_fence.configuration_revision
+            or capture.source_generation != source_fence.generation or capture.source_id != source_id):
+        raise RuntimeError("Source purge authority differs from the held cleanup fences")
+    document_ids = list((await session.scalars(select(Document.id).where(
+        Document.workspace_id == scope.workspace_id, Document.source_id == source_id,
+    ).order_by(Document.id).limit(_CLEANUP_LIMIT + 1))).all())
+    if len(document_ids) > _CLEANUP_LIMIT:
+        raise ValueError("Source graph cleanup exceeds its atomic document limit")
+    closure = await _prepare_cleanup_closure(
+        session, source_id=source_id, document_id=None, scope=scope, flag=flag,
+        access_fence=access_fence, source_fence=source_fence)
+    if isinstance(closure, DocumentCleanupPreparationLimitError):
+        raise closure
+    await _capture_source_document_cleanup(
+        session, source_id, source_purge_operation_id, capture=capture, scope=scope, multi_workspace_enabled=flag)
+    await observations.purge_source_in_uow(
+        session, source_id, closure=closure.observations, scope=scope, multi_workspace_enabled=flag,
+        access_fence=access_fence, source_fence=source_fence)
+    await session.execute(delete(NormalizedDocumentIdentity).where(
+        NormalizedDocumentIdentity.workspace_id == scope.workspace_id,
+        NormalizedDocumentIdentity.source_id == source_id,
+    ))
+    timeline_drafts = await _apply_graph_cleanup(
+        session, closure, scope=scope, flag=flag, access_fence=access_fence, source_fence=source_fence)
+    await session.execute(delete(Document).where(
+        Document.workspace_id == scope.workspace_id, Document.source_id == source_id))
     return timeline_drafts
 
 
