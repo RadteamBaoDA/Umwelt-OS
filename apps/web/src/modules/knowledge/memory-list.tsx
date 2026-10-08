@@ -282,29 +282,26 @@ export function MemoryList() {
 
       {/* Filter and search toolbar */}
       <div className="flex flex-wrap items-center gap-3">
-        <div role="group" aria-label={t('filterByType')} className="flex rounded-md border border-input bg-background p-0.5">
+        <div role="group" aria-label={t('filterByType')} className="flex flex-wrap gap-1 rounded-md border border-input bg-background p-1">
           {(['all', 'fact', 'preference', 'instruction'] as const).map((typeKey) => {
             const n = countFor(typeKey);
             return (
-            <button
+            <Button
               key={typeKey}
               type="button"
+              size="sm"
+              variant={filterType === typeKey ? 'default' : 'ghost'}
               aria-pressed={filterType === typeKey}
               onClick={() => setFilterType(typeKey)}
-              className={`min-h-11 rounded-sm px-3 text-sm font-semibold transition-colors ${
-                filterType === typeKey
-                  ? 'bg-primary text-primary-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
             >
               {typeKey === 'all' ? t('filterAll') : t(typeKey)}
               {n !== null && (
                 <>
-                  <span className="ml-1.5 tabular-nums" aria-hidden="true">{n}</span>
+                  <span className="tabular-nums" aria-hidden="true">{n}</span>
                   <span className="sr-only">{t('kindCount', { count: n })}</span>
                 </>
               )}
-            </button>
+            </Button>
             );
           })}
         </div>

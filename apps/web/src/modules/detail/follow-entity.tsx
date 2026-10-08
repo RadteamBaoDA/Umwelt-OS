@@ -30,14 +30,18 @@ export function FollowEntityButton({ entityId, name }: { entityId: string; name:
     // A conflict means another write won; refetch so the button reflects the real state.
     onSettled: () => Promise.all([queryClient.invalidateQueries({ queryKey: ['topics'] }), queryClient.invalidateQueries({ queryKey: ['news-stories'] })]),
   });
+  // aria-disabled (not disabled) keeps the button focusable so the reason stays reachable.
+  const blocked = topics.isPending || follow.isPending || following || !name;
   if (topics.isError) return <p role="alert" className="text-xs text-destructive">{t('followLoadFailed')} <Button type="button" variant="outline" size="sm" onClick={() => { void topics.refetch(); }}>{t('retry')}</Button></p>;
   return <div className="flex flex-col items-start gap-1">
     <Button type="button" variant={following ? 'secondary' : 'outline'} aria-pressed={following}
-      disabled={topics.isPending || follow.isPending || following || !name}
-      onClick={() => follow.mutate()}>
-      {following ? <Check aria-hidden="true" className="mr-2 size-4" /> : <Plus aria-hidden="true" className="mr-2 size-4" />}
-      {following ? t('following') : t('follow')}
+      aria-disabled={blocked}
+      aria-describedby={!name ? 'follow-reason' : undefined}
+      onClick={() => { if (!blocked) follow.mutate(); }}>
+      {following ? <Check aria-hidden="true" className="size-4" /> : <Plus aria-hidden="true" className="size-4" />}
+      {follow.isPending ? t('followPending') : following ? t('following') : t('follow')}
     </Button>
+    {!name ? <p id="follow-reason" className="text-xs text-muted-foreground">{t('followNeedsName')}</p> : null}
     {follow.isError ? <p role="alert" className="text-xs text-destructive">{follow.error instanceof ApiError && follow.error.status === 409 ? t('followConflict') : t('followFailed')}</p> : null}
   </div>;
 }

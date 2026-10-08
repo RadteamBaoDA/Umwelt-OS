@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { ApiError } from '@/core/api';
+import { apiFailureKey } from '@/core/api-failure-key';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { entityKeys, getGraphStatuses, listEntities } from '@/modules/knowledge/api';
 import { listSources, sourceKeys } from '@/modules/sources/api';
@@ -107,10 +107,11 @@ export function TimelinePage() {
       <Button type="submit">{t('applyFilters')}</Button>
     </form>
     {searchText && <p className="muted" role="status">{t('searchActive', { query: searchText })} <Button type="button" className="secondary" onClick={() => { const next = new URLSearchParams(applied); next.delete('q'); router.push(`/timeline${next.size ? `?${next}` : ''}`); }}>{t('clearSearch')}</Button></p>}
+    {pinned.isLoading && <p className="muted" role="status">{t('pinnedLoading')}</p>}
     {pinned.data && <div className="stack"><EventDetail event={pinned.data} locale={display.locale} timezone={display.timezone} entityNames={entityNames} /></div>}
     {pinned.isError && <p className="error" role="alert">{t('loadFailed')}</p>}
     {timeline.isPending && !appliedTypeTooLong && <div className="skeleton" aria-label={t('loading')} />}
-    {timeline.isError && <p className="error" role="alert">{timeline.error instanceof ApiError ? timeline.error.message : t('loadFailed')} <Button type="button" className="secondary" onClick={() => timeline.refetch()}>{t('retry')}</Button></p>}
+    {timeline.isError && <p className="error" role="alert">{t(apiFailureKey(timeline.error) ?? 'loadFailed')} <Button type="button" className="secondary" onClick={() => timeline.refetch()}>{t('retry')}</Button></p>}
     {timeline.data && <>
       <p className="muted" role="status">{t('loadedCount', { count: events.length })} · {documentVersionIds.length === 0 ? t('graphStatusNoEvidence') : graphStatuses.isPending ? t('graphStatusLoading') : graphStatuses.isError ? t('graphStatusUnavailable') : t('graphStatusSummary', { count: graphStatuses.data?.length ?? 0 })}</p>
       {allDocumentVersionIds.length > 100 && <p className="muted">{t('graphStatusBound', { count: allDocumentVersionIds.length - 100 })}</p>}
