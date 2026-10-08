@@ -9,7 +9,6 @@ from fastapi import FastAPI
 from starlette.middleware.sessions import SessionMiddleware
 
 from core.auth.routes import router as auth_router
-from core.workspaces.routes import router as workspaces_router
 from core.body_limit import BodyLimitMiddleware
 from core.config import Settings
 from core.database import make_session_factory
@@ -20,6 +19,7 @@ from core.realtime_routes import router as realtime_router
 from core.system.routes import router as system_router
 from core.telemetry import install_log_redaction
 from core.tools import ToolRegistry
+from core.workspaces.routes import router as workspaces_router
 from modules.agents.handoff import register_handoff_tool
 from modules.agents.routes import router as agents_router
 from modules.automations.routes import router as automations_router

@@ -21,9 +21,9 @@ from core.config import Settings
 from core.model_gateway.cache import capability_key
 from core.model_gateway.policy import may_send
 from core.model_gateway.schemas import CapabilityResult, ModelMapping, RequestPolicy
-from core.workspaces.schemas import InternalJobScope, Scope, WorkspaceContext
 from core.model_gateway.transport import EndpointNetworkPolicyError, approved_http_client, body_sent
 from core.telemetry import record_model_call
+from core.workspaces.schemas import InternalJobScope, Scope, WorkspaceContext
 
 _LEASE_PREFIX = "bbd:model-gateway:slot:"
 _SLOTS = Settings().model_gateway_slots  # MODEL_GATEWAY_SLOTS, read once per process

@@ -16,13 +16,22 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.requests import ClientDisconnect
-from starlette.types import Message, Receive, Scope as ASGIScope, Send
+from starlette.types import Message, Receive, Send
+from starlette.types import Scope as ASGIScope
 
 from core.auth.dependencies import require_account
 from core.auth.public import authenticated_session_ref, get_active_account
 from core.auth.schemas import AccountRead, AccountSessionRef
 from core.database import get_session
-from core.realtime import MAX_CURSOR_LENGTH, MAX_REPLAY_BATCH, ReplayCursor, ReplayRecord, ReplayState, current_head, parse_cursor
+from core.realtime import (
+    MAX_CURSOR_LENGTH,
+    MAX_REPLAY_BATCH,
+    ReplayCursor,
+    ReplayRecord,
+    ReplayState,
+    current_head,
+    parse_cursor,
+)
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, WorkspaceContext
 
@@ -400,7 +409,6 @@ async def stream_events(
     initial_reason = ("epoch_changed" if initial.epoch != head.epoch
                       else "cursor_expired" if initial.sequence < head.floor_sequence - 1 else None)
 
-    started = asyncio.Event()
 
     async def body() -> AsyncIterator[str]:
         """Yield detached same-stream events/resync or15s heartbeat; no SQL transaction survives a yield."""
