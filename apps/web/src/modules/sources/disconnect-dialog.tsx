@@ -16,11 +16,12 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Label } from '@/components/ui/label';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import { useDisplayPreferences } from '@/core/query-provider';
+import { normalizeFormattingLocale } from '@/core/i18n';
 import { getSourceImpact } from './api';
 
 // Backend counts saturate at 1000; show that as "1000+".
-const numberFormat = new Intl.NumberFormat();
-const shown = (n: number) => (n >= 1000 ? '1000+' : numberFormat.format(n));
+const shownWith = (format: Intl.NumberFormat) => (n: number) => (n >= 1000 ? '1000+' : format.format(n));
 
 /**
  * Confirms disconnecting a source with explicit consequence copy for keeping or deleting collected data.
@@ -37,6 +38,8 @@ export function DisconnectDialog({ sourceId, name, archived, disabled, trigger, 
   onCloseAutoFocus?: (event: Event) => void;
 }) {
   const t = useTranslations('sources');
+  const { locale } = useDisplayPreferences();
+  const shown = shownWith(new Intl.NumberFormat(normalizeFormattingLocale(locale)));
   const [choice, setChoice] = useState<'keep' | 'delete'>(archived ? 'delete' : 'keep');
   const [open, setOpen] = useState(false);
   const deleting = choice === 'delete';
@@ -62,7 +65,7 @@ export function DisconnectDialog({ sourceId, name, archived, disabled, trigger, 
       <p className="muted" role="status">{impact.data ? t('disconnectImpact', { documents: shown(impact.data.document_count), gadgets: shown(impact.data.gadget_definition_count), placements: shown(impact.data.gadget_placement_count), chats: shown(impact.data.conversation_count) }) : impact.isFetching ? t('disconnectImpactLoading') : t('disconnectImpactUnknown')}</p>
       <AlertDialogFooter>
         <AlertDialogCancel>{t('cancel')}</AlertDialogCancel>
-        <AlertDialogAction className={deleting ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90' : undefined} onClick={() => onConfirm(deleting)}>
+        <AlertDialogAction variant={deleting ? 'destructive' : undefined} onClick={() => onConfirm(deleting)}>
           {t(deleting ? 'disconnectDelete' : 'disconnectKeep')}
         </AlertDialogAction>
       </AlertDialogFooter>

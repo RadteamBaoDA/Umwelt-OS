@@ -11,6 +11,8 @@ import { Label } from '@/components/ui/label';
 import { ApiError } from '@/core/api';
 import { apiFailureKey } from '@/core/api-failure-key';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
+import { formatDateTime } from '@/core/i18n';
+import { useDisplayPreferences } from '@/core/query-provider';
 import { getSource } from '@/modules/sources/api';
 import { deleteDocument, documentDeletionKeys, documentKeys, getCitationTarget, getDocument, getVersion, listVersions, updateContent, updateDocument } from './api';
 import { useTranslations } from 'next-intl';
@@ -23,6 +25,7 @@ import { DocumentDeletionReceiptPanel } from './document-deletion-receipt';
 export function DocumentDetail({ id, citedVersion, citationVersionId, citationChunkId, deletionOperationId }: { id: string; citedVersion: number | null; citationVersionId?: string | null; citationChunkId?: string | null; deletionOperationId?: string | null }) {
   const { csrfToken } = useWorkspaceSession();
   const t = useTranslations('documents');
+  const display = useDisplayPreferences();
   const queryClient = useQueryClient();
   const router = useRouter();
   const [acceptedOperation, setAcceptedOperation] = useState<{ documentId: string; operationId: string } | null>(null);
@@ -105,7 +108,7 @@ export function DocumentDetail({ id, citedVersion, citationVersionId, citationCh
   if (document.isPending) return <div className="content-panel skeleton" aria-label={t('loadingDocument')} />;
   if (document.isError) return <section className="content-panel"><h1>{t('unavailable')}</h1><p className="error" role="alert">{t(apiFailureKey(document.error) ?? 'loadFailed')}</p><Button className="secondary" onClick={() => document.refetch()}>{t('retry')}</Button></section>;
 
-  return <section className="content-panel"><Link href="/knowledge/documents">{t('back')}</Link><div className="section-heading"><div><span className="brand">{t('brand')}</span><h1>{document.data.title}</h1><p className="muted">{t('sourceLine', { source: source.data?.name ?? document.data.source_id, version: document.data.current_version, updated: new Date(document.data.updated_at).toLocaleString() })}</p>{Array.isArray(document.data.metadata.warnings) && document.data.metadata.warnings.includes('parsed_text_truncated') && <p className="muted rounded-md border border-border p-3 text-sm" role="note">{t('parsedTextTruncated')}</p>}{document.data.raw_uri && <a href={`/api/v1/documents/${document.data.id}/raw`}>{t('inspectOriginal')}</a>}</div><AlertDialog>
+  return <section className="content-panel"><Link href="/knowledge/documents">{t('back')}</Link><div className="section-heading"><div><span className="brand">{t('brand')}</span><h1>{document.data.title}</h1><p className="muted">{t('sourceLine', { source: source.data?.name ?? document.data.source_id, version: document.data.current_version, updated: formatDateTime(document.data.updated_at, display.locale, display.timezone) })}</p>{Array.isArray(document.data.metadata.warnings) && document.data.metadata.warnings.includes('parsed_text_truncated') && <p className="muted rounded-md border border-border p-3 text-sm" role="note">{t('parsedTextTruncated')}</p>}{document.data.raw_uri && <a href={`/api/v1/documents/${document.data.id}/raw`}>{t('inspectOriginal')}</a>}</div><AlertDialog>
         <AlertDialogTrigger asChild><Button className="secondary" aria-disabled={remove.isPending} onClick={(event) => { if (remove.isPending) event.preventDefault(); }}>{t('deleteDocument')}</Button></AlertDialogTrigger>
         <AlertDialogContent>
           <AlertDialogHeader><AlertDialogTitle>{t('deleteTitle', { title: document.data.title })}</AlertDialogTitle><AlertDialogDescription>{t('deleteBody')}</AlertDialogDescription></AlertDialogHeader>
@@ -126,7 +129,7 @@ export function DocumentDetail({ id, citedVersion, citationVersionId, citationCh
       <section className="sub-panel"><h2>{t('details')}</h2><form className="form" onSubmit={submitMetadata}><div className="field"><Label htmlFor="title">{t('titleLabel')}</Label><Input id="title" maxLength={500} value={title ?? ''} onChange={(event) => setTitle(event.target.value)} /></div><div className="field"><Label htmlFor="metadata">{t('metadataLabel')}</Label><textarea id="metadata" className="input text-area compact" value={metadata ?? ''} onChange={(event) => setMetadata(event.target.value)} /></div>
         {metadataError && <p className="error" role="alert">{t(metadataError)}</p>}{saveMetadata.error && <p className="error" role="alert">{t(apiFailureKey(saveMetadata.error) ?? 'saveDetailsFailed')}</p>}<Button type="submit" disabled={saveMetadata.isPending}>{t('saveDetails')}</Button></form></section>
     </div><aside className="sub-panel"><h2>{t('versionHistory')}</h2>{versions.isPending && <p className="muted">{t('loadingVersions')}</p>}{versions.isError && <p className="error" role="alert">{t('versionsLoadFailed')} <Button className="secondary" onClick={() => versions.refetch()}>{t('retry')}</Button></p>}
-      {versions.data && <ul className="version-list">{versions.data.pages.flatMap((page) => page.items).map((version) => <li key={version.id}><button type="button" className="text-button" onClick={() => setSelectedVersion(version.version_number)}>{t('version', { version: version.version_number })}</button><span className="muted">{new Date(version.created_at).toLocaleString()}</span></li>)}</ul>}
+      {versions.data && <ul className="version-list">{versions.data.pages.flatMap((page) => page.items).map((version) => <li key={version.id}><button type="button" className="text-button" onClick={() => setSelectedVersion(version.version_number)}>{t('version', { version: version.version_number })}</button><span className="muted">{formatDateTime(version.created_at, display.locale, display.timezone)}</span></li>)}</ul>}
       {versions.hasNextPage && <Button className="secondary" disabled={versions.isFetchingNextPage} onClick={() => versions.fetchNextPage()}>{t('loadMoreVersions')}</Button>}
       {selectedVersion !== null && <div className="version-preview" id="cited-revision"><h3>{t('version', { version: selectedVersion })}</h3>{selected.isPending && <p className="muted">{t('loadingVersion')}</p>}{selected.isError && <p className="error" role="alert">{t('versionLoadFailed')}</p>}{selected.data && <pre>{selected.data.content}</pre>}</div>}
     </aside></div>
