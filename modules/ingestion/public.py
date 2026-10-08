@@ -2374,7 +2374,7 @@ async def accept_collection_no_changes(
     """
     source, source_fence, access_fence = await _lock_source_projection(
         session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    if source is None:
+    if source is None or source_fence is None:
         raise HTTPException(status_code=404, detail="Source not found")
     if source.status != "active" or source.generation != source_generation:
         raise HTTPException(status_code=409, detail="Source generation changed during collection")
