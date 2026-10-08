@@ -37,7 +37,8 @@ export const ATTACHMENT_STATUS_ID = 'chat-attachment-status';
 const POLL_MS = 1500;
 /** Consecutive non-404 polling errors tolerated (with exponential backoff) before giving up. */
 const MAX_POLL_FAILURES = 5;
-const MAX_SIZE_LABEL = `${ATTACHMENT_MAX_BYTES / (1024 * 1024)} MiB`;
+/** Overall cap on one attachment's ingest polling, whatever the server keeps reporting. */
+const MAX_POLL_MS = 10 * 60_000;
 const allowed = new Set(ATTACHMENT_ACCEPT.split(','));
 
 /** Maps an upload failure to localized copy; the server's English detail is never shown verbatim. */
@@ -77,6 +78,7 @@ export function useChatAttachments(csrfToken: string, unavailable = false) {
   /** Polls one accepted Document until ingest settles; only a 404 fails it, other errors back off within a bound. */
   const poll = React.useCallback(async (key: string, documentId: string, signal: AbortSignal) => {
     let failures = 0;
+    const deadline = Date.now() + MAX_POLL_MS;
     while (!signal.aborted) {
       await new Promise((resolve) => setTimeout(resolve, POLL_MS * 2 ** failures));
       if (signal.aborted) return;
@@ -84,6 +86,7 @@ export function useChatAttachments(csrfToken: string, unavailable = false) {
         const doc = await getChatAttachment(documentId, signal);
         failures = 0;
         if (doc.status !== 'pending') { patch(key, { doc, state: doc.status }); return; }
+        if (Date.now() > deadline) { patch(key, { state: 'failed', error: t('attachmentTimedOut') }); return; }
       } catch (err: unknown) {
         if (signal.aborted) return;
         if ((err instanceof ApiError && err.status === 404) || ++failures > MAX_POLL_FAILURES) {
@@ -92,7 +95,7 @@ export function useChatAttachments(csrfToken: string, unavailable = false) {
         }
       }
     }
-  }, [patch]);
+  }, [patch, t]);
 
   const upload = React.useCallback((key: string, file: File, share: boolean) => {
     const controller = new AbortController();
@@ -102,7 +105,7 @@ export function useChatAttachments(csrfToken: string, unavailable = false) {
         patch(key, { doc, state: doc.status });
         if (doc.status === 'pending') void poll(key, doc.document_id, controller.signal);
       })
-      .catch((err: unknown) => { if (!controller.signal.aborted) patch(key, { state: 'rejected', error: t(uploadErrorKey(err), { size: MAX_SIZE_LABEL }) }); });
+      .catch((err: unknown) => { if (!controller.signal.aborted) patch(key, { state: 'rejected', error: t(uploadErrorKey(err)) }); });
   }, [csrfToken, patch, poll, t]);
 
   /** Validates type and size locally (the server re-validates), then uploads each file that fits. */
@@ -111,7 +114,7 @@ export function useChatAttachments(csrfToken: string, unavailable = false) {
     setDropped(Math.max(0, files.length - room));
     const added = files.slice(0, room).map((file): AttachmentEntry => {
       const ext = file.name.includes('.') ? `.${file.name.split('.').pop()!.toLowerCase()}` : '';
-      const error = !allowed.has(ext) ? t('attachmentType') : file.size > ATTACHMENT_MAX_BYTES ? t('attachmentTooBig', { size: MAX_SIZE_LABEL }) : undefined;
+      const error = !allowed.has(ext) ? t('attachmentType') : file.size > ATTACHMENT_MAX_BYTES ? t('attachmentTooBig') : undefined;
       return { key: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`, name: file.name, file, state: error ? 'rejected' : 'uploading', error };
     });
     update((prev) => [...prev, ...added]);
@@ -182,7 +185,7 @@ export function ChatAttachmentBar({ state, disabled }: { state: ReturnType<typeo
     if (e.state === 'pending') return t('attachmentProcessing');
     if (e.state === 'ready') return e.doc?.local_only ? t('attachmentLocalOnly') : t('attachmentReady');
     if (e.state === 'too_large') return t('attachmentTooLargeContext');
-    return t('attachmentFailed');
+    return e.error ?? t('attachmentFailed');
   };
   const note = state.dropped > 0
     ? t('attachmentDropped', { max: MAX_ATTACHMENTS })

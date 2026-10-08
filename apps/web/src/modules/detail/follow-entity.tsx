@@ -6,24 +6,9 @@ import { useTranslations } from 'next-intl';
 import { ApiError } from '@/core/api';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { Button } from '@/components/ui/button';
-import { createTopic, fetchTopics, updateTopic } from '@/modules/news/api';
-import type { Topic } from '@/modules/news/types';
+import { createTopic, fetchAllTopics, updateTopic } from '@/modules/news/api';
 
 const topicsKey = ['topics', 'follow-lookup'] as const;
-const MAX_PAGES = 10;
-
-/** Reads every owner topic (bounded) so followed state never depends on one page. */
-async function fetchAllTopics(): Promise<Topic[]> {
-  const items: Topic[] = [];
-  let cursor: string | undefined;
-  for (let page = 0; page < MAX_PAGES; page += 1) {
-    const result = await fetchTopics({ limit: 100, cursor });
-    items.push(...result.items);
-    if (!result.next_cursor) return items;
-    cursor = result.next_cursor;
-  }
-  return items;
-}
 
 /**
  * Follow = a topic whose entity_ids contain this entity. Idempotent: an active linked topic means

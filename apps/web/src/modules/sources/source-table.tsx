@@ -11,6 +11,7 @@ export type SourceFilter = 'all' | 'active' | 'paused' | 'attention';
 /**
  * Derives the visible row state from owner-reported data only.
  * "Collecting" is not exposed by the list endpoints, so it is never invented. "Reconnect needed" comes from the provider_unauthorized code.
+ * n8n and MCP collectors report no auth code yet, so those sources show "Error", never "Reconnect needed".
  */
 export function sourceRowState(source: Source, activation?: { state: string; error_code: string | null }): SourceRowState {
   if (source.status === 'archived') return 'archived';

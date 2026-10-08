@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { apiRequest } from '@/core/api';
+import { ApiError, apiRequest } from '@/core/api';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { PlusIcon } from 'lucide-react';
@@ -21,7 +21,6 @@ import {
 } from '@/modules/chat/api';
 import { ChatComposer } from './chat-composer';
 import { ChatTranscript } from './chat-transcript';
-import { ApiError } from '@/core/api';
 import { ChatContextBar, MAX_ITEMS } from './chat-context-bar';
 import { ATTACHMENT_STATUS_ID, ChatAttachmentBar, SELECTION_LOCAL_ONLY, useChatAttachments, withAttachments } from './chat-attachments';
 import { ConversationAgentActivity } from '@/modules/agents/conversation-agent-activity';
