@@ -6,14 +6,15 @@ type TopicItem = { name: string; is_active: boolean };
 test('onboarding topic chips toggle idempotently', async ({ page }) => {
   await page.goto('/');
   const session = await (await page.request.get('/api/v1/auth/session')).json();
-  const headers = { 'X-CSRF-Token': session.csrfToken };
+  // Playwright's request context sends no Origin (browsers do); owner writes require it.
+  const headers = { 'X-CSRF-Token': session.csrfToken, Origin: new URL(page.url()).origin };
   const read = async (): Promise<Onboarding> => (await page.request.get('/api/v1/settings/onboarding')).json();
   let state = await read();
   test.skip(state.completed_at !== null, 'onboarding completed; chips unreachable');
   // Chips live on `sources`; the API allows moving back freely but only one step forward.
   const put = async (step: string) => {
     const res = await page.request.put('/api/v1/settings/onboarding', { headers, data: { expected_revision: state.configuration_revision, current_step: step } });
-    expect(res.ok()).toBeTruthy();
+    expect(res.ok(), `put onboarding ${step}: ${res.status()} ${await res.text()}`).toBeTruthy();
     state = await read();
   };
   if (state.current_step === 'ai_privacy') await put('capability');

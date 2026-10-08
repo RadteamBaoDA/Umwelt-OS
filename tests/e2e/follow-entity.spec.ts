@@ -5,12 +5,13 @@ type TopicItem = { id: string; entity_ids: string[]; is_active: boolean; revisio
 test('owner follows an entity and sees the topic', async ({ page }) => {
   await page.goto('/');
   const session = await (await page.request.get('/api/v1/auth/session')).json();
-  const headers = { 'X-CSRF-Token': session.csrfToken };
+  // Playwright's request context sends no Origin (browsers do); owner writes require it.
+  const headers = { 'X-CSRF-Token': session.csrfToken, Origin: new URL(page.url()).origin };
   const created = await page.request.post('/api/v1/entities', {
     headers,
     data: { name: `E2E Follow Co ${Date.now()}`, type: 'organization' },
   });
-  expect(created.ok()).toBeTruthy();
+  expect(created.ok(), `create entity ${created.status()} ${await created.text()}`).toBeTruthy();
   const entity = await created.json();
   const linkedTopics = async (): Promise<TopicItem[]> => {
     const topics = await (await page.request.get('/api/v1/topics?limit=100')).json();
@@ -32,7 +33,7 @@ test('owner follows an entity and sees the topic', async ({ page }) => {
     headers,
     data: { expected_revision: topic.revision, is_active: false },
   });
-  expect(patched.ok()).toBeTruthy();
+  expect(patched.ok(), `patch topic ${patched.status()} ${await patched.text()}`).toBeTruthy();
   await page.reload();
   await page.getByRole('button', { name: 'Follow', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Following' })).toBeVisible();
