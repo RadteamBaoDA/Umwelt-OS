@@ -1,11 +1,13 @@
 """Protected dashboard configuration REST routes with explicit owner and write dependencies."""
 
+import time
 from collections.abc import Awaitable
 from datetime import date
 from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from redis.exceptions import RedisError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.dependencies import require_owner, require_owner_write
@@ -172,6 +174,26 @@ async def replace_layout(dashboard_id: UUID, payload: LayoutReplace, session: Se
     return await _call(public.replace_layout(session, owner.owner_id, dashboard_id, payload))
 
 
+PREVIEW_LIMIT_PER_MINUTE = 10
+
+
+async def _allow_preview(request: Request, owner_id: int) -> None:
+    """Owner-scoped fixed-window limit (preview fans out into topic and projection queries); Redis outage fails closed."""
+    key = f"dashboard:preview:{owner_id}:{int(time.time() // 60)}"
+    try:
+        pipeline = request.app.state.redis.pipeline(transaction=True)
+        pipeline.incr(key)
+        pipeline.expire(key, 120, nx=True)
+        count = (await pipeline.execute())[0]
+    except RedisError as exc:
+        raise HTTPException(status_code=503, detail={"code": "preview_unavailable", "message": "Preview is temporarily unavailable", "details": {}}) from exc
+    if count > PREVIEW_LIMIT_PER_MINUTE:
+        raise HTTPException(
+            status_code=429, detail={"code": "preview_rate_limited", "message": "Too many previews", "details": {}},
+            headers={"Retry-After": str(60 - int(time.time()) % 60)},
+        )
+
+
 @router.get("/gadget-definitions", response_model=list[GadgetDefinitionRead])
 async def list_definitions(session: Session, owner: OwnerRead, response: Response, limit: Annotated[int, Query(ge=1, le=200)] = 200) -> list[GadgetDefinitionRead]:
     """List a bounded page from the authenticated owner's reusable definition library."""
@@ -187,9 +209,10 @@ async def create_definition(payload: GadgetDefinitionCreate, session: Session, o
 
 
 @router.post("/gadget-definitions/highlight-preview", response_model=HighlightPreviewRead)
-async def preview_highlights(payload: HighlightPreviewRequest, session: Session, owner: OwnerWrite, response: Response) -> HighlightPreviewRead:
+async def preview_highlights(payload: HighlightPreviewRequest, session: Session, owner: OwnerWrite, response: Response, request: Request) -> HighlightPreviewRead:
     """Dry-run draft rules over the last days of current evidence; never persists or notifies."""
     _no_store(response)
+    await _allow_preview(request, owner.owner_id)
     return await _call(public.preview_highlights(session, owner.owner_id, payload))
 
 
