@@ -90,14 +90,14 @@ async def invoke_tool(
     allowed = frozenset(item.name for item in registry.list_tools())
     owner_id, owner_token_hash = owner.owner_id, owner.token_hash
     principal = ToolExecutionPrincipal(
-        actor_id=f"owner:{owner_id}", scope=scope, is_owner=True, allowed_tools=allowed,
+        actor_id=f"owner:{scope.user_id}", scope=scope, is_owner=True, allowed_tools=allowed,
         source_ids=frozenset(), owner_all_sources=True, destinations=frozenset({"local"}),
         capabilities=frozenset({"source.read"}),
     )
 
     async def revalidate_owner(current: ToolExecutionPrincipal) -> bool:
         """Recheck the same owner session in a fresh short transaction after async tool work."""
-        if current.actor_id != f"owner:{owner_id}" or not current.is_owner or current.scope != scope:
+        if current.actor_id != f"owner:{scope.user_id}" or not current.is_owner or current.scope != scope:
             return False
         try:
             async with request.app.state.session_factory() as fresh_session:

@@ -146,3 +146,13 @@ async def test_purge_is_workspace_scoped_and_denies_member_before_query() -> Non
     ) == 0
     text = str(session.scalars.call_args.args[0].compile(dialect=postgresql.dialect()))
     assert "browser_read_jobs.workspace_id =" in text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [OSError("connect refused"), TimeoutError()])
+async def test_transport_errors_fail_closed(error: Exception) -> None:
+    sink, _ = _remote_case()
+    with patch("modules.sources.public.list_tool_sources", AsyncMock(side_effect=error)):
+        assert await revalidate_native_output_fences(
+            _session_cm, sink, _principal(), destination_kind="remote", multi_workspace_enabled=FLAG,
+        ) is False

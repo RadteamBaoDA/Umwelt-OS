@@ -168,7 +168,7 @@ async def revalidate_native_output_fences(
                 )
             if not valid:
                 return False
-    except (HTTPException, SQLAlchemyError, ValueError):
+    except (HTTPException, SQLAlchemyError, ValueError, OSError, TimeoutError):
         # Admission/database/validation failures suppress output; TypeError/AttributeError are bugs and propagate.
         return False
     return True

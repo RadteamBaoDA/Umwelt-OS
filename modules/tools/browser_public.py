@@ -695,8 +695,8 @@ async def execute_browser_read(
         row.service_instance_id = str(response_data["service_instance_id"])
         await session.flush()
         await commit_with_replay(
-                session, [], scope=job_scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
-            )
+            session, [], scope=job_scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+        )
         return BrowserReadResult(job=_read(row), pages=tuple(persisted))
 
 
