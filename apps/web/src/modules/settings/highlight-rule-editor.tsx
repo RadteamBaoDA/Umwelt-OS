@@ -71,7 +71,7 @@ export function HighlightRuleEditor({ initialDefinitionId }: { initialDefinition
     {def && <>
       <label className="field max-w-md"><span className="label">{t('pickGadget')}</span>
         <Select value={def.id} onValueChange={setPicked}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{definitions.map((item) => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}</SelectContent></Select></label>
-      <RuleList key={`${def.id}:${def.revision}`} def={def} onRuleDeleted={() => { setNotice(t('ruleDeleted')); headingRef.current?.focus(); }} />
+      <RuleList key={`${def.id}:${def.revision}`} def={def} onRuleDeleted={() => { setNotice(''); requestAnimationFrame(() => setNotice(t('ruleDeleted'))); headingRef.current?.focus(); }} />
     </>}
   </div>;
 }
@@ -86,7 +86,6 @@ function RuleList({ def, onRuleDeleted }: { def: GadgetDefinition; onRuleDeleted
   const [isNew, setIsNew] = useState(false);
   const [touched, setTouched] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
-  const confirmedRef = useRef(false);
   const rules = def.highlight_rules ?? [];
   const usage = useQuery({ queryKey: [...dashboardKeys.definition(def.id), 'usage'], queryFn: ({ signal }) => getGadgetDefinitionUsage(def.id, signal) });
   const usageNames = (usage.data ?? []).map((item) => item.name).join(', ');
@@ -134,7 +133,7 @@ function RuleList({ def, onRuleDeleted }: { def: GadgetDefinition; onRuleDeleted
       <span className="muted text-xs">{t(severityKeys[rule.severity])}</span>
       <span className="muted inline-flex items-center gap-1 text-xs">{rule.notify && <Bell className="size-3" aria-hidden="true" />}{rule.notify ? t('notifyOn') : t('notifyOff')}</span>
       <Button type="button" className="secondary" disabled={write.isPending} onClick={() => open(rule)}>{t('editRule')}</Button>
-      <Button type="button" variant="destructive" disabled={write.isPending} onClick={() => setDeleteId(rule.id)}>{t('deleteRule')}</Button>
+      <Button type="button" variant="destructive" aria-disabled={write.isPending} onClick={() => { if (!write.isPending) setDeleteId(rule.id); }}>{t('deleteRule')}</Button>
     </li>)}</ul>
     {editing && <form className="space-y-3 rounded-lg border border-border p-4" aria-label={isNew ? t('ruleNew') : t('ruleTitle')} onSubmit={(event) => { event.preventDefault(); saveRule(); }}>
       <fieldset disabled={write.isPending} className="space-y-3">
@@ -189,8 +188,8 @@ function RuleList({ def, onRuleDeleted }: { def: GadgetDefinition; onRuleDeleted
     </section>
     {write.error && !editing && <p className="error" role="alert">{t((highlightRuleErrorKey(write.error) ?? apiFailureKey(write.error) ?? 'saveFailed') as 'saveFailed')}</p>}
     <AlertDialog open={deleteId !== null} onOpenChange={(value) => { if (!value) setDeleteId(null); }}>
-      <AlertDialogContent onCloseAutoFocus={(event) => { if (confirmedRef.current) { event.preventDefault(); confirmedRef.current = false; } }}><AlertDialogHeader><AlertDialogTitle>{t('deleteRuleTitle')}</AlertDialogTitle><AlertDialogDescription>{usageNames ? t('deleteRuleBodyUsed', { names: usageNames }) : t('deleteRuleBody')}</AlertDialogDescription></AlertDialogHeader>
-        <AlertDialogFooter><AlertDialogCancel>{t('cancelRule')}</AlertDialogCancel><AlertDialogAction onClick={() => { confirmedRef.current = true; write.mutate(rules.filter((item) => item.id !== deleteId), { onSuccess: onRuleDeleted }); }}>{t('deleteRule')}</AlertDialogAction></AlertDialogFooter>
+      <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{t('deleteRuleTitle')}</AlertDialogTitle><AlertDialogDescription>{usageNames ? t('deleteRuleBodyUsed', { names: usageNames }) : t('deleteRuleBody')}</AlertDialogDescription></AlertDialogHeader>
+        <AlertDialogFooter><AlertDialogCancel>{t('cancelRule')}</AlertDialogCancel><AlertDialogAction onClick={() => { write.mutate(rules.filter((item) => item.id !== deleteId), { onSuccess: onRuleDeleted }); }}>{t('deleteRule')}</AlertDialogAction></AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
   </div>;

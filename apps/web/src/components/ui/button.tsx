@@ -9,7 +9,7 @@ import { forwardRef, type ButtonHTMLAttributes } from 'react';
  * and every size retains the 44px minimum touch target.
  */
 export const buttonVariants = cva(
-  'button inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-[9px] border-0 text-[15px] font-bold transition-colors disabled:cursor-progress disabled:opacity-[0.65] [&_svg]:shrink-0',
+  'button inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-[9px] border-0 text-[15px] font-bold transition-colors disabled:cursor-progress disabled:opacity-[0.65] aria-disabled:cursor-not-allowed aria-disabled:opacity-[0.65] [&_svg]:shrink-0',
   {
     variants: {
       variant: {

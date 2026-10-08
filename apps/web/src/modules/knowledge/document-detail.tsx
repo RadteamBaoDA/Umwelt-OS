@@ -106,10 +106,10 @@ export function DocumentDetail({ id, citedVersion, citationVersionId, citationCh
   if (document.isError) return <section className="content-panel"><h1>{t('unavailable')}</h1><p className="error" role="alert">{t(apiFailureKey(document.error) ?? 'loadFailed')}</p><Button className="secondary" onClick={() => document.refetch()}>{t('retry')}</Button></section>;
 
   return <section className="content-panel"><Link href="/knowledge/documents">{t('back')}</Link><div className="section-heading"><div><span className="brand">{t('brand')}</span><h1>{document.data.title}</h1><p className="muted">{t('sourceLine', { source: source.data?.name ?? document.data.source_id, version: document.data.current_version, updated: new Date(document.data.updated_at).toLocaleString() })}</p>{Array.isArray(document.data.metadata.warnings) && document.data.metadata.warnings.includes('parsed_text_truncated') && <p className="muted rounded-md border border-border p-3 text-sm" role="note">{t('parsedTextTruncated')}</p>}{document.data.raw_uri && <a href={`/api/v1/documents/${document.data.id}/raw`}>{t('inspectOriginal')}</a>}</div><AlertDialog>
-        <AlertDialogTrigger asChild><Button className="secondary" disabled={remove.isPending}>{t('deleteDocument')}</Button></AlertDialogTrigger>
+        <AlertDialogTrigger asChild><Button className="secondary" aria-disabled={remove.isPending} onClick={(event) => { if (remove.isPending) event.preventDefault(); }}>{t('deleteDocument')}</Button></AlertDialogTrigger>
         <AlertDialogContent>
           <AlertDialogHeader><AlertDialogTitle>{t('deleteTitle', { title: document.data.title })}</AlertDialogTitle><AlertDialogDescription>{t('deleteBody')}</AlertDialogDescription></AlertDialogHeader>
-          <AlertDialogFooter><AlertDialogCancel>{t('cancel')}</AlertDialogCancel><AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" onClick={() => remove.mutate(id)}>{t('deleteDocument')}</AlertDialogAction></AlertDialogFooter>
+          <AlertDialogFooter><AlertDialogCancel>{t('cancel')}</AlertDialogCancel><AlertDialogAction variant="destructive" onClick={() => remove.mutate(id)}>{t('deleteDocument')}</AlertDialogAction></AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog></div>
     {remove.error && <p className="error" role="alert">{t(apiFailureKey(remove.error) ?? 'deleteFailed')}</p>}

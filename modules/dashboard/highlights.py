@@ -120,7 +120,7 @@ def match_compiled(
                 reason += f" ({item.truncated} topic term(s) not checked)"
             matches.append(HighlightMatch(
                 rule_id=rule.id, matched_keywords=tuple(matched_words), severity=rule.severity,
-                notify=rule.notify, reason=reason,
+                notify=rule.notify, reason=reason[:1000],
             ))
     matches.sort(key=lambda m: _SEVERITY_ORDER.get(m.severity, 0), reverse=True)
     return matches

@@ -53,3 +53,10 @@ def test_results_identical_to_legacy_per_term_matcher() -> None:
         expected = tuple(k for k, p in zip(keywords, legacy, strict=True) if p.search(text))
         got = match_compiled(text, [compiled])
         assert (got[0].matched_keywords if got else ()) == expected
+
+
+def test_reason_is_capped_to_read_schema_limit() -> None:
+    words = [f"{'k' * 110}{i:02d}" for i in range(16)]
+    compiled = compile_rules([_rule(words)], {})
+    matches = match_compiled(" ".join(words), compiled)
+    assert matches and len(matches[0].reason) <= 1000

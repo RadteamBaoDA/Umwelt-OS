@@ -1,6 +1,7 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useId } from 'react';
 import { Check, Plus } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { ApiError } from '@/core/api';
@@ -16,6 +17,7 @@ const topicsKey = ['topics', 'follow-lookup'] as const;
  */
 export function FollowEntityButton({ entityId, name }: { entityId: string; name: string | null }) {
   const t = useTranslations('detail');
+  const reasonId = useId();
   const { csrfToken } = useWorkspaceSession();
   const queryClient = useQueryClient();
   const topics = useQuery({ queryKey: topicsKey, queryFn: ({ signal }) => fetchAllTopics({ signal }) });
@@ -36,12 +38,12 @@ export function FollowEntityButton({ entityId, name }: { entityId: string; name:
   return <div className="flex flex-col items-start gap-1">
     <Button type="button" variant={following ? 'secondary' : 'outline'} aria-pressed={following}
       aria-disabled={blocked}
-      aria-describedby={!name ? 'follow-reason' : undefined}
+      aria-describedby={!name ? reasonId : undefined}
       onClick={() => { if (!blocked) follow.mutate(); }}>
       {following ? <Check aria-hidden="true" className="size-4" /> : <Plus aria-hidden="true" className="size-4" />}
       {follow.isPending ? t('followPending') : following ? t('following') : t('follow')}
     </Button>
-    {!name ? <p id="follow-reason" className="text-xs text-muted-foreground">{t('followNeedsName')}</p> : null}
+    {!name ? <p id={reasonId} className="text-xs text-muted-foreground">{t('followNeedsName')}</p> : null}
     {follow.isError ? <p role="alert" className="text-xs text-destructive">{follow.error instanceof ApiError && follow.error.status === 409 ? t('followConflict') : t('followFailed')}</p> : null}
   </div>;
 }

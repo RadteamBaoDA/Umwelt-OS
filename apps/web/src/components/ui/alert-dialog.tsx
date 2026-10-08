@@ -32,7 +32,7 @@ export function AlertDialogCancel(props: React.ComponentProps<typeof AlertDialog
 }
 
 /** Renders the primitive confirm action with the shared primary button style. */
-export function AlertDialogAction(props: React.ComponentProps<typeof AlertDialogPrimitive.Action>) {
+export function AlertDialogAction(props: React.ComponentProps<typeof AlertDialogPrimitive.Action> & Pick<React.ComponentProps<typeof Button>, 'variant'>) {
   return <AlertDialogPrimitive.Action asChild><Button {...props} /></AlertDialogPrimitive.Action>;
 }
 
