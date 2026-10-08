@@ -28,7 +28,7 @@ export function OnboardingTopics() {
   const t = useTranslations('onboarding');
   const { csrfToken } = useWorkspaceSession();
   const client = useQueryClient();
-  const topics = useQuery({ queryKey: key, queryFn: fetchAllTopics });
+  const topics = useQuery({ queryKey: key, queryFn: ({ signal }) => fetchAllTopics({ signal }) });
   const toggle = useMutation({
     mutationFn: async (preset: (typeof PRESETS)[number]) => {
       const matches = topics.data?.filter((topic) => ownsPreset(topic, preset.id)) ?? [];

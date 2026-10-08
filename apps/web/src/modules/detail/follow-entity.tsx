@@ -18,7 +18,7 @@ export function FollowEntityButton({ entityId, name }: { entityId: string; name:
   const t = useTranslations('detail');
   const { csrfToken } = useWorkspaceSession();
   const queryClient = useQueryClient();
-  const topics = useQuery({ queryKey: topicsKey, queryFn: fetchAllTopics });
+  const topics = useQuery({ queryKey: topicsKey, queryFn: ({ signal }) => fetchAllTopics({ signal }) });
   const linked = topics.data?.filter((topic) => topic.entity_ids.includes(entityId)) ?? [];
   const following = linked.some((topic) => topic.is_active);
   const follow = useMutation({
