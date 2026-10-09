@@ -18,7 +18,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.auth.public import authenticated_session_ref
 from core.database import get_session
 from core.storage import save_upload, storage_path
-from core.workspaces.dependencies import require_workspace_read, require_workspace_write
+from core.workspaces.dependencies import (
+    require_default_workspace_read,
+    require_default_workspace_write,
+    require_workspace_read,
+    require_workspace_write,
+)
 from core.workspaces.public import lock_access_fence
 from core.workspaces.schemas import WorkspaceContext
 from modules.connectors import public as connectors
@@ -44,6 +49,8 @@ documents_router = APIRouter(prefix="/api/v1/documents", tags=["documents"],
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
 OwnerWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
+DefaultRead = Annotated[WorkspaceContext, Depends(require_default_workspace_read)]
+DefaultWrite = Annotated[WorkspaceContext, Depends(require_default_workspace_write)]
 
 
 def _owner_scope(scope: WorkspaceContext) -> WorkspaceContext:
@@ -175,22 +182,17 @@ async def retry_run(run_id: UUID, payload: RetryRunRequest, session: Session, _o
     return Receipt(workspace_id=run.workspace_id, batch_id=run.batch_id, run_id=run.id, status=run.status)
 
 
-@documents_router.post("/upload", response_model=Receipt, status_code=202)
-async def upload_document(
-    request: Request,
-    source_id: Annotated[UUID, Form()],
-    upload: Annotated[UploadFile, File(alias="file")],
-    session: Session,
-    _owner: OwnerWrite,
-) -> Receipt:
+async def _intake_upload(
+    request: Request, session: AsyncSession, scope: WorkspaceContext, source_id: UUID, upload: UploadFile,
+) -> tuple[IngestionRun, UUID]:
     """Authorize exact Source/session before scoped raw I/O, then publish under original fences.
 
     Release SQL for bounded temporary/hash/atomic filesystem work. Recheck the captured
     access/Source/session without epoch upgrades before owner intake. Known rejected or
     duplicate staging bytes are deleted; uncertain commit outcomes retain bytes for the
     reference-proved orphan sweep. Filename sanitization supplies display metadata only.
+    Returns the run and the owning Document ID (the existing one for duplicate bytes).
     """
-    scope = _owner_scope(_owner)
     settings = request.app.state.settings
     enabled = settings.multi_workspace_enabled
     session_ref = authenticated_session_ref(request)
@@ -242,4 +244,96 @@ async def upload_document(
         raise
     if not created:
         storage_path(settings.data_dir, raw_uri).unlink(missing_ok=True)
+        existing = await documents.find_document_identity(
+            session, source_id, f"file:{digest}", scope=scope, multi_workspace_enabled=enabled,
+        )
+        if existing is None:
+            raise HTTPException(status_code=409, detail="This file was previously ingested and its document was deleted")
+        document_id = existing
+    return run, document_id
+
+
+@documents_router.post("/upload", response_model=Receipt, status_code=202)
+async def upload_document(
+    request: Request,
+    source_id: Annotated[UUID, Form()],
+    upload: Annotated[UploadFile, File(alias="file")],
+    session: Session,
+    _owner: OwnerWrite,
+) -> Receipt:
+    """Validate and durably store a bounded upload, removing raw bytes if intake fails or deduplicates."""
+    scope = _owner_scope(_owner)
+    run, _document_id = await _intake_upload(request, session, scope, source_id, upload)
     return Receipt(workspace_id=run.workspace_id, batch_id=run.batch_id, run_id=run.id, status=run.status)
+
+
+async def _chat_attachment_read(
+    session: AsyncSession, document_id: UUID, run_id: UUID | None = None, *,
+    scope: WorkspaceContext, multi_workspace_enabled: bool,
+) -> ChatAttachmentRead:
+    """Project one in-workspace Chat attachments Document into its chat-context readiness, or 404."""
+    document = await documents.get_document(
+        session, document_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if document is None or not await sources.is_chat_attachments_source(
+        session, document.source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    ):
+        raise HTTPException(status_code=404, detail="Chat attachment not found")
+    source = await sources.get_source(
+        session, document.source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    local_only = True if source is None else source.local_only
+    status: Literal["pending", "ready", "too_large", "failed"] = "failed"
+    version_id: UUID | None = None
+    if document.extraction_status in {"queued", "processing"}:
+        status = "pending"
+    elif document.extraction_status in {"ready", "succeeded"}:
+        # The same current-version projection the chat selection resolver re-checks at send.
+        projection = await documents.get_news_document_projection(
+            session, document.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
+        if projection is not None:
+            status = "too_large" if projection.chunks_truncated else "ready"
+            version_id = projection.document_version_id
+            local_only = projection.local_only
+    return ChatAttachmentRead(
+        document_id=document.id, source_id=document.source_id, title=document.title,
+        status=status, document_version_id=version_id, local_only=local_only, run_id=run_id,
+    )
+
+
+@documents_router.post("/chat-attachments", response_model=ChatAttachmentRead, status_code=202)
+async def upload_chat_attachment(
+    request: Request,
+    upload: Annotated[UploadFile, File(alias="file")],
+    session: Session,
+    _owner: DefaultWrite,
+    share_with_model: Annotated[bool, Form()] = False,
+) -> ChatAttachmentRead:
+    """Store a chat attachment as an ordinary Document in one of two server-owned sources.
+
+    ``share_with_model`` (default false) only picks between the private, local-only "Chat
+    attachments" source and "Chat attachments (shared)"; the client can never name a source.
+    Both are plain manual sources, so purge, export, backup and deletion treat the file exactly
+    like any other uploaded Document. Bound to the default workspace.
+    """
+    scope = _owner_scope(_owner)
+    enabled = request.app.state.settings.multi_workspace_enabled
+    source = await sources.get_or_create_chat_attachments_source(
+        session, scope=scope, multi_workspace_enabled=enabled, shared=share_with_model,
+    )
+    run, document_id = await _intake_upload(request, session, scope, source.id, upload)
+    return await _chat_attachment_read(
+        session, document_id, run.id, scope=scope, multi_workspace_enabled=enabled,
+    )
+
+
+@documents_router.get("/chat-attachments/{document_id}", response_model=ChatAttachmentRead)
+async def get_chat_attachment(
+    document_id: UUID, request: Request, session: Session, _owner: DefaultRead,
+) -> ChatAttachmentRead:
+    """Return a chat attachment's ingest status and current version for the composer to poll."""
+    return await _chat_attachment_read(
+        session, document_id, scope=_owner_scope(_owner),
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+    )

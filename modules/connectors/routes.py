@@ -999,13 +999,13 @@ async def fetch_native_provider(
         )
     except HTTPException as exc:
         await _release_failed_collection(
-            session, active_lease[0], error_code="provider_collection_failed",
+            session, active_lease[0], error_code=_collection_error_code(exc),
             multi_workspace_enabled=multi_workspace_enabled, scope=scope,
         )
         raise
     except (TimeoutError, httpx.HTTPError, ValueError) as exc:
         await _release_failed_collection(
-            session, active_lease[0], error_code="provider_collection_failed",
+            session, active_lease[0], error_code=_collection_error_code(exc),
             multi_workspace_enabled=multi_workspace_enabled, scope=scope,
         )
         raise HTTPException(status_code=503, detail="Provider collection failed") from exc
