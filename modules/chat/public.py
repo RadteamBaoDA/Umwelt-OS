@@ -786,7 +786,7 @@ def _safe_chat_export_url(value: str | None) -> str | None:
 
 def _export_owner_allowed(owner_id: int, scope: _Any, multi_workspace_enabled: bool) -> bool:
     """Bootstrap owner always; any other account only when the rollout is on and the scope is theirs."""
-    return (owner_id == 1 or multi_workspace_enabled) and (scope is None or scope.user_id == owner_id)
+    return (owner_id == 1 or multi_workspace_enabled) and (scope is None or (scope.user_id == owner_id and scope.role == "owner"))
 
 
 async def _require_chat_export_owner(

@@ -2890,6 +2890,23 @@ async def settle_collection_in_uow(
         accepted_receipt_id=accepted_receipt_id)
 
 
+async def settle_collection_exit(
+    session: AsyncSession, ref: "CollectionRequestRef", *,
+    outcome: Literal["no_changes", "failed"], error_code: str | None = None,
+    retryable: bool = False, provider_deadline: datetime | None = None,
+) -> bool:
+    """Settle a failed/retryable/replay-only exit and free its slot now, committing; False if the token is stale.
+
+    Reuses the sweeper's settlement, so action-required codes gate the schedule and retryable
+    failures requeue no earlier than ``provider_deadline`` instead of waiting for slot expiry.
+    """
+    from modules.connectors import scheduler
+
+    return await scheduler.settle_admission(
+        session, ref.request_id, ref.admission_token, outcome=outcome, error_code=error_code,
+        retryable=retryable, provider_deadline=provider_deadline)
+
+
 async def recoverable_collection_request_ids(session: AsyncSession, request_ids: list[UUID]) -> set[UUID]:
     """Return which of ``request_ids`` are still queued/running, i.e. whose receipt must be kept."""
     from modules.connectors import scheduler

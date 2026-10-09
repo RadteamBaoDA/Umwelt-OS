@@ -68,3 +68,11 @@ async def test_export_owner_gate(monkeypatch):
     member = WorkspaceContext(user_id=8, workspace_id=WS, role="member", membership_revision=1)
     with pytest.raises(PermissionError):  # scope belongs to someone else
         await chat_public._require_chat_export_owner(session, 7, scope=member, multi_workspace_enabled=True)
+
+
+@pytest.mark.asyncio
+async def test_export_owner_gate_denies_member_role_of_same_user():
+    session = MagicMock(scalar=AsyncMock(return_value=7))
+    member = WorkspaceContext(user_id=7, workspace_id=WS, role="member", membership_revision=1)
+    with pytest.raises(PermissionError):
+        await chat_public._require_chat_export_owner(session, 7, scope=member, multi_workspace_enabled=True)

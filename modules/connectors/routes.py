@@ -425,6 +425,35 @@ async def _prove_admission(
         raise HTTPException(status_code=409, detail="Collection admission is no longer current")
 
 
+async def _settle_request_exit(
+    session: AsyncSession, ref: CollectionRequestRef, *, outcome: Literal["no_changes", "failed"],
+    error_code: str | None = None, retryable: bool = False, provider_deadline: datetime | None = None,
+) -> None:
+    """Best-effort immediate settle of a non-accepted exit so the slot frees without waiting for expiry."""
+    try:
+        async with asyncio.timeout(3):
+            await session.rollback()
+            await connectors_public.settle_collection_exit(
+                session, ref, outcome=outcome, error_code=error_code, retryable=retryable,
+                provider_deadline=provider_deadline)
+    except BaseException:  # noqa: BLE001  # deliberate boundary: the expiry sweeper still settles it
+        return
+
+
+def _request_failure(exc: BaseException) -> tuple[str, bool]:
+    """Map an exit exception to (request error code, retryable): auth/schema/terms never retry."""
+    code = _collection_error_code(exc)
+    if code == "provider_unauthorized":
+        return "invalid_credential", False
+    if isinstance(exc, HTTPException):
+        if exc.detail == "terms_not_accepted":
+            return "terms_not_accepted", False
+        if exc.status_code == 422:
+            return "schema_changed", False
+        return code, exc.status_code >= 500
+    return code, True
+
+
 async def _release_failed_collection(
     session: AsyncSession,
     lease: ConnectorCollectionLease,
@@ -746,6 +775,9 @@ async def fetch_native_provider(
             _provider_cooldown(request, source.provider), deadline=segment_deadline
         )
         if cooldown is not None and cooldown > now:
+            await _settle_request_exit(
+                session, request_ref, outcome="failed", error_code="provider_rate_limited",
+                retryable=True, provider_deadline=cooldown)
             return ProviderFetchRead(workspace_id=scope.workspace_id, 
                 status="rate_limited", batch_id=None, run_id=None,
                 received_update_count=0, record_count=0,
@@ -809,6 +841,9 @@ async def fetch_native_provider(
                     access_fence=access_fence, multi_workspace_enabled=multi_workspace_enabled, scope=scope,
                 )
                 if isinstance(receipt, ProviderFetchRead):
+                    await _settle_request_exit(
+                        session, request_ref, outcome="failed", error_code="provider_rate_limited",
+                        retryable=True, provider_deadline=receipt.next_eligible_at)
                     return receipt
             else:
                 collected_at = datetime.now(UTC)
@@ -969,6 +1004,9 @@ async def fetch_native_provider(
                         session, lease, error_code="provider_rate_limited",
                         multi_workspace_enabled=multi_workspace_enabled, scope=scope,
                     )
+                    await _settle_request_exit(
+                        session, request_ref, outcome="failed", error_code="provider_rate_limited",
+                        retryable=True, provider_deadline=eligible)
                     return ProviderFetchRead(workspace_id=scope.workspace_id, 
                         status="rate_limited", batch_id=None, run_id=None,
                         received_update_count=0, record_count=0,
@@ -1006,6 +1044,8 @@ async def fetch_native_provider(
                     expected_world_credential_operation_id=original_world_operation_id if source.provider == "alpha_vantage" else None,
                 )
                 return _provider_fetch_read(receipt, eligible)
+        if receipt.batch_id is None:  # replay-only Telegram page: nothing accepted, so nothing settled it
+            await _settle_request_exit(session, request_ref, outcome="no_changes")
         return _provider_fetch_read(receipt, eligible)
     except ProviderAdmissionBusy:
         eligible = datetime.now(UTC) + timedelta(seconds=1)
@@ -1013,6 +1053,9 @@ async def fetch_native_provider(
             session, active_lease[0], error_code="provider_admission_busy",
             multi_workspace_enabled=multi_workspace_enabled, scope=scope,
         )
+        await _settle_request_exit(
+            session, request_ref, outcome="failed", error_code="provider_admission_busy",
+            retryable=True, provider_deadline=eligible)
         return ProviderFetchRead(workspace_id=scope.workspace_id, 
             status="rate_limited", batch_id=None, run_id=None,
             received_update_count=0, record_count=0,
@@ -1024,6 +1067,9 @@ async def fetch_native_provider(
             session, active_lease[0], error_code="provider_rate_limited",
             multi_workspace_enabled=multi_workspace_enabled, scope=scope,
         )
+        await _settle_request_exit(
+            session, request_ref, outcome="failed", error_code="provider_rate_limited",
+            retryable=True, provider_deadline=deadline)
         return ProviderFetchRead(workspace_id=scope.workspace_id, 
             status="rate_limited", batch_id=None, run_id=None,
             received_update_count=0, record_count=0,
@@ -1035,18 +1081,24 @@ async def fetch_native_provider(
             session, active_lease[0], error_code=_collection_error_code(exc),
             multi_workspace_enabled=multi_workspace_enabled, scope=scope,
         )
+        code, retryable = _request_failure(exc)
+        await _settle_request_exit(session, request_ref, outcome="failed", error_code=code, retryable=retryable)
         raise
     except (TimeoutError, httpx.HTTPError, ValueError) as exc:
         await _release_failed_collection(
             session, active_lease[0], error_code=_collection_error_code(exc),
             multi_workspace_enabled=multi_workspace_enabled, scope=scope,
         )
+        code, retryable = _request_failure(exc)
+        await _settle_request_exit(session, request_ref, outcome="failed", error_code=code, retryable=retryable)
         raise HTTPException(status_code=503, detail="Provider collection failed") from exc
     except BaseException:
         await _release_failed_collection(
             session, active_lease[0], error_code="provider_collection_failed",
             multi_workspace_enabled=multi_workspace_enabled, scope=scope,
         )
+        await _settle_request_exit(
+            session, request_ref, outcome="failed", error_code="provider_collection_failed", retryable=True)
         raise
     finally:
         if github_permit_token is not None:
@@ -1576,6 +1628,10 @@ async def admit_collection(
             raise
         await session.rollback()  # the MCP workflow holds only the distinct mcp:collect bearer
         _, scope, _ = await _mcp_collector(session, source_id, authorization, multi_workspace_enabled=multi_workspace_enabled)
+        # The mcp:collect bearer is valid only for an MCP source; every other type needs the collector bearer.
+        source = await _source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+        if source.type != mcp_collection.PROVIDER_ID:
+            raise HTTPException(status_code=403, detail="MCP collector bearer is valid only for MCP sources")
     await session.rollback()  # admission takes its own fence -> Source -> request locks
     return await connectors_public.admit_managed_collection(
         session, scope, source_id, payload, trigger=payload.trigger, multi_workspace_enabled=multi_workspace_enabled)

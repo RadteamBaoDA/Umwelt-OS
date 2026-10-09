@@ -219,6 +219,7 @@ async def test_admission_falls_back_to_mcp_bearer_only_on_401() -> None:
     payload = CollectionAdmissionRequest(**FENCE)
     with (patch.object(routes, "_collector", AsyncMock(side_effect=HTTPException(401))),
           patch.object(routes, "_mcp_collector", AsyncMock(return_value=("t", scope, object()))) as mcp,
+          patch.object(routes, "_source", AsyncMock(return_value=SimpleNamespace(type="mcp"))),
           patch.object(routes.connectors_public, "admit_managed_collection", AsyncMock(return_value=read))):
         assert await routes.admit_collection(SOURCE_ID, payload, _http(), session, "Bearer t") is read  # type: ignore[arg-type]
     mcp.assert_awaited_once()
@@ -248,3 +249,60 @@ def test_every_template_admits_first_and_passes_the_token_on(source_type: str, p
     assert len(first) == 1 and first[0] != "Request collection admission"
     text = json.dumps([n["parameters"] for n in body["nodes"] if n["name"] != "Request collection admission"])
     assert "admission_request_id" in text and "admission_token" in text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("source_type", "allowed"), [("web", False), ("mcp", True)])
+async def test_mcp_bearer_fallback_only_for_mcp_sources(source_type: str, allowed: bool) -> None:
+    session = MagicMock(rollback=AsyncMock())
+    read = CollectionAdmissionRead(request_id=uuid4(), source_id=SOURCE_ID, admission_token=uuid4(), attempt=1)
+    admit = AsyncMock(return_value=read)
+    payload = CollectionAdmissionRequest(**FENCE)
+    with (patch.object(routes, "_collector", AsyncMock(side_effect=HTTPException(401))),
+          patch.object(routes, "_mcp_collector", AsyncMock(return_value=("t", object(), object()))),
+          patch.object(routes, "_source", AsyncMock(return_value=SimpleNamespace(type=source_type))),
+          patch.object(routes.connectors_public, "admit_managed_collection", admit)):
+        if allowed:
+            assert await routes.admit_collection(SOURCE_ID, payload, _http(), session, "Bearer t") is read  # type: ignore[arg-type]
+        else:
+            with pytest.raises(HTTPException) as exc:
+                await routes.admit_collection(SOURCE_ID, payload, _http(), session, "Bearer t")  # type: ignore[arg-type]
+            assert exc.value.status_code == 403
+            admit.assert_not_awaited()
+
+
+def test_request_failure_keeps_auth_schema_terms_non_retryable() -> None:
+    assert routes._request_failure(HTTPException(409, "terms_not_accepted")) == ("terms_not_accepted", False)
+    assert routes._request_failure(HTTPException(422, "bad")) == ("schema_changed", False)
+    assert routes._request_failure(HTTPException(409, routes.GITHUB_RECONNECT_DETAIL)) == ("invalid_credential", False)
+    assert routes._request_failure(HTTPException(503, "x")) == ("provider_collection_failed", True)
+    assert routes._request_failure(TimeoutError()) == ("provider_collection_failed", True)
+
+
+@pytest.mark.asyncio
+async def test_settle_request_exit_releases_slot_with_deadline_and_never_raises() -> None:
+    session = MagicMock(rollback=AsyncMock())
+    ref = CollectionRequestRef(request_id=uuid4(), admission_token=uuid4())
+    deadline = object()
+    settle = AsyncMock(return_value=True)
+    with patch.object(routes.connectors_public, "settle_collection_exit", settle):
+        await routes._settle_request_exit(
+            session, ref, outcome="failed", error_code="provider_rate_limited", retryable=True,
+            provider_deadline=deadline)  # type: ignore[arg-type]
+    settle.assert_awaited_once_with(
+        session, ref, outcome="failed", error_code="provider_rate_limited", retryable=True, provider_deadline=deadline)
+    with patch.object(routes.connectors_public, "settle_collection_exit", AsyncMock(side_effect=RuntimeError)):
+        await routes._settle_request_exit(session, ref, outcome="no_changes")
+
+
+@pytest.mark.asyncio
+async def test_public_settle_collection_exit_delegates_to_scheduler_settle() -> None:
+    from modules.connectors import public, scheduler
+
+    ref = CollectionRequestRef(request_id=uuid4(), admission_token=uuid4())
+    session = MagicMock()
+    with patch.object(scheduler, "settle_admission", AsyncMock(return_value=True)) as settle:
+        assert await public.settle_collection_exit(session, ref, outcome="failed", error_code="x", retryable=True)
+    settle.assert_awaited_once_with(
+        session, ref.request_id, ref.admission_token, outcome="failed", error_code="x", retryable=True,
+        provider_deadline=None)
