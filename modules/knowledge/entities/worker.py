@@ -651,7 +651,7 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
             response = await gateway.structured(
                 alias, mapping, policy,
                 extraction_messages([(chunk.id, chunk.content) for chunk in data.chunks]),
-                response_schema(), probe=False,
+                response_schema(), probe=False, before_send=before_send,
             )
             if not isinstance(response, dict):
                 raise ValueError("invalid_model_response")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior

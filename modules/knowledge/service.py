@@ -199,8 +199,8 @@ class KnowledgeService:
         from modules.chat import retrieval
 
         return await retrieval.build_context(
-            self.session, session_factory, redis, settings, request,
-        )  # ponytail: Chat resolves the owner scope itself until A2 converts build_context
+            self.session, session_factory, redis, settings, request, scope=self.scope,
+        )
 
     async def get_memories(
         self,

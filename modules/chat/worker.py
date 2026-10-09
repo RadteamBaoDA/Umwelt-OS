@@ -182,11 +182,13 @@ async def is_run_cancelled(response_id: UUID, redis: Redis) -> bool:
         return False
 
 
-async def is_history_storage_enabled(session: AsyncSession) -> bool:
+async def is_history_storage_enabled(session: AsyncSession, scope: Scope | None = None) -> bool:
     """Read the owner history choice while serializing absent-row initialization and updates.
 
     Args:
         session: Active asynchronous database session.
+        scope: The caller's workspace scope; None falls back to the owner-1 default workspace
+            (ponytail: link_agent_run is still owner-pinned to 1).
 
     Returns:
         True when durable history is permitted; False when new history is temporary.
@@ -196,7 +198,7 @@ async def is_history_storage_enabled(session: AsyncSession) -> bool:
     """
     await lock_export_privacy(session)
     return (await read_export_privacy(
-        session, scope=await owner_default_scope(session), multi_workspace_enabled=multi_workspace_enabled(),
+        session, scope=scope or await owner_default_scope(session), multi_workspace_enabled=multi_workspace_enabled(),
     )).store_conversation_history
 
 

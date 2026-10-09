@@ -316,7 +316,7 @@ async def process_timeline_extraction_work(ctx: dict[str, object], work_id_value
                     [(item.id, item.content) for item in data.chunks],
                     [item.model_dump(mode="json", exclude={"name", "entity_id", "entity_revision", "observed_at"}) for item in membership_refs],
                 ),
-                response_schema(), probe=False,
+                response_schema(), probe=False, before_send=before_send,
             )
             if not isinstance(response, dict):
                 raise ValueError("invalid_model_response")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior

@@ -747,7 +747,7 @@ async def generate_brief(
     try:
         response = await gateway.chat(
             alias, mapping, policy, _messages(day, facts), max_tokens=500, temperature=0.2,
-            after_send=release_fence,
+            before_send=send_fence, after_send=release_fence,
         )
         content = str(response["choices"][0]["message"]["content"]).strip()
     except (ModelGatewayError, KeyError, IndexError, TypeError) as exc:

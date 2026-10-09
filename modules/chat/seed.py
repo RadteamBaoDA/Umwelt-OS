@@ -19,7 +19,7 @@ async def ensure_demo_conversation(
     del multi_workspace_enabled  # history consent is owner-global; the flag only matters to scoped Source/Document seeds
     from modules.chat.worker import is_history_storage_enabled
 
-    if not await is_history_storage_enabled(session):
+    if not await is_history_storage_enabled(session, scope):
         return 0, 0, 1
     conversation_id = p12_demo_seed_id("conversation", "orchard-catalogue-planning")
     if await session.scalar(select(Conversation.id).where(
