@@ -1,5 +1,6 @@
 'use client';
 
+import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { MessageSquare, RefreshCw, Sparkles } from 'lucide-react';
 import { useTranslations } from 'next-intl';
@@ -8,11 +9,26 @@ import { ApiError, apiRequest } from '@/core/api';
 import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { DateSelector } from './date-selector';
-import { dailyKeys, generateBrief, getDailyContext, type DailyWidgetData } from './daily-api';
+import { dailyKeys, generateBrief, getDailyContext, type DailyBriefRevision, type DailyWidgetData } from './daily-api';
 import { useChatController } from '@/core/app-shell/chat-controller';
 import { useSelectedDay } from './selected-day';
 import { useWorkspace } from '@/core/workspace-context';
 import { BriefShareButton, SharedBriefs } from './brief-sharing';
+import { useContentTranslation } from '@/modules/translations/use-content-translation';
+import { TranslatedBadge } from '@/modules/translations/translated-badge';
+
+/** Brief text with the automatic translation of this saved revision; the original is shown first. */
+export function BriefText({ brief }: { brief: DailyBriefRevision }) {
+  const [showOriginal, setShowOriginal] = useState(false);
+  const targets = useMemo(() => [{ id: brief.id, revision: String(brief.revision) }], [brief.id, brief.revision]);
+  const translated = useContentTranslation('daily_brief', targets).results.get(brief.id)?.translation?.content;
+  return (
+    <>
+      <p className="whitespace-pre-wrap text-sm leading-relaxed">{translated && !showOriginal ? translated : brief.content}</p>
+      {translated && <TranslatedBadge showOriginal={showOriginal} onToggle={() => setShowOriginal((v) => !v)} />}
+    </>
+  );
+}
 
 /** Renders one current-record widget summary with its own updated-at and source status. */
 function WidgetSummary({ widget }: { widget: DailyWidgetData }) {
@@ -85,7 +101,7 @@ export function DailyBrief() {
             {brief ? (
               <>
                 {brief.status === 'stale' && <p role="status" className="rounded border border-destructive p-2 text-xs text-destructive">{t('staleBrief')}</p>}
-                <p className="whitespace-pre-wrap text-sm leading-relaxed">{brief.content}</p>
+                <BriefText key={`${brief.id}:${brief.revision}`} brief={brief} />
                 {brief.citations.length > 0 && (
                   <ol className="space-y-0.5 text-xs text-muted-foreground" aria-label={t('citations')}>
                     {brief.citations.map((citation) => <li key={citation.ref}>[{citation.ref}] {citation.title}</li>)}
