@@ -152,7 +152,6 @@ async def test_correction_event_ids_denies_member_before_query() -> None:
 async def test_event_routes_do_not_pass_route_actor() -> None:
     """Event audit actor derives from the scope, so routes no longer forward an owner id."""
     from modules.timeline import routes
-    owner = MagicMock(owner_id=999)
     request = MagicMock()
     request.app.state.settings.multi_workspace_enabled = False
     for name, call in (
