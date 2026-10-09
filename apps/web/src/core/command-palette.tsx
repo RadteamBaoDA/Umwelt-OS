@@ -6,10 +6,11 @@ import { useQuery } from '@tanstack/react-query';
 import { BotIcon, CalendarIcon, FileTextIcon, MessageSquareIcon, NavigationIcon, PlayIcon, SearchIcon, ShapesIcon, SparklesIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
-import { commandDestinations, destinationEnabled, type ModuleAvailability } from '@/core/module-registry';
+import { commandDestinations, destinationEnabled, destinationForRole, type ModuleAvailability } from '@/core/module-registry';
 import { apiRequest } from '@/core/api';
 import { useGuardedNavigation } from '@/core/guarded-navigation';
 import { useChatController } from '@/core/app-shell/chat-controller';
+import { useWorkspace } from '@/core/workspace-context';
 import { listConversations } from '@/modules/chat/api';
 import { searchEvents } from '@/modules/timeline/api';
 import { searchDocuments, searchEntities, type SearchFilters } from '@/modules/search/api';
@@ -52,6 +53,7 @@ export function CommandPalette() {
   const { setDraft, openDrawer, selectConversation } = useChatController();
   const t = useTranslations('shell');
   const tc = useTranslations('chat');
+  const { selection } = useWorkspace();
   const inputRef = useRef<HTMLInputElement>(null);
   const openRef = useRef(false);
   const [open, setOpen] = useState(false);
@@ -120,7 +122,7 @@ export function CommandPalette() {
     if (scope === 'all') {
       for (const dest of commandDestinations) {
         const label = t(dest.messageKey);
-        if (destinationEnabled(dest, moduleAvailability.data) && label.toLocaleLowerCase().includes(lower)) {
+        if (destinationEnabled(dest, moduleAvailability.data) && destinationForRole(dest, selection?.role) && label.toLocaleLowerCase().includes(lower)) {
           list.push({ id: `go-${dest.id}`, group: 'goTo', label, icon: NavigationIcon, run: () => go(dest.href) });
         }
       }
@@ -134,7 +136,7 @@ export function CommandPalette() {
       }
     }
     return list;
-  }, [query, scope, moduleAvailability.data, docs.data, entities.data, events.data, conversations.data, wantsDocs, wantsEntities, wantsEvents, wantsConversations, t, tc, setDraft, openDrawer, selectConversation, navigate]);
+  }, [query, scope, moduleAvailability.data, docs.data, entities.data, events.data, conversations.data, selection?.role, wantsDocs, wantsEntities, wantsEvents, wantsConversations, t, tc, setDraft, openDrawer, selectConversation, navigate]);
 
   const active = options.length ? Math.min(activeIndex, options.length - 1) : -1;
   const optionId = (index: number) => `palette-option-${options[index]?.id}`;

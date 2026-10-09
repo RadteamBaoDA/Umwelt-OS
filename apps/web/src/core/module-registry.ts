@@ -5,6 +5,7 @@ export type ShellMessageKey =
   | 'dataSources'
   | 'aiRouter'
   | 'dashboardGadgets'
+  | 'workspaceMembers'
   | 'documents'
   | 'entities'
   | 'search'
@@ -50,6 +51,7 @@ export const settingsGroups: NavigationDestination[] = [
   { id: 'data-sources', href: '/settings/sources', messageKey: 'dataSources' },
   { id: 'ai-router', href: '/settings/ai', messageKey: 'aiRouter' },
   { id: 'dashboard-gadgets', href: '/settings/dashboard', messageKey: 'dashboardGadgets' },
+  { id: 'workspace-members', href: '/settings/workspace', messageKey: 'workspaceMembers' },
 ];
 
 /** Sub-tabs of the Data sources group (rendered by the shell above the page); exact tabs match only their own path. */

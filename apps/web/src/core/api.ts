@@ -2,15 +2,18 @@
 export class ApiError extends Error {
   readonly code: string | null;
   readonly details: unknown;
+  /** Full error object (e.g. top-level `document_ids` on a 409), not only the recognized fields. */
+  readonly payload: Record<string, unknown>;
   /** Copies the response status, message, and recognized payload fields onto the error. */
   constructor(
     readonly status: number,
     message: string,
-    payload?: { code?: unknown; details?: unknown },
+    payload?: { code?: unknown; details?: unknown; [key: string]: unknown },
   ) {
     super(message);
     this.code = typeof payload?.code === 'string' ? payload.code : null;
     this.details = payload?.details;
+    this.payload = payload ?? {};
   }
 }
 
@@ -102,7 +105,7 @@ export async function apiRequest<T>(
   }
   if (response.status === 204) return undefined as T;
 
-  const body = (await response.json()) as { error?: { message?: string; code?: string; details?: unknown }; detail?: string | { message?: string; code?: string; details?: unknown } } & T;
+  const body = (await response.json()) as { error?: { message?: string; code?: string; details?: unknown; [key: string]: unknown }; detail?: string | { message?: string; code?: string; details?: unknown; [key: string]: unknown } } & T;
   if (isStale()) throw new StaleWorkspaceError();
   if (!response.ok) {
     if (scoped && typeof window !== 'undefined' && response.status === 404 && body.detail === 'Workspace not found') {

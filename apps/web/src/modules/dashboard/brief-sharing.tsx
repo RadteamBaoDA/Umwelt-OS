@@ -3,7 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
-import { ApiError, csrfHeaders, workspaceHeaders } from '@/core/api';
+import { ApiError } from '@/core/api';
 import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { useWorkspace } from '@/core/workspace-context';
@@ -14,17 +14,6 @@ import { dailyKeys, listBriefRevisions, type DailyBriefRevision } from './daily-
 /** Raised when a brief share is blocked until the listed owner-visible documents are shared. */
 export class EvidenceNotSharedError extends Error {
   constructor(readonly documentIds: string[]) { super('brief_evidence_not_shared'); }
-}
-
-/** ApiError does not retain the top-level `document_ids`, so re-read them from the same conflict response. */
-async function readEvidenceIds(url: string, body: string, csrfToken: string): Promise<string[]> {
-  const response = await fetch(url, {
-    method: 'PUT', cache: 'no-store', credentials: 'same-origin',
-    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken), ...(workspaceHeaders('selected') as Record<string, string>) }, body,
-  });
-  const payload = (await response.json().catch(() => ({}))) as { detail?: { document_ids?: unknown } };
-  const ids = payload.detail?.document_ids;
-  return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : [];
 }
 
 function EvidenceLink({ id }: { id: string }) {
@@ -42,9 +31,8 @@ export function BriefShareButton({ brief }: { brief: Pick<DailyBriefRevision, 'i
       return await grantShare(workspaceId, 'brief', brief.id, member, revision, csrfToken);
     } catch (error) {
       if (error instanceof ApiError && error.status === 409 && error.code === 'brief_evidence_not_shared') {
-        const url = `/api/v1/workspaces/${workspaceId}/shares/brief/${brief.id}/${member.user_id}`;
-        const body = JSON.stringify({ expected_revision: member.membership_revision, resource_revision: revision });
-        throw new EvidenceNotSharedError(await readEvidenceIds(url, body, csrfToken));
+        const ids = error.payload.document_ids;
+        throw new EvidenceNotSharedError(Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : []);
       }
       throw error;
     }

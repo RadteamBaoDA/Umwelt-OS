@@ -39,9 +39,9 @@ describe('useContentTranslation', () => {
       accepted(items.map((i) => ({ resource_id: i.resource_id, status: 'unchanged' }))));
     renderHook(() => useContentTranslation('news_story', ids(30)), { wrapper });
     await settle(); await settle();
-    const sizes = api.submitTranslationBatch.mock.calls.map((c: unknown[][]) => c[0].length).sort();
+    const sizes = api.submitTranslationBatch.mock.calls.map((c: unknown[][]) => c[0].length).sort((a: number, b: number) => a - b);
     expect(sizes).toEqual([5, 25]);
-    expect(api.submitTranslationBatch.mock.calls.flatMap((c: unknown[][]) => c[0]).every((i: { resource_id: string }) => /^s\d+$/.test(i.resource_id))).toBe(true);
+    expect(api.submitTranslationBatch.mock.calls.flatMap((c: unknown[][]) => c[0] as Array<{ resource_id: string }>).every((i: { resource_id: string }) => /^s\d+$/.test(i.resource_id))).toBe(true);
   });
 
   it('drops a late result after a workspace switch', async () => {
