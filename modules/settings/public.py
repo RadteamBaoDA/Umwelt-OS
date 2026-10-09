@@ -319,21 +319,20 @@ async def check_ai_execution_config(
     latest = await get_ai_execution_config(session, settings, redis, scope=scope)
     if latest.gateway_identity != expected.gateway_identity or latest.configuration_revision != expected.configuration_revision:
         raise HTTPException(status_code=409, detail="AI settings changed; prepare a fresh request")
-async def lock_ai_settings_for_share(session: AsyncSession) -> bool:
-    """Share-lock the owner AI settings row until the caller's transaction ends.
+
+
+async def lock_ai_settings_for_share(session: AsyncSession, *, scope: Scope) -> bool:
+    """Share-lock the scoped AI settings row until the caller's transaction ends.
 
     Blocks ``save_ai_settings`` (row ``FOR UPDATE``) so a consent/provider/endpoint/key read in the same
     transaction cannot be revoked before the caller releases it. A leaf lock: savers lock nothing else.
-    Returns False when no row exists (nothing was locked; callers treat that as "not configured").
+    The caller already holds the access fence. Returns False when no row exists.
     """
     return (await session.scalar(
-        select(AISettingsRecord.owner_id).where(AISettingsRecord.owner_id == OWNER_ID).with_for_update(read=True)
+        select(AISettingsRecord.owner_id).where(
+            AISettingsRecord.owner_id == scope_actor(scope), AISettingsRecord.workspace_id == scope.workspace_id,
+        ).with_for_update(read=True)
     )) is not None
-
-
-async def read_ai_settings(session: AsyncSession, settings: Settings, redis: Redis | None = None) -> AISettingsRead:
-    """Return the public AI settings projection for the current owner."""
-    return _read(await get_ai_execution_config(session, settings, redis))
 
 
 async def read_ai_settings(session: AsyncSession, settings: Settings, redis: Redis | None = None, *, scope: Scope) -> AISettingsRead:
@@ -375,7 +374,7 @@ async def save_ai_settings(session: AsyncSession, update: AISettingsUpdate, sett
         old_endpoint = old_endpoint or default_endpoint
         row.omniroute_base_url = old_endpoint
         if not row.aliases:
-            row.aliases = {key: value.model_dump() for key, value in (await legacy_aliases(None, settings, scope=scope)).items()}
+            row.aliases = {key: value.model_dump(mode="json") for key, value in (await legacy_aliases(None, settings, scope=scope)).items()}
         if not row.omniroute_api_key_ciphertext and default_credential:
             row.omniroute_api_key_ciphertext = _cipher(settings).encrypt(default_credential.encode()).decode()
     if update.omniroute_credential_action == "replaced":

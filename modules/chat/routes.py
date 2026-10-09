@@ -330,7 +330,12 @@ async def list_conversations(
     response.headers["Cache-Control"] = "private, no-store"
     now = datetime.now(UTC)
     scope = await owner_default_scope(session, _owner.owner_id)
-    rows = (
+    if q is not None and not q.strip():
+        raise HTTPException(status_code=422, detail="q must not be blank")
+    rows = await chat_public.search_conversations(
+        session, q, scope=scope, multi_workspace_enabled=multi_workspace_enabled(),
+        limit=limit, offset=offset, archived=archived,
+    ) if q is not None else (
         await session.scalars(
             select(Conversation)
             .where(Conversation.workspace_id == scope.workspace_id, Conversation.archived == archived)
@@ -722,7 +727,9 @@ async def send_message(
     await session.flush()
 
     resolved_context = await chat_public.resolve_gadget_context(session, payload.context)
-    await chat_public.reject_unsendable_selection(session, resolved_context)
+    await chat_public.reject_unsendable_selection(
+        session, resolved_context, scope=scope, multi_workspace_enabled=multi_workspace_enabled(),
+    )
     response_run = ResponseRun(
         workspace_id=conv.workspace_id,
         actor_user_id=conv.actor_user_id,
@@ -872,7 +879,9 @@ async def mutate_message(
     if original_prompt is None:
         raise HTTPException(status_code=409, detail="The original prompt is unavailable")
     # The stored fence is a snapshot: re-check its sources' current local_only before a new run exists.
-    await chat_public.reject_unsendable_selection(session, original_run.retrieval_context)
+    await chat_public.reject_unsendable_selection(
+        session, original_run.retrieval_context, scope=scope, multi_workspace_enabled=multi_workspace_enabled(),
+    )
 
     user_message = Message(
         conversation_id=conversation_id,

@@ -27,7 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.auth.models import Owner as _Owner
 from core.telemetry import RunMeta as _RunMeta
 from core.workspaces import public as _workspaces
-from core.workspaces.schemas import InternalJobScope, WorkspaceContext
+from core.workspaces.schemas import InternalJobScope, Scope, WorkspaceContext
 from modules.chat.citations import (
     INSUFFICIENT_EVIDENCE_MESSAGE,
     ensure_grounded_answer,
@@ -354,7 +354,9 @@ MAX_CHAT_ATTACHMENTS_PER_MESSAGE = 5
 CHAT_SELECTION_LOCAL_ONLY = "selection_local_only"
 
 
-async def reject_unsendable_selection(session: AsyncSession, resolved: dict[str, _Any] | None) -> None:
+async def reject_unsendable_selection(
+    session: AsyncSession, resolved: dict[str, _Any] | None, *, scope: Scope, multi_workspace_enabled: bool,
+) -> None:
     """Refuse, before any run exists, a selection that chat could never answer from.
 
     Chat always streams through the remote model gateway, and the worker privacy-cancels any run
@@ -372,7 +374,9 @@ async def reject_unsendable_selection(session: AsyncSession, resolved: dict[str,
     attachments = 0
     local_only = False
     for fence in fences:
-        source = await sources_public.get_source(session, UUID(str(fence["source_id"])))
+        source = await sources_public.get_source(
+            session, UUID(str(fence["source_id"])), scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
         if source is not None and (source.configuration or {}).get(sources_public.CHAT_ATTACHMENTS_MARKER) is True:
             attachments += 1
         local_only = local_only or bool(fence.get("local_only")) or (source is not None and source.local_only)
@@ -871,7 +875,8 @@ async def _chat_export_privacy(
 
 
 async def search_conversations(
-    session: AsyncSession, q: str, *, limit: int, offset: int, archived: bool,
+    session: AsyncSession, q: str, *, scope: WorkspaceContext, multi_workspace_enabled: bool,
+    limit: int, offset: int, archived: bool,
 ) -> list[Conversation]:
     """Search retained conversation titles by literal substring, newest first.
 
@@ -880,7 +885,7 @@ async def search_conversations(
     """
     # Lock-free consent read (the export path's); is_history_storage_enabled would hold Memory's advisory lock.
     try:
-        if not (await _chat_export_privacy(session))[0]:
+        if not (await _chat_export_privacy(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled))[0]:
             return []
     except ValueError:  # inconsistent privacy marker: fail closed rather than 500
         return []
@@ -888,7 +893,10 @@ async def search_conversations(
     # ponytail: ILIKE scan over the owner's own titles; add a pg_trgm index if title volume grows.
     statement = (
         _select(Conversation)
-        .where(Conversation.archived == archived, Conversation.title.ilike(f"%{escaped}%", escape="\\"))
+        .where(
+            Conversation.workspace_id == scope.workspace_id, Conversation.actor_user_id == scope.user_id,
+            Conversation.archived == archived, Conversation.title.ilike(f"%{escaped}%", escape="\\"),
+        )
         .where(*_chat_export_scope_retained(_datetime.now(_UTC)))
         .order_by(Conversation.pinned.desc(), Conversation.updated_at.desc(), Conversation.id.desc())
         .offset(offset).limit(limit)
@@ -1713,7 +1721,7 @@ async def purge_document_copied_evidence_page(
     )
 
 
-async def count_source_conversations(session: AsyncSession, source_id: UUID, cap: int = 1000) -> int:
+async def count_source_conversations(session: AsyncSession, source_id: UUID, *, scope: Scope, cap: int = 1000) -> int:
     """Return an owner-UI-only count of conversations citing a source, saturating at ``cap``."""
     key = str(source_id)
     # ponytail: seq scan over chat_messages; add GIN(citations jsonb_path_ops) if dialog open gets slow
@@ -1722,8 +1730,12 @@ async def count_source_conversations(session: AsyncSession, source_id: UUID, cap
         Message.citations.contains([{"sourceId": key}]),  # older rows
     )
     ids = _union(
-        _select(Message.conversation_id).where(cites),
-        _select(ResponseRun.conversation_id).where(ResponseRun.retrieval_context["source_scope"].contains([key])),
+        _select(Message.conversation_id)
+        .join(Conversation, Conversation.id == Message.conversation_id)
+        .where(Conversation.workspace_id == scope.workspace_id, cites),
+        _select(ResponseRun.conversation_id).where(
+            ResponseRun.workspace_id == scope.workspace_id, ResponseRun.retrieval_context["source_scope"].contains([key]),
+        ),
     ).subquery()
     capped = _select(ids.c.conversation_id).limit(cap).subquery()
     return int(await session.scalar(_select(_func.count()).select_from(capped)) or 0)

@@ -132,7 +132,12 @@ async def test_get_conversation_reads_outcome_for_assistant_messages(monkeypatch
         return [list(x) for x in lists]
 
     monkeypatch.setattr(routes, "_filter_citation_lists", keep)
-    detail = await routes.get_conversation(cid, session, None, SimpleNamespace(headers={}))  # type: ignore[arg-type]
+
+    async def default_scope(*_a: Any, **_k: Any) -> Any:
+        return SimpleNamespace(workspace_id=uuid4(), user_id=1)
+
+    monkeypatch.setattr(routes, "owner_default_scope", default_scope)
+    detail = await routes.get_conversation(cid, session, SimpleNamespace(owner_id=1), SimpleNamespace(headers={}))  # type: ignore[arg-type]
     by_id = {m.id: m.web_search for m in detail.messages}
     assert by_id[assistant_id] is not None and by_id[assistant_id].reason == "daily_limit"
     assert by_id[other_id] is None  # malformed stored outcome reports nothing
@@ -176,6 +181,11 @@ async def test_filter_current_citations_passes_web_through_in_order(monkeypatch:
         return [SimpleNamespace(document_version_id=version, chunk_id=chunk, source_id=source, document_id=document)]
 
     monkeypatch.setattr(documents_public, "lock_chat_evidence_chunks", lock)
+
+    async def scope_kw(*_a: Any, **_k: Any) -> dict[str, object]:
+        return {"scope": SimpleNamespace(workspace_id=uuid4(), user_id=1), "multi_workspace_enabled": False}
+
+    monkeypatch.setattr("modules.chat.scope.owner_scope_kwargs", scope_kw)
     web2 = {**WEB, "url": "https://example.org/b"}
     malformed = {"sourceType": "web", "url": "javascript:x"}  # missing title/provider/retrievedAt
     forged = {**WEB, "documentId": str(document)}  # mixed shape is rejected by extra="forbid"
@@ -215,13 +225,13 @@ async def test_export_emits_web_citations_with_query_stripped(monkeypatch: pytes
     async def ok(*_a: Any, **_k: Any) -> None:
         return None
 
-    async def privacy(_s: Any) -> tuple[bool, bool, datetime | None]:
+    async def privacy(_s: Any, **_k: Any) -> tuple[bool, bool, datetime | None]:
         return True, False, None
 
     async def count(*_a: Any) -> int:
         return 1
 
-    async def no_evidence(*_a: Any) -> dict[Any, Any]:
+    async def no_evidence(*_a: Any, **_k: Any) -> dict[Any, Any]:
         return {}
 
     ftp = {**WEB, "url": "ftp://x/y"}
@@ -241,7 +251,9 @@ async def test_export_emits_web_citations_with_query_stripped(monkeypatch: pytes
     monkeypatch.setattr(chat_public, "_chat_export_privacy", privacy)
     monkeypatch.setattr(chat_public, "_chat_export_count", count)
     monkeypatch.setattr(chat_public, "_chat_export_evidence_fences", no_evidence)
-    page = await chat_public.export_page(_Session(), owner_id=1, record_kind="messages", limit=10)  # type: ignore[arg-type]
+    page = await chat_public.export_page(_Session(), owner_id=1, record_kind="messages", limit=10,
+                                         scope=SimpleNamespace(workspace_id=uuid4(), user_id=1),
+                                         multi_workspace_enabled=False)  # type: ignore[arg-type]
     item = page.items[0]
     assert isinstance(item, ChatExportMessageRead)
     assert [c.model_dump(mode="json") for c in item.citations] == [{
@@ -289,6 +301,10 @@ async def test_delete_conversation_deletes_only_the_cascading_parent(monkeypatch
     async def noop(*_a: Any, **_k: Any) -> None:
         return None
 
+    async def default_scope(*_a: Any, **_k: Any) -> Any:
+        return SimpleNamespace(workspace_id=uuid4(), user_id=1)
+
+    monkeypatch.setattr("modules.chat.scope.owner_default_scope", default_scope)
     monkeypatch.setattr(memory_public, "lock_export_privacy", noop)
     monkeypatch.setattr(agents_public, "purge_conversation_actions", noop)
     assert await chat_public.delete_conversation(_Session(), convo.id, 1) is True  # type: ignore[arg-type]

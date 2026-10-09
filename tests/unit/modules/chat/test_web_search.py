@@ -6,6 +6,7 @@ import json
 import logging
 from datetime import UTC, datetime
 from typing import Any
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -174,7 +175,8 @@ def test_key_and_query_never_logged(caplog: pytest.LogCaptureFixture) -> None:
 
 def _config(**over: Any) -> AIExecutionConfig:
     base: dict[str, Any] = {
-        "configuration_revision": 1, "gateway_identity": "g", "endpoint_destination_id": None,
+        "workspace_id": uuid4(), "actor_user_id": 1, "membership_revision": 1, "access_configuration_revision": 1,
+        "configuration_revision": 1, "gateway_identity": "a" * 64, "endpoint_destination_id": None,
         "omniroute_base_url": None, "omniroute_api_key": "", "aliases": {},
         "privacy": PrivacySettings(allow_remote_web_search=True), "chat_alias": "a", "brief_alias": "b",
         "request_timeout_seconds": 20, "web_search_provider": "tavily",
