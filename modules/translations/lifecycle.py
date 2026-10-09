@@ -4,7 +4,6 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import and_, delete, or_, select
-from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.translations.models import ContentTranslation, TranslationBatch
@@ -33,12 +32,12 @@ async def expire_page(session: AsyncSession, *, now: datetime | None = None, lim
     ids = select(ContentTranslation.id).where(
         ContentTranslation.expires_at <= now, ~running,
     ).order_by(ContentTranslation.expires_at).limit(limit).with_for_update(skip_locked=True)
-    rows: CursorResult = await session.execute(  # type: ignore[type-arg]
+    rows = await session.execute(
         delete(ContentTranslation).where(ContentTranslation.id.in_(ids)).execution_options(synchronize_session=False))
     batch_ids = select(TranslationBatch.id).where(TranslationBatch.expires_at <= now).limit(limit)
-    batches: CursorResult = await session.execute(  # type: ignore[type-arg]
+    batches = await session.execute(
         delete(TranslationBatch).where(TranslationBatch.id.in_(batch_ids)).execution_options(synchronize_session=False))
-    return int(rows.rowcount or 0) + int(batches.rowcount or 0)
+    return int(getattr(rows, "rowcount", 0) or 0) + int(getattr(batches, "rowcount", 0) or 0)
 
 
 async def orphan_page(session: AsyncSession, after: UUID | None, limit: int = PAGE) -> list[ContentTranslation]:
