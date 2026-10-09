@@ -40,7 +40,7 @@ async def list_events(session: Session, _owner: OwnerRead, scope: WorkspaceRead,
     if response is not None:
         response.headers["Cache-Control"] = "no-store"
     try:
-        return await public.list_events(session, limit=limit, cursor=cursor, source_id=source_id,
+        return await public.list_events(session, limit=limit, cursor=cursor, source_id=source_id, q=q,
                                         scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

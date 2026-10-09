@@ -121,3 +121,27 @@ async def test_change_password_is_rate_limited(monkeypatch: pytest.MonkeyPatch) 
     ]
     assert codes[:5] == [403] * 5
     assert codes[5] == 429
+
+
+def test_password_route_uses_account_write_not_owner_write() -> None:
+    """Any active account (not only user 1) may change its own password: account-write CSRF/Origin gate."""
+    from core.auth.dependencies import require_account_write
+
+    route = next(r for r in auth_routes.router.routes if getattr(r, "path", "").endswith("/password"))
+    assert require_account_write in {d.call for d in route.dependant.dependencies}
+
+
+@pytest.mark.asyncio
+async def test_password_change_for_disabled_account_is_401(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = MemoryAuthStore()
+    client, csrf = await _login(store)
+
+    async def inactive(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(auth_routes, "get_active_account", inactive)
+    resp = await client.post(
+        "/api/v1/auth/password", headers={"Origin": ORIGIN, "X-CSRF-Token": csrf}, json=_body(),
+    )
+    assert resp.status_code == 401
+    assert verify_password(store.owner.password_hash, OLD)
