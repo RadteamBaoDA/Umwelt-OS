@@ -93,7 +93,7 @@ async def _current_authority(
     Also returns the job scope and the locked original access fence (both None when authority is
     already revoked and no fence is held) so the caller can commit with replay.
     """
-    from core.auth.public import revalidate_owner_session
+    from core.auth.public import revalidate_account_session
     from modules.sources import public as sources
 
     authority = await _job_authority(session, job, multi_workspace_enabled=multi_workspace_enabled)
@@ -117,7 +117,9 @@ async def _current_authority(
         job.profile_revision_hash, frozenset(UUID(item) for item in job.authorized_source_ids),
         job.claim_generation, 0, 0, 0, 1,
     )
-    session_valid = await revalidate_owner_session(session, job.auth_session_hash, job.owner_id)
+    session_valid = await revalidate_account_session(
+        session, job.auth_session_hash, job.owner_id, multi_workspace_enabled=multi_workspace_enabled,
+    )
     run_valid = await revalidate_browser_run_authority(
         session, authorization, scope=job_scope, multi_workspace_enabled=multi_workspace_enabled,
     )
