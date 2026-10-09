@@ -10,6 +10,7 @@ import { GuardedNavigationProvider } from '@/core/guarded-navigation';
 import { messages } from '@/core/messages';
 import { OwnerPreferences, PreferenceValues } from '@/core/preferences';
 import { RealtimeProvider } from '@/core/realtime-provider';
+import { WorkspaceProvider } from '@/core/workspace-context';
 
 /** Resolves a missing translated message from the English catalog using its namespace and key. */
 function englishMessageFallback(namespace: string | undefined, key: string): string {
@@ -142,7 +143,7 @@ function DisplayPreferencesProvider({ children }: { children: ReactNode }) {
     <NextIntlClientProvider locale={normalizeFormattingLocale(effective.locale)} messages={messages[effective.locale]} getMessageFallback={({ namespace, key }) => englishMessageFallback(namespace, key)}>
       {/* Keep chat retries across route shells, but drop their private drafts when auth ends. */}
       <ChatControllerProvider key={authGeneration}>
-        <RealtimeProvider>{children}</RealtimeProvider>
+        <WorkspaceProvider><RealtimeProvider>{children}</RealtimeProvider></WorkspaceProvider>
       </ChatControllerProvider>
     </NextIntlClientProvider>
   </DisplayPreferenceContext.Provider>;

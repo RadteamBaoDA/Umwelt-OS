@@ -1,4 +1,4 @@
-import { apiRequest, csrfHeaders } from '@/core/api';
+import { apiRequest, csrfHeaders, workspaceHeaders, workspaceTargetFor } from '@/core/api';
 
 /**
  * Citation evidence reference pointing to an exact grounded revision chunk.
@@ -389,7 +389,8 @@ export async function streamResponseEvents(
   const queryString = query.toString();
   const url = `/api/v1/responses/${responseId}/events${queryString ? `?${queryString}` : ''}`;
 
-  const headers: HeadersInit = {
+  const headers: Record<string, string> = {
+    ...(workspaceHeaders(workspaceTargetFor(url)) as Record<string, string>),
     Accept: 'text/event-stream',
     'Cache-Control': 'no-cache',
   };
