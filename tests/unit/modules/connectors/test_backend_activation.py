@@ -10,7 +10,11 @@ from cryptography.fernet import Fernet
 from fastapi import HTTPException
 
 from modules.connectors import activation, backends, provisioning
-from modules.connectors.credentials import CredentialEncryptionUnavailable, decrypt_rest_secret, encrypt_rest_secret
+from modules.connectors.credentials import (
+    CredentialEncryptionUnavailable,
+    decrypt_rest_secret,
+    encrypt_rest_secret,
+)
 from modules.connectors.n8n import build_workflow
 
 SOURCE_ID = uuid4()
@@ -18,12 +22,12 @@ KEY = Fernet.generate_key().decode("ascii")
 
 
 def row(**over):
-    base = dict(
-        source_id=SOURCE_ID, source_generation=1, desired_revision=3, applied_revision=3, desired_enabled=True,
-        state="active", error_code=None, execution_backend="n8n", backend_revision=1, applied_backend_revision=1,
-        transition_phase="idle", target_backend=None, transition_operation_id=None, old_workflow_id=None,
-        workflow_id="wf1", workflow_name="n", workflow_operation=None, activation_intent=None,
-        template_revision=1, applied_template_revision=1, credential_revision=1, desired_configuration={})
+    base = {
+        "source_id": SOURCE_ID, "source_generation": 1, "desired_revision": 3, "applied_revision": 3, "desired_enabled": True,
+        "state": "active", "error_code": None, "execution_backend": "n8n", "backend_revision": 1, "applied_backend_revision": 1,
+        "transition_phase": "idle", "target_backend": None, "transition_operation_id": None, "old_workflow_id": None,
+        "workflow_id": "wf1", "workflow_name": "n", "workflow_operation": None, "activation_intent": None,
+        "template_revision": 1, "applied_template_revision": 1, "credential_revision": 1, "desired_configuration": {}}
     base.update(over)
     return SimpleNamespace(**base)
 
@@ -148,7 +152,10 @@ class _Advance:
             p.stop()
 
 
-async def advance(r, api=object()):
+_API = object()
+
+
+async def advance(r, api=_API):
     session = SimpleNamespace(rollback=AsyncMock())
     return await provisioning.advance_backend_transition(
         session, SOURCE_ID, api, scope=object(), multi_workspace_enabled=True, access_fence=object())
@@ -241,7 +248,7 @@ async def test_failed_native_activation_keeps_transition_open_with_code():
 async def test_resolve_retry_and_confirm():
     r = row(transition_phase="reconciliation_required", backend_revision=2, old_workflow_id="wf1")
     session = SimpleNamespace(flush=AsyncMock())
-    kw = dict(scope=object(), multi_workspace_enabled=True, access_fence=object())
+    kw = {"scope": object(), "multi_workspace_enabled": True, "access_fence": object()}
     with _Locks(r), patch.object(provisioning, "_new_deactivation", lambda *a, **k: {"kind": "deactivate"}):
         await provisioning.resolve_backend_transition_in_uow(session, SOURCE_ID, 3, "retry", **kw)
         assert r.transition_phase == "deactivating_old" and r.workflow_operation == {"kind": "deactivate"}
@@ -303,9 +310,9 @@ async def test_native_activation_persists_applied_state_and_schedule_without_wor
 @pytest.mark.asyncio
 async def test_native_activation_refusals_change_nothing():
     cases = [
-        (dict(local_only=True), "source_inactive"),
-        (dict(supported=False), "native_unsupported"),
-        (dict(terms=[HTTPException(status_code=409, detail="provider_terms_ineligible")]), "terms_not_accepted"),
+        ({"local_only": True}, "source_inactive"),
+        ({"supported": False}, "native_unsupported"),
+        ({"terms": [HTTPException(status_code=409, detail="provider_terms_ineligible")]}, "terms_not_accepted"),
     ]
     for kwargs, code in cases:
         r = row(execution_backend="n8n", state="saved_not_active", desired_enabled=False, applied_backend_revision=0)
@@ -336,7 +343,7 @@ async def test_native_header_auth_needs_a_ready_credential_for_this_revision():
 
 def test_rest_secret_roundtrip_and_binding_fences():
     op = uuid4()
-    kw = dict(source_id=SOURCE_ID, operation_id=op, source_generation=1, configuration_revision=3, header_name="X-Key")
+    kw = {"source_id": SOURCE_ID, "operation_id": op, "source_generation": 1, "configuration_revision": 3, "header_name": "X-Key"}
     blob = encrypt_rest_secret(KEY, secret="s3cret-token", **kw)
     assert "s3cret" not in blob
     assert decrypt_rest_secret(KEY, blob, **kw) == "s3cret-token"
@@ -446,11 +453,12 @@ async def test_reentry_stores_encrypted_secret_bumps_revision_and_lifts_the_gate
         patch.object(routes, "make_source_change", lambda *a, **k: None),
         patch.object(routes, "_activation_read", AsyncMock(return_value="read")),
     ):
+        owner = SimpleNamespace(workspace_id=uuid4())
         result = await routes.reenter_native_rest_credential(
-            SOURCE_ID, payload, session, request, SimpleNamespace(workspace_id=uuid4()))
+            SOURCE_ID, payload, session, request, owner)
     assert result == "read" and r.credential_revision == 5
     clear.assert_awaited_once()
-    assert clear.await_args.kwargs == {"credential_revision": 5}
+    assert clear.await_args.kwargs == {"credential_revision": 5, "workspace_id": owner.workspace_id}
     (credential,) = stored
     assert credential.state == "ready" and credential.configuration_revision == 3
     assert "top-secret" not in credential.encrypted_secret

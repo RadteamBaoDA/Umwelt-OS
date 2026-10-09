@@ -193,7 +193,7 @@ class TestCredentialMaskingAndRedaction:
             state="dispatching",
             operation_envelope=dict(envelope),
         )
-        desired = ConnectorProvisioning(source_id=source_id, source_generation=1, desired_revision=2)
+        desired = ConnectorProvisioning(source_id=source_id, source_generation=1, desired_revision=2, credential_revision=1)
         session = AsyncMock()
 
         with patch("modules.connectors.provisioning._read_retained_connector_rows",
@@ -606,6 +606,7 @@ class TestConnectorLifecycleStateTransitions:
             desired_enabled=True,
             state="provisioning",
             workflow_operation=op,
+            execution_backend="n8n", transition_phase="idle", backend_revision=1, credential_revision=1,
         )
         session = AsyncMock()
 

@@ -27,12 +27,12 @@ from modules.connectors.github import oauth as github_oauth
 from modules.connectors.github.adapter import collect_github_segment
 from modules.connectors.github.schemas import GitHubHintClaimProof, project_github_source_config
 from modules.connectors.github.sync import validate_github_segment
-from modules.connectors.provider_specs import TERMS_INELIGIBLE
 from modules.connectors.models import (
     ConnectorProvisioning,
     ConnectorWorldCredential,
     GithubOAuthGrant,
 )
+from modules.connectors.provider_specs import TERMS_INELIGIBLE
 from modules.connectors.public import (
     AgentBrowserGrantPatch,
     CollectionFence,
