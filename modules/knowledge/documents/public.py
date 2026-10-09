@@ -6,7 +6,7 @@ import logging
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID, uuid4, uuid5
@@ -128,6 +128,7 @@ __all__ = [
     "ObservationExportEvidenceCandidate",
     "ProviderRecordMetadata",
     "TimelineExportEvidenceCandidate",
+    "count_source_documents",
 ]
 
 EXTRACTION_CHUNK_LIMIT = 100
@@ -500,10 +501,19 @@ async def export_page(
                 NormalizedVersionProvenance.canonical_url.label("provenance_canonical_url"),
                 NormalizedVersionProvenance.published_at.label("provenance_published_at"),
                 NormalizedVersionProvenance.content_type.label("provenance_content_type"),
+                # Interaction state is read live (best-effort), not covered by snapshot_at/fences: a
+                # read/save/hide between export pages can yield a mixed view. Accepted by design.
+                DocumentInteraction.read_at.label("interaction_read_at"),
+                DocumentInteraction.bookmarked_at.label("interaction_bookmarked_at"),
+                DocumentInteraction.dismissed_at.label("interaction_dismissed_at"),
             )
             .join(Source, Source.id == Document.source_id)
             .join(DocumentVersion, DocumentVersion.document_id == Document.id)
             .outerjoin(NormalizedVersionProvenance, NormalizedVersionProvenance.document_version_id == DocumentVersion.id)
+            .outerjoin(DocumentInteraction, and_(
+                DocumentInteraction.document_version_id == DocumentVersion.id,
+                DocumentInteraction.owner_id == owner_id,
+            ))
             .where(
                 Document.workspace_id == scope.workspace_id,
                 *_document_export_scope(snapshot_at), DocumentVersion.created_at <= snapshot_at,
@@ -538,6 +548,9 @@ async def export_page(
                     is_current_version=version_row["version_number"] == version_row["document_current_version"],
                     content=version_row["version_content"], observed_at=version_row["version_observed_at"],
                     created_at=version_row["version_created_at"], provenance=safe_provenance,
+                    read_at=version_row["interaction_read_at"],
+                    bookmarked_at=version_row["interaction_bookmarked_at"],
+                    dismissed_at=version_row["interaction_dismissed_at"],
                 )
                 item_bytes = _export_item_bytes(version_item)
                 proposed_bytes = payload_bytes + item_bytes + (1 if items else 0)
@@ -1457,6 +1470,12 @@ async def list_news_document_projections(
     )
     if observed_since is not None:
         statement = statement.where(func.coalesce(Document.observed_at, DocumentVersion.observed_at) >= observed_since)
+    if language is not None:
+        if language not in FEED_LANGUAGES:
+            raise ValueError("Language filter must be an allowlisted code")
+        # Unknown (NULL) language never matches a concrete language; only "Any" (None) returns it.
+        # Stored normalized (primary subtag, lowercase) so this equality can use ix_documents_language_created_at_id.
+        statement = statement.where(Document.language == language)
     if channel_ids is not None:
         statement = statement.where(
             Source.provider == "telegram",
@@ -1492,6 +1511,25 @@ async def list_news_document_projections(
     return projections, next_cursor
 
 
+# Keep in sync with the language options in apps/web feed-gadget.tsx.
+FEED_LANGUAGES = frozenset({"en", "vi", "fr", "de", "es", "pt", "it", "ru", "ja", "ko", "zh", "id", "th"})
+
+
+def normalize_document_language(raw: object) -> str | None:
+    """Return the allowlisted primary language subtag ("en-US" -> "en") or None when unknown/invalid."""
+    if not isinstance(raw, str):
+        return None
+    primary = raw.strip().lower().replace("_", "-").split("-", 1)[0]
+    return primary if primary in FEED_LANGUAGES else None
+
+
+def _provenance_language(provenance: object) -> str | None:
+    """Extract the normalized language from ingestion provenance ``metadata.language``."""
+    metadata = provenance.get("metadata") if isinstance(provenance, dict) else None
+    return normalize_document_language(metadata.get("language") if isinstance(metadata, dict) else None)
+FEED_MAX_WINDOW = timedelta(days=366)
+
+
 async def list_gadget_document_projections(
     session: AsyncSession, *, source_ids: tuple[UUID, ...], limit: int = 50,
     cursor: str | None = None, channel_ids: tuple[str, ...] | None = None,
@@ -1519,11 +1557,12 @@ async def list_gadget_document_projections(
         )
     )).all() if version_ids else []
     interactions = {row.document_version_id: row for row in interaction_rows}
+    # Hide-only: filtered after the privacy-fenced projection page, so a page may be short (the cursor still advances).
     items = [
-        _as_gadget_document_projection(
-            item, interactions.get(item.document_version_id),
-        )
+        _as_gadget_document_projection(item, interactions.get(item.document_version_id))
         for item in projections
+        if include_dismissed
+        or not (interactions.get(item.document_version_id) and interactions[item.document_version_id].dismissed_at)
     ]
     return GadgetDocumentProjectionList(items=items, next_cursor=next_cursor)
 
@@ -1571,6 +1610,7 @@ def _as_gadget_document_projection(
         metadata_is_version_snapshot=item.metadata_is_version_snapshot,
         read_at=interaction.read_at if interaction else None,
         bookmarked_at=interaction.bookmarked_at if interaction else None,
+        dismissed_at=interaction.dismissed_at if interaction else None,
     )
 
 
@@ -1680,7 +1720,8 @@ async def set_gadget_document_interaction(
     now = datetime.now(UTC)
     read_at = (now if payload.read else None) if payload.read is not None else (row.read_at if row else None)
     bookmarked_at = (now if payload.bookmarked else None) if payload.bookmarked is not None else (row.bookmarked_at if row else None)
-    if read_at is None and bookmarked_at is None:
+    dismissed_at = (now if payload.dismissed else None) if payload.dismissed is not None else (row.dismissed_at if row else None)
+    if read_at is None and bookmarked_at is None and dismissed_at is None:
         if row is not None:
             await session.delete(row)
     elif row is None:
@@ -1692,6 +1733,7 @@ async def set_gadget_document_interaction(
     else:
         row.read_at = read_at
         row.bookmarked_at = bookmarked_at
+        row.dismissed_at = dismissed_at
         row.updated_at = now
     await commit_with_replay(
         session, [], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
@@ -1699,7 +1741,7 @@ async def set_gadget_document_interaction(
     )
     return GadgetDocumentInteractionRead(
         document_version_id=projection.document_version_id,
-        read_at=read_at, bookmarked_at=bookmarked_at,
+        read_at=read_at, bookmarked_at=bookmarked_at, dismissed_at=dismissed_at,
     )
 
 
@@ -2920,6 +2962,13 @@ class NormalizedDocumentValidationRejected(ValueError):
     """
 
 
+async def find_document_identity(session: AsyncSession, source_id: UUID, external_id: str) -> UUID | None:
+    """Return the document ID a source owns for an external identity, if any."""
+    return await session.scalar(
+        select(Document.id).where(Document.source_id == source_id, Document.external_id == external_id)
+    )
+
+
 async def upsert_normalized_document(
     session: AsyncSession, payload: NormalizedDocumentInput, *, scope: Scope, multi_workspace_enabled: bool,
 ) -> NormalizedDocumentResult:
@@ -3166,6 +3215,7 @@ async def _apply_normalized_document(
         document.published_at = payload.published_at
         document.content_type = payload.content_type
         document.observed_at = payload.observed_at
+        document.language = _provenance_language(payload.provenance)
         document.extraction_status = "ready"
     await session.flush()
     if (document.workspace_id != workspace_id or identity.workspace_id != workspace_id
@@ -3355,6 +3405,7 @@ async def _select_world_document_version(
     document.published_at = provenance.published_at
     document.content_type = provenance.content_type
     document.observed_at = provenance.observed_at
+    document.language = _provenance_language(provenance.provenance_json)
     document.extraction_status = "ready"
     await session.flush()
     return True
@@ -5163,3 +5214,8 @@ async def lock_chat_evidence_chunks(
         raise ValueError("One or more exact selected evidence chunks are unavailable")
     return evidence
 
+
+async def count_source_documents(session: AsyncSession, source_id: UUID, cap: int = 1000) -> int:
+    """Return an owner-UI-only document count for one source, saturating at ``cap``."""
+    capped = select(Document.id).where(Document.source_id == source_id).limit(cap).subquery()
+    return int(await session.scalar(select(func.count()).select_from(capped)) or 0)

@@ -319,6 +319,21 @@ async def check_ai_execution_config(
     latest = await get_ai_execution_config(session, settings, redis, scope=scope)
     if latest.gateway_identity != expected.gateway_identity or latest.configuration_revision != expected.configuration_revision:
         raise HTTPException(status_code=409, detail="AI settings changed; prepare a fresh request")
+async def lock_ai_settings_for_share(session: AsyncSession) -> bool:
+    """Share-lock the owner AI settings row until the caller's transaction ends.
+
+    Blocks ``save_ai_settings`` (row ``FOR UPDATE``) so a consent/provider/endpoint/key read in the same
+    transaction cannot be revoked before the caller releases it. A leaf lock: savers lock nothing else.
+    Returns False when no row exists (nothing was locked; callers treat that as "not configured").
+    """
+    return (await session.scalar(
+        select(AISettingsRecord.owner_id).where(AISettingsRecord.owner_id == OWNER_ID).with_for_update(read=True)
+    )) is not None
+
+
+async def read_ai_settings(session: AsyncSession, settings: Settings, redis: Redis | None = None) -> AISettingsRead:
+    """Return the public AI settings projection for the current owner."""
+    return _read(await get_ai_execution_config(session, settings, redis))
 
 
 async def read_ai_settings(session: AsyncSession, settings: Settings, redis: Redis | None = None, *, scope: Scope) -> AISettingsRead:
@@ -375,7 +390,7 @@ async def save_ai_settings(session: AsyncSession, update: AISettingsUpdate, sett
     next_web_endpoint = _endpoint(str(update.web_search_endpoint) if update.web_search_endpoint else None, settings)
     current_web_destination = f"web-search:{_fingerprint(row.web_search_endpoint or '')[:32]}" if row.web_search_endpoint else None
     next_web_destination = f"web-search:{_fingerprint(next_web_endpoint or '')[:32]}" if next_web_endpoint else None
-    privacy = update.privacy.model_dump()
+    privacy = update.privacy.model_dump(mode="json")
     # Consent is bound to the endpoint selected in this same owner save.
     try:
         canonical_old_endpoint = _endpoint(old_endpoint, settings)
@@ -393,7 +408,7 @@ async def save_ai_settings(session: AsyncSession, update: AISettingsUpdate, sett
         privacy["allow_remote_web_search"] = False
     privacy["web_search_destinations"] = [next_web_destination] if privacy["allow_remote_web_search"] else []
     row.privacy = privacy
-    row.aliases = {key: value.model_dump() for key, value in update.aliases.items() if key in ALIASES}
+    row.aliases = {key: value.model_dump(mode="json") for key, value in update.aliases.items() if key in ALIASES}
     row.chat_alias, row.brief_alias = update.chat_alias, update.brief_alias
     row.web_search_provider = update.web_search_provider
     row.web_search_endpoint = next_web_endpoint

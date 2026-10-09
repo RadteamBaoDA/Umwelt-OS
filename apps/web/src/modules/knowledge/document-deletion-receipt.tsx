@@ -22,6 +22,8 @@ type DocumentDeletionStageStatus =
 export function DocumentDeletionReceiptPanel({ operationId }: { operationId: string }) {
   const t = useTranslations('shell');
   const pollUntil = useRef(0);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  useEffect(() => { headingRef.current?.focus(); }, []);
   const [automaticRefreshPaused, setAutomaticRefreshPaused] = useState(false);
   useEffect(() => {
     pollUntil.current = Date.now() + 30_000;
@@ -87,7 +89,7 @@ export function DocumentDeletionReceiptPanel({ operationId }: { operationId: str
           : t('documentDeletionLoading');
 
   return <section aria-labelledby="document-deletion-title" className="rounded-lg border border-border bg-card p-4 text-card-foreground shadow-sm">
-    <h1 id="document-deletion-title" className="text-lg font-semibold">{t('documentDeletionTitle')}</h1>
+    <h1 id="document-deletion-title" ref={headingRef} tabIndex={-1} className="text-lg font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{t('documentDeletionTitle')}</h1>
     {receipt?.immediate_access_revoked === true && <p className="mt-2 text-sm text-muted-foreground">{t('documentDeletionAccessRevoked')}</p>}
     <p className="mt-3" role={receipt?.status === 'failed' || scopeUnavailable || memoryUnresolved || agentUnresolved || materializationUnresolved || briefUnresolved ? 'alert' : 'status'} aria-live={receipt?.status === 'failed' || scopeUnavailable || memoryUnresolved || agentUnresolved || materializationUnresolved || briefUnresolved ? 'assertive' : 'polite'}>{summary}</p>
     {receipt?.memory_unresolved_count ? <p className="mt-2 text-sm text-destructive" role="alert">{t('documentDeletionMemoryUnresolvedCount', { count: receipt.memory_unresolved_count })}</p> : null}

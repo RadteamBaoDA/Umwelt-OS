@@ -3,8 +3,9 @@ import { apiRequest, csrfHeaders } from '@/core/api';
 /**
  * Citation evidence reference pointing to an exact grounded revision chunk.
  */
-export interface Citation {
-  sourceType: 'document';
+export interface DocumentCitation {
+  /** Server dumps this as `source_type`, so it is usually absent after parsing; discriminate with `=== 'web'`, never `=== 'document'`. */
+  sourceType?: 'document';
   sourceId: string;
   documentId: string;
   documentVersionId: string;
@@ -13,6 +14,40 @@ export interface Citation {
   url: string | null;
   observedAt: string | null;
   quote: string;
+}
+
+/**
+ * Public-web citation built by the server from a cited search result (P15 contract).
+ * Title and quote are untrusted third-party text: render as plain text only.
+ */
+export interface WebCitation {
+  sourceType: 'web';
+  url: string;
+  title: string;
+  quote: string;
+  provider?: string;
+  retrievedAt?: string;
+}
+
+/** Citation shown with an answer; discriminated by `sourceType`. */
+export type Citation = DocumentCitation | WebCitation;
+
+/**
+ * Gates the web_search toggle and request flag.
+ * Enabled with W2 (worker search + outcome); set false to hide the toggle without a backend change.
+ */
+export const WEB_SEARCH_SEND_ENABLED = true;
+
+/** Reason codes the backend may report for a skipped or unavailable web search. */
+export type WebSearchReason =
+  | 'not_configured' | 'query_too_long' | 'empty_query' | 'local_only_context' | 'daily_limit'
+  | 'timeout' | 'provider_error' | 'network_denied' | 'run_inactive' | 'no_results';
+
+/** Outcome of a requested web search; absent when the message did not opt in. */
+export interface WebSearchOutcome {
+  status: 'used' | 'unavailable' | 'skipped';
+  reason?: WebSearchReason | string | null;
+  result_count?: number;
 }
 
 /**
@@ -28,6 +63,8 @@ export interface ChatContext {
     documentId: string;
     documentVersionId?: string;
     chunkId?: string;
+    /** Client-only chip label; stripped before sending (the server forbids extra fields). */
+    title?: string;
   }>;
   [key: string]: unknown;
 }
@@ -58,6 +95,8 @@ export interface ChatMessage {
   client_request_id: string | null;
   model_identity: string | null;
   citations: Citation[];
+  /** Web search outcome for this answer; sent by the backend only for opted-in runs. */
+  web_search?: WebSearchOutcome | null;
   response_id: string | null;
   /** Message whose prompt or assistant response this append-only revision follows. */
   revision_of_message_id: string | null;
@@ -100,6 +139,8 @@ export interface SendMessagePayload {
   content: string;
   client_request_id?: string;
   context?: ChatContext | Record<string, unknown>;
+  /** Per-message opt-in; omit (never send false-by-default state) unless the user ticked it. */
+  web_search?: boolean;
 }
 
 /**
@@ -117,6 +158,8 @@ export interface MessageMutationPayload {
   base_content_hash: string;
   client_request_id: string;
   content?: string;
+  /** Per-mutation opt-in; not inherited from the original message. */
+  web_search?: boolean;
 }
 
 /**
@@ -135,6 +178,7 @@ export interface StreamEventsOptions {
   signal?: AbortSignal;
   onDelta?: (text: string) => void;
   onCitations?: (citations: Citation[]) => void;
+  onWebSearch?: (outcome: WebSearchOutcome) => void;
   onStatus?: (status: string, payload?: unknown) => void;
   onDone?: (result: { text: string; citations: Citation[]; model?: string; status: string }) => void;
   onError?: (error: Error) => void;
@@ -159,11 +203,13 @@ export async function listConversations(params?: {
   limit?: number;
   offset?: number;
   archived?: boolean;
+  q?: string;
 }): Promise<Conversation[]> {
   const query = new URLSearchParams();
   if (params?.limit !== undefined) query.set('limit', String(params.limit));
   if (params?.offset !== undefined) query.set('offset', String(params.offset));
   if (params?.archived !== undefined) query.set('archived', String(params.archived));
+  if (params?.q?.trim()) query.set('q', params.q.trim().slice(0, 200));
   const queryString = query.toString();
   const path = `/api/v1/conversations${queryString ? `?${queryString}` : ''}`;
   return apiRequest<Conversation[]>(path);
@@ -448,6 +494,13 @@ export async function streamResponseEvents(
               status: 'completed',
             });
           }
+        } else if (eventType === 'web_search') {
+          try {
+            const parsed = JSON.parse(eventData);
+            if (parsed && typeof parsed.status === 'string') options.onWebSearch?.(parsed as WebSearchOutcome);
+          } catch (err) {
+            console.warn('Failed to parse web_search SSE payload', err);
+          }
         } else if (eventType === 'status') {
           try {
             const parsed = JSON.parse(eventData);
@@ -470,4 +523,38 @@ export async function streamResponseEvents(
   } finally {
     reader.releaseLock();
   }
+}
+
+/** File extensions accepted by the shared upload allowlist (`modules/ingestion/files.py`). */
+export const ATTACHMENT_ACCEPT = '.txt,.md,.markdown,.json,.csv,.pdf,.docx';
+/** Server-enforced per-message cap on Chat attachments. */
+export const MAX_ATTACHMENTS = 5;
+/** Local pre-check only, mirroring the server's default `upload_max_bytes`; the server stays authoritative and its 413 is mapped to copy without a number. */
+export const ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
+
+/** One chat attachment Document and whether it can be referenced as chat context. */
+export interface ChatAttachment {
+  document_id: string;
+  source_id: string;
+  title: string;
+  status: 'pending' | 'ready' | 'too_large' | 'failed';
+  document_version_id: string | null;
+  local_only: boolean;
+  run_id?: string | null;
+}
+
+/**
+ * Uploads one file through the shared ingestion pipeline. The server picks the destination: the private,
+ * local-only "Chat attachments" source by default, or "Chat attachments (shared)" when `shareWithModel` is set.
+ */
+export async function uploadChatAttachment(file: File, csrfToken: string, shareWithModel = false, signal?: AbortSignal): Promise<ChatAttachment> {
+  const form = new FormData();
+  form.set('file', file);
+  if (shareWithModel) form.set('share_with_model', 'true');
+  return apiRequest<ChatAttachment>('/api/v1/documents/chat-attachments', { method: 'POST', headers: csrfHeaders(csrfToken), body: form, signal });
+}
+
+/** Reads a chat attachment's ingest status and current document version. */
+export async function getChatAttachment(documentId: string, signal?: AbortSignal): Promise<ChatAttachment> {
+  return apiRequest<ChatAttachment>(`/api/v1/documents/chat-attachments/${encodeURIComponent(documentId)}`, { signal });
 }

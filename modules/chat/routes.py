@@ -30,6 +30,8 @@ from modules.chat.models import (
     StreamEvent,
 )
 from modules.chat.schemas import (
+    WEB_SEARCH_KEY,
+    WEB_SEARCH_OUTCOME_KEY,
     CancelResponse,
     ConversationCreate,
     ConversationDetailRead,
@@ -39,6 +41,7 @@ from modules.chat.schemas import (
     MessageRead,
     SendMessageRequest,
     SendMessageResponse,
+    WebSearchOutcomeRead,
 )
 from modules.chat.scope import multi_workspace_enabled, owner_default_scope
 from modules.chat.stream import format_sse_event, parse_event_id
@@ -143,8 +146,19 @@ async def _dispatch_response_run(request: Request, response_id: UUID) -> None:
         logger.warning("Failed to enqueue chat response %s (%s)", response_id, type(exc).__name__)
 
 
+def _run_context(inherited: dict[str, Any] | None, privacy: Any, web_search: bool) -> dict[str, Any]:
+    """Build a run's retrieval context: client-visible keys kept, every server-private "_" key rewritten.
+
+    Stale "_" keys (old privacy fence, web opt-in, web outcome) are never inherited, so each send,
+    regenerate and edit carries only its own fence and its own explicit web-search choice.
+    """
+    kept = {k: v for k, v in (inherited or {}).items() if not k.startswith("_")}
+    return {**kept, "_chat_privacy_fence": _privacy_fence(privacy), WEB_SEARCH_KEY: {"requested": web_search}}
+
+
 def _message_mutation_digest(
     *, action: str, target_message_id: UUID, base_content_hash: str, content: str | None,
+    web_search: bool = False,
 ) -> str:
     """Hash canonical mutation fields so a request key cannot be replayed with new data.
 
@@ -153,17 +167,21 @@ def _message_mutation_digest(
         target_message_id: Immutable transcript entry acted upon.
         base_content_hash: SHA-256 of the displayed message used for the concurrency fence.
         content: Trimmed replacement text for edits, or None for regeneration.
+        web_search: Per-run web search opt-in; hashed only when true so pre-deploy receipts stay valid.
 
     Returns:
         Lowercase SHA-256 digest of the canonical JSON payload.
     """
+    fields: dict[str, object] = {
+        "action": action,
+        "target_message_id": str(target_message_id),
+        "base_content_hash": base_content_hash,
+        "content": content,
+    }
+    if web_search:
+        fields["web_search"] = True
     canonical = json.dumps(
-        {
-            "action": action,
-            "target_message_id": str(target_message_id),
-            "base_content_hash": base_content_hash,
-            "content": content,
-        },
+        fields,
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
@@ -293,6 +311,7 @@ async def list_conversations(
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
     archived: bool = False,
+    q: Annotated[str | None, Query(min_length=1, max_length=200)] = None,
 ) -> list[ConversationRead]:
     """List persistent owner conversations ordered by most recent update.
 
@@ -303,6 +322,7 @@ async def list_conversations(
         limit: Maximum number of conversations to return (1-100).
         offset: Offset for pagination.
         archived: Filter to archived or active conversations.
+        q: Optional literal title substring; uses the retained-history search path.
 
     Returns:
         List of ConversationRead schemas.
@@ -481,6 +501,7 @@ async def get_conversation(
             ).all()
 
     response_ids_by_user_message: dict[UUID, UUID] = {}
+    web_search_by_assistant: dict[UUID, WebSearchOutcomeRead] = {}
     if messages_rows:
         response_rows = await session.execute(
             select(ResponseRun.user_message_id, ResponseRun.id).where(
@@ -491,6 +512,22 @@ async def get_conversation(
             user_message_id: response_id
             for user_message_id, response_id in response_rows.all()
         }
+        # Only the outcome sub-key is read (never the whole retrieval context), and only for answers.
+        outcome_rows = await session.execute(
+            select(
+                ResponseRun.assistant_message_id,
+                ResponseRun.retrieval_context[WEB_SEARCH_OUTCOME_KEY].as_json(),
+            ).where(
+                ResponseRun.conversation_id == conversation_id,
+                ResponseRun.assistant_message_id.in_([m.id for m in messages_rows if m.role == "assistant"]),
+            )
+        )
+        for assistant_id, raw_outcome in outcome_rows.all():
+            if assistant_id is not None and isinstance(raw_outcome, dict):
+                try:
+                    web_search_by_assistant[UUID(str(assistant_id))] = WebSearchOutcomeRead.model_validate(raw_outcome)
+                except ValueError:
+                    pass  # malformed outcome: report nothing rather than guess
 
     # One batched evidence lookup for the whole transcript instead of one per message (P2-6).
     current_citations = await _filter_citation_lists(session, [m.citations or [] for m in messages_rows])
@@ -506,6 +543,7 @@ async def get_conversation(
             response_id=m.response_id or response_ids_by_user_message.get(m.id),
             revision_of_message_id=m.revision_of_message_id,
             created_at=m.created_at,
+            web_search=web_search_by_assistant.get(m.id),
         )
         for m, citations in zip(messages_rows, current_citations, strict=True)
     ]
@@ -655,6 +693,9 @@ async def send_message(
             )
         )
         if existing_run is not None:
+            # A replay returns the original run and ignores every changed field (content and web_search
+            # alike): no new run is created, so a flipped flag cannot cause egress. Mutations hash the
+            # flag into their digest and answer 409 instead, because they have no other identity check.
             return SendMessageResponse(
                 message_id=existing_run.user_message_id,
                 response_id=existing_run.id,
@@ -681,6 +722,7 @@ async def send_message(
     await session.flush()
 
     resolved_context = await chat_public.resolve_gadget_context(session, payload.context)
+    await chat_public.reject_unsendable_selection(session, resolved_context)
     response_run = ResponseRun(
         workspace_id=conv.workspace_id,
         actor_user_id=conv.actor_user_id,
@@ -688,7 +730,7 @@ async def send_message(
         user_message_id=user_msg.id,
         client_request_id=payload.client_request_id,
         status="pending",
-        retrieval_context={**resolved_context, "_chat_privacy_fence": _privacy_fence(privacy)},
+        retrieval_context=_run_context(resolved_context, privacy, payload.web_search),
         ephemeral=conv.ephemeral,
         expires_at=conv.expires_at,
     )
@@ -756,6 +798,7 @@ async def mutate_message(
         target_message_id=message_id,
         base_content_hash=payload.base_content_hash,
         content=normalized_content,
+        web_search=payload.web_search,
     )
 
     receipt = await session.scalar(
@@ -828,6 +871,8 @@ async def mutate_message(
     )
     if original_prompt is None:
         raise HTTPException(status_code=409, detail="The original prompt is unavailable")
+    # The stored fence is a snapshot: re-check its sources' current local_only before a new run exists.
+    await chat_public.reject_unsendable_selection(session, original_run.retrieval_context)
 
     user_message = Message(
         conversation_id=conversation_id,
@@ -845,12 +890,10 @@ async def mutate_message(
         user_message_id=user_message.id,
         client_request_id=payload.client_request_id,
         status="pending",
-        # Retain the original captured context byte-for-byte. The worker rechecks its
-        # source/version fences before retrieval and before remote send.
-        retrieval_context={
-            **dict(original_run.retrieval_context or {}),
-            "_chat_privacy_fence": _privacy_fence(privacy),
-        },
+        # Retain the original client-visible context; every server-private `_` key (privacy fence,
+        # web search opt-in) is rewritten by `_run_context`. The worker rechecks its source/version
+        # fences before retrieval and before remote send.
+        retrieval_context=_run_context(original_run.retrieval_context, privacy, payload.web_search),
         ephemeral=conversation.ephemeral,
         expires_at=conversation.expires_at,
     )

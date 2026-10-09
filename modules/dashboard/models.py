@@ -123,6 +123,20 @@ class GadgetDefinition(Base):
 
 
 
+class GadgetHighlightSuppression(Base):
+    """Notification keys suppressed by rule delivery policy; never re-evaluated (BM-34)."""
+
+    __tablename__ = "gadget_highlight_suppression"
+
+    definition_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("gadget_definitions.id", ondelete="CASCADE"), primary_key=True
+    )
+    dedupe_key: Mapped[str] = mapped_column(String(200), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class GadgetHighlightProgress(Base):
     """Durable immutable-version scan cursor bound to one definition revision and rule set."""
 
@@ -142,6 +156,10 @@ class GadgetHighlightProgress(Base):
     rules_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
     cursor_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     cursor_version_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    # rule_id -> ISO instant of the last notification; reset when the rules fingerprint changes.
+    rule_last_notified: Mapped[dict[str, str]] = mapped_column(
+        JSONB, nullable=False, server_default="{}"
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )

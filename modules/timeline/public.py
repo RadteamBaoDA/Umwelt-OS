@@ -673,6 +673,12 @@ async def _list_partition(
         # Escape SQL LIKE metacharacters so the user value remains a literal substring.
         type_pattern = query.type.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         statement = statement.where(Event.type.ilike(f"%{type_pattern}%", escape="\\"))
+    if query.q is not None:
+        # ponytail: ILIKE scan bounded by the page limit; add a pg_trgm index if event volume grows.
+        q_pattern = query.q.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
+        statement = statement.where(or_(
+            Event.title.ilike(f"%{q_pattern}%", escape="\\"), Event.summary.ilike(f"%{q_pattern}%", escape="\\"),
+        ))
     if partition == 0:
         statement = statement.where(Event.date_precision == "timed")
         if query.date_from is not None:

@@ -1,5 +1,6 @@
 """Workspace-owner Source HTTP boundary; preserve scoped pagination and aggregate purge DTOs."""
 
+from dataclasses import asdict
 from typing import Annotated
 from uuid import UUID
 
@@ -12,7 +13,14 @@ from core.workspaces.dependencies import require_workspace_read, require_workspa
 from core.workspaces.schemas import WorkspaceContext
 from modules.settings.public import module_dependency
 from modules.sources import public
-from modules.sources.schemas import OperationRead, SourceCreate, SourceList, SourcePatch, SourceRead
+from modules.sources.schemas import (
+    OperationRead,
+    SourceCreate,
+    SourceImpactRead,
+    SourceList,
+    SourcePatch,
+    SourceRead,
+)
 
 router = APIRouter(
     prefix="/api/v1/sources",
@@ -76,6 +84,20 @@ async def get_source(
     if source is None:
         raise HTTPException(status_code=404, detail="Source not found")
     return SourceRead.model_validate(source, from_attributes=True)
+
+
+@router.get("/{source_id}/impact", response_model=SourceImpactRead)
+async def get_source_impact(
+    source_id: UUID, session: Session, request: Request, scope: WorkspaceRead,
+) -> SourceImpactRead:
+    """Return owner-only dependent counts; 409 while a data purge is pending."""
+    _require_source_owner(scope)
+    impact = await public.get_source_impact(  # B2: public still takes owner_id until converted
+        session, scope.user_id, source_id,
+    )
+    if impact is None:
+        raise HTTPException(status_code=404, detail="Source not found")
+    return SourceImpactRead(**asdict(impact))
 
 
 @router.patch("/{source_id}", response_model=SourceRead)

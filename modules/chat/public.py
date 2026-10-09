@@ -21,6 +21,7 @@ from sqlalchemy import func as _func
 from sqlalchemy import or_ as _or
 from sqlalchemy import select as _select
 from sqlalchemy import tuple_ as _tuple
+from sqlalchemy import union as _union
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.models import Owner as _Owner
@@ -57,6 +58,7 @@ from modules.chat.schemas import (
     ChatExportFenceValidation,
     ChatExportMessageRead,
     ChatExportPage,
+    ChatExportWebCitation,
     ChatMemoryExportOrigin,
     Citation,
     CitationValidationResult,
@@ -74,6 +76,7 @@ from modules.chat.schemas import (
     SendMessageResponse,
     TemporalContextItem,
     ValidatedAnswer,
+    WebCitation,
 )
 from modules.chat.seed import ensure_demo_conversation
 from modules.chat.stream import (
@@ -124,6 +127,7 @@ __all__ = [
     "ChatExportFenceValidation",
     "ChatExportMessageRead",
     "ChatExportPage",
+    "ChatExportWebCitation",
     "ChatMemoryExportOrigin",
     "Citation",
     "CitationValidationResult",
@@ -146,8 +150,10 @@ __all__ = [
     "StreamEvent",
     "TemporalContextItem",
     "ValidatedAnswer",
+    "WebCitation",
     "authorize_agent_run_access",
     "build_context",
+    "count_source_conversations",
     "delete_conversation",
     "ensure_demo_conversation",
     "ensure_grounded_answer",
@@ -173,6 +179,7 @@ __all__ = [
     "read_memory_export_origin",
     "revalidate_context_fence",
     "run_response_generation",
+    "search_conversations",
     "validate_answer_citations",
     "validate_citations",
     "validate_export_fences",
@@ -236,6 +243,11 @@ async def purge_unpinned_conversations(session: AsyncSession, owner_id: int) -> 
         cursor = conversation_ids[-1]
 
 
+def _selection_detail(code: str, message: str) -> dict[str, _Any]:
+    """Build the machine-coded ``HTTPException`` detail (``core/errors.py`` envelope) for selection/context failures."""
+    return {"code": code, "message": message, "details": {}}
+
+
 async def resolve_gadget_context(session: AsyncSession, context: dict[str, _Any] | None) -> dict[str, _Any]:
     """Normalize exact gadget selections to JSON-safe refs and owner-derived source fences.
 
@@ -256,14 +268,14 @@ async def resolve_gadget_context(session: AsyncSession, context: dict[str, _Any]
 
     raw_items = context.get("items")
     if not isinstance(raw_items, list) or not 1 <= len(raw_items) <= 32:
-        raise HTTPException(status_code=422, detail="Selection must contain 1 to 32 document versions")
+        raise HTTPException(status_code=422, detail=_selection_detail("selection_invalid", "Selection must contain 1 to 32 document versions"))
     selections: list[SelectedDocumentVersion] = []
     try:
         selections = [SelectedDocumentVersion.model_validate(item) for item in raw_items]
     except Exception as exc:
-        raise HTTPException(status_code=422, detail="Selection references are invalid") from exc
+        raise HTTPException(status_code=422, detail=_selection_detail("selection_invalid", "Selection references are invalid")) from exc
     if len({item.document_id for item in selections}) != len(selections):
-        raise HTTPException(status_code=422, detail="Selection contains duplicate documents")
+        raise HTTPException(status_code=422, detail=_selection_detail("selection_invalid", "Selection contains duplicate documents"))
 
     from modules.chat.scope import owner_scope_kwargs
 
@@ -279,7 +291,7 @@ async def resolve_gadget_context(session: AsyncSession, context: dict[str, _Any]
             projection is None or projection.source_id != item.source_id
             or projection.document_version_id != item.document_version_id
         ):
-            raise HTTPException(status_code=409, detail="A selected document version is stale or unavailable")
+            raise HTTPException(status_code=409, detail=_selection_detail("selection_unavailable", "A selected document version is stale or unavailable"))
         fence = GadgetDocumentSelectionFence(
             document_id=projection.document_id,
             document_version_id=projection.document_version_id,
@@ -301,18 +313,21 @@ async def resolve_gadget_context(session: AsyncSession, context: dict[str, _Any]
                 require_current_version=True, selection_fences=(fence,), **scope_kw,
             )
             if not chunks or chunks[0].document_id != item.document_id or chunks[0].source_id != item.source_id:
-                raise HTTPException(status_code=409, detail="A selected evidence chunk is unavailable")
+                raise HTTPException(status_code=409, detail=_selection_detail("selection_unavailable", "A selected evidence chunk is unavailable"))
             # The exact chunk may be beyond the bounded projection slice; preserve its validated ID.
             chunk_ids = [item.chunk_id]
         else:
             if projection.chunks_truncated:
                 raise HTTPException(
                     status_code=422,
-                    detail="Select a specific evidence chunk for documents above the context limit",
+                    detail=_selection_detail(
+                        "selection_too_large",
+                        "Select a specific evidence chunk for documents above the context limit",
+                    ),
                 )
             chunk_ids = [chunk.id for chunk in projection.chunks]
         if not chunk_ids:
-            raise HTTPException(status_code=409, detail="A selected document has no available evidence chunks")
+            raise HTTPException(status_code=409, detail=_selection_detail("selection_unavailable", "A selected document has no available evidence chunks"))
         for chunk_id in chunk_ids:
             refs.append({
                 "document_version_id": str(projection.document_version_id),
@@ -323,7 +338,7 @@ async def resolve_gadget_context(session: AsyncSession, context: dict[str, _Any]
         if item.source_id not in sources:
             sources.append(item.source_id)
         if len(refs) > 100:
-            raise HTTPException(status_code=422, detail="Selection exceeds the evidence limit")
+            raise HTTPException(status_code=422, detail=_selection_detail("selection_too_large", "Selection exceeds the evidence limit"))
 
     return {
         "source_scope": [str(source_id) for source_id in sources],
@@ -331,6 +346,44 @@ async def resolve_gadget_context(session: AsyncSession, context: dict[str, _Any]
         "selection_fences": [fence.model_dump(mode="json") for fence in selection_fences],
         "selected_only": True,
     }
+
+
+MAX_CHAT_ATTACHMENTS_PER_MESSAGE = 5
+
+
+CHAT_SELECTION_LOCAL_ONLY = "selection_local_only"
+
+
+async def reject_unsendable_selection(session: AsyncSession, resolved: dict[str, _Any] | None) -> None:
+    """Refuse, before any run exists, a selection that chat could never answer from.
+
+    Chat always streams through the remote model gateway, and the worker privacy-cancels any run
+    whose evidence is ``local_only`` before a request opens. Refusing here makes that outcome
+    visible (409, machine code ``selection_local_only``) instead of a silently cancelled answer.
+    ``local_only`` is re-read from each fence's current source, so edit/regenerate (which reuse a
+    stored fence snapshot) see the source's present state. Chat attachments are also capped per
+    message at the boundary (422).
+    """
+    from fastapi import HTTPException
+
+    from modules.sources import public as sources_public
+
+    fences = (resolved or {}).get("selection_fences") or []
+    attachments = 0
+    local_only = False
+    for fence in fences:
+        source = await sources_public.get_source(session, UUID(str(fence["source_id"])))
+        if source is not None and (source.configuration or {}).get(sources_public.CHAT_ATTACHMENTS_MARKER) is True:
+            attachments += 1
+        local_only = local_only or bool(fence.get("local_only")) or (source is not None and source.local_only)
+    if attachments > MAX_CHAT_ATTACHMENTS_PER_MESSAGE:
+        raise HTTPException(status_code=422, detail=_selection_detail("selection_too_large", "Selection exceeds the per-message attachment limit"))
+    if local_only:
+        raise HTTPException(status_code=409, detail={
+            "code": CHAT_SELECTION_LOCAL_ONLY,
+            "message": "Selection includes local-only documents, which are never sent to the cloud chat model",
+            "details": {},
+        })
 
 
 async def link_agent_run(
@@ -817,6 +870,41 @@ async def _chat_export_privacy(
     return privacy.store_conversation_history, persisted, updated_at
 
 
+async def search_conversations(
+    session: AsyncSession, q: str, *, limit: int, offset: int, archived: bool,
+) -> list[Conversation]:
+    """Search retained conversation titles by literal substring, newest first.
+
+    Search shows nothing when history storage is off, and never ephemeral,
+    expired or automation threads. Deleted rows are gone, so they never match.
+    """
+    # Lock-free consent read (the export path's); is_history_storage_enabled would hold Memory's advisory lock.
+    try:
+        if not (await _chat_export_privacy(session))[0]:
+            return []
+    except ValueError:  # inconsistent privacy marker: fail closed rather than 500
+        return []
+    escaped = q.strip().replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
+    # ponytail: ILIKE scan over the owner's own titles; add a pg_trgm index if title volume grows.
+    statement = (
+        _select(Conversation)
+        .where(Conversation.archived == archived, Conversation.title.ilike(f"%{escaped}%", escape="\\"))
+        .where(*_chat_export_scope_retained(_datetime.now(_UTC)))
+        .order_by(Conversation.pinned.desc(), Conversation.updated_at.desc(), Conversation.id.desc())
+        .offset(offset).limit(limit)
+    )
+    return list((await session.scalars(statement)).all())
+
+
+def _chat_export_scope_retained(now: _datetime) -> tuple[ColumnElement[bool], ...]:
+    """Retention predicates shared by export scope and search (no snapshot cutoff)."""
+    return (
+        Conversation.ephemeral.is_(False),
+        _or(Conversation.expires_at.is_(None), Conversation.expires_at > now),
+        _or(Conversation.context_kind.is_(None), Conversation.context_kind != "automation"),
+    )
+
+
 def _chat_export_scope(
     snapshot_at: _datetime, now: _datetime, workspace_id: UUID,
 ) -> tuple[ColumnElement[bool], ...]:
@@ -825,9 +913,7 @@ def _chat_export_scope(
         Conversation.workspace_id == workspace_id,
         Conversation.created_at <= snapshot_at,
         Conversation.updated_at <= snapshot_at,
-        Conversation.ephemeral.is_(False),
-        _or(Conversation.expires_at.is_(None), Conversation.expires_at > now),
-        _or(Conversation.context_kind.is_(None), Conversation.context_kind != "automation"),
+        *_chat_export_scope_retained(now),
     )
 
 
@@ -1007,7 +1093,7 @@ async def export_page(
             message_statement.order_by(Message.created_at, Message.id)
             .limit(limit + 1).execution_options(yield_per=10)
         )
-        candidates: list[tuple[dict[str, _Any], list[Citation], int]] = []
+        candidates: list[tuple[dict[str, _Any], list[Citation | WebCitation], int]] = []
         page_ref_set: set[tuple[UUID, UUID]] = set()
         page_citation_count = 0
         predicted_candidate_bytes = 0
@@ -1023,14 +1109,18 @@ async def export_page(
                 raw_citations = message_row["citations"] if isinstance(message_row["citations"], list) else []
                 if len(raw_citations) > 100:
                     raise ValueError("A retained message exceeds the citation export bound")
-                parsed: list[Citation] = []
+                parsed: list[Citation | WebCitation] = []
                 omitted = 0 if isinstance(message_row["citations"], list) else 1
                 for raw in raw_citations:
                     try:
-                        parsed.append(Citation.model_validate(raw))
+                        is_web = isinstance(raw, dict) and raw.get("sourceType") == "web"
+                        parsed.append(WebCitation.model_validate(raw) if is_web else Citation.model_validate(raw))
                     except ValueError:
                         omitted += 1
-                refs_for_message = {(message_item.documentVersionId, message_item.chunkId) for message_item in parsed}
+                refs_for_message = {
+                    (message_item.documentVersionId, message_item.chunkId)
+                    for message_item in parsed if isinstance(message_item, Citation)
+                }
                 predicted_record_bytes = (
                     len(_json.dumps(content, ensure_ascii=False).encode("utf-8"))
                     + len(parsed) * 32_768 + 1024
@@ -1050,10 +1140,21 @@ async def export_page(
         evidence = await _chat_export_evidence_fences(
             session, list(page_ref_set), scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         for message_row, parsed, initially_omitted in candidates:
-            citations: list[ChatExportCitation] = []
+            citations: list[ChatExportCitation | ChatExportWebCitation] = []
             citation_fences: list[ChatExportCitationFence] = []
             omitted = initially_omitted
             for citation in parsed:
+                if isinstance(citation, WebCitation):
+                    # No Source, evidence fence or omission: the URL is query-stripped like document URLs.
+                    safe_url = _safe_chat_export_url(citation.url)
+                    if safe_url is None:
+                        omitted += 1
+                        continue
+                    citations.append(ChatExportWebCitation(
+                        url=safe_url, title=citation.title, quote=citation.quote,
+                        provider=citation.provider, retrieved_at=citation.retrievedAt,
+                    ))
+                    continue
                 resolved = evidence.get((citation.documentVersionId, citation.chunkId))
                 if resolved is None:
                     omitted += 1
@@ -1411,9 +1512,17 @@ async def filter_current_citations(
     if not isinstance(citations, list) or not citations:
         return []
     refs: list[tuple[UUID, UUID]] = []
-    parsed: list[tuple[dict[str, object], UUID, UUID, UUID, UUID]] = []
+    parsed: list[tuple[dict[str, object], UUID, UUID, UUID, UUID] | dict[str, object]] = []
     for raw in citations:
         if not isinstance(raw, dict):
+            continue
+        if raw.get("sourceType") == "web":
+            # Web results reference no Source or evidence: keep valid ones in place (markers are positional).
+            try:
+                WebCitation.model_validate(raw)
+            except ValueError:
+                continue
+            parsed.append(raw)
             continue
         source_id = _cleanup_uuid(raw.get("sourceId") or raw.get("source_id"))
         document_id = _cleanup_uuid(raw.get("documentId") or raw.get("document_id"))
@@ -1424,23 +1533,28 @@ async def filter_current_citations(
         refs.append((version_id, chunk_id))  # type: ignore[arg-type]
         parsed.append((raw, source_id, document_id, version_id, chunk_id))  # type: ignore[arg-type]
     unique_refs = sorted(set(refs), key=lambda item: (str(item[0]), str(item[1])))
-    if not unique_refs:
-        return []
-    from modules.chat.scope import owner_scope_kwargs
-    from modules.knowledge.documents import public as documents_public
-
-    scope_kw = await owner_scope_kwargs(session)
     current = {}
-    for start in range(0, len(unique_refs), 100):
-        evidence = await documents_public.lock_chat_evidence_chunks(
-            session, unique_refs[start:start + 100], require_active_source=False, **scope_kw,
-        )
-        current.update({(item.document_version_id, item.chunk_id): item for item in evidence})
-    return [
-        raw for raw, source_id, document_id, version_id, chunk_id in parsed
-        if (item := current.get((version_id, chunk_id))) is not None
-        and item.source_id == source_id and item.document_id == document_id
-    ]
+    if unique_refs:
+        from modules.chat.scope import owner_scope_kwargs
+        from modules.knowledge.documents import public as documents_public
+
+        scope_kw = await owner_scope_kwargs(session)
+
+        for start in range(0, len(unique_refs), 100):
+            evidence = await documents_public.lock_chat_evidence_chunks(
+                session, unique_refs[start:start + 100], require_active_source=False, **scope_kw,
+            )
+            current.update({(item.document_version_id, item.chunk_id): item for item in evidence})
+    kept: list[dict[str, object]] = []
+    for entry in parsed:
+        if isinstance(entry, dict):
+            kept.append(entry)
+            continue
+        raw, source_id, document_id, version_id, chunk_id = entry
+        if ((item := current.get((version_id, chunk_id))) is not None
+                and item.source_id == source_id and item.document_id == document_id):
+            kept.append(raw)
+    return kept
 
 
 async def purge_document_copied_evidence_page(
@@ -1597,3 +1711,19 @@ async def purge_document_copied_evidence_page(
     return CopiedEvidenceCleanupProgress(
         next_cursor=None, complete=True, rows_examined=examined, rows_changed=changed,
     )
+
+
+async def count_source_conversations(session: AsyncSession, source_id: UUID, cap: int = 1000) -> int:
+    """Return an owner-UI-only count of conversations citing a source, saturating at ``cap``."""
+    key = str(source_id)
+    # ponytail: seq scan over chat_messages; add GIN(citations jsonb_path_ops) if dialog open gets slow
+    cites = _or(
+        Message.citations.contains([{"source_id": key}]),  # worker writes the alias key
+        Message.citations.contains([{"sourceId": key}]),  # older rows
+    )
+    ids = _union(
+        _select(Message.conversation_id).where(cites),
+        _select(ResponseRun.conversation_id).where(ResponseRun.retrieval_context["source_scope"].contains([key])),
+    ).subquery()
+    capped = _select(ids.c.conversation_id).limit(cap).subquery()
+    return int(await session.scalar(_select(_func.count()).select_from(capped)) or 0)

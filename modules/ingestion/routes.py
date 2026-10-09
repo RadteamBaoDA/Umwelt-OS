@@ -1,5 +1,5 @@
 from pathlib import PurePosixPath, PureWindowsPath
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
 from fastapi import (
@@ -24,7 +24,9 @@ from core.workspaces.schemas import WorkspaceContext
 from modules.connectors import public as connectors
 from modules.ingestion import public
 from modules.ingestion.files import validate_upload
+from modules.ingestion.models import IngestionRun
 from modules.ingestion.schemas import (
+    ChatAttachmentRead,
     CollectorCredentialRead,
     Receipt,
     ReceiveBatch,
@@ -32,6 +34,7 @@ from modules.ingestion.schemas import (
     RunRead,
     SourceIngestionRead,
 )
+from modules.knowledge.documents import public as documents
 from modules.settings.public import module_dependency, module_is_enabled
 from modules.sources import public as sources
 

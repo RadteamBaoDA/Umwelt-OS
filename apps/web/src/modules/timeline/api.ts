@@ -47,6 +47,7 @@ export type TimelineQuery = {
   entity_id: string;
   precision: 'all' | 'timed' | 'date' | 'unknown';
   type?: string;
+  q?: string;
 };
 
 export type TimelinePageResult = {
@@ -70,6 +71,19 @@ export function listTimeline(query: TimelineQuery, cursor?: string) {
   const type = query.type?.trim() ?? '';
   if ([...type].length > 64) throw new RangeError('Timeline type filter exceeds 64 characters');
   if (type) params.set('type', type);
+  const q = query.q?.trim() ?? '';
+  if (q) params.set('q', q.slice(0, 200));
   if (cursor) params.set('cursor', cursor);
   return apiRequest<TimelinePageResult>(`/api/v1/timeline?${params}`);
+}
+
+/** Searches event titles and summaries through the visibility-filtered events list (server-side, one bounded page). */
+export function searchEvents(q: string) {
+  const params = new URLSearchParams({ limit: '8', q: q.trim().slice(0, 200) });
+  return apiRequest<{ items: TimelineEvent[]; next_cursor: string | null }>(`/api/v1/events?${params}`);
+}
+
+/** Fetches one event by id (id-only navigation keeps titles out of URLs and access logs). */
+export function getEvent(id: string) {
+  return apiRequest<TimelineEvent>(`/api/v1/events/${encodeURIComponent(id)}`);
 }

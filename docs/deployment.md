@@ -99,4 +99,18 @@ After successful activation, retain chat_link_required when rolling back applica
 
 ## AI endpoint network policy
 
+### Model gateway
+
 Before enabling OmniRoute or a configured web-search endpoint, set `AI_ALLOWED_ENDPOINT_HOSTS` to exact hostnames or `host:port` entries and `AI_ALLOWED_ENDPOINT_CIDRS` to the approved IPv4/IPv6 CIDRs in the protected deployment environment. Both lists are required: every DNS answer must fall within the approved CIDRs, and the client connects to a checked numeric address while retaining the original Host and TLS hostname. Empty CIDR policy denies gateway connections. Include a specific private CIDR for a self-hosted gateway; do not use broad private ranges unless the deployment operator intends to authorize them. Redirects and environment proxy variables are disabled for these SDK requests. DNS resolution, the TCP connect and the TLS handshake are each bounded to 5 s (at most 15 s per attempt, 30 s over the 2 attempts). Lock order: a gateway slot is taken first, and database locks (the Memory privacy lock and evidence row locks) are taken only inside `before_send`, so a lock is never held while waiting for a slot; the lock is held per attempt, from `before_send` until `after_send` runs once the request body is written, so the worst-case hold is one attempt's connect phases (at most 15 s) plus the body write, and a failed first attempt releases it before the retry. `MODEL_GATEWAY_SLOTS` (default 24) caps concurrent model calls across the api, worker and chat-worker; a chat stream holds one slot for its whole answer and waits up to 120 s for it (other calls wait 10 s), so keep it above chat `max_jobs` plus worker `max_jobs`. A private certificate authority must be configured explicitly in the trusted TLS context; certificate verification stays enabled.
+
+### Web search
+
+Web search (Tavily or Brave) has its own policy and never uses `AI_ALLOWED_ENDPOINT_CIDRS`; do not add the providers' public ranges there, because that only widens the model-gateway policy.
+
+- Hosts: list `api.tavily.com` or `api.search.brave.com` in `AI_ALLOWED_ENDPOINT_HOSTS` (shared with the gateway), otherwise saving the provider returns 422. The endpoint must be https.
+- Destinations: only public addresses are admitted. Tunnel and NAT64 prefixes are denied, and redirects and environment proxy variables are disabled. `WEB_SEARCH_ALLOWED_CIDRS` additionally allows specific (typically private) ranges and exists for the test compose only; leave it empty in production. Ranges shorter than /8 (IPv4) or /16 (IPv6) are rejected at startup.
+- `WEB_SEARCH_DAILY_LIMIT` (default `50`): searches per owner per UTC day. Failed searches count, `0` disables web search, and a Redis outage also disables it (fails closed).
+- The owner consent toggle in AI settings is required, and the provider key is stored encrypted under the connector credential key.
+- The chat-attachments upload path shares `UPLOAD_MAX_BYTES`.
+
+`r15_document_dismissed` adds the owner "Not relevant" state (`document_interactions.dismissed_at`; hides items from dashboard feed gadgets and highlights only). Its structural downgrade deletes dismissed-only interaction rows (rows that also carry read or saved state keep that state and lose only `dismissed_at`), so hidden-item preferences are lost on downgrade; not an operational rollback.

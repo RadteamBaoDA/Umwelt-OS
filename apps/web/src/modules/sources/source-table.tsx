@@ -5,16 +5,18 @@ import type { ReactNode } from 'react';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import type { Source } from './api';
 
-export type SourceRowState = 'active' | 'paused' | 'archived' | 'savedNotActive' | 'error';
+export type SourceRowState = 'active' | 'paused' | 'archived' | 'savedNotActive' | 'error' | 'reconnect';
 export type SourceFilter = 'all' | 'active' | 'paused' | 'attention';
 
 /**
  * Derives the visible row state from owner-reported data only.
- * "Collecting" and "Needs authorization" are not exposed by the list endpoints, so they are never invented.
+ * "Collecting" is not exposed by the list endpoints, so it is never invented. "Reconnect needed" comes from the provider_unauthorized code.
+ * n8n and MCP collectors report no auth code yet, so those sources show "Error", never "Reconnect needed".
  */
 export function sourceRowState(source: Source, activation?: { state: string; error_code: string | null }): SourceRowState {
   if (source.status === 'archived') return 'archived';
   if (source.status === 'paused') return 'paused';
+  if (source.collection_error_code === 'provider_unauthorized') return 'reconnect';
   if (source.collection_error_code || source.processing_error_code || activation?.error_code || activation?.state === 'reconciliation_required') return 'error';
   if (activation && ['saved_not_active', 'queued', 'provisioning', 'disabled'].includes(activation.state)) return 'savedNotActive';
   return 'active';
@@ -25,7 +27,7 @@ export function matchesFilter(state: SourceRowState, filter: SourceFilter): bool
   if (filter === 'all') return true;
   if (filter === 'active') return state === 'active';
   if (filter === 'paused') return state === 'paused';
-  return state === 'error' || state === 'savedNotActive';
+  return state === 'error' || state === 'reconnect' || state === 'savedNotActive';
 }
 
 /** Filter tabs with loaded-row counts plus a semantic table; rows at 720px and below collapse into stacked cards. */

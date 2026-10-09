@@ -8,17 +8,20 @@ through the shared replay transaction.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
+from collections.abc import Collection, Mapping, Sequence
+from datetime import UTC, datetime, timedelta, tzinfo
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import HTTPException
 from sqlalchemy import ColumnElement, delete, func, select, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.expression import Exists
 
@@ -73,10 +76,14 @@ from modules.dashboard.schemas import (
     GadgetDefinitionExportValidation,
     GadgetDefinitionPatch,
     GadgetDefinitionRead,
+    GadgetDefinitionUsageRead,
     GadgetFilters,
     GadgetScope,
     GroupCreate,
     GroupPatch,
+    HighlightPreviewRead,
+    HighlightPreviewRequest,
+    HighlightPreviewRuleRead,
     HighlightRule,
     InstanceCreate,
     InstancePatch,
@@ -86,6 +93,7 @@ from modules.dashboard.schemas import (
     PresetPreviewRequest,
     RendererRead,
 )
+from modules.settings import public as settings_public
 from modules.sources import public as sources
 from modules.sources.schemas import GadgetSourceSelectionPage
 
@@ -98,6 +106,17 @@ HIGHLIGHT_SCAN_PAGE_LIMIT = max(
     1, MAX_HIGHLIGHT_NOTIFICATIONS_PER_TRANSACTION // MAX_RULES_PER_DEFINITION,
 )
 HIGHLIGHT_MATCHES_PER_PAGE_MAX = HIGHLIGHT_SCAN_PAGE_LIMIT * MAX_RULES_PER_DEFINITION
+PREVIEW_PAGE_SIZE = 100
+PREVIEW_MATCH_TIMEOUT_SECONDS = 5
+PREVIEW_MAX_PAGES = 2  # 200 current versions at most
+PREVIEW_MAX_MATCHES = 100
+
+
+def _owner_tzinfo(name: str) -> tzinfo:
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError, OSError):
+        return UTC
 
 
 def _actor(scope: Scope) -> int:
@@ -134,8 +153,8 @@ async def evaluate_gadget_highlights(
     Highlight notification titles carry exact private Document/version provenance; Notifications
     rechecks the selected current version and keeps that provenance out of its public DTO.
     """
-    from modules.dashboard.highlights import evaluate_highlights
-    from modules.dashboard.models import GadgetHighlightProgress
+    from modules.dashboard.highlights import compile_rules, match_compiled, notification_allowed
+    from modules.dashboard.models import GadgetHighlightProgress, GadgetHighlightSuppression
     from modules.dashboard.schemas import HighlightRule
     from modules.knowledge.documents import public as documents
     from modules.notifications.public import NotificationEmit, NotificationEvidence, emit
@@ -179,7 +198,7 @@ async def evaluate_gadget_highlights(
         )
         rules_fingerprint = hashlib.sha256(json.dumps(
             {"source_ids": [str(value) for value in source_ids], "scope": sorted(item_scope),
-             "rules": [rule.model_dump(mode="json") for rule in rules]},
+             "rules": [rule.model_dump(mode="json", exclude_defaults=True) for rule in rules]},
             sort_keys=True, separators=(",", ":"), ensure_ascii=False,
         ).encode("utf-8")).hexdigest()
 
@@ -255,7 +274,7 @@ async def evaluate_gadget_highlights(
         if progress is None:
             progress = GadgetHighlightProgress(
                 definition_id=definition.id, definition_revision=definition.revision,
-                rules_fingerprint=rules_fingerprint,
+                rules_fingerprint=rules_fingerprint, rule_last_notified={},
             )
             session.add(progress)
             await session.flush()
@@ -270,6 +289,39 @@ async def evaluate_gadget_highlights(
         progress.cursor_created_at = page.cursor_created_at if page.has_more else None
         progress.cursor_version_id = page.cursor_version_id if page.has_more else None
 
+        # Delivery policy (T6b): reads only the already-locked progress row plus an unlocked
+        # preferences SELECT, so the definition -> progress lock order is unchanged.
+        now = datetime.now(UTC)
+        rules_by_id = {rule.id: rule for rule in rules}
+        last_notified = {
+            key: datetime.fromisoformat(value) for key, value in progress.rule_last_notified.items()
+            if UUID(key) in rules_by_id
+        }
+        tz: tzinfo = UTC
+        if any(rule.quiet_start for rule in rules):
+            tz = _owner_tzinfo((await settings_public.read_owner_preferences(session)).timezone)
+        found = [
+            (item, match) for item in page.items
+            if not item_scope or str(item.document_id) in item_scope
+            for match in match_compiled(item.excerpt, compiled, source_id=item.source_id)
+        ]
+
+        def key_of(item: Any, match: Any) -> str:
+            return (
+                f"highlight:{definition.id}:{definition.revision}:"
+                f"{rules_fingerprint}:{match.rule_id}:{item.document_version_id}"
+            )
+
+        # BM-34: quiet hours/cooldown/expiry SUPPRESS. The decision is stored so a later rescan of
+        # the same version cannot deliver it. Writes happen under the definition lock held above.
+        suppressed_keys: set[str] = set()
+        if found:
+            suppressed_keys = set((await session.execute(
+                select(GadgetHighlightSuppression.dedupe_key).where(
+                    GadgetHighlightSuppression.definition_id == definition.id,
+                    GadgetHighlightSuppression.dedupe_key.in_([key_of(i, m) for i, m in found]),
+                )
+            )).scalars())
         matches: list[DashboardHighlightRead] = []
         for item in page.items:
             if item_scope and str(item.document_id) not in item_scope:
@@ -318,6 +370,8 @@ async def evaluate_gadget_highlights(
     source_ids = tuple(item.id for item in selected_sources if item.status == "active")
     if not source_ids:
         return []
+    # "Not relevant" scope: hides versions from dashboard feed gadgets and this highlights view only
+    # (include_dismissed stays False). Notifications, brief, search and chat are unchanged.
     projection_page = await documents.list_gadget_document_projections(
         session, source_ids=source_ids, limit=100, scope=scope,
         multi_workspace_enabled=multi_workspace_enabled,
@@ -325,11 +379,13 @@ async def evaluate_gadget_highlights(
     rules = [HighlightRule.model_validate(rule) for rule in definition_read.highlight_rules]
     raw_item_scope = definition_read.scope.get("source_item_ids", [])
     item_scope = {str(value) for value in raw_item_scope} if isinstance(raw_item_scope, list) else set()
+    compiled = compile_rules(rules, await _rule_topic_terms(session, owner_id, rules))
     matches = []
-    for item in projection_page.items:
-        if item_scope and str(item.document_id) not in item_scope:
-            continue
-        for match in evaluate_highlights(item.excerpt, rules):
+    scoped = [item for item in projection_page.items if not item_scope or str(item.document_id) in item_scope]
+    # Regex work is CPU-bound; keep it off the API event loop.
+    per_item = await asyncio.to_thread(_match_items, scoped, compiled)
+    for item, item_matches in zip(scoped, per_item, strict=True):
+        for match in item_matches:
             matches.append(DashboardHighlightRead(
                 document_id=item.document_id, document_version_id=item.document_version_id,
                 source_id=item.source_id, title=item.title, observed_at=item.observed_at,
@@ -337,6 +393,134 @@ async def evaluate_gadget_highlights(
                 severity=match.severity, notify=match.notify, reason=match.reason,
             ))
     return matches[:100]
+
+
+async def _rule_topic_terms(
+    session: AsyncSession, owner_id: int, rules: Sequence[HighlightRule],
+) -> dict[UUID, list[str]]:
+    """Resolve the owner's live, active topics referenced by rules (read-only)."""
+    from modules.news import public as news
+    topic_ids = list(dict.fromkeys(topic for rule in rules for topic in rule.topic_ids))
+    return await news.resolve_topic_terms(session, owner_id, topic_ids)
+
+
+class HighlightRuleError(ValueError):
+    """A rule breaks a scope or ownership invariant; ``code`` lets the web client localize it."""
+
+    def __init__(self, code: str, message: str) -> None:
+        """Keep the stable machine code beside the English message."""
+        super().__init__(message)
+        self.code = code
+
+
+async def validate_highlight_rules(
+    session: AsyncSession, owner_id: int, source_ids: Sequence[UUID], rules: Sequence[HighlightRule],
+    *, known_topic_ids: Collection[UUID] | None = (),
+) -> None:
+    """Trust-boundary check: rule sources stay inside the definition scope; new topics must be the owner's.
+
+    Topic ids in ``known_topic_ids`` (already stored on the definition) are not re-checked, so a topic
+    deleted later never blocks edits; ``None`` skips the topic check (preview reports them unresolved).
+    """
+    from modules.news import public as news
+    allowed = set(source_ids)
+    for rule in rules:
+        if not set(rule.source_ids) <= allowed or not set(rule.exclude_source_ids) <= allowed:
+            raise HighlightRuleError("rule_sources_not_subset", "Rule sources must be a subset of the definition sources")
+        if allowed and allowed <= set(rule.exclude_source_ids):
+            raise HighlightRuleError("rule_excludes_all_sources", "A rule cannot exclude every definition source")
+    if known_topic_ids is None:
+        return
+    topic_ids = list(dict.fromkeys(
+        topic for rule in rules for topic in rule.topic_ids if topic not in known_topic_ids
+    ))
+    if topic_ids and set(topic_ids) - await news.live_topic_ids(session, owner_id, topic_ids):
+        raise HighlightRuleError("rule_topic_unknown", "Rule topic_ids must reference your existing topics")
+
+
+def _match_items(items: Sequence[Any], compiled: Sequence[Any]) -> list[list[Any]]:
+    """Match every item against pre-compiled rules (pure CPU; safe to run in a thread)."""
+    from modules.dashboard.highlights import match_compiled
+    return [match_compiled(item.excerpt, compiled, source_id=item.source_id) for item in items]
+
+
+async def preview_highlights(
+    session: AsyncSession, owner_id: int, payload: HighlightPreviewRequest,
+) -> HighlightPreviewRead:
+    """Dry-run draft rules over recent current evidence: read-only, bounded, no notifications, no egress.
+
+    Uses the same projection reads as the display path, so purged, paused or superseded content is
+    never scanned. Nothing is written or committed and ``emit`` is never imported.
+    """
+    from modules.dashboard.highlights import compile_rules
+    from modules.knowledge.documents import public as documents
+    await validate_highlight_rules(session, owner_id, payload.source_ids, payload.rules, known_topic_ids=None)
+    since = datetime.now(UTC) - timedelta(days=payload.days)
+    source_ids = tuple(payload.source_ids)
+    topic_terms = await _rule_topic_terms(session, owner_id, payload.rules)
+    compiled = compile_rules(payload.rules, topic_terms)
+    item_scope = {str(value) for value in payload.source_item_ids}
+    counts = {rule.id: 0 for rule in payload.rules}
+    matches: list[DashboardHighlightRead] = []
+    scanned = 0
+    cursor: str | None = None
+    truncated = False
+    for _ in range(PREVIEW_MAX_PAGES):
+        page = await documents.list_gadget_document_projections(
+            session, owner_id=owner_id, source_ids=source_ids, limit=PREVIEW_PAGE_SIZE,
+            cursor=cursor, since=since,
+        )
+        items = [item for item in page.items if not item_scope or str(item.document_id) in item_scope]
+        scanned += len(items)
+        # Regex work is CPU-bound; keep it off the event loop.
+        try:
+            per_item = await asyncio.wait_for(
+                asyncio.to_thread(_match_items, items, compiled), PREVIEW_MATCH_TIMEOUT_SECONDS,
+            )
+        except TimeoutError as exc:
+            raise HTTPException(
+                status_code=504, detail={"code": "preview_timeout", "message": "Preview took too long", "details": {}},
+            ) from exc
+        for item, item_matches in zip(items, per_item, strict=True):
+            for match in item_matches:
+                counts[match.rule_id] += 1
+                if len(matches) < PREVIEW_MAX_MATCHES:
+                    matches.append(DashboardHighlightRead(
+                        document_id=item.document_id, document_version_id=item.document_version_id,
+                        source_id=item.source_id, title=item.title, observed_at=item.observed_at,
+                        rule_id=match.rule_id, matched_keywords=list(match.matched_keywords),
+                        severity=match.severity, notify=match.notify, reason=match.reason,
+                    ))
+        cursor = page.next_cursor
+        if cursor is None:
+            break
+    else:
+        truncated = True
+    return HighlightPreviewRead(
+        window_days=payload.days, scanned=scanned, truncated=truncated, matches=matches,
+        rules=[HighlightPreviewRuleRead(
+            rule_id=rule.id, match_count=counts[rule.id],
+            unresolved_topic_ids=[topic for topic in rule.topic_ids if topic not in topic_terms],
+        ) for rule in payload.rules],
+    )
+
+
+async def definition_usage(
+    session: AsyncSession, owner_id: int, definition_id: UUID,
+) -> list[GadgetDefinitionUsageRead] | None:
+    """List the owner dashboards that place this definition (and so evaluate its rules)."""
+    if await session.scalar(select(GadgetDefinition.id).where(
+        GadgetDefinition.id == definition_id, GadgetDefinition.owner_id == owner_id,
+    )) is None:
+        return None
+    rows = (await session.execute(
+        select(Dashboard.id, Dashboard.name, func.count(GadgetInstance.id))
+        .join(GadgetInstance, GadgetInstance.dashboard_id == Dashboard.id)
+        .where(GadgetInstance.definition_id == definition_id, Dashboard.owner_id == owner_id)
+        .group_by(Dashboard.id, Dashboard.name)
+        .order_by(Dashboard.name, Dashboard.id).limit(MAX_DASHBOARDS_PER_OWNER)
+    )).all()
+    return [GadgetDefinitionUsageRead(dashboard_id=r[0], name=r[1], instance_count=r[2]) for r in rows]
 
 
 class DashboardConflict(Exception):
@@ -1372,6 +1556,10 @@ async def patch_definition(session: AsyncSession, definition_id: UUID, payload: 
         highlight_rules=candidate["highlight_rules"] if candidate["highlight_rules"] is not None else [HighlightRule.model_validate(item) for item in row.highlight_rules],
     )
     gadgets.validate_renderer_configuration(candidate["renderer"], config)
+    stored_topics = {UUID(str(topic)) for item in row.highlight_rules for topic in item.get("topic_ids", [])}
+    await validate_highlight_rules(
+        session, owner_id, candidate["source_ids"], config.highlight_rules, known_topic_ids=stored_topics,
+    )
     row.name = candidate["name"]
     row.renderer = candidate["renderer"]
     row.source_ids = [str(item) for item in candidate["source_ids"]]
@@ -1746,6 +1934,27 @@ from modules.dashboard.briefs import (
 from modules.dashboard.context import build_daily_context
 from modules.dashboard.daily_schemas import BriefRead, DailyContext
 
+
+async def count_source_gadgets(
+    session: AsyncSession, owner_id: int, source_id: UUID, cap: int = 1000,
+) -> tuple[int, int]:
+    """Return owner-scoped (definition, distinct instance) counts that select a source, saturating at ``cap``."""
+    selects = GadgetDefinition.source_ids.contains([str(source_id)])
+    definitions = (
+        select(GadgetDefinition.id)
+        .where(GadgetDefinition.owner_id == owner_id, selects).limit(cap).subquery()
+    )
+    placements = (
+        select(GadgetInstance.id)
+        .join(GadgetDefinition, GadgetDefinition.id == GadgetInstance.definition_id)
+        .where(GadgetDefinition.owner_id == owner_id, selects).limit(cap).subquery()
+    )
+    return (
+        int(await session.scalar(select(func.count()).select_from(definitions)) or 0),
+        int(await session.scalar(select(func.count()).select_from(placements)) or 0),
+    )
+
+
 __all__ = [
     "BriefEmpty",
     "BriefEvidenceRevoked",
@@ -1756,6 +1965,7 @@ __all__ = [
     "build_daily_context",
     "claim_brief_slot",
     "clean_document_brief_evidence",
+    "count_source_gadgets",
     "generate_brief",
     "latest_brief",
     "legacy_brief_coverage",
@@ -1764,3 +1974,4 @@ __all__ = [
     "read_slot_owner",
     "release_brief_slot",
 ]
+

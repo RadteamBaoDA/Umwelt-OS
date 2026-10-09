@@ -237,3 +237,12 @@ class SourcePurgeJobIdentity(BaseModel):
     configuration_revision: StrictInt = Field(gt=0)
     source_id: UUID
     source_generation: StrictInt = Field(gt=0)
+
+
+class SourceImpactRead(BaseModel):
+    """Counts only, no content or names; each value saturates at 1000."""
+
+    document_count: int
+    gadget_definition_count: int
+    gadget_placement_count: int
+    conversation_count: int

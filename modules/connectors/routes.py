@@ -380,6 +380,20 @@ async def _await_with_github_segment_deadline(  # noqa: UP047  # keep TypeVar/Ty
     return await asyncio.wait_for(operation, timeout=remaining)
 
 
+GITHUB_RECONNECT_DETAIL = "GitHub grant is expired or requires reconnection"
+
+
+def _collection_error_code(exc: BaseException) -> str:
+    """Map auth-type failures (HTTP 401/403, Telegram credentials rejected, GitHub reconnect) to a reconnect-needed code."""
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in {401, 403}:
+        return "provider_unauthorized"
+    if getattr(exc, "code", None) == "telegram_credentials_rejected":
+        return "provider_unauthorized"
+    if isinstance(exc, HTTPException) and exc.detail == GITHUB_RECONNECT_DETAIL:
+        return "provider_unauthorized"
+    return "provider_collection_failed"
+
+
 async def _release_failed_collection(
     session: AsyncSession,
     lease: ConnectorCollectionLease,
@@ -805,7 +819,7 @@ async def fetch_native_provider(
                         access_fence=access_fence, source_fence=source_fence,
                     )
                     if fence is None:
-                        raise HTTPException(status_code=409, detail="GitHub grant is expired or requires reconnection")
+                        raise HTTPException(status_code=409, detail=GITHUB_RECONNECT_DETAIL)
                     grant = await session.scalar(
                         select(GithubOAuthGrant).where(GithubOAuthGrant.source_id == source.id).with_for_update()
                     )
@@ -815,7 +829,7 @@ async def fetch_native_provider(
                         or grant.configuration_revision != payload.connector_revision
                         or grant.expires_at is None or grant.expires_at <= datetime.now(UTC)
                     ):
-                        raise HTTPException(status_code=409, detail="GitHub grant is expired or requires reconnection")
+                        raise HTTPException(status_code=409, detail=GITHUB_RECONNECT_DETAIL)
                     token_revision = grant.token_revision
                     grant_operation = grant.operation_id
                     key = request.app.state.settings.connector_credential_encryption_key.get_secret_value()
@@ -983,7 +997,7 @@ async def fetch_native_provider(
             coverage="pending_updates_only" if source.provider == "telegram" else "returned_snapshot",
             next_eligible_at=deadline,
         )
-    except HTTPException:
+    except HTTPException as exc:
         await _release_failed_collection(
             session, active_lease[0], error_code="provider_collection_failed",
             multi_workspace_enabled=multi_workspace_enabled, scope=scope,

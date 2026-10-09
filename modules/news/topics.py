@@ -7,7 +7,7 @@ import binascii
 import hashlib
 import json
 from datetime import UTC, datetime
-from typing import Annotated, Literal, NoReturn
+from typing import Annotated, Any, Literal, NoReturn
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
@@ -327,14 +327,12 @@ async def _topic_read(
 ) -> TopicRead:
     """Build a detached topic projection through the same admitted workspace as its row."""
     from modules.knowledge.entities import public as entities
-    identifiers = [UUID(value) for value in (topic.entity_ids or [])]
     try:
         refs = await entities.get_entity_refs(
             session, identifiers, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
         return _to_topic_read(topic, list(dict.fromkeys(ref.canonical_id for ref in refs)))
     except LookupError:
-        # Entity deletion must not make the topic owner record unreadable.
         visible = []
         for identifier in identifiers:
             try:
@@ -343,7 +341,47 @@ async def _topic_read(
                 ))[0].canonical_id)
             except LookupError:
                 continue
-        return _to_topic_read(topic, list(dict.fromkeys(visible)))
+        return visible
+
+
+async def _topic_read(session: AsyncSession, topic: Topic) -> TopicRead:
+    """Build a detached projection using entity-owner read resolution only."""
+    # Entity deletion must not make the topic owner record unreadable.
+    refs = await _visible_entity_refs(session, [UUID(value) for value in (topic.entity_ids or [])])
+    return _to_topic_read(topic, list(dict.fromkeys(ref.canonical_id for ref in refs)))
+
+
+async def resolve_topic_terms(
+    session: AsyncSession, owner_id: int, topic_ids: list[UUID],
+) -> dict[UUID, list[str]]:
+    """Read-only: return current keywords plus entity names for the owner's live, active topics.
+
+    Missing, foreign, deleted or inactive topics are simply absent from the result so callers
+    treat them as unresolved. Never writes and never contacts a provider.
+    """
+    if not topic_ids:
+        return {}
+    rows = (await session.scalars(select(Topic).where(
+        Topic.id.in_(topic_ids), Topic.owner_id == owner_id,
+        Topic.deleted_at.is_(None), Topic.is_active.is_(True),
+    ))).all()
+    resolved: dict[UUID, list[str]] = {}
+    for topic in rows:
+        terms = list(topic.keywords or [])
+        entity_ids = [UUID(value) for value in (topic.entity_ids or [])]
+        if entity_ids:
+            terms += [ref.name for ref in await _visible_entity_refs(session, entity_ids) if ref.name]
+        resolved[topic.id] = list(dict.fromkeys(terms))
+    return resolved
+
+
+async def live_topic_ids(session: AsyncSession, owner_id: int, topic_ids: list[UUID]) -> set[UUID]:
+    """Return which of the given IDs are the owner's live (non-deleted) topics."""
+    if not topic_ids:
+        return set()
+    return set((await session.scalars(select(Topic.id).where(
+        Topic.id.in_(topic_ids), Topic.owner_id == owner_id, Topic.deleted_at.is_(None),
+    ))).all())
 
 
 def _encode_topic_cursor(

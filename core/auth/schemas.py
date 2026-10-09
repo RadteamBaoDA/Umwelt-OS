@@ -73,3 +73,9 @@ class AccountRead(BaseModel):
     default_workspace_id: UUID
     email_verified_at: datetime | None
     email_verification_source: Literal["google_oidc"] | None
+
+
+class ChangePasswordRequest(BaseModel):
+    """Current password plus a replacement validated with the same policy as first-run setup."""
+    currentPassword: str = Field(min_length=1, max_length=128)
+    newPassword: str = Field(min_length=12, max_length=128)

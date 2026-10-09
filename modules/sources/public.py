@@ -10,8 +10,19 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
-from sqlalchemy import ColumnElement, Integer, Select, and_, case, cast, desc, func, select, tuple_
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import (
+    ColumnElement,
+    Integer,
+    Select,
+    and_,
+    case,
+    cast,
+    desc,
+    func,
+    select,
+    text,
+    tuple_,
+)
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
@@ -435,6 +446,59 @@ async def get_source(session: AsyncSession, source_id: UUID, *, scope: Scope, mu
     return await session.scalar(select(Source).where(
         Source.id == source_id, *_source_scope(scope),
     ).execution_options(populate_existing=True))
+CHAT_ATTACHMENTS_MARKER = "chat_attachments"
+CHAT_ATTACHMENTS_NAME = "Chat attachments"
+CHAT_ATTACHMENTS_SHARED_NAME = "Chat attachments (shared)"
+
+
+async def get_or_create_chat_attachments_source(session: AsyncSession, *, shared: bool = False) -> Source:
+    """Return one of the owner's two server-owned Chat attachments manual sources, creating it once.
+
+    ``shared=False`` (the default) selects the private "Chat attachments" source (``local_only``);
+    ``shared=True`` selects "Chat attachments (shared)", which is not ``local_only`` and therefore
+    eligible for cloud chat, embeddings, extraction and briefs. Both carry the same server-set
+    marker and differ only in ``local_only``, which no owner API can change.
+
+    A transaction-scoped advisory lock (one key per variant) serializes concurrent first uploads, so
+    two requests never create two sources of the same variant. An archived/purged source is retired
+    history and a fresh one is created; a paused one is returned so intake reports it as inactive
+    (409). Commits before returning.
+    """
+    variant = "shared" if shared else "private"
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+        {"key": f"umwelt.sources.chat_attachments.{variant}"},
+    )
+    source = await session.scalar(
+        select(Source).where(
+            Source.configuration[CHAT_ATTACHMENTS_MARKER].as_boolean().is_(True),
+            Source.local_only.is_(not shared),
+            Source.status != "archived",
+        ).order_by(Source.created_at.desc()).limit(1)
+    )
+    if source is not None:
+        await session.commit()
+        return source
+    source = Source(
+        type="manual", name=CHAT_ATTACHMENTS_SHARED_NAME if shared else CHAT_ATTACHMENTS_NAME,
+        local_only=not shared, configuration={CHAT_ATTACHMENTS_MARKER: True},
+    )
+    session.add(source)
+    await session.flush()
+    await commit_with_replay(session, [make_source_change(source.id, source.generation, source.status)])
+    await session.refresh(source)
+    return source
+
+
+async def is_chat_attachments_source(session: AsyncSession, source_id: UUID) -> bool:
+    """Report whether a source carries the server-set Chat attachments marker."""
+    source = await session.get(Source, source_id)
+    return source is not None and source.configuration.get(CHAT_ATTACHMENTS_MARKER) is True
+
+
+async def get_source(session: AsyncSession, source_id: UUID) -> Source | None:
+    """Read a source ORM record by identifier."""
+    return await session.get(Source, source_id)
 
 
 async def get_tool_source(
@@ -1837,3 +1901,32 @@ async def resolve_source_purge_job_scope(
             row.source_id, row.generation):
         return None
     return scope
+
+
+@dataclass(frozen=True)
+class SourceImpact:
+    """Owner-UI-only counts of what a disconnect/purge would touch; each saturates at 1000."""
+
+    document_count: int
+    gadget_definition_count: int
+    gadget_placement_count: int
+    conversation_count: int
+
+
+async def get_source_impact(session: AsyncSession, owner_id: int, source_id: UUID) -> SourceImpact | None:
+    """Count dependents of a source through owner public APIs; None when absent, 409 when purge-pending."""
+    if await session.get(Source, source_id) is None:
+        return None
+    if await session.scalar(export_eligible_source_ids().where(Source.id == source_id)) is None:
+        raise HTTPException(status_code=409, detail="Source purge is pending")
+    from modules.chat import public as chat
+    from modules.dashboard import public as dashboard
+    from modules.knowledge.documents import public as documents
+
+    definitions, placements = await dashboard.count_source_gadgets(session, owner_id, source_id)
+    return SourceImpact(
+        document_count=await documents.count_source_documents(session, source_id),
+        gadget_definition_count=definitions,
+        gadget_placement_count=placements,
+        conversation_count=await chat.count_source_conversations(session, source_id),
+    )

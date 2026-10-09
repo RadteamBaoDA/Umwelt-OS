@@ -1,11 +1,13 @@
 """Protected dashboard configuration REST routes with explicit owner and write dependencies."""
 
+import time
 from collections.abc import Awaitable
 from datetime import date
 from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from redis.exceptions import RedisError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.dependencies import require_owner, require_owner_write
@@ -33,8 +35,11 @@ from modules.dashboard.schemas import (
     GadgetDefinitionCreate,
     GadgetDefinitionPatch,
     GadgetDefinitionRead,
+    GadgetDefinitionUsageRead,
     GroupCreate,
     GroupPatch,
+    HighlightPreviewRead,
+    HighlightPreviewRequest,
     InstanceCreate,
     InstancePatch,
     LayoutReplace,
@@ -70,7 +75,8 @@ async def _call[T](operation: Awaitable[T]) -> T:
         raise HTTPException(status_code=409, detail={"code": exc.code, "message": str(exc), "details": details}) from exc
     except (ValueError, KeyError) as exc:
         message = "Unknown preset or renderer" if isinstance(exc, KeyError) else str(exc)
-        raise HTTPException(status_code=422, detail={"code": "invalid_dashboard_configuration", "message": message, "details": {}}) from exc
+        code = getattr(exc, "code", "invalid_dashboard_configuration")
+        raise HTTPException(status_code=422, detail={"code": code, "message": message, "details": {}}) from exc
 
 
 @router.get("/dashboards", response_model=list[DashboardSummary])
@@ -172,6 +178,26 @@ async def replace_layout(dashboard_id: UUID, payload: LayoutReplace, session: Se
     return await _call(public.replace_layout(session, dashboard_id, payload, scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled))
 
 
+PREVIEW_LIMIT_PER_MINUTE = 10
+
+
+async def _allow_preview(request: Request, owner_id: int) -> None:
+    """Owner-scoped fixed-window limit (preview fans out into topic and projection queries); Redis outage fails closed."""
+    key = f"dashboard:preview:{owner_id}:{int(time.time() // 60)}"
+    try:
+        pipeline = request.app.state.redis.pipeline(transaction=True)
+        pipeline.incr(key)
+        pipeline.expire(key, 120, nx=True)
+        count = (await pipeline.execute())[0]
+    except RedisError as exc:
+        raise HTTPException(status_code=503, detail={"code": "preview_unavailable", "message": "Preview is temporarily unavailable", "details": {}}) from exc
+    if count > PREVIEW_LIMIT_PER_MINUTE:
+        raise HTTPException(
+            status_code=429, detail={"code": "preview_rate_limited", "message": "Too many previews", "details": {}},
+            headers={"Retry-After": str(60 - int(time.time()) % 60)},
+        )
+
+
 @router.get("/gadget-definitions", response_model=list[GadgetDefinitionRead])
 async def list_definitions(session: Session, owner: OwnerRead, scope: WorkspaceRead, request: Request, response: Response, limit: Annotated[int, Query(ge=1, le=200)] = 200) -> list[GadgetDefinitionRead]:
     """List a bounded page from the authenticated owner's reusable definition library."""
@@ -184,6 +210,24 @@ async def create_definition(payload: GadgetDefinitionCreate, session: Session, o
     """Save validated renderer configuration after source lifecycle checks and quota enforcement."""
     _no_store(response)
     return await _call(public.create_definition(session, payload, scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled))
+
+
+@router.post("/gadget-definitions/highlight-preview", response_model=HighlightPreviewRead)
+async def preview_highlights(payload: HighlightPreviewRequest, session: Session, owner: OwnerWrite, response: Response, request: Request) -> HighlightPreviewRead:
+    """Dry-run draft rules over the last days of current evidence; never persists or notifies."""
+    _no_store(response)
+    await _allow_preview(request, owner.owner_id)
+    return await _call(public.preview_highlights(session, owner.owner_id, payload))
+
+
+@router.get("/gadget-definitions/{definition_id}/usage", response_model=list[GadgetDefinitionUsageRead])
+async def definition_usage(definition_id: UUID, session: Session, owner: OwnerRead, response: Response) -> list[GadgetDefinitionUsageRead]:
+    """List the owner dashboards using one definition, for edit and delete warnings."""
+    _no_store(response)
+    result = await public.definition_usage(session, owner.owner_id, definition_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Definition not found", "details": {}})
+    return result
 
 
 @router.get("/gadget-definitions/{definition_id}", response_model=GadgetDefinitionRead)

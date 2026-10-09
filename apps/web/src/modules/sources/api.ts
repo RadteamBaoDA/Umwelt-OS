@@ -152,6 +152,11 @@ export function listSources(cursor?: string) {
   return apiRequest<SourcePage>(`/api/v1/sources?limit=50${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
 }
 
+export type SourceImpact = { document_count: number; gadget_definition_count: number; gadget_placement_count: number; conversation_count: number };
+
+/** Fetches owner-only dependent counts for a source (409 while a purge is pending). */
+export function getSourceImpact(id: string, signal?: AbortSignal) { return apiRequest<SourceImpact>(`/api/v1/sources/${id}/impact`, { signal }); }
+
 /** Fetches one source by its identifier. */
 export function getSource(id: string) { return apiRequest<Source>(`/api/v1/sources/${id}`); }
 

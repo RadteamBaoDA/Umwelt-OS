@@ -8,12 +8,12 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { ApiError } from '@/core/api';
+import { apiFailureKey } from '@/core/api-failure-key';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { entityKeys, getGraphStatuses, listEntities } from '@/modules/knowledge/api';
 import { listSources, sourceKeys } from '@/modules/sources/api';
 import { EventDetail } from './event-detail';
-import { listTimeline, type TimelineQuery } from './api';
+import { getEvent, listTimeline, type TimelineQuery } from './api';
 
 type Precision = TimelineQuery['precision'];
 
@@ -31,6 +31,8 @@ export function TimelinePage() {
   const entityId = params.get('entity_id') ?? '';
   const precision = (['all', 'timed', 'date', 'unknown'].includes(params.get('precision') ?? '') ? params.get('precision') : 'all') as Precision;
   const eventType = (params.get('type') ?? '').trim();
+  const pinnedEventId = (params.get('event_id') ?? '').trim().slice(0, 64);
+  const searchText = (params.get('q') ?? '').trim().slice(0, 200);
   const [draftDateFrom, setDraftDateFrom] = useState(dateFrom);
   const [draftDateTo, setDraftDateTo] = useState(dateTo);
   const [draftSourceId, setDraftSourceId] = useState(sourceId);
@@ -49,7 +51,7 @@ export function TimelinePage() {
 
   const query: TimelineQuery = {
     date_from: dateFrom, date_to: dateTo, timezone: display.timezone,
-    source_id: sourceId, entity_id: entityId, precision, type: eventType,
+    source_id: sourceId, entity_id: entityId, precision, type: eventType, q: searchText,
   };
   const timeline = useInfiniteQuery({
     // A normalized server filter in the key starts a fresh cursor chain whenever the filter changes.
@@ -59,6 +61,7 @@ export function TimelinePage() {
     getNextPageParam: (page) => page.next_cursor ?? undefined,
     enabled: !appliedTypeTooLong,
   });
+  const pinned = useQuery({ queryKey: ['timeline-event', pinnedEventId], queryFn: () => getEvent(pinnedEventId), enabled: !!pinnedEventId });
   const sources = useInfiniteQuery({ queryKey: sourceKeys.list, initialPageParam: undefined as string | undefined, queryFn: ({ pageParam }) => listSources(pageParam), getNextPageParam: (page) => page.next_cursor ?? undefined });
   const entities = useInfiniteQuery({ queryKey: entityKeys.list(), initialPageParam: undefined as string | undefined, queryFn: ({ pageParam }) => listEntities(pageParam), getNextPageParam: (page) => page.next_cursor ?? undefined });
   const events = timeline.data?.pages.flatMap((page) => page.items) ?? [];
@@ -103,8 +106,12 @@ export function TimelinePage() {
       <p className="muted">{t('rangeHelp')} · {t('timezoneLabel', { timezone: display.timezone })}</p>
       <Button type="submit">{t('applyFilters')}</Button>
     </form>
+    {searchText && <p className="muted" role="status">{t('searchActive', { query: searchText })} <Button type="button" className="secondary" onClick={() => { const next = new URLSearchParams(applied); next.delete('q'); router.push(`/timeline${next.size ? `?${next}` : ''}`); }}>{t('clearSearch')}</Button></p>}
+    {pinned.isLoading && <p className="muted" role="status">{t('pinnedLoading')}</p>}
+    {pinned.data && <div className="stack"><EventDetail event={pinned.data} locale={display.locale} timezone={display.timezone} entityNames={entityNames} /></div>}
+    {pinned.isError && <p className="error" role="alert">{t('loadFailed')}</p>}
     {timeline.isPending && !appliedTypeTooLong && <div className="skeleton" aria-label={t('loading')} />}
-    {timeline.isError && <p className="error" role="alert">{timeline.error instanceof ApiError ? timeline.error.message : t('loadFailed')} <Button type="button" className="secondary" onClick={() => timeline.refetch()}>{t('retry')}</Button></p>}
+    {timeline.isError && <p className="error" role="alert">{t(apiFailureKey(timeline.error) ?? 'loadFailed')} <Button type="button" className="secondary" onClick={() => timeline.refetch()}>{t('retry')}</Button></p>}
     {timeline.data && <>
       <p className="muted" role="status">{t('loadedCount', { count: events.length })} · {documentVersionIds.length === 0 ? t('graphStatusNoEvidence') : graphStatuses.isPending ? t('graphStatusLoading') : graphStatuses.isError ? t('graphStatusUnavailable') : t('graphStatusSummary', { count: graphStatuses.data?.length ?? 0 })}</p>
       {allDocumentVersionIds.length > 100 && <p className="muted">{t('graphStatusBound', { count: allDocumentVersionIds.length - 100 })}</p>}

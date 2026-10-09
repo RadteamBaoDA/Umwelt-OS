@@ -4,7 +4,7 @@ import asyncio
 import ipaddress
 import logging
 import socket
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Collection, Sequence
 from contextvars import ContextVar
 
 import httpx
@@ -48,6 +48,41 @@ def _address(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
     return address
 
 
+_DENY_V6 = tuple(
+    ipaddress.IPv6Network(v)
+    for v in ("2001::/32", "2002::/16", "64:ff9b:1::/48", "::/96", "fec0::/10")  # Teredo, 6to4, local NAT64, compat
+)
+_DENY_V4 = tuple(ipaddress.IPv4Network(v) for v in ("100.64.0.0/10", "192.88.99.0/24"))
+_NAT64_WKP = ipaddress.IPv6Network("64:ff9b::/96")  # RFC 6052 fixes the layout only for this prefix
+
+
+def _is_public(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Return whether an address is publicly routable.
+
+    Tunnel prefixes whose embedded IPv4 is attacker-choosable (Teredo, 6to4, local-use NAT64, IPv4-compatible)
+    are denied outright, before any unwrapping; only IPv4-mapped and well-known NAT64 are unwrapped and re-checked.
+    ``is_global`` alone is wrong on Python 3.12 (NAT64 ``64:ff9b::a9fe:a9fe``, multicast and ``fec0::/10``
+    all report True), so every non-public property is checked explicitly.
+    """
+    if isinstance(address, ipaddress.IPv6Address):
+        if address.ipv4_mapped is not None:
+            return _is_public(address.ipv4_mapped)
+        if any(address in network for network in _DENY_V6):
+            return False
+        if address in _NAT64_WKP:
+            return _is_public(ipaddress.IPv4Address(address.packed[12:]))
+    elif any(address in network for network in _DENY_V4):
+        return False
+    return address.is_global and not (
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_reserved
+        or address.is_unspecified
+    )
+
+
 class _NotifyOnEnd(httpx.AsyncByteStream):
     """Yield the request body unchanged, then await ``callback`` once when it is exhausted.
 
@@ -86,13 +121,24 @@ class ApprovedEndpointTransport(httpx.AsyncBaseTransport):
         origin: httpx.URL,
         approved_cidrs: Sequence[str],
         delegate: httpx.AsyncBaseTransport,
+        *,
+        allow_global: bool = False,
     ) -> None:
-        """Retain the HTTP origin, parsed non-empty CIDR allowlist, and delegate; malformed or empty CIDRs raise EndpointNetworkPolicyError."""
+        """Retain the HTTP origin, parsed non-empty CIDR allowlist, and delegate; malformed or empty CIDRs raise EndpointNetworkPolicyError.
+
+        ``allow_global`` (web search only) also admits addresses passing ``_is_public``; the CIDR
+        allowlist may then be empty.
+        """
         self._scheme = origin.scheme
         self._host = origin.raw_host.decode("ascii").lower()
         self._port = origin.port
-        self._networks = _networks(approved_cidrs)
+        self._allow_global = allow_global
+        self._networks = _networks(approved_cidrs) if approved_cidrs or not allow_global else ()
         self._delegate = delegate
+
+    def _approved(self, address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+        """Return whether an address is in the CIDR allowlist or, in ``allow_global`` mode, public."""
+        return any(address in network for network in self._networks) or (self._allow_global and _is_public(address))
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         """Validate the request origin, resolve every address, require all addresses to be allowlisted, and delegate to the selected pinned IP."""
@@ -128,9 +174,13 @@ class ApprovedEndpointTransport(httpx.AsyncBaseTransport):
             if address not in unique:
                 unique.append(address)
         # Deny the whole DNS answer set so a mixed safe/unsafe response cannot route to a forbidden address.
-        if not unique or any(not any(address in network for network in self._networks) for address in unique):
+        if not unique or any(not self._approved(address) for address in unique):
             raise EndpointNetworkPolicyError("Gateway address is denied by deployment policy")
 
+        # ponytail: only the first checked address is dialled (no happy-eyeballs fallback); an IPv6-first answer on a
+        # host without IPv6 routing fails the search. Same as the gateway; every address is still policy-checked above.
+        # Connect-time guarantee: the delegate dials this checked literal IP and never resolves again, so a
+        # DNS answer that changes after the check (rebinding) is unreachable; every request re-resolves.
         selected = unique[0]
         headers = request.headers.copy()
         # Pin the network connection to the checked IP while preserving the original HTTP Host and TLS identity.
@@ -167,8 +217,10 @@ def _is_ip(host: str) -> bool:
         return False
 
 
-def approved_http_client(base_url: str, approved_cidrs: Sequence[str]) -> httpx.AsyncClient:
-    """Create a no-proxy, no-redirect HTTP client using the approved-address transport."""
+def approved_transport(
+    base_url: str, approved_cidrs: Sequence[str], *, allow_global: bool = False
+) -> ApprovedEndpointTransport:
+    """Create the no-proxy, no-retry, HTTP/1.1 approved-address transport for one origin."""
     origin = httpx.URL(base_url)
     # HTTP/1.1 only: _NotifyOnEnd relies on httpcore's HTTP/1.1 write-then-pull body loop.
     delegate = httpx.AsyncHTTPTransport(
@@ -179,5 +231,37 @@ def approved_http_client(base_url: str, approved_cidrs: Sequence[str]) -> httpx.
         http1=True,
         http2=False,
     )
-    transport = ApprovedEndpointTransport(origin, approved_cidrs, delegate)
+    return ApprovedEndpointTransport(origin, approved_cidrs, delegate, allow_global=allow_global)
+
+
+def approved_http_client(base_url: str, approved_cidrs: Sequence[str]) -> httpx.AsyncClient:
+    """Create a no-proxy, no-redirect HTTP client using the approved-address transport."""
+    transport = approved_transport(base_url, approved_cidrs)
     return httpx.AsyncClient(transport=transport, trust_env=False, follow_redirects=False)
+
+
+def approved_web_search_transport(
+    base_url: str, allowed_hosts: Collection[str], approved_cidrs: Sequence[str] = ()
+) -> ApprovedEndpointTransport:
+    """Transport for ``modules.chat.web_search.search``: public addresses (``_is_public``) plus ``approved_cidrs``.
+
+    ``allowed_hosts`` is ``AI_ALLOWED_ENDPOINT_HOSTS`` (normalized by Settings); ``approved_cidrs`` is
+    ``WEB_SEARCH_ALLOWED_CIDRS``, never the gateway CIDRs (review P3-8). No redirects and
+    ``trust_env=False`` are enforced by ``search``'s own ``AsyncClient`` and by this delegate. https only.
+    ``search()`` closes the transport it is given, so build one transport per search call.
+    """
+    origin = httpx.URL(base_url)
+    if origin.scheme != "https" or not origin.raw_host or origin.userinfo:
+        raise EndpointNetworkPolicyError("Web search endpoint is invalid")
+    host = origin.raw_host.decode("ascii").lower()
+    if ":" in host:
+        try:
+            host = ipaddress.ip_address(host).compressed
+        except ValueError as exc:
+            raise EndpointNetworkPolicyError("Web search endpoint is invalid") from exc
+    authority = f"[{host}]" if ":" in host else host
+    port = origin.port or 443
+    # Mirrors modules.settings.public: a bare entry admits only the default port, otherwise host:port is required.
+    if (authority if port == 443 else f"{authority}:{port}") not in allowed_hosts:
+        raise EndpointNetworkPolicyError("Web search endpoint host is not allowed by deployment policy")
+    return approved_transport(base_url, approved_cidrs, allow_global=True)

@@ -75,7 +75,7 @@ def set_trace(**ids: str | None) -> None:
 #  1. Authorization / cookie / API-key style headers and fields: the whole value is replaced.
 #  2. ``Bearer <token>`` / ``Basic <token>`` credentials anywhere in text.
 #  3. URL userinfo (``scheme://user:pass@host``) keeps scheme and host only.
-#  4. Query parameters named like secrets (token, key, secret, password, signature, code...).
+#  4. Query parameters named like secrets (token, key, secret, password, signature, code...) and ``q``/``query`` search text.
 #  5. Provider key shapes (sk-..., ghp_/gho_/github_pat_..., xox?-..., AIza..., JWT triples).
 #  6. Fields named prompt/messages/content/document/text/body/input/output are replaced by a
 #     length marker (raw prompts and documents are never logged by default).
@@ -89,6 +89,7 @@ _TEXT_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"(?i)\b(authorization|set-cookie|cookie|x-api-key|x-csrf-token)\s*[:=]\s*[^\r\n]+"), r"\1: " + _MASK),
     (re.compile(r"(?i)([a-z][a-z0-9+.-]*://)[^/\s:@]+(?::[^/\s@]*)?@"), r"\1" + _MASK + "@"),
     (re.compile(r"(?i)([?&](?:[a-z_]*(?:token|key|secret|password|signature|code|sig)[a-z_]*)=)[^&\s#]+"), r"\1" + _MASK),
+    (re.compile(r"(?i)([?&](?:q|query)=)[^&\s#]+"), r"\1" + _MASK),
     (re.compile(r"\b(?:sk|rk|pk)-[A-Za-z0-9_-]{16,}"), _MASK),
     (re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|\bgithub_pat_[A-Za-z0-9_]{20,}"), _MASK),
     (re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}"), _MASK),

@@ -49,6 +49,7 @@ from modules.dashboard.models import (
     DashboardLayout,
     GadgetDefinition,
     GadgetHighlightProgress,
+    GadgetHighlightSuppression,
     GadgetInstance,
     GadgetPlacement,
 )
@@ -168,6 +169,7 @@ _dashboard_models = (
     DashboardGroup,
     GadgetDefinition,
     GadgetHighlightProgress,
+    GadgetHighlightSuppression,
     GadgetInstance,
     DashboardLayout,
     GadgetPlacement,

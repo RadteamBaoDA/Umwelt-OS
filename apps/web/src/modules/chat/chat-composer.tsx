@@ -7,6 +7,8 @@ import * as React from 'react';
 import { useTranslations } from 'next-intl';
 import { SendIcon, SquareIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Label } from '@/components/ui/label';
 
 export interface ChatComposerProps {
   /** Current in-memory draft string. */
@@ -29,6 +31,12 @@ export interface ChatComposerProps {
   sourcesCount?: number;
   /** Full page shows the truthful web search and attachment availability note. */
   showCapabilityNote?: boolean;
+  /** Per-message web search opt-in; passed only by the full Chat page. */
+  webSearch?: { available: boolean; profileBlocked?: boolean; provider?: string; enabled: boolean; onChange: (enabled: boolean) => void };
+  /** Attachment controls rendered above the input (full Chat page only). */
+  attachments?: React.ReactNode;
+  /** Element id explaining why Send is blocked (e.g. attachments still processing); blocks Send when set. */
+  sendBlockedBy?: string | null;
 }
 
 /**
@@ -49,6 +57,9 @@ export function ChatComposer({
   modelLabel = null,
   sourcesCount = 0,
   showCapabilityNote = false,
+  webSearch,
+  attachments,
+  sendBlockedBy = null,
 }: ChatComposerProps) {
   const t = useTranslations('chat');
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
@@ -58,9 +69,9 @@ export function ChatComposer({
    */
   const handleSend = React.useCallback(() => {
     const trimmed = value.trim();
-    if (!trimmed || isStreaming || disabled) return;
+    if (!trimmed || isStreaming || disabled || sendBlockedBy) return;
     onSend(trimmed);
-  }, [value, isStreaming, disabled, onSend]);
+  }, [value, isStreaming, disabled, sendBlockedBy, onSend]);
 
   /**
    * Handles keyboard shortcuts in the textarea: Enter submits, Shift+Enter inserts newline.
@@ -95,10 +106,11 @@ export function ChatComposer({
     textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`;
   }, [value]);
 
-  const canSend = value.trim().length > 0 && !isStreaming && !disabled;
+  const canSend = value.trim().length > 0 && !isStreaming && !disabled && !sendBlockedBy;
 
   return (
     <div className="relative flex flex-col gap-2 border-t border-border bg-background p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+      {attachments}
       <div className="relative flex items-end gap-2 rounded-xl border border-border bg-surface p-2 shadow-sm focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-1">
         <textarea
           ref={textareaRef}
@@ -127,9 +139,12 @@ export function ChatComposer({
             <Button
               type="button"
               onClick={handleSend}
-              disabled={!canSend}
-              className="flex items-center gap-1.5 px-3 py-1.5 h-9 rounded-lg bg-primary text-primary-foreground disabled:opacity-40 disabled:cursor-not-allowed font-medium text-xs shadow-sm transition-opacity"
+              // aria-disabled (not disabled) keeps Send focusable so its blocked reason stays reachable;
+              // handleSend is the click guard.
+              aria-disabled={!canSend}
+              className="flex items-center gap-1.5 px-3 py-1.5 h-9 rounded-lg bg-primary text-primary-foreground aria-disabled:opacity-40 aria-disabled:cursor-not-allowed font-medium text-xs shadow-sm transition-opacity"
               aria-label={t('send')}
+              aria-describedby={sendBlockedBy ?? undefined}
             >
               <SendIcon className="size-3.5" />
               <span>{t('send')}</span>
@@ -137,11 +152,28 @@ export function ChatComposer({
           )}
         </div>
       </div>
-      <div className="flex flex-wrap items-center justify-between gap-x-3 px-1 text-[11px] text-muted-foreground">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 px-1 text-xs text-muted-foreground">
         <span>{modelLabel ? t('modelLine', { model: modelLabel }) : t('modelNotReported')}{sourcesCount > 0 ? ` · ${t('sourcesCount', { count: sourcesCount })}` : ''}</span>
         <span className="hidden sm:inline">Enter ↵ · Shift+Enter</span>
       </div>
-      {showCapabilityNote && <p className="px-1 text-[11px] text-muted-foreground">{t('composerNote')}</p>}
+      {webSearch && (
+        <div className="flex flex-col gap-0.5 px-1">
+          <div className="flex items-center gap-2">
+            <Checkbox
+              id="chat-web-search"
+              checked={webSearch.available && !webSearch.profileBlocked && webSearch.enabled}
+              disabled={!webSearch.available || webSearch.profileBlocked || isStreaming || disabled}
+              onCheckedChange={(checked) => webSearch.onChange(checked === true)}
+              aria-describedby="chat-web-search-help"
+            />
+            <Label htmlFor="chat-web-search" className="text-xs text-foreground">{t('webSearchToggle')}</Label>
+          </div>
+          <p id="chat-web-search-help" className="text-xs text-muted-foreground">
+            {!webSearch.available ? t('webSearchDisabledHelp') : webSearch.profileBlocked ? t('webSearchProfileHelp') : webSearch.enabled ? t('webSearchEnabledHelp', { provider: webSearch.provider ?? '' }) : t('webSearchIdleHelp')}
+          </p>
+        </div>
+      )}
+      {showCapabilityNote && <p className="px-1 text-xs text-muted-foreground">{t('composerNote')}</p>}
     </div>
   );
 }

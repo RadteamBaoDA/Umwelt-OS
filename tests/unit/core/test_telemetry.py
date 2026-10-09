@@ -81,6 +81,12 @@ class TestLogSanitization:
         assert "Bearer [redacted]" in redacted
         assert "my_secret_token_12345678" not in redacted
 
+    def test_redact_search_query_params(self) -> None:
+        """redact_text masks q and query values but keeps other params."""
+        redacted = telemetry.redact_text("GET /api/v1/events?q=secret&x=1 and /a?limit=8&query=my+trip&y=2")
+        assert "secret" not in redacted and "my+trip" not in redacted
+        assert "?q=[redacted]&x=1" in redacted and "&query=[redacted]&y=2" in redacted
+
     def test_redact_url_userinfo(self) -> None:
         """redact_text masks password/user in URL authority."""
         url = "postgres://admin:super_secret_pw@localhost:5432/umwelt"

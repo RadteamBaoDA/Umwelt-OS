@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
@@ -158,6 +159,9 @@ async def list_dashboard_projections(
     channel_ids: Annotated[list[str] | None, Query(max_length=32)] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     cursor: Annotated[str | None, Query(max_length=1024)] = None,
+    language: Annotated[str | None, Query(pattern=r"^[a-z]{2}$")] = None,
+    since: datetime | None = None,
+    include_dismissed: bool = False,
 ) -> GadgetDocumentProjectionList:
     """Return current source-scoped records through the Documents owner projection."""
     _require_document_route_owner(workspace)

@@ -1,6 +1,7 @@
 'use client';
 
 import * as React from 'react';
+import { ApiError, apiRequest } from '@/core/api';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { PlusIcon } from 'lucide-react';
@@ -15,10 +16,13 @@ import {
   streamResponseEvents,
   type ChatMessage,
   type Citation,
+  type WebSearchOutcome,
+  WEB_SEARCH_SEND_ENABLED,
 } from '@/modules/chat/api';
 import { ChatComposer } from './chat-composer';
 import { ChatTranscript } from './chat-transcript';
-import { ChatContextBar } from './chat-context-bar';
+import { ChatContextBar, MAX_ITEMS, stripItemTitles } from './chat-context-bar';
+import { ATTACHMENT_STATUS_ID, ChatAttachmentBar, useChatAttachments, withAttachments } from './chat-attachments';
 import { ConversationAgentActivity } from '@/modules/agents/conversation-agent-activity';
 import {
   PendingMessageMutationConflictError,
@@ -40,6 +44,34 @@ const runStatusKeys: Record<string, 'agentRunQueued' | 'agentRunRunning' | 'agen
   queued: 'agentRunQueued', running: 'agentRunRunning', waiting_approval: 'agentRunWaitingApproval',
   succeeded: 'agentRunSucceeded', failed: 'agentRunFailed', cancelled: 'agentRunCancelled',
 };
+
+/** Error whose message is already localized for the user (safe to display verbatim). */
+class LocalizedError extends Error {}
+
+/** Server machine codes for selection failures mapped to their localized catalog keys. */
+const SELECTION_ERROR_KEYS: Record<string, string> = {
+  selection_local_only: 'contextSelectionLocalOnly',
+  selection_unavailable: 'contextSelectionUnavailable',
+  selection_too_large: 'contextSelectionTooLarge',
+  selection_invalid: 'contextSelectionTooLarge',
+};
+
+/**
+ * Maps a chat failure to a `chat` catalog key. Server `detail` text is English-only and never shown:
+ * selection codes win, then HTTP status class, then the caller's fallback. The raw error goes to the console.
+ */
+function chatFailureKey(err: unknown, fallback: string): string {
+  if (!(err instanceof ApiError)) return fallback;
+  console.warn('Chat request failed', err.status, err.code, err.message);
+  if (err.code && Object.hasOwn(SELECTION_ERROR_KEYS, err.code)) return SELECTION_ERROR_KEYS[err.code];
+  if (err.status === 401) return 'sessionExpired';
+  if (err.status === 409) return 'errorConflict';
+  if (err.status >= 500) return 'errorService';
+  return fallback;
+}
+
+/** Display names for known web-search providers; anything else uses the neutral `webSearchProviderGeneric` copy. */
+const WEB_SEARCH_PROVIDER_LABELS: Record<string, string> = { brave: 'Brave', tavily: 'Tavily' };
 
 export interface ChatSessionProps {
   /** Target conversation ID to render, or null/undefined for a fresh unsaved thread. */
@@ -80,6 +112,8 @@ export function ChatSession({
 
   const [streamingText, setStreamingText] = React.useState<string>('');
   const [streamingCitations, setStreamingCitations] = React.useState<Citation[]>([]);
+  const [streamingWebSearch, setStreamingWebSearch] = React.useState<WebSearchOutcome | null>(null);
+  const [webSearchOn, setWebSearchOn] = React.useState(false);
   const [isStreaming, setIsStreaming] = React.useState<boolean>(false);
   const [isPending, setIsPending] = React.useState<boolean>(false);
   const [activeResponseId, setActiveResponseId] = React.useState<string | null>(null);
@@ -146,6 +180,25 @@ export function ChatSession({
 
   const latestAssistant = React.useMemo(() => [...messages].reverse().find((message) => message.role === 'assistant'), [messages]);
 
+  // Same cache key as AI settings; availability needs provider, stored credential and remote-search consent.
+  const aiSettings = useQuery({
+    queryKey: ['ai-settings'],
+    queryFn: () => apiRequest<{ web_search_provider: string; web_search_credential_configured: boolean; privacy: { allow_remote_web_search: boolean } }>('/api/v1/settings/ai'),
+    enabled: mode === 'full',
+  });
+  const webSearchAvailable = Boolean(
+    aiSettings.data && aiSettings.data.web_search_provider !== 'none'
+    && aiSettings.data.web_search_credential_configured && aiSettings.data.privacy?.allow_remote_web_search,
+  );
+  // Specialist-agent sends (non-assistant profile or a pending profile retry) do not carry web_search.
+  const webSearchProfileBlocked = selectedProfileId !== 'assistant' || Boolean(pendingProfileRun);
+  // Specialist runs and prompt edits carry no chat context, and a day/document/entity context cannot hold
+  // a selection, so attachments cannot ride along with any of them.
+  const attachmentsUnavailable = webSearchProfileBlocked || !!effectiveEditingMessageId
+    || (!!chatCtrl.context && chatCtrl.context.kind !== 'selection');
+  const attachments = useChatAttachments(session.csrfToken, attachmentsUnavailable);
+  const webSearchUsable = WEB_SEARCH_SEND_ENABLED && webSearchAvailable && !webSearchProfileBlocked;
+
   const profiles = useQuery({ queryKey: ['agent-profiles'], queryFn: getAgentProfiles, enabled: mode === 'full' });
   const agentRuns = useQuery({
     queryKey: ['agent-runs', 'conversation', conversationId],
@@ -176,6 +229,7 @@ export function ChatSession({
     setIsStreaming(false);
     setStreamingText('');
     setStreamingCitations([]);
+    setStreamingWebSearch(null);
     setActiveResponseId(null);
     setEditingMessageId(null);
     const promoted = promotedSelectionRef.current;
@@ -192,6 +246,7 @@ export function ChatSession({
   }, [conversationId, chatCtrl.activeConversationGeneration]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
+  const streamRunRef = React.useRef<((id: string, conversationId: string, isCurrentView: () => boolean) => Promise<void>) | null>(null);
   /**
    * Streams a durable response into the currently selected view and refreshes its transcript on exit.
    *
@@ -222,6 +277,9 @@ export function ChatSession({
       onDelta: (chunk) => {
         if (isCurrentView()) setStreamingText((prev) => prev + chunk);
       },
+      onWebSearch: (outcome) => {
+        if (isCurrentView()) setStreamingWebSearch(outcome);
+      },
       onCitations: (cites) => {
         if (isCurrentView()) setStreamingCitations(cites);
       },
@@ -230,6 +288,7 @@ export function ChatSession({
           setIsStreaming(false);
           setStreamingText('');
           setStreamingCitations([]);
+          setStreamingWebSearch(null);
           setActiveResponseId(null);
         }
         void queryClient.invalidateQueries({ queryKey: chatKeys.conversation(responseConversationId) });
@@ -242,6 +301,7 @@ export function ChatSession({
             setIsPending(false);
             setStreamingText('');
             setStreamingCitations([]);
+            setStreamingWebSearch(null);
             setActiveResponseId(null);
             setError(t('cancelled'));
           }
@@ -251,14 +311,27 @@ export function ChatSession({
           setIsStreaming(false);
           setActiveResponseId(null);
           setError(t('sessionExpired'));
+          // Password rotation also ends the stream's old session; apiRequest dispatches bbd:unauthorized only on a real 401.
+          // A 200 probe means the session was only rotated: the durable run continues, so reattach (never resend the prompt).
+          void apiRequest('/api/v1/auth/session').then(async () => {
+            await streamPromise.catch(() => undefined);
+            if (attachedResponseStreamRef.current === streamAttachment) attachedResponseStreamRef.current = null;
+            if (!isCurrentView() || attachedResponseStreamRef.current) return;
+            setError(null);
+            setStreamingText('');
+            setStreamingCitations([]);
+            setActiveResponseId(responseId);
+            setIsStreaming(true);
+            await streamRunRef.current?.(responseId, responseConversationId, isCurrentView);
+          }).catch(() => undefined);
         }
       },
-      onError: (streamError) => {
+      onError: () => {
         if (!abortCtrl.signal.aborted && isCurrentView()) {
           setIsStreaming(false);
           setIsPending(false);
           setActiveResponseId(null);
-          setError(streamError.message || t('errorSending'));
+          setError(t('errorSending'));
         }
       },
     });
@@ -277,7 +350,7 @@ export function ChatSession({
         setIsStreaming(false);
         setIsPending(false);
         setActiveResponseId(null);
-        setError(streamError instanceof Error ? streamError.message : t('errorSending'));
+        setError(t(chatFailureKey(streamError, 'errorSending')));
       }
       throw streamError;
     } finally {
@@ -287,6 +360,7 @@ export function ChatSession({
       }
     }
   }, [queryClient, t]);
+  React.useEffect(() => { streamRunRef.current = streamResponseRun; }, [streamResponseRun]);
 
   /** Reattaches to the owner-reported durable run when this conversation surface mounts or returns. */
   React.useEffect(() => {
@@ -310,6 +384,7 @@ export function ChatSession({
     setIsStreaming(true);
     setStreamingText('');
     setStreamingCitations([]);
+    setStreamingWebSearch(null);
     setError(null);
     void streamResponseRun(responseId, conversationId, isCurrentView).catch(() => {
       // streamResponseRun reports visible failures through its guarded error path.
@@ -341,6 +416,7 @@ export function ChatSession({
 
     setError(null);
     setIsPending(true);
+    const webSearchRequested = mode === 'full' && webSearchUsable && webSearchOn;
     try {
       const baseContentHash = await hashMessageContent(target.content);
       const envelope = chatCtrl.getOrCreatePendingMessageMutation(targetConversationId, {
@@ -357,9 +433,11 @@ export function ChatSession({
           base_content_hash: envelope.baseContentHash,
           client_request_id: envelope.clientRequestId,
           ...(envelope.content !== undefined ? { content: envelope.content } : {}),
+          ...(webSearchRequested ? { web_search: true } : {}),
         },
         session.csrfToken,
       );
+      setWebSearchOn(false);
       chatCtrl.clearPendingMessageMutation(targetConversationId, envelope.clientRequestId);
       if (isCurrentView()) {
         setEditingMessageId(null);
@@ -375,16 +453,17 @@ export function ChatSession({
       setIsStreaming(true);
       setStreamingText('');
       setStreamingCitations([]);
+      setStreamingWebSearch(null);
       await streamResponseRun(run.response_id, targetConversationId, isCurrentView);
     } catch (mutationError: unknown) {
       if (isCurrentView()) {
         setIsPending(false);
         setError(mutationError instanceof PendingMessageMutationConflictError
           ? t('retryOriginalRevisionFirst')
-          : mutationError instanceof Error ? mutationError.message : t('revisionFailed'));
+          : t(chatFailureKey(mutationError, 'revisionFailed')));
       }
     }
-  }, [chatCtrl, conversationId, isPending, isStreaming, messages, queryClient, session.csrfToken, streamResponseRun, t]);
+  }, [chatCtrl, conversationId, isPending, isStreaming, messages, mode, queryClient, session.csrfToken, streamResponseRun, t, webSearchUsable, webSearchOn]);
 
   /** Opens the full Chat composer with a user message's content for an append-only edit. */
   const handleEditMessage = React.useCallback((message: ChatMessage) => {
@@ -441,13 +520,22 @@ export function ChatSession({
         ? { date: chatCtrl.context.date, timezone: chatCtrl.context.timezone }
         : null;
 
+      // Ready Chat attachments join the U3 selection mechanism; the composer blocks Send while any are not ready.
+      const sendContext = stripItemTitles(mode === 'full' ? withAttachments(chatCtrl.context, attachments.items) : chatCtrl.context);
+      const selItems = sendContext?.kind === 'selection' ? sendContext.items ?? [] : [];
+      let selectionStage = false; // true only while the selection precheck / sendMessage can fail
       try {
+        // Pre-validate the server's 1..32 distinct-document limit before the draft is cleared.
+        if (selItems.length > MAX_ITEMS || new Set(selItems.map((i) => i.documentId)).size !== selItems.length) {
+          selectionStage = true;
+          throw new ApiError(422, 'selection limit', { code: 'selection_too_large' });
+        }
         const selected = mode === 'full' && selectedProfileId !== 'assistant'
           ? profiles.data?.find((profile) => profile.id === selectedProfileId)
           : undefined;
         if (mode === 'full' && selectedProfileId !== 'assistant' && !retryEnvelope &&
             (!selected || !selected.enabled || selected.capability === 'unavailable')) {
-          throw new Error(tAgents('agentUnavailable'));
+          throw new LocalizedError(tAgents('agentUnavailable'));
         }
         // If no active conversation exists, create one first with initial title from message excerpt
         if (!targetId) {
@@ -481,7 +569,7 @@ export function ChatSession({
 
         if (mode === 'full' && (selectedProfileId !== 'assistant' || retryEnvelope)) {
           const profile = selected;
-          if (!retryEnvelope && !profile) throw new Error(tAgents('agentUnavailable'));
+          if (!retryEnvelope && !profile) throw new LocalizedError(tAgents('agentUnavailable'));
           const envelope: PendingSpecialistRun = retryEnvelope ?? {
             prompt: content,
             profileId: profile!.id,
@@ -519,16 +607,21 @@ export function ChatSession({
           : `req-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
         const responseConversationId = targetId;
 
+        selectionStage = true;
         const responseRun = await sendMessage(
           responseConversationId,
           {
             content,
             client_request_id: clientRequestId,
-            context: chatCtrl.context ?? undefined,
+            context: sendContext ?? undefined,
+            ...(mode === 'full' && webSearchUsable && webSearchOn ? { web_search: true } : {}),
           },
           session.csrfToken,
         );
+        setWebSearchOn(false);
+        if (attachments.items.length && canUpdateCurrentView()) attachments.clear();
 
+        selectionStage = false;
         if (!canUpdateCurrentView()) {
           void queryClient.invalidateQueries({ queryKey: chatKeys.conversation(responseConversationId) });
           void queryClient.invalidateQueries({ queryKey: chatKeys.conversations() });
@@ -540,6 +633,7 @@ export function ChatSession({
         setIsStreaming(true);
         setStreamingText('');
         setStreamingCitations([]);
+        setStreamingWebSearch(null);
 
         await streamResponseRun(responseRun.response_id, responseConversationId, canUpdateCurrentView);
       } catch (err: unknown) {
@@ -547,9 +641,16 @@ export function ChatSession({
           setIsPending(false);
           setIsStreaming(false);
           setActiveResponseId(null);
-          const errMsg = attemptedProfileRun?.prompt === content
-            ? tAgents('agentStartFailed')
-            : err instanceof Error ? err.message : t('errorSending');
+          // Selection failures are identified by the server's machine code (never by message text) and keep the draft.
+          const selectionFailure = selectionStage && selItems.length > 0 && err instanceof ApiError && !!err.code && Object.hasOwn(SELECTION_ERROR_KEYS, err.code);
+          if (selectionFailure) chatCtrl.setDraft(content);
+          const errMsg = err instanceof LocalizedError
+            ? err.message
+            : selectionFailure
+              ? t(chatFailureKey(err, 'errorSending'))
+              : attemptedProfileRun?.prompt === content
+                ? tAgents('agentStartFailed')
+                : t(chatFailureKey(err, 'errorSending'));
           setError(errMsg);
         }
       }
@@ -559,7 +660,6 @@ export function ChatSession({
       chatCtrl,
       onConversationCreated,
       queryClient,
-      refetchDetail,
       session.csrfToken,
       t,
       mode,
@@ -569,6 +669,10 @@ export function ChatSession({
       effectiveEditingMessageId,
       handleMessageMutation,
       streamResponseRun,
+      webSearchUsable,
+      webSearchOn,
+      attachments,
+      pendingProfileRun,
     ],
   );
 
@@ -606,6 +710,8 @@ export function ChatSession({
     setError(null);
     setStreamingText('');
     setStreamingCitations([]);
+    setStreamingWebSearch(null);
+    setWebSearchOn(false);
     setIsStreaming(false);
     setIsPending(false);
   }, [chatCtrl]);
@@ -667,7 +773,7 @@ export function ChatSession({
         </details>
       ) : null}
 
-      <ChatContextBar context={chatCtrl.context} onRemove={() => chatCtrl.setContext(null)} showAddNote={mode === 'full'} />
+      <ChatContextBar context={chatCtrl.context} onRemove={() => chatCtrl.setContext(null)} onChange={mode === 'full' ? chatCtrl.setContext : undefined} />
 
       {mode === 'full' && pendingMessageMutation && (
         <div role="status" className="flex items-center justify-between gap-3 border-b border-border bg-secondary px-4 py-2 text-xs">
@@ -710,6 +816,7 @@ export function ChatSession({
         messages={messages}
         streamingText={streamingText}
         streamingCitations={streamingCitations}
+        streamingWebSearch={streamingWebSearch}
         isStreaming={isStreaming}
         isPending={isPending}
         error={error}
@@ -734,6 +841,14 @@ export function ChatSession({
         modelLabel={latestAssistant?.model_identity ?? null}
         sourcesCount={latestAssistant?.citations?.length ?? 0}
         showCapabilityNote={mode === 'full'}
+        attachments={mode === 'full' ? (
+          <ChatAttachmentBar
+            state={attachments}
+            disabled={isPending || isStreaming || attachmentsUnavailable}
+          />
+        ) : undefined}
+        sendBlockedBy={mode === 'full' && attachments.sendBlock ? ATTACHMENT_STATUS_ID : null}
+        webSearch={mode === 'full' && WEB_SEARCH_SEND_ENABLED ? { available: webSearchAvailable, provider: WEB_SEARCH_PROVIDER_LABELS[aiSettings.data?.web_search_provider ?? ''] ?? t('webSearchProviderGeneric'), profileBlocked: webSearchProfileBlocked, enabled: webSearchOn, onChange: setWebSearchOn } : undefined}
       />
     </div>
   );

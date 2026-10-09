@@ -131,8 +131,8 @@ function EditorSourceActions({ source, activation, disabled, onChanged, onPurgeS
   const off = disabled || actions.busy;
   return <>
     {source.status === 'active' && <Button className="secondary" disabled={off} onClick={() => void actions.toggleStatus()}>{actions.busy ? t('pausing') : t('pause')}</Button>}
-    <DisconnectDialog name={source.name} archived={source.status === 'archived'} disabled={off} onConfirm={(deleteData) => void actions.disconnect(deleteData)}
-      trigger={<Button className="secondary" disabled={off}>{actions.busy ? t('disconnecting') : t(source.status === 'archived' ? 'disconnectDelete' : 'disconnectAction')}</Button>} />
+    <DisconnectDialog sourceId={source.id} name={source.name} archived={source.status === 'archived'} disabled={off} onConfirm={(deleteData) => void actions.disconnect(deleteData)}
+      trigger={<Button className="secondary" aria-disabled={off}>{actions.busy ? t('disconnecting') : t(source.status === 'archived' ? 'disconnectDelete' : 'disconnectAction')}</Button>} />
     {actions.error && <p className="error" role="alert">{t('actionFailed')}</p>}
   </>;
 }

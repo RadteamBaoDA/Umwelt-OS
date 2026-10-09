@@ -3,14 +3,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { useQuery } from '@tanstack/react-query';
-import { BotIcon, FileTextIcon, MessageSquareIcon, NavigationIcon, PlayIcon, SearchIcon, ShapesIcon, SparklesIcon } from 'lucide-react';
+import { BotIcon, CalendarIcon, FileTextIcon, MessageSquareIcon, NavigationIcon, PlayIcon, SearchIcon, ShapesIcon, SparklesIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { commandDestinations, destinationEnabled, type ModuleAvailability } from '@/core/module-registry';
 import { apiRequest } from '@/core/api';
 import { useGuardedNavigation } from '@/core/guarded-navigation';
 import { useChatController } from '@/core/app-shell/chat-controller';
-import { chatKeys, listConversations } from '@/modules/chat/api';
+import { listConversations } from '@/modules/chat/api';
+import { searchEvents } from '@/modules/timeline/api';
 import { searchDocuments, searchEntities, type SearchFilters } from '@/modules/search/api';
 
 type Scope = 'all' | 'entities' | 'documents' | 'events' | 'conversations';
@@ -22,7 +23,7 @@ const MIN_QUERY = 2;
 /** One selectable row; `disabledReason` keeps unavailable actions visible but inert. */
 interface PaletteOption {
   id: string;
-  group: 'actions' | 'goTo' | 'documents' | 'entities' | 'conversations';
+  group: 'actions' | 'goTo' | 'documents' | 'entities' | 'events' | 'conversations';
   label: string;
   meta?: string;
   disabledReason?: string;
@@ -63,6 +64,7 @@ export function CommandPalette() {
   const searching = open && debounced.length >= MIN_QUERY;
   const wantsDocs = scope === 'all' || scope === 'documents';
   const wantsEntities = scope === 'all' || scope === 'entities';
+  const wantsEvents = scope === 'all' || scope === 'events';
   const wantsConversations = scope === 'all' || scope === 'conversations';
 
   const moduleAvailability = useQuery({
@@ -72,7 +74,8 @@ export function CommandPalette() {
   });
   const docs = useQuery({ queryKey: ['palette', 'documents', debounced], queryFn: () => searchDocuments(debounced, noFilters, 'hybrid'), enabled: searching && wantsDocs && online, retry: false });
   const entities = useQuery({ queryKey: ['palette', 'entities', debounced], queryFn: () => searchEntities(debounced), enabled: searching && wantsEntities && online, retry: false });
-  const conversations = useQuery({ queryKey: chatKeys.conversations(), queryFn: () => listConversations(), enabled: open && wantsConversations && online, retry: false });
+  const events = useQuery({ queryKey: ['palette', 'events', debounced], queryFn: () => searchEvents(debounced), enabled: searching && wantsEvents && online, retry: false });
+  const conversations = useQuery({ queryKey: ['palette', 'conversations', debounced], queryFn: () => listConversations({ q: debounced, limit: 8 }), enabled: searching && wantsConversations && online, retry: false });
 
   useEffect(() => {
     openRef.current = open;
@@ -124,17 +127,18 @@ export function CommandPalette() {
     }
     if (wantsDocs) for (const hit of docs.data?.items ?? []) list.push({ id: `doc-${hit.chunk_id}`, group: 'documents', label: hit.title, meta: `${hit.source.name} · v${hit.version_number}`, icon: FileTextIcon, run: () => go(`/knowledge/documents/${hit.document_id}?versionId=${hit.document_version_id}&chunkId=${hit.chunk_id}#cited-chunk`) });
     if (wantsEntities) for (const hit of entities.data?.items ?? []) list.push({ id: `ent-${hit.id}`, group: 'entities', label: hit.name ?? hit.id, meta: hit.type, icon: ShapesIcon, run: () => go(`/knowledge/entities/${hit.id}`) });
-    if (wantsConversations && query.length >= MIN_QUERY) {
-      for (const conv of (conversations.data ?? []).filter((c) => c.title.toLocaleLowerCase().includes(lower))) {
+    if (wantsEvents) for (const hit of events.data?.items ?? []) list.push({ id: `evt-${hit.id}`, group: 'events', label: hit.title, meta: hit.type, icon: CalendarIcon, run: () => go(`/timeline?event_id=${encodeURIComponent(hit.id)}`) });
+    if (wantsConversations) {
+      for (const conv of conversations.data ?? []) {
         list.push({ id: `conv-${conv.id}`, group: 'conversations', label: conv.title || tc('untitledConversation'), icon: MessageSquareIcon, run: () => { selectConversation(conv.id); go('/chat'); } });
       }
     }
     return list;
-  }, [query, scope, moduleAvailability.data, docs.data, entities.data, conversations.data, wantsDocs, wantsEntities, wantsConversations, t, tc, setDraft, openDrawer, selectConversation, navigate]);
+  }, [query, scope, moduleAvailability.data, docs.data, entities.data, events.data, conversations.data, wantsDocs, wantsEntities, wantsEvents, wantsConversations, t, tc, setDraft, openDrawer, selectConversation, navigate]);
 
   const active = options.length ? Math.min(activeIndex, options.length - 1) : -1;
   const optionId = (index: number) => `palette-option-${options[index]?.id}`;
-  const groupLabel = (group: PaletteOption['group']) => group === 'goTo' ? tc('paletteGoTo') : group === 'actions' ? tc('paletteActions') : group === 'documents' ? tc('paletteDocuments') : group === 'entities' ? tc('paletteEntities') : tc('paletteConversations');
+  const groupLabel = (group: PaletteOption['group']) => group === 'goTo' ? tc('paletteGoTo') : group === 'actions' ? tc('paletteActions') : group === 'documents' ? tc('paletteDocuments') : group === 'entities' ? tc('paletteEntities') : group === 'events' ? tc('paletteEvents') : tc('paletteConversations');
   const groups = options.reduce<{ group: PaletteOption['group']; items: { option: PaletteOption; index: number }[] }[]>((acc, option, index) => {
     const last = acc[acc.length - 1];
     if (last && last.group === option.group) last.items.push({ option, index }); else acc.push({ group: option.group, items: [{ option, index }] });
@@ -151,11 +155,11 @@ export function CommandPalette() {
     else if (event.key === 'Enter') { event.preventDefault(); const option = options[active]; if (option && !option.disabledReason) option.run(); }
   };
 
-  const loading = searching && ((wantsDocs && docs.isFetching) || (wantsEntities && entities.isFetching));
-  const failed = searching && ((wantsDocs && docs.isError) || (wantsEntities && entities.isError));
+  const loading = searching && ((wantsDocs && docs.isFetching) || (wantsEntities && entities.isFetching) || (wantsEvents && events.isFetching) || (wantsConversations && conversations.isFetching));
+  const failed = searching && ((wantsDocs && docs.isError) || (wantsEntities && entities.isError) || (wantsEvents && events.isError) || (wantsConversations && conversations.isError));
   const mode = searching && wantsDocs ? docs.data?.effective_mode : undefined;
-  const needsQuery = query.length < MIN_QUERY && scope !== 'all' && scope !== 'events';
-  const showEmpty = !loading && !failed && options.length === 0 && !needsQuery && scope !== 'events';
+  const needsQuery = query.length < MIN_QUERY && scope !== 'all';
+  const showEmpty = !loading && !failed && options.length === 0 && !needsQuery;
 
   return <>
     <Button type="button" variant="outline" className="search-trigger" onClick={() => setOpen(true)} aria-label={t('searchOrRun')} aria-keyshortcuts="Control+K Meta+K"><SearchIcon className="size-4" aria-hidden="true" /><span className="search-label">{t('searchOrRun')}</span><kbd>Ctrl K</kbd></Button>
@@ -206,7 +210,7 @@ export function CommandPalette() {
             {loading && <p>{tc('paletteSearching')}</p>}
             {!loading && options.length > 0 && <p className="sr-only">{tc('paletteResultCount', { count: options.length })}</p>}
             {showEmpty && <p>{tc('paletteNoResults')}</p>}
-            {scope === 'events' && <p>{tc('paletteEventsUnavailable')}</p>}
+            {(scope === 'all' || scope === 'events') && query.length >= MIN_QUERY && <p>{tc('paletteEventsNote')}</p>}
             {needsQuery && <p>{tc('paletteTypeToSearch')}</p>}
             {(scope === 'all' || scope === 'conversations') && query.length >= MIN_QUERY && <p>{tc('paletteConversationsNote')}</p>}
             {!online && <p>{tc('paletteOffline')}</p>}
