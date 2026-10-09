@@ -43,9 +43,22 @@ MAX_RANKED_CANDIDATES = MAX_CANDIDATES * 2
 FALLBACK_WARNING = "Semantic search unavailable"
 
 
-async def _admit(session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool) -> AccessFence:
-    """Admit owner-only Search access before workspace candidates or generation rows are read."""
-    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
+def is_member_scope(scope: Scope) -> bool:
+    """True for a non-owner workspace member, who may only search explicitly shared documents."""
+    return isinstance(scope, WorkspaceContext) and scope.role != "owner"
+
+
+def _member_grants(scope: Scope) -> Select[Any]:
+    """Document-id projection of this member's active grants (members are always WorkspaceContext)."""
+    assert isinstance(scope, WorkspaceContext)
+    return workspaces.granted_resource_ids(scope=scope, kind="document")
+
+
+async def _admit(
+    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool, allow_member: bool = False,
+) -> AccessFence:
+    """Admit Search access before candidates or generation rows are read; members only when allowed."""
+    if not allow_member and is_member_scope(scope):
         raise HTTPException(status_code=403, detail="Workspace owner required")
     return await workspaces.read_access_fence(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
@@ -223,8 +236,9 @@ def _filters(
 def _visible_rows(
     *columns: Any, destination: ToolDestination = ToolDestination.LOCAL,
     source_generation_fences: dict[UUID, int] | None = None, workspace_id: UUID,
+    grants: Select[Any] | None = None,
 ) -> Select[Any]:
-    """Build a fresh active/current query with destination and optional generation fences."""
+    """Build a fresh active/current query with destination, generation fences and member grants."""
     statement = (
         select(*columns)
         .join(DocumentVersion, DocumentVersion.id == DocumentChunk.document_version_id)
@@ -237,6 +251,9 @@ def _visible_rows(
             Source.status == "active",
         )
     )
+    if grants is not None:
+        # Member grant predicate sits in the candidate SQL, before any ORDER BY / LIMIT.
+        statement = statement.where(Document.id.in_(grants))
     if destination != ToolDestination.LOCAL:
         statement = statement.where(Source.local_only.is_(False))
     if source_generation_fences is not None:
@@ -252,13 +269,13 @@ async def _lexical_ids(
     session: AsyncSession, request: SearchRequest,
     destination: ToolDestination = ToolDestination.LOCAL,
     source_generation_fences: dict[UUID, int] | None = None,
-    *, workspace_id: UUID,
+    *, workspace_id: UUID, grants: Select[Any] | None = None,
 ) -> list[UUID]:
     """Retrieve bounded candidates after active/current, privacy and generation SQL filters."""
     vector = func.to_tsvector(text("'simple'"), DocumentChunk.content)
     query = func.websearch_to_tsquery(text("'simple'"), request.query)
     statement = _filters(
-        _visible_rows(DocumentChunk.id, destination=destination, workspace_id=workspace_id), request, destination,
+        _visible_rows(DocumentChunk.id, destination=destination, workspace_id=workspace_id, grants=grants), request, destination,
         source_generation_fences, workspace_id=workspace_id,
     ).where(vector.op("@@")(query)).order_by(
         func.ts_rank_cd(vector, query).desc(), DocumentChunk.id,
@@ -356,15 +373,22 @@ async def search(
         raise ValueError("Search source fence exceeds its supported bound")
     if destination != ToolDestination.LOCAL and not source_generation_fences:
         raise ValueError("Remote search requires current source-generation fences")
-    admitted_fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    member = is_member_scope(scope)
+    if member and (destination != ToolDestination.LOCAL or source_generation_fences is not None):
+        raise HTTPException(status_code=403, detail="Workspace owner required")
+    admitted_fence = await _admit(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, allow_member=True,
+    )
+    grants = _member_grants(scope) if member else None
     offset = _offset(request, destination, source_generation_fences)
     lexical = await _lexical_ids(
-        session, request, destination, source_generation_fences, workspace_id=scope.workspace_id,
+        session, request, destination, source_generation_fences, workspace_id=scope.workspace_id, grants=grants,
     )
     vector: list[UUID] = []
     effective_mode = "lexical"
     warnings: list[str] = []
-    if request.mode == "hybrid":
+    # Members never rerank or embed: embeddings use the owner's AI config and global statistics.
+    if request.mode == "hybrid" and not member:
         generation = await session.scalar(select(IndexGeneration).where(
             IndexGeneration.workspace_id == scope.workspace_id, IndexGeneration.status == "active",
         ))
@@ -447,7 +471,7 @@ async def search(
             Source.generation,
             destination=destination,
             source_generation_fences=source_generation_fences,
-            workspace_id=scope.workspace_id,
+            workspace_id=scope.workspace_id, grants=grants,
         ), request, destination, source_generation_fences, workspace_id=scope.workspace_id,
     ).where(DocumentChunk.id.in_(selected)))).all() if selected else []
     visible = {row[0]: row for row in rows}
@@ -455,6 +479,8 @@ async def search(
     expected_fences: dict[UUID, tuple[UUID, UUID, UUID, int]] = {}
     for chunk_id in selected[:request.limit]:
         if chunk_id not in visible:
+            if member:
+                raise _stale_member_read()
             continue
         (
             chunk_id, content, version_id, version_number, version_observed, document_id,
@@ -475,8 +501,15 @@ async def search(
         ))
     current_ids = await _revalidate_tool_result_fences(
         session, expected_fences, destination, source_generation_fences, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled,
+        multi_workspace_enabled=multi_workspace_enabled, allow_member=member,
     )
+    if member and (
+        current_ids != set(expected_fences)
+        or await workspaces.read_access_fence(
+            session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        ) != admitted_fence
+    ):
+        raise _stale_member_read()
     items = [item for item in items if item.chunk_id in current_ids]
     next_cursor = _encode_cursor(
         request, offset + request.limit, destination, source_generation_fences,
@@ -484,12 +517,17 @@ async def search(
     return SearchResponse(items=items, next_cursor=next_cursor, effective_mode=effective_mode, warnings=warnings)
 
 
+def _stale_member_read() -> HTTPException:
+    """A changed fence or grant fails the whole member page, never a partial one."""
+    return HTTPException(status_code=409, detail="Search results changed; retry")
+
+
 async def _revalidate_tool_result_fences(
     session: AsyncSession,
     expected: dict[UUID, tuple[UUID, UUID, UUID, int]],
     destination: ToolDestination,
     source_generation_fences: dict[UUID, int] | None,
-    *, scope: Scope, multi_workspace_enabled: bool,
+    *, scope: Scope, multi_workspace_enabled: bool, allow_member: bool = False,
 ) -> set[UUID]:
     """Return exact active/current source-generation tuples still eligible in a fresh query.
 
@@ -499,7 +537,9 @@ async def _revalidate_tool_result_fences(
     """
     if not expected:
         return set()
-    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await _admit(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, allow_member=allow_member,
+    )
     statement = (
         select(DocumentChunk.id, DocumentVersion.id, Document.id, Source.id, Source.generation)
         .join(DocumentVersion, DocumentVersion.id == DocumentChunk.document_version_id)
@@ -513,6 +553,8 @@ async def _revalidate_tool_result_fences(
             Source.status == "active",
         )
     )
+    if allow_member:
+        statement = statement.where(Document.id.in_(_member_grants(scope)))
     if destination != ToolDestination.LOCAL:
         statement = statement.where(Source.local_only.is_(False))
     if source_generation_fences is not None:

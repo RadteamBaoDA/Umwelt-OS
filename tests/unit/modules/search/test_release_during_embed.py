@@ -171,7 +171,7 @@ async def test_route_passes_flag(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(public, "search", recorder)
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(redis=None, settings=SimpleNamespace(multi_workspace_enabled=False))))
-    out: Any = await routes.search(SearchRequest(query="q"), request, object(), object(), _SCOPE)  # type: ignore[arg-type]
+    out: Any = await routes.search(SearchRequest(query="q"), request, object(), _SCOPE)  # type: ignore[arg-type]
     assert out == "ok" and seen["release_during_embed"] is True
 
 

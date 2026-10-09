@@ -5,18 +5,20 @@ from pydantic import ValidationError
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.auth.dependencies import require_owner, require_owner_write
-from core.auth.models import AuthSession
+from core.auth.public import authenticated_session_ref
 from core.config import Settings
 from core.database import get_session
+from core.publication import require_publication_gate
+from core.workspaces import public as workspaces
 from core.workspaces.dependencies import require_workspace_read, require_workspace_write
-from core.workspaces.schemas import WorkspaceContext
+from core.workspaces.schemas import AccessFence, PublicationFence, WorkspaceContext
 from modules.goals.schemas import GoalFilter
 from modules.search import indexing, public
 from modules.search.schemas import (
     GlobalSearchResponse,
     ReindexResponse,
     SearchFilters,
+    SearchHit,
     SearchIndexStatus,
     SearchRequest,
     SearchResponse,
@@ -26,17 +28,37 @@ from modules.tasks.schemas import TaskFilter
 
 router = APIRouter(prefix="/api/v1/search", tags=["search"], dependencies=[Depends(module_dependency("search"))])
 Session = Annotated[AsyncSession, Depends(get_session)]
-OwnerRead = Annotated[AuthSession, Depends(require_owner)]
-OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]
 WorkspaceRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
 WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
+
+
+async def _gate_member_hits(
+    request: Request, session: AsyncSession, workspace: WorkspaceContext, fence: AccessFence,
+    hits: list[SearchHit],
+) -> None:
+    """Bind a member's response to the exact document grants it was built from (409 if any moved)."""
+    ids = tuple(dict.fromkeys(hit.document_id for hit in hits))
+    grants = await workspaces.read_resource_grants(session, scope=workspace, kind="document", resource_ids=ids)
+    if {grant.resource_id for grant in grants} != set(ids):
+        raise HTTPException(status_code=409, detail="Search results changed; retry")
+    require_publication_gate(request, PublicationFence(
+        scope=workspace, access_fence=fence, auth_session=authenticated_session_ref(request), grants=grants,
+    ))
+
+
+async def _member_fence(request: Request, session: AsyncSession, workspace: WorkspaceContext) -> AccessFence | None:
+    """Admission fence for member reads (None for owners, who need no publication gate)."""
+    if not public.is_member_scope(workspace):
+        return None
+    return await workspaces.read_access_fence(
+        session, scope=workspace, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+    )
 
 
 @router.get("/global", response_model=GlobalSearchResponse)
 async def global_search(
     request: Request,
     session: Session,
-    owner: OwnerRead,
     workspace: WorkspaceRead,
     q: Annotated[str, Query(min_length=1, max_length=300)],
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
@@ -66,10 +88,18 @@ async def global_search(
         cursor=document_cursor,
         filters=SearchFilters(),
     )
+    member_fence = await _member_fence(request, session, workspace)
     doc_response = await public.search(
         session, request.app.state.redis, request.app.state.settings, doc_request,
         scope=workspace, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
     )
+    if member_fence is not None:
+        # Members get documents only: no task/goal rows and no cross-type counts.
+        await _gate_member_hits(request, session, workspace, member_fence, doc_response.items)
+        return GlobalSearchResponse(
+            documents=doc_response.items, document_next_cursor=doc_response.next_cursor,
+            total=len(doc_response.items),
+        )
     try:
         task_filter = TaskFilter(q=q, limit=limit, cursor=task_cursor)
         goal_filter = GoalFilter(q=q, limit=limit, cursor=goal_cursor)
@@ -94,20 +124,23 @@ async def global_search(
 
 @router.post("", response_model=SearchResponse)
 async def search(
-    payload: SearchRequest, request: Request, session: Session, _owner: OwnerRead,
-    workspace: WorkspaceRead,
+    payload: SearchRequest, request: Request, session: Session, workspace: WorkspaceRead,
 ) -> SearchResponse:
-    """Run owner-authenticated search within the selected admitted default workspace."""
-    return await public.search(
+    """Search the selected workspace: owners see everything, members only explicitly shared documents."""
+    member_fence = await _member_fence(request, session, workspace)
+    response = await public.search(
         session, request.app.state.redis, request.app.state.settings, payload,
         scope=workspace, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
-        release_during_embed=True,
+        release_during_embed=member_fence is None,
     )
+    if member_fence is not None:
+        await _gate_member_hits(request, session, workspace, member_fence, response.items)
+    return response
 
 
 @router.get("/index", response_model=SearchIndexStatus)
 async def index_status(
-    request: Request, session: Session, _owner: OwnerRead, workspace: WorkspaceRead,
+    request: Request, session: Session, workspace: WorkspaceRead,
 ) -> SearchIndexStatus:
     """Return this admitted workspace's generation and truthful automatic-index readiness state."""
     return await public.index_status(
@@ -119,7 +152,7 @@ async def index_status(
 
 @router.post("/reindex", response_model=ReindexResponse, status_code=202)
 async def reindex(
-    request: Request, session: Session, _owner: OwnerWrite, workspace: WorkspaceWrite,
+    request: Request, session: Session, workspace: WorkspaceWrite,
 ) -> ReindexResponse:
     """Queue reindexing only when a permitted remote embedding mapping is configured."""
     redis: Redis = request.app.state.redis
