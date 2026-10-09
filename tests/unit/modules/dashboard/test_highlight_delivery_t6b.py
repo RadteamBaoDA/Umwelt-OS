@@ -16,6 +16,7 @@ from modules.dashboard.schemas import HighlightRule
 from modules.settings import public as settings_public
 from tests.unit.modules.dashboard.test_highlight_rules_t6a import (
     FP_SOURCE,
+    KW,
     LEGACY_FINGERPRINT,
     FakeNews,
     definition_row,
@@ -23,6 +24,7 @@ from tests.unit.modules.dashboard.test_highlight_rules_t6a import (
     item,
     news,  # noqa: F401  (fixture)
     run_emit,
+    scope_edges,  # noqa: F401  (autouse fixture)
 )
 
 NOW = datetime(2026, 10, 7, 12, 0, tzinfo=UTC)
@@ -82,7 +84,7 @@ def frozen(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(public, "datetime", Clock)
 
-    async def prefs(_s: Any) -> Any:
+    async def prefs(_s: Any, **_k: Any) -> Any:
         return SimpleNamespace(timezone="UTC")
 
     monkeypatch.setattr(settings_public, "read_owner_preferences", prefs)
@@ -99,7 +101,7 @@ async def test_emit_cooldown_suppresses_second_but_lists_both(
     r = rule(cooldown_minutes=60)
     items = [item(FP_SOURCE, "rates up"), item(FP_SOURCE, "rates down")]
     session = run_emit(monkeypatch, definition_row([dump(r)], [FP_SOURCE]), items)
-    matches = await public.evaluate_gadget_highlights(session, 1, uuid4(), emit_notifications=True)  # type: ignore[arg-type]
+    matches = await public.evaluate_gadget_highlights(session, uuid4(), **KW, emit_notifications=True)  # type: ignore[arg-type]
     assert len(matches) == 2 and len(emit_spy) == 1
     assert session.progress.rule_last_notified == {str(r.id): NOW.isoformat()}
 
@@ -111,7 +113,7 @@ async def test_emit_expired_and_quiet_never_notify_but_are_listed(
     expired = rule(expires_at=NOW - timedelta(days=1))
     quiet = rule(quiet_start="11:00", quiet_end="13:00")
     session = run_emit(monkeypatch, definition_row([dump(expired), dump(quiet)], [FP_SOURCE]), [item(FP_SOURCE, "rates")])
-    matches = await public.evaluate_gadget_highlights(session, 1, uuid4(), emit_notifications=True)  # type: ignore[arg-type]
+    matches = await public.evaluate_gadget_highlights(session, uuid4(), **KW, emit_notifications=True)  # type: ignore[arg-type]
     assert len(matches) == 2 and emit_spy == []
     assert session.progress.rule_last_notified == {}
 
@@ -122,16 +124,16 @@ async def test_state_resets_when_fingerprint_changes_and_legacy_fingerprint_hold
 ) -> None:
     legacy = {"id": "00000000-0000-0000-0000-0000000000a1", "keywords": ["rates"], "severity": "warning", "notify": True}
     session = run_emit(monkeypatch, definition_row([legacy], [FP_SOURCE]), [])
-    await public.evaluate_gadget_highlights(session, 1, uuid4(), emit_notifications=True)  # type: ignore[arg-type]
+    await public.evaluate_gadget_highlights(session, uuid4(), **KW, emit_notifications=True)  # type: ignore[arg-type]
     assert session.progress.rules_fingerprint == LEGACY_FINGERPRINT
     session.progress.rule_last_notified = {legacy["id"]: NOW.isoformat()}
     # Same rules: state kept (and unknown rule ids pruned).
     session.progress.rule_last_notified[str(UUID(int=7))] = NOW.isoformat()
-    await public.evaluate_gadget_highlights(session, 1, uuid4(), emit_notifications=True)  # type: ignore[arg-type]
+    await public.evaluate_gadget_highlights(session, uuid4(), **KW, emit_notifications=True)  # type: ignore[arg-type]
     assert set(session.progress.rule_last_notified) == {legacy["id"]}
     # Cooldown edit changes the fingerprint: state resets.
     session.definition.highlight_rules = [{**legacy, "cooldown_minutes": 5}]
-    await public.evaluate_gadget_highlights(session, 1, uuid4(), emit_notifications=True)  # type: ignore[arg-type]
+    await public.evaluate_gadget_highlights(session, uuid4(), **KW, emit_notifications=True)  # type: ignore[arg-type]
     assert session.progress.rules_fingerprint != LEGACY_FINGERPRINT
     assert session.progress.rule_last_notified == {}
 
@@ -143,7 +145,7 @@ def dedupe_emit(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
     keys: list[str] = []
 
-    async def spy(_s: Any, _o: int, payload: Any, **_kw: Any) -> bool:
+    async def spy(_s: Any, payload: Any, **_kw: Any) -> bool:
         if payload.dedupe_key in keys:
             return False
         keys.append(payload.dedupe_key)
@@ -154,7 +156,7 @@ def dedupe_emit(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
 
 async def evaluate(session: Any) -> list[Any]:
-    return await public.evaluate_gadget_highlights(session, 1, uuid4(), emit_notifications=True)
+    return await public.evaluate_gadget_highlights(session, uuid4(), **KW, emit_notifications=True)
 
 
 @pytest.mark.asyncio

@@ -181,9 +181,9 @@ async def replace_layout(dashboard_id: UUID, payload: LayoutReplace, session: Se
 PREVIEW_LIMIT_PER_MINUTE = 10
 
 
-async def _allow_preview(request: Request, owner_id: int) -> None:
-    """Owner-scoped fixed-window limit (preview fans out into topic and projection queries); Redis outage fails closed."""
-    key = f"dashboard:preview:{owner_id}:{int(time.time() // 60)}"
+async def _allow_preview(request: Request, scope: WorkspaceContext) -> None:
+    """Workspace and user scoped fixed-window limit (preview fans out into topic and projection queries); Redis outage fails closed."""
+    key = f"dashboard:preview:{scope.workspace_id}:{scope.user_id}:{int(time.time() // 60)}"
     try:
         pipeline = request.app.state.redis.pipeline(transaction=True)
         pipeline.incr(key)
@@ -213,18 +213,20 @@ async def create_definition(payload: GadgetDefinitionCreate, session: Session, o
 
 
 @router.post("/gadget-definitions/highlight-preview", response_model=HighlightPreviewRead)
-async def preview_highlights(payload: HighlightPreviewRequest, session: Session, owner: OwnerWrite, response: Response, request: Request) -> HighlightPreviewRead:
+async def preview_highlights(payload: HighlightPreviewRequest, session: Session, owner: OwnerWrite, scope: WorkspaceWrite, response: Response, request: Request) -> HighlightPreviewRead:
     """Dry-run draft rules over the last days of current evidence; never persists or notifies."""
     _no_store(response)
-    await _allow_preview(request, owner.owner_id)
-    return await _call(public.preview_highlights(session, owner.owner_id, payload))
+    await _allow_preview(request, scope)
+    return await _call(public.preview_highlights(
+        session, payload, scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled))
 
 
 @router.get("/gadget-definitions/{definition_id}/usage", response_model=list[GadgetDefinitionUsageRead])
-async def definition_usage(definition_id: UUID, session: Session, owner: OwnerRead, response: Response) -> list[GadgetDefinitionUsageRead]:
+async def definition_usage(definition_id: UUID, session: Session, owner: OwnerRead, scope: WorkspaceRead, request: Request, response: Response) -> list[GadgetDefinitionUsageRead]:
     """List the owner dashboards using one definition, for edit and delete warnings."""
     _no_store(response)
-    result = await public.definition_usage(session, owner.owner_id, definition_id)
+    result = await public.definition_usage(
+        session, definition_id, scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
     if result is None:
         raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Definition not found", "details": {}})
     return result

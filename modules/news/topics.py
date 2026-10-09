@@ -322,39 +322,43 @@ def _to_topic_read(topic: Topic, entity_ids: list[UUID]) -> TopicRead:
         created_at=topic.created_at, updated_at=topic.updated_at)
 
 
-async def _topic_read(
-    session: AsyncSession, topic: Topic, *, scope: Scope, multi_workspace_enabled: bool,
-) -> TopicRead:
-    """Build a detached topic projection through the same admitted workspace as its row."""
+async def _visible_entity_refs(
+    session: AsyncSession, identifiers: list[UUID], *, scope: Scope, multi_workspace_enabled: bool,
+) -> list[Any]:
+    """Resolve entity refs in scope, falling back to one lookup per ID so a deleted entity drops only itself."""
     from modules.knowledge.entities import public as entities
     try:
-        refs = await entities.get_entity_refs(
+        return list(await entities.get_entity_refs(
             session, identifiers, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        )
-        return _to_topic_read(topic, list(dict.fromkeys(ref.canonical_id for ref in refs)))
+        ))
     except LookupError:
         visible = []
         for identifier in identifiers:
             try:
                 visible.append((await entities.get_entity_refs(
                     session, [identifier], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-                ))[0].canonical_id)
+                ))[0])
             except LookupError:
                 continue
         return visible
 
 
-async def _topic_read(session: AsyncSession, topic: Topic) -> TopicRead:
-    """Build a detached projection using entity-owner read resolution only."""
+async def _topic_read(
+    session: AsyncSession, topic: Topic, *, scope: Scope, multi_workspace_enabled: bool,
+) -> TopicRead:
+    """Build a detached topic projection through the same admitted workspace as its row."""
     # Entity deletion must not make the topic owner record unreadable.
-    refs = await _visible_entity_refs(session, [UUID(value) for value in (topic.entity_ids or [])])
+    refs = await _visible_entity_refs(
+        session, [UUID(value) for value in (topic.entity_ids or [])],
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     return _to_topic_read(topic, list(dict.fromkeys(ref.canonical_id for ref in refs)))
 
 
 async def resolve_topic_terms(
-    session: AsyncSession, owner_id: int, topic_ids: list[UUID],
+    session: AsyncSession, topic_ids: list[UUID], *, scope: Scope, multi_workspace_enabled: bool,
 ) -> dict[UUID, list[str]]:
-    """Read-only: return current keywords plus entity names for the owner's live, active topics.
+    """Read-only: return current keywords plus entity names for the actor's live, active topics.
 
     Missing, foreign, deleted or inactive topics are simply absent from the result so callers
     treat them as unresolved. Never writes and never contacts a provider.
@@ -362,7 +366,7 @@ async def resolve_topic_terms(
     if not topic_ids:
         return {}
     rows = (await session.scalars(select(Topic).where(
-        Topic.id.in_(topic_ids), Topic.owner_id == owner_id,
+        Topic.id.in_(topic_ids), Topic.workspace_id == scope.workspace_id, Topic.owner_id == _actor(scope),
         Topic.deleted_at.is_(None), Topic.is_active.is_(True),
     ))).all()
     resolved: dict[UUID, list[str]] = {}
@@ -370,17 +374,21 @@ async def resolve_topic_terms(
         terms = list(topic.keywords or [])
         entity_ids = [UUID(value) for value in (topic.entity_ids or [])]
         if entity_ids:
-            terms += [ref.name for ref in await _visible_entity_refs(session, entity_ids) if ref.name]
+            refs = await _visible_entity_refs(
+                session, entity_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
+            terms += [ref.name for ref in refs if ref.name]
         resolved[topic.id] = list(dict.fromkeys(terms))
     return resolved
 
 
-async def live_topic_ids(session: AsyncSession, owner_id: int, topic_ids: list[UUID]) -> set[UUID]:
-    """Return which of the given IDs are the owner's live (non-deleted) topics."""
+async def live_topic_ids(session: AsyncSession, topic_ids: list[UUID], *, scope: Scope) -> set[UUID]:
+    """Return which of the given IDs are the actor's live (non-deleted) topics in this workspace."""
     if not topic_ids:
         return set()
     return set((await session.scalars(select(Topic.id).where(
-        Topic.id.in_(topic_ids), Topic.owner_id == owner_id, Topic.deleted_at.is_(None),
+        Topic.id.in_(topic_ids), Topic.workspace_id == scope.workspace_id, Topic.owner_id == _actor(scope),
+        Topic.deleted_at.is_(None),
     ))).all())
 
 
@@ -645,11 +653,10 @@ async def update_topic(
         raise TopicConflict("stale_revision", "Topic changed since it was loaded", topic.revision)
     if topic.revision >= MAX_REVISION:
         raise TopicConflict("revision_exhausted", "Topic revision cannot be incremented", topic.revision)
-    changes = payload.model_dump(exclude_unset=True, exclude={"expected_revision"})
-    if "entity_ids" in changes and changes["entity_ids"] is not None:
-        await entities.get_entity_refs(session, changes["entity_ids"], for_write=True, scope=scope,
+    changes = payload.model_dump(mode="json", exclude_unset=True, exclude={"expected_revision"})
+    if "entity_ids" in changes and payload.entity_ids is not None:
+        await entities.get_entity_refs(session, payload.entity_ids, for_write=True, scope=scope,
             multi_workspace_enabled=multi_workspace_enabled)
-        changes["entity_ids"] = [str(item) for item in changes["entity_ids"]]
     for key, value in changes.items():
         setattr(topic, key, value)
     topic.revision += 1
