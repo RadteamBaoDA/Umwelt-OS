@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from modules.connectors.public import CollectionFence, ConnectorReceipt
+from modules.connectors.public import CollectionFence, ConnectorReceipt, CrawlRequest
 
 CollectionTrigger = Literal["manual", "scheduled", "retry"]
 CollectionStatus = Literal["queued", "running", "succeeded", "no_changes", "failed", "cancelled"]
@@ -60,6 +60,13 @@ class ManagedConnectorReceipt(ConnectorReceipt):
 
 class ManagedNoChanges(CollectionFence):
     """A managed-n8n /no-changes acknowledgement carrying its admission."""
+
+    admission_request_id: UUID
+    admission_token: UUID
+
+
+class ManagedCrawlRequest(CrawlRequest):
+    """A managed-n8n /crawl request carrying the admission it was queued under."""
 
     admission_request_id: UUID
     admission_token: UUID

@@ -2516,13 +2516,15 @@ async def queue_connector_crawl(
     connector_revision: int,
     cursor_before: str | None,
     configuration: dict[str, object], *, scope: Scope, multi_workspace_enabled: bool,
+    request_ref: CollectionRequestRef | None = None,
 ) -> CrawlReceipt:
     """Idempotently queue a generic crawl keyed by source, cursor, config, and minute.
 
     A matching batch/run receipt returns without the new-work commit. New work
     persists its stage, request event, cursor lease and realtime updates in this
     function's commit; stale source, connector revision, cursor, or active-lease
-    checks raise HTTP 404/409; native sources must use their provider adapter.
+    checks raise HTTP 404/409; native sources must use their provider adapter. With ``request_ref`` the
+    admitted request is re-proved under lock and settled against the queued run in the same commit.
     """
     source, source_fence, access_fence = await _lock_source_projection(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if source is None:
@@ -2544,6 +2546,10 @@ async def queue_connector_crawl(
         ),
         lock=True, scope=scope, multi_workspace_enabled=multi_workspace_enabled):
         raise HTTPException(status_code=409, detail="Connector collection fence is stale")
+    if request_ref is not None:
+        await _authorize_collection(
+            session, source_id=source_id, source_generation=source_generation,
+            connector_revision=connector_revision, collector_token=None, request_ref=request_ref, scope=scope)
     state = await session.get(SourceIngestionState, source_id, with_for_update=True)
     if state is None:
         state = SourceIngestionState(source_id=source_id, cursor=None)
@@ -2559,6 +2565,14 @@ async def queue_connector_crawl(
         run = await session.scalar(select(IngestionRun).where(IngestionRun.batch_id == existing.id, IngestionRun.source_id == source.id, *_run_scope(scope)))
         if run is None:
             raise RuntimeError("Crawl batch has no run")
+        if request_ref is not None:  # same minute, same work: the request still resolves to the existing run
+            await _settle_request(
+                session, request_ref, outcome="succeeded", run_id=run.id, scope=scope, source_id=source_id,
+                source_generation=source_generation, connector_revision=connector_revision,
+                batch_id=existing.id, payload_digest=existing.payload_hash, cursor_before=cursor_before,
+                cursor_after=cursor_before)
+            await commit_with_replay(session, [make_source_change(source.id, source.generation, source.status, scope=scope)],
+                                     scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
         return CrawlReceipt(workspace_id=scope.workspace_id, run_id=run.id)
     if (
         (state.lease_run_id is not None and state.lease_expires_at is None)
@@ -2604,6 +2618,10 @@ async def queue_connector_crawl(
     state.lease_run_id = run.id
     state.collection_lease_token = None
     state.lease_expires_at = now + COLLECTION_LEASE
+    await _settle_request(
+        session, request_ref, outcome="succeeded", run_id=run.id, scope=scope, source_id=source_id,
+        source_generation=source_generation, connector_revision=connector_revision, batch_id=batch.id,
+        payload_digest=batch.payload_hash, cursor_before=cursor_before, cursor_after=cursor_before)
     await commit_with_replay(session, [
         make_source_change(source.id, source.generation, source.status, scope=scope),
         make_ingestion_change(source.id, run.id, run.status, stage.stage_key, stage.status, scope=scope),
