@@ -8,18 +8,19 @@ import hashlib
 import json
 import re
 from datetime import UTC, datetime, timedelta
-from typing import cast
+from typing import Any, cast
 from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
 
 from fastapi import HTTPException
 from pydantic import ValidationError
-from sqlalchemy import func, select, text, tuple_
+from sqlalchemy import Select, and_, func, select, text, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, Scope, WorkspaceContext
 from modules.knowledge.documents import public as documents
+from modules.knowledge.documents.models import Document
 from modules.knowledge.entities import public as entities
 from modules.news import topics
 from modules.news.models import NewsObservation, NewsStory, NewsStoryIdentity
@@ -33,6 +34,8 @@ from modules.news.schemas import (
 )
 from modules.search import public as search
 from modules.sources import public as sources
+from modules.sources.models import Source
+from modules.translations.schemas import TranslationInput
 
 ALGORITHM_VERSION = 1
 MAX_CANDIDATES = 100
@@ -41,9 +44,7 @@ FUZZY_THRESHOLD = 0.92
 
 
 async def _admit(session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool) -> AccessFence:
-    """Admit owner story reads before source selection, counts, or enrichment."""
-    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
-        raise HTTPException(status_code=403, detail="Workspace owner required")
+    """Admit story reads (owner or member) before source selection, counts, or enrichment."""
     if type(multi_workspace_enabled) is not bool:
         raise TypeError("The configured multi-workspace feature flag must be a boolean")
     return await workspaces.read_access_fence(
@@ -520,6 +521,8 @@ async def list_stories(
         raise HTTPException(status_code=422, detail="date_from must be earlier than date_to")
     as_of = datetime.now(UTC)
     cursor = _decode_cursor(filters.cursor, access_fence, filters) if filters.cursor else None
+    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
+        return await _member_list_stories(session, filters, scope, access_fence, cursor, as_of)
     if cursor:
         as_of = cursor.as_of
         source_ids = tuple(cursor.resolved_source_ids)
@@ -584,6 +587,7 @@ async def list_stories(
         id=story.id, title=representative.title, excerpt=representative.excerpt,
         observed_at=max(ev.observed_at for ev in evidence), source_count=len({ev.source_id for ev in evidence}),
         evidence_count=len(evidence), evidence=evidence[:100], relevance_state="unavailable",
+        translation_revision=_translation_revision(story.id, representative),
         incomplete_reasons=sorted(story_reasons),
     ) for story, _observations, evidence, representative, story_reasons in page]
     from modules.news.relevance import score_relevance
@@ -731,6 +735,10 @@ async def get_story(
     access_fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if not 1 <= evidence_limit <= 100:
         raise ValueError("Evidence page size must be between 1 and 100")
+    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
+        return await _member_get_story(
+            session, story_id, source_ids, scope, access_fence, evidence_limit, evidence_cursor,
+        )
     after_key: tuple[UUID, UUID, UUID] | None = None
     as_of = datetime.now(UTC)
     source_selection_incomplete = False
@@ -808,5 +816,226 @@ async def get_story(
         observed_at=max(item.observed_at for item in title_evidence),
         source_count=len({item.source_id for item in title_evidence}), evidence_count=len(base_evidence or title_evidence),
         evidence=evidence_page, relevance_state="unavailable",
+        translation_revision=_translation_revision(story.id, representative),
         incomplete_reasons=sorted(incomplete_reasons),
     ), evidence_cursor=next_evidence_cursor, incomplete_reasons=sorted(incomplete_reasons))
+
+
+# --- Member projection: grant-first evidence; no topics, relevance, entities or trends -------------
+
+_LIVE_STATUS = ("ready", "succeeded")
+
+
+def _translation_revision(story_id: UUID, representative: StoryEvidence) -> str:
+    """Hash the story, its representative version and its title/excerpt text (32 hex chars)."""
+    text_hash = hashlib.sha256(f"{representative.title}\0{representative.excerpt}".encode()).hexdigest()
+    raw = f"{story_id}:{representative.document_version_id}:{text_hash}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:32]
+
+
+def _member_obs(scope: WorkspaceContext, as_of: datetime, source_ids: tuple[UUID, ...], *columns: Any) -> Select[Any]:
+    """Select live observations whose document is granted to the member; the grant filter precedes any LIMIT."""
+    query = (
+        select(*columns).select_from(NewsObservation)
+        .join(Document, and_(
+            Document.id == NewsObservation.document_id, Document.workspace_id == scope.workspace_id,
+            Document.current_version == NewsObservation.version_number,
+            Document.extraction_status.in_(_LIVE_STATUS),
+        ))
+        .join(Source, and_(
+            Source.id == NewsObservation.source_id, Source.workspace_id == scope.workspace_id,
+            Source.status == "active", Source.generation == NewsObservation.source_generation,
+        ))
+        .where(
+            NewsObservation.workspace_id == scope.workspace_id,
+            NewsObservation.algorithm_version == ALGORITHM_VERSION,
+            NewsObservation.document_id.in_(workspaces.granted_resource_ids(scope=scope, kind="document")),
+            NewsObservation.created_at <= as_of, NewsObservation.observed_at <= as_of,
+        )
+    )
+    return query.where(NewsObservation.source_id.in_(source_ids)) if source_ids else query
+
+
+def _member_evidence(observation: NewsObservation, source: Source) -> StoryEvidence:
+    """Detach one authorized observation; title and excerpt never come from hidden rows."""
+    return StoryEvidence(
+        document_id=observation.document_id, document_version_id=observation.document_version_id,
+        chunk_id=observation.chunk_id, source_id=observation.source_id, source_name=source.name,
+        source_type=source.type, provider=observation.provider, url=_canonical_url(observation.canonical_url),
+        title=observation.title, excerpt=observation.excerpt[:1000], observed_at=observation.observed_at,
+        published_at=observation.published_at,
+    )
+
+
+def _representative(evidence: list[StoryEvidence]) -> StoryEvidence:
+    """Pick the newest published/observed evidence, ties by document ID."""
+    return max(evidence, key=lambda item: (item.published_at or item.observed_at, str(item.document_id)))
+
+
+async def _member_list_stories(
+    session: AsyncSession, filters: StoryFilter, scope: WorkspaceContext, fence: AccessFence,
+    cursor: StoryCursor | None, as_of: datetime,
+) -> StoryPage:
+    """Page stories over the member's authorized evidence only; zero authorized evidence hides the story."""
+    if filters.topic_id or filters.entity_id:
+        raise HTTPException(status_code=403, detail="Workspace owner required")
+    if cursor:
+        as_of = cursor.as_of
+    source_ids = tuple(cursor.resolved_source_ids) if cursor else tuple(filters.source_ids)
+    latest = func.max(NewsObservation.observed_at)
+    query = _member_obs(scope, as_of, source_ids, NewsObservation.story_id, latest.label("latest")).group_by(
+        NewsObservation.story_id)
+    if cursor:
+        query = query.having(tuple_(latest, NewsObservation.story_id) < tuple_(
+            cursor.after_observed_at, cursor.after_story_id))
+    candidates = list((await session.execute(
+        query.order_by(latest.desc(), NewsObservation.story_id.desc()).limit(filters.limit + 1)
+    )).all())
+    has_more = len(candidates) > filters.limit
+    candidates = candidates[:filters.limit]
+    ids = [row.story_id for row in candidates]
+    evidence: dict[UUID, list[StoryEvidence]] = {}
+    counts: dict[UUID, tuple[int, int]] = {}
+    if ids:
+        rank = _member_obs(
+            scope, as_of, source_ids, NewsObservation.id.label("oid"),
+            func.row_number().over(
+                partition_by=NewsObservation.story_id,
+                order_by=(NewsObservation.observed_at.desc(), NewsObservation.id),
+            ).label("rank"),
+        ).where(NewsObservation.story_id.in_(ids)).subquery()
+        rows = (await session.execute(
+            select(NewsObservation, Source)
+            .join(rank, rank.c.oid == NewsObservation.id)
+            .join(Source, and_(Source.id == NewsObservation.source_id, Source.workspace_id == scope.workspace_id))
+            .where(rank.c.rank <= 100)
+            .order_by(NewsObservation.story_id, NewsObservation.observed_at.desc(), NewsObservation.id)
+        )).all()
+        for observation, source in rows:
+            evidence.setdefault(observation.story_id, []).append(_member_evidence(observation, source))
+        counts = {row.story_id: (row.evidence_count, row.source_count) for row in (await session.execute(
+            _member_obs(
+                scope, as_of, source_ids, NewsObservation.story_id,
+                func.count().label("evidence_count"),
+                func.count(NewsObservation.source_id.distinct()).label("source_count"),
+            ).where(NewsObservation.story_id.in_(ids)).group_by(NewsObservation.story_id)
+        )).all()}
+    query_tokens = _tokens(filters.q or "")
+    items = []
+    for row in candidates:
+        story_evidence = evidence.get(row.story_id)
+        if not story_evidence:
+            continue
+        if (filters.date_from or filters.date_to) and not any(
+            (filters.date_from is None or item.observed_at >= filters.date_from)
+            and (filters.date_to is None or item.observed_at < filters.date_to) for item in story_evidence
+        ):
+            continue
+        if query_tokens and not any(
+            query_tokens.issubset(_tokens(item.title + " " + item.excerpt)) for item in story_evidence
+        ):
+            continue
+        rep = _representative(story_evidence)
+        evidence_count, source_count = counts.get(
+            row.story_id, (len(story_evidence), len({item.source_id for item in story_evidence})))
+        items.append(StoryRead(
+            id=row.story_id, title=rep.title, excerpt=rep.excerpt, observed_at=row.latest,
+            source_count=source_count, evidence_count=evidence_count, evidence=story_evidence,
+            relevance_state="unavailable", translation_revision=_translation_revision(row.story_id, rep),
+        ))
+    next_cursor = None
+    if has_more and candidates:
+        last = candidates[-1]
+        next_cursor = _encode_cursor(StoryCursor(
+            domain="news_stories", workspace_id=fence.workspace_id, actor_user_id=fence.user_id,
+            membership_revision=fence.membership_revision, configuration_revision=fence.configuration_revision,
+            filter_hash=_filter_hash(filters), sort="observed_at_desc_story_id_desc", as_of=as_of,
+            after_observed_at=last.latest, after_story_id=last.story_id, resolved_source_ids=list(source_ids),
+        ))
+    return StoryPage(items=items, next_cursor=next_cursor, as_of=as_of, capability="partial")
+
+
+async def _member_get_story(
+    session: AsyncSession, story_id: UUID, source_ids: tuple[UUID, ...], scope: WorkspaceContext,
+    fence: AccessFence, evidence_limit: int, evidence_cursor: str | None,
+) -> StoryDetail | None:
+    """Return one story's authorized evidence page; a story with no authorized evidence is None (404)."""
+    as_of, after = datetime.now(UTC), None
+    if evidence_cursor:
+        source_ids, as_of, after, _incomplete = _decode_detail_cursor(evidence_cursor, fence, story_id, source_ids)
+    own = NewsObservation.story_id == story_id
+    total = (await session.execute(_member_obs(
+        scope, as_of, source_ids, func.count().label("n"),
+        func.count(NewsObservation.source_id.distinct()).label("s"),
+        func.max(NewsObservation.observed_at).label("latest"),
+    ).where(own))).one()
+    if not total.n:
+        return None
+    rep_row = (await session.execute(
+        _member_obs(scope, as_of, source_ids, NewsObservation, Source).where(own).order_by(
+            func.coalesce(NewsObservation.published_at, NewsObservation.observed_at).desc(),
+            NewsObservation.document_id.desc(),
+        ).limit(1)
+    )).one()
+    rep = _member_evidence(rep_row[0], rep_row[1])
+    key = (NewsObservation.source_id, NewsObservation.document_version_id, NewsObservation.chunk_id)
+    page_query = _member_obs(scope, as_of, source_ids, NewsObservation, Source).where(own)
+    if after is not None:
+        page_query = page_query.where(tuple_(*key) > after)
+    page = list((await session.execute(page_query.order_by(*key).limit(evidence_limit + 1))).all())
+    more = len(page) > evidence_limit
+    page = page[:evidence_limit]
+    next_cursor = None
+    if more:
+        last = page[-1][0]
+        next_cursor = _encode_detail_cursor(
+            fence, story_id, source_ids, as_of, (last.source_id, last.document_version_id, last.chunk_id), False,
+        )
+    return StoryDetail(story=StoryRead(
+        id=story_id, title=rep.title, excerpt=rep.excerpt, observed_at=total.latest,
+        source_count=total.s, evidence_count=total.n, evidence=[_member_evidence(o, s) for o, s in page],
+        relevance_state="unavailable", translation_revision=_translation_revision(story_id, rep),
+    ), evidence_cursor=next_cursor)
+
+
+async def read_story_translation_input(
+    session: AsyncSession, *, scope: WorkspaceContext, story_id: UUID, multi_workspace_enabled: bool,
+) -> TranslationInput | None:
+    """Return the translatable title/excerpt plus a visibility hash, or None when not visible or incomplete."""
+    detail = await get_story(
+        session, story_id, (), evidence_limit=100, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    story = detail.story if detail else None
+    # ponytail: a story with >100 evidence rows is not translatable; page the hash if that matters.
+    if detail is None or story is None or detail.evidence_cursor is not None or not story.evidence:
+        return None
+    versions = {item.document_version_id for item in story.evidence}
+    rows = (await session.execute(
+        select(
+            NewsObservation.document_id, NewsObservation.document_version_id, NewsObservation.source_id,
+            NewsObservation.source_generation, NewsObservation.local_only,
+        ).where(
+            NewsObservation.workspace_id == scope.workspace_id, NewsObservation.story_id == story_id,
+            NewsObservation.algorithm_version == ALGORITHM_VERSION,
+            NewsObservation.document_version_id.in_(versions),
+        )
+    )).all()
+    grant_revisions: dict[UUID, int] = {}
+    if scope.role != "owner":
+        grants = await workspaces.read_resource_grants(
+            session, scope=scope, kind="document",
+            resource_ids=tuple(sorted({row.document_id for row in rows}, key=str)),
+        )
+        grant_revisions = {grant.resource_id: grant.share_revision for grant in grants}
+    tuples = sorted(
+        (str(row.document_id), str(row.document_version_id), str(row.source_id), row.source_generation,
+         grant_revisions.get(row.document_id, 0), scope.membership_revision, bool(row.local_only))
+        for row in rows
+    )
+    return TranslationInput(
+        workspace_id=scope.workspace_id, actor_user_id=scope.user_id, resource_type="news_story",
+        resource_id=story_id, resource_revision=story.translation_revision,
+        fields={"title": story.title, "excerpt": story.excerpt},
+        visibility_hash=hashlib.sha256(json.dumps(tuples, separators=(",", ":")).encode()).hexdigest(),
+        source_ids=tuple(sorted({row.source_id for row in rows}, key=str)), local_only=any(t[-1] for t in tuples),
+    )

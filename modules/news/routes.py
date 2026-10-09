@@ -8,11 +8,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.auth.dependencies import require_owner
-from core.auth.models import AuthSession
+from core.auth.public import authenticated_session_ref
 from core.database import get_session
+from core.publication import require_publication_gate
+from core.workspaces import public as workspaces
 from core.workspaces.dependencies import require_workspace_read
-from core.workspaces.schemas import WorkspaceContext
+from core.workspaces.schemas import GrantRef, PublicationFence, WorkspaceContext
 from modules.connectors import public as connector_public
 from modules.news.public import build_correlations
 from modules.news.schemas import (
@@ -22,6 +23,7 @@ from modules.news.schemas import (
     StoryDetail,
     StoryFilter,
     StoryPage,
+    StoryRead,
     TrendFilter,
     TrendPage,
 )
@@ -31,7 +33,6 @@ from modules.settings.public import module_dependency
 
 router = APIRouter(prefix="/api/v1", tags=["news"], dependencies=[Depends(module_dependency("news"))])
 Session = Annotated[AsyncSession, Depends(get_session)]
-OwnerRead = Annotated[AuthSession, Depends(require_owner)]
 WorkspaceRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
 
 
@@ -40,9 +41,32 @@ def _no_store(response: Response) -> None:
     response.headers["Cache-Control"] = "private, no-store"
 
 
+def _require_owner(scope: WorkspaceContext) -> None:
+    """Trends, correlations and CII stay owner only; members see story projections alone."""
+    if scope.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
+
+
+async def _gate_member_read(
+    session: AsyncSession, request: Request, scope: WorkspaceContext, stories: list[StoryRead],
+) -> None:
+    """Bind a member's shared-content response to its grants and access fence for the publication gate."""
+    if scope.role == "owner":
+        return
+    ids = sorted({item.document_id for story in stories for item in story.evidence}, key=str)
+    grants: list[GrantRef] = []
+    for start in range(0, len(ids), 500):
+        grants.extend(await workspaces.read_resource_grants(
+            session, scope=scope, kind="document", resource_ids=tuple(ids[start:start + 500])))
+    fence = await workspaces.read_access_fence(
+        session, scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
+    require_publication_gate(request, PublicationFence(
+        scope=scope, access_fence=fence, auth_session=authenticated_session_ref(request), grants=tuple(grants)))
+
+
 @router.get("/stories", response_model=StoryPage)
 async def list_stories_route(
-    session: Session, request: Request, _owner: OwnerRead, scope: WorkspaceRead, response: Response,
+    session: Session, request: Request, scope: WorkspaceRead, response: Response,
     source_ids: Annotated[list[UUID], Query(max_length=32)] = [],  # noqa: B006  # never mutated; FastAPI/DTO copies the default
     topic_id: UUID | None = None, entity_id: UUID | None = None,
     date_from: datetime | None = None, date_to: datetime | None = None,
@@ -57,15 +81,17 @@ async def list_stories_route(
             source_ids=source_ids, topic_id=topic_id, entity_id=entity_id,
             date_from=date_from, date_to=date_to, q=q, limit=limit, cursor=cursor,
         )
-        return await list_stories(session, filters, scope=scope,
+        page = await list_stories(session, filters, scope=scope,
             multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="Invalid story filter") from exc
+    await _gate_member_read(session, request, scope, page.items)
+    return page
 
 
 @router.get("/stories/{story_id}", response_model=StoryDetail)
 async def get_story_route(
-    story_id: UUID, session: Session, request: Request, _owner: OwnerRead, scope: WorkspaceRead, response: Response,
+    story_id: UUID, session: Session, request: Request, scope: WorkspaceRead, response: Response,
     source_ids: Annotated[list[UUID], Query(max_length=32)] = [],  # noqa: B006  # never mutated; FastAPI/DTO copies the default
     evidence_cursor: Annotated[str | None, Query(max_length=4096)] = None,
     evidence_limit: Annotated[int, Query(ge=1, le=100)] = 100,
@@ -80,16 +106,18 @@ async def get_story_route(
     )
     if value is None:
         raise HTTPException(status_code=404, detail="Story not found")
+    await _gate_member_read(session, request, scope, [value.story] if value.story else [])
     return value
 
 
 @router.get("/trends", response_model=TrendPage)
 async def list_trends_route(
-    session: Session, request: Request, _owner: OwnerRead, scope: WorkspaceRead, response: Response,
+    session: Session, request: Request, scope: WorkspaceRead, response: Response,
     source_ids: Annotated[list[UUID], Query(max_length=32)] = [],  # noqa: B006  # never mutated; FastAPI/DTO copies the default
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
 ) -> TrendPage:
     """Return current source-breadth trend candidates with explicit baseline flags."""
+    _require_owner(scope)
     _no_store(response)
     return await list_trends(session, TrendFilter(source_ids=source_ids, limit=limit), scope=scope,
         multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
@@ -97,13 +125,14 @@ async def list_trends_route(
 
 @router.get("/intelligence/correlations", response_model=CorrelationResult)
 async def read_correlations(
-    session: Session, request: Request, _owner: OwnerRead, scope: WorkspaceRead, response: Response,
+    session: Session, request: Request, scope: WorkspaceRead, response: Response,
     regions: Annotated[list[str], Query(min_length=1, max_length=32)],
     from_at: datetime, to_at: datetime,
     source_ids: Annotated[list[UUID], Query(max_length=32)] = [],  # noqa: B006  # never mutated; FastAPI/DTO copies the default
     limit_per_domain: Annotated[int, Query(ge=1, le=100)] = 100,
 ) -> CorrelationResult:
     """Return bounded evidence-only temporal co-occurrence for the authenticated owner."""
+    _require_owner(scope)
     _no_store(response)
     try:
         query = CorrelationQuery(
@@ -121,10 +150,11 @@ async def read_correlations(
 
 @router.get("/intelligence/cii", response_model=CiiUnavailableRead)
 async def read_cii_availability(
-    _owner: OwnerRead, response: Response,
+    scope: WorkspaceRead, response: Response,
     countries: Annotated[list[str], Query(max_length=31)] = [],  # noqa: B006  # never mutated; FastAPI/DTO copies the default
 ) -> CiiUnavailableRead:
     """Expose a consumed CII v8 unavailable state without fabricating scores or country coverage."""
+    _require_owner(scope)
     _no_store(response)
     try:
         projection = connector_public.cii_v8_availability(countries)
