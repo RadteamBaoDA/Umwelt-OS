@@ -1,5 +1,4 @@
 import asyncio
-import hashlib
 import secrets
 from collections.abc import Awaitable
 from datetime import UTC, datetime, timedelta
@@ -24,7 +23,14 @@ from modules.connectors import mcp as mcp_collection
 from modules.connectors import provider_terms, provisioning, registry, scheduler
 from modules.connectors import public as connectors_public
 from modules.connectors.backends import FIXED_SCOPE_PROVIDERS
-from modules.connectors.collection_schemas import CollectionRequestRead
+from modules.connectors.collection_schemas import (
+    CollectionAdmissionRead,
+    CollectionAdmissionRequest,
+    CollectionRequestRead,
+    CollectionRequestRef,
+    ManagedConnectorReceipt,
+    ManagedNoChanges,
+)
 from modules.connectors.github import oauth as github_oauth
 from modules.connectors.github.adapter import collect_github_segment
 from modules.connectors.github.schemas import GitHubHintClaimProof, project_github_source_config
@@ -40,7 +46,6 @@ from modules.connectors.public import (
     CollectionFence,
     ConnectorConfigurationRequest,
     ConnectorPreview,
-    ConnectorReceipt,
     CrawlRequest,
     CrawlResult,
     NativeCredentialSnapshot,
@@ -1526,10 +1531,29 @@ async def preview_rss(
         raise HTTPException(status_code=422, detail="RSS source could not be collected") from exc
 
 
+@router.post("/{source_id}/collection-admission", response_model=CollectionAdmissionRead)
+async def admit_collection(
+    source_id: UUID,
+    payload: CollectionAdmissionRequest,
+    request: Request, session: Session,
+    authorization: Annotated[str | None, Header()] = None,
+) -> CollectionAdmissionRead:
+    """Admit one managed-n8n run before any provider I/O; 409 when stale or busy.
+
+    Same collector bearer as /sync. The returned token is fenced to this request and slot; /sync
+    and /no-changes must carry it, and a stale or replayed token is refused there.
+    """
+    multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
+    _, scope, _ = await _collector(session, source_id, authorization, multi_workspace_enabled=multi_workspace_enabled)
+    await session.rollback()  # admission takes its own fence -> Source -> request locks
+    return await connectors_public.admit_managed_collection(
+        session, scope, source_id, payload, trigger=payload.trigger, multi_workspace_enabled=multi_workspace_enabled)
+
+
 @router.post("/{source_id}/sync", response_model=Receipt, status_code=202)
 async def receive_connector_batch(
     source_id: UUID,
-    payload: ConnectorReceipt,
+    payload: ManagedConnectorReceipt,
     request: Request, session: Session,
     authorization: Annotated[str | None, Header()] = None,
 ) -> Receipt:
@@ -1559,9 +1583,7 @@ async def receive_connector_batch(
         source_id=source_id,
         source_generation=payload.source_generation,
         connector_revision=payload.connector_revision,
-        batch_key="connector:" + hashlib.sha256(
-            payload.model_dump_json().encode()
-        ).hexdigest(),
+        batch_key=f"connector-request:{payload.admission_request_id}",
         cursor_before=payload.cursor_before,
         cursor_after=payload.cursor_after,
         records=[record.model_dump() for record in payload.records],
@@ -1569,31 +1591,31 @@ async def receive_connector_batch(
     await session.rollback()
     await lock_access_fence(session, scope=scope, expected=access_fence,
                             multi_workspace_enabled=multi_workspace_enabled)
-    return await ingestion.receive_connector_batch(session, batch, collector_token, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    # Ingestion re-proves the running request, unexpired slot and token under lock (409 when stale)
+    # and settles the request in the same commit as the batch.
+    return await ingestion.receive_connector_batch(
+        session, batch, collector_token, multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+        request_ref=CollectionRequestRef(
+            request_id=payload.admission_request_id, admission_token=payload.admission_token))
 
 
 @router.post("/{source_id}/no-changes", response_model=ManualSyncResult)
 async def acknowledge_no_changes(
     source_id: UUID,
-    payload: CollectionFence,
+    payload: ManagedNoChanges,
     request: Request, session: Session,
     authorization: Annotated[str | None, Header()] = None,
 ) -> ManualSyncResult:
-    """Record only generic collector no-change status; native providers persist a native receipt and cursor atomically.
+    """Record only generic collector no-change status under a verified admission; native providers persist a native receipt and cursor atomically.
 
-    All owner reads/writes receive an explicit admitted workspace/job scope and the
-    actual rollout flag; members have no Source/configuration/credential access. Service bearer capability remains distinct from principal scope.
+    Ingestion proves the admission token, settles the request and frees the slot in one commit; a
+    stale or replayed token is a 409. Service bearer capability remains distinct from principal scope.
     """
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
     collector_token, scope, access_fence = await _collector(
         session, source_id, authorization, multi_workspace_enabled=multi_workspace_enabled,
     )
     source = await _source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
-    source_fence = await sources.get_source_fence(
-        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-    )
-    if source_fence is None:
-        raise HTTPException(status_code=404, detail="Source not found")
     if is_native_provider(source.provider):
         raise HTTPException(status_code=409, detail="native_collection_required")
     if not await provisioning.require_collection_fence(
@@ -1602,18 +1624,14 @@ async def acknowledge_no_changes(
     ):
         raise HTTPException(status_code=409, detail="Connector collection fence is stale")
     await _collector_current(session, source_id, collector_token, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
-    now = datetime.now(UTC)
-    if not await sources.record_collection_result_in_uow(
-        session, source_id, payload.source_generation, now, None, no_changes=True,
-        access_fence=access_fence, source_fence=source_fence,
-        multi_workspace_enabled=multi_workspace_enabled, scope=scope,
-    ):
-        raise HTTPException(status_code=409, detail="Source is no longer active")
-    current = await sources.get_source_fence(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
-    drafts = [
-        make_source_change(current.id, current.generation, current.status, scope=scope)
-    ] if current is not None else []
-    await commit_with_replay(session, drafts, access_fence=access_fence, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    await session.rollback()
+    await lock_access_fence(session, scope=scope, expected=access_fence, multi_workspace_enabled=multi_workspace_enabled)
+    await ingestion.accept_collection_no_changes(
+        session, source_id=source_id, source_generation=payload.source_generation,
+        connector_revision=payload.connector_revision,
+        request_ref=CollectionRequestRef(
+            request_id=payload.admission_request_id, admission_token=payload.admission_token),
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     return ManualSyncResult(status="no_changes")
 
 
