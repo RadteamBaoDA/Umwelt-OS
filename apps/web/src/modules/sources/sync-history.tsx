@@ -63,6 +63,8 @@ export function SyncHistory({ source }: { source: Source }) {
   };
   return <section className="source-history" aria-label={t('recentRuns')}>
     <h3>{t('recentRuns')}</h3>
+    <p className="muted">{t('lastSuccess')}: {source.last_success_at ? formatDate(source.last_success_at, display.locale, display.timezone) : t('never')}</p>
+    {source.collection_error_code && <p className="error" role="alert">{t('collectionError')}: {source.collection_error_code}</p>}
     {current && renderRun(current, true)}
     {runs.map((run) => renderRun(run, false))}
     {!current && runs.length === 0 && <p className="muted">{t('noRuns')}</p>}

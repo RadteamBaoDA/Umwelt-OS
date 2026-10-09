@@ -19,6 +19,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from core import telemetry
 from core.config import Settings
 from core.workspaces.models import WorkspaceMembership
 from core.workspaces.schemas import InternalJobScope, Scope
@@ -722,9 +723,41 @@ async def dispatch_due_collections(ctx: dict[str, object]) -> int:
     Returns the number of requests enqueued. Safe to run concurrently and after Redis loss.
     """
     settings = cast(Settings, ctx["settings"])
+    if not settings.collector_scheduler_enabled:
+        return 0
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     now = datetime.now(UTC)
-    await _recover_expired_slots(factory, now)
+    stale = await _recover_expired_slots(factory, now)
     await _create_due_requests(factory, now, settings.multi_workspace_enabled)
-    return await _enqueue_queued(ctx, factory, datetime.now(UTC))
+    enqueued = await _enqueue_queued(ctx, factory, datetime.now(UTC))
+    await _emit_metrics(factory, datetime.now(UTC), stale)
+    return enqueued
+
+
+async def _emit_metrics(factory: async_sessionmaker[AsyncSession], now: datetime, stale_leases: int) -> None:
+    """Sample bounded-label tick metrics; per-tick samples, never IDs. Telemetry faults never fail the tick."""
+    try:
+        async with factory() as session:
+            rows = (await session.execute(
+                select(ConnectorCollectionRequest.captured_backend, ConnectorCollectionRequest.status,
+                       ConnectorCollectionRequest.attempt, ConnectorCollectionRequest.available_at,
+                       ConnectorCollectionRequest.attempt_deadline_at)
+                .where(ConnectorCollectionRequest.status.in_(("queued", "running"))))).all()
+            await session.rollback()
+        # ponytail: provider label fixed to "all"; requests carry no provider column (join to sources if needed)
+        for backend, status, attempt, available_at, deadline in rows:
+            lb = {"provider": "all", "backend": backend}
+            if status == "running":
+                telemetry.count("collection_running_slots", **lb, outcome="running")
+                if deadline is not None and deadline < now:
+                    telemetry.count("collection_unresolved_transitions", **lb, outcome="overdue")
+            elif available_at > now:
+                telemetry.count("collection_retry_after", **lb, outcome="waiting" if attempt else "scheduled")
+            else:
+                telemetry.count("collection_pending", **lb, outcome="queued")
+                telemetry.registry.observe("collection_due_lag_ms", (now - available_at).total_seconds() * 1000, **lb)
+        if stale_leases:
+            telemetry.count("collection_stale_leases", stale_leases, provider="all", backend="all", outcome="expired")
+    except Exception:  # noqa: BLE001 - telemetry must not affect scheduling
+        return
 

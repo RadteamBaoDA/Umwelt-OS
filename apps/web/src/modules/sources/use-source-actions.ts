@@ -3,7 +3,28 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
-import { archiveSource, connectorKeys, ConnectorActivation, deactivateConnector, purgeSource, Source, sourceKeys, updateSourceStatus } from './api';
+import { archiveSource, CollectionRequest, connectorKeys, ConnectorActivation, deactivateConnector, purgeSource, Source, sourceKeys, updateSourceStatus } from './api';
+
+const TERMINAL: ReadonlySet<string> = new Set(['succeeded', 'no_changes', 'failed', 'cancelled']);
+export const COLLECTION_POLL_MS = 2000;
+
+/** Polls a collection request every `intervalMs` until it is terminal; resolves null when aborted. A fetch error ends the poll by throwing. */
+export async function pollCollectionRequest(
+  fetchRequest: (signal: AbortSignal) => Promise<CollectionRequest>,
+  { signal, intervalMs = COLLECTION_POLL_MS, onUpdate }: { signal: AbortSignal; intervalMs?: number; onUpdate?: (request: CollectionRequest) => void },
+): Promise<CollectionRequest | null> {
+  while (!signal.aborted) {
+    const request = await fetchRequest(signal);
+    if (signal.aborted) return null;
+    onUpdate?.(request);
+    if (TERMINAL.has(request.status)) return request;
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, intervalMs);
+      signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+    });
+  }
+  return null;
+}
 
 /** Shared Pause/Resume and Disconnect handlers used by both the source list rows and the connector editor header. */
 export function useSourceActions({ source, activation, onResumed, onChanged, onPurgeStarted }: {
