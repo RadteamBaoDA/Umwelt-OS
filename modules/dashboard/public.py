@@ -1949,6 +1949,14 @@ async def apply_preset(
 
 
 # Stable seams for P10 automation: daily context and briefs are consumed through this module only.
+from modules.dashboard.brief_sharing import (
+    SharedBrief,
+    check_brief_shareable,
+    list_shared_briefs,
+    read_brief_access_projection,
+    read_brief_translation_input,
+    read_shared_brief,
+)
 from modules.dashboard.briefs import (
     BriefEmpty,
     BriefEvidenceRevoked,
@@ -1995,7 +2003,9 @@ __all__ = [
     "BriefSlotOwned",
     "BriefUnavailable",
     "DailyContext",
+    "SharedBrief",
     "build_daily_context",
+    "check_brief_shareable",
     "claim_brief_slot",
     "clean_document_brief_evidence",
     "count_source_gadgets",
@@ -2003,7 +2013,11 @@ __all__ = [
     "latest_brief",
     "legacy_brief_coverage",
     "list_briefs",
+    "list_shared_briefs",
+    "read_brief_access_projection",
+    "read_brief_translation_input",
     "read_schedule",
+    "read_shared_brief",
     "read_slot_owner",
     "release_brief_slot",
 ]
