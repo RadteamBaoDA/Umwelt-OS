@@ -116,3 +116,25 @@ async def test_present_chat_worker_heartbeat_is_healthy() -> None:
 
 def test_ready_timeout_exceeds_health_probe_and_fits_compose_healthcheck() -> None:
     assert health_module.PROBE_TIMEOUT_SECONDS < system_routes.READY_TIMEOUT_SECONDS < 4
+
+
+@pytest.mark.asyncio
+async def test_absent_optional_n8n_and_browser_do_not_degrade_overall() -> None:
+    class OkSession:
+        async def execute(self, _statement):
+            return None
+
+    class OkRedis:
+        async def ping(self):
+            return True
+
+        async def get(self, _key):
+            return b"1"
+
+        async def info(self, _section):
+            return {}
+
+    result = await system_health(cast(AsyncSession, OkSession()), cast(Redis, OkRedis()), Settings())
+    assert result["overall"] == "healthy"
+    for name in ("n8n", "browser"):
+        assert result["components"][name] == {"status": "not_configured", "optional": True}

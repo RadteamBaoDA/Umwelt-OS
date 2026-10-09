@@ -51,6 +51,8 @@ class CatalogEntry(BaseModel):
     endpoint_probe: Literal["plan_documented", "unverified"] | None = None
     quota_policies: tuple[QuotaWindowPolicy, ...] = ()
     setup_guide: str | None = None
+    # Optional sidecar the provider needs; None means the native base stack is enough.
+    requires_service: Literal["n8n", "browser"] | None = None
 
     @computed_field(return_type=bool)  # type: ignore[prop-decorator]  # pydantic computed_field over property
     @property
@@ -91,6 +93,7 @@ _ENTRIES = (
         supports_edit=False,
         supports_delete=False,
         availability="available",
+        requires_service="browser",
     ),
     CatalogEntry(
         provider_id="rest",
@@ -236,6 +239,7 @@ _ENTRIES = (
             supports_edit=False, supports_delete=False, availability=availability,
             availability_reason=reason, history_description=None,
             evidence_status=evidence,
+            requires_service="browser" if provider_id == "browser" else None,
         )
         for provider_id, label, auth_methods, availability, reason, evidence in (
             ("google_news", "Google News feeds", ("none",), "planned", "Official feed construction is not established; use configured RSS only when an owner supplies a feed URL.", "unverified"),

@@ -37,3 +37,7 @@ The Source operation reaches `succeeded` only after successful Documents capture
 The existing authenticated `/api/v1/system/operations/{id}` source-progress poll uses a Sources-owned, explicit `OperationRead` allowlist. It returns 404 for unknown or non-Source operation IDs and never exposes internal outbox payloads or legacy raw URI arrays.
 
 The migration marks legacy `running`, `succeeded`, and uncertain `failed` Source operations `unavailable`: earlier workers may already have cascaded rows without preserving immutable identities, and `raw_uris` cannot prove copied evidence cleanup. Old `queued` operations remain captureable because the prior worker committed its queued-to-running state in the same transaction as the cascade; a failed `source_generation_changed` receipt remains a truthful failure. New operations leave legacy `raw_uris` empty. No compatibility worker blindly unlinks that JSON; legacy raw repair and all future copied-owner cleanup remain incomplete, and full behavioral/capacity acceptance is deferred.
+
+## 2026-10-09: Optional connector services
+
+Browser and n8n are optional overlays. `docker-compose.connectors.yml` keeps n8n and `include`s `docker-compose.browser.yml` (Compose >= 2.20) so the legacy command still gets both; api/worker network attachments and `BROWSER_SHARED_TOKEN` moved to the browser overlay, and n8n variables reach api/worker via `env_file: .env`. Health lists `n8n` and `browser` as `optional` and excludes them from `overall`. `CatalogEntry.requires_service` records which sidecar a provider needs.

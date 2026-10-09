@@ -1,0 +1,48 @@
+# Browser collection overlay (needs Compose >= 2.20 when pulled in via include).
+# Usage: docker compose -f docker-compose.yml -f docker-compose.browser.yml up -d --build
+# Owns the browser sidecar, the private connectors_internal network and the API/worker attachments to it.
+services:
+  browser:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/browser.Dockerfile
+    environment:
+      BROWSER_SHARED_TOKEN: ${BROWSER_SHARED_TOKEN:-}
+    expose: ["8001"]
+    cap_add: ["NET_ADMIN"]
+    mem_limit: 1536m
+    cpus: 1.5
+    pids_limit: 128
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/docs', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - connectors_internal
+      - browser_egress
+
+  api:
+    environment:
+      BROWSER_SHARED_TOKEN: ${BROWSER_SHARED_TOKEN:-}
+    networks:
+      default: {}
+      connectors_internal:
+        ipv4_address: 172.29.250.10
+
+  worker:
+    environment:
+      BROWSER_SHARED_TOKEN: ${BROWSER_SHARED_TOKEN:-}
+    networks:
+      - default
+      - connectors_internal
+
+networks:
+  connectors_internal:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.29.250.0/24
+  browser_egress:
+    driver: bridge

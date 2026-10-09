@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     # 10 MiB of text chunks in ~1 s and ~0.3 GiB; the 100 MiB docx bound would need ~3 GiB on an 8 GiB host.
     parsed_text_max_chars: int = Field(default=10 * 1024 * 1024, gt=0)
     storage_orphan_grace_seconds: int = Field(default=3600, gt=0)
+    # Gates dispatch_due_collections (gate line applied in C5-api-web); existing constants stay constants.
+    collector_scheduler_enabled: bool = Field(default=True, validation_alias="COLLECTOR_SCHEDULER_ENABLED")
     browser_service_url: AnyHttpUrl = AnyHttpUrl("http://browser:8001")
     browser_shared_token: SecretStr = SecretStr("")
     n8n_service_url: AnyHttpUrl = Field(default=AnyHttpUrl("http://n8n:5678"), validation_alias="N8N_SERVICE_URL")

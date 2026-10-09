@@ -82,3 +82,7 @@ The catalog advertises scheduled and manual collection. In Data sources, the own
 chooses active collection grants already reviewed for that exact source, supplies fixed JSON arguments, and saves or
 activates its bounded schedule. MCP connections and grant review remain in MCP settings. Runtime n8n credential
 provisioning and provider acceptance remain deferred validation gates.
+
+## Optional services (native-first)
+
+Native sources need no n8n or browser service. The browser sidecar lives in `docker-compose.browser.yml`; `docker-compose.connectors.yml` adds n8n and includes the browser overlay (Compose >= 2.20), so the existing command is unchanged. See [native-and-n8n.md](connectors/native-and-n8n.md).
