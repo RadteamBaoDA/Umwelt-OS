@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 import io
 import typing
 from types import SimpleNamespace
@@ -25,10 +24,6 @@ from modules.sources.models import Source
 WS = uuid4()
 SCOPE = WorkspaceContext(user_id=7, workspace_id=WS, role="owner", membership_revision=3)
 KW: dict[str, Any] = {"scope": SCOPE, "multi_workspace_enabled": False}
-# reject_unsendable_selection/resolve_gadget_context gain scope kwargs in slice B1; these tests
-# activate once that slice is merged (phase integration).
-B1_READY = "scope" in inspect.signature(chat_public.reject_unsendable_selection).parameters
-needs_b1 = pytest.mark.skipif(not B1_READY, reason="requires slice B1 scoped chat selection API")
 
 
 def _request(max_bytes: int = 1024) -> Any:
@@ -272,7 +267,6 @@ async def test_attachment_read_of_a_foreign_workspace_document_is_404(monkeypatc
 
 # --- selection reference and send-time refusal ------------------------------------------------
 
-@needs_b1
 async def test_attachment_becomes_a_selection_reference_and_local_only_is_refused(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -290,6 +284,7 @@ async def test_attachment_becomes_a_selection_reference_and_local_only_is_refuse
         {"sourceId": str(source_id), "documentId": str(document_id), "documentVersionId": str(version_id)},
     ]}
 
+    monkeypatch.setattr("modules.chat.scope.owner_scope_kwargs", AsyncMock(return_value=KW))
     resolved = await chat_public.resolve_gadget_context(MagicMock(), context)
     assert resolved["selected_only"] is True
     assert resolved["selected_refs"][0]["chunk_id"] == str(chunk_id)
@@ -303,7 +298,6 @@ async def test_attachment_becomes_a_selection_reference_and_local_only_is_refuse
     assert caught.value.detail["code"] == "selection_local_only"  # machine code the UI maps
 
 
-@needs_b1
 async def test_per_message_attachment_count_is_capped(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sources_public, "get_source", AsyncMock(return_value=Source(
         local_only=False, configuration={"chat_attachments": True})))
@@ -405,7 +399,6 @@ def test_client_cannot_choose_the_destination_source(monkeypatch: pytest.MonkeyP
     assert get_or_create.await_args.kwargs == {**KW, "shared": False}
 
 
-@needs_b1
 async def test_shared_attachment_is_sendable_and_private_one_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
     fence = {"selection_fences": [{"source_id": str(uuid4()), "local_only": False}]}
     monkeypatch.setattr(sources_public, "get_source", AsyncMock(return_value=Source(
@@ -435,6 +428,7 @@ def _chat_route_mocks(monkeypatch: pytest.MonkeyPatch) -> tuple[MagicMock, Async
     session.flush = AsyncMock()
     session.commit = AsyncMock()
     session.refresh = AsyncMock()
+    monkeypatch.setattr(chat_routes, "owner_default_scope", AsyncMock(return_value=SCOPE))
     monkeypatch.setattr(chat_routes, "lock_export_privacy", AsyncMock())
     monkeypatch.setattr(chat_routes, "read_export_privacy", AsyncMock(
         return_value=SimpleNamespace(store_conversation_history=True)))
@@ -457,7 +451,6 @@ def _assert_nothing_persisted(session: MagicMock, dispatch: AsyncMock) -> None:
     dispatch.assert_not_awaited()
 
 
-@needs_b1
 async def test_send_message_refuses_local_only_selection_before_any_run(monkeypatch: pytest.MonkeyPatch) -> None:
     from modules.chat import routes as chat_routes
     from modules.chat.schemas import SendMessageRequest
@@ -477,7 +470,6 @@ async def test_send_message_refuses_local_only_selection_before_any_run(monkeypa
 
 
 @pytest.mark.parametrize("action", ["edit", "regenerate"])
-@needs_b1
 async def test_mutate_message_rechecks_current_local_only(monkeypatch: pytest.MonkeyPatch, action: str) -> None:
     import hashlib
 
