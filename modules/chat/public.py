@@ -488,24 +488,37 @@ async def publish_agent_activity(
         await session.commit()
 
 
+def _require_activity_owner(scope: _Any, owner_id: int) -> None:
+    """Members get 403; a scope that is not the caller's own is indistinguishable from absent (404)."""
+    from fastapi import HTTPException
+
+    if scope.user_id != owner_id:
+        raise HTTPException(status_code=404, detail="Agent activity not found")
+    if scope.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
+
+
 async def get_agent_activity(
     session: AsyncSession, conversation_id: UUID, run_id: UUID, owner_id: int,
-    auth_session_hash: str,
+    auth_session_hash: str, *, scope: _Any,
 ) -> AgentActivityRead:
     """Read safe activity only through the requested live conversation and original owner session."""
     from fastapi import HTTPException
     from sqlalchemy import select
 
+    _require_activity_owner(scope, owner_id)
     link = await session.scalar(select(AgentActivityLink).where(
         AgentActivityLink.conversation_id == conversation_id,
         AgentActivityLink.agent_run_id == run_id,
         AgentActivityLink.owner_id == owner_id,
+        AgentActivityLink.workspace_id == scope.workspace_id,
     ))
     from datetime import UTC, datetime
 
     from modules.chat.scope import revalidate_chat_session
 
-    conversation = await session.scalar(select(Conversation).where(Conversation.id == conversation_id))
+    conversation = await session.scalar(select(Conversation).where(
+        Conversation.id == conversation_id, Conversation.workspace_id == scope.workspace_id))
     if (link is None or link.auth_session_hash != auth_session_hash
             or link.expires_at is not None and link.expires_at <= datetime.now(UTC)
             or conversation is None
@@ -520,6 +533,7 @@ async def get_agent_activity(
 
 async def list_agent_run_ids_for_owner(
     session: AsyncSession, conversation_id: UUID, owner_id: int, auth_session_hash: str,
+    *, scope: _Any,
 ) -> list[UUID]:
     """Return at most 50 live run links from the authenticated conversation without exposing chat storage."""
     from datetime import UTC, datetime
@@ -529,12 +543,15 @@ async def list_agent_run_ids_for_owner(
 
     from modules.chat.scope import revalidate_chat_session
 
-    conversation = await session.scalar(select(Conversation).where(Conversation.id == conversation_id))
+    _require_activity_owner(scope, owner_id)
+    conversation = await session.scalar(select(Conversation).where(
+        Conversation.id == conversation_id, Conversation.workspace_id == scope.workspace_id))
     if (conversation is None
             or conversation.expires_at is not None and conversation.expires_at <= datetime.now(UTC)
             or not await revalidate_chat_session(session, auth_session_hash, owner_id)):
         raise HTTPException(status_code=404, detail="Conversation not found")
     statement = select(AgentActivityLink.agent_run_id).where(
+        AgentActivityLink.workspace_id == scope.workspace_id,
         AgentActivityLink.conversation_id == conversation_id,
         AgentActivityLink.owner_id == owner_id,
         AgentActivityLink.auth_session_hash == auth_session_hash,
