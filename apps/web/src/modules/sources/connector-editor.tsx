@@ -18,7 +18,7 @@ import { AppLocaleId, normalizeFormattingLocale } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { useGuardedNavigation } from '@/core/guarded-navigation';
 import { useWorkspace } from '@/core/workspace-context';
-import { ProviderGuide, ProviderScope, type NativeProvider } from './provider-scope';
+import { ProviderGuide, ProviderScope, ProviderTerms, type NativeProvider } from './provider-scope';
 import { GitHubSummary } from './github-summary';
 import { McpCollectionEditor } from './mcp-collection-editor';
 import {
@@ -35,6 +35,7 @@ import {
   ConnectorActivation,
   getConnectorActivation,
   getConnectorCatalog,
+  getProviderTerms,
   getMonotonicConnectorConfiguration,
   selectMonotonicConnectorConfiguration,
   removeProviderCredential,
@@ -57,9 +58,12 @@ import {
 } from './api';
 
 const intervals = [15, 30, 60, 360, 1440] as const;
-const sourceTypes = { rss: 'rss', web: 'web', rest: 'api', mcp: 'mcp', youtube: 'rss', arxiv: 'rss', huggingface: 'api', github: 'api', github_releases: 'api', telegram: 'api', alpha_vantage: 'api', open_meteo: 'api', coingecko: 'api' } as const;
+const sourceTypes = { rss: 'rss', web: 'web', rest: 'api', mcp: 'mcp', youtube: 'rss', arxiv: 'rss', huggingface: 'api', github: 'api', github_releases: 'api', telegram: 'api', alpha_vantage: 'api', open_meteo: 'api', coingecko: 'api',
+  bbc_world: 'rss', vnexpress_business: 'rss', hn_top: 'api', gdelt_economy: 'api', world_bank: 'api', frankfurter: 'api', ecb: 'api', binance: 'api', alternative_me: 'api', usgs: 'api', coinpaprika: 'api' } as const;
 type Provider = keyof typeof sourceTypes;
-const nativeProviders = new Set<Provider>(['youtube', 'arxiv', 'huggingface', 'github', 'github_releases', 'telegram', 'alpha_vantage', 'open_meteo', 'coingecko']);
+/** Fixed-endpoint catalog providers: no owner scope, terms-gated, collected only by the scheduler. */
+const freeProviders = new Set<Provider>(['bbc_world', 'vnexpress_business', 'hn_top', 'gdelt_economy', 'world_bank', 'frankfurter', 'ecb', 'binance', 'alternative_me', 'usgs', 'coinpaprika']);
+const nativeProviders = new Set<Provider>(['youtube', 'arxiv', 'huggingface', 'github', 'github_releases', 'telegram', 'alpha_vantage', 'open_meteo', 'coingecko', ...freeProviders]);
 
 /** True when the schedule/activation gate asks the owner to (re)enter a provider key. */
 function keyNeeded(code: string | null | undefined): boolean {
@@ -83,11 +87,16 @@ function providerKey(providerId: string): string {
     map_osint: 'providerMapOsint', browser: 'providerBrowser', notes: 'providerNotes', health: 'providerHealth',
     personal_finance: 'providerPersonalFinance', iot: 'providerIot', notion: 'providerNotion', slack: 'providerSlack',
     home_assistant: 'providerHomeAssistant',
+    bbc_world: 'providerBbcWorld', vnexpress_business: 'providerVnexpressBusiness', hn_top: 'providerHnTop', gdelt_economy: 'providerGdeltEconomy',
+    world_bank: 'providerWorldBank', frankfurter: 'providerFrankfurter', ecb: 'providerEcb', binance: 'providerBinance',
+    alternative_me: 'providerAlternativeMe', usgs: 'providerUsgs', coinpaprika: 'providerCoinpaprika',
   } as Record<string, string>)[providerId] ?? 'provider';
 }
 
 /** Builds the editable default configuration for the selected provider. */
-function defaultConfiguration(provider: Provider): ConnectorConfig {
+function defaultConfiguration(provider: Provider, entry?: ConnectorCatalogEntry): ConnectorConfig {
+  // Free providers are preset from the catalog's static example so the saved shape matches the backend contract.
+  if (freeProviders.has(provider) && entry?.example_config) return entry.example_config as ConnectorConfig;
   if (nativeProviders.has(provider)) return {
     timeout_seconds: 30,
     timezone: 'Asia/Ho_Chi_Minh',
@@ -298,6 +307,9 @@ export function ConnectorEditor({
     refetchInterval: sourceId && provider === 'github' ? 10_000 : false,
   });
   const catalogQuery = useQuery({ queryKey: connectorKeys.catalog, queryFn: ({ signal }) => getConnectorCatalog(signal) });
+  const termsGated = freeProviders.has(provider) && Boolean(sourceId);
+  const termsQuery = useQuery({ queryKey: connectorKeys.terms(sourceId), queryFn: ({ signal }) => getProviderTerms(sourceId, signal), enabled: termsGated });
+  const termsBlocked = freeProviders.has(provider) && (!termsGated || termsQuery.data?.eligible !== true);
   const catalog = catalogQuery.data ?? [];
   const currentEntry = catalog.find((entry) => entry.provider_id === provider);
   const sourceStatus = sourceStatusOverride ?? source?.status ?? 'active';
@@ -1028,7 +1040,7 @@ export function ConnectorEditor({
         {catalog.map((entry) => {
           const localProvider = entry.provider_id;
           const supported = ['available', 'implemented', 'requires_credentials'].includes(entry.availability) && isProvider(localProvider);
-          return <Button key={entry.provider_id} type="button" className={`source-provider${provider === localProvider ? ' is-selected' : ''}`} disabled={!supported || locked} onClick={() => { if (!supported || !isProvider(localProvider)) return; setProvider(localProvider); setConfiguration(defaultConfiguration(localProvider)); markDraftChanged(); }}>
+          return <Button key={entry.provider_id} type="button" className={`source-provider${provider === localProvider ? ' is-selected' : ''}`} disabled={!supported || locked} onClick={() => { if (!supported || !isProvider(localProvider)) return; setProvider(localProvider); setConfiguration(defaultConfiguration(localProvider, entry)); if (freeProviders.has(localProvider) && !name.trim()) setName(entry.label); markDraftChanged(); }}>
             <strong>{t(providerKey(entry.provider_id))}</strong><span>{catalogStatus(entry)}</span>
             {!supported && <small>{t('providerUnavailableReason')}</small>}
           </Button>;
@@ -1057,7 +1069,7 @@ export function ConnectorEditor({
         {provider === 'mcp' ? <McpCollectionEditor sourceId={sourceId} sourceStatus={sourceStatus} onDraftChange={setDirty} onChanged={() => { void queryClient.invalidateQueries({ queryKey: connectorKeys.configuration(sourceId) }); void queryClient.invalidateQueries({ queryKey: connectorKeys.activation(sourceId) }); onChanged(); }} /> : <>
         {revision > 0 && (visibleActivationState === 'saved_not_active' || visibleActivationState === 'reconciliation_required' || Boolean(visibleActivationError)) && <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive p-4" role="status">
           <p><strong>{t('activationIssueTitle')}</strong> {t('savedInactive')}{visibleActivationError ? ` ${t('activationError')}: ${visibleActivationError}` : ''}</p>
-          {!dirty && <Button className="secondary" disabled={locked} onClick={retryActivation}>{busyAction === 'activate' ? t('enabling') : t('retryActivation')}</Button>}
+          {!dirty && <Button className="secondary" disabled={locked || termsBlocked} onClick={retryActivation}>{busyAction === 'activate' ? t('enabling') : t('retryActivation')}</Button>}
         </div>}
         <ol aria-label={t('stepperLabel')} className="m-0 grid list-none grid-cols-3 gap-3 p-0 max-[720px]:grid-cols-1">
           {steps.map((step) => <li key={step.id}>
@@ -1090,8 +1102,11 @@ export function ConnectorEditor({
           </section>
           <section id="source-step-choose" aria-labelledby="source-step-choose-title" className="grid gap-3 rounded-lg border border-border p-4">
             <h3 id="source-step-choose-title" className="text-base font-semibold">{t('stepChooseData')}</h3>
-          {currentEntry && <ProviderGuide entry={currentEntry} source={source ? { ...source, status: sourceStatus } : null} />}
-          {nativeProviders.has(provider)
+          {currentEntry && <ProviderGuide entry={currentEntry} source={source ? { ...source, status: sourceStatus } : null} onTest={sourceId ? validateDraft : undefined} testBusy={locked} testPassed={Boolean(validation)} />}
+          {freeProviders.has(provider) && currentEntry && (sourceId
+            ? <ProviderTerms sourceId={sourceId} entry={currentEntry} csrfToken={csrfToken} disabled={locked} />
+            : <p className="muted" role="status">{t('termsRequired')}</p>)}
+          {freeProviders.has(provider) ? <p className="muted">{t('fixedScope')}</p> : nativeProviders.has(provider)
             ? <ProviderScope key={`${sourceId}:${provider}:${revision}:${sourceGeneration}:${scopeResetEpoch}`} provider={provider as NativeProvider} configuration={configuration} disabled={locked} resetEpoch={scopeResetEpoch} onChange={changeConfiguration} />
             : provider === 'rss' ? <div className="field"><Label htmlFor="source-feed-url">{t('sourceUrl')}</Label><Input id="source-feed-url" type="url" value={configuration.feed_url ?? ''} onChange={(event) => changeConfiguration('feed_url', event.target.value)} /></div> : <div className="field"><Label htmlFor="source-config-url">{provider === 'rest' ? t('apiUrl') : t('pageUrl')}</Label><Input id="source-config-url" type="url" value={configuration.url ?? ''} onChange={(event) => changeConfiguration('url', event.target.value)} /></div>}
           {provider === 'rest' && <>
@@ -1182,10 +1197,11 @@ export function ConnectorEditor({
           <p className="error">{t('conflict')}</p>
           <Button className="secondary" disabled={locked} onClick={reloadServerConfiguration}>{t('reloadDiscard')}</Button>
         </div>}
+        {(termsBlocked || visibleActivationError === 'terms_not_accepted') && <p className="error" role="status">{t('termsActivationBlocked')}</p>}
         <div className="form-actions">
           <Button className="secondary" onClick={closeEditor}>{t('cancel')}</Button>
           <Button className="secondary" disabled={locked || sourceStatus !== 'active'} onClick={() => saveConfiguration()}>{busyAction === 'save' ? t('saving') : t('save')}</Button>
-          <Button disabled={locked || sourceStatus !== 'active'} onClick={saveAndEnable}>{busyAction === 'activate' ? t('enabling') : t('saveEnable')}</Button>
+          <Button disabled={locked || sourceStatus !== 'active' || termsBlocked} onClick={saveAndEnable}>{busyAction === 'activate' ? t('enabling') : t('saveEnable')}</Button>
         </div>
         <AlertDialog open={githubDisconnectOpen} onOpenChange={setGithubDisconnectOpen}>
           <AlertDialogContent>

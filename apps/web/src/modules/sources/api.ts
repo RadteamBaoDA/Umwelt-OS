@@ -14,6 +14,8 @@ export type Source = {
   collected_at: string | null;
   indexed_at: string | null;
   collection_error_code: string | null;
+  next_due_at?: string | null;
+  retry_at?: string | null;
   processing_error_code: string | null;
   generation: number;
   retired_at: string | null;
@@ -141,6 +143,9 @@ export type ConnectorCatalogEntry = {
   runtime_verified?: boolean;
   quota_policies?: QuotaPolicy[];
   setup_guide?: string | null;
+  // Static, fixture-shaped illustrations (never live data).
+  example_config?: Record<string, unknown> | null;
+  sample_output?: Record<string, unknown> | null;
 };
 export type QuotaPolicy = { policy_key: string; budget_kind: string; window: 'second' | 'minute' | 'day' | 'month'; unit: string; limit_units: number | null; basis: string };
 export type SourceIngestion = { current_run: IngestionRun | null; items: IngestionRun[]; next_cursor: string | null };
@@ -165,6 +170,7 @@ export const connectorKeys = {
   configuration: (id: string) => ['connector-configuration', id] as const,
   activation: (id: string) => ['connector-activation', id] as const,
   ingestion: (id: string) => ['source-ingestion', id] as const,
+  terms: (id: string) => ['connector-terms', id] as const,
   collection: (id: string, requestId: string) => ['source-collection-request', id, requestId] as const,
 };
 
@@ -395,4 +401,20 @@ export function retryRun(id: string, stageKey: string, csrfToken: string) {
 /** Fetches the allowlisted Source purge progress projection and forwards its abort signal to the GET. */
 export function getOperation(id: string, signal?: AbortSignal) {
   return apiRequest<PurgeOperation>(`/api/v1/system/operations/${id}`, { signal });
+}
+
+export type DeclaredUse = 'personal' | 'noncommercial' | 'commercial' | 'unknown';
+export type ProviderTerms = {
+  source_id: string; provider_id: string; terms_revision: number; terms_url: string; terms_version: string; checked_on: string;
+  declared_use: string; operator_review_state: string; reviewed_allowed_use: string | null; eligible: boolean; decision: string;
+};
+
+/** Owner read of the provider terms state; null when nothing has been acknowledged yet. */
+export function getProviderTerms(id: string, signal?: AbortSignal) {
+  return apiRequest<ProviderTerms | null>(`/api/v1/connectors/${id}/terms`, { signal });
+}
+
+/** Owner declares deployment use and acknowledges one terms version. */
+export function acknowledgeProviderTerms(id: string, declaredUse: DeclaredUse, termsVersion: string, csrfToken: string, signal?: AbortSignal) {
+  return apiRequest<ProviderTerms>(`/api/v1/connectors/${id}/terms`, { method: 'PUT', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify({ declared_use: declaredUse, terms_version: termsVersion }), signal });
 }

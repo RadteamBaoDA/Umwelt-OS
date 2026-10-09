@@ -184,3 +184,14 @@ def test_news_source_field_allowlists(provider: str, fields: dict[str, object], 
     else:
         with pytest.raises(ValidationError):
             build()
+
+
+def test_fixed_providers_have_static_example_config_and_sample():
+    from modules.connectors.catalog import list_catalog
+    from modules.connectors.provider_specs import DISPATCHABLE
+    entries = {e.provider_id: e for e in list_catalog()}
+    for pid in DISPATCHABLE:
+        e = entries[pid]
+        assert e.example_config is not None and e.example_config["schedule_interval_minutes"] == e.default_interval_minutes
+        assert e.sample_output
+    assert entries["youtube"].example_config is None
