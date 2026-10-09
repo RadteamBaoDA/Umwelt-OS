@@ -49,7 +49,8 @@ class _ExplodingSession:
         raise AssertionError(f"session.{name} used before owner admission")
 
 
-@pytest.mark.parametrize("call", ["search", "index_status", "tasks_goals", "news", "fences"])
+# "search" is no longer member-403: members search shared documents (see test_member_search.py).
+@pytest.mark.parametrize("call", ["index_status", "tasks_goals", "news", "fences"])
 async def test_member_without_share_gets_nothing(call: str) -> None:
     """A member (membership, no share) is rejected before any query, so no hit/count/snippet exists."""
     member = WorkspaceContext(user_id=9, workspace_id=WORKSPACE, role="member", membership_revision=1)
@@ -728,7 +729,7 @@ async def test_reindex_maps_conflicts_to_409(monkeypatch: pytest.MonkeyPatch) ->
 
     async def call() -> int:
         with pytest.raises(HTTPException) as caught:
-            await routes.reindex(request, None, None, None)  # type: ignore[arg-type]
+            await routes.reindex(request, None, None)  # type: ignore[arg-type]
         return caught.value.status_code
 
     permitted["value"] = False
