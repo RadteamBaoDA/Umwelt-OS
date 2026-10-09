@@ -20,6 +20,7 @@ from modules.backup.schemas import (
     UnresolvedEffectRead,
 )
 
+# Operator-only: backup/restore is instance-wide and bound to the bootstrap account (id 1). Never use as a workspace owner.
 OWNER_ID = 1
 ADMISSION_LOCK_KEY = 0x5031324241434B55
 TERMINAL_DRAIN_KINDS = frozenset({"activity_finish", "activity_uncertain", "cancel", "privacy_cleanup", "effect_terminal"})

@@ -315,7 +315,7 @@ async def execute_browser_read(
 
     import httpx
 
-    from core.auth.public import revalidate_owner_session
+    from core.auth.public import revalidate_account_session
     from core.config import Settings
     from core.remote_heavy import mark_remote_heavy_uncertain_in_uow
     from modules.agents.public import revalidate_browser_run_authority
@@ -360,8 +360,9 @@ async def execute_browser_read(
             frozenset(UUID(item) for item in candidate.authorized_source_ids),
             candidate.claim_generation, 0, 0, 0, candidate.max_active_seconds,
         )
-        session_valid = await revalidate_owner_session(
+        session_valid = await revalidate_account_session(
             session, candidate.auth_session_hash, candidate.owner_id,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
         run_valid = await revalidate_browser_run_authority(
             session, auth, scope=job_scope, multi_workspace_enabled=multi_workspace_enabled,
@@ -602,7 +603,7 @@ async def execute_browser_read(
         return await _fail_job(session_factory, job_id, "invalid_result")
 
     async with session_factory() as session:
-        from core.auth.public import revalidate_owner_session
+        from core.auth.public import revalidate_account_session
         from modules.agents.public import revalidate_browser_run_authority
 
         candidate = await session.scalar(select(BrowserReadJob).where(
@@ -637,8 +638,9 @@ async def execute_browser_read(
             frozenset(UUID(item) for item in candidate.authorized_source_ids),
             candidate.claim_generation, 0, 0, 0, candidate.max_active_seconds,
         )
-        session_valid = await revalidate_owner_session(
+        session_valid = await revalidate_account_session(
             session, candidate.auth_session_hash, candidate.owner_id,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
         run_valid = await revalidate_browser_run_authority(
             session, auth, scope=job_scope, multi_workspace_enabled=multi_workspace_enabled,
@@ -712,7 +714,7 @@ async def read_browser_result(
     """Return successful observations only while the original session/run/Chat/profile/source grant stays current."""
     from sqlalchemy import select
 
-    from core.auth.public import revalidate_owner_session
+    from core.auth.public import revalidate_account_session
     from modules.agents.public import BrowserRunAuthorization, revalidate_browser_run_authority
     from modules.connectors import public as connectors
     from modules.tools.models import BrowserPageEvidence
@@ -737,7 +739,9 @@ async def read_browser_result(
         return None
     async with session_factory() as fresh:
         if (
-            not await revalidate_owner_session(fresh, auth_session_hash, owner_id)
+            not await revalidate_account_session(
+                fresh, auth_session_hash, owner_id, multi_workspace_enabled=multi_workspace_enabled,
+            )
             or not await revalidate_browser_run_authority(
                 fresh, authorization, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
             )

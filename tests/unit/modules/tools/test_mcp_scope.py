@@ -312,9 +312,11 @@ async def test_tools_listing_and_invoke_allowlist_hide_other_workspace_mcp_tools
     registry = MagicMock()
     registry.list_tools.return_value = [native, mcp]
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
-        tool_registry=registry, mcp_runtime=SimpleNamespace(dispatch=adapter))))
-    assert [i["name"] for i in (await routes.list_tools(request, MagicMock(), OWNER_B))["items"]] == ["source.read"]  # type: ignore[arg-type]
-    assert [i["name"] for i in (await routes.list_tools(request, MagicMock(), OWNER_A))["items"]] == ["source.read", name]  # type: ignore[arg-type]
+        tool_registry=registry, mcp_runtime=SimpleNamespace(dispatch=adapter),
+        settings=SimpleNamespace(multi_workspace_enabled=False))))
+    with patch.object(routes, "read_workspace_modules", AsyncMock(return_value={})):
+        assert [i["name"] for i in (await routes.list_tools(request, MagicMock(), OWNER_B, MagicMock()))["items"]] == ["source.read"]  # type: ignore[arg-type]
+        assert [i["name"] for i in (await routes.list_tools(request, MagicMock(), OWNER_A, MagicMock()))["items"]] == ["source.read", name]  # type: ignore[arg-type]
     # invoke_tool builds its allowed set from the same helper
     assert [i.name for i in routes._visible_tools(request, WS_B)] == ["source.read"]  # type: ignore[arg-type]
     assert [i.name for i in routes._visible_tools(request, WS_A)] == ["source.read", name]  # type: ignore[arg-type]

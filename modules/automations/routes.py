@@ -23,7 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.auth.dependencies import require_owner, require_owner_write
+from core.auth.dependencies import require_account, require_account_write
 from core.auth.models import AuthSession, Owner
 from core.database import get_session
 from core.realtime import commit_with_replay
@@ -52,8 +52,8 @@ from modules.settings.public import module_dependency, module_is_enabled, regist
 router = APIRouter(prefix="/api/v1/automations", tags=["automations"], dependencies=[Depends(module_dependency("automations"))])
 webhook_router = APIRouter(prefix="/api/v1/automations", tags=["automation-webhooks"])
 Session = Annotated[AsyncSession, Depends(get_session)]
-OwnerRead = Annotated[AuthSession, Depends(require_owner)]
-OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]
+OwnerRead = Annotated[AuthSession, Depends(require_account)]
+OwnerWrite = Annotated[AuthSession, Depends(require_account_write)]
 WorkspaceRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
 WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 WEBHOOK_TOKEN_TTL = timedelta(days=90)
@@ -244,10 +244,8 @@ async def receive_inbound_webhook(
         raise HTTPException(status_code=401, detail="Webhook credentials are invalid or expired")
     scope = InternalJobScope(
         workspace_id=credential.workspace_id, actor_user_id=owner.user_id, membership_revision=owner.membership_revision)
-    # External trigger ingress uses its own bearer. Check persisted availability only after it
-    # authenticates, since this router deliberately has no owner-session/CSRF dependency.
-    if not await module_is_enabled(session, "automations", scope=scope, multi_workspace_enabled=flag):
-        raise HTTPException(status_code=404, detail="Automation webhooks are unavailable")
+    # External trigger ingress uses its own bearer. Persisted module availability is read only
+    # after the fence lock below (lock order: fence first), since this router has no session dependency.
     body = bytearray()
     try:
         async with asyncio.timeout(5):
