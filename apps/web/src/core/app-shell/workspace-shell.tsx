@@ -14,7 +14,9 @@ import { CommandPalette } from '@/core/command-palette';
 import { ConnectionFooter } from '@/core/app-shell/connection-footer';
 import { useChatController } from '@/core/app-shell/chat-controller';
 import { SettingsNav, SourcesSubNav } from '@/core/app-shell/settings-nav';
-import { destinationEnabled, mainNavigation, settingsGroups, type ModuleAvailability } from '@/core/module-registry';
+import { WorkspaceSwitcher } from '@/core/app-shell/workspace-switcher';
+import { useWorkspace } from '@/core/workspace-context';
+import { destinationEnabled, destinationForRole, mainNavigation, settingsGroups, type ModuleAvailability } from '@/core/module-registry';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { useRealtime } from '@/core/realtime-provider';
 import { ChangePasswordDialog } from '@/modules/account/change-password-dialog';
@@ -85,6 +87,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
   const t = useTranslations('shell');
   const display = useDisplayPreferences();
   const realtime = useRealtime();
+  const role = useWorkspace().selection?.role;
   const online = useBrowserOnline();
   const [accountOpen, setAccountOpen] = useState(false);
   const [passwordOpen, setPasswordOpen] = useState(false);
@@ -180,8 +183,9 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
   }
 
   const savedPreferences = preferences.data ?? display.confirmedPreferences ?? null;
-  const visibleMainNavigation = mainNavigation.filter((item) => destinationEnabled(item, moduleAvailability.data));
-  const visibleSettingsGroups = settingsGroups.filter((item) => destinationEnabled(item, moduleAvailability.data));
+  const visibleSettingsGroups = settingsGroups.filter((item) => destinationEnabled(item, moduleAvailability.data) && destinationForRole(item, role));
+  // A member without any settings group (translation settings arrive with T4a) gets no Settings entry.
+  const visibleMainNavigation = mainNavigation.filter((item) => destinationEnabled(item, moduleAvailability.data) && destinationForRole(item, role) && (item.id !== 'settings' || visibleSettingsGroups.length > 0));
   const settingsActive = pathname.startsWith('/settings');
   const active = visibleMainNavigation.find((item) => item.id !== 'settings' && (pathname === item.href || pathname.startsWith(`${item.href}/`)))?.id ?? (settingsActive ? 'settings' : '');
   /** Returns focus to the triggering menu control after a dialog closes. */
@@ -196,6 +200,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
         <header className="topbar">
           <Link href="/app" className="brand-name" aria-label="Umwelt-OS"><UmweltLogo /></Link>
           <div className="top-actions">
+            <WorkspaceSwitcher />
             {visibleMainNavigation.some((item) => item.id === 'chat') && <ChatTriggerButton />}
             <CommandPalette />
             <UserMenu triggerRef={menuTriggerRef} onOpenPreferences={() => setPreferencesOpen(true)} onOpenAccount={() => setAccountOpen(true)} onOpenChangePassword={() => setPasswordOpen(true)} onSignOut={() => logout.mutate()} signOutPending={logout.isPending} />
