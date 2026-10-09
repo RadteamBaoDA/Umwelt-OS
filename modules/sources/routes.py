@@ -92,8 +92,9 @@ async def get_source_impact(
 ) -> SourceImpactRead:
     """Return owner-only dependent counts; 409 while a data purge is pending."""
     _require_source_owner(scope)
-    impact = await public.get_source_impact(  # B2: public still takes owner_id until converted
-        session, scope.user_id, source_id,
+    impact = await public.get_source_impact(
+        session, source_id, scope=scope,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
     )
     if impact is None:
         raise HTTPException(status_code=404, detail="Source not found")

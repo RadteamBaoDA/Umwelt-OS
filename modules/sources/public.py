@@ -451,26 +451,32 @@ CHAT_ATTACHMENTS_NAME = "Chat attachments"
 CHAT_ATTACHMENTS_SHARED_NAME = "Chat attachments (shared)"
 
 
-async def get_or_create_chat_attachments_source(session: AsyncSession, *, shared: bool = False) -> Source:
-    """Return one of the owner's two server-owned Chat attachments manual sources, creating it once.
+async def get_or_create_chat_attachments_source(
+    session: AsyncSession, *, scope: WorkspaceContext, multi_workspace_enabled: bool, shared: bool = False,
+) -> Source:
+    """Return one of the workspace's two server-owned Chat attachments manual sources, creating it once.
 
     ``shared=False`` (the default) selects the private "Chat attachments" source (``local_only``);
     ``shared=True`` selects "Chat attachments (shared)", which is not ``local_only`` and therefore
     eligible for cloud chat, embeddings, extraction and briefs. Both carry the same server-set
     marker and differ only in ``local_only``, which no owner API can change.
 
-    A transaction-scoped advisory lock (one key per variant) serializes concurrent first uploads, so
-    two requests never create two sources of the same variant. An archived/purged source is retired
-    history and a fresh one is created; a paused one is returned so intake reports it as inactive
-    (409). Commits before returning.
+    Access locks come first, then a transaction-scoped advisory lock (one key per workspace and
+    variant) serializes concurrent first uploads. An archived/purged source is retired history and a
+    fresh one is created; a paused one is returned so intake reports it as inactive. Commits before
+    returning.
     """
+    access_fence = await _admit_source_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True,
+    )
     variant = "shared" if shared else "private"
     await session.execute(
         text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
-        {"key": f"umwelt.sources.chat_attachments.{variant}"},
+        {"key": f"umwelt.sources.chat_attachments.{scope.workspace_id}.{variant}"},
     )
     source = await session.scalar(
         select(Source).where(
+            *_source_scope(scope),
             Source.configuration[CHAT_ATTACHMENTS_MARKER].as_boolean().is_(True),
             Source.local_only.is_(not shared),
             Source.status != "archived",
@@ -479,26 +485,28 @@ async def get_or_create_chat_attachments_source(session: AsyncSession, *, shared
     if source is not None:
         await session.commit()
         return source
+    # Built directly: create_source forces local_only for manual sources, which would break "shared".
     source = Source(
+        workspace_id=scope.workspace_id,
         type="manual", name=CHAT_ATTACHMENTS_SHARED_NAME if shared else CHAT_ATTACHMENTS_NAME,
         local_only=not shared, configuration={CHAT_ATTACHMENTS_MARKER: True},
     )
     session.add(source)
     await session.flush()
-    await commit_with_replay(session, [make_source_change(source.id, source.generation, source.status)])
+    await commit_with_replay(
+        session, [make_source_change(source.id, source.generation, source.status, scope=scope)],
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+    )
     await session.refresh(source)
     return source
 
 
-async def is_chat_attachments_source(session: AsyncSession, source_id: UUID) -> bool:
-    """Report whether a source carries the server-set Chat attachments marker."""
-    source = await session.get(Source, source_id)
+async def is_chat_attachments_source(
+    session: AsyncSession, source_id: UUID, *, scope: WorkspaceContext, multi_workspace_enabled: bool,
+) -> bool:
+    """Report whether an in-workspace source carries the server-set Chat attachments marker."""
+    source = await get_source(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     return source is not None and source.configuration.get(CHAT_ATTACHMENTS_MARKER) is True
-
-
-async def get_source(session: AsyncSession, source_id: UUID) -> Source | None:
-    """Read a source ORM record by identifier."""
-    return await session.get(Source, source_id)
 
 
 async def get_tool_source(
@@ -1913,20 +1921,22 @@ class SourceImpact:
     conversation_count: int
 
 
-async def get_source_impact(session: AsyncSession, owner_id: int, source_id: UUID) -> SourceImpact | None:
-    """Count dependents of a source through owner public APIs; None when absent, 409 when purge-pending."""
-    if await session.get(Source, source_id) is None:
+async def get_source_impact(
+    session: AsyncSession, source_id: UUID, *, scope: WorkspaceContext, multi_workspace_enabled: bool,
+) -> SourceImpact | None:
+    """Count dependents of a source through public APIs; None when foreign/absent, 409 when purge-pending."""
+    if await get_source(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled) is None:
         return None
-    if await session.scalar(export_eligible_source_ids().where(Source.id == source_id)) is None:
+    if await session.scalar(export_eligible_source_ids(scope=scope).where(Source.id == source_id)) is None:
         raise HTTPException(status_code=409, detail="Source purge is pending")
     from modules.chat import public as chat
     from modules.dashboard import public as dashboard
     from modules.knowledge.documents import public as documents
 
-    definitions, placements = await dashboard.count_source_gadgets(session, owner_id, source_id)
+    definitions, placements = await dashboard.count_source_gadgets(session, source_id, scope=scope)
     return SourceImpact(
-        document_count=await documents.count_source_documents(session, source_id),
+        document_count=await documents.count_source_documents(session, source_id, scope=scope),
         gadget_definition_count=definitions,
         gadget_placement_count=placements,
-        conversation_count=await chat.count_source_conversations(session, source_id),
+        conversation_count=await chat.count_source_conversations(session, source_id, scope=scope),
     )
