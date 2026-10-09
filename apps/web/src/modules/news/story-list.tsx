@@ -11,6 +11,7 @@ import { fetchNewsTrends, fetchStories } from './story-api';
 import { useNewsIncompleteLabel } from './use-news-incomplete-label';
 import { TranslatedBadge } from '@/modules/translations/translated-badge';
 import { useContentTranslation } from '@/modules/translations/use-content-translation';
+import { safeHttpUrl } from '@/core/safe-url';
 import type { Story } from './story-types';
 
 /** Props for the source-scoped story gadget renderer. */
@@ -125,6 +126,7 @@ export function StoryList({
                 <span key={reason} className="mt-1 block text-xs text-muted-foreground">{incompleteLabel(reason)}</span>
               ))}
             </Button>
+            <Attribution story={story} />
           </li>
         ))}
       </ol>
@@ -134,5 +136,19 @@ export function StoryList({
         </Button>
       ) : null}
     </section>
+  );
+}
+
+/** Publisher and license beside a story; sits outside the selection button so the link is not nested interactive content. */
+function Attribution({ story }: { story: Story }) {
+  const t = useTranslations('news');
+  const item = story.evidence?.find((e) => e.publisher);
+  if (!item?.publisher) return null;
+  const href = safeHttpUrl(item.url);
+  return (
+    <p className="mt-1 px-1 text-xs text-muted-foreground">
+      {t('publisher')}: {href ? <a className="text-accent underline" href={href} target="_blank" rel="noopener noreferrer">{item.publisher}</a> : item.publisher}
+      {item.license_label ? ` · ${item.license_label}` : ''}
+    </p>
   );
 }

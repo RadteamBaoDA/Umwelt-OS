@@ -18,7 +18,7 @@ import { AppLocaleId, normalizeFormattingLocale } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { useGuardedNavigation } from '@/core/guarded-navigation';
 import { useWorkspace } from '@/core/workspace-context';
-import { ProviderScope, type NativeProvider } from './provider-scope';
+import { ProviderGuide, ProviderScope, type NativeProvider } from './provider-scope';
 import { GitHubSummary } from './github-summary';
 import { McpCollectionEditor } from './mcp-collection-editor';
 import {
@@ -1076,6 +1076,7 @@ export function ConnectorEditor({
           </section>
           <section id="source-step-choose" aria-labelledby="source-step-choose-title" className="grid gap-3 rounded-lg border border-border p-4">
             <h3 id="source-step-choose-title" className="text-base font-semibold">{t('stepChooseData')}</h3>
+          {currentEntry && <ProviderGuide entry={currentEntry} source={source ? { ...source, status: sourceStatus } : null} />}
           {nativeProviders.has(provider)
             ? <ProviderScope key={`${sourceId}:${provider}:${revision}:${sourceGeneration}:${scopeResetEpoch}`} provider={provider as NativeProvider} configuration={configuration} disabled={locked} resetEpoch={scopeResetEpoch} onChange={changeConfiguration} />
             : provider === 'rss' ? <div className="field"><Label htmlFor="source-feed-url">{t('sourceUrl')}</Label><Input id="source-feed-url" type="url" value={configuration.feed_url ?? ''} onChange={(event) => changeConfiguration('feed_url', event.target.value)} /></div> : <div className="field"><Label htmlFor="source-config-url">{provider === 'rest' ? t('apiUrl') : t('pageUrl')}</Label><Input id="source-config-url" type="url" value={configuration.url ?? ''} onChange={(event) => changeConfiguration('url', event.target.value)} /></div>}
@@ -1211,7 +1212,7 @@ export function ConnectorEditor({
           {visibleActivationError === 'credential_delete_pending' && <p className="muted" role="status">{t('credentialPending')}</p>}
           {providerCredentialConfigured && sourceStatus === 'paused' && visibleActivationError !== 'deactivation_pending' && visibleActivationError !== 'credential_delete_pending' && <Button className="secondary" disabled={locked || dirty || Boolean(secret)} onClick={removeCredential}>{busyAction === 'remove' ? t('saving') : t('removeCredential')}</Button>}
         </section>}
-        {source && <SyncHistory source={{ ...source, status: sourceStatus }} />}
+        {source && <SyncHistory source={{ ...source, status: sourceStatus }} intervalMinutes={configuration.schedule_interval_minutes} />}
         </>}
       </>}
     </>}

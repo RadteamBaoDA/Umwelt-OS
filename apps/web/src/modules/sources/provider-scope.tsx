@@ -5,7 +5,10 @@ import { useEffect, useRef, useState } from 'react';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import type { ConnectorConfig } from './api';
+import { formatDateTime } from '@/core/i18n';
+import { useDisplayPreferences } from '@/core/query-provider';
+import type { ConnectorCatalogEntry, ConnectorConfig, Source } from './api';
+import { isStale, periodKind } from './freshness';
 
 export type NativeProvider = 'youtube' | 'arxiv' | 'huggingface' | 'github' | 'github_releases' | 'telegram' | 'alpha_vantage' | 'open_meteo';
 
@@ -89,4 +92,33 @@ export function ProviderScope({
     }} />
     <small id="source-scope-telegram-help" className="muted">{t('telegramChannelHelp')}</small>
   </div>;
+}
+
+/** Setup guide for a catalog provider. Shows only catalog facts: no invented quotas, terms or sample output. */
+export function ProviderGuide({ entry, source, now }: { entry: ConnectorCatalogEntry; source?: Source | null; now?: Date }) {
+  const t = useTranslations('sources');
+  const display = useDisplayPreferences();
+  if (!entry.terms_url && !entry.attribution) return null;
+  const fmt = (value: string) => formatDateTime(value, display.locale, display.timezone);
+  const interval = entry.default_interval_minutes ?? null;
+  const stale = source ? isStale(source.last_success_at, interval, now) : false;
+  const period = periodKind(entry.provider_id);
+  const keyed = (entry.key_fields ?? []).length > 0;
+  const quotas = (entry.quota_policies ?? []).map((q) => (q.limit_units === null ? t('guideQuotaUnknown', { window: q.window }) : t('guideQuota', { limit: q.limit_units, unit: q.unit, window: q.window })));
+  const row = (label: string, body: React.ReactNode) => <div className="grid gap-1 sm:grid-cols-[10rem_1fr]"><dt className="font-medium">{label}</dt><dd className="text-muted-foreground">{body}</dd></div>;
+  return <section aria-label={t('guideTitle')} className="grid gap-2 rounded-lg border border-border bg-surface p-3 text-sm">
+    <h4 className="font-semibold">{t('guideTitle')}</h4>
+    <dl className="grid gap-2">
+      {row(t('guideData'), [...(entry.hosts ?? []), ...(entry.endpoints ?? [])].join(' · ') || t('guideNone'))}
+      {period && row(t('guidePeriod'), t(period === 'referenceDate' ? 'guideReferenceDate' : 'guideAnnualPeriod'))}
+      {row(t('guideKey'), keyed ? t('guideKeyRequired') : t('guideKeyNone'))}
+      {interval !== null && row(t('guideCadence'), t('everyMinutes', { minutes: interval }))}
+      {quotas.length > 0 && row(t('guideQuotaLabel'), quotas.join('; '))}
+      {entry.attribution && row(t('guideAttribution'), <>{entry.attribution}{entry.terms_url ? <> <a className="text-accent underline" href={entry.terms_url} target="_blank" rel="noopener noreferrer">{t('providerTerms')}</a></> : null}</>)}
+      {row(t('guideVerified'), entry.runtime_verified ? t('guideVerifiedYes') : t('guideVerifiedNo'))}
+      {source && row(t('guideLastSuccess'), source.last_success_at ? <>{fmt(source.last_success_at)}{stale && <span role="status" className="ml-2 rounded-md border border-border px-1.5 py-0.5 text-xs text-danger">{t('stale')}</span>}</> : t('never'))}
+      {source?.collection_error_code && row(t('guideLastError'), <span role="alert" className="text-danger">{source.collection_error_code}{source.last_success_at ? ` · ${t('guideShowingLastGood')}` : ''}</span>)}
+      {row(t('guideRecovery'), t('guideRecoveryBody'))}
+    </dl>
+  </section>;
 }

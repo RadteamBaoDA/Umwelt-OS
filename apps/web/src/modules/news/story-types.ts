@@ -12,6 +12,9 @@ export type StoryEvidence = {
   excerpt: string;
   observed_at: string;
   published_at: string | null;
+  /** Feed publisher and license text when the server supplies them; shown beside the story as attribution. */
+  publisher?: string | null;
+  license_label?: string | null;
 };
 
 /** Story summary and evidence use only currently visible supporting versions. */

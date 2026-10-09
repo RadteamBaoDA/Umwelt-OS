@@ -128,7 +128,21 @@ export type ConnectorCatalogEntry = {
   unavailable_reason?: string | null;
   availability_reason?: string | null;
   unavailable_operations: string[];
+  // Free-provider facts from the catalog; optional because older servers and non-free entries omit them.
+  eligibility?: 'unknown' | 'open' | 'personal' | 'noncommercial' | 'review';
+  terms_url?: string | null;
+  terms_checked_on?: string | null;
+  attribution?: string | null;
+  hosts?: string[];
+  endpoints?: string[];
+  execution?: 'supported' | 'experimental' | 'research_only' | null;
+  default_interval_minutes?: number | null;
+  key_fields?: string[];
+  runtime_verified?: boolean;
+  quota_policies?: QuotaPolicy[];
+  setup_guide?: string | null;
 };
+export type QuotaPolicy = { policy_key: string; budget_kind: string; window: 'second' | 'minute' | 'day' | 'month'; unit: string; limit_units: number | null; basis: string };
 export type SourceIngestion = { current_run: IngestionRun | null; items: IngestionRun[]; next_cursor: string | null };
 export type PurgeOperation = {
   operation_id: string;
