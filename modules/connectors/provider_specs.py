@@ -61,7 +61,7 @@ class FreeProviderSpec:
 DISPATCHABLE = frozenset({
     "bbc_world", "vnexpress_business", "hn_top", "gdelt_economy",
     "world_bank", "frankfurter", "ecb", "binance", "alternative_me", "usgs", "coinpaprika",
-    "coingecko",
+    "coingecko", "google_news",
 })
 
 
@@ -97,6 +97,12 @@ FREE_PROVIDER_SPECS: tuple[FreeProviderSpec, ...] = (
           "https://vnexpress.net/rss", "noncommercial",
           "Identify VnExpress clearly and link the original article; feed-only scope.",
           ("/rss/kinh-doanh.rss",), (_day(96), _unknown())),
+    # Unofficial RSS search endpoint: Google publishes no API contract for it. Interval and pilot cap
+    # mirror the other 30-minute news feeds (docs/free-data-provider-policy.md quota table); no official quota is claimed.
+    _spec("google_news", "Google News RSS", ("news.google.com",), "news", 30,
+          "https://policies.google.com/terms", "review",
+          "Google News RSS / publisher: show the item's publisher and link to the original article; feed-only title, summary and link.",
+          ("/rss/search",), (_day(96), _unknown())),
     _spec("hn_top", "Hacker News top stories", ("hacker-news.firebaseio.com",), "news", 60,
           "https://github.com/HackerNews/API", "review",
           "Attribute Hacker News plus the item and publisher URL; the API license does not license linked articles.",

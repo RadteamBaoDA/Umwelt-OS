@@ -791,17 +791,18 @@ async def _run_feed(run: Run) -> None:
     a, provider = run.attempt, str(run.attempt.source.provider)
     collected_at, revision = datetime.now(UTC), str(a.connector_revision)
     state = await _state(run)
+    url = _payload(news.preset_url, provider, a.source.configuration)
     stored = news.FeedValidators(
-        news.FEED_URLS[provider], revision, state.etag, state.last_modified,
+        url, revision, state.etag, state.last_modified,
     ) if state.validators_revision == a.connector_revision else None
     lease = await _lease(run)
-    fetched = await _get_body(run, news.feed_request(provider, stored, revision), max_bytes=news.MAX_FEED_BYTES)
+    fetched = await _get_body(run, news.feed_request(provider, stored, revision, url), max_bytes=news.MAX_FEED_BYTES)
     result = _payload(news.map_feed_response, provider, 200 if fetched.body is not None else 304, fetched.body or b"", collected_at)
     if result.not_modified:
         await _accept_native(run, lease, (), "returned_snapshot", collected_at)
         return
     captured = news.capture_validators(
-        provider, {"etag": fetched.etag or "", "last-modified": fetched.last_modified or ""}, revision)
+        provider, {"etag": fetched.etag or "", "last-modified": fetched.last_modified or ""}, revision, url)
     update = CollectionStateUpdate(
         update_validators=True, etag=captured.etag if captured else None,
         last_modified=captured.last_modified if captured else None)
@@ -845,7 +846,7 @@ async def _run_gdelt(run: Run) -> None:
 ADAPTERS.update({
     **dict.fromkeys(PURE_PROVIDERS, _run_pure),
     "coingecko": _run_coingecko,
-    "bbc_world": _run_feed, "vnexpress_business": _run_feed, "hn_top": _run_hn, "gdelt_economy": _run_gdelt,
+    "bbc_world": _run_feed, "vnexpress_business": _run_feed, "google_news": _run_feed, "hn_top": _run_hn, "gdelt_economy": _run_gdelt,
 })
 
 

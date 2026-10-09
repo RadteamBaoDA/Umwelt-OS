@@ -22,7 +22,7 @@ from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, Worksp
 from modules.connectors import mcp as mcp_collection
 from modules.connectors import provider_terms, provisioning, registry, scheduler
 from modules.connectors import public as connectors_public
-from modules.connectors.backends import FIXED_SCOPE_PROVIDERS
+from modules.connectors.backends import GATED_EXECUTOR_PROVIDERS
 from modules.connectors.collection_schemas import (
     CollectionAdmissionRead,
     CollectionAdmissionRequest,
@@ -751,7 +751,7 @@ async def fetch_native_provider(
     )
     if not is_native_provider(source.provider):
         raise HTTPException(status_code=409, detail="Native provider is not configured")
-    if source.provider in FIXED_SCOPE_PROVIDERS:  # free providers run only through the gated shared executor
+    if source.provider in GATED_EXECUTOR_PROVIDERS:  # free providers run only through the gated shared executor
         raise HTTPException(status_code=409, detail="Provider is collected by the scheduler only")
     try:
         registry.validate(source)

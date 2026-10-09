@@ -4,7 +4,7 @@ This catalog distinguishes implemented mapper scope from provider ideas that sti
 permitted endpoint, source scope, authentication contract, licensing review, or adapter work.
 Public access alone does not imply permission to redistribute provider content.
 
-Fixed-endpoint free presets (BBC, VnExpress, Hacker News top stories, GDELT, World Bank, Frankfurter, ECB, Binance, Alternative.me, USGS, CoinPaprika, CoinGecko, Alpha Vantage) also have terms, quota and setup facts in [free-sources.md](free-sources.md). Their live behaviour is not yet verified; see [provider-research-2026-10-07.md](provider-research-2026-10-07.md).
+Free presets (BBC, VnExpress, Google News RSS search, Hacker News top stories, GDELT, World Bank, Frankfurter, ECB, Binance, Alternative.me, USGS, CoinPaprika, CoinGecko, Alpha Vantage) also have terms, quota and setup facts in [free-sources.md](free-sources.md). Their live behaviour is not yet verified; see [provider-research-2026-10-07.md](provider-research-2026-10-07.md).
 
 ## Inventory
 
@@ -15,10 +15,11 @@ Generated from `modules/connectors/catalog.py` and `modules/connectors/provider_
 - **Runtime verified** is `no` for every row. No provider has live verification yet; endpoint shapes and quotas are plan-documented, not observed.
 - **Eligibility** is the catalog class (`open`, `personal`, `noncommercial`, `review`) or `unknown` for providers without a free preset. It is never a grant for a workspace; see `free-sources.md`.
 
-The 12 registered fixed-endpoint native providers are `bbc_world`, `vnexpress_business`, `hn_top`, `gdelt_economy`, `world_bank`, `frankfurter`, `ecb`, `binance`, `alternative_me`, `usgs`, `coinpaprika` and `coingecko` (requires an owner API key). `gdelt_economy` is `experimental`. The native registry also holds the earlier providers (`youtube`, `arxiv`, `huggingface`, `github_releases`, `github`, `telegram`, `alpha_vantage`, `open_meteo`), which are listed below with their own availability.
+The 12 registered fixed-endpoint native providers (plus the scoped `google_news` preset) are `bbc_world`, `vnexpress_business`, `hn_top`, `gdelt_economy`, `world_bank`, `frankfurter`, `ecb`, `binance`, `alternative_me`, `usgs`, `coinpaprika` and `coingecko` (requires an owner API key). `gdelt_economy` is `experimental`. The native registry also holds the earlier providers (`youtube`, `arxiv`, `huggingface`, `github_releases`, `github`, `telegram`, `alpha_vantage`, `open_meteo`), which are listed below with their own availability.
 
 Notes on specific rows:
 
+- `google_news` is implemented as a scoped preset (query, site allowlist, `vi-VN`/`en-US`; the owner never supplies a URL). It uses an unofficial Google News RSS endpoint with no official API contract, requires terms acknowledgement plus operator review, and is not runtime verified.
 - `hn_top` (implemented top-stories preset) and `hacker_news` (planned, broader catalog entry) are separate rows. Only `hn_top` has an adapter.
 - `coingecko` is registered (requires API key). The owner supplies a Demo key through the native REST credential slot; it is stored encrypted and never returned. Without a key it fails closed with `credential_missing`. Its availability is `implemented`, not runtime verified.
 - `finance` is `planned` in the catalog, while the prose below lists crypto, commodity and macro families as unavailable. Only `alpha_vantage` has an adapter in that family.
@@ -41,7 +42,6 @@ Notes on specific rows:
 | `telegram` | `requires_credentials` | unknown | - | yes | no | - | - |
 | `alpha_vantage` | `requires_credentials` | personal | supported | yes | no | 1440 | 2026-10-07 |
 | `open_meteo` | `implemented` | unknown | - | yes | no | - | - |
-| `google_news` | `planned` | unknown | - | no | no | - | - |
 | `reddit` | `planned` | unknown | - | no | no | - | - |
 | `hacker_news` | `planned` | unknown | - | no | no | - | - |
 | `mastodon` | `planned` | unknown | - | no | no | - | - |
@@ -63,6 +63,7 @@ Notes on specific rows:
 | `home_assistant` | `planned` | unknown | - | no | no | - | - |
 | `bbc_world` | `implemented` | review | supported | yes | no | 30 | 2026-10-07 |
 | `vnexpress_business` | `implemented` | noncommercial | supported | yes | no | 30 | 2026-10-07 |
+| `google_news` | `implemented` | review | supported | yes | no | 30 | 2026-10-07 |
 | `hn_top` | `implemented` | review | supported | yes | no | 60 | 2026-10-07 |
 | `gdelt_economy` | `implemented` | review | experimental | yes | no | 60 | 2026-10-07 |
 | `world_bank` | `implemented` | open | supported | yes | no | 1440 | 2026-10-07 |
@@ -80,7 +81,7 @@ Notes on specific rows:
 | Provider | Availability | Bounded scope and known limits |
 |---|---|---|
 | RSS / Atom | Supported through the generic feed connector | Owner supplies a permitted public feed URL. A returned feed is a snapshot; missing entries do not imply deletion or complete history. |
-| Google News | Planned; unsupported operation | Official feed construction and query contract are not established. A generic RSS URL is not Google News support. |
+| Google News | `google_news` implemented as a scoped RSS search preset; not runtime verified | Unofficial `news.google.com/rss/search` endpoint: Google documents no API, quota or stability contract. The server builds the URL from a validated query, an allowlisted site (reuters.com, apnews.com, bbc.com, vnexpress.net or any) and `vi-VN`/`en-US`. Items carry the publisher from `<source>` and the label "Google News RSS / publisher"; links point to Google article URLs and the original article is not fetched. A generic RSS URL is still not Google News support. |
 | YouTube | Mapper implemented; integration gate open | One configured public channel Atom feed. Metadata only; no transcripts, media, private videos, or notification guarantee. Returned feed only; missed edits and removals are possible. |
 | arXiv | Mapper implemented; integration gate open | One configured category Atom feed, metadata only. Daily feed snapshots are not an archive. A shared PostgreSQL advisory lock spaces requests by at least three seconds. |
 | Hugging Face | Mapper implemented; integration gate open | One public author listing, at most 100 model metadata rows. On 429, the latest applicable valid retry/reset deadline is honored, including the official `RateLimit` API bucket `t`; `RateLimit-Policy` describes policy and is not a reset deadline. No model cards, weights, private grants, or inference. Public quotas can change and are shared by egress IP. |

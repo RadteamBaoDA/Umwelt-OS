@@ -301,7 +301,21 @@ class ConnectorConfig(BaseModel):
     weather_longitude: float | None = Field(default=None, ge=-180, le=180)
     weather_timezone: str | None = Field(default=None, min_length=1, max_length=64)
     weather_metrics: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=8)
+    news_query: str | None = Field(default=None, min_length=1, max_length=200)
+    news_site: Literal["any", "reuters.com", "apnews.com", "bbc.com", "vnexpress.net"] | None = None
+    news_locale: Literal["vi-VN", "en-US"] | None = None
     history_mode: Literal["returned_snapshot", "pending_updates"] | None = None
+
+    @field_validator("news_query", mode="before")
+    @classmethod
+    def clean_news_query(cls, value: object) -> object:
+        """Strip control characters and fold whitespace; a bare ``site:`` operator would bypass the site allowlist."""
+        if not isinstance(value, str):
+            return value
+        cleaned = " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", value).split())
+        if re.search(r"(?i)\bsite\s*:", cleaned):
+            raise ValueError("Use the site selector instead of a site: operator")
+        return cleaned
 
     @field_validator("timezone")
     @classmethod

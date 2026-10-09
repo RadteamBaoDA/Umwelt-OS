@@ -29,7 +29,7 @@ class Gate:
         return response
 
 
-def make_run(provider, gate, monkeypatch, state=None, connector_revision=2):
+def make_run(provider, gate, monkeypatch, state=None, connector_revision=2, configuration=None):
     accepted = []
 
     async def lease(_run):
@@ -44,7 +44,7 @@ def make_run(provider, gate, monkeypatch, state=None, connector_revision=2):
     monkeypatch.setattr(collection, "_lease", lease)
     monkeypatch.setattr(collection, "_accept_native", accept)
     monkeypatch.setattr(collection, "_state", get_state)
-    source = SimpleNamespace(provider=provider)
+    source = SimpleNamespace(provider=provider, configuration=configuration or {})
     run = SimpleNamespace(
         attempt=SimpleNamespace(source=source, connector_revision=connector_revision), gate=gate, extras={})
     return run, accepted
@@ -156,11 +156,12 @@ def test_registration_agrees_across_registry_sources_and_scope_validators(provid
 
     source_type = PROVIDER_SOURCE_TYPES[provider]
     SourceCreate(type=source_type, name="n", provider=provider)  # sources schema map agrees
-    assert native_dispatch_supported(source_type, provider) and PROVIDER_SCOPE_FIELDS[provider] == frozenset()
+    scope = {"news_query": "economy", "news_site": "any", "news_locale": "en-US"} if provider == "google_news" else {}
+    assert native_dispatch_supported(source_type, provider) and PROVIDER_SCOPE_FIELDS[provider] == frozenset(scope)
     source = SimpleNamespace(
         id=uuid4(), status="active", type=source_type, provider=provider, generation=1,
-        configuration={"history_mode": "returned_snapshot"})
+        configuration={"history_mode": "returned_snapshot", **scope})
     assert registry.validate(source)["provider"] == provider
-    source.configuration = {"history_mode": "returned_snapshot", "feed_url": "https://x.example/f"}
+    source.configuration = {"history_mode": "returned_snapshot", **scope, "feed_url": "https://x.example/f"}
     with pytest.raises(ValueError):
         registry.validate(source)  # owner-supplied scope is refused for fixed endpoints

@@ -1,6 +1,6 @@
 # Free data sources
 
-Catalog facts for the 13 free-provider presets, taken from `modules/connectors/provider_specs.py` (checked on 2026-10-07; policy revision 1). `Code` shows whether a collection adapter is registered in the shared executor: `registered` means present in code only, `existing adapter` is the earlier Alpha Vantage collector, and `not registered` means no adapter exists. 
+Catalog facts for the 14 free-provider presets, taken from `modules/connectors/provider_specs.py` (checked on 2026-10-07; policy revision 1). `Code` shows whether a collection adapter is registered in the shared executor: `registered` means present in code only, `existing adapter` is the earlier Alpha Vantage collector, and `not registered` means no adapter exists. 
 Endpoint availability, implemented code, legal eligibility and live acceptance are separate facts: a row here is **not** a license grant and **no** provider is runtime-verified. Evidence and quotes live in `docs/free-data-provider-policy.md`.
 
 ## Rules
@@ -17,6 +17,7 @@ Endpoint availability, implemented code, legal eligibility and live acceptance a
 |---|---|---|---|---|---|---|---|---|
 | `bbc_world` | feeds.bbci.co.uk | news | 30 | review | none | supported | registered | [terms](https://www.bbc.co.uk/usingthebbc/terms/) |
 | `vnexpress_business` | vnexpress.net | news | 30 | noncommercial | none | supported | registered | [terms](https://vnexpress.net/rss) |
+| `google_news` | news.google.com | news | 30 | review | none | supported | registered | [terms](https://policies.google.com/terms) |
 | `hn_top` | hacker-news.firebaseio.com | news | 60 | review | none | supported | registered | [terms](https://github.com/HackerNews/API) |
 | `gdelt_economy` | api.gdeltproject.org | news | 60 | review | none | experimental | registered | [terms](https://gdeltproject.org/about.html) |
 | `world_bank` | api.worldbank.org | measurement | 1440 | open | none | supported | registered | [terms](https://datacatalog.worldbank.org/public-licenses) |
@@ -33,6 +34,7 @@ Endpoint availability, implemented code, legal eligibility and live acceptance a
 
 - `bbc_world`: Display BBC as publisher with a link to the original article; feed-only title, summary and link.
 - `vnexpress_business`: Identify VnExpress clearly and link the original article; feed-only scope.
+- `google_news`: Google News RSS / publisher: show the item's publisher (from its `<source>` element) and link to the original article; feed-only title, summary and link.
 - `hn_top`: Attribute Hacker News plus the item and publisher URL; the API license does not license linked articles.
 - `gdelt_economy`: Cite the GDELT Project and the publisher URL; article metadata is not republication permission.
 - `world_bank`: Credit the World Bank and the original indicator; retain the dataset license and changed notice.
@@ -53,6 +55,8 @@ Endpoint availability, implemented code, legal eligibility and live acceptance a
 | `bbc_world` | `official_unknown_calls_utc_day` | provider | day | http_calls | counted, no cap | 1 | official_unknown |
 | `vnexpress_business` | `pilot_calls_utc_day` | provider | day | http_calls | 96 | 1 | pilot_local |
 | `vnexpress_business` | `official_unknown_calls_utc_day` | provider | day | http_calls | counted, no cap | 1 | official_unknown |
+| `google_news` | `pilot_calls_utc_day` | provider | day | http_calls | 96 | 1 | pilot_local |
+| `google_news` | `official_unknown_calls_utc_day` | provider | day | http_calls | counted, no cap | 1 | official_unknown |
 | `hn_top` | `pilot_calls_utc_day` | provider | day | http_calls | 528 | 1 | pilot_local |
 | `hn_top` | `pilot_calls_utc_minute` | provider | minute | http_calls | 12 | 1 | pilot_local |
 | `gdelt_economy` | `pilot_calls_utc_day` | provider | day | http_calls | 48 | 1 | pilot_local |
@@ -98,6 +102,7 @@ Each entry gives what the source collects, prerequisites, cadence, quota and att
 
 - **`bbc_world`**: BBC World News RSS feed (`/news/world/rss.xml`). Title, summary and link only. No key. Cadence 30 min. Attribution: show BBC as publisher with a link to the original article. Needs operator terms review.
 - **`vnexpress_business`**: VnExpress business RSS feed (`/rss/kinh-doanh.rss`). Title, summary and link only. No key. Cadence 30 min. Attribution: identify VnExpress and link the original article. Noncommercial use only.
+- **`google_news`**: Google News RSS search feed (`news.google.com/rss/search`). Implemented, requires terms acknowledgement (class `review`: an operator must record approval first) and is **not runtime verified**. This is an unofficial RSS endpoint: Google publishes no API contract, quota or stability guarantee for it, and the feed can change or stop without notice. The owner never supplies a URL. The server builds it from validated scope only: `news_query` (1-200 characters, control characters stripped, no `site:` operator), `news_site` (`any`, `reuters.com`, `apnews.com`, `bbc.com`, `vnexpress.net`) and `news_locale` (`en-US` or `vi-VN`, mapped to `hl`/`gl`/`ceid`). Title, summary and link only; each item carries `publisher` from its `<source>` element and the licence label "Google News RSS / publisher". The item link is Google's article link; the original publisher article is not fetched. Cadence 30 min and the 96/day pilot ceiling are the same local choices as the other news feeds (see the quota table in `docs/free-data-provider-policy.md`); no official quota is claimed.
 - **`hn_top`**: Hacker News top stories. One list call plus at most 10 item calls per run (11 sends). No key. Cadence 60 min. Attribution: Hacker News with the item and publisher URL. Needs operator terms review.
 - **`gdelt_economy`**: GDELT DOC 2.0 economy article list, 5 records, 24-hour window. Experimental. No key. Cadence 60 min. Attribution: cite the GDELT Project and the publisher URL. Needs operator terms review.
 - **`world_bank`**: Annual GDP (current US$) for Vietnam, `NY.GDP.MKTP.CD`, up to 3 rows per response. No key. Cadence 1440 min. Attribution: credit the World Bank and the indicator; keep the dataset licence. Coverage is marked `truncated` when the response spans more than one page.
@@ -127,7 +132,7 @@ Recovery: error payloads, including ones returned with HTTP 200, are rejected by
 
 ## Data caveats
 
-- **Feed-only news.** `bbc_world`, `vnexpress_business`, `hn_top` and `gdelt_economy` store title, summary, link and publisher. Linked article full text is not fetched and is not available. Summary text is capped at 4,000 characters and marked truncated when longer.
+- **Feed-only news.** `bbc_world`, `vnexpress_business`, `google_news`, `hn_top` and `gdelt_economy` store title, summary, link and publisher. Linked article full text is not fetched and is not available. Summary text is capped at 4,000 characters and marked truncated when longer.
 - **Publisher and licence label.** Each news record carries `publisher` (for example "BBC News") and `license_label`, which is the catalog attribution text. Both are meant to be shown beside the data. Whether the UI shows them is a P4-web item and is not verified here.
 - **Frankfurter.** The rate date is the rate period, not a release instant. The v2 shape (`rate` field) is an unverified assumption until a live response is checked.
 - **World Bank coverage.** Annual data with up to 3 rows. Coverage is `truncated` when more than one page is returned; exact continuation paging is not implemented.

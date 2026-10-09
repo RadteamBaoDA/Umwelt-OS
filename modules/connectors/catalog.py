@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field, computed_field
 from modules.connectors.backends import (
     FIXED_SCOPE_PROVIDERS,
     GENERIC_CATALOG_SOURCE_TYPES,
+    PROVIDER_SCOPE_FIELDS,
     is_native_provider,
 )
 from modules.connectors.provider_specs import (
@@ -249,7 +250,6 @@ _ENTRIES = (
             requires_service="browser" if provider_id == "browser" else None,
         )
         for provider_id, label, auth_methods, availability, reason, evidence in (
-            ("google_news", "Google News feeds", ("none",), "planned", "Official feed construction is not established; use configured RSS only when an owner supplies a feed URL.", "unverified"),
             ("reddit", "Reddit", ("oauth2",), "planned", "Provider OAuth, endpoint, licensing, and quota gates remain open.", "unverified"),
             ("hacker_news", "Hacker News", ("none",), "planned", "A scoped adapter and evidence review remain open.", "unverified"),
             ("mastodon", "Mastodon", ("oauth2",), "planned", "Instance, authorization, licensing, and quota gates remain open.", "unverified"),
@@ -287,19 +287,29 @@ SAMPLE_OUTPUTS: dict[str, dict[str, Any]] = {
     "alternative_me": {"index": "fear_and_greed", "value": 50, "classification": "Neutral", "reference_date": "2026-01-01"},
     "usgs": {"magnitude": 4.5, "place": "Example region", "event_time": "2026-01-01T08:00:00Z"},
     "coinpaprika": {"coin_id": "btc-bitcoin", "price_usd": 100000.0, "observed_at": "2026-01-01T08:00:00Z"},
+    "google_news": {"title": "Example headline", "url": "https://news.google.com/rss/articles/EXAMPLE",
+                    "publisher": "Reuters", "published_at": "2026-01-01T08:00:00Z"},
     "coingecko": {"coin_id": "bitcoin", "price_usd": 100000.0, "observed_at": "2026-01-01T08:00:00Z"},
+}
+
+
+# Scoped free presets: owner scope is validated server-side and the URL is never user-supplied.
+_SCOPED_EXAMPLES: dict[str, dict[str, Any]] = {
+    "google_news": {"news_query": "Vietnam economy", "news_site": "reuters.com", "news_locale": "en-US"},
 }
 
 
 def _with_spec(entry: CatalogEntry, spec: FreeProviderSpec) -> CatalogEntry:
     """Overlay free-provider facts on an entry without touching its availability or scope fields."""
     fixed = spec.id in FIXED_SCOPE_PROVIDERS
+    scoped = _SCOPED_EXAMPLES.get(spec.id)
     return entry.model_copy(update={
         "example_config": {
             "timeout_seconds": 30, "timezone": "Asia/Ho_Chi_Minh",
             "schedule_interval_minutes": spec.default_interval_minutes, "history_mode": "returned_snapshot",
-        } if fixed else None,
-        "sample_output": SAMPLE_OUTPUTS.get(spec.id) if fixed else None,
+            **(scoped or {}),
+        } if fixed or scoped else None,
+        "sample_output": SAMPLE_OUTPUTS.get(spec.id) if fixed or scoped else None,
         "eligibility": spec.eligibility, "terms_url": spec.terms_url, "terms_checked_on": spec.checked_on,
         "attribution": spec.attribution, "hosts": spec.hosts, "endpoints": spec.endpoints,
         "execution": spec.execution, "default_interval_minutes": spec.default_interval_minutes,
@@ -316,9 +326,10 @@ def _free_entry(spec: FreeProviderSpec) -> CatalogEntry:
     # Planned until the adapter is registered (spec.code_implemented): planned entries must never pass
     # the "available/implemented/requires_credentials" provider-scope gates.
     ready = spec.code_implemented
+    scope = tuple(sorted(PROVIDER_SCOPE_FIELDS.get(spec.id, ()) if spec.id not in FIXED_SCOPE_PROVIDERS else ()))
     return _with_spec(CatalogEntry(
         provider_id=spec.id, label=spec.label, auth_methods=("api_key",) if spec.key_required else ("none",),
-        scope_fields=(), configuration_fields=("schedule_interval_minutes",),
+        scope_fields=scope, configuration_fields=(*scope, "schedule_interval_minutes"),
         collection_modes=("scheduled", "manual") if ready else (),
         supports_history=False, supports_edit=False, supports_delete=False,
         availability="implemented" if ready else "planned",
