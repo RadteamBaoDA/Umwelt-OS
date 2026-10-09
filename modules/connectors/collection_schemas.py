@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from modules.connectors.public import CollectionFence, ConnectorReceipt
+
 CollectionTrigger = Literal["manual", "scheduled", "retry"]
 CollectionStatus = Literal["queued", "running", "succeeded", "no_changes", "failed", "cancelled"]
 
@@ -27,6 +29,8 @@ class CollectionAdmissionRequest(BaseModel):
     source_generation: int = Field(ge=1)
     connector_revision: int = Field(ge=1)
     backend_revision: int = Field(ge=1)
+    # "manual" (n8n webhook) needs no due schedule; "scheduled" (n8n Schedule) does.
+    trigger: Literal["manual", "scheduled"] = "scheduled"
 
 
 class CollectionAdmissionRead(BaseModel):
@@ -44,4 +48,18 @@ class CollectionRequestRef(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     request_id: UUID
+    admission_token: UUID
+
+
+class ManagedConnectorReceipt(ConnectorReceipt):
+    """A managed-n8n /sync batch carrying the admission it was fetched under; the token is verified, not trusted."""
+
+    admission_request_id: UUID
+    admission_token: UUID
+
+
+class ManagedNoChanges(CollectionFence):
+    """A managed-n8n /no-changes acknowledgement carrying its admission."""
+
+    admission_request_id: UUID
     admission_token: UUID

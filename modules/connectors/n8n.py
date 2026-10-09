@@ -77,6 +77,7 @@ def build_workflow(
         "Validate source",
         "Validate source and load cursor",
         "Collect bounded pages",
+        "Request collection admission",
         "Submit acknowledged batch",
         "Acknowledge no changes",
         "Collect provider",

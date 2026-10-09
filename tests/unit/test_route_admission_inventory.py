@@ -37,6 +37,7 @@ CAPABILITY_ROUTES = {
     ("POST", "/api/v1/connectors/github/webhook"),
     ("POST", "/api/v1/connectors/sources/{source_id}/mcp-collect"),
     ("POST", "/api/v1/connectors/sources/{source_id}/crawl"),
+    ("POST", "/api/v1/connectors/sources/{source_id}/collection-admission"),
     ("POST", "/api/v1/connectors/sources/{source_id}/no-changes"),
     ("POST", "/api/v1/connectors/sources/{source_id}/sync"),
     ("GET", "/api/v1/connectors/sources/{source_id}/rss"),
