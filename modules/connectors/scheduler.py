@@ -14,7 +14,7 @@ from typing import Literal, cast
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
-from sqlalchemy import or_, select, text, update
+from sqlalchemy import func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -736,17 +736,21 @@ async def dispatch_due_collections(ctx: dict[str, object]) -> int:
 
 async def _emit_metrics(factory: async_sessionmaker[AsyncSession], now: datetime, stale_leases: int) -> None:
     """Sample bounded-label tick metrics; per-tick samples, never IDs. Telemetry faults never fail the tick."""
+    from modules.sources.models import Source
+
     try:
         async with factory() as session:
             rows = (await session.execute(
-                select(ConnectorCollectionRequest.captured_backend, ConnectorCollectionRequest.status,
-                       ConnectorCollectionRequest.attempt, ConnectorCollectionRequest.available_at,
-                       ConnectorCollectionRequest.attempt_deadline_at)
+                select(Source.provider, Source.type, ConnectorCollectionRequest.captured_backend,
+                       ConnectorCollectionRequest.status, ConnectorCollectionRequest.attempt,
+                       ConnectorCollectionRequest.available_at, ConnectorCollectionRequest.attempt_deadline_at)
+                .join(Source, (Source.id == ConnectorCollectionRequest.source_id)
+                      & (Source.workspace_id == ConnectorCollectionRequest.workspace_id))
                 .where(ConnectorCollectionRequest.status.in_(("queued", "running"))))).all()
             await session.rollback()
-        # ponytail: provider label fixed to "all"; requests carry no provider column (join to sources if needed)
-        for backend, status, attempt, available_at, deadline in rows:
-            lb = {"provider": "all", "backend": backend}
+        # Labels are bounded vocabularies only (provider/source type, backend); never workspace or source ids.
+        for provider, source_type, backend, status, attempt, available_at, deadline in rows:
+            lb = {"provider": provider or source_type, "backend": backend}
             if status == "running":
                 telemetry.count("collection_running_slots", **lb, outcome="running")
                 if deadline is not None and deadline < now:
@@ -761,3 +765,31 @@ async def _emit_metrics(factory: async_sessionmaker[AsyncSession], now: datetime
     except Exception:  # noqa: BLE001 - telemetry must not affect scheduling
         return
 
+
+
+async def collection_timing(
+    session: AsyncSession, workspace_id: UUID, source_ids: list[UUID],
+) -> dict[UUID, tuple[datetime | None, datetime | None]]:
+    """Return (next_due_at, retry_at) per source for the workspace; read-only, no admission.
+
+    retry_at is the later of a provider/penalty deadline on the schedule and a queued retry's
+    available_at, and only when still in the future.
+    """
+    if not source_ids:
+        return {}
+    now = datetime.now(UTC)
+    out: dict[UUID, tuple[datetime | None, datetime | None]] = {}
+    schedules = (await session.execute(
+        select(ConnectorSchedule.source_id, ConnectorSchedule.enabled, ConnectorSchedule.next_due_at,
+               ConnectorSchedule.next_eligible_at)
+        .where(ConnectorSchedule.workspace_id == workspace_id, ConnectorSchedule.source_id.in_(source_ids)))).all()
+    retries = dict((await session.execute(
+        select(ConnectorCollectionRequest.source_id, func.min(ConnectorCollectionRequest.available_at))
+        .where(ConnectorCollectionRequest.workspace_id == workspace_id,
+               ConnectorCollectionRequest.source_id.in_(source_ids),
+               ConnectorCollectionRequest.status == "queued", ConnectorCollectionRequest.attempt > 0)
+        .group_by(ConnectorCollectionRequest.source_id))).all())
+    for source_id, enabled, due, eligible in schedules:
+        candidates = [t for t in (eligible, retries.get(source_id)) if t is not None and t > now]
+        out[source_id] = (due if enabled else None, max(candidates) if candidates else None)
+    return out

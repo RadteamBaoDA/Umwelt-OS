@@ -2894,3 +2894,12 @@ async def recoverable_collection_request_ids(session: AsyncSession, request_ids:
     from modules.connectors import scheduler
 
     return await scheduler.recoverable_request_ids(session, request_ids)
+
+
+async def collection_timing(
+    session: AsyncSession, scope: Scope, source_ids: list[UUID],
+) -> dict[UUID, tuple[datetime | None, datetime | None]]:
+    """Return (next_due_at, retry_at) per source in the caller's workspace, for source read DTOs."""
+    from modules.connectors import scheduler
+
+    return await scheduler.collection_timing(session, scope.workspace_id, source_ids)

@@ -82,6 +82,9 @@ class SourceRead(BaseModel):
     retired_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    # Filled by the route from connector schedule state; None for sources without a schedule.
+    next_due_at: datetime | None = None
+    retry_at: datetime | None = None
 
 
 class SourceFence(BaseModel):
