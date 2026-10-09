@@ -184,3 +184,17 @@ class TestObservationGroupingAndClustering:
         assert FUZZY_WINDOW == timedelta(hours=72)
         assert FUZZY_THRESHOLD == 0.92
         assert ALGORITHM_VERSION == 1
+
+
+@pytest.mark.asyncio
+async def test_topic_reads_are_workspace_owner_only():
+    from fastapi import HTTPException
+
+    from core.workspaces.schemas import WorkspaceContext
+    from modules.news.topics import _owner_workspace_read
+
+    ws = uuid4()
+    assert (await _owner_workspace_read(WorkspaceContext(7, ws, "owner", 1))).user_id == 7
+    with pytest.raises(HTTPException) as exc:
+        await _owner_workspace_read(WorkspaceContext(8, ws, "member", 1))
+    assert exc.value.status_code == 403

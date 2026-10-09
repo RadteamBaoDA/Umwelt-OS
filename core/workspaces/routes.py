@@ -231,7 +231,7 @@ async def member_remove(
 
 @router.get("/{workspace_id}/shares", response_model=ShareList)
 async def share_list(
-    workspace_id: UUID, resource_type: ShareKind, resource_id: UUID,
+    workspace_id: UUID, resource_type: ShareKind, resource_id: UUID, request: Request,
     auth: Annotated[AuthSession, Depends(require_account)], session: Annotated[AsyncSession, Depends(get_session)],
     after: int | None = None, limit: Annotated[int, Query(ge=1, le=100)] = 100,
 ) -> ShareList:
@@ -239,6 +239,7 @@ async def share_list(
     return await list_resource_shares(
         session, workspace_id, auth.owner_id, resource_type=resource_type, resource_id=resource_id,
         after=after, limit=limit,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
     )
 
 

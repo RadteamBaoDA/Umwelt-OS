@@ -31,6 +31,15 @@ async def owner_default_scope(session: AsyncSession, owner_id: int = 1) -> Works
     return context
 
 
+async def revalidate_chat_session(session: AsyncSession, token_hash: str, owner_id: int) -> bool:
+    """Account-session revalidation for Chat/Agent links under the rollout gate (any workspace owner)."""
+    from core.auth.public import revalidate_account_session
+
+    return await revalidate_account_session(
+        session, token_hash, owner_id, multi_workspace_enabled=multi_workspace_enabled(),
+    )
+
+
 async def owner_scope_kwargs(session: AsyncSession, owner_id: int = 1) -> dict[str, object]:
     """`scope`/`multi_workspace_enabled` keyword arguments for owner-backed Chat call sites."""
     return {"scope": await owner_default_scope(session, owner_id), "multi_workspace_enabled": multi_workspace_enabled()}

@@ -221,10 +221,12 @@ async def _account_segment(
             await _delete_checkpoints(session, row.checkpoint_thread_id)
         elif state is not None and state.get("waiting_approval"):
             # The run and approval rows are locked; repeat ephemeral authorization at the pause boundary.
-            from core.auth.public import revalidate_owner_session
+            from core.auth.public import revalidate_account_session
             from modules.chat.public import has_live_agent_run_link
 
-            if (await revalidate_owner_session(session, row.auth_session_hash, row.owner_id)
+            if (await revalidate_account_session(
+                session, row.auth_session_hash, row.owner_id, multi_workspace_enabled=context.multi_workspace_enabled,
+            )
                     and await has_live_agent_run_link(
                         session, row.id, row.owner_id, row.auth_session_hash,
                     )):

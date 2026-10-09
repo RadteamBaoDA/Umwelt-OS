@@ -407,15 +407,16 @@ async def link_agent_run(
     from fastapi import HTTPException
     from sqlalchemy import select
 
-    from core.auth.public import revalidate_owner_session
+    from modules.chat.scope import revalidate_chat_session
 
     conversation = await session.scalar(select(Conversation).where(Conversation.id == conversation_id))
-    if conversation is None or owner_id != 1 or not await revalidate_owner_session(session, auth_session_hash, owner_id):
+    if (conversation is None or conversation.actor_user_id != owner_id
+            or not await revalidate_chat_session(session, auth_session_hash, owner_id)):
         raise HTTPException(status_code=404, detail="Conversation not found")
     now = datetime.now(UTC)
     if conversation.expires_at is not None and conversation.expires_at <= now:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    ephemeral = conversation.ephemeral or not await is_history_storage_enabled(session)
+    ephemeral = conversation.ephemeral or not await is_history_storage_enabled(session, owner_id=owner_id)
     expires_at = conversation.expires_at or (now + timedelta(hours=24) if ephemeral else None)
     session.add(AgentActivityLink(
         workspace_id=conversation.workspace_id, conversation_id=conversation_id,
@@ -446,7 +447,7 @@ async def publish_agent_activity(
 
     from sqlalchemy import select
 
-    from core.auth.public import revalidate_owner_session
+    from modules.chat.scope import revalidate_chat_session
 
     if status not in {"queued", "running", "waiting_approval", "succeeded", "failed", "cancelled", "started", "denied"}:
         return
@@ -466,7 +467,7 @@ async def publish_agent_activity(
         )
         if (link is None or link.owner_id != owner_id or link.auth_session_hash != auth_session_hash
                 or conversation is None or link.conversation_id != conversation.id
-                or not await revalidate_owner_session(session, auth_session_hash, owner_id)):
+                or not await revalidate_chat_session(session, auth_session_hash, owner_id)):
             return
         # Take fresh time after waiting on lifecycle locks and revalidating the owner session.
         now = datetime.now(UTC)
@@ -502,14 +503,14 @@ async def get_agent_activity(
     ))
     from datetime import UTC, datetime
 
-    from core.auth.public import revalidate_owner_session
+    from modules.chat.scope import revalidate_chat_session
 
     conversation = await session.scalar(select(Conversation).where(Conversation.id == conversation_id))
     if (link is None or link.auth_session_hash != auth_session_hash
             or link.expires_at is not None and link.expires_at <= datetime.now(UTC)
             or conversation is None
             or conversation.expires_at is not None and conversation.expires_at <= datetime.now(UTC)
-            or not await revalidate_owner_session(session, auth_session_hash, owner_id)):
+            or not await revalidate_chat_session(session, auth_session_hash, owner_id)):
         raise HTTPException(status_code=404, detail="Agent activity not found")
     return AgentActivityRead(
         conversation_id=link.conversation_id, agent_run_id=link.agent_run_id,
@@ -526,12 +527,12 @@ async def list_agent_run_ids_for_owner(
     from fastapi import HTTPException
     from sqlalchemy import select
 
-    from core.auth.public import revalidate_owner_session
+    from modules.chat.scope import revalidate_chat_session
 
     conversation = await session.scalar(select(Conversation).where(Conversation.id == conversation_id))
-    if (conversation is None or owner_id != 1
+    if (conversation is None
             or conversation.expires_at is not None and conversation.expires_at <= datetime.now(UTC)
-            or not await revalidate_owner_session(session, auth_session_hash, owner_id)):
+            or not await revalidate_chat_session(session, auth_session_hash, owner_id)):
         raise HTTPException(status_code=404, detail="Conversation not found")
     statement = select(AgentActivityLink.agent_run_id).where(
         AgentActivityLink.conversation_id == conversation_id,
@@ -561,11 +562,11 @@ async def filter_live_agent_run_ids(
 
     from sqlalchemy import select
 
-    from core.auth.public import revalidate_owner_session
+    from modules.chat.scope import revalidate_chat_session
 
     if not run_ids or len(run_ids) > 100 or len(set(run_ids)) != len(run_ids):
         return frozenset()
-    if owner_id != 1 or not await revalidate_owner_session(session, auth_session_hash, owner_id):
+    if not await revalidate_chat_session(session, auth_session_hash, owner_id):
         return frozenset()
     now = datetime.now(UTC)
     statement = select(AgentActivityLink.agent_run_id).join(
@@ -602,9 +603,9 @@ async def authorize_agent_run_access(
 
     from sqlalchemy import select
 
-    from core.auth.public import revalidate_owner_session
+    from modules.chat.scope import revalidate_chat_session
 
-    if owner_id != 1 or not await revalidate_owner_session(session, auth_session_hash, owner_id):
+    if not await revalidate_chat_session(session, auth_session_hash, owner_id):
         return False
     conversation_id = await session.scalar(select(AgentActivityLink.conversation_id).where(
         AgentActivityLink.agent_run_id == run_id,
@@ -634,7 +635,7 @@ async def authorize_agent_run_access(
         conversation = await session.scalar(select(Conversation).where(
             Conversation.id == conversation_id,
         ).execution_options(populate_existing=True))
-    if conversation is None or not await revalidate_owner_session(session, auth_session_hash, owner_id):
+    if conversation is None or not await revalidate_chat_session(session, auth_session_hash, owner_id):
         return False
     now = datetime.now(UTC)
     if ((link.expires_at is not None and link.expires_at <= now)
@@ -661,8 +662,6 @@ async def live_agent_conversation_id(
     from sqlalchemy import select
 
     now = datetime.now(UTC)
-    if owner_id != 1:
-        return None
     statement = select(AgentActivityLink.conversation_id).join(
         Conversation, Conversation.id == AgentActivityLink.conversation_id,
     ).where(
@@ -785,9 +784,17 @@ def _safe_chat_export_url(value: str | None) -> str | None:
         return None
 
 
-async def _require_chat_export_owner(session: AsyncSession, owner_id: int) -> None:
-    """Require the live singleton owner before reading owner-scoped chat history."""
-    if owner_id != 1 or await session.scalar(_select(_Owner.id).where(_Owner.id == owner_id)) is None:
+def _export_owner_allowed(owner_id: int, scope: _Any, multi_workspace_enabled: bool) -> bool:
+    """Bootstrap owner always; any other account only when the rollout is on and the scope is theirs."""
+    return (owner_id == 1 or multi_workspace_enabled) and (scope is None or scope.user_id == owner_id)
+
+
+async def _require_chat_export_owner(
+    session: AsyncSession, owner_id: int, *, scope: _Any = None, multi_workspace_enabled: bool = False,
+) -> None:
+    """Require the live workspace owner before reading owner-scoped chat history."""
+    if (not _export_owner_allowed(owner_id, scope, multi_workspace_enabled)
+            or await session.scalar(_select(_Owner.id).where(_Owner.id == owner_id)) is None):
         raise PermissionError("Chat export requires the current owner")
 
 
@@ -803,17 +810,20 @@ async def read_memory_export_origin(
     from modules.memory.public import lock_export_privacy
 
     await lock_export_privacy(session)
+    from modules.chat.scope import multi_workspace_enabled, owner_default_scope
+
+    flag = multi_workspace_enabled()
     try:
-        await _require_chat_export_owner(session, owner_id)
-    except PermissionError:
+        scope = await owner_default_scope(session, owner_id)
+        await _require_chat_export_owner(session, owner_id, scope=scope, multi_workspace_enabled=flag)
+    except (PermissionError, HTTPException):
         return None
-    history_enabled, persisted, privacy_updated_at = await _chat_export_privacy(session)
+    history_enabled, persisted, privacy_updated_at = await _chat_export_privacy(
+        session, scope=scope, multi_workspace_enabled=flag)
     if not history_enabled:
         return None
     now = _datetime.now(_UTC)
-    from modules.chat.scope import owner_default_scope
-
-    conversation_scope = _chat_export_scope(now, now, (await owner_default_scope(session, owner_id)).workspace_id)
+    conversation_scope = _chat_export_scope(now, now, scope.workspace_id)
     row = (await session.execute(
         _select(
             Conversation.id.label("conversation_id"),
@@ -869,7 +879,7 @@ async def _chat_export_privacy(
 
         privacy = await read_export_privacy(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     else:
-        privacy = await read_owner_export_privacy(session)
+        privacy = await read_owner_export_privacy(session)  # default owner scope; callers should pass scope
     persisted, updated_at = _chat_export_privacy_marker(privacy.persisted, privacy.updated_at)
     return privacy.store_conversation_history, persisted, updated_at
 
@@ -1014,7 +1024,7 @@ async def export_page(
     """
     if record_kind not in {"conversations", "messages"} or not 1 <= limit <= 100:
         raise ValueError("Chat export kind or page limit is invalid")
-    await _require_chat_export_owner(session, owner_id)
+    await _require_chat_export_owner(session, owner_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if cursor is None:
         snapshot_at = _datetime.now(_UTC)
         position = None
@@ -1245,7 +1255,8 @@ async def validate_export_fences(
     privacy_persisted, privacy_updated_at = _chat_export_privacy_marker(privacy_persisted, privacy_updated_at)
     if len(fences) > 100 or sum(len(fence.citations) for fence in fences) > CHAT_EXPORT_MAX_CITATIONS_PER_PAGE:
         raise ValueError("Chat export revalidation exceeds its bounded page contract")
-    if owner_id != 1 or await session.scalar(_select(_Owner.id).where(_Owner.id == owner_id)) is None:
+    if (not _export_owner_allowed(owner_id, scope, multi_workspace_enabled)
+            or await session.scalar(_select(_Owner.id).where(_Owner.id == owner_id)) is None):
         return ChatExportFenceValidation(
             valid=False, reason="owner_unavailable", observed_snapshot_count=0,
             privacy_persisted=privacy_persisted, privacy_updated_at=privacy_updated_at,
