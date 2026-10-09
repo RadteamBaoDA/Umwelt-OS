@@ -12,6 +12,7 @@ import { apiRequest, csrfHeaders } from '@/core/api';
 import { apiFailureKey } from '@/core/api-failure-key';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { AgentSettingsWorkspace } from '@/modules/agents/agent-settings';
+import { TranslationSettings } from './translation-settings';
 import { AutomationSettings } from '@/modules/automations/rule-list';
 
 type Mapping = { model: string; version: string | null; destination: 'unknown' | 'remote' };
@@ -224,6 +225,7 @@ export function AISettingsWorkspace() {
         <Button type="button" className="secondary" disabled={save.isPending || !dirty} onClick={cancelChanges}>{t('cancelChanges')}</Button><Button type="submit" disabled={save.isPending || !dirty}>{t('saveButton')}</Button>
       </div>
     </form>
+    <TranslationSettings />
     <details className="rounded-md border border-border p-3"><summary className="min-h-11 cursor-pointer py-2 font-semibold">{t('agentsAutomations')}</summary><AgentSettingsWorkspace /><AutomationSettings /></details>
   </section>;
 }

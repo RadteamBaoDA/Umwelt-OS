@@ -9,6 +9,8 @@ import { formatDateTime } from '@/core/i18n';
 import { safeHttpUrl } from '@/core/safe-url';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { fetchStory } from './story-api';
+import { TranslatedBadge } from '@/modules/translations/translated-badge';
+import { useContentTranslation } from '@/modules/translations/use-content-translation';
 import { useNewsIncompleteLabel } from './use-news-incomplete-label';
 
 /** Props for the detail renderer shown when a story is opened from its gadget. */
@@ -60,6 +62,10 @@ export function StoryDetail({ storyId, sourceIds, onBack }: StoryDetailProps) {
   // A later authority failure revokes the whole cursor snapshot, including earlier cached pages.
   const visiblePages = contentAvailable ? pages : [];
   const story = visiblePages.find((page) => page.story !== null)?.story ?? undefined;
+  const targets = story?.translation_revision ? [{ id: story.id, revision: story.translation_revision }] : [];
+  const translation = useContentTranslation('news_story', targets);
+  const [showOriginal, setShowOriginal] = useState(false);
+  const translated = showOriginal || !story ? undefined : translation.results.get(story.id)?.translation ?? undefined;
   const evidence = visiblePages.flatMap((page) => page.story?.evidence ?? []);
   const omissionReasons = [...new Set(visiblePages.flatMap((page) => page.incomplete_reasons))];
   const firstUrl = evidence.map((item) => safeHttpUrl(item.url)).find(Boolean) ?? null;
@@ -96,16 +102,17 @@ export function StoryDetail({ storyId, sourceIds, onBack }: StoryDetailProps) {
             <span className={badgeClass}>{d('sourceCount', { count: story.source_count })}</span>
           </div>
           <div className="flex items-start gap-2">
-            <h2 id="story-detail-title" className="flex-1 text-xl font-semibold leading-snug">{story.title}</h2>
+            <h2 id="story-detail-title" className="flex-1 text-xl font-semibold leading-snug">{translated?.title ?? story.title}</h2>
             {firstUrl ? <a href={firstUrl} target="_blank" rel="noopener noreferrer" aria-label={d('openOriginal')} title={d('openOriginal')} className="inline-flex size-11 items-center justify-center rounded-[9px] text-muted-foreground hover:bg-secondary hover:text-foreground"><ExternalLink aria-hidden="true" className="size-4" /></a> : null}
             <Button variant="ghost" size="icon" aria-label={d('copyCitation')} title={d('copyCitation')} onClick={() => { void copyCitation(); }}><CopyIcon aria-hidden="true" className="size-4" /></Button>
           </div>
           <p className="text-xs text-muted-foreground">
             {t('observed', { date: formatDateTime(story.observed_at, display.locale, display.timezone) })} · {display.timezone}
           </p>
+          {translation.results.has(story.id) ? <TranslatedBadge showOriginal={showOriginal} onToggle={() => setShowOriginal((v) => !v)} /> : null}
           <p role="status" className="text-xs text-muted-foreground">{copied === 'ok' ? d('copied') : copied === 'failed' ? d('copyFailed') : ''}</p>
           <h3 className="text-sm font-semibold">{t('excerpt')}</h3>
-          <blockquote className="border-l-2 border-border pl-3 text-sm leading-relaxed">{story.excerpt}</blockquote>
+          <blockquote className="border-l-2 border-border pl-3 text-sm leading-relaxed">{translated?.excerpt ?? story.excerpt}</blockquote>
           {story.incomplete_reasons.length ? (
             <div role="status" className="space-y-1 text-xs text-muted-foreground">
               <p>{t('partialData')}</p>

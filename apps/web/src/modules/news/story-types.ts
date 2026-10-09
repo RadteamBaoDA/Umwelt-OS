@@ -19,6 +19,8 @@ export type Story = {
   id: string;
   title: string;
   excerpt: string;
+  /** Hash identifying the translatable text; empty when the server cannot translate this story. */
+  translation_revision?: string;
   summary_method: 'excerpt';
   generated: false;
   observed_at: string;
