@@ -3,7 +3,20 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Index, Integer, String, UniqueConstraint, func, text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from core.database import Base
@@ -94,4 +107,46 @@ class WorkspaceInvitation(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     accepted_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("owner.id", ondelete="RESTRICT"))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class WorkspaceShare(Base):
+    """Owner-granted read access of one member to one document or brief.
+
+    Bound to the member's membership revision; member removal cascades the row away, so a
+    rejoin never revives an old grant. Share changes never bump membership/config revisions.
+    """
+
+    __tablename__ = "workspace_shares"
+    __table_args__ = (
+        CheckConstraint("resource_type IN ('document', 'brief')", name="ck_workspace_shares_resource_type"),
+        CheckConstraint("revision > 0", name="ck_workspace_shares_positive_revision"),
+        CheckConstraint("resource_revision > 0", name="ck_workspace_shares_positive_resource_revision"),
+        CheckConstraint("membership_revision > 0", name="ck_workspace_shares_positive_membership_revision"),
+        CheckConstraint("member_user_id <> granted_by_user_id", name="ck_workspace_shares_not_self"),
+        ForeignKeyConstraint(
+            ["workspace_id", "member_user_id"], ["workspace_memberships.workspace_id", "workspace_memberships.user_id"],
+            name="fk_workspace_shares_member", ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "granted_by_user_id"], ["workspaces.id", "workspaces.owner_user_id"],
+            name="fk_workspace_shares_matching_owner", ondelete="CASCADE",
+        ),
+        Index(
+            "ix_workspace_shares_member_active", "workspace_id", "member_user_id", "resource_type", "resource_id",
+            postgresql_where=text("revoked_at IS NULL"),
+        ),
+        Index("ix_workspace_shares_resource", "workspace_id", "resource_type", "resource_id"),
+    )
+
+    workspace_id: Mapped[UUID] = mapped_column(primary_key=True)
+    resource_type: Mapped[str] = mapped_column(String(16), primary_key=True)
+    resource_id: Mapped[UUID] = mapped_column(primary_key=True)
+    member_user_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    granted_by_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, default=1, server_default=text("1"), nullable=False)
+    resource_revision: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    membership_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

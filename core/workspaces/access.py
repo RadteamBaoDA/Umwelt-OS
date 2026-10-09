@@ -69,6 +69,28 @@ async def lock_owner_management(
     return workspace, memberships
 
 
+async def lock_share_management(
+    session: AsyncSession, workspace_id: UUID, actor_user_id: int, target_user_id: int, expected_revision: int | None,
+) -> tuple[Workspace, dict[int, WorkspaceMembership]]:
+    """Owner-only share lock; CAS is the target member's membership revision (not the workspace's).
+
+    Order: actor invisible 404, non-owner 403, target absent or the owner 404, missing CAS 428,
+    stale CAS 409. Caller holds auth locks first; share row and resource locks follow.
+    """
+    ids = tuple(sorted({actor_user_id, target_user_id}))
+    workspace, memberships = await lock_workspace_memberships(session, workspace_id, ids)
+    actor = memberships.get(actor_user_id)
+    if actor is None:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    if actor.role != "owner" or workspace.owner_user_id != actor_user_id or actor.owner_user_id != actor_user_id:
+        raise HTTPException(status_code=403, detail="Workspace owner required")
+    target = memberships.get(target_user_id)
+    if target is None or target_user_id == actor_user_id or target.role != "member":
+        raise HTTPException(status_code=404, detail="Member not found")
+    require_revision(expected_revision, target.revision)
+    return workspace, memberships
+
+
 def _scope_actor(scope: Scope) -> int:
     """Accept only a detached typed subject; queued/client dictionaries are never trusted."""
     if isinstance(scope, InternalJobScope):

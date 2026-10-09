@@ -100,3 +100,14 @@ def test_language_index_is_workspace_first_and_drops_legacy_name() -> None:
     assert up.returncode == 0, up.stderr
     assert "ix_documents_workspace_language_created_at_id ON documents (workspace_id, language, created_at, id)" in up.stdout
     assert "DROP INDEX CONCURRENTLY IF EXISTS ix_documents_language_created_at_id" in up.stdout
+
+
+def test_workspace_shares_migration_renders_and_guards_downgrade() -> None:
+    up = _alembic("upgrade", "r15_highlight_rule_delivery:p14_workspace_shares", "--sql")
+    assert up.returncode == 0, up.stderr
+    for fragment in ("CREATE TABLE workspace_shares", "fk_workspace_shares_member", "fk_workspace_shares_matching_owner",
+                     "ck_workspace_shares_not_self", "ix_workspace_shares_member_active", "WHERE revoked_at IS NULL"):
+        assert fragment in up.stdout
+    down = _alembic("downgrade", "p14_workspace_shares:r15_highlight_rule_delivery", "--sql")
+    assert down.returncode == 0, down.stderr
+    assert "DROP TABLE workspace_shares" in down.stdout
