@@ -5,6 +5,7 @@ import ipaddress
 import json
 from collections.abc import Awaitable, Callable
 from urllib.parse import urlsplit, urlunsplit
+from uuid import UUID
 
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import HTTPException
@@ -24,7 +25,11 @@ from core.model_gateway.schemas import (
     ModelMapping,
     PrivacySettings,
 )
-from core.workspaces.public import lock_access_fence, read_access_fence
+from core.workspaces.public import (
+    lock_access_fence,
+    read_access_fence,
+    resolve_workspace_owner_context,
+)
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
 from modules.backup.schemas import ActivityReceipt, AdmissionReceipt
 from modules.settings.models import AISettingsRecord, OwnerPreferencesRecord, legacy_aliases
@@ -558,3 +563,28 @@ async def get_translation_settings(session: AsyncSession, *, scope: Scope, multi
         read_translation_settings,  # lazy: avoids a settings<->translations import cycle
     )
     return await read_translation_settings(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+
+
+async def read_ai_policy_fingerprint(
+    session: AsyncSession, settings: Settings, redis: Redis | None, *, workspace_id: UUID, alias: str,
+) -> str | None:
+    """Nonsecret digest of the workspace owner's AI execution policy for one alias, or None when unusable.
+
+    Members cannot read Settings, so the owner context is resolved internally. Covers endpoint identity,
+    credential fingerprint, alias mapping version, remote/privacy flags and AI settings revision.
+    """
+    owner = await resolve_workspace_owner_context(
+        session, workspace_id, multi_workspace_enabled=settings.multi_workspace_enabled)
+    if owner is None:
+        return None
+    config = await get_ai_execution_config(session, settings, redis, scope=owner)
+    mapping = config.aliases.get(alias)
+    if mapping is None or config.omniroute_base_url is None or config.endpoint_policy_denied or not config.omniroute_credential_configured:
+        return None
+    destination = config.endpoint_destination_id
+    if destination is None or not config.privacy.allow_remote_reasoning:
+        return None
+    return hashlib.sha256(json.dumps(
+        (destination, _fingerprint(config.omniroute_api_key), alias, mapping.model, mapping.version, mapping.destination,
+         config.privacy.model_dump(mode="json"), config.configuration_revision),
+        sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()

@@ -208,6 +208,8 @@ class ModelGateway:
         after_send: Callable[[], Awaitable[None]] | None = None,
     ) -> Any:
         """Check policy and cached capability before sending a bounded, retried gateway request; map transport and provider errors."""
+        if not probe and before_send is None:
+            raise ValueError("before_send_required")  # fail closed: every non-probe call needs a per-call fence
         if not self._policy_matches(policy) or not may_send(policy, alias, mapping, self.destination_id, bool(self.api_key), capability):
             raise PrivacyPolicyDenied("Model request denied by privacy policy")
         if self.base_url is None or mapping is None:

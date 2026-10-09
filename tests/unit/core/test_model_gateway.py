@@ -266,7 +266,7 @@ class TestModelGatewayRequestExecution:
         mapping = ModelMapping(model="gpt-4o", version="1", destination="remote")
 
         with pytest.raises(PrivacyPolicyDenied, match="denied by privacy policy"):
-            await mock_gateway.chat("fast", mapping, policy, [{"role": "user", "content": "hi"}])
+            await mock_gateway.chat("fast", mapping, policy, [{"role": "user", "content": "hi"}], before_send=AsyncMock())
 
     @pytest.mark.asyncio
     async def test_request_unverified_capability_raises(self, mock_gateway) -> None:
@@ -276,7 +276,7 @@ class TestModelGatewayRequestExecution:
         mapping = ModelMapping(model="gpt-4o", version="1", destination="remote")
 
         with pytest.raises(ModelGatewayError, match="capability is not supported"):
-            await mock_gateway.chat("fast", mapping, policy, [{"role": "user", "content": "hi"}])
+            await mock_gateway.chat("fast", mapping, policy, [{"role": "user", "content": "hi"}], before_send=AsyncMock())
 
     @pytest.mark.asyncio
     async def test_request_maps_unsupported_status_error(self, mock_gateway) -> None:
@@ -300,7 +300,7 @@ class TestModelGatewayRequestExecution:
         with patch("core.model_gateway.client.AsyncOpenAI", side_effect=mock_async_openai), \
              patch.object(ModelGateway, "_http_client", return_value=MagicMock()):  # noqa: SIM117  # style-only; nested with kept
             with pytest.raises(CapabilityUnsupported):
-                await mock_gateway.chat("fast", mapping, policy, [{"role": "user", "content": "hi"}])
+                await mock_gateway.chat("fast", mapping, policy, [{"role": "user", "content": "hi"}], before_send=AsyncMock())
 
     @pytest.mark.asyncio
     async def test_discover_models_returns_model_ids(self, mock_gateway) -> None:
@@ -694,9 +694,10 @@ _BIG = "x" * 200_000  # several socket writes' worth of body
 
 async def _call(gw: ModelGateway, op: str, after_send: Any) -> object:
     if op == "chat":
-        return await gw.chat("fast", _MAPPING, _POLICY, [{"role": "user", "content": _BIG}], after_send=after_send)
+        return await gw.chat("fast", _MAPPING, _POLICY, [{"role": "user", "content": _BIG}], after_send=after_send,
+                               before_send=AsyncMock())
     if op == "rerank":
-        return await gw.rerank("reranker", _MAPPING, _POLICY, "q", [_BIG], after_send=after_send)
+        return await gw.rerank("reranker", _MAPPING, _POLICY, "q", [_BIG], after_send=after_send, before_send=AsyncMock())
     return [x async for x in gw.stream("fast", _MAPPING, _POLICY, [{"role": "user", "content": _BIG}],
                                        after_send=after_send)]
 
@@ -865,13 +866,13 @@ class TestBodySentHook:
              patch.object(ModelGateway, "_http_client", return_value=MagicMock()), \
              patch.object(client_module, "body_sent", spy):
             if op == "chat":
-                await gw.chat("fast", _MAPPING, _POLICY, [])
+                await gw.chat("fast", _MAPPING, _POLICY, [], before_send=AsyncMock())
             elif op == "embed":
-                await gw.embed("fast", _MAPPING, _POLICY, ["x"])
+                await gw.embed("fast", _MAPPING, _POLICY, ["x"], before_send=AsyncMock())
             elif op == "structured":
-                await gw.structured("fast", _MAPPING, _POLICY, [], {})
+                await gw.structured("fast", _MAPPING, _POLICY, [], {}, before_send=AsyncMock())
             elif op == "tools":
-                await gw.tools("fast", _MAPPING, _POLICY, [], [])
+                await gw.tools("fast", _MAPPING, _POLICY, [], [], before_send=AsyncMock())
             else:
                 [x async for x in gw.stream("fast", _MAPPING, _POLICY, [])]
         assert seen == [None] and spy.set.call_count == 0 and spy.reset.call_count == 0
