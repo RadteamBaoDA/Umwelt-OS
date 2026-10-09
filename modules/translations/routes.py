@@ -11,6 +11,9 @@ from core.auth.public import authenticated_session_ref
 from core.database import get_session
 from core.workspaces.dependencies import require_workspace_read
 from core.workspaces.schemas import WorkspaceContext
+from modules.translations import (
+    inputs as _inputs,  # noqa: F401  # import registers the resource authorizers
+)
 from modules.translations import public
 from modules.translations.schemas import (
     TranslationBatchAccepted,
@@ -34,7 +37,8 @@ async def create_batch(
     result = await public.submit_batch(
         session, value, scope=member,
         multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
-        auth_sessions=(authenticated_session_ref(request),))
+        auth_sessions=(authenticated_session_ref(request),),
+        app_settings=request.app.state.settings, redis=request.app.state.redis)
     await session.commit()
     return result
 

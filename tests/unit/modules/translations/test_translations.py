@@ -138,7 +138,7 @@ async def test_no_registered_authorizer_is_uniform_404():
 async def test_stale_visible_revision_is_409_after_all_authorized():
     row = SimpleNamespace(enabled=True, target_language="vi", configuration_revision=1)
 
-    async def ok(session, *, scope, resource_id):
+    async def ok(session, *, scope, resource_id, multi_workspace_enabled):
         return public.ResourceAuthorization("server-rev", "c" * 64, "v" * 64)
 
     public.register_resource_authorizer("news_story", ok)

@@ -5,9 +5,11 @@ registers an authorizer (W3 News/Brief projections). Callers commit; no network 
 """
 
 import hashlib
+import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from importlib import import_module
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -34,7 +36,7 @@ from modules.translations.schemas import (
     TranslationPayload,
 )
 
-PROMPT_VERSION = "v1"  # T2 owns prompt text; bumping it invalidates every cache fingerprint.
+PROMPT_VERSION = "v2"  # T2 owns prompt text; bumping it invalidates every cache fingerprint.
 MAX_NONTERMINAL_PER_WORKSPACE = 100
 MAX_BATCHES_PER_MINUTE = 4
 RETRY_AFTER_SECONDS = "60"
@@ -54,18 +56,21 @@ _AUTHORIZERS: dict[str, ResourceAuthorizer] = {}
 
 
 def register_resource_authorizer(resource_type: str, authorizer: ResourceAuthorizer) -> None:
-    """Register ``authorizer(session, *, scope, resource_id)``; it returns None unless shared-readable."""
+    """Register ``authorizer(session, *, scope, resource_id, multi_workspace_enabled)``; None unless shared-readable."""
     _AUTHORIZERS[resource_type] = authorizer
 
 
 async def _authorize(
     session: AsyncSession, scope: WorkspaceContext, resource_type: str, resource_id: UUID,
+    *, multi_workspace_enabled: bool,
 ) -> ResourceAuthorization | None:
     """Deny by default when no owner module registered for the type."""
     authorizer = _AUTHORIZERS.get(resource_type)
     if authorizer is None:
         return None
-    return await authorizer(session, scope=scope, resource_id=resource_id)
+    return await authorizer(
+        session, scope=scope, resource_id=resource_id, multi_workspace_enabled=multi_workspace_enabled,
+    )
 
 
 def _member(scope: Scope) -> WorkspaceContext:
@@ -135,9 +140,19 @@ async def save_translation_settings(
     return _read(row)
 
 
-def _config_hash(settings: TranslationSettingsRead) -> str:
-    """Settings fingerprint; T2 extends privacy/model identity through a PROMPT_VERSION bump."""
-    return hashlib.sha256(f"{settings.configuration_revision}|{settings.target_language}".encode()).hexdigest()
+def translation_fingerprint(parts: dict[str, str | int]) -> str:
+    """Stable sha256 over every cache-relevant part (key order independent)."""
+    return hashlib.sha256(json.dumps(parts, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+async def _policy_fingerprint(
+    session: AsyncSession, app_settings: object | None, redis: object | None, workspace_id: UUID,
+) -> str:
+    """AI policy identity (W4-ai); empty until that hook exists or settings are not supplied."""
+    reader = getattr(import_module("modules.settings.public"), "read_ai_policy_fingerprint", None)
+    if reader is None or app_settings is None:
+        return ""
+    return (await reader(session, app_settings, redis, workspace_id=workspace_id, alias="reasoning-small")) or "none"
 
 
 def _too_many(detail: str) -> HTTPException:
@@ -148,6 +163,7 @@ def _too_many(detail: str) -> HTTPException:
 async def submit_batch(
     session: AsyncSession, request: TranslationBatchRequest,
     *, scope: Scope, multi_workspace_enabled: bool, auth_sessions: tuple[AccountSessionRef, ...] = (),
+    app_settings: object | None = None, redis: object | None = None,
 ) -> TranslationBatchAccepted:
     """Authorize every item first (404 uniformly, then 409 stale), dedup, bound, persist pending rows."""
     actor = _member(scope)
@@ -164,21 +180,28 @@ async def submit_batch(
             for i in request.items])
     verdicts: list[ResourceAuthorization] = []
     for item in request.items:
-        verdict = await _authorize(session, actor, item.resource_type, item.resource_id)
+        verdict = await _authorize(
+            session, actor, item.resource_type, item.resource_id, multi_workspace_enabled=multi_workspace_enabled,
+        )
         if verdict is None:
             raise HTTPException(status_code=404, detail="Resource not found")
         verdicts.append(verdict)
     if any(v.resource_revision != i.resource_revision for v, i in zip(verdicts, request.items)):
         raise HTTPException(status_code=409, detail="Resource revision changed")
     now = datetime.now(UTC)
-    config = _config_hash(settings)
+    policy_fp = await _policy_fingerprint(session, app_settings, redis, actor.workspace_id)
+    configs = [translation_fingerprint({
+        "workspace": str(actor.workspace_id), "actor": actor.user_id, "revision": v.resource_revision,
+        "content": v.content_hash, "visibility": v.visibility_hash, "target": settings.target_language,
+        "settings": settings.configuration_revision, "policy": policy_fp, "prompt": PROMPT_VERSION,
+    }) for v in verdicts]
     existing = {
-        (t.resource_type, t.resource_id, t.resource_revision, t.content_hash, t.visibility_hash): t
+        (t.resource_type, t.resource_id, t.resource_revision, t.content_hash, t.visibility_hash, t.config_hash): t
         for t in (await session.scalars(select(ContentTranslation).where(
             ContentTranslation.workspace_id == actor.workspace_id,
             ContentTranslation.actor_user_id == actor.user_id,
             ContentTranslation.target_language == settings.target_language,
-            ContentTranslation.config_hash == config,
+            ContentTranslation.config_hash.in_(configs),
             ContentTranslation.prompt_version == PROMPT_VERSION,
             ContentTranslation.resource_id.in_([i.resource_id for i in request.items]),
         ).with_for_update())).all()
@@ -186,9 +209,9 @@ async def submit_batch(
     rows: list[ContentTranslation] = []
     fresh: list[ContentTranslation] = []
     retry: list[ContentTranslation] = []
-    for item, verdict in zip(request.items, verdicts):
+    for item, verdict, config in zip(request.items, verdicts, configs):
         found = existing.get((item.resource_type, item.resource_id, verdict.resource_revision,
-                              verdict.content_hash, verdict.visibility_hash))
+                              verdict.content_hash, verdict.visibility_hash, config))
         if found is None:
             found = ContentTranslation(
                 workspace_id=actor.workspace_id, actor_user_id=actor.user_id, resource_type=item.resource_type,
@@ -263,7 +286,10 @@ async def read_batch(
     for item, tr in pairs:
         status, code, payload = "blocked", gate, None
         if code is None:
-            verdict = await _authorize(session, actor, item.resource_type, item.resource_id)
+            verdict = await _authorize(
+                session, actor, item.resource_type, item.resource_id,
+                multi_workspace_enabled=multi_workspace_enabled,
+            )
             if verdict is None:
                 code = "resource_unavailable"
             elif tr is None:
