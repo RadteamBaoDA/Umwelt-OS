@@ -1,13 +1,16 @@
 'use client';
 
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { useEffect, useRef, useState } from 'react';
+import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
-import type { ConnectorCatalogEntry, ConnectorConfig, Source } from './api';
+import { acknowledgeProviderTerms, connectorKeys, getProviderTerms, type ConnectorCatalogEntry, type ConnectorConfig, type DeclaredUse, type Source } from './api';
 import { isStale, periodKind } from './freshness';
 
 export type NativeProvider = 'youtube' | 'arxiv' | 'huggingface' | 'github' | 'github_releases' | 'telegram' | 'alpha_vantage' | 'open_meteo';
@@ -95,7 +98,11 @@ export function ProviderScope({
 }
 
 /** Setup guide for a catalog provider. Shows only catalog facts: no invented quotas, terms or sample output. */
-export function ProviderGuide({ entry, source, now }: { entry: ConnectorCatalogEntry; source?: Source | null; now?: Date }) {
+export function ProviderGuide({ entry, source, now, onTest, testBusy, testPassed }: {
+  entry: ConnectorCatalogEntry; source?: Source | null; now?: Date;
+  /** Runs the existing owner validate action; it never calls the provider. Omitted until the source exists. */
+  onTest?: () => void; testBusy?: boolean; testPassed?: boolean;
+}) {
   const t = useTranslations('sources');
   const display = useDisplayPreferences();
   if (!entry.terms_url && !entry.attribution) return null;
@@ -120,5 +127,59 @@ export function ProviderGuide({ entry, source, now }: { entry: ConnectorCatalogE
       {source?.collection_error_code && row(t('guideLastError'), <span role="alert" className="text-danger">{source.collection_error_code}{source.last_success_at ? ` · ${t('guideShowingLastGood')}` : ''}</span>)}
       {row(t('guideRecovery'), t('guideRecoveryBody'))}
     </dl>
+    {entry.example_config && <div className="grid gap-1"><strong>{t('guideExampleConfig')}</strong>
+      <pre className="overflow-x-auto rounded-md border border-border bg-bg p-2 text-xs" data-testid="guide-example-config">{JSON.stringify(entry.example_config, null, 2)}</pre></div>}
+    {entry.sample_output && <div className="grid gap-1"><strong>{t('guideSampleOutput')}</strong>
+      <pre className="overflow-x-auto rounded-md border border-border bg-bg p-2 text-xs" data-testid="guide-sample-output">{JSON.stringify(entry.sample_output, null, 2)}</pre></div>}
+    {(entry.example_config || entry.sample_output) && <small className="text-muted-foreground">{t('guideExampleNote')}</small>}
+    <div className="flex flex-wrap items-center gap-2">
+      <Button type="button" className="secondary" disabled={!onTest || testBusy} onClick={onTest}>{t('guideTest')}</Button>
+      <small className="text-muted-foreground">{onTest ? t('guideTestNote') : t('guideTestNeedsSource')}</small>
+      {testPassed && <small role="status">{t('guideTestPassed')}</small>}
+    </div>
+  </section>;
+}
+
+const TERMS_DECISION: Record<string, 'termsEligibleYes' | 'termsNotAcknowledged' | 'termsUseIncompatible' | 'termsOperatorReview'> = {
+  ok: 'termsEligibleYes', terms_not_acknowledged: 'termsNotAcknowledged', use_incompatible: 'termsUseIncompatible', operator_review_required: 'termsOperatorReview',
+};
+
+/** Owner declaration of deployment use and acknowledgement of the current catalog terms version. Activation stays blocked until the server reports the terms as accepted. */
+export function ProviderTerms({ sourceId, entry, csrfToken, disabled }: { sourceId: string; entry: ConnectorCatalogEntry; csrfToken: string; disabled?: boolean }) {
+  const t = useTranslations('sources');
+  const queryClient = useQueryClient();
+  const [use, setUse] = useState<DeclaredUse | ''>('');
+  const [read, setRead] = useState(false);
+  const termsQuery = useQuery({ queryKey: connectorKeys.terms(sourceId), queryFn: ({ signal }) => getProviderTerms(sourceId, signal) });
+  const version = entry.terms_checked_on ?? '';
+  const save = useMutation({
+    mutationFn: () => acknowledgeProviderTerms(sourceId, declared as DeclaredUse, version, csrfToken),
+    onSuccess: (result) => {
+      queryClient.setQueryData(connectorKeys.terms(sourceId), result);
+      void queryClient.invalidateQueries({ queryKey: connectorKeys.activation(sourceId) });
+    },
+  });
+  const current = termsQuery.data ?? null;
+  const decision = current ? TERMS_DECISION[current.decision] ?? 'termsNotAcknowledged' : 'termsNotAcknowledged';
+  const declared = use || (current?.declared_use as DeclaredUse | undefined) || '';
+  return <section aria-label={t('termsTitle')} className="grid gap-2 rounded-lg border border-border p-3 text-sm">
+    <h4 className="font-semibold">{t('termsTitle')}</h4>
+    {!current?.eligible && <p role="status" className="text-danger">{t('termsRequired')}</p>}
+    {termsQuery.isError ? <p role="alert" className="text-danger">{t('termsLoadFailed')}</p> : <p>{t(decision)}</p>}
+    <p className="text-muted-foreground">{t('termsVersion')}: {version || t('guideNone')} · <a className="text-accent underline" href={entry.terms_url ?? undefined} target="_blank" rel="noopener noreferrer">{t('providerTerms')}</a></p>
+    <div className="field"><Label htmlFor="terms-declared-use">{t('termsDeclaredUse')}</Label>
+      <Select value={declared} onValueChange={(value) => setUse(value as DeclaredUse)} disabled={disabled}>
+        <SelectTrigger id="terms-declared-use"><SelectValue /></SelectTrigger>
+        <SelectContent>
+          <SelectItem value="personal">{t('termsUsePersonal')}</SelectItem><SelectItem value="noncommercial">{t('termsUseNoncommercial')}</SelectItem>
+          <SelectItem value="commercial">{t('termsUseCommercial')}</SelectItem><SelectItem value="unknown">{t('termsUseUnknown')}</SelectItem>
+        </SelectContent>
+      </Select></div>
+    <div className="field field-inline"><Checkbox id="terms-read" checked={read} disabled={disabled} onCheckedChange={(checked) => setRead(checked === true)} /><Label htmlFor="terms-read">{t('termsAcknowledge')}</Label></div>
+    <div className="flex items-center gap-2">
+      <Button type="button" disabled={disabled || save.isPending || !declared || !read || !version} onClick={() => save.mutate()}>{save.isPending ? t('termsSaving') : t('termsSave')}</Button>
+      {save.isSuccess && <small role="status">{t('termsSaved')}</small>}
+      {save.isError && <small role="alert" className="text-danger">{t('actionFailed')}</small>}
+    </div>
   </section>;
 }

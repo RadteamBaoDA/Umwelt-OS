@@ -67,6 +67,8 @@ export function SyncHistory({ source, intervalMinutes }: { source: Source; inter
     <p className="muted">{t('lastSuccess')}: {source.last_success_at ? formatDate(source.last_success_at, display.locale, display.timezone) : t('never')}</p>
     {source.collected_at && <p className="muted">{t('collectedAt')}: {formatDate(source.collected_at, display.locale, display.timezone)}</p>}
     {source.indexed_at && <p className="muted">{t('indexedAt')}: {formatDate(source.indexed_at, display.locale, display.timezone)}</p>}
+    {source.next_due_at && <p className="muted">{t('nextDueAt')}: {formatDate(source.next_due_at, display.locale, display.timezone)}</p>}
+    {source.retry_at && <p className="muted">{t('retryAt')}: {formatDate(source.retry_at, display.locale, display.timezone)}</p>}
     {isStale(source.last_success_at, intervalMinutes) && <p className="muted" role="status">{t('stale')}</p>}
     {source.collection_error_code && <p className="error" role="alert">{t('collectionError')}: {source.collection_error_code}</p>}
     {current && renderRun(current, true)}

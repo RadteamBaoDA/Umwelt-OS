@@ -1,8 +1,12 @@
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
-from modules.connectors.backends import GENERIC_CATALOG_SOURCE_TYPES, is_native_provider
+from modules.connectors.backends import (
+    FIXED_SCOPE_PROVIDERS,
+    GENERIC_CATALOG_SOURCE_TYPES,
+    is_native_provider,
+)
 from modules.connectors.provider_specs import (
     FREE_PROVIDER_SPECS,
     FreeProviderSpec,
@@ -53,6 +57,9 @@ class CatalogEntry(BaseModel):
     setup_guide: str | None = None
     # Optional sidecar the provider needs; None means the native base stack is enough.
     requires_service: Literal["n8n", "browser"] | None = None
+    # Static, fixture-shaped illustrations for the setup guide. Never live data and never a quota or license claim.
+    example_config: dict[str, Any] | None = None
+    sample_output: dict[str, Any] | None = None
 
     @computed_field(return_type=bool)  # type: ignore[prop-decorator]  # pydantic computed_field over property
     @property
@@ -267,9 +274,32 @@ _ENTRIES = (
 )
 
 
+_NEWS = {"title": "Example headline", "url": "https://example.org/article", "publisher": "Example Publisher",
+         "published_at": "2026-01-01T08:00:00Z"}
+SAMPLE_OUTPUTS: dict[str, dict[str, Any]] = {
+    "bbc_world": _NEWS, "vnexpress_business": _NEWS, "gdelt_economy": _NEWS,
+    "hn_top": {"title": "Example story", "url": "https://example.org/story", "by": "example_user", "score": 123,
+               "published_at": "2026-01-01T08:00:00Z"},
+    "world_bank": {"indicator": "NY.GDP.MKTP.CD", "country": "VN", "period": "2024", "value": 1.0e11},
+    "frankfurter": {"base": "EUR", "quote": "USD", "rate": 1.0, "reference_date": "2026-01-01"},
+    "ecb": {"base": "EUR", "quote": "USD", "rate": 1.0, "reference_date": "2026-01-01"},
+    "binance": {"symbol": "BTCUSDT", "price": "100000.00", "observed_at": "2026-01-01T08:00:00Z"},
+    "alternative_me": {"index": "fear_and_greed", "value": 50, "classification": "Neutral", "reference_date": "2026-01-01"},
+    "usgs": {"magnitude": 4.5, "place": "Example region", "event_time": "2026-01-01T08:00:00Z"},
+    "coinpaprika": {"coin_id": "btc-bitcoin", "price_usd": 100000.0, "observed_at": "2026-01-01T08:00:00Z"},
+    "coingecko": {"coin_id": "bitcoin", "price_usd": 100000.0, "observed_at": "2026-01-01T08:00:00Z"},
+}
+
+
 def _with_spec(entry: CatalogEntry, spec: FreeProviderSpec) -> CatalogEntry:
     """Overlay free-provider facts on an entry without touching its availability or scope fields."""
+    fixed = spec.id in FIXED_SCOPE_PROVIDERS
     return entry.model_copy(update={
+        "example_config": {
+            "timeout_seconds": 30, "timezone": "Asia/Ho_Chi_Minh",
+            "schedule_interval_minutes": spec.default_interval_minutes, "history_mode": "returned_snapshot",
+        } if fixed else None,
+        "sample_output": SAMPLE_OUTPUTS.get(spec.id) if fixed else None,
         "eligibility": spec.eligibility, "terms_url": spec.terms_url, "terms_checked_on": spec.checked_on,
         "attribution": spec.attribution, "hosts": spec.hosts, "endpoints": spec.endpoints,
         "execution": spec.execution, "default_interval_minutes": spec.default_interval_minutes,
