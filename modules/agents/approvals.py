@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.auth.public import revalidate_owner_session
+from core.auth.public import revalidate_account_session
 from core.realtime import commit_with_replay
 from core.tools.schemas import ToolDefinition, ToolExecutionPrincipal, compute_argument_hash
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope
@@ -60,7 +60,7 @@ async def create_pending_approval(
             session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
             lock=True, expected=original_fence,
         )
-        if not await revalidate_owner_session(session, auth_session_hash, owner_id):
+        if not await revalidate_account_session(session, auth_session_hash, owner_id, multi_workspace_enabled=multi_workspace_enabled):
             raise HTTPException(status_code=401, detail="Owner session expired")
         from modules.chat.public import has_live_agent_run_link
         if not await has_live_agent_run_link(session, run_id, owner_id, auth_session_hash):
@@ -76,7 +76,7 @@ async def create_pending_approval(
             AgentApproval.run_id == run_id, AgentApproval.ordinal == ordinal,
             AgentApproval.workspace_id == scope.workspace_id,
         ).with_for_update())
-        if (not await revalidate_owner_session(session, auth_session_hash, owner_id)
+        if (not await revalidate_account_session(session, auth_session_hash, owner_id, multi_workspace_enabled=multi_workspace_enabled)
                 or not await has_live_agent_run_link(session, run_id, owner_id, auth_session_hash)):
             raise HTTPException(status_code=409, detail="Owner session or Chat link is no longer live")
         if row is None:
@@ -150,7 +150,7 @@ async def verify_approved_action(
                 or row.argument_hash != compute_argument_hash(arguments) or row.arguments != arguments
                 or row.destination_id != destination_id or row.destination_revision != destination_revision
                 or effect.payload_hash != row.argument_hash or effect.payload != row.arguments
-                or not await revalidate_owner_session(session, auth_session_hash, owner_id)):
+                or not await revalidate_account_session(session, auth_session_hash, owner_id, multi_workspace_enabled=multi_workspace_enabled)):
             return False
         return True
 
@@ -197,7 +197,7 @@ async def reserve_effect_before_send(
         except HTTPException:
             return False
         # Do the latest auth query before row locks; a second send fence occurs after DNS resolution.
-        if not await revalidate_owner_session(session, auth_session_hash, owner_id):
+        if not await revalidate_account_session(session, auth_session_hash, owner_id, multi_workspace_enabled=multi_workspace_enabled):
             return False
         run = await session.scalar(select(AgentRun).where(
             AgentRun.id == run_id, AgentRun.workspace_id == scope.workspace_id,
@@ -223,7 +223,7 @@ async def reserve_effect_before_send(
                 or effect.payload_hash != approval.argument_hash or effect.payload != approval.arguments):
             return False
         from modules.chat.public import has_live_agent_run_link
-        if (not await revalidate_owner_session(session, auth_session_hash, owner_id)
+        if (not await revalidate_account_session(session, auth_session_hash, owner_id, multi_workspace_enabled=multi_workspace_enabled)
                 or not await has_live_agent_run_link(session, run_id, owner_id, auth_session_hash)):
             return False
         effect.state = "in_flight"
@@ -338,7 +338,7 @@ async def decision(
     """
     fence = await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
     owner_id = actor(scope)
-    if not await revalidate_owner_session(session, auth_session_hash, owner_id):
+    if not await revalidate_account_session(session, auth_session_hash, owner_id, multi_workspace_enabled=multi_workspace_enabled):
         raise HTTPException(status_code=401, detail="Owner session expired")
     candidate = await session.scalar(select(AgentApproval).where(
         AgentApproval.id == approval_id, AgentApproval.workspace_id == scope.workspace_id,
@@ -398,7 +398,7 @@ async def decision(
     if (run.owner_id != owner_id or run.auth_session_hash != auth_session_hash
             or row.run_id != run.id or row.owner_id != owner_id):
         raise HTTPException(status_code=409, detail="Approval authorization changed")
-    if (not await revalidate_owner_session(session, auth_session_hash, owner_id)
+    if (not await revalidate_account_session(session, auth_session_hash, owner_id, multi_workspace_enabled=multi_workspace_enabled)
             or not await has_live_agent_run_link(session, run.id, owner_id, auth_session_hash)):
         raise HTTPException(status_code=409, detail="Owner session or Chat link is no longer live")
     if row.expires_at <= datetime.now(UTC):
@@ -485,7 +485,7 @@ async def _cancel_stale_action(
         AgentApproval.id == candidate.id, AgentApproval.workspace_id == scope.workspace_id,
     ).with_for_update())
     from modules.chat.public import has_live_agent_run_link
-    if (not await revalidate_owner_session(session, candidate.auth_session_hash, candidate.owner_id)
+    if (not await revalidate_account_session(session, candidate.auth_session_hash, candidate.owner_id, multi_workspace_enabled=multi_workspace_enabled)
             or not await has_live_agent_run_link(
                 session, candidate.run_id, candidate.owner_id, candidate.auth_session_hash,
             )):

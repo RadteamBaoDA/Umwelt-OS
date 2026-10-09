@@ -32,7 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
-from core.auth.dependencies import require_owner, require_owner_write
+from core.auth.dependencies import require_account, require_account_write
 from core.auth.models import AuthSession
 from core.database import Base, get_session
 from core.realtime import commit_with_replay
@@ -728,9 +728,18 @@ from modules.settings.public import module_dependency
 
 router = APIRouter(prefix="/api/v1/topics", tags=["news"], dependencies=[Depends(module_dependency("news"))])
 Session = Annotated[AsyncSession, Depends(get_session)]
-OwnerRead = Annotated[AuthSession, Depends(require_owner)]
-OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]
-WorkspaceRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
+async def _owner_workspace_read(
+    scope: Annotated[WorkspaceContext, Depends(require_workspace_read)],
+) -> WorkspaceContext:
+    """Topic profiles are workspace-owner only; members get 403."""
+    if scope.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
+    return scope
+
+
+OwnerRead = Annotated[AuthSession, Depends(require_account)]
+OwnerWrite = Annotated[AuthSession, Depends(require_account_write)]
+WorkspaceRead = Annotated[WorkspaceContext, Depends(_owner_workspace_read)]
 WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 
 

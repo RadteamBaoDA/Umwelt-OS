@@ -1397,12 +1397,12 @@ async def list_conversation_approvals(
     *, scope: Scope, multi_workspace_enabled: bool,
 ) -> list[ApprovalRead]:
     """List bounded actions only while the owner session, Chat link and current output fences remain valid."""
-    from core.auth.public import revalidate_owner_session
+    from core.auth.public import revalidate_account_session
     from modules.chat.public import list_agent_run_ids_for_owner
 
     await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     owner_id = actor(scope)
-    if not await revalidate_owner_session(session, auth_session_hash, owner_id):
+    if not await revalidate_account_session(session, auth_session_hash, owner_id, multi_workspace_enabled=multi_workspace_enabled):
         return []
 
     run_ids = await list_agent_run_ids_for_owner(session, conversation_id, owner_id, auth_session_hash)
@@ -1430,7 +1430,7 @@ async def list_conversation_approvals(
             )
         )
         from modules.chat.public import has_live_agent_run_link
-        session_current = await revalidate_owner_session(session, auth_session_hash, owner_id)
+        session_current = await revalidate_account_session(session, auth_session_hash, owner_id, multi_workspace_enabled=multi_workspace_enabled)
         link_current = session_current and await has_live_agent_run_link(
             session, item.run_id, owner_id, auth_session_hash,
         )
@@ -1466,12 +1466,12 @@ async def get_approval(
     *, scope: Scope, multi_workspace_enabled: bool,
 ) -> ApprovalRead:
     """Return exact bounded action detail only while its original Chat link and owner session are live."""
-    from core.auth.public import revalidate_owner_session
+    from core.auth.public import revalidate_account_session
     from modules.chat.public import live_agent_conversation_id
 
     await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     owner_id = actor(scope)
-    if not await revalidate_owner_session(session, auth_session_hash, owner_id):
+    if not await revalidate_account_session(session, auth_session_hash, owner_id, multi_workspace_enabled=multi_workspace_enabled):
         raise HTTPException(status_code=404, detail="Approval not found")
     item = await session.scalar(select(AgentApproval).where(
         AgentApproval.id == approval_id, AgentApproval.workspace_id == scope.workspace_id,
@@ -1489,7 +1489,7 @@ async def get_approval(
     fences_current = not run_revoked and await _approval_fences_current(
         session_factory, item, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
-    if (not await revalidate_owner_session(session, auth_session_hash, owner_id)
+    if (not await revalidate_account_session(session, auth_session_hash, owner_id, multi_workspace_enabled=multi_workspace_enabled)
             or not await live_agent_conversation_id(
                 session, item.run_id, owner_id, auth_session_hash,
             )):

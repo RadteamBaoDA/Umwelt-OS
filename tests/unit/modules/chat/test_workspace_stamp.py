@@ -97,7 +97,7 @@ async def test_mutate_message_run_stamps_workspace(monkeypatch):
 async def test_link_agent_run_stamps_workspace(monkeypatch):
     conv = _conv()
     session = _session(AsyncMock(return_value=conv))
-    monkeypatch.setattr("core.auth.public.revalidate_owner_session", AsyncMock(return_value=True))
+    monkeypatch.setattr("core.auth.public.revalidate_account_session", AsyncMock(return_value=True))
     monkeypatch.setattr(chat_public, "is_history_storage_enabled", AsyncMock(return_value=True))
     await chat_public.link_agent_run(session, conv.id, uuid4(), 1, "h" * 64)
     (link,) = _added(session, AgentActivityLink)

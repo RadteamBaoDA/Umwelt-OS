@@ -15,7 +15,7 @@ from redis.asyncio import Redis
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from core.auth.public import revalidate_owner_session
+from core.auth.public import revalidate_account_session
 from core.config import Settings
 from core.model_gateway.client import ModelGateway
 from core.model_gateway.policy import may_send
@@ -337,7 +337,9 @@ class HarnessContext:
                 profile_snapshot=dict(row.profile_snapshot) if row.profile_snapshot else None,
             )
         async with self.session_factory() as session:
-            if not await revalidate_owner_session(session, detached.auth_session_hash, detached.owner_id):
+            if not await revalidate_account_session(
+                session, detached.auth_session_hash, detached.owner_id, multi_workspace_enabled=self.multi_workspace_enabled,
+            ):
                 raise RunCancelled("Owner session is no longer valid")
         await self.assert_lease()
         return detached
@@ -1433,7 +1435,9 @@ def build_workflow(context: HarnessContext, checkpointer: Any) -> Any:
                     AgentToolCall.run_id == context.run_id, AgentToolCall.ordinal == ordinal,
                 ).with_for_update()
             )
-            if not await revalidate_owner_session(session, run.auth_session_hash, run.owner_id):
+            if not await revalidate_account_session(
+                session, run.auth_session_hash, run.owner_id, multi_workspace_enabled=context.multi_workspace_enabled,
+            ):
                 raise RunCancelled("Owner session expired before tool publication")
             from modules.chat.public import has_live_agent_run_link
 

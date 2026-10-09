@@ -267,3 +267,17 @@ async def authorize_internal_job(
 def can_read_resource(scope: WorkspaceContext, resource_workspace_id: UUID, shared_to_actor: bool) -> bool:
     """Pure predicate, no DB access: same workspace and (owner or an active share for the actor)."""
     return scope.workspace_id == resource_workspace_id and (scope.role == "owner" or shared_to_actor)
+
+
+async def assert_resource_access(
+    session: AsyncSession, scope: WorkspaceContext, kind: str, resource_id: UUID, expected_revision: int,
+) -> None:
+    """Owner passes; a member needs a live grant at ``expected_revision`` (FOR SHARE locked), else 404."""
+    if scope.role == "owner":
+        return
+    from core.workspaces.public import lock_resource_grants, read_resource_grants
+
+    grants = await read_resource_grants(session, scope=scope, kind=kind, resource_ids=(resource_id,))  # type: ignore[arg-type]
+    if not grants or grants[0].resource_revision != expected_revision:
+        raise HTTPException(status_code=404, detail="Resource not found")
+    await lock_resource_grants(session, scope=scope, grants=grants)

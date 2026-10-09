@@ -516,7 +516,7 @@ async def _owner_visible_projection(
 
 async def list_resource_shares(
     session: AsyncSession, workspace_id: UUID, actor_user_id: int, *, resource_type: ShareKind,
-    resource_id: UUID, after: int | None = None, limit: int = 100,
+    resource_id: UUID, after: int | None = None, limit: int = 100, multi_workspace_enabled: bool = False,
 ) -> ShareList:
     """Owner-only keyset page (member_user_id) of share rows for one visible resource."""
     scope = await resolve_workspace_context(session, actor_user_id, workspace_id)
@@ -532,7 +532,9 @@ async def list_resource_shares(
     else:
         from modules.dashboard.public import read_brief_access_projection
 
-        projection = await read_brief_access_projection(session, resource_id, scope=scope)
+        projection = await read_brief_access_projection(
+            session, resource_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
     if projection is None or not projection.available:
         raise HTTPException(status_code=404, detail="Resource not found")
     query = select(WorkspaceShare).where(
