@@ -9,6 +9,8 @@ export type ShellMessageKey =
   | 'documents'
   | 'entities'
   | 'search'
+  | 'news'
+  | 'translationSettings'
   | 'systemStatus'
   | 'sourcesTab'
   | 'mcpTab'
@@ -52,6 +54,7 @@ export const settingsGroups: NavigationDestination[] = [
   { id: 'ai-router', href: '/settings/ai', messageKey: 'aiRouter' },
   { id: 'dashboard-gadgets', href: '/settings/dashboard', messageKey: 'dashboardGadgets' },
   { id: 'workspace-members', href: '/settings/workspace', messageKey: 'workspaceMembers' },
+  { id: 'translation-settings', href: '/settings/translation', messageKey: 'translationSettings', members: true },
 ];
 
 /** Sub-tabs of the Data sources group (rendered by the shell above the page); exact tabs match only their own path. */
@@ -65,6 +68,7 @@ export const sourcesSubNavigation: (NavigationDestination & { exact?: boolean })
 export const detailDestinations: NavigationDestination[] = [
   { id: 'documents', href: '/knowledge/documents', messageKey: 'documents', members: true },
   { id: 'entities', href: '/knowledge/entities', messageKey: 'entities' },
+  { id: 'news', href: '/news', messageKey: 'news', members: true },
   { id: 'search', href: '/search', messageKey: 'search', members: true },
   { id: 'system', href: '/settings/system', messageKey: 'systemStatus' },
 ];
