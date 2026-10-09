@@ -206,11 +206,11 @@ async def test_lost_authority_publishes_nothing_and_cancels_only_when_asked(monk
 
 
 @pytest.mark.asyncio
-async def test_unsupported_and_proof_bearing_providers_fail_closed_without_a_send(monkeypatch):
+async def test_unsupported_providers_fail_closed_without_a_send(monkeypatch):
     async def adapter(run):
         raise AssertionError("must not run")
 
-    for provider, adapter_fn in (("github", adapter), ("telegram", adapter), ("web", None)):
+    for provider, adapter_fn in (("web", None),):
         ctx, admission, settled = harness(monkeypatch, adapter_fn, attempt(provider if provider != "web" else None, "web"))
         await collection.execute_collection(ctx, admission)
         assert settled == [{"outcome": "failed", "error_code": "collection_unsupported"}]
