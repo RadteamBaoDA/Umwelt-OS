@@ -59,6 +59,7 @@ from modules.knowledge.entities.worker import (
     recover_entity_extraction_work,
 )
 from modules.knowledge.temporal.worker import process_graph_operation, recover_graph_work
+from modules.news.backfill_attribution import backfill_news_attribution
 from modules.news.worker import process_news_document_ready, recover_news_work
 from modules.observability.maintenance import run_retention_maintenance
 from modules.search.indexing import index_pending_chunks
@@ -286,6 +287,7 @@ class WorkerSettings:
         cron(recover_timeline_extraction_work, minute=set(range(0, 60, 1))),
         cron(recover_graph_work, second=set(range(0, 60, 5)), run_at_startup=True),
         cron(recover_news_work, minute=set(range(0, 60, 1)), run_at_startup=True),
+        cron(backfill_news_attribution, minute={11, 41}, run_at_startup=True),
         cron(run_scheduled_brief, minute=set(range(0, 60, 1)), run_at_startup=True),
         cron(run_scheduled_highlights, minute=set(range(0, 60, 1)), run_at_startup=True),
         cron(purge_expired_chat_runs, minute=set(range(0, 60, 15))),

@@ -394,6 +394,8 @@ async def read_agent_activity(
 ) -> chat_public.AgentActivityRead:
     """Read bounded agent activity through its owner-checked chat conversation link."""
     scope = await owner_default_scope(session, owner.owner_id)
+    if scope.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
     conversation = await session.scalar(select(Conversation).where(
         Conversation.id == conversation_id, Conversation.workspace_id == scope.workspace_id,
     ))
@@ -401,7 +403,7 @@ async def read_agent_activity(
         raise HTTPException(status_code=404, detail="Conversation not found")
     _reject_expired_conversation(conversation)
     return await chat_public.get_agent_activity(
-        session, conversation_id, run_id, owner.owner_id, owner.token_hash,
+        session, conversation_id, run_id, owner.owner_id, owner.token_hash, scope=scope,
     )
 
 

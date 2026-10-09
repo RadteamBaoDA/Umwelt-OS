@@ -1405,7 +1405,9 @@ async def list_conversation_approvals(
     if not await revalidate_account_session(session, auth_session_hash, owner_id, multi_workspace_enabled=multi_workspace_enabled):
         return []
 
-    run_ids = await list_agent_run_ids_for_owner(session, conversation_id, owner_id, auth_session_hash)
+    run_ids = await list_agent_run_ids_for_owner(
+        session, conversation_id, owner_id, auth_session_hash, scope=scope,
+    )
     if not run_ids:
         return []
     rows = list((await session.scalars(select(AgentApproval).where(
