@@ -8,9 +8,14 @@ from uuid import uuid4
 from sqlalchemy.dialects import postgresql
 
 from core.pagination import encode_cursor
+from core.workspaces.schemas import WorkspaceContext
 from modules.memory import public
 from modules.memory.public import MemoryService
 from modules.memory.schemas import MemoryPage
+
+WS = uuid4()
+OWNER = WorkspaceContext(user_id=7, workspace_id=WS, role="owner", membership_revision=2)
+CTX = {"scope": OWNER, "multi_workspace_enabled": False}
 
 
 def _rows(kinds: list[str]) -> list[SimpleNamespace]:
@@ -30,16 +35,17 @@ async def _page(rows: list[SimpleNamespace], hidden: set[int] | None = None, **k
         batch, pending[:] = pending[:public._COUNT_BATCH], pending[public._COUNT_BATCH:]
         return MagicMock(all=lambda: batch)
 
-    async def verified(_session: object, row: SimpleNamespace) -> object | None:
+    async def verified(_session: object, row: SimpleNamespace, **_kw: object) -> object | None:
         return None if row.id in hidden_ids else SimpleNamespace()
 
     session = MagicMock()
     session.scalars = AsyncMock(side_effect=scalars)
     with (
+        patch.object(public, "_admit", AsyncMock()),
         patch.object(public, "lock_export_privacy", AsyncMock()),
         patch.object(public, "_verified_memory_read", verified),
     ):
-        return await MemoryService(session).get_memories(**kwargs)  # type: ignore[arg-type]
+        return await MemoryService(session).get_memories(**CTX, **kwargs)  # type: ignore[arg-type]
 
 
 async def test_hidden_rows_are_not_counted() -> None:
@@ -91,10 +97,11 @@ async def test_cursor_pages_omit_counts() -> None:
 def test_counts_share_the_list_visibility_filters() -> None:
     """Deleted/forgotten rows are excluded by status; the search filter is shared with the list."""
     sql = " ".join(
-        str(c.compile(dialect=postgresql.dialect())) for c in public._list_filters("active", " tea ")
+        str(c.compile(dialect=postgresql.dialect())) for c in public._list_filters("active", " tea ", scope=OWNER)
     )
     assert "memories.status =" in sql and "ILIKE" in sql.upper()
-    assert len(public._list_filters("forgotten", None)) == 1
+    assert len(public._list_filters("forgotten", None, scope=OWNER)) == 2  # workspace + status
+    assert "memories.workspace_id =" in sql
 
 
 async def test_search_skips_counts_and_scan_under_privacy_lock() -> None:
@@ -102,11 +109,33 @@ async def test_search_skips_counts_and_scan_under_privacy_lock() -> None:
     session = MagicMock()
     session.scalars = AsyncMock(return_value=MagicMock(all=list))
     with (
+        patch.object(public, "_admit", AsyncMock()),
         patch.object(public, "lock_export_privacy", AsyncMock()),
         patch.object(public, "_verified_memory_read", AsyncMock(return_value=SimpleNamespace())),
     ):
-        page = await MemoryService(session).get_memories(query="50%_off")
+        page = await MemoryService(session).get_memories(query="50%_off", **CTX)
     assert session.scalars.await_count == 1  # list only; counts would add a second scan
     assert page.kind_counts is None and page.total_count is None and page.counts_capped is False
-    sql = str(public.select(public.Memory).where(*public._list_filters("active", "50%_off")).compile(dialect=postgresql.dialect()))
+    sql = str(public.select(public.Memory).where(*public._list_filters("active", "50%_off", scope=OWNER)).compile(dialect=postgresql.dialect()))
     assert "ESCAPE" in sql
+
+
+async def test_counts_scan_sql_is_workspace_scoped_and_other_workspace_excluded() -> None:
+    """The counts scan statement carries the workspace predicate before LIMIT."""
+    stmts: list[object] = []
+
+    async def scalars(stmt: object) -> MagicMock:
+        stmts.append(stmt)
+        return MagicMock(all=list)
+
+    session = MagicMock()
+    session.scalars = AsyncMock(side_effect=scalars)
+    with (
+        patch.object(public, "_admit", AsyncMock()),
+        patch.object(public, "lock_export_privacy", AsyncMock()),
+    ):
+        await MemoryService(session).get_memories(**CTX)
+    assert len(stmts) == 2  # counts scan + list
+    for stmt in stmts:
+        sql = str(stmt.compile(dialect=postgresql.dialect()))  # type: ignore[attr-defined]
+        assert "memories.workspace_id =" in sql.split("WHERE", 1)[1].split("LIMIT")[0]

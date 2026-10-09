@@ -717,10 +717,13 @@ async def _list_partition(
 
 async def list_events(
     session: AsyncSession, *, limit: int = 50, cursor: str | None = None, source_id: UUID | None = None,
-    scope: Scope, multi_workspace_enabled: bool,
+    q: str | None = None, scope: Scope, multi_workspace_enabled: bool,
 ) -> EventPage:
-    """Return bounded events with stable timed/date/unknown cursor partitions."""
-    query = TimelineQuery(source_id=source_id)
+    """Return bounded events with stable timed/date/unknown cursor partitions.
+
+    ``q`` is a literal title/summary substring that rides the same visibility filters and cursor fingerprint.
+    """
+    query = TimelineQuery(source_id=source_id, q=q)
     return await _list_page(session, query, limit, cursor, scope=scope,
                              multi_workspace_enabled=multi_workspace_enabled)
 

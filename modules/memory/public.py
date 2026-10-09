@@ -1197,9 +1197,9 @@ def _to_candidate_read(
     )
 
 
-def _list_filters(status: str, query: str | None) -> list[ColumnElement[bool]]:
-    """Visibility filters shared by the Memory list page and its per-kind counts (type excluded)."""
-    filters: list[ColumnElement[bool]] = [Memory.status == status]
+def _list_filters(status: str, query: str | None, *, scope: Scope) -> list[ColumnElement[bool]]:
+    """Workspace-scoped visibility filters shared by the Memory list page and its per-kind counts (type excluded)."""
+    filters: list[ColumnElement[bool]] = [Memory.workspace_id == scope.workspace_id, Memory.status == status]
     if query:
         escaped = query.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         filters.append(Memory.content.ilike(f"%{escaped}%", escape="\\"))
@@ -1212,7 +1212,7 @@ _COUNT_BATCH = 100
 
 
 async def _visible_kind_counts(
-    session: AsyncSession, filters: list[ColumnElement[bool]],
+    session: AsyncSession, filters: list[ColumnElement[bool]], *, scope: Scope, multi_workspace_enabled: bool,
 ) -> dict[str, int] | None:
     """Tally kinds over rows that pass the same per-row privacy check as the list.
 
@@ -1232,7 +1232,7 @@ async def _visible_kind_counts(
         )).all())
         for row in batch:
             scanned += 1
-            if await _verified_memory_read(session, row) is None:
+            if await _verified_memory_read(session, row, scope=scope, multi_workspace_enabled=multi_workspace_enabled) is None:
                 continue
             visible += 1
             if visible > COUNT_VERIFIED_CAP:
@@ -1298,7 +1298,8 @@ class MemoryService:
         """
         await _admit(self.session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         clamped_limit = max(1, min(limit, 100))
-        stmt = select(Memory).where(Memory.workspace_id == scope.workspace_id, Memory.status == status)
+        filters = _list_filters(status, query, scope=scope)
+        stmt = select(Memory).where(*filters)
 
         if memory_type:
             stmt = stmt.where(Memory.memory_type == memory_type)
@@ -1313,7 +1314,9 @@ class MemoryService:
         # Counts are per kind: only unfiltered first pages carry them. A search skips them so each debounced
         # keystroke does not re-run up to COUNT_SCAN_CAP verified reads while holding the global privacy lock.
         if cursor is None and memory_type is None and not query:
-            kind_counts = await _visible_kind_counts(self.session, filters)
+            kind_counts = await _visible_kind_counts(
+                self.session, filters, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
             counts_capped = kind_counts is None
         rows = list((await self.session.scalars(
             stmt.order_by(desc(Memory.created_at), desc(Memory.id)).limit(101)
