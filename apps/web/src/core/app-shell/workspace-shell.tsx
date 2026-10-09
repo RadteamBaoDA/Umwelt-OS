@@ -13,7 +13,7 @@ import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
 import { CommandPalette } from '@/core/command-palette';
 import { ConnectionFooter } from '@/core/app-shell/connection-footer';
 import { useChatController } from '@/core/app-shell/chat-controller';
-import { SettingsNav, SourcesSubNav } from '@/core/app-shell/settings-nav';
+import { SettingsNav, SourcesSubNav, groupActive } from '@/core/app-shell/settings-nav';
 import { WorkspaceSwitcher } from '@/core/app-shell/workspace-switcher';
 import { useWorkspace } from '@/core/workspace-context';
 import { destinationEnabled, destinationForRole, mainNavigation, settingsGroups, type ModuleAvailability } from '@/core/module-registry';
@@ -172,6 +172,11 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
     }
   }, [display.isCurrentGeneration, generation]);
 
+  const visibleSettingsGroups = settingsGroups.filter((item) => destinationEnabled(item, moduleAvailability.data) && destinationForRole(item, role));
+  // A member deep-linking to an owner settings page is sent to the first settings group they may see.
+  const memberSettingsRedirect = role === 'member' && pathname.startsWith('/settings') && !visibleSettingsGroups.some((g) => groupActive(pathname, g.href)) ? visibleSettingsGroups[0]?.href : undefined;
+  useEffect(() => { if (memberSettingsRedirect) router.replace(memberSettingsRedirect); }, [memberSettingsRedirect, router]);
+
   if (session.isPending) return <main className="shell"><div className="status-panel skeleton" aria-label={t('loadingWorkspace')} /></main>;
   if (session.isError || !session.data) {
     const expired = session.error instanceof ApiError && session.error.status === 401;
@@ -183,10 +188,10 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
   }
 
   const savedPreferences = preferences.data ?? display.confirmedPreferences ?? null;
-  const visibleSettingsGroups = settingsGroups.filter((item) => destinationEnabled(item, moduleAvailability.data) && destinationForRole(item, role));
-  // A member without any settings group (translation settings arrive with T4a) gets no Settings entry.
+  // Members see only the read-only translation settings group; their Settings entry opens it directly.
   const visibleMainNavigation = mainNavigation.filter((item) => destinationEnabled(item, moduleAvailability.data) && destinationForRole(item, role) && (item.id !== 'settings' || visibleSettingsGroups.length > 0));
   const settingsActive = pathname.startsWith('/settings');
+  // A member deep-linking to an owner settings page is sent to the first group they may see.
   const active = visibleMainNavigation.find((item) => item.id !== 'settings' && (pathname === item.href || pathname.startsWith(`${item.href}/`)))?.id ?? (settingsActive ? 'settings' : '');
   /** Returns focus to the triggering menu control after a dialog closes. */
   const restoreMenuFocus = (event: Event) => {
@@ -208,10 +213,10 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
         </header>
         <div className="workspace">
           <nav className="workspace-nav" aria-label={t('mainNavigation')}>
-            {visibleMainNavigation.map((item) => <Link key={item.id} href={item.href} aria-current={active === item.id ? 'page' : undefined}>{t(item.messageKey)}</Link>)}
+            {visibleMainNavigation.map((item) => <Link key={item.id} href={item.id === 'settings' && role === 'member' ? visibleSettingsGroups[0].href : item.href} aria-current={active === item.id ? 'page' : undefined}>{t(item.messageKey)}</Link>)}
           </nav>
           {settingsActive && <SettingsNav groups={visibleSettingsGroups} pathname={pathname} />}
-          <main id="main-content" tabIndex={-1} className="workspace-main">{pathname.startsWith('/settings/sources') && <SourcesSubNav pathname={pathname} />}{children}</main>
+          <main id="main-content" tabIndex={-1} className="workspace-main">{memberSettingsRedirect ? null : <>{pathname.startsWith('/settings/sources') && <SourcesSubNav pathname={pathname} />}{children}</>}</main>
         </div>
         <ConnectionFooter
           apiStatus={!online ? 'clientOffline' : apiHealth.isFetching && apiHealth.isError ? 'reconnecting' : apiHealth.isPending ? 'connecting' : apiHealth.isError ? 'unavailable' : 'connected'}
