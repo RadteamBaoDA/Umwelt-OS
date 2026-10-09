@@ -16,4 +16,4 @@ export type TranslationItem = TranslationItemStatus & {
 export type TranslationBatch = { batch_id: string; target_language: TranslationLanguage; items: TranslationItem[] };
 
 /** Result the UI keeps per resource; absent means "show the original". */
-export type TranslationResult = { status: TranslationStatus; translation: TranslationPayload | null };
+export type TranslationResult = { status: TranslationStatus; translation: TranslationPayload | null; errorCode?: string | null };

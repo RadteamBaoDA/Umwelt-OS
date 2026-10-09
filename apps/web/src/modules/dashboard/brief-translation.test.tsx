@@ -48,6 +48,15 @@ describe('Daily Brief translation', () => {
     expect(screen.queryByText('Ban dich')).toBeNull();
   });
 
+  it('shows a short reason line when the translation is blocked', async () => {
+    api.submitTranslationBatch.mockResolvedValue({
+      batch_id: null, items: [{ resource_type: 'daily_brief', resource_id: 'b1', status: 'blocked', error_code: 'privacy_blocked' }],
+    });
+    render(view(brief(3)));
+    expect(await screen.findByText('Not translated because of your privacy settings.')).toBeTruthy();
+    expect(screen.getByText('Original text')).toBeTruthy();
+  });
+
   it('shows no badge and requests nothing when translation is disabled', async () => {
     api.fetchTranslationSettings.mockResolvedValue({ enabled: false, target_language: 'vi', configuration_revision: 1 });
     render(view(brief(1)));

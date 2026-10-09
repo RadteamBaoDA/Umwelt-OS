@@ -10,6 +10,7 @@ import { safeHttpUrl } from '@/core/safe-url';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { fetchStory } from './story-api';
 import { TranslatedBadge } from '@/modules/translations/translated-badge';
+import { TranslationNote } from '@/modules/translations/translation-note';
 import { useContentTranslation } from '@/modules/translations/use-content-translation';
 import { useNewsIncompleteLabel } from './use-news-incomplete-label';
 
@@ -109,7 +110,7 @@ export function StoryDetail({ storyId, sourceIds, onBack }: StoryDetailProps) {
           <p className="text-xs text-muted-foreground">
             {t('observed', { date: formatDateTime(story.observed_at, display.locale, display.timezone) })} · {display.timezone}
           </p>
-          {translation.results.has(story.id) ? <TranslatedBadge showOriginal={showOriginal} onToggle={() => setShowOriginal((v) => !v)} /> : null}
+          {translation.results.has(story.id) ? <TranslatedBadge showOriginal={showOriginal} onToggle={() => setShowOriginal((v) => !v)} /> : <TranslationNote issue={translation.issues.get(story.id)} />}
           <p role="status" className="text-xs text-muted-foreground">{copied === 'ok' ? d('copied') : copied === 'failed' ? d('copyFailed') : ''}</p>
           <h3 className="text-sm font-semibold">{t('excerpt')}</h3>
           <blockquote className="border-l-2 border-border pl-3 text-sm leading-relaxed">{translated?.excerpt ?? story.excerpt}</blockquote>

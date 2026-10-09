@@ -232,3 +232,8 @@ def test_jobs_and_crons_are_registered():
     assert any("recover_translation_jobs" in n for n in cron_names)
     assert any("sweep_translation_orphans" in n for n in cron_names)
     assert any("expire_translations" in n for n in cron_names)
+
+
+def test_slot_ttl_is_120_seconds_with_20_second_renewal():
+    assert worker.SLOT_TTL_SECONDS == 120
+    assert worker.HEARTBEAT_SECONDS == 20

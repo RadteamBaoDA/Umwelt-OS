@@ -10,6 +10,7 @@ import { useDisplayPreferences } from '@/core/query-provider';
 import { fetchNewsTrends, fetchStories } from './story-api';
 import { useNewsIncompleteLabel } from './use-news-incomplete-label';
 import { TranslatedBadge } from '@/modules/translations/translated-badge';
+import { TranslationNote } from '@/modules/translations/translation-note';
 import { useContentTranslation } from '@/modules/translations/use-content-translation';
 import { safeHttpUrl } from '@/core/safe-url';
 import type { Story } from './story-types';
@@ -115,6 +116,7 @@ export function StoryList({
                 <ArrowUpRight aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
               </span>
               <span className="mt-1 line-clamp-3 block text-sm text-muted-foreground">{shown(story)?.excerpt ?? story.excerpt}</span>
+              {!translation.results.has(story.id) && <TranslationNote issue={translation.issues.get(story.id)} />}
               <span className="mt-2 flex flex-wrap gap-x-3 text-xs text-muted-foreground">
                 <span>{t('sources', { count: story.source_count })}</span>
                 <span>{t('evidence', { count: story.evidence_count })}</span>

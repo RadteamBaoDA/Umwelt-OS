@@ -175,3 +175,16 @@ async def test_inputs_adapter_registers_and_rejects_foreign_workspace(monkeypatc
     other = SimpleNamespace(workspace_id=uuid4())
     assert await public._AUTHORIZERS["news_story"](None, scope=other, resource_id=src.resource_id,
                                                    multi_workspace_enabled=False) is None
+
+
+async def test_token_use_is_counted_with_bounded_labels(monkeypatch):
+    calls = []
+    monkeypatch.setattr(service, "count", lambda name, value=1, /, **labels: calls.append((name, value, labels)))
+
+    async def structured(alias, mapping, policy, messages, schema, **kw):
+        payload = json.loads(messages[1]["content"])
+        return {**_reply({k: _echo(v) for k, v in payload.items()}), "usage": {"prompt_tokens": 7, "completion_tokens": 3}}
+
+    await _run(SimpleNamespace(structured=structured))
+    assert calls == [("translation_tokens_total", 7, {"direction": "in", "target_language": "vi"}),
+                     ("translation_tokens_total", 3, {"direction": "out", "target_language": "vi"})]

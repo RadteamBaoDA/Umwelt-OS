@@ -45,7 +45,7 @@ from modules.translations.schemas import (
 from modules.translations.service import ALIAS, TranslationBlocked, content_hash, translate_input
 
 LEASE_SECONDS = 120
-SLOT_TTL_SECONDS = 60
+SLOT_TTL_SECONDS = 120
 HEARTBEAT_SECONDS = 20
 ATTEMPT_TIMEOUT_SECONDS = 20
 DEADLINE_SECONDS = 90
@@ -260,6 +260,8 @@ async def _publish(run: _Run, source: TranslationInput, output: dict[str, str]) 
         applied = result.first() is not None
         await session.commit()
     count("translation_jobs_total", outcome=("unchanged" if unchanged else "ready") if applied else "purged")
+    count("translation_results_total", resource_type=claim.resource_type, target_language=claim.target_language,
+          outcome=("unchanged" if unchanged else "ready") if applied else "purged")
 
 
 async def _heartbeat(run: _Run, token: int) -> None:
