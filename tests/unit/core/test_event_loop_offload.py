@@ -278,7 +278,7 @@ async def test_export_render_off_loop_then_fence_and_bytes_identical(
     monkeypatch.setattr(export_routes, "_validate_final_fences", fence)
     result = await export_routes._build_export_response(
         fmt, object(), SimpleNamespace(owner_id=1),
-        SimpleNamespace(user_id=1),
+        SimpleNamespace(user_id=1, role="owner"),
         SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(settings=SimpleNamespace(multi_workspace_enabled=False)))),
         Response(),  # type: ignore[arg-type]
     )

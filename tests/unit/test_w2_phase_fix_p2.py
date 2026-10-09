@@ -21,11 +21,13 @@ async def test_p2_1_member_cannot_list_tools():
 
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
         mcp_runtime=None, tool_registry=MagicMock(list_tools=MagicMock(return_value=[])),
+        settings=SimpleNamespace(multi_workspace_enabled=False),
     )))
     with pytest.raises(HTTPException) as exc:
-        await routes.list_tools(request, MagicMock(), MEMBER)  # type: ignore[arg-type]
+        await routes.list_tools(request, MagicMock(), MEMBER, MagicMock())  # type: ignore[arg-type]
     assert exc.value.status_code == 403
-    assert (await routes.list_tools(request, MagicMock(), OWNER))["items"] == []  # type: ignore[arg-type]
+    with patch.object(routes, "read_workspace_modules", AsyncMock(return_value={})):
+        assert (await routes.list_tools(request, MagicMock(), OWNER, MagicMock()))["items"] == []  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio

@@ -93,11 +93,11 @@ async def test_memory_and_chat_seams_forward_scope(monkeypatch):
     await f.get_memory_context()
     assert len(calls) == 2
     _assert_bound(calls)
-    # Chat's build_context does not accept scope/flag until A2 converts it (P3-3).
+    # Chat's build_context takes the bound scope (W4-private made it required).
     build_calls: list = []
     _record(monkeypatch, retrieval, "build_context", build_calls)
     await f.build_answer_context(None, None, None, None)  # type: ignore[arg-type]
-    assert build_calls and build_calls[0][2] == {}
+    assert build_calls and build_calls[0][2] == {"scope": SCOPE}
 
 
 async def test_entity_timeline_batches_carry_scope(monkeypatch):
