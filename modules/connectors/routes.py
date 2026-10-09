@@ -12,6 +12,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.auth.dependencies import require_owner_write
+from core.auth.models import AuthSession
 from core.auth.public import authenticated_session_ref
 from core.database import get_session
 from core.realtime import commit_with_replay, make_source_change
@@ -65,6 +67,7 @@ from modules.sources.schemas import ConnectorSource, SourceFence
 
 router = APIRouter(prefix="/api/v1/connectors/sources", tags=["connectors"])
 Session = Annotated[AsyncSession, Depends(get_session)]
+operator_router = APIRouter(prefix="/api/v1/operator/connectors", tags=["connectors"])
 OwnerWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 
 
@@ -1238,6 +1241,21 @@ async def acknowledge_provider_terms(
     result = await provider_terms.acknowledge_terms(
         session, source_id, payload, scope=_owner,
         multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
+    await scheduler.clear_collection_block(session, source_id, terms_revision=result.terms_revision)
+    await session.commit()
+    return result
+
+
+@operator_router.put("/{workspace_id}/{source_id}/terms-review", response_model=provider_terms.ProviderTermsRead)
+async def review_provider_terms(
+    workspace_id: UUID, source_id: UUID, payload: provider_terms.OperatorTermsReview, session: Session,
+    operator: Annotated[AuthSession, Depends(require_owner_write)],
+) -> provider_terms.ProviderTermsRead:
+    """Bootstrap-operator review of a review-class provider's acknowledged terms (no workspace role grants it)."""
+    await session.rollback()
+    result = await provider_terms.record_operator_review(
+        session, workspace_id=workspace_id, source_id=source_id, reviewer_user_id=operator.owner_id,
+        body=payload, instance_operator=True)
     await scheduler.clear_collection_block(session, source_id, terms_revision=result.terms_revision)
     await session.commit()
     return result

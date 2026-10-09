@@ -167,3 +167,34 @@ async def test_scheduler_denies_before_inserting_a_request_and_captures_revision
     request = await run("world_bank", _row())
     added = session.add.call_args.args[0]
     assert isinstance(added, ConnectorCollectionRequest) and added.terms_revision == 3 and request is added
+
+
+async def test_operator_review_route_uses_bootstrap_operator_admission_and_clears_terms_gate(monkeypatch):
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from core.auth.dependencies import require_owner_write
+    from modules.connectors import routes
+
+    route = next(r for r in routes.operator_router.routes if r.path.endswith("/terms-review"))
+    assert require_owner_write in {d.call for d in route.dependant.dependencies}
+    calls = []
+
+    async def review(session, **kwargs):
+        calls.append(("review", kwargs))
+        return SimpleNamespace(terms_revision=7)
+
+    async def clear(session, source_id, **kwargs):
+        calls.append(("clear", kwargs))
+
+    class Session:
+        async def rollback(self): calls.append(("rollback", {}))
+        async def commit(self): calls.append(("commit", {}))
+
+    monkeypatch.setattr(routes.provider_terms, "record_operator_review", review)
+    monkeypatch.setattr(routes.scheduler, "clear_collection_block", clear)
+    ws, src = uuid4(), uuid4()
+    result = await route.endpoint(ws, src, "body", Session(), SimpleNamespace(owner_id=1))
+    assert result.terms_revision == 7
+    assert calls[1][1] == {"workspace_id": ws, "source_id": src, "reviewer_user_id": 1, "body": "body", "instance_operator": True}
+    assert calls[2] == ("clear", {"terms_revision": 7}) and calls[-1][0] == "commit"

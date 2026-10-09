@@ -31,6 +31,7 @@ from modules.chat.routes import MAX_CHAT_STREAMS_PER_API_PROCESS
 from modules.chat.routes import router as chat_router
 from modules.connectors.github.routes import router as github_oauth_router
 from modules.connectors.provisioning_routes import router as connector_provisioning_router
+from modules.connectors.routes import operator_router as connectors_operator_router
 from modules.connectors.routes import router as connectors_router
 from modules.dashboard.routes import router as dashboard_router
 from modules.export.routes import router as export_router
@@ -170,6 +171,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(document_upload_router)
     app.include_router(ingestion_router)
     app.include_router(connectors_router)
+    app.include_router(connectors_operator_router)
     app.include_router(browser_control_router)
     app.include_router(connector_provisioning_router)
     app.include_router(github_oauth_router)
