@@ -121,25 +121,25 @@ __all__ = [
 ENTITY_EXPORT_PAGE_MAX_BYTES = 16_777_216
 
 
-def _encode_entity_export_cursor(owner_id: int, snapshot_at: datetime, position_at: datetime, position_id: UUID) -> str:
-    """Encode an owner- and snapshot-bound entity keyset position."""
-    payload = json.dumps({"v": 1, "owner": owner_id, "kind": "entities",
+def _encode_entity_export_cursor(owner_id: int, workspace_id: UUID, snapshot_at: datetime, position_at: datetime, position_id: UUID) -> str:
+    """Encode an owner-, workspace- and snapshot-bound entity keyset position."""
+    payload = json.dumps({"v": 1, "owner": owner_id, "workspace": str(workspace_id), "kind": "entities",
                           "snapshot": snapshot_at.astimezone(UTC).isoformat(),
                           "at": position_at.astimezone(UTC).isoformat(), "id": str(position_id)},
                          sort_keys=True, separators=(",", ":")).encode()
     return base64.urlsafe_b64encode(payload).decode().rstrip("=")
 
 
-def _decode_entity_export_cursor(cursor: str, owner_id: int) -> tuple[datetime, datetime, UUID]:
+def _decode_entity_export_cursor(cursor: str, owner_id: int, workspace_id: UUID) -> tuple[datetime, datetime, UUID]:
     """Decode a canonical bounded cursor, rejecting cross-owner and future snapshots."""
     try:
         if not cursor or len(cursor) > 1024 or "=" in cursor:
             raise ValueError
         raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
         value = json.loads(raw)
-        if not isinstance(value, dict) or set(value) != {"v", "owner", "kind", "snapshot", "at", "id"}:
+        if not isinstance(value, dict) or set(value) != {"v", "owner", "workspace", "kind", "snapshot", "at", "id"}:
             raise ValueError
-        if value["v"] != 1 or value["owner"] != owner_id or value["kind"] != "entities":
+        if value["v"] != 1 or value["owner"] != owner_id or value["workspace"] != str(workspace_id) or value["kind"] != "entities":
             raise ValueError
         snapshot_at, position_at = datetime.fromisoformat(value["snapshot"]), datetime.fromisoformat(value["at"])
         if any(item.tzinfo is None or item.utcoffset() is None for item in (snapshot_at, position_at)):
@@ -148,7 +148,7 @@ def _decode_entity_export_cursor(cursor: str, owner_id: int) -> tuple[datetime, 
         if snapshot_at > datetime.now(UTC):
             raise ValueError
         position_id = UUID(value["id"])
-        if _encode_entity_export_cursor(owner_id, snapshot_at, position_at, position_id) != cursor:
+        if _encode_entity_export_cursor(owner_id, workspace_id, snapshot_at, position_at, position_id) != cursor:
             raise ValueError
         return snapshot_at, position_at, position_id
     except (ValueError, TypeError, KeyError, UnicodeDecodeError, binascii.Error, json.JSONDecodeError) as exc:
@@ -243,7 +243,7 @@ async def export_page(
     if cursor is None:
         snapshot_at, position = datetime.now(UTC), None
     else:
-        snapshot_at, position_at, position_id = _decode_entity_export_cursor(cursor, owner_id)
+        snapshot_at, position_at, position_id = _decode_entity_export_cursor(cursor, owner_id, scope.workspace_id)
         position = (position_at, position_id)
     snapshot_count = await _entity_export_count(
         session, snapshot_at, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
@@ -379,7 +379,7 @@ async def export_page(
             evidence_digest=sha256(json.dumps([item.model_dump(mode="json") for item in evidence_items],
                                               ensure_ascii=False, separators=(",", ":")).encode()).hexdigest(),
         ))
-    next_cursor = (_encode_entity_export_cursor(owner_id, snapshot_at, items[-1].created_at, items[-1].id)
+    next_cursor = (_encode_entity_export_cursor(owner_id, scope.workspace_id, snapshot_at, items[-1].created_at, items[-1].id)
                    if has_more and items else None)
     return EntityExportPage(
         owner_id=owner_id, record_kind="entities", snapshot_at=snapshot_at,

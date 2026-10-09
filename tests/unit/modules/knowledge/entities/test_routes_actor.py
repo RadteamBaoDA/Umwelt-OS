@@ -26,7 +26,7 @@ async def test_review_routes_pass_scope_user(route: object, method: str) -> None
     target = AsyncMock(return_value=None)
     setattr(service.return_value, method, target)
     with patch.object(routes, "KnowledgeService", service):
-        await route(uuid4(), MagicMock(), AsyncMock(), MagicMock(owner_id=999), request, SCOPE)  # type: ignore[operator]
+        await route(uuid4(), MagicMock(), AsyncMock(), request, SCOPE)  # type: ignore[operator]
     assert target.call_args.kwargs["actor_id"] == 7
 
 

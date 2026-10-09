@@ -401,11 +401,11 @@ def test_no_route_keys_oauth_state_on_the_session_owner_id() -> None:
     "acknowledge_github_reconnect", "refresh_github_authorization", "complete_github_authorization",
     "github_project_summary", "list_github_grant_peers", "revoke_github_grant",
 ])
-def test_routes_keep_their_owner_dependency_and_add_the_workspace(name) -> None:
+def test_routes_keep_their_account_dependency_and_add_the_workspace(name) -> None:
     parameters = inspect.signature(getattr(routes, name)).parameters
     assert "scope" in parameters
     assert str(parameters["scope"].annotation).count("require_workspace") == 1
-    assert any(str(p.annotation).count("require_owner") for p in parameters.values())
+    assert any(str(p.annotation).count("require_account") for p in parameters.values())
 
 
 def test_peer_inventory_filters_the_workspace_before_limit() -> None:

@@ -553,3 +553,20 @@ Includes ARQ/cron targets and public worker/index/maintenance helpers. Internal 
 Static inventory:132 mapped declarations in28 files,273 HTTP/service route declarations (including14 explicit MCP management registrations),47 public worker/index/maintenance callbacks, the mounted MCP protocol/native tools, and38 concrete cache/cursor/graph/storage/process entrypoints above. Table names and declaration classes were compared against current source after W1a, excluding its three separately listed identity tables. No unclassified table rows or generic folder-only route assignments remain.
 
 V1 must reconcile actual SQLAlchemy metadata, Alembic/deployed/external tables, instantiated FastAPI route graph/mounts and worker registrations, including new W1/W3/C2 additions. This static inventory is not runtime authorization, query-plan, capacity, migration or race acceptance. No production tests, builds, lint, typecheck, migration or service commands ran in W2a.
+
+## W4-routes outcomes (route flips)
+
+`require_owner` (bootstrap-only) was replaced by account/workspace admission; owner-role denial of members is unchanged (write routes via `require_workspace_write`, reads via the owning public `scope.role` guard / connector `_admit`).
+
+| Route group | Outcome |
+| --- | --- |
+| `modules/tasks`, `modules/goals`, `modules/timeline` routes | Flipped: `_owner` parameter removed; `require_workspace_read/write` authenticates. |
+| `modules/knowledge/{entities,relationships,temporal,observations}` routes | Flipped the same way. |
+| `modules/sources`, `modules/ingestion`, `modules/settings/onboarding_routes.py`, `connectors/routes.py`, `connectors/provisioning_routes.py` | Already workspace/account dependencies before this slice; verified by the inventory test. |
+| `modules/connectors/github/routes.py` | Flipped to `require_account` / `require_account_write` (browser session `token_hash` still bound to OAuth attempts); `_admit` rejects members. |
+| `GET /api/v1/connectors/github/webhook-status` | Operator (`require_owner`): reports the global durable backlog. |
+| `PUT /api/v1/operator/connectors/{workspace_id}/{source_id}/terms-review` | Operator (`require_owner_write` + `is_instance_operator`). |
+| `modules/observability/{routes,operations_routes}.py` | Operator only, unchanged. |
+| Bearer/signature ingress (`/ingestion/batches`, GitHub webhook, n8n connector endpoints) | No session dependency by design; token-authenticated in the handler. |
+
+Entity export cursors now also bind `workspace_id` (P3-4).
