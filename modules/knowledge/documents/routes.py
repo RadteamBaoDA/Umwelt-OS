@@ -169,6 +169,7 @@ async def list_dashboard_projections(
         return await public.list_gadget_document_projections(
             session, source_ids=tuple(source_ids), limit=limit, cursor=cursor,
             channel_ids=tuple(channel_ids) if channel_ids is not None else None,
+            language=language, since=since, include_dismissed=include_dismissed,
             scope=workspace, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
         )
     except ValueError as exc:

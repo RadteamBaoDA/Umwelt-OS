@@ -1442,12 +1442,15 @@ async def news_current_scope_status(
 async def list_news_document_projections(
     session: AsyncSession, *, source_ids: tuple[UUID, ...], limit: int = 50,
     cursor: str | None = None, observed_since: datetime | None = None,
-    channel_ids: tuple[str, ...] | None = None, scope: Scope, multi_workspace_enabled: bool,
+    channel_ids: tuple[str, ...] | None = None, language: str | None = None,
+    scope: Scope, multi_workspace_enabled: bool,
 ) -> tuple[list[NewsDocumentProjection], str | None]:
     """Page bounded current ready versions from explicitly authorized active sources."""
     if not source_ids or len(source_ids) > 32 or len(set(source_ids)) != len(source_ids) or not 1 <= limit <= 100:
         raise ValueError("News source page must contain 1 to 32 unique sources and a bounded limit")
     access_fence = await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if language is not None and language not in FEED_LANGUAGES:
+        raise ValueError("Language filter must be an allowlisted code")
     if channel_ids is not None and (
         len(channel_ids) > 32 or len(set(channel_ids)) != len(channel_ids)
         or any(re.fullmatch(r"-?[1-9][0-9]{0,19}", item) is None for item in channel_ids)
@@ -1455,7 +1458,7 @@ async def list_news_document_projections(
         raise ValueError("Channel scope must contain at most 32 unique numeric identifiers")
     fingerprint = _news_projection_cursor_fingerprint(
         access_fence=access_fence, source_ids=source_ids,
-        observed_since=observed_since, channel_ids=channel_ids,
+        observed_since=observed_since, channel_ids=channel_ids, language=language,
     )
     statement = (
         select(Document.id, Document.created_at)
@@ -1471,10 +1474,8 @@ async def list_news_document_projections(
     if observed_since is not None:
         statement = statement.where(func.coalesce(Document.observed_at, DocumentVersion.observed_at) >= observed_since)
     if language is not None:
-        if language not in FEED_LANGUAGES:
-            raise ValueError("Language filter must be an allowlisted code")
         # Unknown (NULL) language never matches a concrete language; only "Any" (None) returns it.
-        # Stored normalized (primary subtag, lowercase) so this equality can use ix_documents_language_created_at_id.
+        # Stored normalized (primary subtag, lowercase) so this equality can use ix_documents_workspace_language_created_at_id.
         statement = statement.where(Document.language == language)
     if channel_ids is not None:
         statement = statement.where(
@@ -1527,12 +1528,15 @@ def _provenance_language(provenance: object) -> str | None:
     """Extract the normalized language from ingestion provenance ``metadata.language``."""
     metadata = provenance.get("metadata") if isinstance(provenance, dict) else None
     return normalize_document_language(metadata.get("language") if isinstance(metadata, dict) else None)
+
+
 FEED_MAX_WINDOW = timedelta(days=366)
 
 
 async def list_gadget_document_projections(
     session: AsyncSession, *, source_ids: tuple[UUID, ...], limit: int = 50,
     cursor: str | None = None, channel_ids: tuple[str, ...] | None = None,
+    language: str | None = None, since: datetime | None = None, include_dismissed: bool = False,
     scope: Scope, multi_workspace_enabled: bool,
 ) -> GadgetDocumentProjectionList:
     """Return active, current, ready source records as a small dashboard projection page.
@@ -1545,9 +1549,13 @@ async def list_gadget_document_projections(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
     actor_id = access_fence.user_id
+    if since is not None:
+        now = datetime.now(UTC)
+        if since.tzinfo is None or not now - FEED_MAX_WINDOW <= since <= now + timedelta(minutes=5):
+            raise ValueError("Time filter must be a timezone-aware instant within the last year")
     projections, next_cursor = await list_news_document_projections(
         session, source_ids=source_ids, limit=limit, cursor=cursor,
-        channel_ids=channel_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        channel_ids=channel_ids, language=language, observed_since=since, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
     version_ids = [item.document_version_id for item in projections]
     interaction_rows = (await session.scalars(
@@ -1727,7 +1735,7 @@ async def set_gadget_document_interaction(
     elif row is None:
         row = DocumentInteraction(
             owner_id=actor_id, document_version_id=projection.document_version_id,
-            read_at=read_at, bookmarked_at=bookmarked_at,
+            read_at=read_at, bookmarked_at=bookmarked_at, dismissed_at=dismissed_at,
         )
         session.add(row)
     else:
@@ -1747,7 +1755,7 @@ async def set_gadget_document_interaction(
 
 def _news_projection_cursor_fingerprint(
     *, access_fence: AccessFence, source_ids: tuple[UUID, ...], observed_since: datetime | None,
-    channel_ids: tuple[str, ...] | None,
+    channel_ids: tuple[str, ...] | None, language: str | None = None,
 ) -> str:
     """Hash News filters with the admitted actor/workspace and membership/configuration revisions."""
     context = {
@@ -1758,6 +1766,7 @@ def _news_projection_cursor_fingerprint(
         "sources": sorted(str(item) for item in source_ids),
         "observed_since": observed_since.astimezone(UTC).isoformat() if observed_since else None,
         "channels": sorted(channel_ids) if channel_ids is not None else None,
+        "language": language,
     }
     return hashlib.sha256(json.dumps(context, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
@@ -2962,10 +2971,19 @@ class NormalizedDocumentValidationRejected(ValueError):
     """
 
 
-async def find_document_identity(session: AsyncSession, source_id: UUID, external_id: str) -> UUID | None:
-    """Return the document ID a source owns for an external identity, if any."""
+async def find_document_identity(
+    session: AsyncSession, source_id: UUID, external_id: str, *, scope: Scope, multi_workspace_enabled: bool,
+) -> UUID | None:
+    """Return the visible document ID a source owns for an external identity, if any.
+
+    Mirrors ``has_document_identity``: admission and the workspace/purge predicate precede the
+    query, so a foreign or data-purged key is None. Takes no lock and does not commit.
+    """
+    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     return await session.scalar(
-        select(Document.id).where(Document.source_id == source_id, Document.external_id == external_id)
+        select(Document.id).where(
+            Document.source_id == source_id, Document.external_id == external_id, *_document_scope(scope),
+        ).limit(1)
     )
 
 
@@ -3176,6 +3194,7 @@ async def _apply_normalized_document(
             canonical_url=payload.canonical_url, published_at=payload.published_at,
             observed_at=payload.observed_at, current_version=0,
             content_hash=content_hash(payload.content), extraction_status="ready",
+            language=_provenance_language(payload.provenance),
         )
         session.add(document)
         identity.document_id = document.id
@@ -5215,7 +5234,13 @@ async def lock_chat_evidence_chunks(
     return evidence
 
 
-async def count_source_documents(session: AsyncSession, source_id: UUID, cap: int = 1000) -> int:
-    """Return an owner-UI-only document count for one source, saturating at ``cap``."""
-    capped = select(Document.id).where(Document.source_id == source_id).limit(cap).subquery()
+async def count_source_documents(session: AsyncSession, source_id: UUID, *, scope: Scope, cap: int = 1000) -> int:
+    """Return an owner-UI-only document count for one source, saturating at ``cap``.
+
+    The caller has admitted ``scope``; the workspace and purge predicate sit inside the capped
+    subquery so the cap never counts foreign rows.
+    """
+    capped = select(Document.id).where(
+        Document.source_id == source_id, *_document_scope(scope),
+    ).limit(cap).subquery()
     return int(await session.scalar(select(func.count()).select_from(capped)) or 0)
