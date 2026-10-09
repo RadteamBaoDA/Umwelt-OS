@@ -364,6 +364,7 @@ def _delete_harness(closure):
         patch.object(ingestion, "publish_event", published),
         patch.object(ingestion, "tombstone_document_materializations", rec("I_tombstone")),
         patch.object(observations, "purge_document_in_uow", rec("O_purge")),
+        patch.object(public.workspaces, "revoke_resource_shares_in_uow", rec("revoke", 0)),
     ]
     return session, calls, added, published, commit, patches
 
@@ -380,7 +381,7 @@ async def test_delete_document_order_epochs_payload_and_commit_fence() -> None:
             item.stop()
     order = [c for c in calls if c != "document"]
     assert order == ["lock_source_set", "lock_closure", "I_prepare", "evidence", "publish", "O_purge",
-                     "I_tombstone", "graph", "commit"]
+                     "I_tombstone", "graph", "revoke", "commit"]
     receipt = added[0]
     assert isinstance(receipt, DocumentCleanupOperation) and operation is receipt
     assert (receipt.workspace_id, receipt.actor_user_id, receipt.membership_revision,
@@ -573,6 +574,7 @@ async def test_late_delete_inserts_identity_columns_takes_no_locks_and_publishes
     publish = AsyncMock()
     with patch.object(ingestion, "publish_event", publish), \
             patch.object(observations, "purge_source_in_uow", AsyncMock()), \
+            patch.object(public.workspaces, "revoke_resource_shares_in_uow", AsyncMock(return_value=0)), \
             patch.object(public, "_apply_graph_cleanup", AsyncMock(return_value=["draft"])):
         drafts = await _late(session, _capture(), closure)
     assert drafts == ["draft"]

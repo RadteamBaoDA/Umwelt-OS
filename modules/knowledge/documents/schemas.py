@@ -847,6 +847,31 @@ class CitationTargetRead(BaseModel):
     observed_at: datetime
 
 
+class MemberDocumentRead(BaseModel):
+    """Member view of a shared Document: no Source, storage URI, external id or free-form metadata."""
+    id: UUID
+    title: str
+    content_type: str | None
+    mime_type: str | None
+    canonical_url: str | None
+    author: str | None
+    current_version: int
+    content_hash: str
+    extraction_status: str
+    published_at: datetime | None
+    observed_at: datetime | None
+    language: str | None
+    has_raw: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class MemberDocumentList(BaseModel):
+    """Bounded member page of shared Documents."""
+    items: list[MemberDocumentRead]
+    next_cursor: str | None
+
+
 class DocumentList(BaseModel):
     """Return a bounded document page and its optional continuation cursor."""
     items: list[DocumentRead]

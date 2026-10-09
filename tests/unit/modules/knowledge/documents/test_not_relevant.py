@@ -142,7 +142,7 @@ async def test_dashboard_projection_route_forwards_include_dismissed() -> None:
     with patch.object(routes.public, "list_gadget_document_projections", forward):
         for flag in (False, True):
             await routes.list_dashboard_projections(
-                session=AsyncMock(), request=request, _owner=SCOPE, workspace=SCOPE, source_ids=[uuid4()],
+                session=AsyncMock(), request=request, workspace=SCOPE, source_ids=[uuid4()],
                 channel_ids=None, limit=50, cursor=None, language="vi", since=None, include_dismissed=flag,
             )
             assert forward.await_args.kwargs["include_dismissed"] is flag
