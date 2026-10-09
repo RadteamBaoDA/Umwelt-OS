@@ -13,13 +13,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.public import authenticated_session_ref
-from core.workspaces.dependencies import require_workspace_write
+from core.workspaces.dependencies import require_workspace_read, require_workspace_write
 from core.workspaces.public import lock_access_fence, read_access_fence
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
 from core.database import get_session
 from core.realtime import commit_with_replay, make_source_change
 from modules.connectors import mcp as mcp_collection
-from modules.connectors import provisioning, registry
+from modules.connectors import provider_terms, provisioning, registry, scheduler
 from modules.connectors.github import oauth as github_oauth
 from modules.connectors.github.adapter import collect_github_segment
 from modules.connectors.github.schemas import GitHubHintClaimProof, project_github_source_config
@@ -1210,6 +1210,34 @@ async def configure_source(
          scope=scope),
     ], access_fence=access_fence, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
     return ConnectorState(**result)
+
+
+@router.get("/{source_id}/terms", response_model=provider_terms.ProviderTermsRead | None,
+            dependencies=[Depends(module_dependency("connectors"))])
+async def read_provider_terms(
+    source_id: UUID, session: Session, request: Request, _owner: Annotated[WorkspaceContext, Depends(require_workspace_read)],
+) -> provider_terms.ProviderTermsRead | None:
+    """Owner read of provider terms state; members have no Source access."""
+    if _owner.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
+    return await provider_terms.get_terms(
+        session, source_id, scope=_owner, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
+
+
+@router.put("/{source_id}/terms", response_model=provider_terms.ProviderTermsRead,
+            dependencies=[Depends(module_dependency("connectors"))])
+async def acknowledge_provider_terms(
+    source_id: UUID, payload: provider_terms.ProviderTermsAcknowledge, session: Session, request: Request, _owner: OwnerWrite,
+) -> provider_terms.ProviderTermsRead:
+    """Owner acknowledges provider terms; clears a terms action-required gate at the new revision."""
+    await _owner_access(session, request, _owner)
+    await session.rollback()
+    result = await provider_terms.acknowledge_terms(
+        session, source_id, payload, scope=_owner,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
+    await scheduler.clear_collection_block(session, source_id, terms_revision=result.terms_revision)
+    await session.commit()
+    return result
 
 
 @router.post("/{source_id}/collect", response_model=ManualSyncResult, status_code=202,
