@@ -26,7 +26,7 @@ async def test_web_citation_reads_back_and_is_deleted_with_conversation(
     conversation_id, message_id = uuid4(), uuid4()
     async with committed_engine.begin() as connection:
         await connection.execute(
-            text("INSERT INTO chat_conversations (id, title) VALUES (:i, 'w3')"), {"i": conversation_id},
+            text("INSERT INTO chat_conversations (id, workspace_id, actor_user_id, title) VALUES (:i, (SELECT id FROM workspaces ORDER BY created_at LIMIT 1), (SELECT owner_user_id FROM workspaces ORDER BY created_at LIMIT 1), 'w3')"), {"i": conversation_id},
         )
         await connection.execute(
             text("INSERT INTO chat_messages (id, conversation_id, role, content, citations) "

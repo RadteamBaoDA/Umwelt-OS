@@ -32,6 +32,7 @@ from modules.chat import worker
 from modules.chat.models import Conversation, Message, ResponseRun, StreamEvent
 from modules.chat.routes import _privacy_fence
 from modules.chat.schemas import WEB_SEARCH_OUTCOME_KEY, AnswerContext
+from modules.chat.scope import owner_scope_kwargs
 from modules.memory.public import lock_export_privacy, read_export_privacy
 from modules.settings import public as settings_public
 
@@ -93,7 +94,9 @@ def _fake_provider(endpoint: str, hosts: Any, cidrs: Any) -> ApprovedEndpointTra
 
 
 @pytest.fixture
-async def factory(committed_engine: AsyncEngine) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
+async def factory(
+    committed_engine: AsyncEngine, ready_owner_client: object,  # owner + default workspace must exist
+) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
     """Configure web search (Tavily shape, consent on) and restore the owner's ai_settings row afterwards."""
     async with committed_engine.connect() as connection:
         before = (await connection.execute(text("SELECT * FROM ai_settings WHERE owner_id = 1"))).mappings().first()
@@ -102,8 +105,8 @@ async def factory(committed_engine: AsyncEngine) -> AsyncIterator[async_sessionm
     privacy = json.dumps({"allow_remote_web_search": True, "web_search_destinations": [destination]})
     async with committed_engine.begin() as connection:
         await connection.execute(text(
-            "INSERT INTO ai_settings (owner_id, web_search_provider, web_search_endpoint, "
-            "web_search_api_key_ciphertext, privacy) VALUES (1, 'tavily', :e, :c, CAST(:p AS jsonb)) "
+            "INSERT INTO ai_settings (workspace_id, owner_id, web_search_provider, web_search_endpoint, "
+            "web_search_api_key_ciphertext, privacy) VALUES ((SELECT id FROM workspaces ORDER BY created_at LIMIT 1), 1, 'tavily', :e, :c, CAST(:p AS jsonb)) "
             "ON CONFLICT (owner_id) DO UPDATE SET web_search_provider = 'tavily', web_search_endpoint = :e, "
             "web_search_api_key_ciphertext = :c, privacy = CAST(:p AS jsonb)"
         ), {"e": ENDPOINT, "c": cipher, "p": privacy})
@@ -125,20 +128,31 @@ async def factory(committed_engine: AsyncEngine) -> AsyncIterator[async_sessionm
 
 async def _run(factory: async_sessionmaker[AsyncSession], message: str) -> tuple[UUID, UUID, Any]:
     async with factory() as session:
-        privacy = await read_export_privacy(session)
-        conversation = Conversation(title="p15-w2", ephemeral=not privacy.store_conversation_history)
+        privacy = await read_export_privacy(session, **await owner_scope_kwargs(session))
+        ws_id, actor_id = (await session.execute(text(
+            "SELECT id, owner_user_id FROM workspaces ORDER BY created_at LIMIT 1"))).one()
+        conversation = Conversation(workspace_id=ws_id, actor_user_id=actor_id, title="p15-w2", ephemeral=not privacy.store_conversation_history)
         session.add(conversation)
         await session.flush()
         user = Message(conversation_id=conversation.id, role="user", content=message)
         session.add(user)
         await session.flush()
         run = ResponseRun(
-            conversation_id=conversation.id, user_message_id=user.id, status="pending",
+            workspace_id=ws_id, actor_user_id=actor_id, conversation_id=conversation.id, user_message_id=user.id, status="pending",
             retrieval_context={"_chat_privacy_fence": _privacy_fence(privacy), "_web_search": {"requested": True}},
         )
         session.add(run)
         await session.commit()
         return conversation.id, run.id, _privacy_fence(privacy)
+
+
+async def _admit(factory: async_sessionmaker[AsyncSession], run_id: UUID) -> dict[str, Any]:
+    """Worker-style job scope and access fence for the run's stamped workspace/actor."""
+    async with factory() as session:
+        ws_id, actor_id = (await session.execute(text(
+            "SELECT workspace_id, actor_user_id FROM chat_response_runs WHERE id = :i"), {"i": run_id})).one()
+    scope, fence = await worker._admit_job(factory, ws_id, actor_id)
+    return {"scope": scope, "access_fence": fence}
 
 
 async def _cleanup(factory: async_sessionmaker[AsyncSession], conversation_id: UUID) -> None:
@@ -218,7 +232,7 @@ async def test_consent_revoked_while_fence_waits_sends_nothing(
             await claim.execute(text("UPDATE chat_response_runs SET status = 'streaming' WHERE id = :i"), {"i": run_id})
             await claim.commit()
         task = asyncio.create_task(worker._search_for_run(
-            "revocation race", [], run_id, conversation_id, fence, factory, _settings(), _Redis(),  # type: ignore[arg-type]
+            "revocation race", [], run_id, conversation_id, fence, factory, _settings(), _Redis(), **await _admit(factory, run_id),  # type: ignore[arg-type]
         ))
         await asyncio.sleep(0.5)  # the fence is now blocked on the privacy key
         async with committed_engine.begin() as connection:  # save_ai_settings takes only the row lock
@@ -261,10 +275,11 @@ async def test_save_after_fence_read_blocks_until_body_is_sent(
     async def save_revocation() -> None:
         async with factory() as session:  # another session, exactly what PUT /ai does
             revision = await session.scalar(text("SELECT configuration_revision FROM ai_settings WHERE owner_id = 1"))
+            scope = (await owner_scope_kwargs(session))["scope"]
             await settings_public.save_ai_settings(session, AISettingsUpdate(
                 web_search_provider="tavily", web_search_endpoint=ENDPOINT,  # type: ignore[arg-type]
                 privacy=PrivacySettings(allow_remote_web_search=False), expected_revision=revision,
-            ), _settings())
+            ), _settings(), scope=scope)
             await session.commit()
 
     monkeypatch.setattr(worker, "approved_web_search_transport", parked_provider)
@@ -272,7 +287,7 @@ async def test_save_after_fence_read_blocks_until_body_is_sent(
     try:
         with patch.object(asyncio.get_running_loop(), "getaddrinfo", AsyncMock(return_value=[_answer("93.184.216.34")])):
             search = asyncio.create_task(worker._search_for_run(
-                "blocked save", [], run_id, conversation_id, fence, factory, _settings(), _Redis(),  # type: ignore[arg-type]
+                "blocked save", [], run_id, conversation_id, fence, factory, _settings(), _Redis(), **await _admit(factory, run_id),  # type: ignore[arg-type]
             ))
             await asyncio.wait_for(parked.wait(), 3)
             save = asyncio.create_task(save_revocation())
@@ -305,7 +320,7 @@ async def test_nat64_and_private_answers_are_denied(
     try:
         with patch.object(asyncio.get_running_loop(), "getaddrinfo", AsyncMock(return_value=[_answer(ip)])):
             run = await worker._search_for_run(
-                "where is the metadata", [], run_id, conversation_id, fence, factory, _settings(), _Redis(),  # type: ignore[arg-type]
+                "where is the metadata", [], run_id, conversation_id, fence, factory, _settings(), _Redis(), **await _admit(factory, run_id),  # type: ignore[arg-type]
             )
         assert run.outcome == {"status": "unavailable", "reason": "network_denied", "result_count": 0}
         assert fake_model.SEARCH_LOG == []

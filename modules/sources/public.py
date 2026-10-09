@@ -447,6 +447,8 @@ async def get_source(session: AsyncSession, source_id: UUID, *, scope: Scope, mu
     return await session.scalar(select(Source).where(
         Source.id == source_id, *_source_scope(scope),
     ).execution_options(populate_existing=True))
+
+
 CHAT_ATTACHMENTS_MARKER = "chat_attachments"
 CHAT_ATTACHMENTS_NAME = "Chat attachments"
 CHAT_ATTACHMENTS_SHARED_NAME = "Chat attachments (shared)"

@@ -3,7 +3,7 @@ from uuid import uuid4
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import delete
+from sqlalchemy import delete, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from modules.memory.models import Memory
@@ -53,8 +53,9 @@ async def test_counts_exclude_chat_memories_hidden_by_history_off(
     hidden_id = uuid4()
     prior = (await owner_client.get("/api/v1/settings/memory-privacy")).json()
     async with AsyncSession(committed_engine, expire_on_commit=False) as session:
+        ws_id, actor_id = (await session.execute(text("SELECT id, owner_user_id FROM workspaces ORDER BY created_at LIMIT 1"))).one()
         session.add(Memory(
-            id=hidden_id, content="hidden chat copy", memory_type="fact", is_manual=False,
+            workspace_id=ws_id, actor_user_id=actor_id, id=hidden_id, content="hidden chat copy", memory_type="fact", is_manual=False,
             provenance={"conversation_id": str(uuid4()), "message_id": str(uuid4())},
         ))
         await session.commit()

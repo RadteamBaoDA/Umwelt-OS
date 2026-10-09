@@ -504,11 +504,11 @@ async def test_impact_counts_seeded_gadget_and_chat_citation(
     conversation_id = uuid4()
     async with engine.begin() as connection:
         await connection.execute(text(
-            "INSERT INTO gadget_definitions (id, owner_id, name, renderer, source_ids) "
-            "VALUES (gen_random_uuid(), :owner, 'impact gadget', 'list', CAST(:ids AS jsonb))"
+            "INSERT INTO gadget_definitions (id, workspace_id, owner_id, name, renderer, source_ids) "
+            "VALUES (gen_random_uuid(), (SELECT id FROM workspaces ORDER BY created_at LIMIT 1), :owner, 'impact gadget', 'list', CAST(:ids AS jsonb))"
         ), {"owner": owner_id, "ids": f'["{source_id}"]'})
         await connection.execute(text(
-            "INSERT INTO chat_conversations (id, title) VALUES (:id, 'impact chat')"
+            "INSERT INTO chat_conversations (id, workspace_id, actor_user_id, title) VALUES (:id, (SELECT id FROM workspaces ORDER BY created_at LIMIT 1), (SELECT owner_user_id FROM workspaces ORDER BY created_at LIMIT 1), 'impact chat')"
         ), {"id": conversation_id})
         await connection.execute(text(
             "INSERT INTO chat_messages (id, conversation_id, role, content, citations) "

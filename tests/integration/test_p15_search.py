@@ -7,7 +7,7 @@ from uuid import uuid4
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 pytestmark = pytest.mark.skipif(
     os.getenv("BBD_INTEGRATION") != "1", reason="requires disposable Compose test services"
@@ -28,7 +28,7 @@ async def test_conversation_search_hides_ephemeral_expired_and_blank(
     async with committed_engine.begin() as connection:
         for row_id, title, ephemeral, expires_at in rows:
             await connection.execute(
-                text("INSERT INTO chat_conversations (id, title, ephemeral, expires_at) VALUES (:i, :t, :e, :x)"),
+                text("INSERT INTO chat_conversations (id, workspace_id, actor_user_id, title, ephemeral, expires_at) VALUES (:i, (SELECT id FROM workspaces ORDER BY created_at LIMIT 1), (SELECT owner_user_id FROM workspaces ORDER BY created_at LIMIT 1), :t, :e, :x)"),
                 {"i": row_id, "t": title, "e": ephemeral, "x": expires_at},
             )
     try:
@@ -63,8 +63,8 @@ async def test_conversation_search_fences_on_real_rows(
     async with committed_engine.begin() as connection:
         for title, kind, archived, ephemeral, expires_at in rows:
             await connection.execute(
-                text("INSERT INTO chat_conversations (id, title, context_kind, archived, ephemeral, expires_at)"
-                     " VALUES (:i, :t, :k, :a, :e, :x)"),
+                text("INSERT INTO chat_conversations (id, workspace_id, actor_user_id, title, context_kind, archived, ephemeral, expires_at)"
+                     " VALUES (:i, (SELECT id FROM workspaces ORDER BY created_at LIMIT 1), (SELECT owner_user_id FROM workspaces ORDER BY created_at LIMIT 1), :t, :k, :a, :e, :x)"),
                 {"i": uuid4(), "t": title, "k": kind, "a": archived, "e": ephemeral, "x": expires_at},
             )
     privacy = (await owner_client.get("/api/v1/settings/memory-privacy")).json()["store_conversation_history"]
@@ -99,18 +99,16 @@ async def test_conversation_search_fences_on_real_rows(
 async def test_event_search_fences_on_real_rows(
     owner_client: AsyncClient, committed_engine: AsyncEngine,
 ) -> None:
-    from modules.timeline import public as timeline_public
-
     tag = uuid4().hex[:8]
     now = datetime.now(UTC)
     source_id, document_id, version_id, chunk_id = uuid4(), uuid4(), uuid4(), uuid4()
     derived_id, manual_id, deleted_id, pct_id, other_id = (uuid4() for _ in range(5))
     async with committed_engine.begin() as connection:
-        await connection.execute(text("INSERT INTO sources (id, type, name) VALUES (:i, 'rss', :n)"),
+        await connection.execute(text("INSERT INTO sources (id, workspace_id, type, name) VALUES (:i, (SELECT id FROM workspaces ORDER BY created_at LIMIT 1), 'rss', :n)"),
                                  {"i": source_id, "n": f"p15 {tag}"})
         await connection.execute(
-            text("INSERT INTO documents (id, source_id, title, current_version, content_hash)"
-                 " VALUES (:d, :s, :t, 1, 'h')"), {"d": document_id, "s": source_id, "t": f"doc {tag}"})
+            text("INSERT INTO documents (id, workspace_id, source_id, title, current_version, content_hash)"
+                 " VALUES (:d, (SELECT id FROM workspaces ORDER BY created_at LIMIT 1), :s, :t, 1, 'h')"), {"d": document_id, "s": source_id, "t": f"doc {tag}"})
         await connection.execute(
             text("INSERT INTO document_versions (id, document_id, version_number, content, content_hash)"
                  " VALUES (:v, :d, 1, 'c', 'h')"), {"v": version_id, "d": document_id})
@@ -125,13 +123,13 @@ async def test_event_search_fences_on_real_rows(
             (other_id, f"100x {tag}", "manual", None, None),
         ]:
             await connection.execute(
-                text("INSERT INTO timeline_events (id, source_id, type, title, origin, date_precision, observed_at, deleted_at)"
-                     " VALUES (:i, :s, 'note', :t, :o, 'unknown', now(), :x)"),
+                text("INSERT INTO timeline_events (id, workspace_id, source_id, type, title, origin, date_precision, observed_at, deleted_at)"
+                     " VALUES (:i, (SELECT id FROM workspaces ORDER BY created_at LIMIT 1), :s, 'note', :t, :o, 'unknown', now(), :x)"),
                 {"i": event_id, "s": src, "t": title, "o": origin, "x": deleted_at},
             )
         await connection.execute(
-            text("INSERT INTO timeline_event_evidence (id, event_id, source_id, document_id, document_version_id, chunk_id)"
-                 " VALUES (:i, :e, :s, :d, :v, :c)"),
+            text("INSERT INTO timeline_event_evidence (id, workspace_id, event_id, source_id, document_id, document_version_id, chunk_id)"
+                 " VALUES (:i, (SELECT id FROM workspaces ORDER BY created_at LIMIT 1), :e, :s, :d, :v, :c)"),
             {"i": uuid4(), "e": derived_id, "s": source_id, "d": document_id, "v": version_id, "c": chunk_id},
         )
     try:
@@ -144,9 +142,12 @@ async def test_event_search_fences_on_real_rows(
         for path in paths:
             before = await titles(path)
             assert f"derived {tag}" in before and f"deleted {tag}" not in before
-        async with AsyncSession(committed_engine) as session:
-            await timeline_public.remove_source_support(session, source_id=source_id)
-            await session.commit()
+        # Emulate removing the Source's support (the real closure-based API needs a held admission):
+        # drop its evidence and soft-delete derived events left without any.
+        async with committed_engine.begin() as connection:
+            await connection.execute(text("DELETE FROM timeline_event_evidence WHERE source_id = :s"), {"s": source_id})
+            await connection.execute(text(
+                "UPDATE timeline_events SET deleted_at = now() WHERE origin = 'derived' AND source_id = :s"), {"s": source_id})
         for path in paths:
             after = await titles(path)
             assert not any(title.startswith(("derived", "[unsupported")) for title in after)
