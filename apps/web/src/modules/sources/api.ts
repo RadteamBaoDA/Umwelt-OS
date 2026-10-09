@@ -361,6 +361,14 @@ export function saveWorldProviderCredential(id: string, expectedGeneration: numb
   });
 }
 
+/** Stores a native REST provider key (CoinGecko) in the owner-only encrypted slot; the key is never returned. */
+export function saveNativeRestCredential(id: string, expectedRevision: number, secret: string, csrfToken: string, signal?: AbortSignal) {
+  return apiRequest<ConnectorActivation>(`/api/v1/connectors/${id}/credentials/native-rest`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify({ expected_revision: expectedRevision, secret }), signal,
+  });
+}
+
 /** Starts connector collection with CSRF protection and returns the accepted run or batch identifiers. */
 export function triggerCollection(id: string, csrfToken: string) {
   return apiRequest<ManualSyncResult>(`/api/v1/connectors/sources/${id}/collect`, { method: 'POST', headers: csrfHeaders(csrfToken) });

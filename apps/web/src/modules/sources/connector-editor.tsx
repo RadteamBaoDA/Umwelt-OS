@@ -39,6 +39,7 @@ import {
   selectMonotonicConnectorConfiguration,
   removeProviderCredential,
   saveWorldProviderCredential,
+  saveNativeRestCredential,
   saveConnectorConfiguration,
   Source,
   sourceKeys,
@@ -56,9 +57,14 @@ import {
 } from './api';
 
 const intervals = [15, 30, 60, 360, 1440] as const;
-const sourceTypes = { rss: 'rss', web: 'web', rest: 'api', mcp: 'mcp', youtube: 'rss', arxiv: 'rss', huggingface: 'api', github: 'api', github_releases: 'api', telegram: 'api', alpha_vantage: 'api', open_meteo: 'api' } as const;
+const sourceTypes = { rss: 'rss', web: 'web', rest: 'api', mcp: 'mcp', youtube: 'rss', arxiv: 'rss', huggingface: 'api', github: 'api', github_releases: 'api', telegram: 'api', alpha_vantage: 'api', open_meteo: 'api', coingecko: 'api' } as const;
 type Provider = keyof typeof sourceTypes;
-const nativeProviders = new Set<Provider>(['youtube', 'arxiv', 'huggingface', 'github', 'github_releases', 'telegram', 'alpha_vantage', 'open_meteo']);
+const nativeProviders = new Set<Provider>(['youtube', 'arxiv', 'huggingface', 'github', 'github_releases', 'telegram', 'alpha_vantage', 'open_meteo', 'coingecko']);
+
+/** True when the schedule/activation gate asks the owner to (re)enter a provider key. */
+function keyNeeded(code: string | null | undefined): boolean {
+  return code === 'credential_missing' || code === 'invalid_credential';
+}
 
 /** Checks whether a provider identifier belongs to the supported provider set. */
 function isProvider(value: string): value is Provider {
@@ -71,7 +77,7 @@ function providerKey(providerId: string): string {
     rss: 'providerRss', web: 'providerWeb', rest: 'providerRest', mcp: 'providerMcp', github: 'providerGithub',
     google_mail: 'providerGoogleMail', google_calendar: 'providerGoogleCalendar', google_drive: 'providerGoogleDrive',
     youtube: 'providerYoutube', arxiv: 'providerArxiv', huggingface: 'providerHuggingface', github_releases: 'providerGithubReleases',
-    telegram: 'providerTelegram', alpha_vantage: 'providerAlphaVantage', open_meteo: 'providerOpenMeteo', google_news: 'providerGoogleNews', reddit: 'providerReddit', hacker_news: 'providerHackerNews',
+    telegram: 'providerTelegram', alpha_vantage: 'providerAlphaVantage', coingecko: 'providerCoinGecko', open_meteo: 'providerOpenMeteo', google_news: 'providerGoogleNews', reddit: 'providerReddit', hacker_news: 'providerHackerNews',
     mastodon: 'providerMastodon', bluesky: 'providerBluesky', x: 'providerX', vietnamese_press: 'providerVietnamesePress',
     gdelt_government: 'providerGdelt', finance: 'providerFinance', weather_disaster_climate: 'providerWeather', cyber_cve: 'providerCyber',
     map_osint: 'providerMapOsint', browser: 'providerBrowser', notes: 'providerNotes', health: 'providerHealth',
@@ -690,16 +696,24 @@ export function ConnectorEditor({
         setError('providerSecretRequired');
         return;
       }
+      const replacingNativeKey = provider === 'coingecko' && Boolean(activationDraft.secret);
+      if (provider === 'coingecko' && !replacingNativeKey && !providerCredentialConfigured) {
+        setError('providerSecretRequired');
+        return;
+      }
+      if (replacingNativeKey) {
+        await saveNativeRestCredential(id, nextRevision, activationDraft.secret, csrfToken, token.controller.signal);
+      }
       if (replacingWorldKey) {
         await saveWorldProviderCredential(id, sourceGenerationRef.current, nextRevision, activationDraft.secret, csrfToken, token.controller.signal);
       }
-      const replacingSecret = provider === 'alpha_vantage' ? false : activationDraft.authMethod === 'telegram_bot_token' ? activationDraft.telegramSecretAction === 'replace' : Boolean(activationDraft.secret);
+      const replacingSecret = provider === 'alpha_vantage' || provider === 'coingecko' ? false : activationDraft.authMethod === 'telegram_bot_token' ? activationDraft.telegramSecretAction === 'replace' : Boolean(activationDraft.secret);
       const result = await activateConnector(id, nextRevision, replacingSecret ? 'replace' : 'keep', replacingSecret ? activationDraft.secret : undefined, csrfToken, token.controller.signal, backendChoice ?? undefined);
       if (!requestIsCurrent(token)) return;
       setActivationState(result.state);
       setActivationError(result.error_code);
-      setProviderCredentialConfigured(replacingWorldKey || activationDraft.authMethod === 'http_header' || activationDraft.authMethod === 'telegram_bot_token' || providerCredentialConfigured);
-      const replacementAccepted = replacingSecret || replacingWorldKey;
+      setProviderCredentialConfigured(replacingWorldKey || replacingNativeKey || activationDraft.authMethod === 'http_header' || activationDraft.authMethod === 'telegram_bot_token' || providerCredentialConfigured);
+      const replacementAccepted = replacingSecret || replacingWorldKey || replacingNativeKey;
       if (replacementAccepted) { setSecret(''); setTelegramSecretAction('keep'); }
       if (draftVersion.current === token.draftVersion) {
         setDirty(false);
@@ -1056,14 +1070,14 @@ export function ConnectorEditor({
         <div className="form source-editor-form">
           <section id="source-step-connect" aria-labelledby="source-step-connect-title" className="grid gap-3 rounded-lg border border-border p-4">
             <h3 id="source-step-connect-title" className="text-base font-semibold">{t('stepConnect')}</h3>
-            {!['telegram', 'alpha_vantage', 'rest'].includes(provider) && currentEntry && (currentEntry.auth_methods.every((method) => method === 'none')
+            {!['telegram', 'alpha_vantage', 'coingecko', 'rest'].includes(provider) && currentEntry && (currentEntry.auth_methods.every((method) => method === 'none')
               ? <p className="muted">{t('connectNoCredential')}</p>
               : currentEntry.auth_methods.includes('oauth2') && <p className="muted">{t('connectOAuth')}</p>)}
             {provider === 'telegram' && <>
               <div className="field"><Label htmlFor="source-telegram-secret-action">{t('telegramCredentialAction')}</Label><Select value={telegramSecretAction} onValueChange={(value) => { setTelegramSecretAction(value as 'keep' | 'replace'); setSecret(''); dirtyRef.current = dirty; draftVersion.current += 1; setValidation(null); setNotice(''); }}><SelectTrigger id="source-telegram-secret-action"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="keep">{t('keepCredential')}</SelectItem><SelectItem value="replace">{t('replaceCredential')}</SelectItem></SelectContent></Select></div>
               {telegramSecretAction === 'replace' && <div className="field"><Label htmlFor="source-telegram-token">{t('telegramBotToken')}</Label><Input id="source-telegram-token" type="password" autoComplete="new-password" maxLength={512} required value={secret} onChange={(event) => { setSecret(event.target.value); dirtyRef.current = true; setDirty(true); draftVersion.current += 1; setValidation(null); setNotice(''); }} /><small className="muted">{t('secretHelp')}</small></div>}
             </>}
-            {provider === 'alpha_vantage' && <div className="field"><Label htmlFor="source-alpha-key">{t('alphaVantageKey')}</Label><Input id="source-alpha-key" type="password" autoComplete="new-password" maxLength={256} required={!providerCredentialConfigured} value={secret} onChange={(event) => { setSecret(event.target.value); dirtyRef.current = true; setDirty(true); draftVersion.current += 1; setValidation(null); setNotice(''); }} /><small className="muted">{providerCredentialConfigured ? t('credentialSavedWriteOnly') : t('secretHelp')}</small></div>}
+            {(provider === 'alpha_vantage' || (provider === 'coingecko' && (backendChoice ?? 'native') === 'native')) && <div className="field"><Label htmlFor="source-provider-key">{t(provider === 'coingecko' ? 'coingeckoKey' : 'alphaVantageKey')}</Label><Input id="source-provider-key" type="password" autoComplete="new-password" maxLength={256} required={!providerCredentialConfigured} value={secret} onChange={(event) => { setSecret(event.target.value); dirtyRef.current = true; setDirty(true); draftVersion.current += 1; setValidation(null); setNotice(''); }} /><small className="muted">{providerCredentialConfigured ? t('credentialSavedWriteOnly') : t('secretHelp')}</small>{provider === 'coingecko' && keyNeeded(visibleActivationError) && <small className="error" role="alert">{t('providerKeyNeeded')}</small>}</div>}
           {provider === 'rest' && <>
             <div className="field"><Label htmlFor="source-auth-method">{t('auth')}</Label><Select value={authMethod} onValueChange={(value) => { setAuthMethod(value as typeof authMethod); markDraftChanged(); setValidation(null); }}><SelectTrigger id="source-auth-method"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">{t('noAuthentication')}</SelectItem><SelectItem value="http_header">{t('headerAuthentication')}</SelectItem></SelectContent></Select></div>
             {authMethod === 'http_header' && <>
