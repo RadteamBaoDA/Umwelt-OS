@@ -23,8 +23,8 @@ from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, Worksp
 from modules.connectors import mcp as mcp_collection
 from modules.connectors import provider_terms, provisioning, registry, scheduler
 from modules.connectors import public as connectors_public
-from modules.connectors.collection_schemas import CollectionRequestRead
 from modules.connectors.backends import FIXED_SCOPE_PROVIDERS
+from modules.connectors.collection_schemas import CollectionRequestRead
 from modules.connectors.github import oauth as github_oauth
 from modules.connectors.github.adapter import collect_github_segment
 from modules.connectors.github.schemas import GitHubHintClaimProof, project_github_source_config
