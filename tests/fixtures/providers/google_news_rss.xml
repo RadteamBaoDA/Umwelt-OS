@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SYNTHETIC fixture: hand-written to follow the Google News RSS item shape; never fetched from news.google.com. -->
+<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">
+<channel><title>"economy site:reuters.com" - Google News</title><link>https://news.google.com/search?q=economy</link>
+<item><title>Central bank holds rates steady - Reuters</title><link>https://news.google.com/rss/articles/SYNTHETIC0001?oc=5</link><guid isPermaLink="false">SYNTHETIC0001</guid><pubDate>Wed, 07 Oct 2026 08:00:00 GMT</pubDate><description>&lt;a href="https://news.google.com/rss/articles/SYNTHETIC0001?oc=5" target="_blank"&gt;Central bank holds rates steady&lt;/a&gt;&amp;nbsp;&amp;nbsp;&lt;font color="#6f6f6f"&gt;Reuters&lt;/font&gt;</description><source url="https://www.reuters.com">Reuters</source></item>
+<item><title>Trade talks resume - AP News</title><link>https://news.google.com/rss/articles/SYNTHETIC0002?oc=5</link><guid isPermaLink="false">SYNTHETIC0002</guid><pubDate>Wed, 07 Oct 2026 09:30:00 GMT</pubDate><description>Trade talks resume</description><source url="https://apnews.com">AP News</source></item>
+<item><title>Item without source element</title><link>https://news.google.com/rss/articles/SYNTHETIC0003?oc=5</link><guid isPermaLink="false">SYNTHETIC0003</guid><pubDate>Wed, 07 Oct 2026 07:00:00 GMT</pubDate></item>
+</channel></rss>

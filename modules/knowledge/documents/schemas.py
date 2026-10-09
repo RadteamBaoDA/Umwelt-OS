@@ -15,7 +15,7 @@ from pydantic import (
 
 MAX_CONTENT_BYTES = 1_048_576
 MAX_METADATA_BYTES = 65_536
-NEWS_PROVIDER_IDS = ("bbc_world", "vnexpress_business", "hn_top", "gdelt_economy")
+NEWS_PROVIDER_IDS = ("bbc_world", "vnexpress_business", "hn_top", "gdelt_economy", "google_news")
 MEASUREMENT_PROVIDER_IDS = (
     "alpha_vantage", "open_meteo", "world_bank", "frankfurter", "ecb", "binance",
     "alternative_me", "usgs", "coinpaprika", "coingecko",
@@ -159,7 +159,7 @@ class ProviderRecordMetadata(BaseModel):
         "youtube", "arxiv", "huggingface", "github_releases", "github", "telegram",
         "alpha_vantage", "open_meteo", "world_bank", "frankfurter", "ecb", "binance",
         "alternative_me", "usgs", "coinpaprika", "coingecko",
-        "bbc_world", "vnexpress_business", "hn_top", "gdelt_economy",
+        "bbc_world", "vnexpress_business", "hn_top", "gdelt_economy", "google_news",
     ]
     identity: str = Field(min_length=1, max_length=512)
     provider_version: str | None = Field(default=None, max_length=255)
@@ -200,7 +200,7 @@ class ProviderRecordMetadata(BaseModel):
             "github": {"record_type", "node_id", "html_url"},
             "telegram": set(),
             **{provider: set() for provider in MEASUREMENT_PROVIDER_IDS},
-            "bbc_world": _FEED_FIELDS, "vnexpress_business": _FEED_FIELDS,
+            "bbc_world": _FEED_FIELDS, "vnexpress_business": _FEED_FIELDS, "google_news": _FEED_FIELDS,
             "hn_top": {"title", "text", "url", "by", "time", "id", "type", "deleted", "dead"},
             "gdelt_economy": {"title", "url", "seendate", "domain", "language", "sourcecountry"},
         }[self.provider]

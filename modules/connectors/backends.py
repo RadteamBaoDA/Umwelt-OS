@@ -14,10 +14,13 @@ PROVIDER_SOURCE_TYPES = MappingProxyType({
     "world_bank": "api", "frankfurter": "api", "ecb": "api", "binance": "api",
     "alternative_me": "api", "usgs": "api", "coinpaprika": "api",
     "coingecko": "api",  # fixed endpoint; owner-supplied API key lives in connector_rest_credentials
+    "google_news": "rss",  # scoped free preset: URL is built server-side from validated query/site/locale
 })
 FIXED_SCOPE_PROVIDERS = frozenset(PROVIDER_SOURCE_TYPES) - frozenset({
-    "youtube", "arxiv", "huggingface", "github_releases", "github", "telegram", "alpha_vantage", "open_meteo",
+    "youtube", "arxiv", "huggingface", "github_releases", "github", "telegram", "alpha_vantage", "open_meteo", "google_news",
 })
+# Free presets collected only by the gated shared executor (fixed-endpoint presets plus the scoped Google News preset).
+GATED_EXECUTOR_PROVIDERS = FIXED_SCOPE_PROVIDERS | {"google_news"}
 PROVIDER_SCOPE_FIELDS = MappingProxyType({
     "youtube": frozenset({"youtube_channel_id"}), "arxiv": frozenset({"arxiv_category"}),
     "huggingface": frozenset({"huggingface_author"}),
@@ -29,6 +32,7 @@ PROVIDER_SCOPE_FIELDS = MappingProxyType({
     "telegram": frozenset({"telegram_chat_ids"}),
     "alpha_vantage": frozenset({"market_symbols", "market_currency", "market_exchange_timezone"}),
     "open_meteo": frozenset({"weather_latitude", "weather_longitude", "weather_timezone", "weather_metrics"}),
+    "google_news": frozenset({"news_query", "news_site", "news_locale"}),
     **dict.fromkeys(FIXED_SCOPE_PROVIDERS, frozenset[str]()),
 })
 NATIVE_PROVIDERS = frozenset(PROVIDER_SOURCE_TYPES)

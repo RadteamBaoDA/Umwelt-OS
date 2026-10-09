@@ -23,7 +23,7 @@ from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from typing import Any, Literal
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 
 from modules.connectors.provider_specs import get_provider_spec
 from modules.connectors.providers.macro import (
@@ -47,6 +47,38 @@ FEED_URLS: dict[str, str] = {
     "vnexpress_business": "https://vnexpress.net/rss/kinh-doanh.rss",
 }
 PUBLISHERS: dict[str, str] = {"bbc_world": "BBC News", "vnexpress_business": "VnExpress"}
+
+# Google News RSS search: unofficial endpoint, no API contract. The URL is built here from validated scope only.
+GOOGLE_NEWS_URL = "https://news.google.com/rss/search"
+GOOGLE_NEWS_LICENSE = "Google News RSS / publisher"
+GOOGLE_NEWS_SITES = ("any", "reuters.com", "apnews.com", "bbc.com", "vnexpress.net")
+GOOGLE_NEWS_LOCALES: dict[str, tuple[str, str, str]] = {"vi-VN": ("vi", "VN", "VN:vi"), "en-US": ("en", "US", "US:en")}
+_QUERY_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+_SITE_OPERATOR_RE = re.compile(r"(?i)\bsite\s*:")
+
+
+def google_news_url(query: object, site: object, locale: object) -> str:
+    """Escaped Google News RSS search URL from allowlisted scope; any other value is ``provider_scope_invalid``."""
+    if not isinstance(query, str) or site not in GOOGLE_NEWS_SITES or locale not in GOOGLE_NEWS_LOCALES:
+        raise ProviderPayloadError("provider_scope_invalid")
+    cleaned = " ".join(_QUERY_CONTROL_RE.sub(" ", query).split())
+    if not 1 <= len(cleaned) <= 200 or _SITE_OPERATOR_RE.search(cleaned):
+        raise ProviderPayloadError("provider_scope_invalid")
+    hl, gl, ceid = GOOGLE_NEWS_LOCALES[str(locale)]
+    q = cleaned if site == "any" else f"{cleaned} site:{site}"
+    return f"{GOOGLE_NEWS_URL}?" + urlencode({"q": q, "hl": hl, "gl": gl, "ceid": ceid}, quote_via=quote)
+
+
+def preset_url(provider: str, configuration: Mapping[str, Any] | None = None) -> str:
+    """Fixed URL for a feed preset, or the server-built Google News URL from stored scope."""
+    if provider == "google_news":
+        cfg = configuration or {}
+        return google_news_url(cfg.get("news_query"), cfg.get("news_site"), cfg.get("news_locale"))
+    url = FEED_URLS.get(provider)
+    if url is None:
+        raise ProviderPayloadError("provider_scope_invalid")
+    return url
+
 HN_TOP_URL = "https://hacker-news.firebaseio.com/v0/topstories.json"
 HN_ITEM_URL = "https://hacker-news.firebaseio.com/v0/item/{id}.json"
 HN_MAX_ITEMS = 10  # items fetched per run; one extra call lists the ids (11 sends total)
@@ -124,6 +156,8 @@ def _stable_id(raw: str) -> str:
 
 
 def _license_label(provider: str) -> str | None:
+    if provider == "google_news":
+        return GOOGLE_NEWS_LICENSE
     spec = get_provider_spec(provider)
     return spec.attribution[:255] if spec else None
 
@@ -219,7 +253,7 @@ def _scan_items(root: ET.Element) -> list[ET.Element]:
 
 def map_feed(provider: str, body: bytes, collected_at: datetime) -> list[IngestionRecord]:
     """Map one RSS 2.0 / Atom body for a fixed preset; order-independent, no fetch of linked articles."""
-    if provider not in FEED_URLS:
+    if provider not in FEED_URLS and provider != "google_news":
         raise ProviderPayloadError("provider_scope_invalid")
     items = _scan_items(safe_xml_root(body))
     by_id: dict[str, tuple[tuple[datetime, str], IngestionRecord]] = {}
@@ -237,9 +271,11 @@ def map_feed(provider: str, body: bytes, collected_at: datetime) -> list[Ingesti
         published = parse_when(_child_text(item, "published" if atom else "pubDate", "date"), collected_at)
         updated = parse_when(_child_text(item, "updated") if atom else None, collected_at)
         summary = plain_text(_child_text(item, "summary", "content") if atom else _child_text(item, "description"), _MAX_SUMMARY)
+        # Google News items name the original publisher in <source>; the item link is kept as the citation.
+        publisher = plain_text(_child_text(item, "source"), 200) or None if provider == "google_news" else PUBLISHERS[provider]
         pub_iso = published.isoformat() if published else None
         upd_iso = updated.isoformat() if updated else None
-        fields: dict[str, Any] = {"title": title, "guid": identity if guid else None, "publisher": PUBLISHERS[provider]}
+        fields: dict[str, Any] = {"title": title, "guid": identity if guid else None, "publisher": publisher}
         if summary:
             fields["summary"] = summary
         if link:
@@ -299,11 +335,11 @@ def _header_value(raw: str | None) -> str | None:
     return raw.strip()
 
 
-def feed_request(provider: str, stored: FeedValidators | None = None, config_revision: str = "") -> ProviderRequest:
-    """Fixed preset GET; validators are replayed only when URL and config revision still match."""
-    url = FEED_URLS.get(provider)
-    if url is None:
-        raise ProviderPayloadError("provider_scope_invalid")
+def feed_request(
+    provider: str, stored: FeedValidators | None = None, config_revision: str = "", url: str | None = None,
+) -> ProviderRequest:
+    """Preset GET (``url`` is the server-built Google News URL); validators replay only when URL and revision match."""
+    url = url or preset_url(provider)
     headers: dict[str, str] = {"Accept": "application/rss+xml, application/atom+xml, application/xml;q=0.9"}
     if stored is not None and stored.url == url and stored.config_revision == config_revision:
         if _header_value(stored.etag):
@@ -313,13 +349,15 @@ def feed_request(provider: str, stored: FeedValidators | None = None, config_rev
     return ProviderRequest("GET", url, headers)
 
 
-def capture_validators(provider: str, headers: Mapping[str, str], config_revision: str = "") -> FeedValidators | None:
+def capture_validators(
+    provider: str, headers: Mapping[str, str], config_revision: str = "", url: str | None = None,
+) -> FeedValidators | None:
     """Validators from a 200 response, tied to this preset URL and revision; None when the feed offers none."""
     lowered = {k.lower(): v for k, v in headers.items()}
     etag, modified = _header_value(lowered.get("etag")), _header_value(lowered.get("last-modified"))
     if not etag and not modified:
         return None
-    return FeedValidators(FEED_URLS[provider], config_revision, etag, modified)
+    return FeedValidators(url or preset_url(provider), config_revision, etag, modified)
 
 
 @dataclass(frozen=True)
