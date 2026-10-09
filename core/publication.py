@@ -55,7 +55,7 @@ class PublicationGateMiddleware:
             nonlocal started, denied
             if denied is not None:
                 return  # response start was denied: drop the rest, 404/409 is sent afterwards
-            fence = (scope.get("state") or {}).get("publication_fence")
+            fence: PublicationFence | None = (scope.get("state") or {}).get("publication_fence")
             kind = message["type"]
             protected = fence is not None and (
                 kind == "http.response.start" or (kind == "http.response.body" and bool(message.get("body", b""))))
@@ -64,6 +64,7 @@ class PublicationGateMiddleware:
                     started = True
                 await send(message)
                 return
+            assert fence is not None
             app: Any = scope["app"]
             session: AsyncSession = app.state.session_factory()
             try:
