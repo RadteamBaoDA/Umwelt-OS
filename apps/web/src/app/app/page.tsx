@@ -1,5 +1,5 @@
 import { WorkspaceShell } from '@/core/app-shell/workspace-shell';
-import { DashboardPage } from '@/modules/dashboard/dashboard-page';
+import { AppHome } from '@/modules/dashboard/app-home';
 import { SelectedDayProvider } from '@/modules/dashboard/selected-day';
 
 /** Renders the authenticated application dashboard route. */
@@ -7,7 +7,7 @@ export default function AppPage() {
   return (
     <WorkspaceShell>
       <SelectedDayProvider>
-        <DashboardPage />
+        <AppHome />
       </SelectedDayProvider>
     </WorkspaceShell>
   );

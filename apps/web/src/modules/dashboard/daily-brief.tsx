@@ -53,6 +53,7 @@ export function DailyBrief() {
   const context = useQuery({
     queryKey: dailyKeys.context(date, timezone),
     queryFn: ({ signal }) => getDailyContext(date, timezone, signal),
+    enabled: isOwner,
   });
   const generate = useMutation({
     mutationFn: () => generateBrief(date, timezone, session.data!.csrfToken),
