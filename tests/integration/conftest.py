@@ -26,9 +26,8 @@ async def owner_client() -> AsyncIterator[AsyncClient]:
     async with AsyncClient(base_url=base_url) as client:
         csrf_response = await client.get("/api/v1/auth/csrf")
         csrf_response.raise_for_status()
-        login = await post_after_throttle(
+        login = await login_after_throttle(
             client,
-            "/api/v1/auth/login",
             headers={"Origin": origin, "X-CSRF-Token": csrf_response.json()["csrfToken"]},
             json={"password": "test-owner-password-42"},
         )
@@ -136,6 +135,16 @@ async def post_after_throttle(client: AsyncClient, url: str, **kwargs: Any) -> R
     return response
 
 
+async def login_after_throttle(client: AsyncClient, **kwargs: Any) -> Response:
+    """Fixture login: also retry the generic 401 a login gets when it loses the NOWAIT owner-row lock to a worker."""
+    for _ in range(6):
+        response = await post_after_throttle(client, "/api/v1/auth/login", **kwargs)
+        if response.status_code != 401:
+            break
+        await asyncio.sleep(1)
+    return response
+
+
 @pytest.fixture
 def post_throttled() -> Callable[..., Awaitable[Response]]:
     return post_after_throttle
@@ -158,8 +167,8 @@ async def ready_owner_client() -> AsyncIterator[AsyncClient]:
             )
             assert created.status_code == 201
             csrf = (await client.get("/api/v1/auth/csrf")).json()["csrfToken"]
-        login = await post_after_throttle(
-            client, "/api/v1/auth/login",
+        login = await login_after_throttle(
+            client,
             headers={"Origin": origin, "X-CSRF-Token": csrf},
             json={"password": OWNER_PASSWORD},
         )
