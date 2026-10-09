@@ -26,6 +26,7 @@ from modules.chat.citations import (
     renumber_citation_markers,
     validate_answer_citations,
 )
+from modules.chat.history import load_effective_history
 from modules.chat.models import (
     AgentActivityLink,
     Conversation,
@@ -573,20 +574,7 @@ async def run_response_generation(
             # Prior messages in this conversation if history enabled
             prior_messages: list[dict[str, str]] = []
             if history_enabled:
-                history_rows = (
-                    await session.scalars(
-                        select(Message)
-                        .where(
-                            Message.conversation_id == conversation_id,
-                            Message.created_at < history_cutoff,
-                        )
-                        .order_by(Message.created_at.asc())
-                        .limit(20)
-                    )
-                ).all()
-                for row in history_rows:
-                    if row.role in ("user", "assistant"):
-                        prior_messages.append({"role": row.role, "content": row.content})
+                prior_messages = await load_effective_history(session, conversation_id, history_cutoff, job_scope)
 
             # Parse and assemble AnswerContextRequest
             req_params = dict(raw_context_req or {})

@@ -104,7 +104,7 @@ class _Gen:
         for name in ("commit", "flush", "rollback", "close", "begin"):
             setattr(self.session, name, AsyncMock())
         seq = iter(range(100, 10_000))
-        monkeypatch.setattr(worker, "_admit_job", AsyncMock(return_value=(SimpleNamespace(), SimpleNamespace())))
+        monkeypatch.setattr(worker, "_admit_job", AsyncMock(return_value=(SimpleNamespace(workspace_id=uuid4()), SimpleNamespace())))
         monkeypatch.setattr(worker, "_lock_live_response", AsyncMock(return_value=(True, MagicMock())))
         monkeypatch.setattr(worker, "is_run_cancelled", AsyncMock(return_value=False))
         monkeypatch.setattr(worker, "revalidate_context_fence", self.fence)
