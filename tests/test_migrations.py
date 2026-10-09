@@ -111,3 +111,16 @@ def test_workspace_shares_migration_renders_and_guards_downgrade() -> None:
     down = _alembic("downgrade", "p14_workspace_shares:r15_highlight_rule_delivery", "--sql")
     assert down.returncode == 0, down.stderr
     assert "DROP TABLE workspace_shares" in down.stdout
+
+
+def test_translation_runtime_migration_renders_slot_and_purge_index() -> None:
+    up = _alembic("upgrade", "p14_workspace_shares:p14_translation_runtime", "--sql")
+    assert up.returncode == 0, up.stderr
+    for fragment in ("CREATE TABLE translation_admission_slots", "ck_translation_admission_slots_singleton",
+                     "(translation_id IS NULL) = (expires_at IS NULL)", "VALUES (1, NULL, 0, NULL)",
+                     "ix_content_translations_resource"):
+        assert fragment in up.stdout
+    assert "REFERENCES content_translations" not in up.stdout.split("CREATE TABLE translation_admission_slots")[1]
+    down = _alembic("downgrade", "p14_translation_runtime:p14_workspace_shares", "--sql")
+    assert down.returncode == 0, down.stderr
+    assert "DROP TABLE translation_admission_slots" in down.stdout

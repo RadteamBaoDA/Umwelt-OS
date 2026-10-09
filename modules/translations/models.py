@@ -9,12 +9,14 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
     Integer,
+    SmallInteger,
     String,
     UniqueConstraint,
     func,
@@ -55,6 +57,7 @@ class ContentTranslation(Base):
         Index("ix_content_translations_scope", "workspace_id", "status", "created_at"),
         Index("ix_content_translations_expiry", "expires_at"),
         Index("ix_content_translations_lease", "status", "next_attempt_at", "lease_expires_at"),
+        Index("ix_content_translations_resource", "workspace_id", "resource_type", "resource_id"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -125,3 +128,19 @@ class TranslationBatchItem(Base):
     resource_revision: Mapped[str] = mapped_column(String(128), nullable=False)
     translation_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class TranslationAdmissionSlot(Base):
+    """The one global translation slot (id = 1); a fencing token makes a stale holder's renewal fail."""
+
+    __tablename__ = "translation_admission_slots"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_translation_admission_slots_singleton"),
+        CheckConstraint("fencing_token >= 0", name="ck_translation_admission_slots_token"),
+        CheckConstraint("(translation_id IS NULL) = (expires_at IS NULL)", name="ck_translation_admission_slots_holder"),
+    )
+
+    id: Mapped[int] = mapped_column(SmallInteger, primary_key=True)
+    translation_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    fencing_token: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
