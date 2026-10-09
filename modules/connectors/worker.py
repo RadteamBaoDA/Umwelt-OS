@@ -40,6 +40,7 @@ _PASS_LIMIT = 40
 
 _CURSOR_KEYS = frozenset({
     "connectors_deleted_revoke", "connectors_workflows", "connectors_unknown_create", "connectors_activation",
+    "connectors_transitions",
 })
 
 
