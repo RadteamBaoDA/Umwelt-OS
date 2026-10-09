@@ -1,27 +1,51 @@
 """Detached workspace lifecycle seams; caller owns admission, auth locks and final commit."""
 
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from hmac import compare_digest
-from datetime import UTC, datetime, timedelta
 from secrets import token_urlsafe
 from typing import Literal, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import Select, select
-from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import HTTPException
+from sqlalchemy import Select, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.workspaces.models import Workspace, WorkspaceMembership, WorkspaceInvitation
-from core.workspaces.schemas import (
-    WorkspaceContext, WorkspaceRead, InvitationTarget, InvitationRead, MemberRead,
-    InvitationList, MemberList, InvitationAccepted,
-    GrantRef, ShareKind, ShareList, ShareRead, ShareUpsert,
-)
 from core.workspaces.access import (
     authorize_internal_job as authorize_internal_job,
+)
+from core.workspaces.access import (
     lock_access_fence as lock_access_fence,
-    lock_owner_management, lock_workspace_memberships,
+)
+from core.workspaces.access import (
+    lock_owner_management,
+    lock_share_management,
+    lock_workspace_memberships,
+)
+from core.workspaces.access import (
     read_access_fence as read_access_fence,
+)
+from core.workspaces.models import (
+    Workspace,
+    WorkspaceInvitation,
+    WorkspaceMembership,
+    WorkspaceShare,
+)
+from core.workspaces.schemas import (
+    GrantRef,
+    InvitationAccepted,
+    InvitationList,
+    InvitationRead,
+    InvitationTarget,
+    MemberList,
+    MemberRead,
+    ResourceAccessProjection,
+    ShareKind,
+    ShareList,
+    ShareRead,
+    ShareUpsert,
+    WorkspaceContext,
+    WorkspaceRead,
 )
 
 
@@ -368,52 +392,244 @@ async def accept_invitation_in_uow(
 
 
 def granted_resource_ids(*, scope: WorkspaceContext, kind: ShareKind) -> Select[tuple[UUID]]:
-    raise NotImplementedError("W3-core")
+    """Narrow SQL projection of the member's active, membership-revision-bound grants."""
+    if scope.role == "owner":
+        raise ValueError("Owner scope has no share grants")
+    return select(WorkspaceShare.resource_id).where(  # type: ignore[return-value]
+        WorkspaceShare.workspace_id == scope.workspace_id, WorkspaceShare.member_user_id == scope.user_id,
+        WorkspaceShare.resource_type == kind, WorkspaceShare.revoked_at.is_(None),
+        WorkspaceShare.membership_revision == scope.membership_revision,
+    )
+
+
+def _bounded_ids(resource_ids: tuple[UUID, ...]) -> tuple[UUID, ...]:
+    if len(resource_ids) > 500:
+        raise ValueError("At most 500 resource IDs per grant lookup")
+    return resource_ids
 
 
 async def read_resource_grants(
-    session: AsyncSession, *, scope: WorkspaceContext, kind: ShareKind,
-    resource_ids: tuple[UUID, ...],
+    session: AsyncSession, *, scope: WorkspaceContext, kind: ShareKind, resource_ids: tuple[UUID, ...],
 ) -> tuple[GrantRef, ...]:
-    raise NotImplementedError("W3-core")
+    """Fresh grant snapshots (id order) for the member's active grants among resource_ids."""
+    ids = _bounded_ids(resource_ids)
+    if not ids or scope.role == "owner":
+        return ()
+    rows = await session.scalars(
+        select(WorkspaceShare).where(
+            WorkspaceShare.resource_id.in_(ids),
+            WorkspaceShare.resource_id.in_(granted_resource_ids(scope=scope, kind=kind)),
+            WorkspaceShare.workspace_id == scope.workspace_id, WorkspaceShare.member_user_id == scope.user_id,
+            WorkspaceShare.resource_type == kind,
+        ).order_by(WorkspaceShare.resource_id).execution_options(populate_existing=True)
+    )
+    return tuple(GrantRef(kind, r.resource_id, r.revision, r.resource_revision) for r in rows)
 
 
 async def active_grant_ids(
     session: AsyncSession, *, workspace_id: UUID, member_user_id: int, kind: ShareKind,
     resource_ids: tuple[UUID, ...],
 ) -> frozenset[UUID]:
-    raise NotImplementedError("W3-core")
+    """Owner-side check: which of resource_ids are actively shared with a current member."""
+    ids = _bounded_ids(resource_ids)
+    if not ids:
+        return frozenset()
+    rows = await session.scalars(
+        select(WorkspaceShare.resource_id).join(
+            WorkspaceMembership, (WorkspaceMembership.workspace_id == WorkspaceShare.workspace_id)
+            & (WorkspaceMembership.user_id == WorkspaceShare.member_user_id)
+            & (WorkspaceMembership.revision == WorkspaceShare.membership_revision),
+        ).where(
+            WorkspaceShare.workspace_id == workspace_id, WorkspaceShare.member_user_id == member_user_id,
+            WorkspaceShare.resource_type == kind, WorkspaceShare.revoked_at.is_(None),
+            WorkspaceShare.resource_id.in_(ids),
+        )
+    )
+    return frozenset(rows)
 
 
 async def lock_resource_grants(
     session: AsyncSession, *, scope: WorkspaceContext, grants: tuple[GrantRef, ...],
 ) -> None:
-    raise NotImplementedError("W3-core")
+    """FOR SHARE the grants sorted; 404 if any is missing, revoked or changed. Fence already held."""
+    if not grants:
+        return
+    if scope.role == "owner":
+        raise ValueError("Owner scope has no share grants")
+    wanted = {(g.resource_type, g.resource_id): g for g in grants}
+    rows = await session.scalars(
+        select(WorkspaceShare).where(
+            WorkspaceShare.workspace_id == scope.workspace_id, WorkspaceShare.member_user_id == scope.user_id,
+            WorkspaceShare.resource_type.in_({k[0] for k in wanted}),
+            WorkspaceShare.resource_id.in_({k[1] for k in wanted}),
+        ).order_by(WorkspaceShare.resource_type, WorkspaceShare.resource_id)
+        .with_for_update(read=True).execution_options(populate_existing=True)
+    )
+    found = {(r.resource_type, r.resource_id): r for r in rows}
+    for key, grant in wanted.items():
+        row = found.get(key)
+        if (row is None or row.revoked_at is not None or row.revision != grant.share_revision
+                or row.resource_revision != grant.resource_revision
+                or row.membership_revision != scope.membership_revision):
+            raise HTTPException(status_code=404, detail="Resource not found")
+
+
+def _share_read(row: WorkspaceShare) -> ShareRead:
+    return ShareRead(
+        workspace_id=row.workspace_id, resource_type=cast(ShareKind, row.resource_type), resource_id=row.resource_id,
+        member_user_id=row.member_user_id, revision=row.revision, resource_revision=row.resource_revision,
+        membership_revision=row.membership_revision, granted_by_user_id=row.granted_by_user_id,
+        created_at=row.created_at, updated_at=row.updated_at, revoked_at=row.revoked_at,
+    )
+
+
+async def _owner_visible_projection(
+    session: AsyncSession, *, scope: WorkspaceContext, kind: ShareKind, resource_id: UUID,
+    multi_workspace_enabled: bool, member_user_id: int,
+) -> ResourceAccessProjection:
+    """Run the owning module's hooks (lock, shareability, projection); invisible -> 404."""
+    if kind == "document":
+        from modules.knowledge.documents.public import (
+            lock_document_ids,
+            read_document_access_projection,
+        )
+
+        if not await lock_document_ids(
+            session, [resource_id], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        ):
+            raise HTTPException(status_code=404, detail="Resource not found")
+        projection = await read_document_access_projection(session, resource_id, scope=scope)
+    else:
+        from modules.dashboard.public import check_brief_shareable, read_brief_access_projection
+
+        await check_brief_shareable(session, resource_id, scope=scope, member_user_id=member_user_id)
+        projection = await read_brief_access_projection(session, resource_id, scope=scope)
+    if projection is None or not projection.available or projection.workspace_id != scope.workspace_id:
+        raise HTTPException(status_code=404, detail="Resource not found")
+    return cast(ResourceAccessProjection, projection)
 
 
 async def list_resource_shares(
     session: AsyncSession, workspace_id: UUID, actor_user_id: int, *, resource_type: ShareKind,
     resource_id: UUID, after: int | None = None, limit: int = 100,
 ) -> ShareList:
-    raise NotImplementedError("W3-core")
+    """Owner-only keyset page (member_user_id) of share rows for one visible resource."""
+    scope = await resolve_workspace_context(session, actor_user_id, workspace_id)
+    if scope is None:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    if scope.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
+    # Read-only visibility: projection hook only, no row locks or shareability check.
+    if resource_type == "document":
+        from modules.knowledge.documents.public import read_document_access_projection
+
+        projection = await read_document_access_projection(session, resource_id, scope=scope)
+    else:
+        from modules.dashboard.public import read_brief_access_projection
+
+        projection = await read_brief_access_projection(session, resource_id, scope=scope)
+    if projection is None or not projection.available:
+        raise HTTPException(status_code=404, detail="Resource not found")
+    query = select(WorkspaceShare).where(
+        WorkspaceShare.workspace_id == workspace_id, WorkspaceShare.resource_type == resource_type,
+        WorkspaceShare.resource_id == resource_id,
+    )
+    if after is not None:
+        query = query.where(WorkspaceShare.member_user_id > after)
+    size = min(max(limit, 1), 100)
+    rows = list(await session.scalars(
+        query.order_by(WorkspaceShare.member_user_id).limit(size + 1).execution_options(populate_existing=True)
+    ))
+    return ShareList(items=[_share_read(r) for r in rows[:size]],
+                     next_cursor=rows[size - 1].member_user_id if len(rows) > size else None)
+
+
+async def _lock_share_row(
+    session: AsyncSession, workspace_id: UUID, resource_type: ShareKind, resource_id: UUID, member_user_id: int,
+) -> WorkspaceShare | None:
+    return await session.scalar(select(WorkspaceShare).where(
+        WorkspaceShare.workspace_id == workspace_id, WorkspaceShare.resource_type == resource_type,
+        WorkspaceShare.resource_id == resource_id, WorkspaceShare.member_user_id == member_user_id,
+    ).with_for_update().execution_options(populate_existing=True))
 
 
 async def grant_share_in_uow(
     session: AsyncSession, workspace_id: UUID, actor_user_id: int, resource_type: ShareKind,
     resource_id: UUID, member_user_id: int, payload: ShareUpsert, *, multi_workspace_enabled: bool,
 ) -> ShareRead:
-    raise NotImplementedError("W3-core")
+    """Owner grants/regrants one member read access.
+
+    Locks: (caller: admission, auth) workspace -> memberships sorted -> share row -> resource hook.
+    Bumps only share.revision; workspace.configuration_revision and membership.revision are untouched.
+    """
+    _, memberships = await lock_share_management(
+        session, workspace_id, actor_user_id, member_user_id, payload.expected_revision,
+    )
+    target = memberships[member_user_id]
+    row = await _lock_share_row(session, workspace_id, resource_type, resource_id, member_user_id)
+    scope = WorkspaceContext(
+        user_id=actor_user_id, workspace_id=workspace_id, role="owner",
+        membership_revision=memberships[actor_user_id].revision,
+    )
+    projection = await _owner_visible_projection(
+        session, scope=scope, kind=resource_type, resource_id=resource_id,
+        multi_workspace_enabled=multi_workspace_enabled, member_user_id=member_user_id,
+    )
+    if projection.resource_revision != payload.resource_revision:
+        raise HTTPException(status_code=409, detail="resource_revision_changed")
+    now = datetime.now(UTC)
+    if row is None:
+        row = WorkspaceShare(
+            workspace_id=workspace_id, resource_type=resource_type, resource_id=resource_id,
+            member_user_id=member_user_id, granted_by_user_id=actor_user_id, revision=1,
+            resource_revision=payload.resource_revision, membership_revision=target.revision,
+            created_at=now, updated_at=now,
+        )
+        session.add(row)
+    elif (row.revoked_at is None and row.resource_revision == payload.resource_revision
+          and row.membership_revision == target.revision):
+        return _share_read(row)  # already in effect
+    else:
+        row.revoked_at = None
+        row.revision += 1
+        row.resource_revision = payload.resource_revision
+        row.membership_revision = target.revision
+        row.granted_by_user_id = actor_user_id
+        row.updated_at = now
+    await session.flush()
+    return _share_read(row)
 
 
 async def revoke_share_in_uow(
     session: AsyncSession, workspace_id: UUID, actor_user_id: int, resource_type: ShareKind,
     resource_id: UUID, member_user_id: int, expected_revision: int | None,
 ) -> None:
-    raise NotImplementedError("W3-core")
+    """Owner revoke under the same lock order; idempotent on an already revoked row.
+
+    No resource hook: the resource may already be deleted, and revoking needs no content access.
+    """
+    await lock_share_management(session, workspace_id, actor_user_id, member_user_id, expected_revision)
+    row = await _lock_share_row(session, workspace_id, resource_type, resource_id, member_user_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Share not found")
+    if row.revoked_at is None:
+        row.revoked_at = row.updated_at = datetime.now(UTC)
+        row.revision += 1
+        await session.flush()
 
 
 async def revoke_resource_shares_in_uow(
-    session: AsyncSession, *, workspace_id: UUID, resource_type: ShareKind,
-    resource_ids: tuple[UUID, ...],
+    session: AsyncSession, *, workspace_id: UUID, resource_type: ShareKind, resource_ids: tuple[UUID, ...],
 ) -> int:
-    raise NotImplementedError("W3-core")
+    """Deletion hook: revoke every active share of the given resources; flush only, no commit."""
+    if not resource_ids:
+        return 0
+    now = datetime.now(UTC)
+    result = await session.execute(
+        update(WorkspaceShare).where(
+            WorkspaceShare.workspace_id == workspace_id, WorkspaceShare.resource_type == resource_type,
+            WorkspaceShare.resource_id.in_(resource_ids), WorkspaceShare.revoked_at.is_(None),
+        ).values(revoked_at=now, updated_at=now, revision=WorkspaceShare.revision + 1)
+        .execution_options(synchronize_session=False)
+    )
+    return int(getattr(result, "rowcount", 0) or 0)

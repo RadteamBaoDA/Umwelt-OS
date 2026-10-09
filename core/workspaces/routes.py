@@ -13,22 +13,52 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.dependencies import (
-    CSRF_COOKIE, SESSION_COOKIE, _hash, _origin_allowed, _valid_csrf,
-    admit_identity_write, require_account, require_account_write,
+    CSRF_COOKIE,
+    SESSION_COOKIE,
+    _hash,
+    _origin_allowed,
+    _valid_csrf,
+    admit_identity_write,
+    require_account,
+    require_account_write,
 )
 from core.auth.models import AuthSession
 from core.auth.public import (
-    account_id_for_email, get_active_account, lock_account_lifecycle, provision_invited_account_in_uow,
+    account_id_for_email,
+    get_active_account,
+    lock_account_lifecycle,
+    provision_invited_account_in_uow,
 )
 from core.auth.routes import get_auth_redis
 from core.database import get_session
 from core.workspaces.public import (
-    accept_invitation_in_uow, create_invitation_in_uow, edit_workspace_in_uow, invitation_target,
-    list_invitations, list_members, list_workspaces, remove_member_in_uow, revoke_invitation_in_uow,
+    accept_invitation_in_uow,
+    create_invitation_in_uow,
+    edit_workspace_in_uow,
+    grant_share_in_uow,
+    invitation_target,
+    list_invitations,
+    list_members,
+    list_resource_shares,
+    list_workspaces,
+    remove_member_in_uow,
+    revoke_invitation_in_uow,
+    revoke_share_in_uow,
 )
 from core.workspaces.schemas import (
-    InvitationAccept, InvitationAccepted, InvitationCreate, InvitationCreated, InvitationList,
-    MemberList, WorkspaceEdit, WorkspaceList, WorkspaceRead,
+    InvitationAccept,
+    InvitationAccepted,
+    InvitationCreate,
+    InvitationCreated,
+    InvitationList,
+    MemberList,
+    ShareKind,
+    ShareList,
+    ShareRead,
+    ShareUpsert,
+    WorkspaceEdit,
+    WorkspaceList,
+    WorkspaceRead,
 )
 
 router = APIRouter(prefix="/api/v1/workspaces", tags=["workspaces"])
@@ -196,6 +226,50 @@ async def member_remove(
     """Commit owner-only nonowner removal with sorted actor/target auth locks and If-Match."""
     await _lock_actor(request, session, auth, user_id)
     await remove_member_in_uow(session, workspace_id, auth.owner_id, user_id, _if_match(revision))
+    await session.commit()
+
+
+@router.get("/{workspace_id}/shares", response_model=ShareList)
+async def share_list(
+    workspace_id: UUID, resource_type: ShareKind, resource_id: UUID,
+    auth: Annotated[AuthSession, Depends(require_account)], session: Annotated[AsyncSession, Depends(get_session)],
+    after: int | None = None, limit: Annotated[int, Query(ge=1, le=100)] = 100,
+) -> ShareList:
+    """Owner-only share rows of one visible resource; keyset on member_user_id."""
+    return await list_resource_shares(
+        session, workspace_id, auth.owner_id, resource_type=resource_type, resource_id=resource_id,
+        after=after, limit=limit,
+    )
+
+
+@router.put("/{workspace_id}/shares/{resource_type}/{resource_id}/{member_user_id}", response_model=ShareRead)
+async def share_grant(
+    workspace_id: UUID, resource_type: ShareKind, resource_id: UUID, member_user_id: int, body: ShareUpsert,
+    request: Request, auth: Annotated[AuthSession, Depends(require_account_write)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> ShareRead:
+    """Owner grants one current member read access; CAS is the member's membership revision."""
+    await _lock_actor(request, session, auth, member_user_id)
+    result = await grant_share_in_uow(
+        session, workspace_id, auth.owner_id, resource_type, resource_id, member_user_id, body,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+    )
+    await session.commit()
+    return result
+
+
+@router.delete("/{workspace_id}/shares/{resource_type}/{resource_id}/{member_user_id}", status_code=204)
+async def share_revoke(
+    workspace_id: UUID, resource_type: ShareKind, resource_id: UUID, member_user_id: int, request: Request,
+    auth: Annotated[AuthSession, Depends(require_account_write)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    revision: Annotated[str | None, Header(alias="If-Match")] = None,
+) -> None:
+    """Owner revokes a share; If-Match is the target member's membership revision."""
+    await _lock_actor(request, session, auth, member_user_id)
+    await revoke_share_in_uow(
+        session, workspace_id, auth.owner_id, resource_type, resource_id, member_user_id, _if_match(revision),
+    )
     await session.commit()
 
 
