@@ -40,6 +40,10 @@ export const loginMessages = {
       apiChecking: 'Checking the API…',
       noDataBeforeSignIn: 'No application data is loaded before you sign in.',
       retry: 'Retry',
+      identifierLabel: 'Email address',
+      identifierPlaceholder: 'name@example.com',
+      useEmail: 'Sign in with email',
+      useOwner: 'Sign in as the owner account',
   },
   'vi-vi': {
       welcome: 'Chào mừng trở lại',
@@ -81,5 +85,9 @@ export const loginMessages = {
       apiChecking: 'Đang kiểm tra API…',
       noDataBeforeSignIn: 'Không có dữ liệu ứng dụng nào được tải trước khi bạn đăng nhập.',
       retry: 'Thử lại',
+      identifierLabel: 'Địa chỉ email',
+      identifierPlaceholder: 'ten@example.com',
+      useEmail: 'Đăng nhập bằng email',
+      useOwner: 'Đăng nhập bằng tài khoản chủ sở hữu',
   },
 } as const;

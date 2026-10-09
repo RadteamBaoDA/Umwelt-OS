@@ -5,7 +5,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { AlertTriangleIcon, UserIcon } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useTranslations } from 'next-intl';
-import { useSyncExternalStore } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
@@ -16,7 +16,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { AppearanceControl } from '@/modules/account/appearance-control';
 
-const loginSchema = z.object({ password: z.string().min(1).max(128) });
+const loginSchema = z.object({ password: z.string().min(1).max(128), identifier: z.string().max(320).optional() });
 type LoginForm = z.infer<typeof loginSchema>;
 
 /** Reads the current query string without a state-in-effect round trip; empty on the server. */
@@ -36,6 +36,10 @@ export default function LoginPage() {
   const search = new URLSearchParams(useSearch());
   const googleError = search.get('google') === 'error';
   const expired = search.get('reason') === 'expired';
+  const presetIdentifier = search.get('identifier');
+  const [emailToggled, setEmailToggled] = useState<boolean | null>(null);
+  // The query string is empty during hydration, so the preset is derived on every render, not stored.
+  const emailMode = emailToggled ?? presetIdentifier !== null;
   const form = useForm<LoginForm>({ resolver: zodResolver(loginSchema) });
   const googleStatus = useQuery({ queryKey: ['auth-google-status'], queryFn: () => apiRequest<{ configured: boolean; linked: boolean }>('/api/v1/auth/google/status') });
   const googleLogin = useMutation({
@@ -55,7 +59,8 @@ export default function LoginPage() {
       return apiRequest<{ authenticated: boolean }>('/api/v1/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrf.csrfToken) },
-        body: JSON.stringify(values),
+        // Omitting identifier keeps the bootstrap owner login; email mode sends the exact identifier.
+        body: JSON.stringify({ password: values.password, ...(emailMode && values.identifier?.trim() ? { identifier: values.identifier.trim() } : {}) }),
       });
     },
     onSuccess: () => router.replace('/app'),
@@ -97,16 +102,21 @@ export default function LoginPage() {
         </div>}
         {login.error && !invalid && !unavailable && <p className="error" role="alert" id="login-error">{t('signInFailed')}</p>}
         <form className="grid gap-4" onSubmit={form.handleSubmit((values) => login.mutate(values))} noValidate>
-          <div className="grid gap-1.5">
+          {emailMode ? <div className="field">
+            <Label htmlFor="identifier">{t('identifierLabel')}</Label>
+            <Input id="identifier" type="email" autoComplete="username" autoFocus defaultValue={presetIdentifier ?? ''} placeholder={t('identifierPlaceholder')} {...form.register('identifier')} />
+            <Button type="button" variant="link" size="sm" className="w-fit px-0" onClick={() => { setEmailToggled(false); form.setValue('identifier', ''); }}>{t('useOwner')}</Button>
+          </div> : <div className="grid gap-1.5">
             <span className="text-[13px] font-semibold">{t('localAccount')}</span>
             <div className="flex min-h-[52px] items-center gap-3 rounded-[9px] border border-border px-3">
               <span aria-hidden="true" className="inline-flex size-8 items-center justify-center rounded-full bg-secondary text-primary"><UserIcon className="size-4" /></span>
               <span className="grid"><strong className="text-sm font-semibold leading-tight">{t('ownerAccount')}</strong><span className="muted text-xs">{t('passwordOnly')}</span></span>
             </div>
-          </div>
+            <Button type="button" variant="link" size="sm" className="w-fit px-0" onClick={() => setEmailToggled(true)}>{t('useEmail')}</Button>
+          </div>}
           <div className="field">
             <Label htmlFor="password">{t('password')}</Label>
-            <Input id="password" type="password" autoComplete="current-password" autoFocus placeholder={t('passwordPlaceholder')}
+            <Input id="password" type="password" autoComplete="current-password" autoFocus={!emailMode} placeholder={t('passwordPlaceholder')}
               aria-invalid={passwordError || undefined} aria-describedby={`password-help${login.error ? ' login-error' : ''}`} {...form.register('password')} />
             {form.formState.errors.password && <span className="error" role="alert">{t('enterPassword')}</span>}
             <p id="password-help" className="muted text-xs">{t('passwordHelp')}</p>
