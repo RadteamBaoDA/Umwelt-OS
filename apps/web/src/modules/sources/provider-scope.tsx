@@ -13,7 +13,7 @@ import { useDisplayPreferences } from '@/core/query-provider';
 import { acknowledgeProviderTerms, connectorKeys, getProviderTerms, type ConnectorCatalogEntry, type ConnectorConfig, type DeclaredUse, type Source } from './api';
 import { isStale, periodKind } from './freshness';
 
-export type NativeProvider = 'youtube' | 'arxiv' | 'huggingface' | 'github' | 'github_releases' | 'telegram' | 'alpha_vantage' | 'open_meteo';
+export type NativeProvider = 'youtube' | 'arxiv' | 'huggingface' | 'github' | 'github_releases' | 'telegram' | 'alpha_vantage' | 'open_meteo' | 'google_news';
 
 /** Renders fixed native-provider scope controls; GitHub resource flags and bounded history horizon remain in the owning revision-fenced draft. */
 export function ProviderScope({
@@ -55,6 +55,30 @@ export function ProviderScope({
     </div>
   );
 
+  if (provider === 'google_news') return <>
+    {field('news_query', t('newsQuery'), configuration.news_query ?? '', (value) => onChange('news_query', value), { maxLength: 200 })}
+    <div className="field">
+      <Label htmlFor="source-scope-news_site">{t('newsSite')}</Label>
+      <Select value={configuration.news_site ?? 'any'} onValueChange={(value) => onChange('news_site', value as ConnectorConfig['news_site'])} disabled={disabled}>
+        <SelectTrigger id="source-scope-news_site"><SelectValue /></SelectTrigger>
+        <SelectContent>
+          <SelectItem value="any">{t('newsSiteAny')}</SelectItem>
+          {(['reuters.com', 'apnews.com', 'bbc.com', 'vnexpress.net'] as const).map((site) => <SelectItem key={site} value={site}>{site}</SelectItem>)}
+        </SelectContent>
+      </Select>
+    </div>
+    <div className="field">
+      <Label htmlFor="source-scope-news_locale">{t('newsLocale')}</Label>
+      <Select value={configuration.news_locale ?? 'en-US'} onValueChange={(value) => onChange('news_locale', value as ConnectorConfig['news_locale'])} disabled={disabled}>
+        <SelectTrigger id="source-scope-news_locale"><SelectValue /></SelectTrigger>
+        <SelectContent>
+          <SelectItem value="en-US">{t('newsLocaleEn')}</SelectItem>
+          <SelectItem value="vi-VN">{t('newsLocaleVi')}</SelectItem>
+        </SelectContent>
+      </Select>
+    </div>
+    <small className="muted">{t('newsHelp')}</small>
+  </>;
   if (provider === 'youtube') return <>{field('youtube_channel_id', t('youtubeChannelId'), configuration.youtube_channel_id ?? '', (value) => onChange('youtube_channel_id', value), { maxLength: 24, pattern: 'UC[A-Za-z0-9_-]{22}' })}</>;
   if (provider === 'arxiv') return <>{field('arxiv_category', t('arxivCategory'), configuration.arxiv_category ?? '', (value) => onChange('arxiv_category', value), { maxLength: 64, pattern: '[A-Za-z][A-Za-z0-9.-]{0,63}' })}</>;
   if (provider === 'huggingface') return <>{field('huggingface_author', t('huggingfaceAuthor'), configuration.huggingface_author ?? '', (value) => onChange('huggingface_author', value), { maxLength: 96, pattern: '[A-Za-z0-9][A-Za-z0-9_-]{0,95}' })}</>;

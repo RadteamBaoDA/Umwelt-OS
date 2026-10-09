@@ -59,10 +59,10 @@ import {
 
 const intervals = [15, 30, 60, 360, 1440] as const;
 const sourceTypes = { rss: 'rss', web: 'web', rest: 'api', mcp: 'mcp', youtube: 'rss', arxiv: 'rss', huggingface: 'api', github: 'api', github_releases: 'api', telegram: 'api', alpha_vantage: 'api', open_meteo: 'api', coingecko: 'api',
-  bbc_world: 'rss', vnexpress_business: 'rss', hn_top: 'api', gdelt_economy: 'api', world_bank: 'api', frankfurter: 'api', ecb: 'api', binance: 'api', alternative_me: 'api', usgs: 'api', coinpaprika: 'api' } as const;
+  bbc_world: 'rss', vnexpress_business: 'rss', hn_top: 'api', gdelt_economy: 'api', world_bank: 'api', frankfurter: 'api', ecb: 'api', binance: 'api', alternative_me: 'api', usgs: 'api', coinpaprika: 'api', google_news: 'rss' } as const;
 type Provider = keyof typeof sourceTypes;
 /** Fixed-endpoint catalog providers: no owner scope, terms-gated, collected only by the scheduler. */
-const freeProviders = new Set<Provider>(['bbc_world', 'vnexpress_business', 'hn_top', 'gdelt_economy', 'world_bank', 'frankfurter', 'ecb', 'binance', 'alternative_me', 'usgs', 'coinpaprika']);
+const freeProviders = new Set<Provider>(['bbc_world', 'vnexpress_business', 'hn_top', 'gdelt_economy', 'world_bank', 'frankfurter', 'ecb', 'binance', 'alternative_me', 'usgs', 'coinpaprika', 'google_news']);
 const nativeProviders = new Set<Provider>(['youtube', 'arxiv', 'huggingface', 'github', 'github_releases', 'telegram', 'alpha_vantage', 'open_meteo', 'coingecko', ...freeProviders]);
 
 /** True when the schedule/activation gate asks the owner to (re)enter a provider key. */
@@ -96,6 +96,8 @@ function providerKey(providerId: string): string {
 /** Builds the editable default configuration for the selected provider. */
 function defaultConfiguration(provider: Provider, entry?: ConnectorCatalogEntry): ConnectorConfig {
   // Free providers are preset from the catalog's static example so the saved shape matches the backend contract.
+  // google_news is scoped: the owner types the query, so the example query is not preselected.
+  if (provider === 'google_news' && entry?.example_config) return { ...(entry.example_config as ConnectorConfig), news_query: '' };
   if (freeProviders.has(provider) && entry?.example_config) return entry.example_config as ConnectorConfig;
   if (nativeProviders.has(provider)) return {
     timeout_seconds: 30,
@@ -1106,7 +1108,7 @@ export function ConnectorEditor({
           {freeProviders.has(provider) && currentEntry && (sourceId
             ? <ProviderTerms sourceId={sourceId} entry={currentEntry} csrfToken={csrfToken} disabled={locked} />
             : <p className="muted" role="status">{t('termsRequired')}</p>)}
-          {freeProviders.has(provider) ? <p className="muted">{t('fixedScope')}</p> : nativeProviders.has(provider)
+          {freeProviders.has(provider) && provider !== 'google_news' ? <p className="muted">{t('fixedScope')}</p> : nativeProviders.has(provider)
             ? <ProviderScope key={`${sourceId}:${provider}:${revision}:${sourceGeneration}:${scopeResetEpoch}`} provider={provider as NativeProvider} configuration={configuration} disabled={locked} resetEpoch={scopeResetEpoch} onChange={changeConfiguration} />
             : provider === 'rss' ? <div className="field"><Label htmlFor="source-feed-url">{t('sourceUrl')}</Label><Input id="source-feed-url" type="url" value={configuration.feed_url ?? ''} onChange={(event) => changeConfiguration('feed_url', event.target.value)} /></div> : <div className="field"><Label htmlFor="source-config-url">{provider === 'rest' ? t('apiUrl') : t('pageUrl')}</Label><Input id="source-config-url" type="url" value={configuration.url ?? ''} onChange={(event) => changeConfiguration('url', event.target.value)} /></div>}
           {provider === 'rest' && <>

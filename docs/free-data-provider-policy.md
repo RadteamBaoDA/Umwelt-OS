@@ -12,6 +12,7 @@ All targets: HTTPS443, exact host plus path/query allowlist, TLS verification, r
 | --- | --- | --- | --- |
 | `bbc_world` | `feeds.bbci.co.uk`; `/news/world/rss.xml` | none | review; supported;30min |
 | `vnexpress_business` | `vnexpress.net`; `/rss/kinh-doanh.rss` | none | noncommercial; supported;30min |
+| `google_news` | `news.google.com`; `/rss/search` (server-built query; unofficial endpoint, no API contract) | none | review; supported;30min |
 | `hn_top` | `hacker-news.firebaseio.com`; `/v0/topstories.json`, `/v0/item/{positive_integer_id}.json` | none | review; supported;60min |
 | `gdelt_economy` | `api.gdeltproject.org`; `/api/v2/doc/doc?query=economy&mode=artlist&format=json&maxrecords=5&timespan=24h` | none | review; experimental;60min |
 | `world_bank` | `api.worldbank.org`; `/v2/country/VN/indicator/NY.GDP.MKTP.CD?format=json&per_page=3` | none | open subject to dataset terms; supported;1440min |
@@ -56,7 +57,7 @@ For unknown official caps keep a separate counted `official_unknown_calls_utc_da
 
 | Provider IDs | Enforced local daily policy_key;limit;unit | Other applicable windows;physical cost |
 | --- | --- | --- |
-| `bbc_world`, `vnexpress_business` | `pilot_calls_utc_day`;96;HTTP calls each | shared-provider calls,1/send;default48 regular polls/day leaves bounded manual/retry headroom |
+| `bbc_world`, `vnexpress_business`, `google_news` | `pilot_calls_utc_day`;96;HTTP calls each | shared-provider calls,1/send;default48 regular polls/day leaves bounded manual/retry headroom |
 | `hn_top` | `pilot_calls_utc_day`;528;HTTP calls |1/list send +1/item send;max11/run, sequential;264 regular calls/day for24 runs; optional provider local12calls/UTCminute |
 | `gdelt_economy` | `pilot_calls_utc_day`;48;HTTP calls |1/send;8s timeout;no pagination/extra article fetch |
 | `world_bank` | `pilot_calls_utc_day`;32;HTTP calls |1/physical page;local32 is chosen to allow bounded continuation, not official cap |
