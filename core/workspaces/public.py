@@ -7,7 +7,7 @@ from secrets import token_urlsafe
 from typing import Literal, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import HTTPException
 
@@ -15,6 +15,7 @@ from core.workspaces.models import Workspace, WorkspaceMembership, WorkspaceInvi
 from core.workspaces.schemas import (
     WorkspaceContext, WorkspaceRead, InvitationTarget, InvitationRead, MemberRead,
     InvitationList, MemberList, InvitationAccepted,
+    GrantRef, ShareKind, ShareList, ShareRead, ShareUpsert,
 )
 from core.workspaces.access import (
     authorize_internal_job as authorize_internal_job,
@@ -359,3 +360,60 @@ async def accept_invitation_in_uow(
         user_id=user_id, email=email, role=cast(Literal["owner", "member"], membership.role),
         membership_revision=membership.revision,
     ), default_workspace=default)
+
+
+# --- Post-Port-B frozen share signatures (M0 stubs; W3-core implements) ---
+# Migration chain: ... r15_highlight_rule_delivery (H) -> p14_workspace_shares (W3-core)
+#   -> p14_translation_runtime (T3).
+
+
+def granted_resource_ids(*, scope: WorkspaceContext, kind: ShareKind) -> Select[tuple[UUID]]:
+    raise NotImplementedError("W3-core")
+
+
+async def read_resource_grants(
+    session: AsyncSession, *, scope: WorkspaceContext, kind: ShareKind,
+    resource_ids: tuple[UUID, ...],
+) -> tuple[GrantRef, ...]:
+    raise NotImplementedError("W3-core")
+
+
+async def active_grant_ids(
+    session: AsyncSession, *, workspace_id: UUID, member_user_id: int, kind: ShareKind,
+    resource_ids: tuple[UUID, ...],
+) -> frozenset[UUID]:
+    raise NotImplementedError("W3-core")
+
+
+async def lock_resource_grants(
+    session: AsyncSession, *, scope: WorkspaceContext, grants: tuple[GrantRef, ...],
+) -> None:
+    raise NotImplementedError("W3-core")
+
+
+async def list_resource_shares(
+    session: AsyncSession, workspace_id: UUID, actor_user_id: int, *, resource_type: ShareKind,
+    resource_id: UUID, after: int | None = None, limit: int = 100,
+) -> ShareList:
+    raise NotImplementedError("W3-core")
+
+
+async def grant_share_in_uow(
+    session: AsyncSession, workspace_id: UUID, actor_user_id: int, resource_type: ShareKind,
+    resource_id: UUID, member_user_id: int, payload: ShareUpsert, *, multi_workspace_enabled: bool,
+) -> ShareRead:
+    raise NotImplementedError("W3-core")
+
+
+async def revoke_share_in_uow(
+    session: AsyncSession, workspace_id: UUID, actor_user_id: int, resource_type: ShareKind,
+    resource_id: UUID, member_user_id: int, expected_revision: int | None,
+) -> None:
+    raise NotImplementedError("W3-core")
+
+
+async def revoke_resource_shares_in_uow(
+    session: AsyncSession, *, workspace_id: UUID, resource_type: ShareKind,
+    resource_ids: tuple[UUID, ...],
+) -> int:
+    raise NotImplementedError("W3-core")

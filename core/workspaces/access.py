@@ -240,3 +240,8 @@ async def authorize_internal_job(
     return await lock_access_fence(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
+
+
+def can_read_resource(scope: WorkspaceContext, resource_workspace_id: UUID, shared_to_actor: bool) -> bool:
+    """Pure predicate, no DB access: same workspace and (owner or an active share for the actor)."""
+    return scope.workspace_id == resource_workspace_id and (scope.role == "owner" or shared_to_actor)

@@ -3,6 +3,7 @@
 Requests carry only resource references; content is always loaded by the resource owner.
 """
 
+from dataclasses import dataclass
 from typing import Literal
 from uuid import UUID
 
@@ -74,3 +75,16 @@ class TranslationBatchRead(BaseModel):
     batch_id: UUID
     target_language: Literal["vi", "en"]
     items: list[TranslationItemRead]
+
+
+@dataclass(frozen=True, slots=True)
+class TranslationInput:
+    workspace_id: UUID
+    actor_user_id: int
+    resource_type: ResourceType
+    resource_id: UUID
+    resource_revision: str  # news: translation_revision hash; brief: str(DailyBrief.revision)
+    fields: dict[str, str]  # news {"title","excerpt"}; brief {"content"}
+    visibility_hash: str  # sha256 hex over sorted dependency tuples (R12)
+    source_ids: tuple[UUID, ...]
+    local_only: bool

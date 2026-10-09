@@ -7,6 +7,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
+from core.auth.schemas import AccountSessionRef
+
 
 @dataclass(frozen=True, slots=True)
 class WorkspaceContext:
@@ -184,3 +186,58 @@ class InvitationTarget:
     workspace_id: UUID
     owner_user_id: int
     email: str
+
+
+ShareKind: TypeAlias = Literal["document", "brief"]  # noqa: UP040
+
+
+class ShareUpsert(BaseModel):
+    """PUT body; CAS is the target member's current membership_revision."""
+
+    expected_revision: int = Field(ge=1)
+    resource_revision: int = Field(ge=1)  # document current_version / DailyBrief.revision
+
+
+class ShareRead(BaseModel):
+    workspace_id: UUID
+    resource_type: ShareKind
+    resource_id: UUID
+    member_user_id: int
+    revision: int
+    resource_revision: int
+    membership_revision: int
+    granted_by_user_id: int
+    created_at: datetime
+    updated_at: datetime
+    revoked_at: datetime | None
+
+
+class ShareList(BaseModel):
+    items: list[ShareRead]
+    next_cursor: int | None = None  # keyset on member_user_id, limit<=100
+
+
+@dataclass(frozen=True, slots=True)
+class ResourceAccessProjection:
+    workspace_id: UUID
+    resource_id: UUID
+    resource_revision: int
+    available: bool
+
+
+@dataclass(frozen=True, slots=True)
+class GrantRef:
+    resource_type: ShareKind
+    resource_id: UUID
+    share_revision: int
+    resource_revision: int
+
+
+@dataclass(frozen=True, slots=True)
+class PublicationFence:
+    """Set only on member reads of shared content."""
+
+    scope: WorkspaceContext
+    access_fence: AccessFence
+    auth_session: AccountSessionRef
+    grants: tuple[GrantRef, ...]
