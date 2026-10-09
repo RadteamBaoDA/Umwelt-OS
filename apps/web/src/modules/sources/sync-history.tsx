@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { AppLocaleId, normalizeFormattingLocale } from '@/core/i18n';
+import { isStale } from './freshness';
 import { connectorKeys, getSourceIngestion, retryRun, Source, sourceKeys } from './api';
 
 /** Formats an ISO timestamp with the supplied application locale and time zone. */
@@ -21,7 +22,7 @@ function statusKey(status: string): 'runQueued' | 'runRunning' | 'runSucceeded' 
 }
 
 /** Renders bounded ingestion run history, preserving owner-reported stages, errors, and result counts for the selected source. */
-export function SyncHistory({ source }: { source: Source }) {
+export function SyncHistory({ source, intervalMinutes }: { source: Source; intervalMinutes?: number }) {
   const t = useTranslations('sources');
   const display = useDisplayPreferences();
   const { csrfToken } = useWorkspaceSession();
@@ -64,6 +65,9 @@ export function SyncHistory({ source }: { source: Source }) {
   return <section className="source-history" aria-label={t('recentRuns')}>
     <h3>{t('recentRuns')}</h3>
     <p className="muted">{t('lastSuccess')}: {source.last_success_at ? formatDate(source.last_success_at, display.locale, display.timezone) : t('never')}</p>
+    {source.collected_at && <p className="muted">{t('collectedAt')}: {formatDate(source.collected_at, display.locale, display.timezone)}</p>}
+    {source.indexed_at && <p className="muted">{t('indexedAt')}: {formatDate(source.indexed_at, display.locale, display.timezone)}</p>}
+    {isStale(source.last_success_at, intervalMinutes) && <p className="muted" role="status">{t('stale')}</p>}
     {source.collection_error_code && <p className="error" role="alert">{t('collectionError')}: {source.collection_error_code}</p>}
     {current && renderRun(current, true)}
     {runs.map((run) => renderRun(run, false))}

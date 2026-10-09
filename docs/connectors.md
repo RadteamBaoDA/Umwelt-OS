@@ -86,3 +86,7 @@ provisioning and provider acceptance remain deferred validation gates.
 ## Optional services (native-first)
 
 Native sources need no n8n or browser service. The browser sidecar lives in `docker-compose.browser.yml`; `docker-compose.connectors.yml` adds n8n and includes the browser overlay (Compose >= 2.20), so the existing command is unchanged. See [native-and-n8n.md](connectors/native-and-n8n.md).
+
+## Provider setup guide in the UI
+
+The source editor shows a setup guide built only from catalog facts (see [provider-catalog.md](connectors/provider-catalog.md) and [free-sources.md](connectors/free-sources.md)): data hosts and endpoints, key prerequisite, default cadence, quota, attribution with the terms link, live-check status and last success or error. Data is marked stale after two polling intervals; FX shows the provider reference date and annual macro data its period. No dashboard Fear and Greed gadget exists yet, so Alternative.me attribution is shown in the guide.
