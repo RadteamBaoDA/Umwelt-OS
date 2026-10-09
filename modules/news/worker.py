@@ -70,9 +70,14 @@ async def process_news_document_ready(ctx: dict[str, object], event_id: str) -> 
     settings = cast(Settings, ctx["settings"])
     flag = settings.multi_workspace_enabled
     async with _factory(ctx)() as session:
-        scope = await ingestion.resolve_ingestion_event_scope(
-            session, identifier, multi_workspace_enabled=flag,
-        )
+        try:
+            scope = await ingestion.resolve_ingestion_event_scope(
+                session, identifier, multi_workspace_enabled=flag,
+            )
+        except HTTPException:
+            # Denied retained principal: no mutation and no retry; the dispatcher quarantines the event.
+            await session.rollback()
+            return
         if scope is None:
             return
         try:

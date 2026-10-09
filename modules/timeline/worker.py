@@ -7,12 +7,20 @@ from typing import cast
 from uuid import UUID
 
 from arq.connections import ArqRedis
+from fastapi import HTTPException
 from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
 from core.heavy_work import bounded_heavy_work
+from core.job_denial import (
+    PERMISSION_LOST,
+    STALE_SCOPE,
+    admit_retry_stale,
+    denial_code,
+    terminalize,
+)
 from core.model_gateway.cache import capability_key
 from core.model_gateway.client import (
     CapabilityUnsupported,
@@ -156,20 +164,32 @@ async def process_timeline_extraction_work(ctx: dict[str, object], work_id_value
         ))
         if workspace_id is None:
             return
-        scope = await _workspace_job_scope(
-            session, workspace_id, multi_workspace_enabled=multi_workspace_enabled,
-        )
-        if scope is None or not await settings_public.module_is_enabled(
-            session, "knowledge.timeline", scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        ):
-            # ponytail: untouched work is re-claimed every sweep while the module is disabled;
-            # upgrade = ack+requeue on module enable.
-            await session.rollback()  # unavailable lineage or disabled module: leave durable work untouched
+        async def admit() -> tuple[InternalJobScope, TimelineExtractionWork | None] | None:
+            await session.rollback()
+            job_scope = await _workspace_job_scope(
+                session, workspace_id, multi_workspace_enabled=multi_workspace_enabled,
+            )
+            if job_scope is None or not await settings_public.module_is_enabled(
+                session, "knowledge.timeline", scope=job_scope, multi_workspace_enabled=multi_workspace_enabled,
+            ):
+                # ponytail: untouched work is re-claimed every sweep while the module is disabled;
+                # upgrade = ack+requeue on module enable.
+                return None  # unavailable lineage or disabled module: leave durable work untouched
+            return job_scope, await timeline.claim_extraction_work(
+                session, work_id, lease_owner, datetime.now(UTC), scope=job_scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+            )
+
+        try:
+            admitted = await admit_retry_stale(admit)
+        except HTTPException as exc:
+            await session.rollback()
+            await terminalize(factory, TimelineExtractionWork, work_id, workspace_id, denial_code(exc) or STALE_SCOPE)
             return
-        work = await timeline.claim_extraction_work(
-            session, work_id, lease_owner, datetime.now(UTC), scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-        )
+        if admitted is None:
+            await session.rollback()
+            return
+        scope, work = admitted
         if work is None:
             await session.commit()
             return
@@ -363,6 +383,10 @@ async def process_timeline_extraction_work(ctx: dict[str, object], work_id_value
                 multi_workspace_enabled=multi_workspace_enabled,
             )
             await session.commit()
+    except HTTPException as exc:
+        if exc.status_code == 409:
+            raise  # lease expires; recovery re-resolves (attempt-budgeted)
+        await terminalize(factory, TimelineExtractionWork, work_id, scope.workspace_id, PERMISSION_LOST)
 
 
 _WORKSPACE_CURSOR_KEY = "bbd:timeline-extraction:workspace-cursor"

@@ -28,6 +28,7 @@ from core.heavy_work import (
     RemoteHeavyWorkBlocked,
     heavy_job_slot,
 )
+from core.job_denial import admit_retry_stale, denial_code, terminalize
 from core.model_gateway.client import ModelGateway, PrivacyPolicyDenied
 from core.model_gateway.schemas import ModelMapping, RequestPolicy
 from core.realtime import commit_with_replay
@@ -120,40 +121,52 @@ async def _get(session: AsyncSession, model: Any, identity: UUID | int, adm: _Ad
 
 async def admit_workspace(
     factory: async_sessionmaker[AsyncSession], settings: Settings, workspace_id: UUID,
+    denial: list[str] | None = None,
 ) -> _Admission | None:
     """ Resolve the workspace's durable owner, lock admission FIRST and capture one original fence.
 
     No other lock is taken before this fence. Returns None (skip, no mutation) when the owner
     lineage, account/membership admission or the per-workspace knowledge.temporal module gate denies.
-    The locks are released before any claim, graph or model I/O; later effects only compare.
+    A typed denial (409 only after one re-resolve) appends its terminal code to ``denial`` so a
+    caller owning a durable row can end it. The locks are released before any claim, graph or
+    model I/O; later effects only compare.
     """
     multi = bool(settings.multi_workspace_enabled)
-    async with factory() as session:
-        try:
-            owner = await workspaces.resolve_workspace_owner_context(
-                session, workspace_id, multi_workspace_enabled=multi,
-            )
-            if owner is None:
-                return None
-            scope = InternalJobScope(
-                workspace_id=workspace_id, actor_user_id=owner.user_id,
-                membership_revision=owner.membership_revision,
-            )
-            fence = await workspaces.authorize_internal_job(session, scope=scope, multi_workspace_enabled=multi)
-            enabled = await settings_public.module_is_enabled(
-                session, "knowledge.temporal", scope=scope, multi_workspace_enabled=multi,
-            )
-        except HTTPException as exc:
-            if exc.status_code in {401, 403, 404, 409}:
-                return None
+
+    async def attempt() -> _Admission | None:
+        async with factory() as session:
+            try:
+                owner = await workspaces.resolve_workspace_owner_context(
+                    session, workspace_id, multi_workspace_enabled=multi,
+                )
+                if owner is None:
+                    return None
+                scope = InternalJobScope(
+                    workspace_id=workspace_id, actor_user_id=owner.user_id,
+                    membership_revision=owner.membership_revision,
+                )
+                fence = await workspaces.authorize_internal_job(session, scope=scope, multi_workspace_enabled=multi)
+                enabled = await settings_public.module_is_enabled(
+                    session, "knowledge.temporal", scope=scope, multi_workspace_enabled=multi,
+                )
+            finally:
+                await session.rollback()
+        return _Admission(scope, multi, fence) if enabled else None
+
+    try:
+        return await admit_retry_stale(attempt)
+    except HTTPException as exc:
+        code = denial_code(exc)
+        if code is None:
             raise
-        finally:
-            await session.rollback()
-    return _Admission(scope, multi, fence) if enabled else None
+        if denial is not None:
+            denial.append(code)
+        return None
 
 
 async def _admit_job(
     factory: async_sessionmaker[AsyncSession], settings: Settings, operation_id: UUID,
+    denial: list[str] | None = None,
 ) -> _Admission | None:
     """ Admit one queued operation: validate its durable workspace/partition/mapping lineage, then the fence."""
     async with factory() as session:
@@ -169,7 +182,15 @@ async def _admit_job(
         await session.rollback()
     if row is None or lineage is None:
         return None
-    return await admit_workspace(factory, settings, row.workspace_id)
+    adm = await admit_workspace(factory, settings, row.workspace_id, denial)
+    if adm is None and denial:
+        # Only never-dispatched, unleased work is ended; dispatched rows keep unknown-outcome recovery.
+        await terminalize(
+            factory, GraphOperation, operation_id, row.workspace_id, denial[0],
+            from_status=("pending", "blocked"),
+            extra_where=(GraphOperation.dispatched_at.is_(None), GraphOperation.lease_owner.is_(None)),
+        )
+    return adm
 
 
 async def _dependency_fingerprint(session: AsyncSession, ctx: dict[str, object], graph_state: GraphState,
@@ -1203,7 +1224,7 @@ async def process_graph_operation(ctx: dict[str, object], operation_id_value: st
     # Fence first: durable lineage + account/workspace/membership admission and the
     # knowledge.temporal gate come before the capacity slot, the claim or any domain lock.
     # A denied subject is skipped with no ACK, retry or rebase onto fresh authority.
-    adm = await _admit_job(factory, cast(Settings, ctx["settings"]), operation_id)
+    adm = await _admit_job(factory, cast(Settings, ctx["settings"]), operation_id, [])
     if adm is None:
         return
     graph = TemporalGraph(GraphConfiguration.from_settings(cast(Settings, ctx["settings"])))
