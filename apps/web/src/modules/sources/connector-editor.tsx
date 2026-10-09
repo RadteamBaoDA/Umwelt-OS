@@ -12,16 +12,19 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ApiError } from '@/core/api';
 import { DisconnectDialog } from './disconnect-dialog';
 import { SyncHistory } from './sync-history';
-import { useSourceActions } from './use-source-actions';
+import { pollCollectionRequest, useSourceActions } from './use-source-actions';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { AppLocaleId, normalizeFormattingLocale } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { useGuardedNavigation } from '@/core/guarded-navigation';
+import { useWorkspace } from '@/core/workspace-context';
 import { ProviderScope, type NativeProvider } from './provider-scope';
 import { GitHubSummary } from './github-summary';
 import { McpCollectionEditor } from './mcp-collection-editor';
 import {
   activateConnector,
+  ExecutionBackend,
+  getCollectionRequest,
   ConnectorCatalogEntry,
   ConnectorConfig,
   ConnectorConfiguration,
@@ -178,6 +181,8 @@ export function ConnectorEditor({
   const [secret, setSecret] = useState('');
   const [telegramSecretAction, setTelegramSecretAction] = useState<'keep' | 'replace'>('keep');
   const [revision, setRevision] = useState(0);
+  const [backendChoice, setBackendChoice] = useState<ExecutionBackend | null>(null);
+  const workspace = useWorkspace();
   const revisionRef = useRef(revision);
   const [activationState, setActivationState] = useState(source?.status === 'paused' ? 'disabled' : 'saved_not_active');
   const [sourceStatusOverride, setSourceStatusOverride] = useState<Source['status'] | null>(null);
@@ -307,6 +312,7 @@ export function ConnectorEditor({
     setAuthMethod(value.auth_method);
     setAuthHeaderName(value.auth_header_name ?? 'Authorization');
     setRevision(value.expected_revision);
+    setBackendChoice(value.execution_backend ?? null);
     revisionRef.current = value.expected_revision;
     setActivationState(value.activation_state);
     setActivationError(value.activation_error_code);
@@ -452,7 +458,17 @@ export function ConnectorEditor({
       const result = await triggerCollection(id, csrfToken);
       if (!requestIsCurrent(token)) return;
       setNotice(t('collectResult', { status: result.status }));
+      if (result.request_id) {
+        const requestId = result.request_id;
+        const final = await pollCollectionRequest((signal) => getCollectionRequest(id, requestId, signal), {
+          signal: token.controller.signal,
+          onUpdate: (update) => { if (requestIsCurrent(token)) setNotice(t('collectResult', { status: update.status })); },
+        });
+        if (!final || !requestIsCurrent(token)) return;
+        if (final.status === 'failed' || final.status === 'cancelled') { setError('actionFailed'); setNotice(t('collectFailedCode', { code: final.error_code ?? final.status })); }
+      }
       await queryClient.invalidateQueries({ queryKey: connectorKeys.ingestion(id) });
+      await queryClient.invalidateQueries({ queryKey: sourceKeys.all });
     } catch (cause) {
       if (requestIsCurrent(token)) setError(errorText(cause));
     } finally {
@@ -678,7 +694,7 @@ export function ConnectorEditor({
         await saveWorldProviderCredential(id, sourceGenerationRef.current, nextRevision, activationDraft.secret, csrfToken, token.controller.signal);
       }
       const replacingSecret = provider === 'alpha_vantage' ? false : activationDraft.authMethod === 'telegram_bot_token' ? activationDraft.telegramSecretAction === 'replace' : Boolean(activationDraft.secret);
-      const result = await activateConnector(id, nextRevision, replacingSecret ? 'replace' : 'keep', replacingSecret ? activationDraft.secret : undefined, csrfToken, token.controller.signal);
+      const result = await activateConnector(id, nextRevision, replacingSecret ? 'replace' : 'keep', replacingSecret ? activationDraft.secret : undefined, csrfToken, token.controller.signal, backendChoice ?? undefined);
       if (!requestIsCurrent(token)) return;
       setActivationState(result.state);
       setActivationError(result.error_code);
@@ -722,7 +738,7 @@ export function ConnectorEditor({
     setNotice('');
     try {
       const replacingSecret = authMethod === 'telegram_bot_token' ? telegramSecretAction === 'replace' : Boolean(requestedSecret);
-      const result = await activateConnector(id, revision, replacingSecret ? 'replace' : 'keep', replacingSecret ? requestedSecret : undefined, csrfToken, token.controller.signal);
+      const result = await activateConnector(id, revision, replacingSecret ? 'replace' : 'keep', replacingSecret ? requestedSecret : undefined, csrfToken, token.controller.signal, backendChoice ?? undefined);
       if (!requestIsCurrent(token)) return;
       setActivationState(result.state);
       setActivationError(result.error_code);
@@ -1136,6 +1152,17 @@ export function ConnectorEditor({
         {currentEntry?.quota_limits && <div className="source-capability"><strong>{t('quota')}</strong><p>{Object.entries(currentEntry.quota_limits).map(([key, value]) => `${key}: ${value}`).join(' · ')}</p></div>}
         {error && <p className="error" role="alert">{t(error as 'conflict' | 'configurationInvalid' | 'serviceUnavailable' | 'validationOutcomeUnknown' | 'sourceNameRequired' | 'actionFailed' | 'reloadFailed')}</p>}
         {notice && <p className="muted" role="status">{notice}</p>}
+        {workspace.isOwner && <details className="rounded-lg border border-border p-4">
+          <summary className="cursor-pointer font-semibold">{t('backendAdvanced')}</summary>
+          <div className="mt-3 grid gap-3">
+            <div className="field"><Label htmlFor="source-backend">{t('backendLabel')}</Label>
+              <Select value={backendChoice ?? 'native'} onValueChange={(value) => { setBackendChoice(value as ExecutionBackend); }}>
+                <SelectTrigger id="source-backend"><SelectValue /></SelectTrigger>
+                <SelectContent><SelectItem value="native">{t('backendNative')}</SelectItem><SelectItem value="n8n">{t('backendN8n')}</SelectItem></SelectContent>
+              </Select></div>
+            {(backendChoice ?? 'native') === 'n8n' && <p className="muted" role="note">{t('backendN8nPrereq')}</p>}
+          </div>
+        </details>}
         {conflict && <div className="source-conflict" role="group" aria-label={t('conflict')}>
           <p className="error">{t('conflict')}</p>
           <Button className="secondary" disabled={locked} onClick={reloadServerConfiguration}>{t('reloadDiscard')}</Button>

@@ -80,7 +80,12 @@ export type ConnectorActivation = {
   state: string;
   error_code: string | null;
   credential_recovery: string;
+  execution_backend?: ExecutionBackend;
 };
+export type ExecutionBackend = 'native' | 'n8n';
+export type CollectionStatus = 'queued' | 'running' | 'succeeded' | 'no_changes' | 'failed' | 'cancelled';
+export type CollectionRequest = { request_id: string; source_id: string; status: CollectionStatus; ingestion_run_id: string | null; error_code: string | null };
+export type ManualSyncResult = { run_id: string | null; batch_id: string | null; status: string; request_id: string | null };
 export type ConnectorConfiguration = {
   source_id: string;
   source_type: 'rss' | 'web' | 'api' | 'mcp';
@@ -95,6 +100,7 @@ export type ConnectorConfiguration = {
   activation_error_code: string | null;
   provider_credential_configured: boolean;
   provider_credential_state: string | null;
+  execution_backend?: ExecutionBackend;
 };
 export type DraftValidation = {
   source_id: string;
@@ -145,6 +151,7 @@ export const connectorKeys = {
   configuration: (id: string) => ['connector-configuration', id] as const,
   activation: (id: string) => ['connector-activation', id] as const,
   ingestion: (id: string) => ['source-ingestion', id] as const,
+  collection: (id: string, requestId: string) => ['source-collection-request', id, requestId] as const,
 };
 
 /** Lists source records in pages of 50 and includes the optional opaque cursor. */
@@ -318,8 +325,8 @@ export function acknowledgeGitHubReconnect(id: string, operationId: string, csrf
 }
 
 /** Activates a connector at the expected revision with an explicit keep or replace action; secret bytes are sent only in this request body. */
-export function activateConnector(id: string, expectedRevision: number, secretAction: 'keep' | 'replace', secret: string | undefined, csrfToken: string, signal?: AbortSignal) {
-  return apiRequest<ConnectorActivation>(`/api/v1/connectors/${id}/activate`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify({ expected_revision: expectedRevision, secret_action: secretAction, ...(secret ? { secret } : {}) }), signal });
+export function activateConnector(id: string, expectedRevision: number, secretAction: 'keep' | 'replace', secret: string | undefined, csrfToken: string, signal?: AbortSignal, executionBackend?: ExecutionBackend) {
+  return apiRequest<ConnectorActivation>(`/api/v1/connectors/${id}/activate`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify({ expected_revision: expectedRevision, secret_action: secretAction, ...(secret ? { secret } : {}), ...(executionBackend ? { execution_backend: executionBackend } : {}) }), signal });
 }
 
 /** Deactivates the connector using CSRF protection and the optional abort signal. */
@@ -342,7 +349,12 @@ export function saveWorldProviderCredential(id: string, expectedGeneration: numb
 
 /** Starts connector collection with CSRF protection and returns the accepted run or batch identifiers. */
 export function triggerCollection(id: string, csrfToken: string) {
-  return apiRequest<{ run_id: string | null; batch_id: string | null; status: string }>(`/api/v1/connectors/sources/${id}/collect`, { method: 'POST', headers: csrfHeaders(csrfToken) });
+  return apiRequest<ManualSyncResult>(`/api/v1/connectors/sources/${id}/collect`, { method: 'POST', headers: csrfHeaders(csrfToken) });
+}
+
+/** Reads one durable collection request (owner only) so the UI can poll a 202 to a terminal state. */
+export function getCollectionRequest(id: string, requestId: string, signal?: AbortSignal) {
+  return apiRequest<CollectionRequest>(`/api/v1/connectors/sources/${id}/collection-requests/${requestId}`, { signal });
 }
 
 /** Fetches an ingestion run by ID. */
