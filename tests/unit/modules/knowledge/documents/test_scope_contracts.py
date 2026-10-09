@@ -169,7 +169,7 @@ async def test_interaction_uses_admitted_actor_and_fenced_commit() -> None:
             patch.object(public.sources, "lock_source_for_document", lock):
         await public.set_gadget_document_interaction(
             session, document_id=uuid4(), version_number=1,
-            payload=SimpleNamespace(read=True, bookmarked=None), **SCOPE_KW,
+            payload=SimpleNamespace(read=True, bookmarked=None, dismissed=None), **SCOPE_KW,
         )
     assert session.get.await_args.args[1] == (FENCE.user_id, version_id)
     assert session.add.call_args.args[0].owner_id == FENCE.user_id
