@@ -35,7 +35,7 @@ Resolver = Callable[[str, int], Awaitable[list[str]]]
 BeforeSend = Callable[[], Awaitable[None]]
 
 
-class CollectionIncomplete(Exception):  # noqa: N818  # control-flow signal named by the protocol's collection_incomplete code
+class CollectionIncomplete(Exception):  # control-flow signal named by the protocol's collection_incomplete code
     """A cap was reached while more data exists; nothing may be accepted or advanced."""
 
 

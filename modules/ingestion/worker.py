@@ -51,7 +51,11 @@ from modules.ingestion.models import (
 from modules.ingestion.parsers import ParsedDocument, parse_file_bounded
 from modules.ingestion.schemas import EventDelivery, IngestionRecord
 from modules.knowledge.documents import public as documents
-from modules.knowledge.documents.schemas import NormalizedDocumentInput
+from modules.knowledge.documents.schemas import (
+    MEASUREMENT_PROVIDER_IDS,
+    NEWS_PROVIDER_IDS,
+    NormalizedDocumentInput,
+)
 from modules.knowledge.observations import public as observations
 from modules.sources import public as sources
 from modules.sources.schemas import ConnectorSource, SourceFence
@@ -486,7 +490,7 @@ async def _lock_worker_event(
                 observation.batch_id, progress.stage_id, progress.normalization_version, observation.source_id,
             ) for progress, observation in normalization_rows) != candidates:
                 raise NormalizationPreparationConflict("normalization_candidate_lineage_changed", normalization_claim)
-            if projection.provider in {"alpha_vantage", "open_meteo"}:
+            if projection.provider in MEASUREMENT_PROVIDER_IDS:
                 observation_preparation = await observations.prepare_ingestion_observation_keys(
                     session, source.id, tuple(sorted({(item.external_id, item.observation_id)
                         for item in candidates}, key=lambda item: (item[0], str(item[1])))),
@@ -640,7 +644,6 @@ async def _collect_web_job(
     lease reconstruction or second gateway retry layer is permitted. C2 owns later exact
     browser request/capability/slot binding; service secret alone is not that proof.
     """
-    from modules.connectors import public as connectors
 
     settings = cast(Settings, ctx["settings"])
     token = settings.browser_shared_token.get_secret_value()
@@ -955,7 +958,7 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
             if document_preparation is None:
                 raise NormalizationPreparationConflict("normalization_document_preparation_missing", claim)
 
-            if source_projection.provider in {"alpha_vantage", "open_meteo"}:
+            if source_projection.provider in MEASUREMENT_PROVIDER_IDS:
                 from modules.settings.public import module_is_enabled
 
                 if not await module_is_enabled(session, "knowledge.observations", scope=work.scope, multi_workspace_enabled=enabled):
@@ -1041,7 +1044,7 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
                             "github_releases": ("node_id", "name", "body", "html_url", "tag_name", "draft", "prerelease", "author", "created_at", "published_at"),
                             "github": ("record_type", "node_id", "html_url"),
                             "telegram": (),
-                            "alpha_vantage": (), "open_meteo": (),
+                            **dict.fromkeys((*MEASUREMENT_PROVIDER_IDS, *NEWS_PROVIDER_IDS), ()),  # envelope source_fields only
                         }[provider_record.provider]
                         source_fields = dict(provider_record.source_fields)
                         for key in provider_field_keys:
@@ -1077,7 +1080,7 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
                             )
                         elif native_telegram_envelope is not None:
                             raise ValueError("Telegram delivery proof is not valid for this provider")
-                    elif source_projection.provider in {"alpha_vantage", "open_meteo"}:
+                    elif source_projection.provider in MEASUREMENT_PROVIDER_IDS:
                         # Compatibility is limited to already persisted observations
                         # after their identity/hash checks. Public native ingress
                         # still requires a validated nested provider_record envelope.
@@ -1095,7 +1098,7 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
                             coverage="returned_snapshot", content_truncated=False,
                             world_data=measurement,
                         )
-                    elif source_projection.provider in {"youtube", "arxiv", "huggingface", "github_releases", "github", "telegram"}:
+                    elif source_projection.provider in {"youtube", "arxiv", "huggingface", "github_releases", "github", "telegram", *NEWS_PROVIDER_IDS}:
                         raise ValueError("Native provider record metadata is missing")
                     title_value = raw_metadata.get("title")
                     title = title_value.strip()[:500] if isinstance(title_value, str) and title_value.strip() else record.provider_id[:500]
@@ -1134,7 +1137,7 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
                         scope=work.scope, multi_workspace_enabled=enabled,
                     )
                     accepted_at = observation.received_at
-                    if source_projection.provider in {"alpha_vantage", "open_meteo"} and (provider_scope is None or accepted_at is None):
+                    if source_projection.provider in MEASUREMENT_PROVIDER_IDS and (provider_scope is None or accepted_at is None):
                         raise ValueError("Accepted world observation is missing its scope or acceptance clock")
                     provenance = {
                         "title": title, "canonical_url": canonical_url,
@@ -1180,7 +1183,7 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
                         continue
                     observation_write = None
                     if (
-                        source_projection.provider in {"alpha_vantage", "open_meteo"}
+                        source_projection.provider in MEASUREMENT_PROVIDER_IDS
                         and result.disposition != "tombstoned"
                     ):
                         from modules.knowledge.observations.schemas import WorldMeasurement
@@ -1260,7 +1263,7 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
                         await session.flush()
                         await ingestion_api.publish_event(session, ready, scope=work.scope,
                                                           multi_workspace_enabled=enabled)
-                    if source_projection.provider in {"alpha_vantage", "open_meteo"}:
+                    if source_projection.provider in MEASUREMENT_PROVIDER_IDS:
                         # Structured series can change even when the normalized document version is reused.
                         knowledge_changes.append(make_knowledge_change(observation.source_id, scope=work.scope))
                     elif result.selected_current and result.created_version:

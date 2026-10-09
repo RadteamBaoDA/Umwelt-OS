@@ -1,6 +1,5 @@
 """Pure tests for the pinned REST transport and the no-slice-and-advance mapping rules."""
 
-import json
 from types import SimpleNamespace
 
 import httpx

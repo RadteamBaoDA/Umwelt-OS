@@ -51,6 +51,7 @@ from modules.knowledge.documents.models import (
     NormalizedVersionProvenance,
 )
 from modules.knowledge.documents.schemas import (
+    MEASUREMENT_PROVIDER_IDS,
     PROVIDER_IDS,
     DocumentCleanupJobIdentity,
     DocumentCleanupPreparationLimitError,
@@ -2975,7 +2976,7 @@ async def upsert_normalized_document_in_uow(
         multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence,
     )
     discriminator = payload.provenance.get("provider_scope_discriminator")
-    if discriminator is not None or source_projection.provider in {"alpha_vantage", "open_meteo"}:
+    if discriminator is not None or source_projection.provider in MEASUREMENT_PROVIDER_IDS:
         provider_scope = await connectors.get_current_provider_scope(
             session, payload.source_id, payload.expected_source_generation, scope=scope,
             multi_workspace_enabled=multi_workspace_enabled,
@@ -3074,7 +3075,7 @@ async def _apply_normalized_document(
         )
         if current_provenance is None:
             raise NormalizedDocumentValidationRejected("Provider identity conflicts with an owner-authored current revision")
-    if source_projection.provider in {"alpha_vantage", "open_meteo"}:
+    if source_projection.provider in MEASUREMENT_PROVIDER_IDS:
         # Observation acceptance time and ingestion identity, not provider event
         # time or worker arrival order, own structured-series current selection.
         selected = False
@@ -3238,7 +3239,7 @@ async def normalized_observation_version_matches_in_uow(
     from modules.connectors import public as connectors
 
     if (not isinstance(external_id, str) or not 1 <= len(external_id) <= 512
-            or provider not in {"alpha_vantage", "open_meteo"}):
+            or provider not in MEASUREMENT_PROVIDER_IDS):
         return False
     projection = await _normalized_source_proof(
         session, source_id, source_generation, scope=scope, multi_workspace_enabled=multi_workspace_enabled,

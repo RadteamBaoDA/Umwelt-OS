@@ -53,7 +53,6 @@ from modules.observability.routes import router as observability_router
 from modules.search.routes import router as search_router
 from modules.settings.onboarding_routes import router as onboarding_router
 from modules.settings.routes import router as settings_router
-from modules.translations.routes import router as translations_router
 from modules.sources.routes import router as sources_router
 from modules.tasks.routes import router as tasks_router
 from modules.tasks.tools import register_task_tools
@@ -66,6 +65,7 @@ from modules.tools.public import McpAdmission, McpRuntime, create_inbound_mcp_bu
 from modules.tools.routes import browser_jobs_router
 from modules.tools.routes import router as tools_router
 from modules.tools.webhook import register_webhook_tool
+from modules.translations.routes import router as translations_router
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:

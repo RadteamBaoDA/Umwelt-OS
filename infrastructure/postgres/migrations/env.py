@@ -9,7 +9,8 @@ from sqlalchemy import pool, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-import modules  # noqa: F401  # Domain model packages are imported here as they are added.
+import modules  # Domain model packages are imported here as they are added.
+import modules.translations.models  # noqa: F401
 from core.auth.models import AuthSession, GoogleIdentity, Owner
 from core.database import Base
 from core.demo_seed import DemoSeedReceipt
@@ -127,7 +128,6 @@ from modules.timeline.models import (
     TimelineExtractionWork,
 )
 from modules.tools.models import BrowserPageEvidence, BrowserReadJob
-import modules.translations.models  # noqa: F401
 
 _auth_models = (AuthSession, GoogleIdentity, Owner)
 _workspace_models = (Workspace, WorkspaceMembership, WorkspaceInvitation)

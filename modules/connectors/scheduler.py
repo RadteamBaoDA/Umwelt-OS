@@ -281,9 +281,6 @@ async def admit_collection_request(
     scope = _request_scope(peek)
     source_id = peek.source_id
     await session.rollback()
-    if not await module_is_enabled(session, "connectors", scope=scope, multi_workspace_enabled=multi_workspace_enabled):
-        await session.rollback()
-        return None  # durable request untouched until the module is re-enabled
     try:
         await connectors._connector_access(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         if not await module_is_enabled(
