@@ -502,8 +502,13 @@ async def _owner_visible_projection(
     else:
         from modules.dashboard.public import check_brief_shareable, read_brief_access_projection
 
-        await check_brief_shareable(session, resource_id, scope=scope, member_user_id=member_user_id)
-        projection = await read_brief_access_projection(session, resource_id, scope=scope)
+        await check_brief_shareable(
+            session, resource_id, scope=scope, member_user_id=member_user_id,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+        projection = await read_brief_access_projection(
+            session, resource_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
     if projection is None or not projection.available or projection.workspace_id != scope.workspace_id:
         raise HTTPException(status_code=404, detail="Resource not found")
     return cast(ResourceAccessProjection, projection)
