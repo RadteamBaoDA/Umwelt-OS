@@ -12,10 +12,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.realtime import ReplayDraft, commit_with_replay, make_source_change
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope
 from fastapi import HTTPException
+from modules.connectors.backends import CURRENT_TEMPLATE_REVISION, backend_admits
 from modules.connectors.models import (
+    ConnectorCollectionRequest,
     ConnectorManagedCredential,
     ConnectorNativeCredential,
     ConnectorProvisioning,
+    ConnectorSchedule,
     ConnectorWorldCredential,
     GithubOAuthGrant,
 )
@@ -883,6 +886,7 @@ async def save_native_credential(
     native.state = "ready"
     native.validated_at = validated_at
     native.error_code = None
+    row.credential_revision += 1
     await session.flush()
 
 
@@ -1459,6 +1463,7 @@ async def begin_enable_in_uow(
         activation_id=activation_id, scope=scope, access_fence=access_fence,
     )
     row.workflow_operation["required_credentials"] = copy.deepcopy(required_credentials or {})
+    row.workflow_operation["backend_revision"] = row.backend_revision
     await session.flush()
     return operation_id
 
@@ -1579,6 +1584,8 @@ async def begin_activation_bundle_in_uow(
     row.desired_enabled = True
     row.state = "provisioning"
     row.error_code = None
+    if credential_intents:
+        row.credential_revision += 1
     row.activation_intent = {
         **_operation_identity(scope, access_fence),
         "id": str(activation_id),
@@ -1882,12 +1889,15 @@ async def require_collection_fence(
     revision: int,
     *,
     lock: bool = False,
+    backend_revision: int | None = None,
     scope: Scope, multi_workspace_enabled: bool,
 ) -> bool:
     """Continue caller-held admission/Source into exact provisioning collection proof.
 
     Source reread is nonlocking; lock=True acquires only the later provisioning row.
-    Active Source DTO/workspace/generation and fully applied revision must agree.
+    Active Source DTO/workspace/generation and fully applied revision must agree, and the row's
+    own backend must be ready (idle transition, applied backend revision, n8n workflow/template).
+    A supplied ``backend_revision`` (every current n8n envelope carries it) must equal the row's.
     """
     current_source = await sources.get_source_fence(session, source.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if (
@@ -1914,7 +1924,22 @@ async def require_collection_fence(
         and row.applied_revision == revision
         and row.desired_enabled
         and row.state == "active"
+        and backend_admits(row)
+        and (backend_revision is None or backend_revision == row.backend_revision)
     )
+
+
+async def require_n8n_backend(session: AsyncSession, source_id: UUID) -> None:
+    """Reject packaged-workflow (bearer) calls unless the row is an idle n8n source.
+
+    A native source, or any source mid-transition, never accepts a late or stale n8n webhook.
+    Nonlocking read under the caller-held Source lock; a missing row is left to later fences.
+    """
+    row = await session.scalar(
+        select(ConnectorProvisioning).where(ConnectorProvisioning.source_id == source_id)
+        .execution_options(populate_existing=True))
+    if row is not None and (row.execution_backend != "n8n" or row.transition_phase != "idle"):
+        raise HTTPException(status_code=409, detail="backend_inactive")
 
 
 async def require_validation_fence(
@@ -2183,6 +2208,7 @@ async def complete_credential_operation(
     )
     row.state = "ready" if current else "reconciliation_required"
     row.error_code = None if current else "retained_credential_effect_requires_reconciliation"
+    desired.credential_revision += 1
     envelope["state"] = "succeeded"
     if not current:
         envelope["cleanup_required"] = True
@@ -2353,6 +2379,7 @@ async def create_delete_intent_in_uow(
     row.source_generation = source.generation
     row.state = "delete_pending"
     row.error_code = None
+    desired.credential_revision += 1
     row.operation_envelope = {
         **_operation_identity(scope, access_fence),
         "id": str(operation_id),
@@ -2546,6 +2573,9 @@ async def acknowledge_workflow_step(
         and source.generation == operation.get("source_generation")
         and row.source_generation == operation.get("source_generation")
         and row.desired_revision == operation.get("revision")
+        and row.execution_backend == "n8n"
+        and row.transition_phase in ("idle", "activating_new")
+        and operation.get("backend_revision", row.backend_revision) == row.backend_revision
         and _required_credentials_match(operation.get("required_credentials", {}), slots)
     )
     target = str(operation.get("workflow_id") or row.workflow_id or "") or None
@@ -2566,6 +2596,7 @@ async def acknowledge_workflow_step(
         row.applied_revision = int(operation["revision"])
         row.error_code = None
         row.workflow_operation = None
+        finalize_backend(row)
         if (
             isinstance(row.activation_intent, dict)
             and row.activation_intent.get("id") == operation.get("activation_id")
@@ -2967,3 +2998,181 @@ async def unresolved_credential_error(session: AsyncSession, source_id: UUID, *,
         )
     )
     return "credential_operation_pending" if rows.first() is not None else None
+
+
+# --------------------------------------------------------------------------- C4 backend transition
+
+
+def finalize_backend(row: ConnectorProvisioning) -> None:
+    """Mark the current backend revision (and for n8n the installed template) applied and go idle."""
+    row.applied_backend_revision = row.backend_revision
+    if row.execution_backend == "n8n":
+        row.template_revision = row.applied_template_revision = CURRENT_TEMPLATE_REVISION
+    row.transition_phase = "idle"
+    row.target_backend = row.transition_operation_id = None
+    row.old_workflow_id = None
+
+
+async def fence_active_requests(session: AsyncSession, source_id: UUID) -> None:
+    """Cancel queued requests, fence running ones (token invalidated, slot freed) and pause the schedule.
+
+    Caller holds Source/provisioning locks. A remote call already sent cannot be recalled, but its
+    result can no longer be accepted because the request is no longer running.
+    """
+    from modules.connectors import scheduler
+
+    active = (await session.scalars(
+        select(ConnectorCollectionRequest)
+        .where(ConnectorCollectionRequest.source_id == source_id,
+               ConnectorCollectionRequest.status.in_(("queued", "running")))
+        .with_for_update().execution_options(populate_existing=True))).all()
+    for request in active:
+        if request.status == "running" and request.active_admission_token is not None:
+            await scheduler.settle_admission_in_uow(
+                session, request.id, request.active_admission_token, outcome="cancelled", error_code="revision_changed")
+        else:
+            request.status, request.error_code = "cancelled", "revision_changed"
+    schedule = await session.get(ConnectorSchedule, source_id, with_for_update=True)
+    if schedule is not None:
+        schedule.enabled = False
+    await session.flush()
+
+
+async def begin_backend_transition_in_uow(
+    session: AsyncSession, source_id: UUID, expected_revision: int, target_backend: str,
+    *, scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
+) -> ConnectorProvisioning:
+    """Invalidate the backend revision, stop admission and fence current work; caller commits.
+
+    Covers backend switches and n8n template upgrades (target == current backend with a stale
+    template). Raises 404/409; nothing is sent. Source/provisioning/all slots are locked in order.
+    """
+    source_fence, row, slots = await lock_connector(
+        session, source_id, _ALL_CREDENTIAL_SLOTS, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=access_fence)
+    if source_fence is None:
+        raise HTTPException(status_code=404, detail="Source not found")
+    if source_fence.status != "active" or row is None or row.source_generation != source_fence.generation:
+        raise HTTPException(status_code=409, detail="Enable this source from connector settings first")
+    if row.desired_revision != expected_revision:
+        raise HTTPException(status_code=409, detail="Connector configuration revision is stale")
+    if row.transition_phase != "idle":
+        raise HTTPException(status_code=409, detail="A backend transition is already in progress")
+    if (
+        row.state == "provisioning" or row.workflow_operation is not None or row.activation_intent is not None
+        or any(c.state in {"dispatching", "reconciliation_required", "delete_pending"} for c in slots.values())
+    ):
+        raise HTTPException(status_code=409, detail="Resolve the pending connector operation first")
+    stale_template = row.execution_backend == "n8n" and row.applied_template_revision < CURRENT_TEMPLATE_REVISION
+    if target_backend == row.execution_backend and not stale_template:
+        raise HTTPException(status_code=409, detail="Source already uses this backend")
+    row.backend_revision += 1
+    row.target_backend = target_backend
+    row.transition_phase = "draining"
+    row.transition_operation_id = uuid4()
+    row.old_workflow_id = row.workflow_id if row.execution_backend == "n8n" else None
+    row.desired_enabled = False
+    row.state = "saved_not_active"
+    row.error_code = "backend_transition_pending"
+    await fence_active_requests(session, source_id)
+    await session.flush()
+    return row
+
+
+async def resolve_backend_transition_in_uow(
+    session: AsyncSession, source_id: UUID, expected_revision: int, action: str,
+    *, scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
+) -> ConnectorProvisioning:
+    """Leave reconciliation_required by retrying the old-workflow stop or on explicit owner attestation.
+
+    ``retry`` prepares a fresh idempotent deactivation; ``confirm_inactive`` records the owner's
+    out-of-band confirmation that the old workflow is inactive. Neither admits any backend.
+    """
+    source_fence, row, _slots = await lock_connector(
+        session, source_id, _ALL_CREDENTIAL_SLOTS, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=access_fence)
+    if source_fence is None:
+        raise HTTPException(status_code=404, detail="Source not found")
+    if row is None or row.transition_phase != "reconciliation_required" or row.desired_revision != expected_revision:
+        raise HTTPException(status_code=409, detail="No reconciliation is pending for this revision")
+    if action == "retry":
+        operation = _new_deactivation(row, row.source_generation, scope=scope, access_fence=access_fence)
+        if operation is None:
+            raise HTTPException(status_code=409, detail="Old workflow is unknown; confirm it inactive instead")
+        row.workflow_operation = operation
+        row.transition_phase = "deactivating_old"
+    else:
+        row.workflow_operation = None
+        row.transition_phase = "activating_new"
+    row.error_code = "backend_transition_pending"
+    await session.flush()
+    return row
+
+
+async def advance_backend_transition(
+    session: AsyncSession, source_id: UUID, api: Any | None,
+    *, scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
+) -> str:
+    """Drive a persisted transition as far as safe and return its resulting phase.
+
+    draining -> deactivating_old (n8n stop through the reviewed workflow saga, confirmed only by its
+    acknowledgement) -> activating_new. An unconfirmed stop becomes reconciliation_required and no
+    backend admits. Native activation runs here; n8n activation waits for the owner's /activate.
+    """
+    from modules.connectors.activation import activate_native_in_uow
+
+    for _ in range(8):
+        source_fence, row, slots = await lock_connector(
+            session, source_id, _ALL_CREDENTIAL_SLOTS, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=access_fence)
+        if source_fence is None or row is None:
+            await session.rollback()
+            return "idle"
+        phase = row.transition_phase
+        if phase in ("idle", "reconciliation_required"):
+            await session.rollback()
+            return phase
+        before = _connector_observation(source_fence, row, slots, access_fence)
+        if phase == "draining":
+            await fence_active_requests(session, source_id)
+            operation = _new_deactivation(row, row.source_generation, scope=scope, access_fence=access_fence) if row.old_workflow_id else None
+            if row.old_workflow_id and operation is None:
+                row.transition_phase, row.error_code = "reconciliation_required", "deactivation_unconfirmed"
+            else:
+                row.workflow_operation = operation
+                row.transition_phase = "deactivating_old" if operation is not None else "activating_new"
+        elif phase == "deactivating_old":
+            operation = row.workflow_operation
+            step = operation.get("step") if isinstance(operation, dict) else None
+            if operation is None:
+                row.transition_phase = "activating_new"  # only a succeeded stop acknowledgement clears the operation
+                row.error_code = "backend_transition_pending"
+            elif (
+                operation.get("kind") != "deactivate" or not isinstance(step, dict)
+                or step.get("state") in {"dispatched", "unknown", "rejected", "blocked"}
+            ):
+                row.transition_phase, row.error_code = "reconciliation_required", "deactivation_unconfirmed"
+            elif api is None:  # n8n is not configured: the stop stays pending, never assumed
+                await session.rollback()
+                return phase
+            else:
+                original = copy.deepcopy(operation)
+                await session.rollback()
+                await drive_workflow_operation(
+                    session, source_id, api, original_operation=original, access_fence=access_fence,
+                    multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+                continue
+        else:  # activating_new: the old backend is confirmed inactive
+            row.execution_backend = row.target_backend or row.execution_backend
+            if row.execution_backend == "native":
+                error = await activate_native_in_uow(
+                    session, source_id, source_fence, row, scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled)
+                row.error_code = error or None
+            else:
+                row.error_code = "activation_required"
+            resulting = row.transition_phase
+            await commit_connector_observation(session, before, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+            return resulting
+        await commit_connector_observation(session, before, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    return "deactivating_old"

@@ -26,10 +26,10 @@ def _alembic(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_single_head_is_translation() -> None:
+def test_single_head_is_backend_activation() -> None:
     result = _alembic("heads")
     assert result.returncode == 0, result.stderr
-    assert result.stdout.split() == ["p14_translation", "(head)"]
+    assert result.stdout.split() == ["p14_backend_activation", "(head)"]
 
 
 def test_offline_upgrade_renders_collection_receipts() -> None:

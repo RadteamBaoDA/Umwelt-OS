@@ -134,7 +134,8 @@ async def _open_request(
         raise HTTPException(status_code=409, detail="Connector revision changed")
     if not await connectors.require_collection_fence(
         session, source, connectors.CollectionFence(
-            source_generation=source.generation, connector_revision=row.desired_revision),
+            source_generation=source.generation, connector_revision=row.desired_revision,
+            backend_revision=row.backend_revision),
         lock=True, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     ):
         raise HTTPException(status_code=409, detail="Connector collection fence is stale")
@@ -153,7 +154,7 @@ async def _open_request(
     # Terms/eligibility gate for manual, scheduled and retry alike, before any queueing or network.
     terms_revision = await provider_terms.require_terms_eligible(session, source)
     if active is not None and active.status == "queued" and (
-        active.terms_revision != terms_revision
+        active.terms_revision != terms_revision or active.credential_revision != row.credential_revision
         or active.source_generation != source.generation or active.connector_revision != row.desired_revision
         or active.backend_revision != row.backend_revision or active.captured_backend != row.execution_backend
     ):
@@ -180,6 +181,7 @@ async def _open_request(
         source_generation=source.generation, connector_revision=row.desired_revision,
         backend_revision=row.backend_revision, captured_backend=row.execution_backend,
         status="queued", attempt=0, available_at=now, enqueue_next_at=now, terms_revision=terms_revision,
+        credential_revision=row.credential_revision,
     )
     session.add(request)
     await session.flush()
@@ -255,7 +257,8 @@ async def _stale_reason(
         and row.backend_revision == request.backend_revision
         and await connectors.require_collection_fence(
             session, source, connectors.CollectionFence(  # type: ignore[arg-type]
-                source_generation=request.source_generation, connector_revision=request.connector_revision),
+                source_generation=request.source_generation, connector_revision=request.connector_revision,
+                backend_revision=request.backend_revision),
             lock=True, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     ):
         return "revision_changed"

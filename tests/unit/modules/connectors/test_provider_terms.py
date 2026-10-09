@@ -146,7 +146,7 @@ async def test_scheduler_denies_before_inserting_a_request_and_captures_revision
     scope = SimpleNamespace(workspace_id=WORKSPACE_ID, membership_revision=1)
     provisioning_row = SimpleNamespace(
         state="active", source_generation=1, applied_revision=2, desired_revision=2, backend_revision=1,
-        execution_backend="native")
+        execution_backend="native", credential_revision=1)
 
     async def run(provider: str, terms: Any) -> Any:
         with (

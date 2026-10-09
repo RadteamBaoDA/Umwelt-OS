@@ -139,6 +139,43 @@ def decrypt_native_token(key: str, credential: NativeCredentialSnapshot) -> str:
     return token
 
 
+def _rest_binding(source_generation: int, configuration_revision: int, header_name: str, key: str, secret: str) -> dict[str, object]:
+    return {
+        "provider": "rest_header", "source_generation": source_generation,
+        "configuration_revision": configuration_revision, "header_name": header_name,
+        "secret_fingerprint": secret_fingerprint(key, secret),
+    }
+
+
+def encrypt_rest_secret(
+    key: str, *, source_id: UUID, operation_id: UUID, source_generation: int,
+    configuration_revision: int, header_name: str, secret: str,
+) -> str:
+    """Encrypt an owner-entered REST header secret bound to source, operation, revision and header."""
+    raw = secret.encode("utf-8")
+    if not 1 <= len(raw) <= 512 or any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in secret):
+        raise ValueError("REST credential is invalid")
+    return encrypt_credential_input(
+        key, source_id=source_id, slot="native:rest_header", operation_id=operation_id,
+        request={"secret": secret},
+        binding=_rest_binding(source_generation, configuration_revision, header_name, key, secret))
+
+
+def decrypt_rest_secret(
+    key: str, ciphertext: str, *, source_id: UUID, operation_id: UUID, source_generation: int,
+    configuration_revision: int, header_name: str,
+) -> str:
+    """Decrypt only when the stored binding matches every current fence; never returns on mismatch."""
+    request, binding = decrypt_credential_input(
+        key, ciphertext, source_id=source_id, slot="native:rest_header", operation_id=operation_id)
+    secret = request.get("secret")
+    if not isinstance(secret, str) or binding != _rest_binding(
+        source_generation, configuration_revision, header_name, key, secret
+    ):
+        raise CredentialEncryptionUnavailable("Stored REST credential binding is invalid")
+    return secret
+
+
 class CredentialOutcomeUnknown(RuntimeError):
     """The create request may have succeeded, but n8n did not return its ID."""
 

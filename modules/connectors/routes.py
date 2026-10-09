@@ -105,6 +105,7 @@ class ManualSyncResult(BaseModel):
     batch_id: UUID | None = None
     status: str = "queued"
     failed_calls: list[str] = []
+    request_id: UUID | None = None  # native backend: the durable collection request to poll
 
 
 class McpCollectionRequest(BaseModel):
@@ -121,6 +122,7 @@ class McpScheduledCollectionRequest(BaseModel):
 
     source_generation: int = Field(ge=1)
     connector_revision: int = Field(ge=1)
+    backend_revision: int | None = Field(default=None, ge=1)
     connection_id: UUID
 
 
@@ -258,7 +260,7 @@ async def collect_mcp_scheduled(
     except ValueError as exc:
         raise HTTPException(status_code=409, detail="MCP source configuration is invalid") from exc
     if config.connection_id != payload.connection_id or not await provisioning.require_collection_fence(
-        session, source, payload.source_generation, payload.connector_revision, lock=True,
+        session, source, payload.source_generation, payload.connector_revision, lock=True, backend_revision=payload.backend_revision,
         multi_workspace_enabled=multi_workspace_enabled, scope=scope,
     ):
         raise HTTPException(status_code=409, detail="MCP source or provisioning revision is stale")
@@ -324,6 +326,7 @@ class ProviderFetchRequest(BaseModel):
 
     source_generation: int = Field(ge=1)
     connector_revision: int = Field(ge=1)
+    backend_revision: int | None = Field(default=None, ge=1)
 
 
 class ProviderFetchRead(BaseModel):
@@ -439,6 +442,8 @@ async def _collector(
     )
     if source_fence is None:
         raise HTTPException(status_code=401, detail="Source collector authentication required")
+    # Bearer routes belong to the packaged n8n workflow: a native or transitioning source rejects them.
+    await provisioning.require_n8n_backend(session, source_id)
     return token, scope, access_fence
 
 
@@ -673,7 +678,7 @@ async def fetch_native_provider(
         if not await _await_with_github_segment_deadline(
             provisioning.require_collection_fence(
                 session, source, payload.source_generation,
-                payload.connector_revision, lock=True,
+                payload.connector_revision, lock=True, backend_revision=payload.backend_revision,
                 multi_workspace_enabled=multi_workspace_enabled, scope=scope,
             ),
             deadline=segment_deadline,
@@ -1293,6 +1298,17 @@ async def trigger_collection(
     revision = provisioned.desired_revision
     if not await provisioning.require_collection_fence(session, source, source.generation, revision, lock=True, multi_workspace_enabled=multi_workspace_enabled, scope=scope):
         raise HTTPException(status_code=409, detail="Connector collection fence is stale")
+    if provisioned.execution_backend == "native":
+        await session.rollback()
+        await _owner_access(session, request, scope, expected=access_fence)
+        try:
+            queued = await scheduler.request_collection(
+                session, scope, source_id, "manual", revision, multi_workspace_enabled=multi_workspace_enabled)
+        except HTTPException as exc:
+            if exc.detail == provider_terms.TERMS_INELIGIBLE:
+                raise HTTPException(status_code=409, detail="terms_not_accepted") from exc
+            raise
+        return ManualSyncResult(status=queued.status, request_id=queued.request_id)
     if not is_native_provider(source.provider):
         try:
             data = registry.validate(source)
@@ -1475,7 +1491,7 @@ async def receive_connector_batch(
     if is_native_provider(source.provider):
         raise HTTPException(status_code=409, detail="native_collection_required")
     if not await provisioning.require_collection_fence(
-        session, source, payload.source_generation, payload.connector_revision, lock=True,
+        session, source, payload.source_generation, payload.connector_revision, lock=True, backend_revision=payload.backend_revision,
         multi_workspace_enabled=multi_workspace_enabled, scope=scope,
     ):
         raise HTTPException(status_code=409, detail="Connector collection fence is stale")
@@ -1526,7 +1542,7 @@ async def acknowledge_no_changes(
     if is_native_provider(source.provider):
         raise HTTPException(status_code=409, detail="native_collection_required")
     if not await provisioning.require_collection_fence(
-        session, source, payload.source_generation, payload.connector_revision, lock=True,
+        session, source, payload.source_generation, payload.connector_revision, lock=True, backend_revision=payload.backend_revision,
         multi_workspace_enabled=multi_workspace_enabled, scope=scope,
     ):
         raise HTTPException(status_code=409, detail="Connector collection fence is stale")
@@ -1566,7 +1582,7 @@ async def submit_crawl(
     settings = request.app.state.settings
     source = await _source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
     if source.type != "web" or is_native_provider(source.provider) or not await provisioning.require_collection_fence(
-        session, source, payload.source_generation, payload.connector_revision, lock=True,
+        session, source, payload.source_generation, payload.connector_revision, lock=True, backend_revision=payload.backend_revision,
         multi_workspace_enabled=multi_workspace_enabled, scope=scope,
     ):
         raise HTTPException(status_code=409, detail="Active web source required")

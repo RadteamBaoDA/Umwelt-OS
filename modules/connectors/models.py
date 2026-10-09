@@ -41,6 +41,15 @@ class ConnectorProvisioning(Base):
         ),
         CheckConstraint("execution_backend IN ('native', 'n8n')", name="ck_connector_provisioning_backend"),
         CheckConstraint("backend_revision > 0", name="ck_connector_provisioning_backend_revision"),
+        CheckConstraint(
+            "transition_phase IN ('idle', 'draining', 'deactivating_old', 'activating_new', 'reconciliation_required')",
+            name="ck_connector_provisioning_transition_phase",
+        ),
+        CheckConstraint("target_backend IS NULL OR target_backend IN ('native', 'n8n')", name="ck_connector_provisioning_target_backend"),
+        CheckConstraint(
+            "applied_backend_revision >= 0 AND template_revision >= 0 AND applied_template_revision >= 0 AND credential_revision > 0",
+            name="ck_connector_provisioning_c4_revisions",
+        ),
     )
 
     source_id: Mapped[UUID] = mapped_column(
@@ -58,6 +67,16 @@ class ConnectorProvisioning(Base):
     # Legacy rows keep n8n; C4 owns transitions and bumps backend_revision to fence old executions.
     execution_backend: Mapped[str] = mapped_column(String(16), nullable=False, server_default="n8n")
     backend_revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    # C4: admission needs idle + applied_backend_revision == backend_revision (see backends.backend_admits).
+    applied_backend_revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    target_backend: Mapped[str | None] = mapped_column(String(16))
+    transition_phase: Mapped[str] = mapped_column(String(24), nullable=False, server_default="idle")
+    transition_operation_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    old_workflow_id: Mapped[str | None] = mapped_column(String(128))
+    template_revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    applied_template_revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    # Bumped for any credential binding/secret/operation replacement; blocked schedules reopen on it.
+    credential_revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     workflow_operation: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     activation_intent: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     state: Mapped[str] = mapped_column(String(32), nullable=False, server_default="queued")
@@ -194,6 +213,25 @@ class ConnectorNativeCredential(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
+
+
+class ConnectorRestCredential(Base):
+    """Encrypted header secret for a native REST source; written only by owner re-entry, never echoed."""
+    __tablename__ = "connector_rest_credentials"
+    __table_args__ = (
+        CheckConstraint("source_generation > 0 AND configuration_revision > 0", name="ck_connector_rest_credentials_fences"),
+        CheckConstraint("state IN ('ready', 'revoked')", name="ck_connector_rest_credentials_state"),
+    )
+
+    source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("sources.id", ondelete="CASCADE"), primary_key=True)
+    source_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    configuration_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    operation_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    header_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    encrypted_secret: Mapped[str | None] = mapped_column(Text)
+    secret_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    state: Mapped[str] = mapped_column(String(16), nullable=False, server_default="ready")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
 
 class ConnectorWorldCredential(Base):
