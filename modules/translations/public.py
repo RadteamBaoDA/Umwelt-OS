@@ -80,7 +80,7 @@ def _read(row: TranslationSettingsRecord | None) -> TranslationSettingsRead:
     if row is None:
         return TranslationSettingsRead()
     return TranslationSettingsRead(
-        enabled=row.enabled, target_language=row.target_language,  # type: ignore[arg-type]
+        enabled=row.enabled, target_language=row.target_language,
         configuration_revision=row.configuration_revision,
     )
 
@@ -228,7 +228,7 @@ async def submit_batch(
     await session.flush()
     return TranslationBatchAccepted(batch_id=batch.id, settings=settings, items=[
         TranslationItemStatusRead(
-            resource_type=i.resource_type, resource_id=i.resource_id, status=t.status)  # type: ignore[arg-type]
+            resource_type=i.resource_type, resource_id=i.resource_id, status=t.status)
         for i, t in zip(request.items, rows)])
 
 
@@ -278,8 +278,8 @@ async def read_batch(
                 if status == "ready" and tr.result is not None:
                     payload = TranslationPayload.model_validate(tr.result)
         items.append(TranslationItemRead(
-            resource_type=item.resource_type, resource_id=item.resource_id,  # type: ignore[arg-type]
-            status=status, translation=payload, target_language=batch.target_language,  # type: ignore[arg-type]
+            resource_type=item.resource_type, resource_id=item.resource_id,
+            status=status, translation=payload, target_language=batch.target_language,
             original_revision=item.resource_revision, error_code=code))
     return TranslationBatchRead(
-        batch_id=batch.id, target_language=batch.target_language, items=items)  # type: ignore[arg-type]
+        batch_id=batch.id, target_language=batch.target_language, items=items)

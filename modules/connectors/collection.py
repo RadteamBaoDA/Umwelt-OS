@@ -558,7 +558,7 @@ def _payload(fn: Callable[..., Any], *args: Any) -> Any:
 
 def _coverage(records: Sequence[IngestionRecord]) -> Literal["returned_snapshot", "truncated"]:
     """Page coverage must equal the records' coverage (ingress rejects a mismatch)."""
-    return "truncated" if any(r.metadata["provider_record"]["coverage"] == "truncated" for r in records) else "returned_snapshot"  # type: ignore[index]
+    return "truncated" if any(r.metadata["provider_record"]["coverage"] == "truncated" for r in records) else "returned_snapshot"
 
 
 async def _get_body(run: Run, request: Any, *, max_bytes: int, timeout: float | None = None) -> rest.Fetched:

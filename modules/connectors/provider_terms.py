@@ -67,8 +67,8 @@ def decide(spec: FreeProviderSpec, row: ConnectorProviderTerms | None) -> TermsD
     if row is None:
         return evaluate_terms(spec, declared_use=None, acknowledged_terms_version=None)
     review = OperatorReview(
-        row.operator_review_state, row.reviewed_allowed_use, row.review_evidence_ref, row.reviewed_terms_version,
-    )  # type: ignore[arg-type]
+        row.operator_review_state, row.reviewed_allowed_use, row.review_evidence_ref, row.reviewed_terms_version,  # type: ignore[arg-type]
+    )
     return evaluate_terms(
         spec, declared_use=row.declared_use, acknowledged_terms_version=row.terms_version, review=review,
     )

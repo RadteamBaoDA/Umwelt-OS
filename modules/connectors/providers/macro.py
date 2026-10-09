@@ -155,13 +155,13 @@ def build_record(
         if decimal_key:
             fields[decimal_key] = decimal_text(value)
     measurement = WorldDataMeasurement(
-        provider=provider, metric=metric, value=as_float, unit=unit, currency=currency,  # type: ignore[arg-type]
+        provider=provider, metric=metric, value=as_float, unit=unit, currency=currency,
         timezone=None, symbol=symbol, region=region, latitude=latitude, longitude=longitude,
         published_at=None, quality="missing" if value is None else quality,
         missing_reason="provider_null" if value is None else None, provider_fields=fields,
     )
     envelope = ProviderRecordMetadata(
-        provider=provider, identity=identity, provider_version=version,  # type: ignore[arg-type]
+        provider=provider, identity=identity, provider_version=version,
         timestamp_basis=timestamp_basis, coverage=coverage, content_truncated=False,
         provider_modified_at=modified_at, world_data=measurement,
     )

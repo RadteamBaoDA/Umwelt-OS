@@ -248,7 +248,7 @@ async def _stale_reason(
     ):
         return "source_inactive"
     if not (
-        source.generation == request.source_generation
+        getattr(source, "generation") == request.source_generation
         and row.source_generation == request.source_generation
         and row.applied_revision == row.desired_revision == request.connector_revision
         and row.execution_backend == request.captured_backend

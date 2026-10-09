@@ -81,7 +81,9 @@ def subject_hash(
     return hashlib.sha256(subject.encode()).hexdigest()
 
 
-def _plan(provider_id: str, now: datetime, credential: str | None, egress: str | None):
+def _plan(
+    provider_id: str, now: datetime, credential: str | None, egress: str | None,
+) -> list[tuple[QuotaWindowPolicy, str, datetime, datetime]]:
     spec = get_provider_spec(provider_id)
     if spec is None:
         raise ValueError("Provider has no quota policy")
