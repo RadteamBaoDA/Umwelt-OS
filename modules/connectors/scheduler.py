@@ -75,6 +75,11 @@ def _read(request: ConnectorCollectionRequest) -> CollectionRequestRead:
     )
 
 
+def denial_code(exc: HTTPException) -> str:
+    """Terminal code for a denied job: 409 (after one re-resolve) is stale_scope, 401/404/other permission_lost."""
+    return "stale_scope" if exc.status_code == 409 else "permission_lost"
+
+
 def _request_scope(request: ConnectorCollectionRequest) -> InternalJobScope:
     """Rebuild the worker subject from the durable request, never from queued arguments."""
     return InternalJobScope(
@@ -284,27 +289,35 @@ async def admit_collection_request(
     scope = _request_scope(peek)
     source_id = peek.source_id
     await session.rollback()
-    try:
-        await connectors._connector_access(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-        if not await module_is_enabled(
-            session, "connectors", scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        ):
+    denied: str | None = None
+    for resolve in (1, 2):  # a 409 is re-resolved once, then becomes terminal stale_scope
+        try:
+            await connectors._connector_access(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+            if not await module_is_enabled(
+                session, "connectors", scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            ):
+                await session.rollback()
+                return None  # durable request untouched until the module is re-enabled
+            source_fence, row, _ = await provisioning.lock_connector(
+                session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+            source = await sources.get_connector_source(
+                session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+            request = await session.scalar(
+                select(ConnectorCollectionRequest).where(ConnectorCollectionRequest.id == request_id)
+                .with_for_update().execution_options(populate_existing=True))
+            break
+        except HTTPException as exc:
             await session.rollback()
-            return None  # durable request untouched until the module is re-enabled
-        source_fence, row, _ = await provisioning.lock_connector(
-            session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-        source = await sources.get_connector_source(
-            session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-        request = await session.scalar(
-            select(ConnectorCollectionRequest).where(ConnectorCollectionRequest.id == request_id)
-            .with_for_update().execution_options(populate_existing=True))
-    except HTTPException:
-        # Lost access or source: no admission is possible; terminalize without exposing data.
-        await session.rollback()
+            if exc.status_code == 409 and resolve == 1:
+                continue
+            denied = denial_code(exc)
+            break
+    if denied is not None:
+        # Lost permission or stale scope: terminal, no retry, no data exposed.
         await session.execute(
             update(ConnectorCollectionRequest)
             .where(ConnectorCollectionRequest.id == request_id, ConnectorCollectionRequest.status == "queued")
-            .values(status="cancelled", error_code="access_lost"))
+            .values(status="cancelled", error_code=denied))
         await session.commit()
         return None
     now = datetime.now(UTC)
@@ -419,8 +432,8 @@ async def renew_admission(
             return False
         reason = await _stale_reason(
             session, request, scope, source_fence, source, row, multi_workspace_enabled=multi_workspace_enabled)
-    except HTTPException:
-        reason = "access_lost"
+    except HTTPException as exc:
+        reason = denial_code(exc)
     if reason is not None:
         await session.rollback()
         await settle_admission(session, request_id, admission_token, outcome="cancelled", error_code=reason)
