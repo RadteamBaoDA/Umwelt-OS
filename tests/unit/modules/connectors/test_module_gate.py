@@ -33,7 +33,7 @@ async def test_dispatch_due_collections_checks_connectors_module(disabled: bool)
     session.scalar = AsyncMock(return_value=SimpleNamespace(user_id=7, revision=3))
     session.get = AsyncMock(return_value=SimpleNamespace(source_generation=1))
     opened = AsyncMock(return_value=SimpleNamespace(status="queued"))
-    ctx = {"settings": SimpleNamespace(multi_workspace_enabled=False), "session_factory": _factory(session)}
+    ctx = {"settings": SimpleNamespace(multi_workspace_enabled=False, collector_scheduler_enabled=True), "session_factory": _factory(session)}
     with (
         patch.object(scheduler, "_recover_expired_slots", AsyncMock()),
         patch.object(scheduler, "_enqueue_queued", AsyncMock(return_value=0)),

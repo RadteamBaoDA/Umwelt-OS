@@ -22,6 +22,8 @@ from core.workspaces.public import lock_access_fence, read_access_fence
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
 from modules.connectors import mcp as mcp_collection
 from modules.connectors import provider_terms, provisioning, registry, scheduler
+from modules.connectors import public as connectors_public
+from modules.connectors.collection_schemas import CollectionRequestRead
 from modules.connectors.backends import FIXED_SCOPE_PROVIDERS
 from modules.connectors.github import oauth as github_oauth
 from modules.connectors.github.adapter import collect_github_segment
@@ -1378,6 +1380,20 @@ async def trigger_collection(
     if result.outcome == "ambiguous":
         raise HTTPException(status_code=503, detail="n8n collection wake outcome is unknown")
     raise HTTPException(status_code=503, detail="n8n collection workflow is unavailable or failed")
+
+
+@router.get("/{source_id}/collection-requests/{request_id}", response_model=CollectionRequestRead,
+            dependencies=[Depends(module_dependency("connectors"))])
+async def read_collection_request(
+    source_id: UUID, request_id: UUID, session: Session, request: Request,
+    _owner: Annotated[WorkspaceContext, Depends(require_workspace_read)],
+) -> CollectionRequestRead:
+    """Owner poll of one durable collection request; foreign or absent ids share one 404."""
+    if _owner.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
+    return await connectors_public.get_collection_request(
+        session, _owner, source_id, request_id,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
 
 
 @router.post("/{source_id}/validate", response_model=ConnectorState)
