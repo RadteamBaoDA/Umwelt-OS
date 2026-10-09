@@ -4,6 +4,77 @@ This catalog distinguishes implemented mapper scope from provider ideas that sti
 permitted endpoint, source scope, authentication contract, licensing review, or adapter work.
 Public access alone does not imply permission to redistribute provider content.
 
+Fixed-endpoint free presets (BBC, VnExpress, Hacker News top stories, GDELT, World Bank, Frankfurter, ECB, Binance, Alternative.me, USGS, CoinPaprika, CoinGecko, Alpha Vantage) also have terms, quota and setup facts in [free-sources.md](free-sources.md). Their live behaviour is not yet verified; see [provider-research-2026-10-07.md](provider-research-2026-10-07.md).
+
+## Inventory
+
+Generated from `modules/connectors/catalog.py` and `modules/connectors/provider_specs.py` (free-provider facts checked on 2026-10-07, policy revision 1). Read the table as follows:
+
+- **Availability** is the catalog's own value and governs source selection. `implemented` means a collection adapter is registered; it does not mean the provider works live.
+- **Code registered** means the shared executor has an adapter for the provider. It is not a runtime, licence or deployment acceptance.
+- **Runtime verified** is `no` for every row. No provider has live verification yet; endpoint shapes and quotas are plan-documented, not observed.
+- **Eligibility** is the catalog class (`open`, `personal`, `noncommercial`, `review`) or `unknown` for providers without a free preset. It is never a grant for a workspace; see `free-sources.md`.
+
+The 11 registered fixed-endpoint native providers are `bbc_world`, `vnexpress_business`, `hn_top`, `gdelt_economy`, `world_bank`, `frankfurter`, `ecb`, `binance`, `alternative_me`, `usgs` and `coinpaprika`. `gdelt_economy` is `experimental`. The native registry also holds the earlier providers (`youtube`, `arxiv`, `huggingface`, `github_releases`, `github`, `telegram`, `alpha_vantage`, `open_meteo`), which are listed below with their own availability.
+
+Notes on specific rows:
+
+- `hn_top` (implemented top-stories preset) and `hacker_news` (planned, broader catalog entry) are separate rows. Only `hn_top` has an adapter.
+- `coingecko` is not registered. Its preset facts exist, but no adapter is registered and the Demo key has no credential slot. Its availability is `planned`.
+- `finance` is `planned` in the catalog, while the prose below lists crypto, commodity and macro families as unavailable. Only `alpha_vantage` has an adapter in that family.
+- `alpha_vantage` is `requires_credentials`: an owner-supplied key is required, stored encrypted, and activation is gated.
+- No row is `disabled`. Free presets start disabled per source; the catalog has no disabled value.
+
+| ID | Availability | Eligibility | Execution | Code registered | Runtime verified | Default interval (min) | Terms checked |
+| `rss` | `available` | unknown | - | yes | no | - | - |
+| `web` | `available` | unknown | - | yes | no | - | - |
+| `rest` | `available` | unknown | - | yes | no | - | - |
+| `mcp` | `available` | unknown | - | yes | no | - | - |
+| `github` | `requires_credentials` | unknown | - | yes | no | - | - |
+| `google_mail` | `unavailable` | unknown | - | no | no | - | - |
+| `google_calendar` | `unavailable` | unknown | - | no | no | - | - |
+| `google_drive` | `unavailable` | unknown | - | no | no | - | - |
+| `youtube` | `implemented` | unknown | - | yes | no | - | - |
+| `arxiv` | `implemented` | unknown | - | yes | no | - | - |
+| `huggingface` | `implemented` | unknown | - | yes | no | - | - |
+| `github_releases` | `implemented` | unknown | - | yes | no | - | - |
+| `telegram` | `requires_credentials` | unknown | - | yes | no | - | - |
+| `alpha_vantage` | `requires_credentials` | personal | supported | yes | no | 1440 | 2026-10-07 |
+| `open_meteo` | `implemented` | unknown | - | yes | no | - | - |
+| `google_news` | `planned` | unknown | - | no | no | - | - |
+| `reddit` | `planned` | unknown | - | no | no | - | - |
+| `hacker_news` | `planned` | unknown | - | no | no | - | - |
+| `mastodon` | `planned` | unknown | - | no | no | - | - |
+| `bluesky` | `planned` | unknown | - | no | no | - | - |
+| `x` | `planned` | unknown | - | no | no | - | - |
+| `vietnamese_press` | `planned` | unknown | - | no | no | - | - |
+| `gdelt_government` | `planned` | unknown | - | no | no | - | - |
+| `finance` | `planned` | unknown | - | no | no | - | - |
+| `weather_disaster_climate` | `planned` | unknown | - | no | no | - | - |
+| `cyber_cve` | `planned` | unknown | - | no | no | - | - |
+| `map_osint` | `planned` | unknown | - | no | no | - | - |
+| `browser` | `unsupported_operation` | unknown | - | no | no | - | - |
+| `notes` | `planned` | unknown | - | no | no | - | - |
+| `health` | `planned` | unknown | - | no | no | - | - |
+| `personal_finance` | `planned` | unknown | - | no | no | - | - |
+| `iot` | `planned` | unknown | - | no | no | - | - |
+| `notion` | `planned` | unknown | - | no | no | - | - |
+| `slack` | `planned` | unknown | - | no | no | - | - |
+| `home_assistant` | `planned` | unknown | - | no | no | - | - |
+| `bbc_world` | `implemented` | review | supported | yes | no | 30 | 2026-10-07 |
+| `vnexpress_business` | `implemented` | noncommercial | supported | yes | no | 30 | 2026-10-07 |
+| `hn_top` | `implemented` | review | supported | yes | no | 60 | 2026-10-07 |
+| `gdelt_economy` | `implemented` | review | experimental | yes | no | 60 | 2026-10-07 |
+| `world_bank` | `implemented` | open | supported | yes | no | 1440 | 2026-10-07 |
+| `frankfurter` | `implemented` | open | supported | yes | no | 1440 | 2026-10-07 |
+| `ecb` | `implemented` | open | supported | yes | no | 1440 | 2026-10-07 |
+| `binance` | `implemented` | review | supported | yes | no | 15 | 2026-10-07 |
+| `alternative_me` | `implemented` | open | supported | yes | no | 1440 | 2026-10-07 |
+| `usgs` | `implemented` | open | supported | yes | no | 60 | 2026-10-07 |
+| `coinpaprika` | `implemented` | personal | supported | yes | no | 15 | 2026-10-07 |
+| `coingecko` | `planned` | review | supported | no | no | 15 | 2026-10-07 |
+
+
 ## World and news sources
 
 | Provider | Availability | Bounded scope and known limits |
@@ -17,12 +88,12 @@ Public access alone does not imply permission to redistribute provider content.
 | GitHub App | Native adapter implemented; runtime/provider acceptance deferred | One repository selected from an installed GitHub App, with separately selected issue, pull request, commit, and release reads. BBD-OS owns expiring user OAuth, encrypted rotating tokens, PKCE, bounded requests, and peer-aware revocation; n8n carries scheduling only. Runtime/provider acceptance remains deferred. |
 | Telegram | Mapper implemented; credentials and integration required | Configured channels only, after bot identity, empty webhook, channel type, and administrator rights are verified. Each full Bot API response body is capped at 10 MiB and counted against the 25 MiB trigger budget, including envelope and filtered events. Pending updates only; no historical bootstrap, media download, or inferred deletion. |
 | Reddit | Planned; endpoint, authentication, quota, and content terms unresolved | No scraping or generic REST relabeling. |
-| Hacker News | Planned; a bounded story scope and content reuse policy are unresolved | Official API documentation does not establish a user-post redistribution license or edit timestamp. |
+| Hacker News | `hacker_news` planned; the `hn_top` top-stories preset is implemented (see Inventory) | Official API documentation does not establish a user-post redistribution license or edit timestamp. Linked articles are not fetched or licensed by the HN API. |
 | Mastodon | Planned; instance and access gates unresolved | Public timeline availability varies by instance and may require an app token with read scope. |
 | Bluesky | Planned; endpoint, rate, and content terms unresolved | No endpoint or license assumptions. |
 | X / Twitter | Planned; requires an authorized provider/API contract | No scraping or assumed access. |
 | Vietnamese press | Planned; site-specific RSS and permission terms required | No blanket press reuse permission. |
-| GDELT / government sources | Planned; named source and bounded scope required | No generic provider or quota claims. |
+| GDELT / government sources | `gdelt_government` planned; `gdelt_economy` economy article list is implemented as experimental | Government sources need named source and bounded scope. The GDELT preset is metadata-only with no quota claim beyond its pilot ceiling. |
 | Alpha Vantage | Daily equity OHLCV adapter and encrypted API-key slot implemented; API key required and provider activation gated | `TIME_SERIES_DAILY` raw as-traded endpoint only; at most five configured symbols, one daily scheduled run, and a local Redis budget of 25 requests per credential reference per UTC day (manual collection uses the same budget). Reservations are conservative and may reset if Redis state is lost; other deployments using the same key and provider-side usage remain outside this local budget. Currency and exchange timezone are explicit source scope because the response date alone does not establish them. No premium adjusted/realtime quote claim. Official Terms of Service PDF at https://www.alphavantage.co/terms_of_service/ was read on 2026-10-05: personal-use grant only absent written agreement; commercial use includes organizational use, redistribution/third-party access, and specified finance-sector affiliations. Key acceptance, exact entitlement, live quota, deployment eligibility and activation remain unverified; provider quota responses remain authoritative and rate-limited runs do not publish empty series. |
 | Open-Meteo | Bounded hourly forecast adapter implemented; deployment eligibility and live activation remain owner gates | Official schema at https://open-meteo.com/en/docs and terms at https://open-meteo.com/en/terms inspected 2026-10-05. Three-day forecast only, configured coordinates/metrics/timezone, returned units and attribution retained. Free API is non-commercial with published request ceilings; commercial deployments require an appropriate subscription. Forecast data is not a disaster or climate-history adapter. |
 | Other finance families | Unavailable | Crypto, commodities, macro/government, and exchange/composite data each require named provider schemas, terms, entitlements, and bounded scope. Alpha Vantage macro/commodities also depend on FRED API terms; no such adapters are registered. |

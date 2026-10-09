@@ -1,6 +1,6 @@
 # Free data sources
 
-Catalog facts for the 13 free-provider presets, generated from `modules/connectors/provider_specs.py` (checked on 2026-10-07; policy revision 1). 
+Catalog facts for the 13 free-provider presets, taken from `modules/connectors/provider_specs.py` (checked on 2026-10-07; policy revision 1). `Code` shows whether a collection adapter is registered in the shared executor: `registered` means present in code only, `existing adapter` is the earlier Alpha Vantage collector, and `not registered` means no adapter exists. 
 Endpoint availability, implemented code, legal eligibility and live acceptance are separate facts: a row here is **not** a license grant and **no** provider is runtime-verified. Evidence and quotes live in `docs/free-data-provider-policy.md`.
 
 ## Rules
@@ -15,18 +15,18 @@ Endpoint availability, implemented code, legal eligibility and live acceptance a
 
 | ID | Host | Kind | Interval (min) | Eligibility | Key | Execution | Code | Terms |
 |---|---|---|---|---|---|---|---|---|
-| `bbc_world` | feeds.bbci.co.uk | news | 30 | review | none | supported | pending | [terms](https://www.bbc.co.uk/usingthebbc/terms/) |
-| `vnexpress_business` | vnexpress.net | news | 30 | noncommercial | none | supported | pending | [terms](https://vnexpress.net/rss) |
-| `hn_top` | hacker-news.firebaseio.com | news | 60 | review | none | supported | pending | [terms](https://github.com/HackerNews/API) |
-| `gdelt_economy` | api.gdeltproject.org | news | 60 | review | none | experimental | pending | [terms](https://gdeltproject.org/about.html) |
-| `world_bank` | api.worldbank.org | measurement | 1440 | open | none | supported | pending | [terms](https://datacatalog.worldbank.org/public-licenses) |
-| `frankfurter` | api.frankfurter.dev | measurement | 1440 | open | none | supported | pending | [terms](https://frankfurter.dev/license/) |
-| `ecb` | www.ecb.europa.eu | measurement | 1440 | open | none | supported | pending | [terms](https://www.ecb.europa.eu/services/using-our-site/disclaimer/html/index.en.html) |
-| `binance` | data-api.binance.vision | measurement | 15 | review | none | supported | pending | [terms](https://developers.binance.com/en/docs/products/spot/rest-api) |
-| `alternative_me` | api.alternative.me | measurement | 1440 | open | none | supported | pending | [terms](https://alternative.me/crypto/fear-and-greed-index/) |
-| `usgs` | earthquake.usgs.gov | event | 60 | open | none | supported | pending | [terms](https://www.usgs.gov/information-policies-and-instructions/copyrights-and-credits) |
-| `coinpaprika` | api.coinpaprika.com | measurement | 15 | personal | none | supported | pending | [terms](https://docs.coinpaprika.com/api-plans) |
-| `coingecko` | api.coingecko.com | measurement | 15 | review | required | supported | pending | [terms](https://www.coingecko.com/en/api_terms) |
+| `bbc_world` | feeds.bbci.co.uk | news | 30 | review | none | supported | registered | [terms](https://www.bbc.co.uk/usingthebbc/terms/) |
+| `vnexpress_business` | vnexpress.net | news | 30 | noncommercial | none | supported | registered | [terms](https://vnexpress.net/rss) |
+| `hn_top` | hacker-news.firebaseio.com | news | 60 | review | none | supported | registered | [terms](https://github.com/HackerNews/API) |
+| `gdelt_economy` | api.gdeltproject.org | news | 60 | review | none | experimental | registered | [terms](https://gdeltproject.org/about.html) |
+| `world_bank` | api.worldbank.org | measurement | 1440 | open | none | supported | registered | [terms](https://datacatalog.worldbank.org/public-licenses) |
+| `frankfurter` | api.frankfurter.dev | measurement | 1440 | open | none | supported | registered | [terms](https://frankfurter.dev/license/) |
+| `ecb` | www.ecb.europa.eu | measurement | 1440 | open | none | supported | registered | [terms](https://www.ecb.europa.eu/services/using-our-site/disclaimer/html/index.en.html) |
+| `binance` | data-api.binance.vision | measurement | 15 | review | none | supported | registered | [terms](https://developers.binance.com/en/docs/products/spot/rest-api) |
+| `alternative_me` | api.alternative.me | measurement | 1440 | open | none | supported | registered | [terms](https://alternative.me/crypto/fear-and-greed-index/) |
+| `usgs` | earthquake.usgs.gov | event | 60 | open | none | supported | registered | [terms](https://www.usgs.gov/information-policies-and-instructions/copyrights-and-credits) |
+| `coinpaprika` | api.coinpaprika.com | measurement | 15 | personal | none | supported | registered | [terms](https://docs.coinpaprika.com/api-plans) |
+| `coingecko` | api.coingecko.com | measurement | 15 | review | required | supported | not registered | [terms](https://www.coingecko.com/en/api_terms) |
 | `alpha_vantage` | www.alphavantage.co | measurement | 1440 | personal | required | supported | existing adapter | [terms](https://www.alphavantage.co/terms_of_service/) |
 
 ## Attribution
@@ -86,8 +86,50 @@ Alpha Vantage enforces 12 sends per UTC day locally (official 25/day is recorded
 
 ## Setup
 
-1. Choose the preset; the source starts disabled.
-2. Owner declares deployment use and acknowledges the terms version shown in the catalog entry.
-3. `review` providers: ask the instance operator to record the terms review for that version.
-4. Key providers (CoinGecko Demo, Alpha Vantage): supply your own free-plan key; it is stored server-side and only a deployment-keyed fingerprint is used for the shared budget.
+1. Choose the preset; the source starts disabled. Fixed presets have no scope fields; the only configurable field is the schedule (`schedule_interval_minutes`).
+2. Owner declares deployment use and acknowledges the terms version with `PUT /api/v1/connectors/{source_id}/terms`, body `{"declared_use": "personal" | "noncommercial" | "commercial" | "unknown", "terms_version": "<version>"}`. `GET /api/v1/connectors/{source_id}/terms` shows the current state. Owner only.
+3. `review` providers: an instance operator records the terms review for the exact acknowledged version (state, allowed use, evidence reference). An owner tick cannot approve.
+4. Key provider: Alpha Vantage only. Supply your own free-plan key; it is encrypted server-side (`CONNECTOR_CREDENTIAL_ENCRYPTION_KEY`) and only a deployment-keyed fingerprint is used for the shared budget. CoinGecko is not registered, so it has no key flow yet.
 5. Stock data for Vietnam stays unavailable; no unofficial Yahoo/SSI endpoint is used.
+
+## Per-provider setup
+
+Each entry gives what the source collects, prerequisites, cadence, quota and attribution. Quotas are the pilot ceilings above, not provider promises. Official caps that are not documented are recorded as counted but not enforced.
+
+- **`bbc_world`**: BBC World News RSS feed (`/news/world/rss.xml`). Title, summary and link only. No key. Cadence 30 min. Attribution: show BBC as publisher with a link to the original article. Needs operator terms review.
+- **`vnexpress_business`**: VnExpress business RSS feed (`/rss/kinh-doanh.rss`). Title, summary and link only. No key. Cadence 30 min. Attribution: identify VnExpress and link the original article. Noncommercial use only.
+- **`hn_top`**: Hacker News top stories. One list call plus at most 10 item calls per run (11 sends). No key. Cadence 60 min. Attribution: Hacker News with the item and publisher URL. Needs operator terms review.
+- **`gdelt_economy`**: GDELT DOC 2.0 economy article list, 5 records, 24-hour window. Experimental. No key. Cadence 60 min. Attribution: cite the GDELT Project and the publisher URL. Needs operator terms review.
+- **`world_bank`**: Annual GDP (current US$) for Vietnam, `NY.GDP.MKTP.CD`, up to 3 rows per response. No key. Cadence 1440 min. Attribution: credit the World Bank and the indicator; keep the dataset licence. Coverage is marked `truncated` when the response spans more than one page.
+- **`frankfurter`**: USD/VND blended reference rate from `/v2/rate/usd/vnd`. No key. Cadence 1440 min. Attribution: credit Frankfurter and its contributing providers. The rate is a blend, not a single bank's rate. The v2 response shape is an unverified assumption.
+- **`ecb`**: ECB euro reference rates, `eurofxref-daily.xml`. No key. Cadence 1440 min. Attribution: credit the ECB and keep the rate date. Each EUR cross rate in the feed becomes one record; no USD/VND or other cross rate is synthesised.
+- **`binance`**: BTCUSDT last price from `data-api.binance.vision`. No key and no trading endpoints. Cadence 15 min. The quote is USDT, not USD. Attribution: credit Binance. Needs operator terms review.
+- **`alternative_me`**: Fear and Greed index, last 2 points. No key. Cadence 1440 min. Attribution: show Alternative.me with a link next to the index, including translated output.
+- **`usgs`**: USGS M4.5+ earthquakes, past day, GeoJSON summary. No key. Cadence 60 min. Detail URLs are never fetched. Attribution: credit the U.S. Geological Survey and cite the event.
+- **`coinpaprika`**: BTC ticker, `btc-bitcoin`. No key. Cadence 15 min. Personal use only, with no redistribution. Attribution: credit CoinPaprika.
+- **`alpha_vantage`**: Daily equity OHLCV (raw, as traded), `TIME_SERIES_DAILY`. Key required. Cadence 1440 min. Quota: 12 sends per UTC day locally, with the official 25/day recorded separately. Personal use only under the catalog class. Example configuration (confirm symbols and exchange before activation):
+
+  ```json
+  {
+    "market_symbols": ["IBM"],
+    "market_currency": "USD",
+    "market_exchange_timezone": "America/New_York",
+    "schedule_interval_minutes": 1440
+  }
+  ```
+
+  Up to five symbols per source. Currency and exchange timezone are explicit because the response does not establish them. The response is daily, not realtime.
+- **`coingecko`**: not registered. No adapter, no key flow and no collection. Its catalog preset is kept for later.
+
+Not verified for any provider in this document: test connection output, sample records, and last-successful-collection behaviour. These need a runtime check.
+
+Recovery: error payloads, including ones returned with HTTP 200, are rejected by each adapter and create no records. A rate-limited run does not publish an empty series.
+
+## Data caveats
+
+- **Feed-only news.** `bbc_world`, `vnexpress_business`, `hn_top` and `gdelt_economy` store title, summary, link and publisher. Linked article full text is not fetched and is not available. Summary text is capped at 4,000 characters and marked truncated when longer.
+- **Publisher and licence label.** Each news record carries `publisher` (for example "BBC News") and `license_label`, which is the catalog attribution text. Both are meant to be shown beside the data. Whether the UI shows them is a P4-web item and is not verified here.
+- **Frankfurter.** The rate date is the rate period, not a release instant. The v2 shape (`rate` field) is an unverified assumption until a live response is checked.
+- **World Bank coverage.** Annual data with up to 3 rows. Coverage is `truncated` when more than one page is returned; exact continuation paging is not implemented.
+- **Freshness (target rule, not yet verified in the UI).** The UI should show observed, published and collected times separately. A feed or quote is stale after two polling intervals. FX reference dates are kept over non-business days and are not presented as live. A failed source should show the last good value and the error, never a current-looking empty price.
+- **Stock gaps.** Alpha Vantage EOD is conditional on the key and entitlement. SEC filings, FRED and TwelveData are research only (see [provider-research-2026-10-07.md](provider-research-2026-10-07.md)). Vietnam stock quotes are unavailable until an endpoint and its terms are verified. Manual file import is the only fallback offered; no paid fallback is added.
