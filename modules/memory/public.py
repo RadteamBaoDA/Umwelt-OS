@@ -144,6 +144,35 @@ class SourceMemoryCleanupProgress:
     changed: bool
 
 
+def page_cursor_binding(scope: Scope, **filters: object) -> str:
+    """Fingerprint workspace, actor and list filters that a page cursor is only valid for."""
+    raw = json.dumps({"w": str(scope.workspace_id), "a": _actor(scope), "f": filters},
+                     sort_keys=True, default=str, separators=(",", ":"))
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def bind_page_cursor(position: str, binding: str) -> str:
+    """Wrap a timestamp/UUID cursor in a canonical envelope carrying its workspace binding."""
+    raw = json.dumps({"v": 2, "binding": binding, "position": position}, separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def unbind_page_cursor(cursor: str, binding: str) -> str:
+    """Return the inner position cursor, or 422 for a foreign-workspace, stale or malformed cursor."""
+    try:
+        if not 1 <= len(cursor) <= 2048 or "=" in cursor:
+            raise ValueError("Invalid cursor encoding")
+        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
+        envelope = json.loads(raw)
+        if (base64.urlsafe_b64encode(raw).decode().rstrip("=") != cursor or not isinstance(envelope, dict)
+                or set(envelope) != {"v", "binding", "position"} or envelope["v"] != 2
+                or envelope["binding"] != binding or not isinstance(envelope["position"], str)):
+            raise ValueError("Cursor binding does not match")
+        return envelope["position"]
+    except (ValueError, TypeError, binascii.Error) as exc:
+        raise HTTPException(status_code=422, detail="Invalid cursor") from exc
+
+
 def _encode_memory_export_cursor(
     owner_id: int, record_kind: str, snapshot_at: datetime, created_at: datetime, identifier: UUID,
 ) -> str:
@@ -1300,12 +1329,15 @@ class MemoryService:
         clamped_limit = max(1, min(limit, 100))
         filters = _list_filters(status, query, scope=scope)
         stmt = select(Memory).where(*filters)
+        binding = page_cursor_binding(
+            scope, kind="memories", status=status, memory_type=memory_type, query=query,
+        )
 
         if memory_type:
             stmt = stmt.where(Memory.memory_type == memory_type)
 
         if cursor:
-            created_at, identifier = decode_cursor(cursor)
+            created_at, identifier = decode_cursor(unbind_page_cursor(cursor, binding))
             stmt = stmt.where(tuple_(Memory.created_at, Memory.id) < (created_at, identifier))
 
         await lock_export_privacy(self.session)
@@ -1332,7 +1364,7 @@ class MemoryService:
                     break
         has_more = examined < len(rows) or len(rows) > 100
         next_cursor = (
-            encode_cursor(rows[examined - 1].created_at, rows[examined - 1].id)
+            bind_page_cursor(encode_cursor(rows[examined - 1].created_at, rows[examined - 1].id), binding)
             if has_more and examined else None
         )
 
@@ -2007,8 +2039,9 @@ class MemoryService:
             MemoryCandidate.workspace_id == scope.workspace_id, MemoryCandidate.status == status,
         )
 
+        binding = page_cursor_binding(scope, kind="candidates", status=status)
         if cursor:
-            created_at, identifier = decode_cursor(cursor)
+            created_at, identifier = decode_cursor(unbind_page_cursor(cursor, binding))
             stmt = stmt.where(
                 tuple_(MemoryCandidate.created_at, MemoryCandidate.id) < (created_at, identifier)
             )
@@ -2029,7 +2062,7 @@ class MemoryService:
                     break
         has_more = examined < len(rows) or len(rows) > 100
         next_cursor = (
-            encode_cursor(rows[examined - 1].created_at, rows[examined - 1].id)
+            bind_page_cursor(encode_cursor(rows[examined - 1].created_at, rows[examined - 1].id), binding)
             if has_more and examined else None
         )
 

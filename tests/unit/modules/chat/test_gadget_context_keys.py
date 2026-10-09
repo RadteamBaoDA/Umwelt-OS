@@ -20,5 +20,5 @@ async def test_non_selection_context_drops_private_and_selected_only_keys() -> N
         "_chat_privacy_fence": {"x": 1},
         "selected_only": True,
     }
-    result = await resolve_gadget_context(AsyncMock(), context)
+    result = await resolve_gadget_context(AsyncMock(), context, scope=None, multi_workspace_enabled=False)  # type: ignore[arg-type]
     assert result == {"kind": "page", "page": "news"}

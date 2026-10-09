@@ -128,7 +128,7 @@ async def test_get_conversation_reads_outcome_for_assistant_messages(monkeypatch
          (other_id, {"status": "garbage"})],
     )
 
-    async def keep(_session: Any, lists: Any) -> list[list[Any]]:
+    async def keep(_session: Any, lists: Any, _scope: Any = None) -> list[list[Any]]:
         return [list(x) for x in lists]
 
     monkeypatch.setattr(routes, "_filter_citation_lists", keep)
@@ -182,18 +182,15 @@ async def test_filter_current_citations_passes_web_through_in_order(monkeypatch:
 
     monkeypatch.setattr(documents_public, "lock_chat_evidence_chunks", lock)
 
-    async def scope_kw(*_a: Any, **_k: Any) -> dict[str, object]:
-        return {"scope": SimpleNamespace(workspace_id=uuid4(), user_id=1), "multi_workspace_enabled": False}
-
-    monkeypatch.setattr("modules.chat.scope.owner_scope_kwargs", scope_kw)
+    scope_kw = {"scope": SimpleNamespace(workspace_id=uuid4(), user_id=1), "multi_workspace_enabled": False}
     web2 = {**WEB, "url": "https://example.org/b"}
     malformed = {"sourceType": "web", "url": "javascript:x"}  # missing title/provider/retrievedAt
     forged = {**WEB, "documentId": str(document)}  # mixed shape is rejected by extra="forbid"
-    out = await chat_public.filter_current_citations(None, [web2, gone, doc, malformed, "junk", forged, WEB])  # type: ignore[arg-type]
+    out = await chat_public.filter_current_citations(None, [web2, gone, doc, malformed, "junk", forged, WEB], **scope_kw)  # type: ignore[arg-type]
     assert out == [web2, doc, WEB]
     assert out[0] is web2 and out[2] is WEB  # unchanged objects, original order
     calls.clear()
-    assert await chat_public.filter_current_citations(None, [WEB]) == [WEB]  # type: ignore[arg-type]
+    assert await chat_public.filter_current_citations(None, [WEB], **scope_kw) == [WEB]  # type: ignore[arg-type]
     assert calls == []  # web-only lists take no evidence lock
 
 

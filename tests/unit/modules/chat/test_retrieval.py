@@ -169,6 +169,7 @@ class TestContextBudgetAndReranking:
             settings=MagicMock(),
             query="finances",
             evidence_items=evidence,
+            scope=SCOPE,
         )
         assert status == "unavailable"
         assert reordered == evidence
@@ -184,19 +185,14 @@ class TestContextBudgetAndReranking:
             settings=MagicMock(),
             query="test",
             evidence_items=[],
+            scope=SCOPE,
         )
         assert status == "skipped"
         assert reordered == []
         assert warnings == []
 
 
-@pytest.fixture(autouse=True)
-def _owner_scope(monkeypatch):
-    """Chat resolves the owner-default scope itself; keep these unit tests off the database."""
-    monkeypatch.setattr(
-        "modules.chat.retrieval.owner_scope_kwargs",
-        AsyncMock(return_value={"scope": MagicMock(), "multi_workspace_enabled": False}),
-    )
+SCOPE = MagicMock()
 
 
 class TestFenceRevalidation:
@@ -217,7 +213,7 @@ class TestFenceRevalidation:
         mock_fence.local_only = False
 
         with patch("modules.chat.retrieval.sources_public.get_source_fence", new=AsyncMock(return_value=mock_fence)):
-            is_valid, reasons = await revalidate_context_fence(MagicMock(), context)
+            is_valid, reasons = await revalidate_context_fence(MagicMock(), context, scope=SCOPE)
             assert is_valid is False
             assert any("inactive" in r for r in reasons)
 
@@ -236,7 +232,7 @@ class TestFenceRevalidation:
         mock_fence.local_only = False
 
         with patch("modules.chat.retrieval.sources_public.get_source_fence", new=AsyncMock(return_value=mock_fence)):
-            is_valid, reasons = await revalidate_context_fence(MagicMock(), context)
+            is_valid, reasons = await revalidate_context_fence(MagicMock(), context, scope=SCOPE)
             assert is_valid is False
             assert any("generation changed" in r for r in reasons)
 
@@ -255,7 +251,7 @@ class TestFenceRevalidation:
         mock_fence.local_only = True
 
         with patch("modules.chat.retrieval.sources_public.get_source_fence", new=AsyncMock(return_value=mock_fence)):
-            is_valid, reasons = await revalidate_context_fence(MagicMock(), context, destination="remote")
+            is_valid, reasons = await revalidate_context_fence(MagicMock(), context, destination="remote", scope=SCOPE)
             assert is_valid is False
             assert any("local_only and cannot be sent" in r for r in reasons)
 
@@ -492,7 +488,7 @@ class TestDayScopedTemporalContext:
             patch.object(retrieval.documents_public, "read_chat_evidence_chunks", AsyncMock(return_value=[])),
             patch.object(retrieval, "_apply_configured_reranking", AsyncMock(return_value=([], "skipped", []))),
         ):
-            ctx = await retrieval.build_context(MagicMock(), MagicMock(), MagicMock(), MagicMock(), request)
+            ctx = await retrieval.build_context(MagicMock(), MagicMock(), MagicMock(), MagicMock(), request, SCOPE)
         assert (seen[0].date_from, seen[0].date_to) == (day, day + timedelta(days=1))
         assert len(ctx.temporal_summaries) == 1
 
@@ -510,6 +506,6 @@ async def test_build_context_releases_connection_during_embed() -> None:
         patch.object(retrieval, "_apply_configured_reranking", AsyncMock(return_value=([], "skipped", []))),
     ):
         await retrieval.build_context(
-            MagicMock(), MagicMock(), MagicMock(), MagicMock(), AnswerContextRequest(query="q"),
+            MagicMock(), MagicMock(), MagicMock(), MagicMock(), AnswerContextRequest(query="q"), SCOPE,
         )
     assert search.call_args.kwargs["release_during_embed"] is True

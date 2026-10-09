@@ -25,11 +25,7 @@ from modules.chat.schemas import (
     EvidenceItem,
     TemporalContextItem,
 )
-from modules.chat.scope import (
-    ensure_ai_config_unchanged,
-    multi_workspace_enabled,
-    owner_scope_kwargs,
-)
+from modules.chat.scope import ensure_ai_config_unchanged, multi_workspace_enabled
 from modules.knowledge.documents import public as documents_public
 from modules.knowledge.entities import public as entities_public
 from modules.knowledge.relationships import public as relationships_public
@@ -72,10 +68,8 @@ def _extract_rerank_indices(rerank_payload: Any) -> list[int] | None:
     return None
 
 
-async def _scope_kwargs(session: AsyncSession, scope: Scope | None) -> dict[str, Any]:
-    """Frozen-call scope kwargs: the caller's job/request scope, else the owner's default workspace."""
-    if scope is None:
-        return await owner_scope_kwargs(session)
+async def _scope_kwargs(session: AsyncSession, scope: Scope) -> dict[str, Any]:
+    """Frozen-call scope kwargs for the caller's own default-workspace request/job scope (R6)."""
     return {"scope": scope, "multi_workspace_enabled": multi_workspace_enabled()}
 
 
@@ -86,7 +80,7 @@ async def _apply_configured_reranking(
     settings: Settings,
     query: str,
     evidence_items: list[EvidenceItem],
-    scope: Scope | None = None,
+    scope: Scope,
 ) -> tuple[list[EvidenceItem], str, list[str]]:
     """Execute configured permitted reranking through ModelGateway.
 
@@ -100,7 +94,7 @@ async def _apply_configured_reranking(
         settings: Application settings.
         query: User search query.
         evidence_items: Current ordered candidate evidence items.
-        scope: Workspace scope of the caller; the owner's default when omitted.
+        scope: Workspace scope of the caller (the actor's default workspace).
 
     Returns:
         Tuple of (reordered evidence items, rerank_status, list of warning strings).
@@ -241,7 +235,7 @@ async def build_context(
     redis: Redis,
     settings: Settings,
     request: AnswerContextRequest,
-    scope: Scope | None = None,
+    scope: Scope,
 ) -> AnswerContext:
     """Retrieve and assemble grounded context across search, entities, temporal events, and documents.
 
@@ -256,7 +250,7 @@ async def build_context(
         redis: Redis connection for caching and rate limiting.
         settings: Application settings.
         request: Validated AnswerContextRequest DTO.
-        scope: Workspace scope of the caller (job scope in the worker); the owner's default when omitted.
+        scope: Workspace scope of the caller (the actor's default workspace; job scope in the worker).
 
     Returns:
         AnswerContext DTO containing ordered bounded evidence and contextual summaries.
@@ -530,7 +524,7 @@ async def revalidate_context_fence(
     destination: str = "remote",
     require_current_versions: bool = False,
     lock_evidence: bool = False,
-    scope: Scope | None = None,
+    scope: Scope,
 ) -> tuple[bool, list[str]]:
     """Revalidate retrieved evidence at egress and publication, optionally serializing deletion.
 

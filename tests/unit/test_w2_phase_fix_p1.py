@@ -77,7 +77,7 @@ async def test_filter_current_citations_passes_scope(monkeypatch):
 
     monkeypatch.setattr(documents_public, "lock_chat_evidence_chunks", lock)
     ids = {k: str(uuid4()) for k in ("sourceId", "documentId", "documentVersionId", "chunkId")}
-    assert await chat_public.filter_current_citations(MagicMock(), [ids]) == []
+    assert await chat_public.filter_current_citations(MagicMock(), [ids], scope=OWNER, multi_workspace_enabled=False) == []
     assert seen == {"scope": OWNER, "flag": False}
 
 
@@ -86,14 +86,10 @@ async def test_retrieval_does_not_swallow_type_errors(monkeypatch):
     from modules.chat import retrieval
     from modules.chat.schemas import AnswerContextRequest
 
-    monkeypatch.setattr(
-        retrieval, "owner_scope_kwargs",
-        AsyncMock(return_value={"scope": OWNER, "multi_workspace_enabled": False}),
-    )
     monkeypatch.setattr(retrieval.search_public, "search", AsyncMock(side_effect=TypeError("bad shape")))
     request = AnswerContextRequest(query="q", source_scope=[], entity_ids=[])
     with pytest.raises(TypeError):
-        await retrieval.build_context(MagicMock(), MagicMock(), MagicMock(), MagicMock(), request)
+        await retrieval.build_context(MagicMock(), MagicMock(), MagicMock(), MagicMock(), request, OWNER)
 
 
 def _config() -> AIExecutionConfig:
@@ -230,7 +226,6 @@ async def test_reranker_does_not_send_after_config_revision_bump(monkeypatch):
 
     snap = _chat_cfg()
     configs = iter([snap, _bumped(snap, configuration_revision=snap.configuration_revision + 1)])
-    monkeypatch.setattr(retrieval, "owner_scope_kwargs", AsyncMock(return_value={"scope": OWNER, "multi_workspace_enabled": False}))
     monkeypatch.setattr(retrieval.settings_public, "get_ai_execution_config", AsyncMock(side_effect=lambda *a, **k: next(configs)))
     monkeypatch.setattr(retrieval, "may_send", lambda *a, **k: True)
     sent = []
@@ -247,7 +242,7 @@ async def test_reranker_does_not_send_after_config_revision_bump(monkeypatch):
     monkeypatch.setattr(retrieval, "ModelGateway", FakeGateway)
     item = MagicMock(spec=EvidenceItem, local_only=False, content="c", document_version_id="v", chunk_id="c1", source_generation=1)
     monkeypatch.setattr(retrieval.documents_public, "lock_chat_evidence_chunks", AsyncMock(return_value=[item]))
-    items, status, _ = await retrieval._apply_configured_reranking(MagicMock(), _factory(), MagicMock(), MagicMock(), "q", [item])
+    items, status, _ = await retrieval._apply_configured_reranking(MagicMock(), _factory(), MagicMock(), MagicMock(), "q", [item], OWNER)
     assert sent == [] and status == "unavailable" and items == [item]
 
 
@@ -255,10 +250,10 @@ async def test_reranker_does_not_send_after_config_revision_bump(monkeypatch):
 async def test_reranker_reraises_type_error(monkeypatch):
     from modules.chat import retrieval
 
-    monkeypatch.setattr(retrieval, "owner_scope_kwargs", AsyncMock(side_effect=TypeError("shape")))
+    monkeypatch.setattr(retrieval.settings_public, "get_ai_execution_config", AsyncMock(side_effect=TypeError("shape")))
     item = MagicMock(local_only=False, content="c")
     with pytest.raises(TypeError):
-        await retrieval._apply_configured_reranking(MagicMock(), _factory(), MagicMock(), MagicMock(), "q", [item])
+        await retrieval._apply_configured_reranking(MagicMock(), _factory(), MagicMock(), MagicMock(), "q", [item], OWNER)
 
 
 def _brief_env(monkeypatch, *, current_cfg, admit_results):

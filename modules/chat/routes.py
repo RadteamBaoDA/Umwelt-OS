@@ -16,10 +16,14 @@ from redis.asyncio import Redis
 from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from core.auth.dependencies import SESSION_COOKIE, require_owner, require_owner_write
+from core.auth.dependencies import SESSION_COOKIE, require_account, require_account_write
 from core.auth.models import AuthSession
 from core.database import get_session
 from core.realtime_routes import _PermitResponse
+from core.workspaces.dependencies import (
+    require_default_workspace_read,
+    require_default_workspace_write,
+)
 from core.workspaces.schemas import WorkspaceContext
 from modules.chat import public as chat_public
 from modules.chat.models import (
@@ -61,8 +65,24 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["chat"], dependencies=[Depends(module_dependency("chat"))])
 
 Session = Annotated[AsyncSession, Depends(get_session)]
-OwnerRead = Annotated[AuthSession, Depends(require_owner)]
-OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]
+async def _account_read(
+    auth: Annotated[AuthSession, Depends(require_account)],
+    _default: Annotated[WorkspaceContext, Depends(require_default_workspace_read)],
+) -> AuthSession:
+    """Any active account, bound to its own default workspace (a foreign X-Workspace-ID returns 409)."""
+    return auth
+
+
+async def _account_write(
+    auth: Annotated[AuthSession, Depends(require_account_write)],
+    _default: Annotated[WorkspaceContext, Depends(require_default_workspace_write)],
+) -> AuthSession:
+    """CSRF/backup-admitted write by any active account under its own default workspace."""
+    return auth
+
+
+OwnerRead = Annotated[AuthSession, Depends(_account_read)]
+OwnerWrite = Annotated[AuthSession, Depends(_account_write)]
 
 _TOKEN_RE = re.compile(r"^[0-9a-f]{64}$")
 DB_READ_TIMEOUT = 3.0
@@ -291,7 +311,9 @@ async def _poll_needs_lock(
     return account_id is None or run.actor_user_id != account_id
 
 
-async def _filter_citation_lists(session: AsyncSession, lists: list[object]) -> list[list[dict[str, object]]]:
+async def _filter_citation_lists(
+    session: AsyncSession, lists: list[object], scope: WorkspaceContext,
+) -> list[list[dict[str, object]]]:
     """Filter many citation lists with ONE `filter_current_citations` call (one evidence lock per 100 refs).
 
     `filter_current_citations` returns the kept raw dicts themselves and keeps or drops each citation
@@ -299,7 +321,9 @@ async def _filter_citation_lists(session: AsyncSession, lists: list[object]) -> 
     per-list output, in each list's original order. Non-list inputs yield [] as before.
     """
     flat = [citation for raw in lists if isinstance(raw, list) for citation in raw]
-    kept = {id(citation) for citation in await chat_public.filter_current_citations(session, flat)}
+    kept = {id(citation) for citation in await chat_public.filter_current_citations(
+        session, flat, scope=scope, multi_workspace_enabled=multi_workspace_enabled(),
+    )}
     return [[c for c in raw if id(c) in kept] if isinstance(raw, list) else [] for raw in lists]
 
 
@@ -535,7 +559,7 @@ async def get_conversation(
                     pass  # malformed outcome: report nothing rather than guess
 
     # One batched evidence lookup for the whole transcript instead of one per message (P2-6).
-    current_citations = await _filter_citation_lists(session, [m.citations or [] for m in messages_rows])
+    current_citations = await _filter_citation_lists(session, [m.citations or [] for m in messages_rows], scope)
     messages_list = [
         MessageRead(
             id=m.id,
@@ -726,7 +750,9 @@ async def send_message(
     session.add(user_msg)
     await session.flush()
 
-    resolved_context = await chat_public.resolve_gadget_context(session, payload.context)
+    resolved_context = await chat_public.resolve_gadget_context(
+        session, payload.context, scope=scope, multi_workspace_enabled=multi_workspace_enabled(),
+    )
     await chat_public.reject_unsendable_selection(
         session, resolved_context, scope=scope, multi_workspace_enabled=multi_workspace_enabled(),
     )
@@ -928,7 +954,7 @@ async def mutate_message(
     )
 
 
-@router.get("/api/v1/responses/{response_id}/events")
+@router.get("/api/v1/responses/{response_id}/events", dependencies=[Depends(require_default_workspace_read)])
 async def get_response_events(
     response_id: UUID,
     request: Request,
@@ -1082,7 +1108,7 @@ async def get_response_events(
                                     citations = await _filter_citation_lists(session, [
                                         event.data.get("citations") if isinstance(event.data, dict) else None
                                         for event in events
-                                    ])
+                                    ], await _run_scope(session, current_run))
                                     frames: list[str] = []
                                     size = 0
                                     batch_full = len(events) == STREAM_BATCH_SIZE

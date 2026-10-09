@@ -248,7 +248,9 @@ def _selection_detail(code: str, message: str) -> dict[str, _Any]:
     return {"code": code, "message": message, "details": {}}
 
 
-async def resolve_gadget_context(session: AsyncSession, context: dict[str, _Any] | None) -> dict[str, _Any]:
+async def resolve_gadget_context(
+    session: AsyncSession, context: dict[str, _Any] | None, *, scope: WorkspaceContext, multi_workspace_enabled: bool,
+) -> dict[str, _Any]:
     """Normalize exact gadget selections to JSON-safe refs and owner-derived source fences.
 
     Every item is re-resolved through Documents' active current-version and provider-scope policy at
@@ -277,9 +279,7 @@ async def resolve_gadget_context(session: AsyncSession, context: dict[str, _Any]
     if len({item.document_id for item in selections}) != len(selections):
         raise HTTPException(status_code=422, detail=_selection_detail("selection_invalid", "Selection contains duplicate documents"))
 
-    from modules.chat.scope import owner_scope_kwargs
-
-    scope_kw = await owner_scope_kwargs(session)
+    scope_kw: dict[str, _Any] = {"scope": scope, "multi_workspace_enabled": multi_workspace_enabled}
     sources: list[UUID] = []
     refs: list[dict[str, str]] = []
     selection_fences: list[GadgetDocumentSelectionFence] = []
@@ -1510,6 +1510,9 @@ def _decode_cleanup_cursor(
 async def filter_current_citations(
     session: AsyncSession,
     citations: object,
+    *,
+    scope: WorkspaceContext,
+    multi_workspace_enabled: bool,
 ) -> list[dict[str, object]]:
     """Return only citations whose exact document, version, and chunk still exist.
 
@@ -1543,10 +1546,9 @@ async def filter_current_citations(
     unique_refs = sorted(set(refs), key=lambda item: (str(item[0]), str(item[1])))
     current = {}
     if unique_refs:
-        from modules.chat.scope import owner_scope_kwargs
         from modules.knowledge.documents import public as documents_public
 
-        scope_kw = await owner_scope_kwargs(session)
+        scope_kw: dict[str, _Any] = {"scope": scope, "multi_workspace_enabled": multi_workspace_enabled}
 
         for start in range(0, len(unique_refs), 100):
             evidence = await documents_public.lock_chat_evidence_chunks(
