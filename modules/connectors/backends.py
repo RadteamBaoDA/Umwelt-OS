@@ -9,6 +9,26 @@ PROVIDER_SOURCE_TYPES = MappingProxyType({
     "youtube": "rss", "arxiv": "rss", "huggingface": "api",
     "github_releases": "api", "github": "api", "telegram": "api",
     "alpha_vantage": "api", "open_meteo": "api",
+    # P2/P3 fixed-endpoint providers: no owner-supplied scope, one catalog request per run.
+    "bbc_world": "rss", "vnexpress_business": "rss", "hn_top": "api", "gdelt_economy": "api",
+    "world_bank": "api", "frankfurter": "api", "ecb": "api", "binance": "api",
+    "alternative_me": "api", "usgs": "api", "coinpaprika": "api",
+})
+FIXED_SCOPE_PROVIDERS = frozenset(PROVIDER_SOURCE_TYPES) - frozenset({
+    "youtube", "arxiv", "huggingface", "github_releases", "github", "telegram", "alpha_vantage", "open_meteo",
+})
+PROVIDER_SCOPE_FIELDS = MappingProxyType({
+    "youtube": frozenset({"youtube_channel_id"}), "arxiv": frozenset({"arxiv_category"}),
+    "huggingface": frozenset({"huggingface_author"}),
+    "github_releases": frozenset({"github_owner", "github_repository"}),
+    "github": frozenset({
+        "github_owner", "github_repository", "include_issues", "include_pulls", "include_commits",
+        "include_releases", "github_history_days",
+    }),
+    "telegram": frozenset({"telegram_chat_ids"}),
+    "alpha_vantage": frozenset({"market_symbols", "market_currency", "market_exchange_timezone"}),
+    "open_meteo": frozenset({"weather_latitude", "weather_longitude", "weather_timezone", "weather_metrics"}),
+    **dict.fromkeys(FIXED_SCOPE_PROVIDERS, frozenset[str]()),
 })
 NATIVE_PROVIDERS = frozenset(PROVIDER_SOURCE_TYPES)
 GENERIC_CATALOG_SOURCE_TYPES = MappingProxyType({

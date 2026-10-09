@@ -55,6 +55,14 @@ class FreeProviderSpec:
     secret_location: Literal["header", "query"] | None = None
 
 
+# Providers the shared executor can actually dispatch (collection.ADAPTERS). CoinGecko is absent: its
+# demo key has no credential slot yet. This is code presence only; runtime_verified stays False.
+DISPATCHABLE = frozenset({
+    "bbc_world", "vnexpress_business", "hn_top", "gdelt_economy",
+    "world_bank", "frankfurter", "ecb", "binance", "alternative_me", "usgs", "coinpaprika",
+})
+
+
 def _unknown(kind: str = "provider", unit: str = "http_calls", cost: int = 1) -> QuotaWindowPolicy:
     return QuotaWindowPolicy(
         "official_unknown_calls_utc_day", kind, "day", unit, None, cost, "official_unknown",  # type: ignore[arg-type]
@@ -74,7 +82,7 @@ def _spec(id_: str, label: str, hosts: tuple[str, ...], kind: str, interval: int
         id=id_, hosts=hosts, data_kind=kind, key_required=key, default_interval_minutes=interval,  # type: ignore[arg-type]
         terms_url=terms_url, eligibility=eligibility, attribution=attribution, execution=execution,  # type: ignore[arg-type]
         label=label, endpoints=endpoints, quota=quota, secret_location=secret,  # type: ignore[arg-type]
-        code_implemented=implemented,
+        code_implemented=implemented or id_ in DISPATCHABLE,
     )
 
 

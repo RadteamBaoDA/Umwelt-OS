@@ -32,6 +32,17 @@ class SourceCreate(BaseModel):
             "telegram": "api",
             "alpha_vantage": "api",
             "open_meteo": "api",
+            "bbc_world": "rss",
+            "vnexpress_business": "rss",
+            "hn_top": "api",
+            "gdelt_economy": "api",
+            "world_bank": "api",
+            "frankfurter": "api",
+            "ecb": "api",
+            "binance": "api",
+            "alternative_me": "api",
+            "usgs": "api",
+            "coinpaprika": "api",
         }.get(self.provider or "")
         if self.provider is not None and expected is None:
             raise ValueError("Provider is not registered")

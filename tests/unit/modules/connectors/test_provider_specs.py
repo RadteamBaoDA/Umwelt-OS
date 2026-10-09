@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from modules.connectors.catalog import get_catalog_entry, list_catalog
 from modules.connectors.provider_specs import (
+    DISPATCHABLE,
     FREE_PROVIDER_SPECS,
     OperatorReview,
     deployment_use_matches,
@@ -75,7 +76,12 @@ def test_review_provider_needs_matching_operator_approval() -> None:
 
 def test_specs_never_claim_runtime_acceptance_or_unproven_code() -> None:
     assert not any(spec.runtime_verified for spec in FREE_PROVIDER_SPECS)
-    assert {spec.id for spec in FREE_PROVIDER_SPECS if spec.code_implemented} == {"alpha_vantage"}
+    # Code presence only: exactly the providers the shared executor dispatches (CoinGecko lacks a key slot).
+    from modules.connectors.collection import ADAPTERS
+
+    implemented = {spec.id for spec in FREE_PROVIDER_SPECS if spec.code_implemented}
+    assert implemented == {"alpha_vantage"} | set(DISPATCHABLE)
+    assert set(DISPATCHABLE) <= set(ADAPTERS) and "coingecko" not in implemented
 
 
 def test_unknown_official_caps_are_counted_not_invented() -> None:
@@ -99,8 +105,9 @@ def test_catalog_exposes_all_specs_additively_and_honestly() -> None:
         assert entry.hosts == spec.hosts
         assert entry.runtime_verified is False
         if spec.id != "alpha_vantage":
-            assert entry.availability == "planned"  # no adapter yet: never scope-exportable
-            assert entry.code_available is False
+            ready = spec.id in DISPATCHABLE  # planned entries stay out of provider-scope export
+            assert entry.availability == ("implemented" if ready else "planned")
+            assert entry.code_available is ready
 
 
 def test_registry_and_typed_schema_ids_are_equal_for_supported_providers() -> None:

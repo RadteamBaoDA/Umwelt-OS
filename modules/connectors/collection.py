@@ -14,11 +14,11 @@ Boundaries kept deliberately narrow:
 
 import asyncio
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
-from typing import Any
+from datetime import UTC, datetime, timedelta
+from typing import Any, Literal
 from uuid import UUID
 
 import httpx
@@ -46,6 +46,9 @@ from modules.sources import public as sources
 from modules.sources.schemas import ConnectorSource, SourceFence
 
 RENEW_EVERY_SECONDS = 20
+PAYLOAD_RATE_LIMIT_BACKOFF = timedelta(minutes=15)  # body-level throttling carries no Retry-After; coarse until observed
+PURE_MAX_BYTES = {"ecb": 256 * 1024}  # every other P3 body is capped at macro.MAX_BODY_BYTES
+PURE_PROVIDERS = ("world_bank", "frankfurter", "ecb", "binance", "alternative_me", "usgs", "coinpaprika")  # coingecko needs a key slot
 SIMPLE_NATIVE = frozenset({"youtube", "arxiv", "huggingface", "github_releases", "alpha_vantage", "open_meteo"})
 REFUSED_HERE = frozenset({"github", "telegram"})  # proof-bearing routes; see module docstring
 Snapshot = tuple[int, int, int]
@@ -462,12 +465,7 @@ async def _run_native(run: Run) -> None:
     """Collect one registered snapshot provider through the reserved native lease + atomic receipt."""
     a, provider = run.attempt, run.attempt.source.provider
     collected_at = datetime.now(UTC)
-    async with run.factory() as session:
-        lease = await ingestion.acquire_connector_collection(
-            session, source_id=a.source.id, source_generation=a.source.generation,
-            connector_revision=a.connector_revision, collector_token=None, scope=a.scope,
-            multi_workspace_enabled=a.multi, request_ref=a.ref)
-    run.extras["lease"] = lease
+    lease = await _lease(run)
     gate = run.gate
     async with run.factory() as session:
         if provider in {"youtube", "arxiv"}:
@@ -498,17 +496,38 @@ async def _run_native(run: Run) -> None:
         gate.captured_operation is None or page.credential_operation_id != gate.captured_operation
     ):
         raise CollectionFenceLost("credential_changed", "revision_changed")
+    await _accept_native(run, lease, page.records, page.coverage, collected_at)
+
+
+async def _lease(run: Run) -> Any:
+    """Reserve the native source lease before any provider send."""
+    a = run.attempt
+    async with run.factory() as session:
+        lease = await ingestion.acquire_connector_collection(
+            session, source_id=a.source.id, source_generation=a.source.generation,
+            connector_revision=a.connector_revision, collector_token=None, scope=a.scope,
+            multi_workspace_enabled=a.multi, request_ref=a.ref)
+    run.extras["lease"] = lease
+    return lease
+
+
+async def _accept_native(
+    run: Run, lease: Any, records: Sequence[IngestionRecord], coverage: Literal["returned_snapshot", "pending_updates_only", "truncated"],
+    collected_at: datetime, state_update: CollectionStateUpdate | None = None,
+) -> None:
+    """Hand a leased native page (possibly empty = no changes) to the ingestion owner."""
+    a, gate = run.attempt, run.gate
     batch = NativeCollectionBatch(
         source_id=a.source.id, source_generation=a.source.generation, connector_revision=a.connector_revision,
         lease_token=lease.token, cursor_before=lease.cursor_before, cursor_after=lease.cursor_before,
-        records=list(page.records), telegram_deliveries=(), telegram_raw_deliveries=(),
-        coverage=page.coverage, github_segment=None, collected_at=collected_at)
+        records=list(records), telegram_deliveries=(), telegram_raw_deliveries=(),
+        coverage=coverage, github_segment=None, collected_at=collected_at)
     async with run.factory() as session:
         await ingestion.accept_native_collection(
             session, batch, collector_token=None, lease=lease, scope=a.scope, multi_workspace_enabled=a.multi,
             expected_native_operation_id=None,
-            expected_world_credential_operation_id=gate.captured_operation if provider == "alpha_vantage" else None,
-            request_ref=a.ref)
+            expected_world_credential_operation_id=gate.captured_operation if a.source.provider == "alpha_vantage" else None,
+            request_ref=a.ref, state_update=state_update)
     run.extras["accepted"] = True
 
 
@@ -517,6 +536,118 @@ class _Unmetered:
 
     async def eval(self, *_args: object) -> int:
         return 1
+
+
+# ---------------------------------------------------------------- P2/P3 free providers (fixed endpoints)
+
+def _payload(fn: Callable[..., Any], *args: Any) -> Any:
+    """Run a pure mapper and translate ``ProviderPayloadError.kind`` into executor failure signals."""
+    from modules.connectors.providers.macro import ProviderPayloadError
+
+    try:
+        return fn(*args)
+    except ProviderPayloadError as exc:
+        if exc.kind == "rate_limited":
+            raise connectors.ProviderRateLimited(datetime.now(UTC) + PAYLOAD_RATE_LIMIT_BACKOFF) from exc
+        if exc.kind == "incomplete":
+            raise rest.CollectionIncomplete from exc
+        if exc.kind in {"credential", "entitlement"}:
+            raise rest.ProviderHttpError(401) from exc
+        raise  # "invalid": ValueError -> provider_response_invalid
+
+
+def _coverage(records: Sequence[IngestionRecord]) -> Literal["returned_snapshot", "truncated"]:
+    """Page coverage must equal the records' coverage (ingress rejects a mismatch)."""
+    return "truncated" if any(r.metadata["provider_record"]["coverage"] == "truncated" for r in records) else "returned_snapshot"  # type: ignore[index]
+
+
+async def _get_body(run: Run, request: Any, *, max_bytes: int, timeout: float | None = None) -> rest.Fetched:
+    """One gated send (terms + quota + fences before the wire); no redirects, bounded bytes."""
+    extra = {} if timeout is None else {"timeout": timeout}
+    return await run.gate.fetch_bytes(request.url, headers=request.headers or None, max_bytes=max_bytes, **extra)
+
+
+def _require_body(fetched: rest.Fetched) -> bytes:
+    if fetched.body is None:  # unconditional GET answered 304: not a usable page
+        raise rest.ProviderHttpError(304)
+    return fetched.body
+
+
+async def _run_pure(run: Run) -> None:
+    """P3 measurement providers: one fixed request, mapped by ``map_pure_provider_body`` (no world_data for news)."""
+    from modules.connectors.providers.macro import MAX_BODY_BYTES
+    from modules.connectors.providers.world_data import PURE_ADAPTERS, map_pure_provider_body
+
+    provider = str(run.attempt.source.provider)
+    collected_at = datetime.now(UTC)
+    lease = await _lease(run)
+    fetched = await _get_body(run, PURE_ADAPTERS[provider].request(), max_bytes=PURE_MAX_BYTES.get(provider, MAX_BODY_BYTES))
+    records = _payload(map_pure_provider_body, provider, _require_body(fetched), collected_at)
+    await _accept_native(run, lease, records, _coverage(records), collected_at)
+
+
+async def _run_feed(run: Run) -> None:
+    """P2 RSS/Atom presets: replay stored validators (same URL + revision), 304 keeps the last good records."""
+    from modules.connectors.providers import news
+
+    a, provider = run.attempt, str(run.attempt.source.provider)
+    collected_at, revision = datetime.now(UTC), str(a.connector_revision)
+    state = await _state(run)
+    stored = news.FeedValidators(
+        news.FEED_URLS[provider], revision, state.etag, state.last_modified,
+    ) if state.validators_revision == a.connector_revision else None
+    lease = await _lease(run)
+    fetched = await _get_body(run, news.feed_request(provider, stored, revision), max_bytes=news.MAX_FEED_BYTES)
+    result = _payload(news.map_feed_response, provider, 200 if fetched.body is not None else 304, fetched.body or b"", collected_at)
+    if result.not_modified:
+        await _accept_native(run, lease, (), "returned_snapshot", collected_at)
+        return
+    captured = news.capture_validators(
+        provider, {"etag": fetched.etag or "", "last-modified": fetched.last_modified or ""}, revision)
+    update = CollectionStateUpdate(
+        update_validators=True, etag=captured.etag if captured else None,
+        last_modified=captured.last_modified if captured else None)
+    await _accept_native(run, lease, result.records, _coverage(result.records), collected_at, update)
+
+
+async def _run_hn(run: Run) -> None:
+    """Hacker News: one id-list send plus at most ``HN_MAX_ITEMS`` sequential item sends, each debited."""
+    from modules.connectors.providers import news
+
+    collected_at = datetime.now(UTC)
+    lease = await _lease(run)
+    top = _require_body(await _get_body(run, news.hn_top_request(), max_bytes=64 * 1024))
+    ids = _payload(news.parse_hn_top_ids, top)
+    bodies: dict[int, bytes | None] = {}
+    for item_id in ids:
+        try:
+            bodies[item_id] = (await _get_body(run, news.hn_item_request(item_id), max_bytes=64 * 1024)).body
+        except rest.ProviderHttpError as exc:
+            if exc.status_code != 404:
+                raise
+            bodies[item_id] = None  # removed item: skipped and counted by the mapper
+    result = _payload(news.map_hn_stories, ids, bodies, collected_at)
+    run.extras["skipped"] = result.skipped
+    await _accept_native(run, lease, result.records, "returned_snapshot", collected_at)
+
+
+async def _run_gdelt(run: Run) -> None:
+    """Experimental GDELT: hard 8 s timeout; on timeout nothing is accepted so the last good records stay."""
+    from modules.connectors.providers.gdelt import GDELT_TIMEOUT_SECONDS, gdelt_request
+    from modules.connectors.providers.macro import MAX_BODY_BYTES
+    from modules.connectors.providers.news import map_news_body
+
+    collected_at = datetime.now(UTC)
+    lease = await _lease(run)
+    fetched = await _get_body(run, gdelt_request(), max_bytes=MAX_BODY_BYTES, timeout=GDELT_TIMEOUT_SECONDS)
+    records = _payload(map_news_body, "gdelt_economy", _require_body(fetched), collected_at)
+    await _accept_native(run, lease, records, _coverage(records), collected_at)
+
+
+ADAPTERS.update({
+    **dict.fromkeys(PURE_PROVIDERS, _run_pure),
+    "bbc_world": _run_feed, "vnexpress_business": _run_feed, "hn_top": _run_hn, "gdelt_economy": _run_gdelt,
+})
 
 
 # ---------------------------------------------------------------- orchestration

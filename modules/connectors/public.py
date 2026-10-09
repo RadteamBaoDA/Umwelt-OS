@@ -31,7 +31,7 @@ from fastapi import HTTPException
 
 from modules.connectors.backends import (
     NATIVE_PROVIDERS,
-    PROVIDER_SOURCE_TYPES,
+    PROVIDER_SCOPE_FIELDS,
     is_native_provider as _is_native_provider,
 )
 from modules.connectors.models import (
@@ -760,15 +760,7 @@ async def get_connector_configuration(
         mode="json", exclude_none=True
     )
     if source.provider in NATIVE_PROVIDERS:
-        scope_fields = {
-            "youtube": {"youtube_channel_id"}, "arxiv": {"arxiv_category"},
-            "huggingface": {"huggingface_author"},
-            "github_releases": {"github_owner", "github_repository"},
-            "github": {"github_owner", "github_repository", "include_issues", "include_pulls", "include_commits", "include_releases", "github_history_days"},
-            "telegram": {"telegram_chat_ids"},
-            "alpha_vantage": {"market_symbols", "market_currency", "market_exchange_timezone"},
-            "open_meteo": {"weather_latitude", "weather_longitude", "weather_timezone", "weather_metrics"},
-        }[source.provider]
+        scope_fields = PROVIDER_SCOPE_FIELDS[source.provider]
         common = {"timezone", "schedule_interval_minutes", "timeout_seconds", "history_mode"}
         configuration = {
             key: value for key, value in configuration.items()
@@ -845,15 +837,7 @@ def serialize_source_configuration(source: ConnectorSource, config: ConnectorCon
     values = config.model_dump(mode="json", exclude_none=True)
     if source.provider not in NATIVE_PROVIDERS:
         return values
-    scope_fields = {
-        "youtube": {"youtube_channel_id"}, "arxiv": {"arxiv_category"},
-        "huggingface": {"huggingface_author"},
-        "github_releases": {"github_owner", "github_repository"},
-        "github": {"github_owner", "github_repository", "include_issues", "include_pulls", "include_commits", "include_releases", "github_history_days"},
-        "telegram": {"telegram_chat_ids"},
-        "alpha_vantage": {"market_symbols", "market_currency", "market_exchange_timezone"},
-        "open_meteo": {"weather_latitude", "weather_longitude", "weather_timezone", "weather_metrics"},
-    }[source.provider]
+    scope_fields = PROVIDER_SCOPE_FIELDS[source.provider]
     common = {"timezone", "schedule_interval_minutes", "timeout_seconds", "history_mode"}
     supplied = config.model_fields_set
     if supplied - scope_fields - common:

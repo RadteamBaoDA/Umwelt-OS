@@ -4,6 +4,7 @@ from urllib.parse import urlsplit
 from modules.connectors.backends import (
     GENERIC_SOURCE_TYPES,
     NATIVE_PROVIDERS,
+    PROVIDER_SCOPE_FIELDS,
     PROVIDER_SOURCE_TYPES,
     is_native_provider,
 )
@@ -48,16 +49,7 @@ def validate(source: ConnectorSource) -> dict[str, Any]:
             raise ValueError("Provider is not registered")
         if source.type != PROVIDER_SOURCE_TYPES[source.provider]:
             raise ValueError("Source type does not match the registered provider")
-        scope_fields = {
-            "youtube": {"youtube_channel_id"},
-            "arxiv": {"arxiv_category"},
-            "huggingface": {"huggingface_author"},
-            "github_releases": {"github_owner", "github_repository"},
-            "github": {"github_owner", "github_repository", "include_issues", "include_pulls", "include_commits", "include_releases", "github_history_days"},
-            "telegram": {"telegram_chat_ids"},
-            "alpha_vantage": {"market_symbols", "market_currency", "market_exchange_timezone"},
-            "open_meteo": {"weather_latitude", "weather_longitude", "weather_timezone", "weather_metrics"},
-        }[source.provider]
+        scope_fields = PROVIDER_SCOPE_FIELDS[source.provider]
         common = {"timezone", "schedule_interval_minutes", "timeout_seconds"}
         expected_history = "pending_updates" if source.provider == "telegram" else "returned_snapshot"
         raw_keys = set(source.configuration or {})

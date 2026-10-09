@@ -279,13 +279,18 @@ def _with_spec(entry: CatalogEntry, spec: FreeProviderSpec) -> CatalogEntry:
 
 
 def _free_entry(spec: FreeProviderSpec) -> CatalogEntry:
-    # Planned, not available: the adapter is not registered, so this must never pass the
-    # "available/implemented/requires_credentials" provider-scope gates.
+    # Planned until the adapter is registered (spec.code_implemented): planned entries must never pass
+    # the "available/implemented/requires_credentials" provider-scope gates.
+    ready = spec.code_implemented
     return _with_spec(CatalogEntry(
         provider_id=spec.id, label=spec.label, auth_methods=("api_key",) if spec.key_required else ("none",),
-        scope_fields=(), configuration_fields=("schedule_interval_minutes",), collection_modes=(),
-        supports_history=False, supports_edit=False, supports_delete=False, availability="planned",
-        availability_reason="Catalog preset only: no collection adapter is registered or runtime-verified yet.",
+        scope_fields=(), configuration_fields=("schedule_interval_minutes",),
+        collection_modes=("scheduled", "manual") if ready else (),
+        supports_history=False, supports_edit=False, supports_delete=False,
+        availability="implemented" if ready else "planned",
+        availability_reason=(
+            "Adapter registered for the gated shared executor; live endpoint behavior is not runtime-verified."
+            if ready else "Catalog preset only: no collection adapter is registered or runtime-verified yet."),
         license_status="unverified", evidence_status="plan_documented_endpoint_unverified_runtime",
     ), spec)
 

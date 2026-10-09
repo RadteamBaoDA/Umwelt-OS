@@ -13,13 +13,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.public import authenticated_session_ref
+from core.database import get_session
+from core.realtime import commit_with_replay, make_source_change
 from core.workspaces.dependencies import require_workspace_read, require_workspace_write
 from core.workspaces.public import lock_access_fence, read_access_fence
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
-from core.database import get_session
-from core.realtime import commit_with_replay, make_source_change
 from modules.connectors import mcp as mcp_collection
 from modules.connectors import provider_terms, provisioning, registry, scheduler
+from modules.connectors.backends import FIXED_SCOPE_PROVIDERS
 from modules.connectors.github import oauth as github_oauth
 from modules.connectors.github.adapter import collect_github_segment
 from modules.connectors.github.schemas import GitHubHintClaimProof, project_github_source_config
@@ -37,8 +38,8 @@ from modules.connectors.public import (
     ConnectorReceipt,
     CrawlRequest,
     CrawlResult,
-    ProviderRateLimited,
     NativeCredentialSnapshot,
+    ProviderRateLimited,
     RSSRequest,
     get_native_credential_snapshot,
     is_native_provider,
@@ -665,6 +666,8 @@ async def fetch_native_provider(
     )
     if not is_native_provider(source.provider):
         raise HTTPException(status_code=409, detail="Native provider is not configured")
+    if source.provider in FIXED_SCOPE_PROVIDERS:  # free providers run only through the gated shared executor
+        raise HTTPException(status_code=409, detail="Provider is collected by the scheduler only")
     try:
         registry.validate(source)
     except (ValueError, TypeError) as exc:

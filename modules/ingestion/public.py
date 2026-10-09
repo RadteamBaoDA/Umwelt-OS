@@ -34,6 +34,7 @@ from core.realtime import (
 from core.telemetry import RunMeta as _RunMeta
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
+from modules.connectors.collection_schemas import CollectionRequestRef
 from modules.ingestion.models import (
     COLLECTION_LEASE,
     RECEIPT_RETENTION,
@@ -67,7 +68,6 @@ from modules.ingestion.schemas import (
     TelegramRawDelivery,
     classify_telegram_probe,
 )
-from modules.connectors.collection_schemas import CollectionRequestRef
 from modules.knowledge.documents import public as documents
 from modules.knowledge.documents.schemas import DocumentCleanupPreparationLimitError
 from modules.sources import public as sources
@@ -1830,6 +1830,7 @@ async def accept_native_collection(
     expected_native_operation_id: UUID | None,
     expected_world_credential_operation_id: UUID | None,
     request_ref: CollectionRequestRef | None = None,
+    state_update: CollectionStateUpdate | None = None,
 ) -> NativeCollectionReceipt:
     """Authenticate, reclassify, and atomically persist one reserved native page.
 
@@ -2203,6 +2204,7 @@ async def accept_native_collection(
         changes.append(make_ingestion_change(
             source.id, run.id, run.status, receive_stage.stage_key, receive_stage.status, scope=scope))
     state.cursor = cursor_after
+    _apply_state_update(state, state_update, payload.connector_revision)
     source_paused = False
     if github_proof is not None and github_proof.hint_claim is not None:
         from modules.connectors.public import GitHubHintClaim
@@ -2266,7 +2268,7 @@ async def accept_native_collection(
         outcome="succeeded" if provider_records or payload.telegram_raw_deliveries else "no_changes", run_id=run.id,
         scope=scope, source_id=source.id, source_generation=source.generation,
         connector_revision=payload.connector_revision, batch_id=batch.id, payload_digest=payload_hash,
-        cursor_before=payload.cursor_before, cursor_after=cursor_after)
+        cursor_before=payload.cursor_before, cursor_after=cursor_after, state_update=state_update)
     await commit_with_replay(session, changes, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
     return NativeCollectionReceipt(
             workspace_id=scope.workspace_id, actor_user_id=_actor_id(scope), membership_revision=scope.membership_revision,
