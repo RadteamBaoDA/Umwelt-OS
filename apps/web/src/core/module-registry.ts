@@ -17,9 +17,16 @@ export type NavigationDestination = {
   id: string;
   href: string;
   messageKey: ShellMessageKey;
+  /** Visible to invited members (read-only shared surfaces); omitted means owner only. */
+  members?: true;
 };
 
 export type ModuleAvailability = { modules: { id: string; enabled: boolean }[] };
+
+/** Members of an invited workspace see only destinations flagged `members`; owners (and an unresolved selection) see all. */
+export function destinationForRole(destination: NavigationDestination, role?: 'owner' | 'member'): boolean {
+  return role !== 'member' || Boolean(destination.members);
+}
 
 /** Hide a navigation destination when its owning persisted module is unavailable. */
 export function destinationEnabled(destination: NavigationDestination, state?: ModuleAvailability): boolean {
@@ -34,9 +41,9 @@ export function destinationEnabled(destination: NavigationDestination, state?: M
 }
 
 export const mainNavigation: NavigationDestination[] = [
-  { id: 'dashboard', href: '/app', messageKey: 'dashboard' },
-  { id: 'chat', href: '/chat', messageKey: 'chat' },
-  { id: 'settings', href: '/settings/sources', messageKey: 'settings' },
+  { id: 'dashboard', href: '/app', messageKey: 'dashboard', members: true },
+  { id: 'chat', href: '/chat', messageKey: 'chat', members: true },
+  { id: 'settings', href: '/settings/sources', messageKey: 'settings', members: true },
 ];
 
 export const settingsGroups: NavigationDestination[] = [
@@ -54,9 +61,9 @@ export const sourcesSubNavigation: (NavigationDestination & { exact?: boolean })
 
 /** Routes kept reachable from the command palette only (not shown in the Settings rail). */
 export const detailDestinations: NavigationDestination[] = [
-  { id: 'documents', href: '/knowledge/documents', messageKey: 'documents' },
+  { id: 'documents', href: '/knowledge/documents', messageKey: 'documents', members: true },
   { id: 'entities', href: '/knowledge/entities', messageKey: 'entities' },
-  { id: 'search', href: '/search', messageKey: 'search' },
+  { id: 'search', href: '/search', messageKey: 'search', members: true },
   { id: 'system', href: '/settings/system', messageKey: 'systemStatus' },
 ];
 
