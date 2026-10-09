@@ -5,8 +5,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.auth.dependencies import require_owner, require_owner_write
-from core.auth.models import AuthSession
 from core.database import get_session
 from core.workspaces.dependencies import require_workspace_read, require_workspace_write
 from core.workspaces.schemas import WorkspaceContext
@@ -37,15 +35,13 @@ from modules.settings.public import module_dependency
 
 router = APIRouter(tags=["knowledge"], dependencies=[Depends(module_dependency("knowledge.entities"))])
 Session = Annotated[AsyncSession, Depends(get_session)]
-OwnerRead = Annotated[AuthSession, Depends(require_owner)]
-OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]
 WorkspaceRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
 WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 
 
 @router.get("/api/v1/entities/extractions/{document_version_id}", response_model=EntityExtractionStatus)
 async def get_extraction_status(
-    document_version_id: UUID, session: Session, _owner: OwnerRead, request: Request, scope: WorkspaceRead,
+    document_version_id: UUID, session: Session, request: Request, scope: WorkspaceRead,
 ) -> EntityExtractionStatus:
     """Read owner-only extraction status for one version; return 404 when no work exists."""
     result = await public.get_extraction_status(
@@ -60,7 +56,6 @@ async def get_extraction_status(
 @router.get("/api/v1/entities", response_model=EntityPage)
 async def list_entities(
     session: Session,
-    _owner: OwnerRead,
     request: Request,
     scope: WorkspaceRead,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
@@ -76,7 +71,7 @@ async def list_entities(
 
 @router.get("/api/v1/entities/review", response_model=EntityReviewPage)
 async def list_review_candidates(
-    session: Session, _owner: OwnerRead, request: Request, scope: WorkspaceRead,
+    session: Session, request: Request, scope: WorkspaceRead,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     cursor: Annotated[str | None, Query(max_length=512)] = None,
 ) -> EntityReviewPage:
@@ -92,7 +87,7 @@ async def list_review_candidates(
 @router.post("/api/v1/entities/review/{candidate_id}/assign", response_model=EntityReviewAssignmentResult)
 async def assign_review_candidate(
     candidate_id: UUID, payload: EntityReviewAssignmentRequest,
-    session: Session, owner: OwnerWrite, request: Request, scope: WorkspaceWrite,
+    session: Session, request: Request, scope: WorkspaceWrite,
 ) -> EntityReviewAssignmentResult:
     """Apply a write-authorized candidate assignment and map stale review conflicts to 409."""
     try:
@@ -108,7 +103,7 @@ async def assign_review_candidate(
 @router.post("/api/v1/entities/review/{candidate_id}/resolve-relationship", response_model=EntityRelationshipReviewResult)
 async def resolve_relationship_review(
     candidate_id: UUID, payload: EntityRelationshipReviewRequest,
-    session: Session, owner: OwnerWrite, request: Request, scope: WorkspaceWrite,
+    session: Session, request: Request, scope: WorkspaceWrite,
 ) -> EntityRelationshipReviewResult:
     """Resolve a write-authorized relationship candidate against its snapshot evidence."""
     try:
@@ -123,7 +118,7 @@ async def resolve_relationship_review(
 
 @router.post("/api/v1/entities", response_model=EntityRead, status_code=201)
 async def create_entity(
-    payload: EntityCreate, session: Session, owner: OwnerWrite, request: Request, scope: WorkspaceWrite,
+    payload: EntityCreate, session: Session, request: Request, scope: WorkspaceWrite,
 ) -> EntityRead:
     """Create an owner-authored entity and map duplicate aliases to 409."""
     try:
@@ -139,7 +134,6 @@ async def create_entity(
 async def get_neighbors(
     entity_id: UUID,
     session: Session,
-    _owner: OwnerRead,
     request: Request,
     scope: WorkspaceRead,
     limit: Annotated[int, Query(ge=2, le=100)] = 50,
@@ -159,7 +153,7 @@ async def get_neighbors(
 
 @router.post("/api/v1/entities/{entity_id}/aliases", response_model=EntityRead, status_code=201)
 async def add_alias(
-    entity_id: UUID, payload: AliasCreate, session: Session, owner: OwnerWrite,
+    entity_id: UUID, payload: AliasCreate, session: Session,
     request: Request, scope: WorkspaceWrite,
 ) -> EntityRead:
     """Add an alias through the owner write contract with redirect/conflict status mapping."""
@@ -183,7 +177,7 @@ async def add_alias(
 
 @router.delete("/api/v1/entities/{entity_id}/aliases/{alias_id}", status_code=204)
 async def delete_alias(
-    entity_id: UUID, alias_id: UUID, session: Session, owner: OwnerWrite,
+    entity_id: UUID, alias_id: UUID, session: Session,
     request: Request, scope: WorkspaceWrite,
     reason: Annotated[str, Query(min_length=1, max_length=300)] = "owner_alias_delete",
 ) -> None:
@@ -202,7 +196,7 @@ async def delete_alias(
 
 @router.get("/api/v1/entities/{entity_id}", response_model=EntityRead)
 async def get_entity(
-    entity_id: UUID, session: Session, _owner: OwnerRead, request: Request, scope: WorkspaceRead,
+    entity_id: UUID, session: Session, request: Request, scope: WorkspaceRead,
 ) -> EntityRead:
     """Return an owner-only entity projection or 404 when its identity is unavailable."""
     entity = await KnowledgeService(
@@ -215,7 +209,7 @@ async def get_entity(
 
 @router.get("/api/v1/entities/{entity_id}/evidence", response_model=EntityEvidencePage)
 async def list_evidence(
-    entity_id: UUID, session: Session, _owner: OwnerRead, request: Request, scope: WorkspaceRead,
+    entity_id: UUID, session: Session, request: Request, scope: WorkspaceRead,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     cursor: Annotated[str | None, Query(max_length=512)] = None,
 ) -> EntityEvidencePage:
@@ -233,7 +227,7 @@ async def list_evidence(
 
 @router.post("/api/v1/entities/{entity_id}/corrections/merge-preview", response_model=EntityCorrectionPreview)
 async def preview_merge(
-    entity_id: UUID, payload: EntityMergeRequest, session: Session, _owner: OwnerRead,
+    entity_id: UUID, payload: EntityMergeRequest, session: Session,
     request: Request, scope: WorkspaceRead,
 ) -> EntityCorrectionPreview:
     """Preview merge scope and conflicts without applying a correction."""
@@ -245,7 +239,7 @@ async def preview_merge(
 
 @router.post("/api/v1/entities/{entity_id}/corrections/split-preview", response_model=EntityCorrectionPreview)
 async def preview_split(
-    entity_id: UUID, payload: EntitySplitRequest, session: Session, _owner: OwnerRead,
+    entity_id: UUID, payload: EntitySplitRequest, session: Session,
     request: Request, scope: WorkspaceRead,
 ) -> EntityCorrectionPreview:
     """Preview split scope and conflicts without applying a correction."""
@@ -257,7 +251,7 @@ async def preview_split(
 
 @router.post("/api/v1/entities/{entity_id}/merge", response_model=EntityCorrectionResult)
 async def merge_entity(
-    entity_id: UUID, payload: EntityMergeRequest, session: Session, owner: OwnerWrite,
+    entity_id: UUID, payload: EntityMergeRequest, session: Session,
     request: Request, scope: WorkspaceWrite,
 ) -> EntityCorrectionResult:
     """Apply a merge as the authenticated owner and map correction conflicts to 404/409."""
@@ -281,7 +275,7 @@ async def merge_entity(
 
 @router.post("/api/v1/entities/{entity_id}/split", response_model=EntityCorrectionResult)
 async def split_entity(
-    entity_id: UUID, payload: EntitySplitRequest, session: Session, owner: OwnerWrite,
+    entity_id: UUID, payload: EntitySplitRequest, session: Session,
     request: Request, scope: WorkspaceWrite,
 ) -> EntityCorrectionResult:
     """Apply an evidence split as the authenticated owner with structured conflicts."""
@@ -305,7 +299,7 @@ async def split_entity(
 
 @router.post("/api/v1/entities/{entity_id}/suppressions", response_model=EntityCorrectionResult)
 async def suppress_candidates(
-    entity_id: UUID, payload: EntitySuppressionRequest, session: Session, owner: OwnerWrite,
+    entity_id: UUID, payload: EntitySuppressionRequest, session: Session,
     request: Request, scope: WorkspaceWrite,
 ) -> EntityCorrectionResult:
     """Persist owner suppression decisions for selected extraction candidates."""
@@ -329,7 +323,7 @@ async def suppress_candidates(
 
 @router.patch("/api/v1/entities/{entity_id}", response_model=EntityRead)
 async def update_entity(
-    entity_id: UUID, payload: EntityPatch, session: Session, owner: OwnerWrite,
+    entity_id: UUID, payload: EntityPatch, session: Session,
     request: Request, scope: WorkspaceWrite,
 ) -> EntityRead:
     """Apply a write-authorized revision-fenced entity update or return conflict/not-found."""
@@ -351,7 +345,7 @@ async def update_entity(
 
 @router.delete("/api/v1/entities/{entity_id}", status_code=204)
 async def delete_entity(
-    entity_id: UUID, session: Session, owner: OwnerWrite,
+    entity_id: UUID, session: Session,
     request: Request, scope: WorkspaceWrite,
     reason: Annotated[str, Query(min_length=1, max_length=300)] = "owner_entity_delete",
 ) -> None:

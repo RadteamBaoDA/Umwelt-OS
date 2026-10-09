@@ -156,9 +156,9 @@ async def test_event_routes_do_not_pass_route_actor() -> None:
     request = MagicMock()
     request.app.state.settings.multi_workspace_enabled = False
     for name, call in (
-        ("create_event", lambda: routes.create_event(MagicMock(), AsyncMock(), owner, OWNER, request, MagicMock())),
-        ("update_event", lambda: routes.update_event(uuid4(), MagicMock(), AsyncMock(), owner, OWNER, request, MagicMock())),
-        ("delete_event", lambda: routes.delete_event(uuid4(), AsyncMock(), owner, OWNER, request, MagicMock(), 1, "r")),
+        ("create_event", lambda: routes.create_event(MagicMock(), AsyncMock(), OWNER, request, MagicMock())),
+        ("update_event", lambda: routes.update_event(uuid4(), MagicMock(), AsyncMock(), OWNER, request, MagicMock())),
+        ("delete_event", lambda: routes.delete_event(uuid4(), AsyncMock(), OWNER, request, MagicMock(), 1, "r")),
     ):
         with patch.object(routes.public, name, AsyncMock(return_value=True)) as target:
             await call()

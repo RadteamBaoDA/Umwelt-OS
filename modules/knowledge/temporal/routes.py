@@ -7,8 +7,6 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.auth.dependencies import require_owner, require_owner_write
-from core.auth.models import AuthSession
 from core.auth.public import authenticated_session_ref
 from core.database import get_session
 from core.realtime import commit_with_replay
@@ -28,8 +26,6 @@ from modules.timeline.schemas import TimelineQuery
 
 router = APIRouter(tags=["temporal-knowledge"])
 Session = Annotated[AsyncSession, Depends(get_session)]
-OwnerRead = Annotated[AuthSession, Depends(require_owner)]
-OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]
 WorkspaceRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
 WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 
@@ -45,7 +41,7 @@ def _service(session: AsyncSession, request: Request, scope: WorkspaceContext) -
 
 
 @router.get("/api/v1/system/graph/status", response_model=list[GraphStatus])
-async def graph_status(session: Session, _owner: OwnerRead, workspace: WorkspaceRead, request: Request,
+async def graph_status(session: Session, workspace: WorkspaceRead, request: Request,
                         response: Response,
                         document_version_ids: Annotated[list[UUID], Query(max_length=100)]) -> list[GraphStatus]:
     """Return a bounded authorized graph-status batch alongside usable canonical records; prevent caching."""
@@ -57,7 +53,7 @@ async def graph_status(session: Session, _owner: OwnerRead, workspace: Workspace
 
 
 @router.post("/api/v1/system/graph/reconcile", status_code=202)
-async def reconcile(payload: ReconcileRequest, session: Session, _owner: OwnerWrite, workspace: WorkspaceWrite,
+async def reconcile(payload: ReconcileRequest, session: Session, workspace: WorkspaceWrite,
                     request: Request, response: Response) -> dict[str, UUID]:
     """Commit one strictly selected durable run under owner Origin/session-CSRF authorization; never rebuild in HTTP."""
     response.headers["Cache-Control"] = "no-store"
@@ -76,7 +72,7 @@ async def reconcile(payload: ReconcileRequest, session: Session, _owner: OwnerWr
 
 
 @router.get("/api/v1/system/graph/reconcile/{run_id}", response_model=ReconcileStatus)
-async def reconcile_run(run_id: UUID, session: Session, _owner: OwnerRead, workspace: WorkspaceRead,
+async def reconcile_run(run_id: UUID, session: Session, workspace: WorkspaceRead,
                         request: Request, response: Response) -> ReconcileStatus:
     """Read actual selected-run continuation and counts; queued/pending cleanup is never reported as success."""
     response.headers["Cache-Control"] = "no-store"
@@ -87,7 +83,7 @@ async def reconcile_run(run_id: UUID, session: Session, _owner: OwnerRead, works
 
 
 @router.get("/api/v1/entities/{entity_id}/history", response_model=EntityHistoryPage)
-async def entity_history(entity_id: UUID, session: Session, _owner: OwnerRead, workspace: WorkspaceRead,
+async def entity_history(entity_id: UUID, session: Session, workspace: WorkspaceRead,
                           request: Request, response: Response,
                           limit: Annotated[int, Query(ge=1, le=100)] = 50,
                           cursor: Annotated[str | None, Query(max_length=1024)] = None,
@@ -106,7 +102,7 @@ async def entity_history(entity_id: UUID, session: Session, _owner: OwnerRead, w
 
 
 @router.get("/api/v1/entities/{entity_id}/timeline")
-async def entity_timeline(entity_id: UUID, session: Session, _owner: OwnerRead, workspace: WorkspaceRead,
+async def entity_timeline(entity_id: UUID, session: Session, workspace: WorkspaceRead,
                            request: Request, response: Response,
                            date_from: str | None = None, date_to: str | None = None,
                            timezone: str = "Asia/Ho_Chi_Minh",
@@ -126,7 +122,7 @@ async def entity_timeline(entity_id: UUID, session: Session, _owner: OwnerRead, 
 
 
 @router.get("/api/v1/knowledge/changes", response_model=ChangePage)
-async def changes(session: Session, _owner: OwnerRead, workspace: WorkspaceRead, request: Request, response: Response,
+async def changes(session: Session, workspace: WorkspaceRead, request: Request, response: Response,
                     kind: Annotated[str | None, Query(pattern="^(entity|relationship|event)$")] = None,
                     canonical_id: UUID | None = None, observed_from: datetime | None = None,
                     observed_to: datetime | None = None,

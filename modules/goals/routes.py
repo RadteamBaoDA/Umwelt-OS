@@ -7,8 +7,6 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.auth.dependencies import require_owner, require_owner_write
-from core.auth.models import AuthSession
 from core.database import get_session
 from core.workspaces.dependencies import require_workspace_read, require_workspace_write
 from core.workspaces.schemas import WorkspaceContext
@@ -28,8 +26,6 @@ from modules.settings.public import module_dependency
 
 router = APIRouter(prefix="/api/v1/goals", tags=["goals"], dependencies=[Depends(module_dependency("goals"))])
 Session = Annotated[AsyncSession, Depends(get_session)]
-OwnerRead = Annotated[AuthSession, Depends(require_owner)]
-OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]
 WorkspaceRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
 WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 
@@ -68,7 +64,6 @@ async def _call[T](operation: Awaitable[T]) -> T:
 @router.get("", response_model=GoalPage)
 async def list_goals(
     session: Session,
-    owner: OwnerRead,
     scope: WorkspaceRead,
     request: Request,
     response: Response,
@@ -88,7 +83,7 @@ async def list_goals(
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=GoalRead)
 async def create_goal(
-    payload: GoalCreate, session: Session, owner: OwnerWrite, scope: WorkspaceWrite,
+    payload: GoalCreate, session: Session, scope: WorkspaceWrite,
     request: Request, response: Response
 ) -> GoalRead:
     """Create a new strategic goal for the authenticated owner."""
@@ -101,7 +96,7 @@ async def create_goal(
 
 @router.get("/{goal_id}", response_model=GoalRead)
 async def get_goal(
-    goal_id: UUID, session: Session, owner: OwnerRead, scope: WorkspaceRead,
+    goal_id: UUID, session: Session, scope: WorkspaceRead,
     request: Request, response: Response
 ) -> GoalRead:
     """Retrieve an existing goal by identifier."""
@@ -117,7 +112,6 @@ async def update_goal(
     goal_id: UUID,
     payload: GoalUpdate,
     session: Session,
-    owner: OwnerWrite,
     scope: WorkspaceWrite,
     request: Request,
     response: Response,
@@ -132,7 +126,7 @@ async def update_goal(
 
 @router.delete("/{goal_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_goal(
-    goal_id: UUID, session: Session, owner: OwnerWrite, scope: WorkspaceWrite,
+    goal_id: UUID, session: Session, scope: WorkspaceWrite,
     request: Request, response: Response,
     expected_revision: Annotated[int, Query(ge=1, le=9_007_199_254_740_991)],
 ) -> None:
@@ -149,7 +143,6 @@ async def accept_plan(
     goal_id: UUID,
     payload: PlanProposal,
     session: Session,
-    owner: OwnerWrite,
     scope: WorkspaceWrite,
     request: Request,
     response: Response,

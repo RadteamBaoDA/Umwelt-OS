@@ -6,8 +6,6 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.auth.dependencies import require_owner, require_owner_write
-from core.auth.models import AuthSession
 from core.database import get_session
 from core.workspaces.dependencies import require_workspace_read, require_workspace_write
 from core.workspaces.schemas import WorkspaceContext
@@ -24,14 +22,12 @@ from modules.timeline.schemas import (
 
 router = APIRouter(tags=["timeline"], dependencies=[Depends(module_dependency("knowledge.timeline"))])
 Session = Annotated[AsyncSession, Depends(get_session)]
-OwnerRead = Annotated[AuthSession, Depends(require_owner)]
-OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]
 WorkspaceRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
 WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 
 
 @router.get("/api/v1/events", response_model=EventPage)
-async def list_events(session: Session, _owner: OwnerRead, scope: WorkspaceRead, request: Request, response: Response,
+async def list_events(session: Session, scope: WorkspaceRead, request: Request, response: Response,
                       limit: Annotated[int, Query(ge=1, le=100)] = 50,
                       cursor: Annotated[str | None, Query(max_length=1024)] = None,
                       source_id: UUID | None = None,
@@ -47,7 +43,7 @@ async def list_events(session: Session, _owner: OwnerRead, scope: WorkspaceRead,
 
 
 @router.get("/api/v1/events/{event_id}", response_model=EventRead)
-async def get_event(event_id: UUID, session: Session, _owner: OwnerRead, scope: WorkspaceRead,
+async def get_event(event_id: UUID, session: Session, scope: WorkspaceRead,
                     request: Request, response: Response) -> EventRead:
     """Return one owner event and mark its potentially sensitive provenance response no-store."""
     response.headers["Cache-Control"] = "no-store"
@@ -59,7 +55,7 @@ async def get_event(event_id: UUID, session: Session, _owner: OwnerRead, scope: 
 
 
 @router.get("/api/v1/events/{event_id}/evidence")
-async def list_evidence(event_id: UUID, session: Session, _owner: OwnerRead, scope: WorkspaceRead,
+async def list_evidence(event_id: UUID, session: Session, scope: WorkspaceRead,
                         request: Request, response: Response) -> dict[str, object]:
     """Return exact evidence references for one visible event without caching source metadata."""
     response.headers["Cache-Control"] = "no-store"
@@ -71,7 +67,7 @@ async def list_evidence(event_id: UUID, session: Session, _owner: OwnerRead, sco
 
 
 @router.get("/api/v1/timeline", response_model=TimelinePage)
-async def list_timeline(session: Session, _owner: OwnerRead, scope: WorkspaceRead, request: Request, response: Response,
+async def list_timeline(session: Session, scope: WorkspaceRead, request: Request, response: Response,
                         date_from: str | None = None, date_to: str | None = None,
                         timezone: str = "Asia/Ho_Chi_Minh", source_id: UUID | None = None,
                         entity_id: UUID | None = None,
@@ -96,7 +92,7 @@ async def list_timeline(session: Session, _owner: OwnerRead, scope: WorkspaceRea
 
 
 @router.post("/api/v1/events", response_model=EventRead, status_code=201)
-async def create_event(payload: EventCreate, session: Session, owner: OwnerWrite, scope: WorkspaceWrite,
+async def create_event(payload: EventCreate, session: Session, scope: WorkspaceWrite,
                        request: Request, response: Response) -> EventRead:
     """Create a manual event under the session-bound owner write and CSRF contract."""
     response.headers["Cache-Control"] = "no-store"
@@ -111,7 +107,7 @@ async def create_event(payload: EventCreate, session: Session, owner: OwnerWrite
 
 @router.patch("/api/v1/events/{event_id}", response_model=EventRead)
 async def update_event(event_id: UUID, payload: EventPatch, session: Session,
-                       owner: OwnerWrite, scope: WorkspaceWrite, request: Request, response: Response) -> EventRead:
+                       scope: WorkspaceWrite, request: Request, response: Response) -> EventRead:
     """Apply a revision-fenced event correction and map stale revisions to conflict."""
     response.headers["Cache-Control"] = "no-store"
     try:
@@ -126,7 +122,7 @@ async def update_event(event_id: UUID, payload: EventPatch, session: Session,
 
 
 @router.delete("/api/v1/events/{event_id}", status_code=204)
-async def delete_event(event_id: UUID, session: Session, owner: OwnerWrite, scope: WorkspaceWrite,
+async def delete_event(event_id: UUID, session: Session, scope: WorkspaceWrite,
                        request: Request, response: Response,
                        expected_revision: Annotated[int, Query(ge=1)],
                        reason: Annotated[str, Query(min_length=1, max_length=300)] = "owner_delete") -> Response:

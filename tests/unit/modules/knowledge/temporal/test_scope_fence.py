@@ -306,7 +306,7 @@ async def test_reconcile_route_locks_fence_then_commits_with_it() -> None:
             patch.object(routes.public, "request_reconcile", request_reconcile), \
             patch.object(routes, "commit_with_replay", commit):
         result = await routes.reconcile(
-            ReconcileRequest(source_id=uuid4()), MagicMock(), None, OWNER, _request(), MagicMock(headers={}))
+            ReconcileRequest(source_id=uuid4()), MagicMock(), OWNER, _request(), MagicMock(headers={}))
     assert order == ["lock", "request", "commit"]
     assert result == {"run_id": run_id}
 
@@ -315,7 +315,7 @@ async def test_reconcile_route_denies_member_before_taking_the_lock() -> None:
     lock = AsyncMock()
     with patch.object(routes, "lock_access_fence", lock), pytest.raises(HTTPException) as denied:
         await routes.reconcile(
-            ReconcileRequest(source_id=uuid4()), MagicMock(), None, MEMBER, _request(), MagicMock(headers={}))
+            ReconcileRequest(source_id=uuid4()), MagicMock(), MEMBER, _request(), MagicMock(headers={}))
     assert denied.value.status_code == 403
     lock.assert_not_awaited()
 

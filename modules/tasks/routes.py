@@ -9,8 +9,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response,
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.auth.dependencies import require_owner, require_owner_write
-from core.auth.models import AuthSession
 from core.database import get_session
 from core.workspaces.dependencies import require_workspace_read, require_workspace_write
 from core.workspaces.schemas import WorkspaceContext
@@ -29,8 +27,6 @@ from modules.tasks.schemas import (
 
 router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"], dependencies=[Depends(module_dependency("tasks"))])
 Session = Annotated[AsyncSession, Depends(get_session)]
-OwnerRead = Annotated[AuthSession, Depends(require_owner)]
-OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]
 WorkspaceRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
 WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 
@@ -69,7 +65,6 @@ async def _call[T](operation: Awaitable[T]) -> T:
 @router.get("", response_model=TaskPage)
 async def list_tasks(
     session: Session,
-    owner: OwnerRead,
     scope: WorkspaceRead,
     request: Request,
     response: Response,
@@ -116,7 +111,7 @@ async def list_tasks(
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=TaskRead)
 async def create_task(
-    payload: TaskCreate, session: Session, owner: OwnerWrite, scope: WorkspaceWrite,
+    payload: TaskCreate, session: Session, scope: WorkspaceWrite,
     request: Request, response: Response,
 ) -> TaskRead:
     """Create a new task under the authenticated owner account."""
@@ -129,7 +124,7 @@ async def create_task(
 
 @router.get("/{task_id}", response_model=TaskRead)
 async def get_task(
-    task_id: UUID, session: Session, owner: OwnerRead, scope: WorkspaceRead,
+    task_id: UUID, session: Session, scope: WorkspaceRead,
     request: Request, response: Response
 ) -> TaskRead:
     """Retrieve an existing task by its identifier."""
@@ -145,7 +140,6 @@ async def update_task(
     task_id: UUID,
     payload: TaskUpdate,
     session: Session,
-    owner: OwnerWrite,
     scope: WorkspaceWrite,
     request: Request,
     response: Response,
@@ -160,7 +154,7 @@ async def update_task(
 
 @router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_task(
-    task_id: UUID, session: Session, owner: OwnerWrite, scope: WorkspaceWrite,
+    task_id: UUID, session: Session, scope: WorkspaceWrite,
     request: Request, response: Response,
     expected_revision: Annotated[int, Query(ge=1, le=9_007_199_254_740_991)],
 ) -> None:

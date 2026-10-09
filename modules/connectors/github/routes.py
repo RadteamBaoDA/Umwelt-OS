@@ -14,7 +14,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.auth.dependencies import SESSION_COOKIE, require_owner, require_owner_write
+from core.auth.dependencies import (
+    SESSION_COOKIE,
+    require_account,
+    require_account_write,
+    require_owner,
+)
 from core.auth.models import AuthSession
 from core.auth.public import authenticated_session_ref
 from core.config import Settings
@@ -49,8 +54,9 @@ from modules.sources import public as sources
 router = APIRouter(prefix="/api/v1/connectors", tags=["github-oauth"])
 RECOVERY_GRACE = timedelta(minutes=2)
 Session = Annotated[AsyncSession, Depends(get_session)]
-OwnerRead = Annotated[AuthSession, Depends(require_owner)]
-OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]
+OwnerRead = Annotated[AuthSession, Depends(require_account)]
+OperatorRead = Annotated[AuthSession, Depends(require_owner)]
+OwnerWrite = Annotated[AuthSession, Depends(require_account_write)]
 WorkspaceRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
 WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 _DENIED = frozenset({401, 403, 404, 409})
@@ -169,7 +175,7 @@ async def receive_github_webhook(request: Request, session: Session) -> JSONResp
 
 @router.get("/github/webhook-status", response_model=GitHubWebhookStatus)
 async def get_github_webhook_status(
-    request: Request, session: Session, _owner: OwnerRead,
+    request: Request, session: Session, _operator: OperatorRead,
 ) -> GitHubWebhookStatus:
     """Return owner-visible receiver readiness and global durable backlog without source inventory."""
     capacity = await session.get(GithubWebhookCapacity, 1)

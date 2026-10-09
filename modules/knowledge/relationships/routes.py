@@ -5,8 +5,6 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.auth.dependencies import require_owner, require_owner_write
-from core.auth.models import AuthSession
 from core.database import get_session
 from core.workspaces.dependencies import require_workspace_read, require_workspace_write
 from core.workspaces.schemas import WorkspaceContext
@@ -22,8 +20,6 @@ from modules.settings.public import module_dependency
 
 router = APIRouter(prefix="/api/v1/relationships", tags=["knowledge"], dependencies=[Depends(module_dependency("knowledge.relationships"))])
 Session = Annotated[AsyncSession, Depends(get_session)]
-OwnerRead = Annotated[AuthSession, Depends(require_owner)]
-OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]
 WorkspaceRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
 WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 
@@ -31,7 +27,6 @@ WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 @router.get("", response_model=RelationshipPage)
 async def list_relationships(
     session: Session,
-    _owner: OwnerRead,
     scope: WorkspaceRead,
     request: Request,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
@@ -59,7 +54,7 @@ async def list_relationships(
 
 
 @router.post("", response_model=RelationshipRead, status_code=201)
-async def create_relationship(payload: RelationshipCreate, session: Session, owner: OwnerWrite,
+async def create_relationship(payload: RelationshipCreate, session: Session,
                               scope: WorkspaceWrite, request: Request) -> RelationshipRead:
     """Create an authorized relationship using the requested owner or derived origin.
 
@@ -80,7 +75,7 @@ async def create_relationship(payload: RelationshipCreate, session: Session, own
 
 @router.delete("/{relationship_id}", status_code=204)
 async def delete_relationship(
-    relationship_id: UUID, session: Session, owner: OwnerWrite, scope: WorkspaceWrite, request: Request,
+    relationship_id: UUID, session: Session, scope: WorkspaceWrite, request: Request,
     reason: Annotated[str, Query(min_length=1, max_length=300)] = "owner_relationship_delete",
 ) -> None:
     """Delete a relationship using the authenticated owner and bounded audit reason."""
@@ -98,7 +93,6 @@ async def delete_relationship(
 async def list_evidence(
     relationship_id: UUID,
     session: Session,
-    _owner: OwnerRead,
     scope: WorkspaceRead,
     request: Request,
     limit: Annotated[int, Query(ge=1, le=50)] = 20,
