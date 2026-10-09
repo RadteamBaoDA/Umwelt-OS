@@ -9,12 +9,20 @@ from typing import cast
 from uuid import UUID, uuid4
 
 from arq.connections import ArqRedis
+from fastapi import HTTPException
 from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
 from core.heavy_work import bounded_heavy_work
+from core.job_denial import (
+    PERMISSION_LOST,
+    STALE_SCOPE,
+    admit_retry_stale,
+    denial_code,
+    terminalize,
+)
 from core.model_gateway.cache import capability_key
 from core.model_gateway.client import (
     CapabilityUnsupported,
@@ -166,9 +174,14 @@ async def process_document_ready(ctx: dict[str, object], event_id: str) -> None:
     event_uuid = UUID(event_id)
     multi_workspace_enabled = cast(Settings, ctx["settings"]).multi_workspace_enabled
     async with factory() as session:
-        scope = await ingestion.resolve_ingestion_event_scope(
-            session, event_uuid, multi_workspace_enabled=multi_workspace_enabled,
-        )
+        try:
+            scope = await ingestion.resolve_ingestion_event_scope(
+                session, event_uuid, multi_workspace_enabled=multi_workspace_enabled,
+            )
+        except HTTPException:
+            # Denied retained principal: no mutation and no retry; the dispatcher quarantines the event.
+            await session.rollback()
+            return
         if scope is None or not await settings_public.module_is_enabled(
             session, "knowledge.entities", scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         ):
@@ -479,17 +492,29 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
         ))
         if workspace_id is None:
             return
-        scope = await _workspace_job_scope(
-            session, workspace_id, multi_workspace_enabled=multi_workspace_enabled,
-        )
-        if scope is None or not await settings_public.module_is_enabled(
-            session, "knowledge.entities", scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        ):
+        async def admit() -> tuple[InternalJobScope, EntityExtractionWork | None] | None:
+            await session.rollback()
+            job_scope = await _workspace_job_scope(
+                session, workspace_id, multi_workspace_enabled=multi_workspace_enabled,
+            )
+            if job_scope is None or not await settings_public.module_is_enabled(
+                session, "knowledge.entities", scope=job_scope, multi_workspace_enabled=multi_workspace_enabled,
+            ):
+                return None
+            return job_scope, await entities.claim_extraction_work(
+                session, work_id, lease_owner, datetime.now(UTC), scope=job_scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+            )
+
+        try:
+            admitted = await admit_retry_stale(admit)
+        except HTTPException as exc:
+            await session.rollback()
+            await terminalize(factory, EntityExtractionWork, work_id, workspace_id, denial_code(exc) or STALE_SCOPE)
             return
-        work = await entities.claim_extraction_work(
-            session, work_id, lease_owner, datetime.now(UTC), scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-        )
+        if admitted is None:
+            return
+        scope, work = admitted
         if work is None:
             await session.commit()
             return
@@ -956,6 +981,10 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
             await session.commit()
         logger.warning("Entity extraction deferred work_id=%s error_code=%s", work_id, error_code)
     except Exception as exc:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
+        if isinstance(exc, HTTPException) and exc.status_code != 409:
+            # Lost permission mid-run is terminal; a 409 keeps the attempt-budgeted retry (re-resolved at next claim).
+            await terminalize(factory, EntityExtractionWork, work_id, scope.workspace_id, PERMISSION_LOST)
+            return
         blocked = str(exc) in {"Extraction input exceeds its chunk or byte limit"}
         error_code = "extraction_input_limit" if blocked else str(exc) if str(exc) in {
             "invalid_model_response", "unknown_evidence_chunk", "duplicate_candidate_key",

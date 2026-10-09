@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
 from core.heavy_work import bounded_heavy_work
+from core.job_denial import admit_retry_stale, denial_code, terminalize
 from core.model_gateway.client import ModelGateway, ModelGatewayError, PrivacyPolicyDenied
 from core.model_gateway.policy import may_send
 from core.model_gateway.schemas import AIExecutionConfig, ModelMapping, RequestPolicy
@@ -562,19 +563,33 @@ async def _index_generation(
             workspace_id=workspace_id, actor_user_id=owner.user_id,
             membership_revision=owner.membership_revision,
         )
-        try:
-            original = await capture_authority(session, settings, redis, scope=scope)
+        async def capture() -> EmbeddingAuthority | None:
+            await session.rollback()
+            captured = await capture_authority(session, settings, redis, scope=scope)
             if not await ai_settings.module_is_enabled(
                 session, "search", scope=scope,
                 multi_workspace_enabled=settings.multi_workspace_enabled,
             ):
                 await session.rollback()
                 return None
+            return captured
+
+        try:
+            captured = await admit_retry_stale(capture)
         except HTTPException as exc:
             await session.rollback()
-            if exc.status_code in {401, 403, 404, 409}:
-                return None
-            raise
+            code = denial_code(exc)
+            if code is None:
+                raise
+            # Denial is terminal for a queued/running generation; the active one keeps serving.
+            await terminalize(
+                factory, IndexGeneration, generation_id, workspace_id, code,
+                from_status=("queued", "running"),
+            )
+            return None
+        if captured is None:
+            return None
+        original = captured
         generation = await session.scalar(select(IndexGeneration).where(
             IndexGeneration.id == generation_id, IndexGeneration.workspace_id == workspace_id,
         ))
