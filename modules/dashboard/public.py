@@ -191,6 +191,10 @@ async def evaluate_gadget_highlights(
         item_scope = {str(value) for value in raw_item_scope} if isinstance(raw_item_scope, list) else set()
         if not scan_source_ids or not rules:
             return []
+        # Read-only topic resolution happens before any definition/progress lock is taken.
+        compiled = compile_rules(rules, await _rule_topic_terms(
+            session, rules, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        ))
         definition_snapshot = json.dumps(
             {"revision": definition_revision, "source_ids": [str(value) for value in source_ids],
              "scope": raw_scope, "rules": raw_rules},
@@ -286,6 +290,10 @@ async def evaluate_gadget_highlights(
             progress.rules_fingerprint = rules_fingerprint
             progress.cursor_created_at = None
             progress.cursor_version_id = None
+            progress.rule_last_notified = {}
+            await session.execute(delete(GadgetHighlightSuppression).where(
+                GadgetHighlightSuppression.definition_id == definition.id,
+            ))
         progress.cursor_created_at = page.cursor_created_at if page.has_more else None
         progress.cursor_version_id = page.cursor_version_id if page.has_more else None
 
@@ -299,7 +307,9 @@ async def evaluate_gadget_highlights(
         }
         tz: tzinfo = UTC
         if any(rule.quiet_start for rule in rules):
-            tz = _owner_tzinfo((await settings_public.read_owner_preferences(session)).timezone)
+            tz = _owner_tzinfo((await settings_public.read_owner_preferences(
+                session, actor_user_id=owner_id, multi_workspace_enabled=multi_workspace_enabled,
+            )).timezone)
         found = [
             (item, match) for item in page.items
             if not item_scope or str(item.document_id) in item_scope
@@ -323,30 +333,38 @@ async def evaluate_gadget_highlights(
                 )
             )).scalars())
         matches: list[DashboardHighlightRead] = []
-        for item in page.items:
-            if item_scope and str(item.document_id) not in item_scope:
-                continue
-            for match in evaluate_highlights(item.excerpt, rules):
-                matches.append(DashboardHighlightRead(
-                    document_id=item.document_id, document_version_id=item.document_version_id,
-                    source_id=item.source_id, title=item.title, observed_at=item.observed_at,
-                    rule_id=match.rule_id, matched_keywords=list(match.matched_keywords),
-                    severity=match.severity, notify=match.notify, reason=match.reason,
-                ))
-                if match.notify:
-                    await emit(session, NotificationEmit(
-                        dedupe_key=(
-                            f"highlight:{definition.id}:{definition.revision}:"
-                            f"{rules_fingerprint}:{match.rule_id}:{item.document_version_id}"
-                        ),
-                        kind="dashboard_highlight", title=item.title[:300],
-                        body=match.reason[:1000],
-                        params={"severity": match.severity, "definition_id": str(definition.id),
-                                "definition_revision": definition.revision},
-                        link="/dashboard",
-                    ), evidence=NotificationEvidence(
-                        document_id=item.document_id, document_version_id=item.document_version_id,
-                    ), scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        for item, match in found:
+            dedupe_key = key_of(item, match)
+            deliver = False
+            if match.notify and dedupe_key not in suppressed_keys:
+                deliver = notification_allowed(
+                    rules_by_id[match.rule_id], now, tz, last_notified.get(str(match.rule_id)),
+                )
+                expires = rules_by_id[match.rule_id].expires_at
+                # ponytail: quiet/cooldown rows grow unbounded; upgrade is version-based pruning (R1 option 2).
+                if not deliver and not (expires is not None and now >= expires):  # expiry is permanent until edit
+                    # Keyed by the locked, scoped definition.id above; the table has no workspace column.
+                    await session.execute(pg_insert(GadgetHighlightSuppression).values(
+                        definition_id=definition.id, dedupe_key=dedupe_key,
+                    ).on_conflict_do_nothing())
+            matches.append(DashboardHighlightRead(
+                document_id=item.document_id, document_version_id=item.document_version_id,
+                source_id=item.source_id, title=item.title, observed_at=item.observed_at,
+                rule_id=match.rule_id, matched_keywords=list(match.matched_keywords),
+                severity=match.severity, notify=match.notify, reason=match.reason,
+            ))
+            if deliver and await emit(session, NotificationEmit(
+                dedupe_key=dedupe_key,
+                kind="dashboard_highlight", title=item.title[:300],
+                body=match.reason[:1000],
+                params={"severity": match.severity, "definition_id": str(definition.id),
+                        "definition_revision": definition.revision},
+                link="/dashboard",
+            ), evidence=NotificationEvidence(
+                document_id=item.document_id, document_version_id=item.document_version_id,
+            ), scope=scope, multi_workspace_enabled=multi_workspace_enabled):
+                last_notified[str(match.rule_id)] = now
+        progress.rule_last_notified = {key: value.isoformat() for key, value in last_notified.items()}
         # Progress and notifications commit together under the original access fence.
         await commit_with_replay(
             session, [], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
@@ -379,7 +397,9 @@ async def evaluate_gadget_highlights(
     rules = [HighlightRule.model_validate(rule) for rule in definition_read.highlight_rules]
     raw_item_scope = definition_read.scope.get("source_item_ids", [])
     item_scope = {str(value) for value in raw_item_scope} if isinstance(raw_item_scope, list) else set()
-    compiled = compile_rules(rules, await _rule_topic_terms(session, owner_id, rules))
+    compiled = compile_rules(rules, await _rule_topic_terms(
+        session, rules, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    ))
     matches = []
     scoped = [item for item in projection_page.items if not item_scope or str(item.document_id) in item_scope]
     # Regex work is CPU-bound; keep it off the API event loop.
@@ -396,12 +416,14 @@ async def evaluate_gadget_highlights(
 
 
 async def _rule_topic_terms(
-    session: AsyncSession, owner_id: int, rules: Sequence[HighlightRule],
+    session: AsyncSession, rules: Sequence[HighlightRule], *, scope: Scope, multi_workspace_enabled: bool,
 ) -> dict[UUID, list[str]]:
-    """Resolve the owner's live, active topics referenced by rules (read-only)."""
+    """Resolve the actor's live, active topics referenced by rules in this workspace (read-only)."""
     from modules.news import public as news
     topic_ids = list(dict.fromkeys(topic for rule in rules for topic in rule.topic_ids))
-    return await news.resolve_topic_terms(session, owner_id, topic_ids)
+    return await news.resolve_topic_terms(
+        session, topic_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
 
 
 class HighlightRuleError(ValueError):
@@ -414,8 +436,8 @@ class HighlightRuleError(ValueError):
 
 
 async def validate_highlight_rules(
-    session: AsyncSession, owner_id: int, source_ids: Sequence[UUID], rules: Sequence[HighlightRule],
-    *, known_topic_ids: Collection[UUID] | None = (),
+    session: AsyncSession, source_ids: Sequence[UUID], rules: Sequence[HighlightRule],
+    *, scope: Scope, known_topic_ids: Collection[UUID] | None = (),
 ) -> None:
     """Trust-boundary check: rule sources stay inside the definition scope; new topics must be the owner's.
 
@@ -434,7 +456,7 @@ async def validate_highlight_rules(
     topic_ids = list(dict.fromkeys(
         topic for rule in rules for topic in rule.topic_ids if topic not in known_topic_ids
     ))
-    if topic_ids and set(topic_ids) - await news.live_topic_ids(session, owner_id, topic_ids):
+    if topic_ids and set(topic_ids) - await news.live_topic_ids(session, topic_ids, scope=scope):
         raise HighlightRuleError("rule_topic_unknown", "Rule topic_ids must reference your existing topics")
 
 
@@ -445,7 +467,7 @@ def _match_items(items: Sequence[Any], compiled: Sequence[Any]) -> list[list[Any
 
 
 async def preview_highlights(
-    session: AsyncSession, owner_id: int, payload: HighlightPreviewRequest,
+    session: AsyncSession, payload: HighlightPreviewRequest, *, scope: Scope, multi_workspace_enabled: bool,
 ) -> HighlightPreviewRead:
     """Dry-run draft rules over recent current evidence: read-only, bounded, no notifications, no egress.
 
@@ -454,10 +476,17 @@ async def preview_highlights(
     """
     from modules.dashboard.highlights import compile_rules
     from modules.knowledge.documents import public as documents
-    await validate_highlight_rules(session, owner_id, payload.source_ids, payload.rules, known_topic_ids=None)
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await validate_highlight_rules(session, payload.source_ids, payload.rules, scope=scope, known_topic_ids=None)
     since = datetime.now(UTC) - timedelta(days=payload.days)
-    source_ids = tuple(payload.source_ids)
-    topic_terms = await _rule_topic_terms(session, owner_id, payload.rules)
+    # Only active sources visible in this workspace are scanned; foreign or paused ids drop out.
+    selected = await sources.get_gadget_sources(
+        session, tuple(payload.source_ids), scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    ) if payload.source_ids else []
+    source_ids = tuple(item.id for item in selected if item.status == "active")
+    topic_terms = await _rule_topic_terms(
+        session, payload.rules, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
     compiled = compile_rules(payload.rules, topic_terms)
     item_scope = {str(value) for value in payload.source_item_ids}
     counts = {rule.id: 0 for rule in payload.rules}
@@ -467,8 +496,8 @@ async def preview_highlights(
     truncated = False
     for _ in range(PREVIEW_MAX_PAGES):
         page = await documents.list_gadget_document_projections(
-            session, owner_id=owner_id, source_ids=source_ids, limit=PREVIEW_PAGE_SIZE,
-            cursor=cursor, since=since,
+            session, source_ids=source_ids, limit=PREVIEW_PAGE_SIZE,
+            cursor=cursor, since=since, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
         items = [item for item in page.items if not item_scope or str(item.document_id) in item_scope]
         scanned += len(items)
@@ -506,17 +535,20 @@ async def preview_highlights(
 
 
 async def definition_usage(
-    session: AsyncSession, owner_id: int, definition_id: UUID,
+    session: AsyncSession, definition_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
 ) -> list[GadgetDefinitionUsageRead] | None:
-    """List the owner dashboards that place this definition (and so evaluate its rules)."""
+    """List the actor's dashboards that place this definition (and so evaluate its rules)."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if await session.scalar(select(GadgetDefinition.id).where(
-        GadgetDefinition.id == definition_id, GadgetDefinition.owner_id == owner_id,
+        GadgetDefinition.id == definition_id, GadgetDefinition.workspace_id == scope.workspace_id,
+        GadgetDefinition.owner_id == _actor(scope),
     )) is None:
         return None
     rows = (await session.execute(
         select(Dashboard.id, Dashboard.name, func.count(GadgetInstance.id))
         .join(GadgetInstance, GadgetInstance.dashboard_id == Dashboard.id)
-        .where(GadgetInstance.definition_id == definition_id, Dashboard.owner_id == owner_id)
+        .where(GadgetInstance.definition_id == definition_id, Dashboard.workspace_id == scope.workspace_id,
+               Dashboard.owner_id == _actor(scope))
         .group_by(Dashboard.id, Dashboard.name)
         .order_by(Dashboard.name, Dashboard.id).limit(MAX_DASHBOARDS_PER_OWNER)
     )).all()
@@ -1496,6 +1528,7 @@ async def create_definition(session: AsyncSession, payload: GadgetDefinitionCrea
     )
     await _lock_selected_sources(session, payload.source_ids, require_active=True, scope=scope,
         multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
+    await validate_highlight_rules(session, payload.source_ids, configuration.highlight_rules, scope=scope)
     count = await session.scalar(select(func.count()).select_from(GadgetDefinition).where(
         GadgetDefinition.workspace_id == scope.workspace_id, GadgetDefinition.owner_id == owner_id)) or 0
     if count >= MAX_DEFINITIONS_PER_OWNER:
@@ -1558,7 +1591,7 @@ async def patch_definition(session: AsyncSession, definition_id: UUID, payload: 
     gadgets.validate_renderer_configuration(candidate["renderer"], config)
     stored_topics = {UUID(str(topic)) for item in row.highlight_rules for topic in item.get("topic_ids", [])}
     await validate_highlight_rules(
-        session, owner_id, candidate["source_ids"], config.highlight_rules, known_topic_ids=stored_topics,
+        session, candidate["source_ids"], config.highlight_rules, scope=scope, known_topic_ids=stored_topics,
     )
     row.name = candidate["name"]
     row.renderer = candidate["renderer"]
@@ -1936,18 +1969,18 @@ from modules.dashboard.daily_schemas import BriefRead, DailyContext
 
 
 async def count_source_gadgets(
-    session: AsyncSession, owner_id: int, source_id: UUID, cap: int = 1000,
+    session: AsyncSession, source_id: UUID, *, scope: Scope, cap: int = 1000,
 ) -> tuple[int, int]:
-    """Return owner-scoped (definition, distinct instance) counts that select a source, saturating at ``cap``."""
+    """Return workspace-scoped (definition, distinct instance) counts that select a source, saturating at ``cap``."""
     selects = GadgetDefinition.source_ids.contains([str(source_id)])
     definitions = (
         select(GadgetDefinition.id)
-        .where(GadgetDefinition.owner_id == owner_id, selects).limit(cap).subquery()
+        .where(GadgetDefinition.workspace_id == scope.workspace_id, selects).limit(cap).subquery()
     )
     placements = (
         select(GadgetInstance.id)
         .join(GadgetDefinition, GadgetDefinition.id == GadgetInstance.definition_id)
-        .where(GadgetDefinition.owner_id == owner_id, selects).limit(cap).subquery()
+        .where(GadgetDefinition.workspace_id == scope.workspace_id, selects).limit(cap).subquery()
     )
     return (
         int(await session.scalar(select(func.count()).select_from(definitions)) or 0),

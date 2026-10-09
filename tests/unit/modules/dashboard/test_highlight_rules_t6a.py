@@ -9,6 +9,7 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy.dialects import postgresql
 
+from core.workspaces.schemas import WorkspaceContext
 from modules.dashboard import public
 from modules.dashboard.highlights import evaluate_highlights
 from modules.dashboard.schemas import (
@@ -19,6 +20,9 @@ from modules.dashboard.schemas import (
 )
 
 SRC_A, SRC_B, TOPIC = uuid4(), uuid4(), uuid4()
+WS = uuid4()
+SCOPE = WorkspaceContext(workspace_id=WS, user_id=1, role="owner", membership_revision=1)
+KW: dict[str, Any] = {"scope": SCOPE, "multi_workspace_enabled": False}
 
 
 def sql_text(stmt: Any) -> str:
@@ -87,11 +91,39 @@ class FakeNews:
     def __init__(self, live: set[Any], terms: dict[Any, list[str]]) -> None:
         self.live, self.terms = live, terms
 
-    async def live_topic_ids(self, _s: Any, _o: int, ids: list[Any]) -> set[Any]:
+    async def live_topic_ids(self, _s: Any, ids: list[Any], **_k: Any) -> set[Any]:
         return {i for i in ids if i in self.live}
 
-    async def resolve_topic_terms(self, _s: Any, _o: int, ids: list[Any]) -> dict[Any, list[str]]:
+    async def resolve_topic_terms(self, _s: Any, ids: list[Any], **_k: Any) -> dict[Any, list[str]]:
         return {i: self.terms[i] for i in ids if i in self.terms}
+
+
+@pytest.fixture(autouse=True)
+def scope_edges(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fake the admission, source and replay edges owned by other modules (frozen signatures)."""
+    from modules.settings import public as settings_public
+    from modules.sources import public as sources_public
+
+    async def admit(*_a: Any, **_k: Any) -> Any:
+        return SimpleNamespace()
+
+    async def get_sources(_s: Any, ids: Any, **_k: Any) -> list[Any]:
+        return [SimpleNamespace(id=i, status="active", generation=1, local_only=False) for i in ids]
+
+    async def lock_source(_s: Any, source_id: Any, **_k: Any) -> Any:
+        return SimpleNamespace(status="active", generation=1, local_only=False)
+
+    async def commit(session: Any, *_a: Any, **_k: Any) -> None:
+        await session.commit()
+
+    async def prefs(_s: Any, **_k: Any) -> Any:
+        return SimpleNamespace(timezone="UTC")
+
+    monkeypatch.setattr(public, "_admit", admit)
+    monkeypatch.setattr(public, "commit_with_replay", commit)
+    monkeypatch.setattr(sources_public, "get_gadget_sources", get_sources)
+    monkeypatch.setattr(sources_public, "lock_source", lock_source)
+    monkeypatch.setattr(settings_public, "read_owner_preferences", prefs)
 
 
 @pytest.fixture
@@ -107,16 +139,18 @@ def news(monkeypatch: pytest.MonkeyPatch) -> FakeNews:
 @pytest.mark.asyncio
 async def test_validate_rules_subset_and_topic_ownership(news: FakeNews) -> None:
     ok = rule(topic_ids=[TOPIC], source_ids=[SRC_A])
-    await public.validate_highlight_rules(None, 1, [SRC_A], [ok])  # type: ignore[arg-type]
+    await public.validate_highlight_rules(None, [SRC_A], [ok], scope=SCOPE)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="subset"):
-        await public.validate_highlight_rules(None, 1, [SRC_B], [ok])  # type: ignore[arg-type]
+        await public.validate_highlight_rules(None, [SRC_B], [ok], scope=SCOPE)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="subset"):
         await public.validate_highlight_rules(
-            None, 1, [SRC_B], [rule(keywords=["a"], exclude_source_ids=[SRC_A])]  # type: ignore[arg-type]
+            None, [SRC_B], [rule(keywords=["a"], exclude_source_ids=[SRC_A])],
+            scope=SCOPE,  # type: ignore[arg-type]
         )
     with pytest.raises(public.HighlightRuleError) as err:
         await public.validate_highlight_rules(
-            None, 1, [SRC_A], [rule(topic_ids=[uuid4()])]  # type: ignore[arg-type]
+            None, [SRC_A], [rule(topic_ids=[uuid4()])],
+            scope=SCOPE,  # type: ignore[arg-type]
         )
     assert err.value.code == "rule_topic_unknown"
 
@@ -125,22 +159,23 @@ async def test_validate_rules_subset_and_topic_ownership(news: FakeNews) -> None
 async def test_validate_rejects_rule_excluding_every_source(news: FakeNews) -> None:
     every = rule(keywords=["a"], exclude_source_ids=[SRC_A, SRC_B])
     with pytest.raises(public.HighlightRuleError) as err:
-        await public.validate_highlight_rules(None, 1, [SRC_A, SRC_B], [every])  # type: ignore[arg-type]
+        await public.validate_highlight_rules(None, [SRC_A, SRC_B], [every], scope=SCOPE)  # type: ignore[arg-type]
     assert err.value.code == "rule_excludes_all_sources"
     some = rule(keywords=["a"], exclude_source_ids=[SRC_A])
-    await public.validate_highlight_rules(None, 1, [SRC_A, SRC_B], [some])  # type: ignore[arg-type]
+    await public.validate_highlight_rules(None, [SRC_A, SRC_B], [some], scope=SCOPE)  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio
 async def test_validate_only_checks_newly_added_topics(news: FakeNews) -> None:
     dead = uuid4()  # stored earlier, deleted since
     stale = rule(topic_ids=[dead, TOPIC])
-    await public.validate_highlight_rules(None, 1, [SRC_A], [stale], known_topic_ids={dead})  # type: ignore[arg-type]
+    await public.validate_highlight_rules(None, [SRC_A], [stale], known_topic_ids={dead}, scope=SCOPE)  # type: ignore[arg-type]
     with pytest.raises(public.HighlightRuleError):
-        await public.validate_highlight_rules(None, 1, [SRC_A], [stale])  # type: ignore[arg-type]
+        await public.validate_highlight_rules(None, [SRC_A], [stale], scope=SCOPE)  # type: ignore[arg-type]
     with pytest.raises(public.HighlightRuleError):  # a new dead id is still rejected
         await public.validate_highlight_rules(
-            None, 1, [SRC_A], [rule(topic_ids=[dead, uuid4()])], known_topic_ids={dead},  # type: ignore[arg-type]
+            None, [SRC_A], [rule(topic_ids=[dead, uuid4()])], known_topic_ids={dead},
+            scope=SCOPE,  # type: ignore[arg-type]
         )
 
 
@@ -157,7 +192,7 @@ class _PatchSession:
 async def test_create_and_patch_call_validation(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list[dict[str, Any]] = []
 
-    async def fake_validate(_s: Any, _o: int, source_ids: Any, rules: Any, **kw: Any) -> None:
+    async def fake_validate(_s: Any, source_ids: Any, rules: Any, **kw: Any) -> None:
         seen.append({"sources": list(source_ids), "rules": list(rules), **kw})
         raise _Stop
 
@@ -170,7 +205,7 @@ async def test_create_and_patch_call_validation(monkeypatch: pytest.MonkeyPatch)
     r = rule(topic_ids=[TOPIC])
     payload = GadgetDefinitionCreate(name="n", renderer="highlights", source_ids=[SRC_A], highlight_rules=[r])
     with pytest.raises(_Stop):
-        await public.create_definition(object(), 1, payload)  # type: ignore[arg-type]
+        await public.create_definition(object(), payload, **KW)  # type: ignore[arg-type]
     assert seen[0]["sources"] == [SRC_A] and "known_topic_ids" not in seen[0]  # create: every topic is checked
 
     row = SimpleNamespace(
@@ -184,7 +219,7 @@ async def test_create_and_patch_call_validation(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(public, "_lock_definition", lock_definition)
     with pytest.raises(_Stop):
         await public.patch_definition(
-            _PatchSession(), 1, uuid4(), GadgetDefinitionPatch(expected_revision=1, name="renamed"),  # type: ignore[arg-type]
+            _PatchSession(), uuid4(), GadgetDefinitionPatch(expected_revision=1, name="renamed"), **KW,  # type: ignore[arg-type]
         )
     assert seen[1]["known_topic_ids"] == {TOPIC}  # stored topics are not re-checked on a rename
 
@@ -246,7 +281,7 @@ async def test_preview_is_read_only_never_notifies_and_bounded(
     news.live.add(gone)  # live but inactive: validates, yet resolves to no terms
     r = rule(topic_ids=[TOPIC, gone], source_ids=[SRC_A], notify=True)
     payload = HighlightPreviewRequest(source_ids=[SRC_A, SRC_B], rules=[r], days=3)
-    result = await public.preview_highlights(ReadOnlySession(), 1, payload)  # type: ignore[arg-type]
+    result = await public.preview_highlights(ReadOnlySession(), payload, **KW)  # type: ignore[arg-type]
     assert emit_spy == []  # no notification call
     assert result.scanned == 3 and result.truncated is True  # 2 pages max, cursor left over
     assert len(seen) == 2 and all(kw["limit"] <= 100 for kw in seen)
@@ -261,7 +296,7 @@ async def test_preview_not_truncated_when_cursor_exhausted(
 ) -> None:
     patch_projections(monkeypatch, [([item(SRC_A, "rates")], None)], [])
     payload = HighlightPreviewRequest(source_ids=[SRC_A], rules=[rule(keywords=["rates"])])
-    result = await public.preview_highlights(ReadOnlySession(), 1, payload)  # type: ignore[arg-type]
+    result = await public.preview_highlights(ReadOnlySession(), payload, **KW)  # type: ignore[arg-type]
     assert result.truncated is False and result.window_days == 7 and emit_spy == []
 
 
@@ -272,11 +307,11 @@ async def test_preview_reports_dead_topic_unresolved_and_rejects_widened_sources
     patch_projections(monkeypatch, [([item(SRC_A, "rates")], None)], [])
     dead = uuid4()
     request = HighlightPreviewRequest(source_ids=[SRC_A], rules=[rule(topic_ids=[dead])])
-    result = await public.preview_highlights(ReadOnlySession(), 1, request)  # type: ignore[arg-type]
+    result = await public.preview_highlights(ReadOnlySession(), request, **KW)  # type: ignore[arg-type]
     assert result.rules[0].unresolved_topic_ids == [dead] and result.rules[0].match_count == 0
     widened = HighlightPreviewRequest(source_ids=[SRC_A], rules=[rule(keywords=["a"], source_ids=[SRC_B])])
     with pytest.raises(public.HighlightRuleError, match="subset"):
-        await public.preview_highlights(ReadOnlySession(), 1, widened)  # type: ignore[arg-type]
+        await public.preview_highlights(ReadOnlySession(), widened, **KW)  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio
@@ -286,7 +321,7 @@ async def test_preview_respects_item_scope(monkeypatch: pytest.MonkeyPatch, news
     request = HighlightPreviewRequest(
         source_ids=[SRC_A], rules=[rule(keywords=["rates"])], source_item_ids=[inside.document_id],
     )
-    result = await public.preview_highlights(ReadOnlySession(), 1, request)  # type: ignore[arg-type]
+    result = await public.preview_highlights(ReadOnlySession(), request, **KW)  # type: ignore[arg-type]
     assert result.scanned == 1 and result.rules[0].match_count == 1
 
 
@@ -317,20 +352,78 @@ async def test_usage_query_is_owner_scoped() -> None:
             captured.append(stmt)
             return SimpleNamespace(all=list)
 
-    await public.definition_usage(Capture(True, []), 7, uuid4())  # type: ignore[arg-type]
+    await public.definition_usage(Capture(True, []), uuid4(), **KW)  # type: ignore[arg-type]
     sql = [sql_text(stmt) for stmt in captured]
     assert len(sql) == 2
-    assert "gadget_definitions.owner_id = 7" in sql[0]
-    assert "dashboards.owner_id = 7" in sql[1]
+    assert "gadget_definitions.owner_id = 1" in sql[0] and f"gadget_definitions.workspace_id = '{WS}'" in sql[0]
+    assert "dashboards.owner_id = 1" in sql[1] and f"dashboards.workspace_id = '{WS}'" in sql[1]
+
+
+_REAL_ADMIT = public._admit  # captured before the autouse fixture replaces it
+
+
+@pytest.mark.asyncio
+async def test_member_is_forbidden_on_preview_and_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(public, "_admit", _REAL_ADMIT)
+    member = WorkspaceContext(workspace_id=WS, user_id=2, role="member", membership_revision=1)
+    request = HighlightPreviewRequest(source_ids=[SRC_A], rules=[rule(keywords=["a"])])
+    for call in (
+        public.preview_highlights(ReadOnlySession(), request, scope=member, multi_workspace_enabled=False),  # type: ignore[arg-type]
+        public.definition_usage(ReadOnlySession(), uuid4(), scope=member, multi_workspace_enabled=False),  # type: ignore[arg-type]
+    ):
+        with pytest.raises(HTTPException) as err:
+            await call
+        assert err.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_foreign_definition_usage_is_none() -> None:
+    assert await public.definition_usage(UsageSession(False, []), uuid4(), **KW) is None  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_count_source_gadgets_carries_workspace_predicate_in_both_subqueries() -> None:
+    captured: list[Any] = []
+
+    class Capture:
+        async def scalar(self, stmt: Any) -> Any:
+            compiled = stmt.compile(dialect=postgresql.dialect())
+            captured.append((str(compiled), compiled.params))
+            return 0
+
+    assert await public.count_source_gadgets(Capture(), uuid4(), scope=SCOPE) == (0, 0)  # type: ignore[arg-type]
+    assert len(captured) == 2
+    assert all(
+        "gadget_definitions.workspace_id = " in sql and "owner_id" not in sql and WS in params.values()
+        for sql, params in captured
+    )
+
+
+@pytest.mark.asyncio
+async def test_foreign_topic_is_rejected_with_scope(news: FakeNews, monkeypatch: pytest.MonkeyPatch) -> None:
+    import modules.news.public as news_public
+
+    seen: list[Any] = []
+
+    async def live(_s: Any, ids: list[Any], **kw: Any) -> set[Any]:
+        seen.append(kw)
+        return set()  # topic belongs to another workspace
+
+    monkeypatch.setattr(news_public, "live_topic_ids", live)
+    with pytest.raises(public.HighlightRuleError) as err:
+        await public.validate_highlight_rules(None, [SRC_A], [rule(topic_ids=[TOPIC])], scope=SCOPE)  # type: ignore[arg-type]
+    assert err.value.code == "rule_topic_unknown" and seen == [{"scope": SCOPE}]
 
 
 @pytest.mark.asyncio
 async def test_usage_lookup() -> None:
     d = uuid4()
     rows = [(d, "Overview", 2)]
-    (usage,) = await public.definition_usage(UsageSession(True, rows), 1, uuid4()) or []  # type: ignore[arg-type]
+    (usage,) = await public.definition_usage(UsageSession(True, rows), uuid4(), **KW) or []  # type: ignore[arg-type]
     assert (usage.dashboard_id, usage.name, usage.instance_count) == (d, "Overview", 2)
-    assert await public.definition_usage(UsageSession(False, []), 1, uuid4()) is None  # type: ignore[arg-type]
+    assert await public.definition_usage(UsageSession(False, []), uuid4(), **KW) is None  # type: ignore[arg-type]
 
 
 # --- golden fingerprint + scheduled notification path -----------------------------------------
@@ -358,8 +451,8 @@ class EmitSession:
             self.suppressed.add(stmt.compile(dialect=postgresql.dialect()).params["dedupe_key"])  # type: ignore[no-untyped-call]
         return SimpleNamespace(scalars=lambda: list(self.suppressed))
 
-    async def scalar(self, _stmt: Any) -> Any:
-        return self.definition
+    async def scalar(self, stmt: Any) -> Any:
+        return self.progress if "gadget_highlight_progress" in str(stmt).split("WHERE")[0] else self.definition
 
     async def get(self, _model: Any, _key: Any, **_kw: Any) -> Any:
         return self.progress
@@ -399,12 +492,12 @@ async def test_emit_path_fingerprint_matches_legacy_golden(
 ) -> None:
     legacy = {"id": str(RULE_ID), "keywords": ["rates"], "severity": "warning", "notify": True}
     session = run_emit(monkeypatch, definition_row([legacy], [FP_SOURCE]), [])
-    await public.evaluate_gadget_highlights(session, 1, uuid4(), emit_notifications=True)  # type: ignore[arg-type]
+    await public.evaluate_gadget_highlights(session, uuid4(), **KW, emit_notifications=True)  # type: ignore[arg-type]
     assert session.progress.rules_fingerprint == LEGACY_FINGERPRINT
     # Re-stored in the new shape (explicit empty lists) must not change it either.
     restored = {**legacy, "topic_ids": [], "source_ids": [], "exclude_source_ids": []}
     session = run_emit(monkeypatch, definition_row([restored], [FP_SOURCE]), [])
-    await public.evaluate_gadget_highlights(session, 1, uuid4(), emit_notifications=True)  # type: ignore[arg-type]
+    await public.evaluate_gadget_highlights(session, uuid4(), **KW, emit_notifications=True)  # type: ignore[arg-type]
     assert session.progress.rules_fingerprint == LEGACY_FINGERPRINT
 
 
@@ -416,11 +509,12 @@ async def test_emit_path_applies_source_and_topic_conditions(
     items = [item(SRC_A, "Rates rise"), item(SRC_B, "Rates rise"), item(SRC_A, "weather")]
     session = run_emit(monkeypatch, definition_row([excluded.model_dump(mode="json")], [SRC_A, SRC_B]), items)
     matches = await public.evaluate_gadget_highlights(  # type: ignore[arg-type]
-        session, 1, uuid4(), emit_notifications=True,
+        session, uuid4(), **KW, emit_notifications=True,
     )
     assert [m.source_id for m in matches] == [SRC_A]  # excluded source and non-topic text both skipped
     assert len(emit_spy) == 1 and session.commits == 1
-    assert emit_spy[0][0][2].body.startswith("Matched 1 keyword(s): rates")
+    assert emit_spy[0][1] == {"evidence": emit_spy[0][1]["evidence"], **KW}  # emit receives the scope
+    assert emit_spy[0][0][1].body.startswith("Matched 1 keyword(s): rates")
 
 
 def test_term_cap_per_rule() -> None:
