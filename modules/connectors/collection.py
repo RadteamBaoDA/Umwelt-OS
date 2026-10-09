@@ -569,7 +569,8 @@ async def _run_web(run: Run) -> None:
     start = str(config.url)
     state = await _state(run)
     origin = rest._origin(start)
-    queue, visited, records = [(start, 0)], {start}, []
+    queue, visited = [(start, 0)], {start}
+    records: list[dict[str, Any]] = []
     spent = 0
     while queue and len(records) < config.max_pages:
         url, depth = queue.pop(0)
@@ -614,7 +615,7 @@ async def _run_mcp(run: Run) -> None:
     for call in config.calls:
         try:
             read = await tools.read_collection_capability(
-                runtime, connection_id=config.connection_id, grant_id=call.grant_id, source_id=a.source.id,
+                cast(Any, runtime), connection_id=config.connection_id, grant_id=call.grant_id, source_id=a.source.id,
                 source_generation=a.source.generation, arguments=call.arguments, authorize_extra=authorized,
                 scope=a.scope, multi_workspace_enabled=a.multi)
             records.extend(mcp_collection.normalize(read, call.arguments, collected_at))
@@ -959,7 +960,7 @@ async def _run_github(run: Run) -> None:
     if not isinstance(token, str) or not token:
         raise CredentialMissing
     config = project_github_source_config(source.configuration)
-    redis, permit = run.ctx.get("redis"), secrets.token_urlsafe(24)
+    redis, permit = cast(Any, run.ctx.get("redis")), secrets.token_urlsafe(24)
     held = False
 
     async def before_send() -> None:

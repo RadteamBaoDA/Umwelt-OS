@@ -32,6 +32,7 @@ from fastapi import HTTPException
 from modules.connectors.backends import (
     NATIVE_PROVIDERS,
     PROVIDER_SCOPE_FIELDS,
+    native_dispatch_supported,
     is_native_provider as _is_native_provider,
 )
 from modules.connectors.models import (
@@ -833,7 +834,7 @@ async def get_connector_configuration(
                                    else native_credential.state if source.provider == "telegram" and native_credential is not None
                                    else "ready" if rest_credential is not None and rest_credential.state == "ready"
                                    else provider_credential.state if provider_credential is not None else None),
-        execution_backend=row.execution_backend if row is not None else "n8n",
+        execution_backend=(row.execution_backend if row is not None else "native" if native_dispatch_supported(source.type, source.provider) else "n8n"),
         transition_phase=row.transition_phase if row is not None else "idle",
         target_backend=row.target_backend if row is not None else None,
     )

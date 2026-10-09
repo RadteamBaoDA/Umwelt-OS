@@ -1308,9 +1308,14 @@ async def _save_desired_in_uow(
     if row is None:
         if expected_revision != 0:
             return None
+        from modules.connectors import collection  # lazy: collection imports this module
+
+        packaged = await sources.get_connector_source(
+            session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
         row = ConnectorProvisioning(
             source_id=source_id,
             source_generation=source_generation,
+            execution_backend="native" if packaged is not None and collection.supports_native(packaged) else "n8n",  # new rows only
             desired_revision=1,
             desired_configuration=copy.deepcopy(configuration),
             state="saved_not_active",

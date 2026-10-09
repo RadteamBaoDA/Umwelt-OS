@@ -13,7 +13,12 @@ from modules.connectors.credentials import (
     encrypt_credential_input,
     secret_fingerprint,
 )
-from modules.connectors.models import ConnectorProvisioning, ConnectorRestCredential
+from modules.connectors.models import (
+    ConnectorNativeCredential,
+    ConnectorProvisioning,
+    ConnectorRestCredential,
+    GithubOAuthGrant,
+)
 from modules.connectors.n8n import N8nApi, build_workflow, workflow_name
 from modules.sources import public as sources
 from modules.sources.schemas import SourceFence
@@ -338,6 +343,16 @@ async def activate_native_in_uow(
             return "invalid_credential"
     elif (row.desired_configuration or {}).get("auth_method") not in (None, "none"):
         return "native_unsupported"
+    if source.provider in ("github", "telegram"):  # the native run needs the owner's grant / bot token for this exact revision
+        grant: GithubOAuthGrant | ConnectorNativeCredential | None
+        grant = await (session.get(GithubOAuthGrant, source_id) if source.provider == "github"
+                       else session.get(ConnectorNativeCredential, source_id))
+        if (
+            grant is None or grant.state != "ready" or grant.source_generation != source.generation
+            or grant.configuration_revision != row.desired_revision
+            or (source.provider == "github" and getattr(grant, "encrypted_tokens", None) is None)
+        ):
+            return "invalid_credential"
     row.execution_backend = "native"
     row.desired_enabled = True
     row.state = "active"

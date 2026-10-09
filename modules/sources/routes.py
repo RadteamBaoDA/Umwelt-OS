@@ -22,6 +22,7 @@ from modules.sources.schemas import (
     SourceRead,
 )
 
+
 async def _with_timing(session: AsyncSession, scope: WorkspaceContext, reads: list[SourceRead]) -> None:
     """Fill next_due_at/retry_at from connector schedule state, scoped to the workspace."""
     from modules.connectors import public as connectors

@@ -436,7 +436,7 @@ class TestConnectorLifecycleStateTransitions:
         session.add = MagicMock()
 
         with patch("modules.connectors.provisioning.sources.lock_source", return_value=_fence(source_id)), \
-             patch("modules.connectors.provisioning._lock_connector_rows", return_value=(_fence(source_id), None, {})):
+             patch("modules.connectors.provisioning.sources.get_connector_source", AsyncMock(return_value=None)),              patch("modules.connectors.provisioning._lock_connector_rows", return_value=(_fence(source_id), None, {})):
             row = await save_desired(session, source_id, source_generation=1, expected_revision=0, configuration={"url": "https://example.com"}, **FLAG)
 
         assert row is not None
@@ -447,6 +447,16 @@ class TestConnectorLifecycleStateTransitions:
         assert row.desired_enabled is False
         session.add.assert_called_once_with(row)
         session.flush.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("supported,expected", [(True, "native"), (False, "n8n")])
+    async def test_new_row_defaults_to_native_only_when_supported(self, supported: bool, expected: str) -> None:
+        source_id = uuid4()
+        session = AsyncMock()
+        session.add = MagicMock()
+        with patch("modules.connectors.provisioning.sources.lock_source", return_value=_fence(source_id)),              patch("modules.connectors.provisioning._lock_connector_rows", return_value=(_fence(source_id), None, {})),              patch("modules.connectors.provisioning.sources.get_connector_source", AsyncMock(return_value=object())),              patch("modules.connectors.collection.supports_native", lambda s: supported):
+            row = await save_desired(session, source_id, source_generation=1, expected_revision=0, configuration={}, **FLAG)
+        assert row is not None and row.execution_backend == expected
 
     @pytest.mark.asyncio
     async def test_save_desired_revision_mismatch_returns_none(self) -> None:

@@ -339,6 +339,24 @@ async def test_native_header_auth_needs_a_ready_credential_for_this_revision():
             assert await activate(env) == expected
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["github", "telegram"])
+async def test_github_telegram_activation_needs_a_ready_grant_for_this_revision(provider):
+    good = SimpleNamespace(state="ready", source_generation=1, configuration_revision=3, encrypted_tokens="x")
+    for credential, expected in [
+        (None, "invalid_credential"),
+        (SimpleNamespace(**{**good.__dict__, "configuration_revision": 2}), "invalid_credential"),
+        (SimpleNamespace(**{**good.__dict__, "state": "revoked"}), "invalid_credential"),
+        (SimpleNamespace(**{**good.__dict__, "encrypted_tokens": None}), "invalid_credential" if provider == "github" else ""),
+        (good, ""),
+    ]:
+        r = row(state="saved_not_active", desired_enabled=False)
+        with _NativeEnv(r, credential=credential) as env:
+            env.source.provider = provider
+            assert await activate(env) == expected
+        assert r.state == ("active" if expected == "" else "saved_not_active")
+
+
 # --------------------------------------------------------------------------- REST credential + envelopes
 
 def test_rest_secret_roundtrip_and_binding_fences():

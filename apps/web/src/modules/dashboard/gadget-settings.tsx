@@ -187,7 +187,7 @@ export function GadgetSettings({
               symbols: parsedSymbols.length > 0 ? parsedSymbols : [],
               metrics: parsedMetrics.length > 0 ? parsedMetrics : ['close'],
               lookback_days: lookbackDays,
-            } : instance.definition.renderer === 'weather' ? {
+            } : instance.definition.renderer === 'weather' || instance.definition.renderer === 'provider_observation' ? {
               metrics: parsedMetrics,
               lookback_days: lookbackDays,
             } : instance.definition.renderer === 'map' ? {
@@ -383,8 +383,8 @@ export function GadgetSettings({
             </>}
           </div>
 
-          {(instance.definition.renderer === 'finance_chart' || instance.definition.renderer === 'weather') && <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5"><Label htmlFor="gadget-metrics" className="text-xs font-semibold">{t('observationMetrics')}</Label><Input id="gadget-metrics" value={metrics} onChange={(event) => setMetrics(event.target.value)} placeholder={instance.definition.renderer === 'finance_chart' ? 'close, volume' : 'temperature_2m, precipitation'} className="h-8 text-xs font-mono bg-muted/20" /></div>
+          {(instance.definition.renderer === 'finance_chart' || instance.definition.renderer === 'weather' || instance.definition.renderer === 'provider_observation') && <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5"><Label htmlFor="gadget-metrics" className="text-xs font-semibold">{t('observationMetrics')}</Label><Input id="gadget-metrics" value={metrics} onChange={(event) => setMetrics(event.target.value)} placeholder={instance.definition.renderer === 'finance_chart' ? 'close, volume' : instance.definition.renderer === 'provider_observation' ? t('providerObsMetricsPlaceholder') : 'temperature_2m, precipitation'} className="h-8 text-xs font-mono bg-muted/20" /></div>
             <div className="space-y-1.5"><Label htmlFor="gadget-lookback" className="text-xs font-semibold">{t('observationLookback')}</Label><Input id="gadget-lookback" type="number" min={1} max={366} value={lookbackDays} onChange={(event) => setLookbackDays(Number(event.target.value))} className="h-8 text-xs font-mono bg-muted/20" /></div>
           </div>}
 

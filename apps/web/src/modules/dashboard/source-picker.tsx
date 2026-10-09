@@ -13,10 +13,11 @@ import {
 import { dashboardKeys, listGadgetSources } from './api';
 
 /** Renderers whose data comes from exactly one configured source, with the provider they require. */
-export const SOURCE_BACKED_RENDERERS: Readonly<Record<string, { provider: string }>> = {
+export const SOURCE_BACKED_RENDERERS: Readonly<Record<string, { provider: string | readonly string[] }>> = {
   github_project: { provider: 'github' },
   finance_chart: { provider: 'alpha_vantage' },
   weather: { provider: 'open_meteo' },
+  provider_observation: { provider: ['alternative_me', 'frankfurter', 'ecb', 'world_bank', 'binance', 'coinpaprika', 'coingecko', 'usgs'] },
 };
 
 /** Renderers whose configured data sources are read through the Documents owner projection. */
@@ -75,18 +76,18 @@ const NONE = '__none__';
  * gadget-sources API. Reusable by any source-backed renderer through SOURCE_BACKED_RENDERERS.
  */
 export function SourcePicker({ provider, value, onChange, id }: {
-  provider: string;
+  provider: string | readonly string[];
   value: string | null;
   onChange: (sourceId: string | null) => void;
   id: string;
 }) {
   const t = useTranslations('github');
   const query = useQuery({
-    queryKey: [...dashboardKeys.sources, 'picker', provider],
+    queryKey: [...dashboardKeys.sources, 'picker', ...[provider].flat()],
     queryFn: ({ signal }) => listGadgetSources(100, undefined, signal),
   });
   const options = (query.data?.items ?? []).filter(
-    (item) => item.provider === provider && (item.status === 'active' || item.id === value),
+    (item) => [provider].flat().includes(item.provider ?? '') && (item.status === 'active' || item.id === value),
   );
   return (
     <div className="space-y-1.5">
