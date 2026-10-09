@@ -186,6 +186,9 @@ async def cluster_observation(
             story, fuzzy_evidence = fuzzy
             match_method = "embedding_entity_time"
             match_evidence.update(fuzzy_evidence)
+    attribution = _attribution(projection.provider_metadata)
+    if attribution:
+        match_evidence["attribution"] = attribution
     if story is None:
         story = NewsStory(workspace_id=scope.workspace_id, identity_key=key, identity_kind=kind, algorithm_version=ALGORITHM_VERSION)
         session.add(story)
@@ -460,7 +463,7 @@ async def _live_story_rows(
             chunk_id=chunk.id, source_id=current.source_id, source_name=current.source_name,
             source_type=current.source_type, provider=current.provider, url=_canonical_url(current.canonical_url),
             title=current.title, excerpt=chunk.content[:1000], observed_at=current.observed_at,
-            published_at=current.published_at,
+            published_at=current.published_at, **_attribution(current.provider_metadata),
         )
         existing = grouped.setdefault(story.id, (story, [], []))
         existing[1].append(observation)
@@ -856,6 +859,19 @@ def _member_obs(scope: WorkspaceContext, as_of: datetime, source_ids: tuple[UUID
     return query.where(NewsObservation.source_id.in_(source_ids)) if source_ids else query
 
 
+def _attribution(metadata: Any) -> dict[str, str]:
+    """Publisher and license text the provider reported, if any; nothing is inferred."""
+    if metadata is None:
+        return {}
+    result: dict[str, str] = {}
+    publisher = metadata.source_fields.get("publisher")
+    if isinstance(publisher, str) and publisher.strip():
+        result["publisher"] = publisher.strip()[:200]
+    if metadata.license_label:
+        result["license_label"] = metadata.license_label
+    return result
+
+
 def _member_evidence(observation: NewsObservation, source: Source) -> StoryEvidence:
     """Detach one authorized observation; title and excerpt never come from hidden rows."""
     return StoryEvidence(
@@ -863,8 +879,15 @@ def _member_evidence(observation: NewsObservation, source: Source) -> StoryEvide
         chunk_id=observation.chunk_id, source_id=observation.source_id, source_name=source.name,
         source_type=source.type, provider=observation.provider, url=_canonical_url(observation.canonical_url),
         title=observation.title, excerpt=observation.excerpt[:1000], observed_at=observation.observed_at,
-        published_at=observation.published_at,
+        published_at=observation.published_at, **_stored_attribution(observation),
     )
+
+
+def _stored_attribution(observation: NewsObservation) -> dict[str, str | None]:
+    """Read attribution captured at observation time (older rows have none)."""
+    stored = observation.match_evidence.get("attribution")
+    stored = stored if isinstance(stored, dict) else {}
+    return {key: stored.get(key) for key in ("publisher", "license_label") if isinstance(stored.get(key), str)}
 
 
 def _representative(evidence: list[StoryEvidence]) -> StoryEvidence:

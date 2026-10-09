@@ -73,7 +73,7 @@ async def test_member_list_uses_authorized_title_and_counts_only() -> None:
     obs = SimpleNamespace(
         story_id=story_id, document_id=uuid4(), document_version_id=uuid4(), chunk_id=uuid4(), source_id=uuid4(),
         provider=None, canonical_url=None, title="Visible title", excerpt="visible", observed_at=NOW,
-        published_at=None,
+        published_at=None, match_evidence={},
     )
     session = FakeSession(
         _rows([SimpleNamespace(story_id=story_id, latest=NOW)]),
@@ -130,3 +130,34 @@ async def test_visibility_hash_changes_with_grant_and_membership_revision() -> N
     assert base == await run(1, MEMBER)
     assert base != await run(2, MEMBER)
     assert base != await run(1, WorkspaceContext(user_id=7, workspace_id=WS, role="member", membership_revision=4))
+
+
+def test_member_detail_without_source_ids_has_no_source_filter() -> None:
+    """The /news page asks for a member story with no source_ids: authorized projection, not a source predicate."""
+    with patch.object(stories.workspaces, "granted_resource_ids", _grant_select):
+        empty = str(stories._member_obs(MEMBER, NOW, (), NewsObservation.story_id).compile(dialect=postgresql.dialect()))
+        scoped = str(stories._member_obs(MEMBER, NOW, (uuid4(),), NewsObservation.story_id).compile(
+            dialect=postgresql.dialect()))
+    assert "news_observations.source_id IN" not in empty
+    assert "news_observations.source_id IN" in scoped
+
+
+def test_attribution_comes_only_from_provider_metadata() -> None:
+    meta = SimpleNamespace(source_fields={"publisher": " BBC News "}, license_label="Feed terms")
+    assert stories._attribution(meta) == {"publisher": "BBC News", "license_label": "Feed terms"}
+    assert stories._attribution(SimpleNamespace(source_fields={}, license_label=None)) == {}
+    assert stories._attribution(None) == {}
+
+
+def test_member_evidence_exposes_stored_attribution_only() -> None:
+    def obs(evidence: dict[str, object]) -> NewsObservation:
+        return NewsObservation(
+            document_id=uuid4(), document_version_id=uuid4(), chunk_id=uuid4(), source_id=uuid4(), provider=None,
+            canonical_url=None, title="t", excerpt="e", observed_at=NOW, published_at=None, match_evidence=evidence,
+        )
+
+    source = SimpleNamespace(name="s", type="rss")
+    shown = stories._member_evidence(obs({"attribution": {"publisher": "BBC", "license_label": "L"}}), source)  # type: ignore[arg-type]
+    assert (shown.publisher, shown.license_label) == ("BBC", "L")
+    bare = stories._member_evidence(obs({}), source)  # type: ignore[arg-type]
+    assert (bare.publisher, bare.license_label) == (None, None)

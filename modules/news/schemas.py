@@ -52,6 +52,8 @@ class StoryEvidence(BaseModel):
     excerpt: str
     observed_at: datetime
     published_at: datetime | None
+    publisher: str | None = None
+    license_label: str | None = None
 
 
 class StoryRead(BaseModel):

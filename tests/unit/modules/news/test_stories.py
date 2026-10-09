@@ -183,6 +183,7 @@ class TestStoryClustering:
             source_name="Sample Source",
             source_type="rss",
             provider="rss",
+            provider_metadata=None,
             local_only=local_only,
             canonical_url="https://example.com/news/article-1",
             content_hash="abc123hash",
