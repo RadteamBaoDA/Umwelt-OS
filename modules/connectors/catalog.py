@@ -3,6 +3,11 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from modules.connectors.backends import GENERIC_CATALOG_SOURCE_TYPES, is_native_provider
+from modules.connectors.provider_specs import (
+    FREE_PROVIDER_SPECS,
+    FreeProviderSpec,
+    QuotaWindowPolicy,
+)
 
 
 class CatalogEntry(BaseModel):
@@ -32,7 +37,20 @@ class CatalogEntry(BaseModel):
     license_status: str | None = None
     evidence_status: str | None = None
     runtime_verified: bool = False
-    eligibility: Literal["unknown"] = "unknown"
+    eligibility: Literal["unknown", "open", "personal", "noncommercial", "review"] = "unknown"
+    # Additive free-provider facts (see provider_specs). Facts and evidence are separate: none implies
+    # runtime acceptance, and eligibility here is the catalog class, not a per-workspace grant.
+    terms_url: str | None = None
+    terms_checked_on: str | None = None
+    attribution: str | None = None
+    hosts: tuple[str, ...] = ()
+    endpoints: tuple[str, ...] = ()
+    execution: Literal["supported", "experimental", "research_only"] | None = None
+    default_interval_minutes: int | None = None
+    key_fields: tuple[str, ...] = ()
+    endpoint_probe: Literal["plan_documented", "unverified"] | None = None
+    quota_policies: tuple[QuotaWindowPolicy, ...] = ()
+    setup_guide: str | None = None
 
     @computed_field(return_type=bool)  # type: ignore[prop-decorator]  # pydantic computed_field over property
     @property
@@ -243,6 +261,38 @@ _ENTRIES = (
         )
     ),
 )
+
+
+def _with_spec(entry: CatalogEntry, spec: FreeProviderSpec) -> CatalogEntry:
+    """Overlay free-provider facts on an entry without touching its availability or scope fields."""
+    return entry.model_copy(update={
+        "eligibility": spec.eligibility, "terms_url": spec.terms_url, "terms_checked_on": spec.checked_on,
+        "attribution": spec.attribution, "hosts": spec.hosts, "endpoints": spec.endpoints,
+        "execution": spec.execution, "default_interval_minutes": spec.default_interval_minutes,
+        "key_fields": ("api_key",) if spec.key_required else (), "endpoint_probe": spec.endpoint_probe,
+        "quota_policies": spec.quota, "setup_guide": (
+            f"Opt in per source, declare deployment use and acknowledge the terms ({spec.terms_url})."
+            + (" Provide your own free API key; no key is created or shared automatically." if spec.key_required else "")
+            + (" An operator must record a terms review before this provider can run." if spec.eligibility == "review" else "")
+        ),
+    })
+
+
+def _free_entry(spec: FreeProviderSpec) -> CatalogEntry:
+    # Planned, not available: the adapter is not registered, so this must never pass the
+    # "available/implemented/requires_credentials" provider-scope gates.
+    return _with_spec(CatalogEntry(
+        provider_id=spec.id, label=spec.label, auth_methods=("api_key",) if spec.key_required else ("none",),
+        scope_fields=(), configuration_fields=("schedule_interval_minutes",), collection_modes=(),
+        supports_history=False, supports_edit=False, supports_delete=False, availability="planned",
+        availability_reason="Catalog preset only: no collection adapter is registered or runtime-verified yet.",
+        license_status="unverified", evidence_status="plan_documented_endpoint_unverified_runtime",
+    ), spec)
+
+
+_SPECS = {spec.id: spec for spec in FREE_PROVIDER_SPECS}
+_ENTRIES = tuple(_with_spec(entry, _SPECS[entry.provider_id]) if entry.provider_id in _SPECS else entry for entry in _ENTRIES)
+_ENTRIES += tuple(_free_entry(spec) for spec in FREE_PROVIDER_SPECS if spec.id not in {e.provider_id for e in _ENTRIES})
 
 
 def list_catalog() -> tuple[CatalogEntry, ...]:

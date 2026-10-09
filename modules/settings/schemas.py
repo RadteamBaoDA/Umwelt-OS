@@ -91,6 +91,22 @@ class MaintenanceSummaryRead(BaseModel):
     temporary_data_deleted: int = Field(ge=0, default=0)
     next_eligible_at: datetime | None = None
 
+class TranslationSettingsRead(BaseModel):
+    """Workspace translation choice; unrelated to the viewer's UI locale."""
+    enabled: bool = False
+    target_language: Literal["vi", "en"] = "vi"
+    configuration_revision: int = Field(default=1, ge=1)
+
+
+class TranslationSettingsUpdate(BaseModel):
+    """Owner update must compare this revision under a row lock; the server picks the next one."""
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    target_language: Literal["vi", "en"]
+    expected_revision: int = Field(ge=1)
+
+
 __all__ = [
     "MaintenanceSummaryRead",
     "ModelMapping",
@@ -102,4 +118,6 @@ __all__ = [
     "PrivacySettings",
     "RetentionSettingsRead",
     "RetentionSettingsUpdate",
+    "TranslationSettingsRead",
+    "TranslationSettingsUpdate",
 ]

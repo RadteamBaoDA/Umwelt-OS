@@ -36,6 +36,8 @@ from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
 from modules.ingestion.models import (
     COLLECTION_LEASE,
+    RECEIPT_RETENTION,
+    CollectionReceipt,
     CollectorCredential,
     EventOutbox,
     IngestionBatch,
@@ -46,6 +48,8 @@ from modules.ingestion.models import (
     SourceObservation,
 )
 from modules.ingestion.schemas import (
+    CollectionState,
+    CollectionStateUpdate,
     ConnectorCollectionLease,
     CrawlReceipt,
     EventDelivery,
@@ -63,6 +67,7 @@ from modules.ingestion.schemas import (
     TelegramRawDelivery,
     classify_telegram_probe,
 )
+from modules.connectors.collection_schemas import CollectionRequestRef
 from modules.knowledge.documents import public as documents
 from modules.knowledge.documents.schemas import DocumentCleanupPreparationLimitError
 from modules.sources import public as sources
@@ -1092,6 +1097,19 @@ async def get_source_cursor(session: AsyncSession, source_id: UUID, *, scope: Sc
     return state.cursor if state is not None else None
 
 
+async def get_collection_state(
+    session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+) -> CollectionState:
+    """Return cursor, validators and continuation checkpoint for an in-scope source (empty otherwise)."""
+    await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if await _source_in_scope(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled) is None:
+        return CollectionState()
+    state = await session.get(SourceIngestionState, source_id)
+    if state is None:
+        return CollectionState()
+    return CollectionState(state.cursor, state.etag, state.last_modified, state.validators_revision, state.continuation_state)
+
+
 async def reset_native_collection_cursor(session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
 ) -> None:
     """Clear one native provider cursor only after its exact collection and run leases are inactive.
@@ -1379,10 +1397,106 @@ async def _lock_source_projection(session: AsyncSession, source_id: UUID, *, sco
 
 
 
+async def _authorize_collection(
+    session: AsyncSession, *, source_id: UUID, source_generation: int, connector_revision: int | None,
+    collector_token: str | None, request_ref: CollectionRequestRef | None, scope: Scope,
+    credential_scope: str = "ingestion:write",
+) -> None:
+    """Authorize a collection write by bearer capability or by an exact admitted request attempt.
+
+    A request-bound caller (the in-process native worker) holds no bearer: its authority is the
+    locked running request + unexpired slot + captured fences, re-proven here under the parent
+    locks. Exactly one of the two proofs is required; an absent proof is 401, a stale attempt 409.
+    """
+    if request_ref is not None:
+        from modules.connectors import public as connectors
+
+        if connector_revision is None or not await connectors.lock_collection_request_in_uow(
+            session, request_ref, source_id=source_id, source_generation=source_generation,
+            connector_revision=connector_revision, scope=scope,
+        ):
+            raise HTTPException(status_code=409, detail="Collection admission is no longer current")
+        return
+    token_hash = hashlib.sha256((collector_token or "").encode()).hexdigest()
+    if collector_token is None or not await session.scalar(select(CollectorCredential.token_hash).where(
+        CollectorCredential.token_hash == token_hash, CollectorCredential.source_id == source_id,
+        CollectorCredential.scope == credential_scope, CollectorCredential.revoked_at.is_(None),
+    )):
+        raise HTTPException(status_code=401, detail="Collector authentication required")
+
+
+async def _settle_request(
+    session: AsyncSession, request_ref: CollectionRequestRef | None, *,
+    outcome: Literal["succeeded", "no_changes"], run_id: UUID | None,
+    scope: Scope, source_id: UUID, source_generation: int, connector_revision: int | None,
+    batch_id: UUID | None = None, payload_digest: str | None = None,
+    cursor_before: str | None = None, cursor_after: str | None = None,
+    state_update: CollectionStateUpdate | None = None,
+) -> None:
+    """Insert the acceptance receipt, flush request outcome + slot release; the caller commits once.
+
+    Receipt first (get-or-create by request UUID, so a replay never writes a second one), then the
+    request is pointed at it in the same flush.
+    """
+    if request_ref is None:
+        return
+    from modules.connectors import public as connectors
+
+    receipt_id = await session.scalar(select(CollectionReceipt.id).where(CollectionReceipt.request_id == request_ref.request_id))
+    if receipt_id is None:
+        now = datetime.now(UTC)
+        receipt_id = uuid4()
+        state_update = state_update or CollectionStateUpdate()
+        session.add(CollectionReceipt(
+            id=receipt_id, request_id=request_ref.request_id, workspace_id=scope.workspace_id, source_id=source_id,
+            source_generation=source_generation, connector_revision=connector_revision,
+            admission_token=request_ref.admission_token,
+            outcome="accepted" if outcome == "succeeded" else "no_changes", batch_id=batch_id, run_id=run_id,
+            payload_digest=payload_digest, cursor_before=cursor_before, cursor_after=cursor_after,
+            coverage=state_update.coverage, etag=state_update.etag if state_update.update_validators else None,
+            last_modified=state_update.last_modified if state_update.update_validators else None,
+            accepted_at=now, retain_until=now + RECEIPT_RETENTION))
+        await session.flush()
+    if not await connectors.settle_collection_in_uow(
+        session, request_ref, outcome=outcome, ingestion_run_id=run_id, accepted_receipt_id=receipt_id,
+    ):
+        raise HTTPException(status_code=409, detail="Collection admission changed before acceptance")
+
+
+def _apply_state_update(state: SourceIngestionState, state_update: CollectionStateUpdate | None, revision: int | None) -> None:
+    """Write checkpoint and (when the walk finished) validators onto the locked state row."""
+    if state_update is None:
+        return
+    state.continuation_state = state_update.continuation_state
+    if state_update.update_validators:
+        state.etag, state.last_modified, state.validators_revision = state_update.etag, state_update.last_modified, revision
+
+
+async def purge_expired_collection_receipts(session: AsyncSession, *, now: datetime | None = None, limit: int = 500) -> int:
+    """Delete expired receipts whose request can no longer be recovered; the caller commits.
+
+    A receipt is the recovery evidence for its request, so one is kept while the connectors-owned
+    request is still queued/running even past ``retain_until``. Returns the number deleted.
+    """
+    from modules.connectors import public as connectors
+
+    now = now or datetime.now(UTC)
+    rows = (await session.execute(
+        select(CollectionReceipt.id, CollectionReceipt.request_id).where(CollectionReceipt.retain_until < now)
+        .order_by(CollectionReceipt.retain_until).limit(limit))).all()
+    if not rows:
+        return 0
+    recoverable = await connectors.recoverable_collection_request_ids(session, [row.request_id for row in rows])
+    doomed = [row.id for row in rows if row.request_id not in recoverable]
+    if doomed:
+        await session.execute(delete(CollectionReceipt).where(CollectionReceipt.id.in_(doomed)))
+    return len(doomed)
+
+
 async def validate_connector_collection_in_uow(
-    session: AsyncSession, lease: ConnectorCollectionLease, *, collector_token: str,
+    session: AsyncSession, lease: ConnectorCollectionLease, *, collector_token: str | None,
     scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
-    source_fence: SourceFence,
+    source_fence: SourceFence, request_ref: CollectionRequestRef | None = None,
 ) -> bool:
     """Validate original lease/bearer under prepared parents; lock only Ingestion state.
 
@@ -1428,13 +1542,11 @@ async def validate_connector_collection_in_uow(
         scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     ):
         raise HTTPException(status_code=409, detail="Connector collection fence is stale")
-    token_hash = hashlib.sha256(collector_token.encode()).hexdigest()
-    eligible = await session.scalar(select(CollectorCredential.token_hash).where(
-        CollectorCredential.token_hash == token_hash, CollectorCredential.source_id == lease.source_id,
-        CollectorCredential.scope == "ingestion:write", CollectorCredential.revoked_at.is_(None),
-    ))
-    if eligible is None:
-        raise HTTPException(status_code=401, detail="Collector authentication required")
+    await _authorize_collection(
+        session, source_id=lease.source_id, source_generation=lease.source_generation,
+        connector_revision=lease.connector_revision, collector_token=collector_token,
+        request_ref=request_ref, scope=scope,
+    )
     state = await session.scalar(select(SourceIngestionState).where(
         SourceIngestionState.source_id == lease.source_id,
     ).with_for_update().execution_options(populate_existing=True))
@@ -1451,7 +1563,8 @@ async def acquire_connector_collection(
     source_id: UUID,
     source_generation: int,
     connector_revision: int,
-    collector_token: str, scope: Scope, multi_workspace_enabled: bool,
+    collector_token: str | None, scope: Scope, multi_workspace_enabled: bool,
+    request_ref: CollectionRequestRef | None = None,
 ) -> ConnectorCollectionLease:
     """Reserve one native fetch under source, provisioning, credential, then state locks.
 
@@ -1492,15 +1605,11 @@ async def acquire_connector_collection(
         session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         access_fence=access_fence, source_fence=source_fence,
     )
-    token_hash = hashlib.sha256(collector_token.encode()).hexdigest()
-    grant_valid = bool(await session.scalar(select(CollectorCredential.token_hash).where(
-        CollectorCredential.token_hash == token_hash,
-        CollectorCredential.source_id == source_id,
-        CollectorCredential.scope == "ingestion:write",
-        CollectorCredential.revoked_at.is_(None),
-    )))
-    if not grant_valid:
-        raise HTTPException(status_code=401, detail="Collector authentication required")
+    await _authorize_collection(
+        session, source_id=source_id, source_generation=source_generation,
+        connector_revision=connector_revision, collector_token=collector_token,
+        request_ref=request_ref, scope=scope,
+    )
     state = await session.scalar(select(SourceIngestionState).where(
         SourceIngestionState.source_id == source_id,
     ).with_for_update().execution_options(populate_existing=True))
@@ -1717,9 +1826,10 @@ async def accept_native_collection(
     session: AsyncSession,
     payload: NativeCollectionBatch,
     *,
-    collector_token: str, lease: ConnectorCollectionLease, scope: Scope, multi_workspace_enabled: bool,
+    collector_token: str | None, lease: ConnectorCollectionLease, scope: Scope, multi_workspace_enabled: bool,
     expected_native_operation_id: UUID | None,
     expected_world_credential_operation_id: UUID | None,
+    request_ref: CollectionRequestRef | None = None,
 ) -> NativeCollectionReceipt:
     """Authenticate, reclassify, and atomically persist one reserved native page.
 
@@ -1857,15 +1967,11 @@ async def accept_native_collection(
             session, source.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
             access_fence=access_fence, source_fence=source_fence,
         )
-    token_hash = hashlib.sha256(collector_token.encode()).hexdigest()
-    grant_valid = bool(await session.scalar(select(CollectorCredential.token_hash).where(
-        CollectorCredential.token_hash == token_hash,
-        CollectorCredential.source_id == source.id,
-        CollectorCredential.scope == "ingestion:write",
-        CollectorCredential.revoked_at.is_(None),
-    )))
-    if not grant_valid:
-        raise HTTPException(status_code=401, detail="Collector authentication required")
+    await _authorize_collection(
+        session, source_id=source.id, source_generation=payload.source_generation,
+        connector_revision=payload.connector_revision, collector_token=collector_token,
+        request_ref=request_ref, scope=scope,
+    )
     if github_proof is not None:
         github_fence = await connectors.lock_github_binding_fence_in_uow(
             session, source.id, source_generation=payload.source_generation,
@@ -1907,6 +2013,11 @@ async def accept_native_collection(
             # A replay may have acquired a fresh reservation; release only that exact token.
             state.collection_lease_token = None
             state.lease_expires_at = None
+            await _settle_request(
+                session, request_ref, outcome="succeeded" if payload.records else "no_changes", run_id=run.id,
+                scope=scope, source_id=source.id, source_generation=source.generation,
+                connector_revision=payload.connector_revision, batch_id=existing.id, payload_digest=payload_hash,
+                cursor_before=payload.cursor_before, cursor_after=payload.cursor_after)
             await commit_with_replay(session, [make_source_change(source.id, source.generation, source.status, scope=scope)], scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
         count = len(payload.records)
         return NativeCollectionReceipt(
@@ -2150,6 +2261,12 @@ async def accept_native_collection(
     if not source_paused:
         await sources.record_collection_result_in_uow(
             session, source.id, source.generation, now, None, no_changes=not provider_records, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence)
+    await _settle_request(
+        session, request_ref,
+        outcome="succeeded" if provider_records or payload.telegram_raw_deliveries else "no_changes", run_id=run.id,
+        scope=scope, source_id=source.id, source_generation=source.generation,
+        connector_revision=payload.connector_revision, batch_id=batch.id, payload_digest=payload_hash,
+        cursor_before=payload.cursor_before, cursor_after=cursor_after)
     await commit_with_replay(session, changes, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
     return NativeCollectionReceipt(
             workspace_id=scope.workspace_id, actor_user_id=_actor_id(scope), membership_revision=scope.membership_revision,
@@ -2164,7 +2281,8 @@ async def accept_native_collection(
 async def receive_batch(
     session: AsyncSession,
     payload: ReceiveBatch,
-    collector_token: str, *, scope: Scope, multi_workspace_enabled: bool,
+    collector_token: str | None, *, scope: Scope, multi_workspace_enabled: bool,
+    request_ref: CollectionRequestRef | None = None, state_update: CollectionStateUpdate | None = None,
 ) -> tuple[IngestionBatch, IngestionRun]:
     """Authenticate and idempotently accept a fenced collection batch.
 
@@ -2183,17 +2301,11 @@ async def receive_batch(
         raise HTTPException(status_code=409, detail="Source is not active")
     if source.generation != payload.source_generation:
         raise HTTPException(status_code=409, detail="Source generation changed during collection")
-    token_hash = hashlib.sha256(collector_token.encode()).hexdigest()
-    grant_valid = bool(await session.scalar(
-        select(CollectorCredential.token_hash).where(
-            CollectorCredential.token_hash == token_hash,
-            CollectorCredential.source_id == payload.source_id,
-            CollectorCredential.scope == "ingestion:write",
-            CollectorCredential.revoked_at.is_(None),
-        )
-    ))
-    if not grant_valid:
-        raise HTTPException(status_code=401, detail="Collector authentication required")
+    await _authorize_collection(
+        session, source_id=payload.source_id, source_generation=payload.source_generation,
+        connector_revision=payload.connector_revision, collector_token=collector_token,
+        request_ref=request_ref, scope=scope,
+    )
     from modules.connectors import public as connectors
 
     if connectors.is_native_provider(source.provider):
@@ -2219,6 +2331,14 @@ async def receive_batch(
         run = await session.scalar(select(IngestionRun).where(IngestionRun.batch_id == existing.id, IngestionRun.source_id == source.id, *_run_scope(scope)))
         if run is None:
             raise RuntimeError("Ingestion batch has no run")
+        if request_ref is not None:
+            # Identical content already accepted: this request is satisfied by the existing run.
+            await _settle_request(
+                session, request_ref, outcome="succeeded", run_id=run.id, scope=scope, source_id=source.id,
+                source_generation=source.generation, connector_revision=payload.connector_revision,
+                batch_id=existing.id, payload_digest=payload_hash, cursor_before=payload.cursor_before,
+                cursor_after=payload.cursor_after)
+            await session.commit()
         return existing, run
 
     state = await session.get(SourceIngestionState, payload.source_id, with_for_update=True)
@@ -2307,6 +2427,12 @@ async def receive_batch(
     ]
     if normalize_stage is not None:
         changes.append(make_ingestion_change(source.id, run.id, run.status, normalize_stage.stage_key, normalize_stage.status, scope=scope))
+    _apply_state_update(state, state_update, payload.connector_revision)
+    await _settle_request(
+        session, request_ref, outcome="succeeded", run_id=run.id, scope=scope, source_id=source.id,
+        source_generation=source.generation, connector_revision=payload.connector_revision, batch_id=batch.id,
+        payload_digest=payload_hash, cursor_before=payload.cursor_before, cursor_after=payload.cursor_after,
+        state_update=state_update)
     await commit_with_replay(session, changes, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
     await session.refresh(batch)
     await session.refresh(run)
@@ -2314,11 +2440,71 @@ async def receive_batch(
 
 
 async def receive_connector_batch(
-    session: AsyncSession, payload: ReceiveBatch, collector_token: str, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession, payload: ReceiveBatch, collector_token: str | None, *, scope: Scope, multi_workspace_enabled: bool,
+    request_ref: CollectionRequestRef | None = None, state_update: CollectionStateUpdate | None = None,
 ) -> Receipt:
     """Accept a connector batch and return its public run receipt."""
-    batch, run = await receive_batch(session, payload, collector_token, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    batch, run = await receive_batch(
+        session, payload, collector_token, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        request_ref=request_ref, state_update=state_update)
     return Receipt(workspace_id=scope.workspace_id, batch_id=batch.id, run_id=run.id, status=run.status)
+
+
+async def accept_collection_no_changes(
+    session: AsyncSession, *, source_id: UUID, source_generation: int, connector_revision: int,
+    request_ref: CollectionRequestRef, scope: Scope, multi_workspace_enabled: bool,
+    state_update: CollectionStateUpdate | None = None,
+) -> None:
+    """Settle a generic request with no new data in one commit: health, receipt, request outcome and slot.
+
+    No batch or run is created and last-good observations stay untouched. ``state_update`` may clear a
+    finished continuation, store validators and (only here, with the state row locked) advance the
+    cursor a resumed walk earned in earlier committed segments. Native
+    providers acknowledge emptiness through their own receipt and are refused here.
+    """
+    source, source_fence, access_fence = await _lock_source_projection(
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if source is None or source_fence is None:
+        raise HTTPException(status_code=404, detail="Source not found")
+    if source.status != "active" or source.generation != source_generation:
+        raise HTTPException(status_code=409, detail="Source generation changed during collection")
+    from modules.connectors import public as connectors
+
+    if connectors.is_native_provider(source.provider):
+        raise HTTPException(status_code=409, detail="Native provider collection is required")
+    if not await connectors.require_collection_fence(
+        session, source,
+        connectors.CollectionFence(source_generation=source_generation, connector_revision=connector_revision),
+        lock=True, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    ):
+        raise HTTPException(status_code=409, detail="Connector collection fence is stale")
+    await _authorize_collection(
+        session, source_id=source_id, source_generation=source_generation,
+        connector_revision=connector_revision, collector_token=None, request_ref=request_ref, scope=scope)
+    state = await session.scalar(select(SourceIngestionState).where(
+        SourceIngestionState.source_id == source_id,
+    ).with_for_update().execution_options(populate_existing=True))
+    if state is None:
+        state = SourceIngestionState(source_id=source_id, cursor=None)
+        session.add(state)
+        await session.flush()
+    cursor_before = state.cursor
+    if state_update is not None and state_update.cursor_after is not None:
+        state.cursor = state_update.cursor_after
+    _apply_state_update(state, state_update, connector_revision)
+    if not await sources.record_collection_result_in_uow(
+        session, source_id, source_generation, datetime.now(UTC), None, no_changes=True,
+        access_fence=access_fence, source_fence=source_fence,
+        multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+    ):
+        raise HTTPException(status_code=409, detail="Source is no longer active")
+    await _settle_request(
+        session, request_ref, outcome="no_changes", run_id=None, scope=scope, source_id=source_id,
+        source_generation=source_generation, connector_revision=connector_revision,
+        cursor_before=cursor_before, cursor_after=state.cursor, state_update=state_update)
+    await commit_with_replay(
+        session, [make_source_change(source.id, source.generation, source.status, scope=scope)],
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
 
 
 async def queue_connector_crawl(

@@ -37,3 +37,11 @@ class CollectionAdmissionRead(BaseModel):
     source_id: UUID
     admission_token: UUID
     attempt: int = Field(ge=1, le=5)
+
+
+class CollectionRequestRef(BaseModel):
+    """Identify one admitted attempt; authority is proven by the locked request and slot rows, never by this value."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    request_id: UUID
+    admission_token: UUID

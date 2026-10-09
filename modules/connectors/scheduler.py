@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from core.config import Settings
 from core.workspaces.models import WorkspaceMembership
 from core.workspaces.schemas import InternalJobScope, Scope
-from modules.connectors import provisioning
+from modules.connectors import provider_terms, provisioning
 from modules.connectors import public as connectors
 from modules.connectors.collection_schemas import (
     CollectionAdmissionRead,
@@ -150,8 +150,11 @@ async def _open_request(
         .with_for_update().execution_options(populate_existing=True))
     if schedule is not None and schedule.blocked_error_code is not None:
         raise HTTPException(status_code=409, detail=f"Action required: {schedule.blocked_error_code}")
+    # Terms/eligibility gate for manual, scheduled and retry alike, before any queueing or network.
+    terms_revision = await provider_terms.require_terms_eligible(session, source)
     if active is not None and active.status == "queued" and (
-        active.source_generation != source.generation or active.connector_revision != row.desired_revision
+        active.terms_revision != terms_revision
+        or active.source_generation != source.generation or active.connector_revision != row.desired_revision
         or active.backend_revision != row.backend_revision or active.captured_backend != row.execution_backend
     ):
         active.status, active.error_code = "cancelled", "revision_changed"
@@ -176,7 +179,7 @@ async def _open_request(
         membership_revision=scope.membership_revision, trigger=trigger,
         source_generation=source.generation, connector_revision=row.desired_revision,
         backend_revision=row.backend_revision, captured_backend=row.execution_backend,
-        status="queued", attempt=0, available_at=now, enqueue_next_at=now,
+        status="queued", attempt=0, available_at=now, enqueue_next_at=now, terms_revision=terms_revision,
     )
     session.add(request)
     await session.flush()
@@ -245,7 +248,7 @@ async def _stale_reason(
     ):
         return "source_inactive"
     if not (
-        getattr(source, "generation") == request.source_generation
+        source.generation == request.source_generation
         and row.source_generation == request.source_generation
         and row.applied_revision == row.desired_revision == request.connector_revision
         and row.execution_backend == request.captured_backend
@@ -278,6 +281,9 @@ async def admit_collection_request(
     scope = _request_scope(peek)
     source_id = peek.source_id
     await session.rollback()
+    if not await module_is_enabled(session, "connectors", scope=scope, multi_workspace_enabled=multi_workspace_enabled):
+        await session.rollback()
+        return None  # durable request untouched until the module is re-enabled
     try:
         await connectors._connector_access(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         if not await module_is_enabled(
@@ -352,6 +358,33 @@ async def admit_collection_request(
     return result
 
 
+async def lock_running_request_in_uow(
+    session: AsyncSession, request_id: UUID, admission_token: UUID, *, source_id: UUID,
+    source_generation: int, connector_revision: int, workspace_id: UUID,
+) -> bool:
+    """Lock the request row and prove this exact attempt may still publish; no commit.
+
+    True only for a running request owning an unexpired slot under the same admission token,
+    source, workspace and captured generation/revision. An expired or superseded attempt gets
+    False, so an old worker can never publish results or advance a cursor.
+    """
+    request = await session.scalar(
+        select(ConnectorCollectionRequest).where(ConnectorCollectionRequest.id == request_id)
+        .with_for_update().execution_options(populate_existing=True))
+    if (
+        request is None or request.status != "running" or request.active_admission_token != admission_token
+        or request.source_id != source_id or request.workspace_id != workspace_id
+        or request.source_generation != source_generation or request.connector_revision != connector_revision
+    ):
+        return False
+    slot = await session.scalar(
+        select(ConnectorAdmissionSlot.slot_id).where(
+            ConnectorAdmissionSlot.occupied_request_id == request_id,
+            ConnectorAdmissionSlot.admission_token == admission_token,
+            ConnectorAdmissionSlot.expires_at > datetime.now(UTC)))
+    return slot is not None
+
+
 async def renew_admission(
     session: AsyncSession, request_id: UUID, admission_token: UUID, *, multi_workspace_enabled: bool,
 ) -> bool:
@@ -408,6 +441,7 @@ async def settle_admission_in_uow(
     session: AsyncSession, request_id: UUID, admission_token: UUID, *, outcome: Outcome,
     error_code: str | None = None, ingestion_run_id: UUID | None = None,
     retryable: bool = False, provider_deadline: datetime | None = None,
+    accepted_receipt_id: UUID | None = None,
 ) -> bool:
     """Flush a request outcome and free its slot if the token is still current; no commit.
 
@@ -434,13 +468,14 @@ async def settle_admission_in_uow(
         request.provider_deadline = provider_deadline
     if outcome in ("succeeded", "no_changes"):
         request.status, request.error_code, request.ingestion_run_id = outcome, None, ingestion_run_id
+        request.accepted_receipt_id = accepted_receipt_id
         if schedule is not None:
             schedule.failure_count, schedule.next_eligible_at = 0, None
     elif outcome == "cancelled":
         request.status, request.error_code = "cancelled", error_code
     elif outcome == "deferred":
         request.status, request.attempt = "queued", max(request.attempt - 1, 0)
-        request.available_at = request.enqueue_next_at = now + BUSY_DEFER
+        request.available_at = request.enqueue_next_at = max(now + BUSY_DEFER, request.provider_deadline or now)
     elif error_code in ACTION_REQUIRED:
         request.status, request.error_code = "failed", error_code
         if schedule is not None:
@@ -457,6 +492,17 @@ async def settle_admission_in_uow(
         _penalize(schedule, request.provider_deadline)
     await session.flush()
     return True
+
+
+async def recoverable_request_ids(session: AsyncSession, request_ids: list[UUID]) -> set[UUID]:
+    """Return the subset of ids whose request is nonterminal (queued or running)."""
+    if not request_ids:
+        return set()
+    rows = await session.scalars(
+        select(ConnectorCollectionRequest.id).where(
+            ConnectorCollectionRequest.id.in_(request_ids),
+            ConnectorCollectionRequest.status.in_(("queued", "running"))))
+    return set(rows)
 
 
 async def settle_admission(session: AsyncSession, request_id: UUID, admission_token: UUID, **kwargs: object) -> bool:

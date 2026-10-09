@@ -1,10 +1,12 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
@@ -587,3 +589,131 @@ class ConnectorWorkspaceDispatch(Base):
     )
     last_considered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ConnectorProviderTerms(Base):
+    """Per-source terms acknowledgement (owner) and review evidence (operator only).
+
+    ``terms_revision`` increments on every change; operator fields are never written from an owner DTO.
+    """
+    __tablename__ = "connector_provider_terms"
+    __table_args__ = (
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_connector_provider_terms_workspace", ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["workspace_id", "source_id"], ["sources.workspace_id", "sources.id"],
+            name="fk_connector_provider_terms_source", ondelete="CASCADE",
+        ),
+        CheckConstraint("terms_revision > 0", name="ck_connector_provider_terms_revision"),
+        CheckConstraint(
+            "declared_use IN ('personal', 'noncommercial', 'commercial', 'unknown')",
+            name="ck_connector_provider_terms_use",
+        ),
+        CheckConstraint(
+            "operator_review_state IN ('pending', 'approved', 'rejected')",
+            name="ck_connector_provider_terms_review_state",
+        ),
+        CheckConstraint(
+            "reviewed_allowed_use IS NULL OR reviewed_allowed_use IN ('personal', 'noncommercial', 'commercial')",
+            name="ck_connector_provider_terms_reviewed_use",
+        ),
+        CheckConstraint(
+            "(operator_review_state = 'pending' AND reviewer_user_id IS NULL AND reviewed_at IS NULL "
+            "AND reviewed_allowed_use IS NULL AND review_evidence_ref IS NULL AND reviewed_terms_version IS NULL) "
+            "OR (operator_review_state = 'rejected' AND reviewer_user_id IS NOT NULL AND reviewed_at IS NOT NULL "
+            "AND review_evidence_ref IS NOT NULL) "
+            "OR (operator_review_state = 'approved' AND reviewer_user_id IS NOT NULL AND reviewed_at IS NOT NULL "
+            "AND reviewed_allowed_use IS NOT NULL AND review_evidence_ref IS NOT NULL "
+            "AND reviewed_terms_version IS NOT NULL)",
+            name="ck_connector_provider_terms_review_fields",
+        ),
+        Index("ix_connector_provider_terms_workspace", "workspace_id", "source_id"),
+    )
+
+    source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    provider_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    terms_revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    terms_url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    terms_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    checked_on: Mapped[date] = mapped_column(Date, nullable=False)
+    owner_acknowledged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    owner_actor_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    declared_use: Mapped[str] = mapped_column(String(16), nullable=False)
+    operator_review_state: Mapped[str] = mapped_column(String(16), nullable=False, server_default="pending")
+    reviewer_user_id: Mapped[int | None] = mapped_column(Integer)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reviewed_allowed_use: Mapped[str | None] = mapped_column(String(16))
+    review_evidence_ref: Mapped[str | None] = mapped_column(String(512))
+    reviewed_terms_version: Mapped[str | None] = mapped_column(String(64))
+
+
+class ConnectorQuotaWindow(Base):
+    """Shared provider/credential/IP budget window; no workspace component so it is deployment-wide."""
+    __tablename__ = "connector_quota_windows"
+    __table_args__ = (
+        CheckConstraint("budget_kind IN ('provider', 'credential', 'ip')", name="ck_connector_quota_windows_kind"),
+        CheckConstraint("used_units >= 0", name="ck_connector_quota_windows_used"),
+        CheckConstraint("limit_units IS NULL OR limit_units >= 0", name="ck_connector_quota_windows_limit"),
+        CheckConstraint("window_end > window_start", name="ck_connector_quota_windows_span"),
+        Index("ix_connector_quota_windows_end", "window_end"),
+    )
+
+    provider_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    budget_kind: Mapped[str] = mapped_column(String(16), primary_key=True)
+    subject_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    policy_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    unit: Mapped[str] = mapped_column(String(24), nullable=False)
+    limit_units: Mapped[int | None] = mapped_column(BigInteger)
+    used_units: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+    blocked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    policy_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class ConnectorProviderSend(Base):
+    """One committed physical provider send; holds no credential, private URL parameter or payload."""
+    __tablename__ = "connector_provider_sends"
+    __table_args__ = (
+        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_connector_provider_sends_workspace", ondelete="CASCADE"),
+        UniqueConstraint("request_id", "admission_token", "send_sequence", name="uq_connector_provider_sends_sequence"),
+        CheckConstraint("attempt >= 0 AND send_sequence >= 0", name="ck_connector_provider_sends_counters"),
+        Index("ix_connector_provider_sends_created", "created_at"),
+    )
+
+    send_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    request_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    admission_token: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    send_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    provider_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_target_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class ConnectorQuotaDebit(Base):
+    """The units one send debited from one window; windows are never deleted while debits reference them."""
+    __tablename__ = "connector_quota_debits"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["send_id"], ["connector_provider_sends.send_id"],
+            name="fk_connector_quota_debits_send", ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["provider_id", "budget_kind", "subject_hash", "policy_key", "window_start"],
+            ["connector_quota_windows.provider_id", "connector_quota_windows.budget_kind",
+             "connector_quota_windows.subject_hash", "connector_quota_windows.policy_key",
+             "connector_quota_windows.window_start"],
+            name="fk_connector_quota_debits_window", ondelete="RESTRICT",
+        ),
+        CheckConstraint("units > 0", name="ck_connector_quota_debits_units"),
+    )
+
+    send_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    provider_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    budget_kind: Mapped[str] = mapped_column(String(16), primary_key=True)
+    subject_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    policy_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    units: Mapped[int] = mapped_column(Integer, nullable=False)

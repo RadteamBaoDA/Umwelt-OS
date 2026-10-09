@@ -1,4 +1,5 @@
 import json
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import Any, Literal
@@ -431,3 +432,31 @@ def classify_telegram_probe(
         ) for item in updates),
         replay_update_ids=tuple(replay_ids), cursor_after=cursor_after,
     )
+
+
+@dataclass(frozen=True)
+class CollectionState:
+    """Read model of a source's cursor, conditional-GET validators and pagination checkpoint."""
+
+    cursor: str | None = None
+    etag: str | None = None
+    last_modified: str | None = None
+    validators_revision: int | None = None
+    continuation_state: str | None = None
+
+
+@dataclass(frozen=True)
+class CollectionStateUpdate:
+    """State committed atomically with an accepted batch or no-change receipt.
+
+    ``continuation_state`` replaces the checkpoint (None clears it). Validators are written only
+    when ``update_validators`` is set, i.e. when the walk finished. ``cursor_after`` is honoured
+    solely by the no-change path, which has no batch to carry a cursor.
+    """
+
+    continuation_state: str | None = None
+    update_validators: bool = False
+    etag: str | None = None
+    last_modified: str | None = None
+    cursor_after: str | None = None
+    coverage: Literal["complete", "partial"] = "complete"

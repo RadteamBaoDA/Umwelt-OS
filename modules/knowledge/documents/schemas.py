@@ -15,13 +15,40 @@ from pydantic import (
 
 MAX_CONTENT_BYTES = 1_048_576
 MAX_METADATA_BYTES = 65_536
-PROVIDER_IDS = ("youtube", "arxiv", "huggingface", "github_releases", "github", "telegram", "alpha_vantage", "open_meteo")
+NEWS_PROVIDER_IDS = ("bbc_world", "vnexpress_business", "hn_top", "gdelt_economy")
+MEASUREMENT_PROVIDER_IDS = (
+    "alpha_vantage", "open_meteo", "world_bank", "frankfurter", "ecb", "binance",
+    "alternative_me", "usgs", "coinpaprika", "coingecko",
+)
+PROVIDER_IDS = (
+    "youtube", "arxiv", "huggingface", "github_releases", "github", "telegram",
+    *MEASUREMENT_PROVIDER_IDS, *NEWS_PROVIDER_IDS,
+)
+# Bounded per-provider evidence keys retained beside the typed measurement (no arbitrary response mirroring).
+MEASUREMENT_PROVIDER_FIELDS = {
+    "alpha_vantage": {"date", "symbol", "open", "high", "low", "close", "volume"},
+    "open_meteo": {"time", "timezone", "utc_offset_seconds", "latitude", "longitude"},
+    "world_bank": {"country", "indicator", "period", "unit", "decimal_value"},
+    "frankfurter": {"date", "base", "quote", "decimal_value", "providers"},
+    "ecb": {"date", "base", "quote", "decimal_value"},
+    "binance": {"symbol", "base", "quote", "decimal_value"},
+    "alternative_me": {"timestamp", "value_classification", "decimal_value"},
+    "usgs": {"place", "type", "status", "magType", "depth_km", "latitude", "longitude", "decimal_mag", "event_time", "updated"},
+    "coinpaprika": {"id", "symbol", "last_updated", "quote", "decimal_value"},
+    "coingecko": {"coin_id", "quote", "decimal_value", "last_updated_at"},
+}
+
+
+_FEED_FIELDS = {"title", "summary", "canonical_url", "guid", "published_at", "provider_updated_at", "publisher"}
 
 
 class WorldDataMeasurement(BaseModel):
     """Preserve one provider-declared numeric value with its original measurement semantics."""
     model_config = ConfigDict(extra="forbid", frozen=True)
-    provider: Literal["alpha_vantage", "open_meteo"]
+    provider: Literal[
+        "alpha_vantage", "open_meteo", "world_bank", "frankfurter", "ecb", "binance",
+        "alternative_me", "usgs", "coinpaprika", "coingecko",
+    ]
     metric: str = Field(min_length=1, max_length=80)
     value: float | None
     unit: str = Field(min_length=1, max_length=64)
@@ -32,7 +59,7 @@ class WorldDataMeasurement(BaseModel):
     latitude: float | None = Field(default=None, ge=-90, le=90)
     longitude: float | None = Field(default=None, ge=-180, le=180)
     published_at: datetime | None = None
-    quality: Literal["provider_reported", "forecast", "missing"]
+    quality: Literal["provider_reported", "forecast", "reference", "missing"]
     missing_reason: str | None = Field(default=None, max_length=64)
     provider_fields: dict[str, str | float | int | None] = Field(default_factory=dict, max_length=12)
 
@@ -49,11 +76,7 @@ class WorldDataMeasurement(BaseModel):
     @model_validator(mode="after")
     def validate_provider_fields(self) -> "WorldDataMeasurement":
         """Keep retained source-row evidence inside each provider's declared field set."""
-        allowed = {
-            "alpha_vantage": {"date", "symbol", "open", "high", "low", "close", "volume"},
-            "open_meteo": {"time", "timezone", "utc_offset_seconds", "latitude", "longitude"},
-        }[self.provider]
-        if self.provider_fields.keys() - allowed:
+        if self.provider_fields.keys() - MEASUREMENT_PROVIDER_FIELDS[self.provider]:
             raise ValueError("Structured provider row contains undeclared fields")
         if (self.value is None) != (self.quality == "missing") or (self.value is None) != (self.missing_reason is not None):
             raise ValueError("Missing values must carry an explicit missing reason and quality")
@@ -132,7 +155,12 @@ class ProviderTelegramMetadata(BaseModel):
 class ProviderRecordMetadata(BaseModel):
     """Retain typed, bounded provider fields separately from generic metadata."""
     model_config = ConfigDict(extra="forbid", frozen=True)
-    provider: Literal["youtube", "arxiv", "huggingface", "github_releases", "github", "telegram", "alpha_vantage", "open_meteo"]
+    provider: Literal[
+        "youtube", "arxiv", "huggingface", "github_releases", "github", "telegram",
+        "alpha_vantage", "open_meteo", "world_bank", "frankfurter", "ecb", "binance",
+        "alternative_me", "usgs", "coinpaprika", "coingecko",
+        "bbc_world", "vnexpress_business", "hn_top", "gdelt_economy",
+    ]
     identity: str = Field(min_length=1, max_length=512)
     provider_version: str | None = Field(default=None, max_length=255)
     timestamp_basis: Literal["provider_modified", "provider_published", "collection"]
@@ -159,7 +187,7 @@ class ProviderRecordMetadata(BaseModel):
         """Enforce provider-specific allowlists and require Telegram's typed identity block."""
         if (self.provider == "telegram") != (self.telegram is not None):
             raise ValueError("Telegram detail must match provider")
-        if self.provider in {"alpha_vantage", "open_meteo"}:
+        if self.provider in MEASUREMENT_PROVIDER_IDS:
             if self.world_data is None or self.world_data.provider != self.provider:
                 raise ValueError("World-data measurement must match provider")
         elif self.world_data is not None:
@@ -171,7 +199,10 @@ class ProviderRecordMetadata(BaseModel):
             "github_releases": {"node_id", "name", "body", "html_url", "tag_name", "draft", "prerelease", "author", "created_at", "published_at"},
             "github": {"record_type", "node_id", "html_url"},
             "telegram": set(),
-            "alpha_vantage": set(), "open_meteo": set(),
+            **{provider: set() for provider in MEASUREMENT_PROVIDER_IDS},
+            "bbc_world": _FEED_FIELDS, "vnexpress_business": _FEED_FIELDS,
+            "hn_top": {"title", "text", "url", "by", "time", "id", "type", "deleted", "dead"},
+            "gdelt_economy": {"title", "url", "seendate", "domain", "language", "sourcecountry"},
         }[self.provider]
         if self.source_fields.keys() - allowed:
             raise ValueError("Provider snapshot contains unsupported source fields")
@@ -180,6 +211,8 @@ class ProviderRecordMetadata(BaseModel):
             "node_id": 256, "name": 500, "body": 4000, "html_url": 2048,
             "tag_name": 255, "record_type": 16, "last_modified": 64, "created_at": 64,
             "published_at": 64, "provider_updated_at": 64,
+            "canonical_url": 2048, "guid": 512, "publisher": 200, "text": 4000, "url": 2048, "by": 128,
+            "type": 32, "seendate": 32, "domain": 255, "language": 64, "sourcecountry": 64,
         }
         for key, value in self.source_fields.items():
             if key in {"tags", "categories", "authors"}:
@@ -187,9 +220,18 @@ class ProviderRecordMetadata(BaseModel):
                     not isinstance(item, str) or len(item) > 255 for item in value
                 ):
                     raise ValueError(f"Provider {key} must be a bounded string list")
-            elif key in {"draft", "prerelease"}:
+            elif key in {"draft", "prerelease", "deleted", "dead"}:
                 if not isinstance(value, bool):
                     raise ValueError(f"Provider {key} must be boolean")
+            elif key in {"time", "id"}:
+                if type(value) is not int or value < 0:
+                    raise ValueError(f"Provider {key} must be a non-negative integer")
+            elif key in {"canonical_url", "url"}:
+                from urllib.parse import urlsplit
+
+                parsed_link = urlsplit(value) if isinstance(value, str) and len(value) <= 2048 else None
+                if parsed_link is None or parsed_link.scheme != "https" or not parsed_link.hostname or parsed_link.username or parsed_link.password:
+                    raise ValueError(f"Provider {key} must be an HTTPS link without credentials")
             elif key == "html_url":
                 if not isinstance(value, str) or len(value) > 2048:
                     raise ValueError("Provider release URL must use HTTPS")

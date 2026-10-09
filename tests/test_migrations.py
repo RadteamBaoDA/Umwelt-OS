@@ -38,6 +38,19 @@ def test_single_head_matches_script_directory() -> None:
     assert result.stdout.split() == [HEAD, "(head)"]
 
 
+def test_single_head_is_translation() -> None:
+    result = _alembic("heads")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split() == ["p14_translation", "(head)"]
+
+
+def test_offline_upgrade_renders_collection_receipts() -> None:
+    result = _alembic("upgrade", "p14_provider_terms_quota:p14_collection_receipts", "--sql")
+    assert result.returncode == 0, result.stderr
+    assert "ingestion_collection_receipts" in result.stdout
+    assert "continuation_state" in result.stdout
+
+
 def test_offline_base_to_head_renders_cleanup_authority_checks() -> None:
     result = _alembic("upgrade", "base:head", "--sql")
     assert result.returncode == 0, result.stderr
@@ -57,3 +70,14 @@ def test_offline_downgrade_refuses_cleanly() -> None:
     assert result.returncode != 0
     assert "run it online" in result.stderr
     assert "get_bind" not in result.stderr
+
+def test_offline_head_renders_provider_terms_and_quota_ledger() -> None:
+    result = _alembic("upgrade", "p14_cleanup_authority:head", "--sql")
+    assert result.returncode == 0, result.stderr
+    for fragment in (
+        "CREATE TABLE connector_provider_terms", "ck_connector_provider_terms_review_fields",
+        "CREATE TABLE connector_quota_windows", "CREATE TABLE connector_provider_sends",
+        "uq_connector_provider_sends_sequence", "CREATE TABLE connector_quota_debits",
+        "fk_connector_quota_debits_window",
+    ):
+        assert fragment in result.stdout
