@@ -49,6 +49,7 @@ RENEW_EVERY_SECONDS = 20
 PAYLOAD_RATE_LIMIT_BACKOFF = timedelta(minutes=15)  # body-level throttling carries no Retry-After; coarse until observed
 PURE_MAX_BYTES = {"ecb": 256 * 1024}  # every other P3 body is capped at macro.MAX_BODY_BYTES
 PURE_PROVIDERS = ("world_bank", "frankfurter", "ecb", "binance", "alternative_me", "usgs", "coinpaprika")  # coingecko needs a key slot
+KEYED_PROVIDERS = {"coingecko": "x-cg-demo-api-key"}  # provider -> fixed header; key in connector_rest_credentials
 SIMPLE_NATIVE = frozenset({"youtube", "arxiv", "huggingface", "github_releases", "alpha_vantage", "open_meteo"})
 REFUSED_HERE = frozenset({"github", "telegram"})  # proof-bearing routes; see module docstring
 Snapshot = tuple[int, int, int]
@@ -75,6 +76,10 @@ class TermsIneligible(Exception):  # control-flow signal
     """Provider terms are no longer satisfied; the source is gated until the owner acts."""
 
 
+class CredentialMissing(Exception):  # control-flow signal
+    """A key-bearing provider has no usable owner-entered key; nothing was sent. Carries no secret."""
+
+
 @dataclass(frozen=True)
 class Attempt:
     """Everything an attempt needs, reloaded from the durable request rather than job arguments."""
@@ -89,6 +94,7 @@ class Attempt:
     terms_revision: int | None
     connector_revision: int
     authenticated: bool
+    credential_revision: int | None = None  # captured at admission; fences key-bearing providers
 
 
 @dataclass
@@ -141,6 +147,13 @@ class SendGate:
         await self._debit()
         self._armed = True
 
+    def bind_credential(self, fingerprint: str) -> None:
+        """Key the shared credential budget on a deployment-keyed fingerprint (never the key)."""
+        async def bound() -> str:
+            return fingerprint
+
+        self._fingerprint = bound
+
     async def fetch_bytes(self, url: str, **kwargs: Any) -> rest.Fetched:
         """Gated, pinned GET for generic adapters (one debited/fenced send per call)."""
         return await rest.fetch_bounded(url, before_send=self, **kwargs)
@@ -168,6 +181,20 @@ class SendGate:
                 raise CollectionFenceLost("terms_changed", "revision_changed")
             if source.provider == "alpha_vantage" and self.captured_operation is not None:
                 await self._check_world_credential(session, source)
+            if source.provider in KEYED_PROVIDERS:
+                await self._check_credential_revision(session, source)
+
+    async def _check_credential_revision(self, session: AsyncSession, source: ConnectorSource) -> None:
+        """Owner key re-entry bumps ``credential_revision``; any send admitted before it is lost."""
+        a = self._a
+        try:
+            source_fence, row, _ = await provisioning.lock_connector(
+                session, source.id, scope=a.scope, multi_workspace_enabled=a.multi,
+                expected_access_fence=a.access_fence)
+            if source_fence is None or row is None or row.credential_revision != a.credential_revision:
+                raise CollectionFenceLost("credential_changed", "revision_changed")
+        finally:
+            await session.rollback()
 
     async def _check_world_credential(self, session: AsyncSession, source: ConnectorSource) -> None:
         a = self._a
@@ -271,6 +298,7 @@ async def _load_attempt(
         attempt=admission.attempt, scope=scope, multi=multi, source=source, access_fence=access_fence,
         source_fence=source_fence, terms_revision=terms_revision, connector_revision=row.desired_revision,
         authenticated=(row.desired_configuration or {}).get("auth_method") not in (None, "none"),
+        credential_revision=request.credential_revision,
     )
 
 
@@ -630,6 +658,34 @@ async def _run_pure(run: Run) -> None:
     await _accept_native(run, lease, records, _coverage(records), collected_at)
 
 
+async def _keyed_secret(run: Run) -> str:
+    """Owner key for this exact generation/revision, read at send time; typed ``credential_missing`` if unusable."""
+    header = KEYED_PROVIDERS[str(run.attempt.source.provider)]
+    try:
+        stored_header, secret = await _rest_secret(run)
+    except rest.ProviderHttpError as exc:
+        raise CredentialMissing from exc
+    if stored_header != header:
+        raise CredentialMissing
+    run.gate.bind_credential(quota.credential_fingerprint(
+        secret, deployment_key=run.settings.connector_credential_encryption_key.get_secret_value()))
+    return secret
+
+
+async def _run_coingecko(run: Run) -> None:
+    """CoinGecko Demo: key read first (no lease, no send without it), header-only, one gated send."""
+    from modules.connectors.providers.crypto import coingecko_request
+    from modules.connectors.providers.macro import MAX_BODY_BYTES
+    from modules.connectors.providers.world_data import map_pure_provider_body
+
+    request = _payload(coingecko_request, await _keyed_secret(run))
+    collected_at = datetime.now(UTC)
+    lease = await _lease(run)
+    fetched = await _get_body(run, request, max_bytes=MAX_BODY_BYTES)
+    records = _payload(map_pure_provider_body, "coingecko", _require_body(fetched), collected_at)
+    await _accept_native(run, lease, records, _coverage(records), collected_at)
+
+
 async def _run_feed(run: Run) -> None:
     """P2 RSS/Atom presets: replay stored validators (same URL + revision), 304 keeps the last good records."""
     from modules.connectors.providers import news
@@ -690,6 +746,7 @@ async def _run_gdelt(run: Run) -> None:
 
 ADAPTERS.update({
     **dict.fromkeys(PURE_PROVIDERS, _run_pure),
+    "coingecko": _run_coingecko,
     "bbc_world": _run_feed, "vnexpress_business": _run_feed, "hn_top": _run_hn, "gdelt_economy": _run_gdelt,
 })
 
@@ -702,6 +759,8 @@ def _classify(exc: BaseException) -> dict[str, Any]:
         return {"outcome": "failed", "error_code": "collection_incomplete"}
     if isinstance(exc, rest.RestSchemaChanged):
         return {"outcome": "failed", "error_code": "schema_changed"}
+    if isinstance(exc, CredentialMissing):
+        return {"outcome": "failed", "error_code": "credential_missing"}
     if isinstance(exc, TermsIneligible):
         return {"outcome": "failed", "error_code": "terms_not_accepted"}
     if isinstance(exc, rest.UnsafeDestination):

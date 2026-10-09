@@ -52,7 +52,7 @@ def make_run(provider, gate, monkeypatch, state=None, connector_revision=2):
 
 def test_every_dispatchable_provider_has_an_adapter_and_spec():
     assert set(DISPATCHABLE) <= set(collection.ADAPTERS)
-    assert "coingecko" not in collection.ADAPTERS
+    assert "coingecko" in collection.ADAPTERS  # key-bearing: needs the owner credential slot
     assert all(get_provider_spec(p) is not None for p in DISPATCHABLE)
 
 

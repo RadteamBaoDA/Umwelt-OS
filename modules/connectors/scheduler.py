@@ -47,7 +47,7 @@ REENQUEUE_AFTER = timedelta(minutes=5)  # lost Redis job: the durable row is enq
 TICK_WORKSPACES = 50
 # Failures that need owner action: never auto-retried, they gate the source's schedule.
 # The value is the blocked dimension; clear_collection_block re-opens it once that dimension moves.
-ACTION_REQUIRED = {"invalid_credential": "credential", "schema_changed": "config", "terms_not_accepted": "terms"}
+ACTION_REQUIRED = {"invalid_credential": "credential", "credential_missing": "credential", "schema_changed": "config", "terms_not_accepted": "terms"}
 _FREE_SLOT = {
     "occupied_request_id": None, "workspace_id": None, "admission_token": None,
     "lease_kind": None, "source_owner_id": None, "expires_at": None,

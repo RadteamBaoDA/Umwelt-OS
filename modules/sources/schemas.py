@@ -43,6 +43,7 @@ class SourceCreate(BaseModel):
             "alternative_me": "api",
             "usgs": "api",
             "coinpaprika": "api",
+            "coingecko": "api",
         }.get(self.provider or "")
         if self.provider is not None and expected is None:
             raise ValueError("Provider is not registered")

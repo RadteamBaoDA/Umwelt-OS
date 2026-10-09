@@ -76,12 +76,12 @@ def test_review_provider_needs_matching_operator_approval() -> None:
 
 def test_specs_never_claim_runtime_acceptance_or_unproven_code() -> None:
     assert not any(spec.runtime_verified for spec in FREE_PROVIDER_SPECS)
-    # Code presence only: exactly the providers the shared executor dispatches (CoinGecko lacks a key slot).
+    # Code presence only: exactly the providers the shared executor dispatches (CoinGecko needs an owner key).
     from modules.connectors.collection import ADAPTERS
 
     implemented = {spec.id for spec in FREE_PROVIDER_SPECS if spec.code_implemented}
     assert implemented == {"alpha_vantage"} | set(DISPATCHABLE)
-    assert set(DISPATCHABLE) <= set(ADAPTERS) and "coingecko" not in implemented
+    assert set(DISPATCHABLE) <= set(ADAPTERS) and "coingecko" in implemented
 
 
 def test_unknown_official_caps_are_counted_not_invented() -> None:
