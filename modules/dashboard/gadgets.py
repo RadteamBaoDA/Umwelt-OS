@@ -58,6 +58,8 @@ RENDERERS: tuple[RendererDescriptor, ...] = (
     RendererDescriptor("goals", 1, 4, 4, "available", ("goals",)),
     RendererDescriptor("daily_brief", 1, 6, 4, "available", ("daily_brief",)),
     RendererDescriptor("weather", 1, 4, 3, "available", ("weather", "world_observations")),
+    # Generic provider observation gadget (Fear & Greed, FX, GDP, BTC price, USGS quakes).
+    RendererDescriptor("provider_observation", 1, 4, 3, "available", ("world_observations",)),
     RendererDescriptor("research", 1, 4, 4, "planned", ("research",)),
     # Reads the GitHub project summary and Timeline slice of one configured github source.
     RendererDescriptor("github_project", 1, 6, 4, "available", ("github_project",)),
@@ -122,6 +124,7 @@ def validate_renderer_configuration(
         "telegram_feed": {"channel_ids"},
         "finance_chart": {"symbols", "metrics", "lookback_days"},
         "weather": {"metrics", "lookback_days"},
+        "provider_observation": {"metrics", "symbols", "lookback_days"},
         "map": {"regions", "map_layer_ids", "lookback_days"},
         "intelligence_panel": {"regions", "lookback_days", "cii_country_codes"},
     }.get(renderer_id, {"source_item_ids"})

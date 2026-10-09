@@ -4,7 +4,7 @@ import { apiRequest } from '@/core/api';
 export type WorldObservation = {
   id: string;
   source_id: string;
-  provider: 'alpha_vantage' | 'open_meteo';
+  provider: string;
   external_id: string;
   revision: number;
   metric: string;
@@ -15,6 +15,10 @@ export type WorldObservation = {
   observed_at: string;
   published_at: string | null;
   collected_at: string;
+  /** FX reference day (YYYY-MM-DD) or null. */
+  reference_date?: string | null;
+  /** Annual macro period (e.g. 2024) or null. */
+  period?: string | null;
   value: number | null;
   unit: string;
   currency: string | null;
