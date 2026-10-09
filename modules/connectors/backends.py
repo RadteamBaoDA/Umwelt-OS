@@ -13,6 +13,7 @@ PROVIDER_SOURCE_TYPES = MappingProxyType({
     "bbc_world": "rss", "vnexpress_business": "rss", "hn_top": "api", "gdelt_economy": "api",
     "world_bank": "api", "frankfurter": "api", "ecb": "api", "binance": "api",
     "alternative_me": "api", "usgs": "api", "coinpaprika": "api",
+    "coingecko": "api",  # fixed endpoint; owner-supplied API key lives in connector_rest_credentials
 })
 FIXED_SCOPE_PROVIDERS = frozenset(PROVIDER_SOURCE_TYPES) - frozenset({
     "youtube", "arxiv", "huggingface", "github_releases", "github", "telegram", "alpha_vantage", "open_meteo",

@@ -26,7 +26,7 @@ Endpoint availability, implemented code, legal eligibility and live acceptance a
 | `alternative_me` | api.alternative.me | measurement | 1440 | open | none | supported | registered | [terms](https://alternative.me/crypto/fear-and-greed-index/) |
 | `usgs` | earthquake.usgs.gov | event | 60 | open | none | supported | registered | [terms](https://www.usgs.gov/information-policies-and-instructions/copyrights-and-credits) |
 | `coinpaprika` | api.coinpaprika.com | measurement | 15 | personal | none | supported | registered | [terms](https://docs.coinpaprika.com/api-plans) |
-| `coingecko` | api.coingecko.com | measurement | 15 | review | required | supported | not registered | [terms](https://www.coingecko.com/en/api_terms) |
+| `coingecko` | api.coingecko.com | measurement | 15 | review | required | supported | registered (requires API key) | [terms](https://www.coingecko.com/en/api_terms) |
 | `alpha_vantage` | www.alphavantage.co | measurement | 1440 | personal | required | supported | existing adapter | [terms](https://www.alphavantage.co/terms_of_service/) |
 
 ## Attribution
@@ -89,7 +89,7 @@ Alpha Vantage enforces 12 sends per UTC day locally (official 25/day is recorded
 1. Choose the preset; the source starts disabled. Fixed presets have no scope fields; the only configurable field is the schedule (`schedule_interval_minutes`).
 2. Owner declares deployment use and acknowledges the terms version with `PUT /api/v1/connectors/{source_id}/terms`, body `{"declared_use": "personal" | "noncommercial" | "commercial" | "unknown", "terms_version": "<version>"}`. `GET /api/v1/connectors/{source_id}/terms` shows the current state. Owner only.
 3. `review` providers: an instance operator records the terms review for the exact acknowledged version (state, allowed use, evidence reference). An owner tick cannot approve.
-4. Key provider: Alpha Vantage only. Supply your own free-plan key; it is encrypted server-side (`CONNECTOR_CREDENTIAL_ENCRYPTION_KEY`) and only a deployment-keyed fingerprint is used for the shared budget. CoinGecko is not registered, so it has no key flow yet.
+4. Key providers: Alpha Vantage and CoinGecko. Supply your own free-plan key; it is encrypted server-side (`CONNECTOR_CREDENTIAL_ENCRYPTION_KEY`) and only a deployment-keyed fingerprint is used for the shared budget. CoinGecko takes its Demo key through `PUT /api/v1/connectors/{source_id}/credentials/native-rest` (body `{"expected_revision": <n>, "secret": "<key>"}`, native backend, owner only). The key is write-only: it is stored encrypted, sent only in the `x-cg-demo-api-key` header, and never returned, logged or placed in a URL. The source read reports only `provider_credential_configured` (boolean). Without a ready key, activation answers `invalid_credential` and a collection fails closed with `credential_missing` and no network call. Re-entering the key bumps the credential revision and cancels in-flight work.
 5. Stock data for Vietnam stays unavailable; no unofficial Yahoo/SSI endpoint is used.
 
 ## Per-provider setup
@@ -119,7 +119,7 @@ Each entry gives what the source collects, prerequisites, cadence, quota and att
   ```
 
   Up to five symbols per source. Currency and exchange timezone are explicit because the response does not establish them. The response is daily, not realtime.
-- **`coingecko`**: not registered. No adapter, no key flow and no collection. Its catalog preset is kept for later.
+- **`coingecko`**: registered, requires an owner-supplied Demo API key (see Setup step 4). One `simple/price` call for bitcoin/usd per run. Code presence only; not runtime verified.
 
 Not verified for any provider in this document: test connection output, sample records, and last-successful-collection behaviour. These need a runtime check.
 

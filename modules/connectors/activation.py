@@ -325,13 +325,15 @@ async def activate_native_in_uow(
         await provider_terms.require_terms_eligible(session, source)
     except HTTPException:
         return "terms_not_accepted"
-    if (row.desired_configuration or {}).get("auth_method") == "http_header":
+    desired = row.desired_configuration or {}
+    keyed_header = collection.KEYED_PROVIDERS.get(source.provider or "")  # fixed header, no owner-set auth config
+    if keyed_header or desired.get("auth_method") == "http_header":
         credential = await session.get(ConnectorRestCredential, source_id, with_for_update=True)
         if (
             credential is None or credential.state != "ready" or credential.encrypted_secret is None
             or credential.source_generation != source.generation
             or credential.configuration_revision != row.desired_revision
-            or credential.header_name != (row.desired_configuration or {}).get("auth_header_name")
+            or credential.header_name != (keyed_header or desired.get("auth_header_name"))
         ):
             return "invalid_credential"
     elif (row.desired_configuration or {}).get("auth_method") not in (None, "none"):

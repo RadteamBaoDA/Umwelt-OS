@@ -55,11 +55,13 @@ class FreeProviderSpec:
     secret_location: Literal["header", "query"] | None = None
 
 
-# Providers the shared executor can actually dispatch (collection.ADAPTERS). CoinGecko is absent: its
-# demo key has no credential slot yet. This is code presence only; runtime_verified stays False.
+# Providers the shared executor can actually dispatch (collection.ADAPTERS). CoinGecko requires an
+# owner-entered API key (connector_rest_credentials) and fails closed without one. Code presence only;
+# runtime_verified stays False.
 DISPATCHABLE = frozenset({
     "bbc_world", "vnexpress_business", "hn_top", "gdelt_economy",
     "world_bank", "frankfurter", "ecb", "binance", "alternative_me", "usgs", "coinpaprika",
+    "coingecko",
 })
 
 

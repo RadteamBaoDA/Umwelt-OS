@@ -15,12 +15,12 @@ Generated from `modules/connectors/catalog.py` and `modules/connectors/provider_
 - **Runtime verified** is `no` for every row. No provider has live verification yet; endpoint shapes and quotas are plan-documented, not observed.
 - **Eligibility** is the catalog class (`open`, `personal`, `noncommercial`, `review`) or `unknown` for providers without a free preset. It is never a grant for a workspace; see `free-sources.md`.
 
-The 11 registered fixed-endpoint native providers are `bbc_world`, `vnexpress_business`, `hn_top`, `gdelt_economy`, `world_bank`, `frankfurter`, `ecb`, `binance`, `alternative_me`, `usgs` and `coinpaprika`. `gdelt_economy` is `experimental`. The native registry also holds the earlier providers (`youtube`, `arxiv`, `huggingface`, `github_releases`, `github`, `telegram`, `alpha_vantage`, `open_meteo`), which are listed below with their own availability.
+The 12 registered fixed-endpoint native providers are `bbc_world`, `vnexpress_business`, `hn_top`, `gdelt_economy`, `world_bank`, `frankfurter`, `ecb`, `binance`, `alternative_me`, `usgs`, `coinpaprika` and `coingecko` (requires an owner API key). `gdelt_economy` is `experimental`. The native registry also holds the earlier providers (`youtube`, `arxiv`, `huggingface`, `github_releases`, `github`, `telegram`, `alpha_vantage`, `open_meteo`), which are listed below with their own availability.
 
 Notes on specific rows:
 
 - `hn_top` (implemented top-stories preset) and `hacker_news` (planned, broader catalog entry) are separate rows. Only `hn_top` has an adapter.
-- `coingecko` is not registered. Its preset facts exist, but no adapter is registered and the Demo key has no credential slot. Its availability is `planned`.
+- `coingecko` is registered (requires API key). The owner supplies a Demo key through the native REST credential slot; it is stored encrypted and never returned. Without a key it fails closed with `credential_missing`. Its availability is `implemented`, not runtime verified.
 - `finance` is `planned` in the catalog, while the prose below lists crypto, commodity and macro families as unavailable. Only `alpha_vantage` has an adapter in that family.
 - `alpha_vantage` is `requires_credentials`: an owner-supplied key is required, stored encrypted, and activation is gated.
 - No row is `disabled`. Free presets start disabled per source; the catalog has no disabled value.
@@ -72,7 +72,7 @@ Notes on specific rows:
 | `alternative_me` | `implemented` | open | supported | yes | no | 1440 | 2026-10-07 |
 | `usgs` | `implemented` | open | supported | yes | no | 60 | 2026-10-07 |
 | `coinpaprika` | `implemented` | personal | supported | yes | no | 15 | 2026-10-07 |
-| `coingecko` | `planned` | review | supported | no | no | 15 | 2026-10-07 |
+| `coingecko` | `implemented` | review | supported | yes | no | 15 | 2026-10-07 |
 
 
 ## World and news sources

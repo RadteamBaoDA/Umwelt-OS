@@ -1161,14 +1161,24 @@ async def reenter_native_rest_credential(
     source = await _source(session, source_id, multi_workspace_enabled=gate, scope=scope)
     row = await provisioning.activation_status(session, source_id, multi_workspace_enabled=gate, scope=scope)
     desired = dict(row.desired_configuration) if row is not None else {}
-    if (
-        source.status != "active" or source.type != "api" or source.provider is not None or row is None
-        or desired.get("auth_method") != "http_header" or not desired.get("auth_header_name")
+    keyed_header = collection.KEYED_PROVIDERS.get(source.provider or "")  # e.g. coingecko: fixed header, key-bearing preset
+    if source.status != "active" or source.type != "api" or row is None or (
+        keyed_header is None and (
+            source.provider is not None
+            or desired.get("auth_method") != "http_header" or not desired.get("auth_header_name"))
     ):
         raise HTTPException(status_code=422, detail="This source does not use REST header authentication")
     if row.desired_revision != payload.expected_revision:
         raise HTTPException(status_code=409, detail="Connector configuration revision is stale")
-    header_name = str(desired["auth_header_name"])
+    if source.provider == "coingecko":
+        from modules.connectors.providers.crypto import coingecko_request
+        from modules.connectors.providers.macro import ProviderPayloadError
+
+        try:
+            coingecko_request(payload.secret.get_secret_value())
+        except ProviderPayloadError as exc:
+            raise HTTPException(status_code=422, detail="The API key is not acceptable for this provider") from exc
+    header_name = keyed_header or str(desired["auth_header_name"])
     operation_id = uuid4()
     try:
         ciphertext = encrypt_rest_secret(

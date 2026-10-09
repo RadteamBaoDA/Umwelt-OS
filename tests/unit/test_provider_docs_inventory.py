@@ -78,6 +78,7 @@ def test_free_presets_match_spec_eligibility_and_execution() -> None:
 def test_registered_presets_are_the_dispatchable_set() -> None:
     text = FREE_DOC.read_text(encoding="utf-8")
     rows = _rows_by_id(_section(text, "## Catalog", "## Attribution"))
-    registered = {pid for pid, group in rows.items() if group[0][7] == "registered"}
+    registered = {pid for pid, group in rows.items() if group[0][7].startswith("registered")}
     assert registered == set(DISPATCHABLE)
-    assert rows["coingecko"][0][7] == "not registered"
+    assert rows["coingecko"][0][7] == "registered (requires API key)"
+    assert [pid for pid, group in rows.items() if group[0][7] == "registered (requires API key)"] == ["coingecko"]
