@@ -197,4 +197,63 @@ async def test_operator_review_route_uses_bootstrap_operator_admission_and_clear
     result = await route.endpoint(ws, src, "body", Session(), SimpleNamespace(owner_id=1))
     assert result.terms_revision == 7
     assert calls[1][1] == {"workspace_id": ws, "source_id": src, "reviewer_user_id": 1, "body": "body", "instance_operator": True}
-    assert calls[2] == ("clear", {"terms_revision": 7}) and calls[-1][0] == "commit"
+    assert calls[2] == ("clear", {"terms_revision": 7, "workspace_id": ws}) and calls[-1][0] == "commit"
+
+
+async def test_operator_review_route_rejects_non_operator_before_any_write(monkeypatch):
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from fastapi import HTTPException
+
+    from modules.connectors import routes
+
+    route = next(r for r in routes.operator_router.routes if r.path.endswith("/terms-review"))
+    calls = []
+
+    async def review(*a, **k): calls.append("review")
+
+    monkeypatch.setattr(routes.provider_terms, "record_operator_review", review)
+    with pytest.raises(HTTPException) as caught:
+        await route.endpoint(uuid4(), uuid4(), "body", object(), SimpleNamespace(owner_id=2))
+    assert caught.value.status_code == 403 and calls == []
+
+
+async def test_operator_review_foreign_workspace_source_is_404():
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from fastapi import HTTPException
+
+    from modules.connectors import provider_terms
+
+    class Session:
+        async def scalar(self, stmt): return None
+        async def rollback(self): pass
+
+    with pytest.raises(HTTPException) as caught:
+        await provider_terms.record_operator_review(
+            Session(), workspace_id=uuid4(), source_id=uuid4(), reviewer_user_id=1,
+            body=SimpleNamespace(), instance_operator=True)
+    assert caught.value.status_code == 404
+
+
+async def test_clear_collection_block_is_workspace_scoped():
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from modules.connectors import scheduler
+
+    ws = uuid4()
+    schedule = SimpleNamespace(
+        workspace_id=ws, blocked_error_code="terms", blocked_dimensions=["terms"],
+        blocked_connector_revision=None, blocked_credential_revision=None, blocked_terms_revision=1)
+
+    class Session:
+        async def get(self, *a, **k): return schedule
+        async def flush(self): pass
+
+    assert await scheduler.clear_collection_block(Session(), uuid4(), terms_revision=2, workspace_id=uuid4()) is False
+    assert schedule.blocked_error_code == "terms"
+    assert await scheduler.clear_collection_block(Session(), uuid4(), terms_revision=2, workspace_id=ws) is True
+    assert schedule.blocked_error_code is None

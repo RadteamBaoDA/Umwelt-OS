@@ -516,6 +516,7 @@ async def settle_admission(session: AsyncSession, request_id: UUID, admission_to
 async def clear_collection_block(
     session: AsyncSession, source_id: UUID, *, connector_revision: int | None = None,
     credential_revision: int | None = None, terms_revision: int | None = None,
+    workspace_id: UUID | None = None,
 ) -> bool:
     """Lift an action-required gate; flush only, the caller commits (C4/P1 call this).
 
@@ -526,6 +527,8 @@ async def clear_collection_block(
     """
     schedule = await session.get(ConnectorSchedule, source_id, with_for_update=True)
     if schedule is None or schedule.blocked_error_code is None:
+        return False
+    if workspace_id is not None and schedule.workspace_id != workspace_id:
         return False
     now_revision = {"config": connector_revision, "credential": credential_revision, "terms": terms_revision}
     failed_at = {

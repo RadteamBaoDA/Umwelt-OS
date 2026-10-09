@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.auth.dependencies import require_owner_write
+from core.auth.dependencies import is_instance_operator, require_owner_write
 from core.auth.models import AuthSession
 from core.auth.public import authenticated_session_ref
 from core.database import get_session
@@ -1252,11 +1252,14 @@ async def review_provider_terms(
     operator: Annotated[AuthSession, Depends(require_owner_write)],
 ) -> provider_terms.ProviderTermsRead:
     """Bootstrap-operator review of a review-class provider's acknowledged terms (no workspace role grants it)."""
+    if not is_instance_operator(operator):
+        raise HTTPException(status_code=403, detail="Instance operator required")
     await session.rollback()
     result = await provider_terms.record_operator_review(
         session, workspace_id=workspace_id, source_id=source_id, reviewer_user_id=operator.owner_id,
         body=payload, instance_operator=True)
-    await scheduler.clear_collection_block(session, source_id, terms_revision=result.terms_revision)
+    await scheduler.clear_collection_block(
+        session, source_id, terms_revision=result.terms_revision, workspace_id=workspace_id)
     await session.commit()
     return result
 

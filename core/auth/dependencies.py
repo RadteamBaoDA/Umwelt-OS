@@ -54,6 +54,11 @@ def _valid_csrf(cookie: str | None, submitted: str | None, settings: Settings) -
     )
 
 
+def is_instance_operator(auth_session: AuthSession) -> bool:
+    """Bootstrap account (owner 1) alone holds instance operator authority."""
+    return auth_session.owner_id == 1
+
+
 async def _current_session(
     request: Request,
     session: AsyncSession,
@@ -65,7 +70,7 @@ async def _current_session(
     Account-scoped endpoints must deliberately select require_account instead.
     """
     row = await _account_session(request, session, token)
-    if row.owner_id != 1:
+    if not is_instance_operator(row):
         raise HTTPException(status_code=401, detail="Authentication required")
     return row
 
