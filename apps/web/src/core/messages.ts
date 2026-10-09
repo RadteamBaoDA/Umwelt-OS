@@ -25,6 +25,10 @@ import { taskGoalMessages } from './messages/task-goal';
 import { searchEntitiesMessages } from './messages/search';
 import { detailMessages } from './messages/detail';
 import { documentsMessages } from './messages/documents';
+import { workspacesMessages } from './messages/workspaces';
+import { workspaceMembersMessages } from './messages/workspace-members';
+import { sharingMessages } from './messages/sharing';
+import { translationsMessages } from './messages/translations';
 
 /**
  * Compose every locale from per-area fragments in ./messages/<area>.ts.
@@ -60,6 +64,10 @@ export const messages = {
     github: githubMessages['en-us'],
     automations: automationMessages['en-us'],
     notifications: notificationMessages['en-us'],
+    workspaces: workspacesMessages['en-us'],
+    workspaceMembers: workspaceMembersMessages['en-us'],
+    sharing: sharingMessages['en-us'],
+    translations: translationsMessages['en-us'],
   },
   'vi-vi': {
     shell: shellMessages['vi-vi'],
@@ -90,5 +98,9 @@ export const messages = {
     github: githubMessages['vi-vi'],
     automations: automationMessages['vi-vi'],
     notifications: notificationMessages['vi-vi'],
+    workspaces: workspacesMessages['vi-vi'],
+    workspaceMembers: workspaceMembersMessages['vi-vi'],
+    sharing: sharingMessages['vi-vi'],
+    translations: translationsMessages['vi-vi'],
   },
 } as const;

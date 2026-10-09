@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
-import { apiRequest } from '@/core/api';
+import { apiRequest, workspaceHeaders, workspaceTargetFor } from '@/core/api';
 
 type BackupControl = {
   phase: 'idle' | 'draining' | 'quiesced' | 'snapshotting' | 'resuming' | 'failed_recovery_required';
@@ -38,7 +38,7 @@ export function BackupExportSettings() {
     setDownloadError(false);
     try {
       const response = await fetch(`/api/v1/exports/${format}`, {
-        cache: 'no-store', credentials: 'same-origin',
+        cache: 'no-store', credentials: 'same-origin', headers: workspaceHeaders(workspaceTargetFor(`/api/v1/exports/${format}`)),
       });
       if (!response.ok) {
         if (response.status === 401) window.dispatchEvent(new Event('bbd:unauthorized'));

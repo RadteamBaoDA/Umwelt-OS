@@ -3,7 +3,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslations } from 'next-intl';
-import { ApiError, apiRequest } from '@/core/api';
+import { ApiError, apiRequest, workspaceGeneration, workspaceHeaders } from '@/core/api';
 import { useDisplayPreferences } from '@/core/query-provider';
 
 export type RealtimeStatus = 'connecting' | 'connected' | 'reconnecting' | 'unavailable' | 'expired';
@@ -21,6 +21,12 @@ type SnapshotAttempt = { id: number; controller: AbortController };
 /** Marks a snapshot read that was canceled because a newer connection attempt took ownership. */
 class SupersededSnapshotAttempt extends Error {}
 
+/** Returns the `&workspace_id=` suffix for the selected workspace (EventSource cannot send headers). */
+function workspaceQuery(): string {
+  const id = (workspaceHeaders('selected') as Record<string, string>)['X-Workspace-ID'];
+  return id ? `&workspace_id=${encodeURIComponent(id)}` : '';
+}
+
 /** Reads protected JSON data and rejects stale attempts, unauthorized responses, and unsuccessful HTTP results. */
 async function protectedJsonRead<T>(
   path: ProtectedReadPath,
@@ -29,6 +35,7 @@ async function protectedJsonRead<T>(
 ): Promise<T> {
   const response = await fetch(path, {
     cache: 'no-store', credentials: 'same-origin', signal,
+    headers: path === '/api/v1/realtime/snapshot' ? workspaceHeaders('selected') : undefined,
   });
   if (!isCurrent()) throw new SupersededSnapshotAttempt();
   if (response.status === 401) throw new ApiError(401, 'Authentication required');
@@ -202,6 +209,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const generation = display.authGeneration;
+    const workspaceGen = workspaceGeneration();
     const sessionState = isAuthenticated
       ? 'authenticated'
       : sessionExpired ? 'expired' : 'unavailable';
@@ -222,7 +230,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     setBarrierGeneration(null);
     setStatus('connecting');
     /** Checks whether asynchronous stream work still belongs to the active auth generation. */
-    const isCurrentGeneration = () => active && display.isCurrentGeneration(generation);
+    const isCurrentGeneration = () => active && display.isCurrentGeneration(generation) && workspaceGeneration() === workspaceGen;
     /** Checks that a snapshot attempt belongs to the active auth generation and has not been aborted. */
     const ownsAttempt = (attempt: SnapshotAttempt) =>
       isCurrentGeneration() && currentAttempt === attempt && !attempt.controller.signal.aborted;
@@ -329,7 +337,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       closeStream();
       if (!ownsAttempt(attempt)) return;
       cursorRef.current = cursor;
-      const stream = new EventSource(`/api/v1/realtime/events?cursor=${encodeURIComponent(cursor)}`);
+      const stream = new EventSource(`/api/v1/realtime/events?cursor=${encodeURIComponent(cursor)}${workspaceQuery()}`);
       eventSource = stream;
       /** Checks that the event stream and snapshot attempt still match the active connection. */
       const ownsStream = () => eventSource === stream && ownsAttempt(attempt);
