@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.auth.dependencies import require_owner
+from core.auth.dependencies import require_account
 from core.auth.models import AuthSession
 from core.database import get_session
 from core.workspaces.dependencies import require_default_workspace_read
@@ -33,7 +33,7 @@ from modules.timeline import public as timeline_public
 
 router = APIRouter(prefix="/api/v1/exports", tags=["exports"])
 Session = Annotated[AsyncSession, Depends(get_session)]
-OwnerRead = Annotated[AuthSession, Depends(require_owner)]
+OwnerRead = Annotated[AuthSession, Depends(require_account)]
 DefaultWorkspaceRead = Annotated[WorkspaceContext, Depends(require_default_workspace_read)]
 PAGE_SIZE = 100
 MAX_EXPORT_BYTES = 32 * 1024 * 1024
@@ -219,7 +219,7 @@ async def _build_export_response(
     from the scope is refused before any dataset query, and every page and fence recheck carries
     the same scope and rollout gate.
     """
-    if scope.user_id != owner.owner_id:
+    if scope.role != "owner" or scope.user_id != owner.owner_id:
         raise HTTPException(status_code=403, detail="Export actor does not match the workspace owner")
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
     collected: dict[str, list[dict[str, Any]]] = {}

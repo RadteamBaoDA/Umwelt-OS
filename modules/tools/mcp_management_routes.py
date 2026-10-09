@@ -7,9 +7,9 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from core.auth.dependencies import require_owner, require_owner_write
+from core.auth.dependencies import require_account, require_account_write
 from core.auth.models import AuthSession
-from core.auth.public import revalidate_owner_session
+from core.auth.public import revalidate_account_session
 from core.config import Settings
 from core.database import get_session
 from core.realtime import commit_with_replay
@@ -27,8 +27,9 @@ from modules.tools.mcp_schemas import (
 
 router = APIRouter(prefix="/api/v1/mcp", tags=["mcp-management"], dependencies=[Depends(module_dependency("tools"))])
 Session = Annotated[AsyncSession, Depends(get_session)]
-OwnerRead = Annotated[AuthSession, Depends(require_owner)]
-OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]
+# Account-level auth; the workspace dependencies add scope and owner-role checks.
+OwnerRead = Annotated[AuthSession, Depends(require_account)]
+OwnerWrite = Annotated[AuthSession, Depends(require_account_write)]
 WorkspaceRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
 WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 
@@ -49,7 +50,9 @@ async def _revalidate_management_owner(
             await workspaces.read_access_fence(
                 fresh_session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
             )
-            return await revalidate_owner_session(fresh_session, token_hash, scope.user_id)
+            return await revalidate_account_session(
+                fresh_session, token_hash, scope.user_id, multi_workspace_enabled=multi_workspace_enabled,
+            )
     except Exception:  # noqa: BLE001  # fail-closed boundary: any failure denies/degrades
         return False
 
