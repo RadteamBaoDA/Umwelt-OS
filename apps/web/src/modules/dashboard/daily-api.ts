@@ -42,6 +42,7 @@ export type DailyContextData = {
 /** Query keys for selected-day data so day switches never share cache entries. */
 export const dailyKeys = {
   context: (date: string, timezone: string) => ['daily-context', date, timezone] as const,
+  briefs: (date: string, timezone: string) => ['daily-briefs', date, timezone] as const,
 };
 
 /** Loads the saved brief and current-record widgets for one local date. */
@@ -57,4 +58,10 @@ export function generateBrief(date: string, timezone: string, csrfToken: string)
     headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' },
     body: JSON.stringify({ brief_date: date, timezone, force: true }),
   });
+}
+
+/** Lists saved brief revisions for a day; for members this is only the briefs shared with them. */
+export function listBriefRevisions(date: string, timezone: string, signal?: AbortSignal): Promise<DailyBriefRevision[]> {
+  const query = new URLSearchParams({ date, timezone });
+  return apiRequest<DailyBriefRevision[]>(`/api/v1/briefs?${query}`, { signal });
 }
