@@ -1,4 +1,4 @@
-import { apiRequest, csrfHeaders } from '@/core/api';
+import { apiRequest, csrfHeaders, workspaceHeaders } from '@/core/api';
 
 export type Document = {
   id: string; source_id: string; external_id: string | null; title: string;
@@ -6,6 +6,8 @@ export type Document = {
   canonical_url: string | null; author: string | null; metadata: Record<string, unknown>;
   current_version: number; content_hash: string; published_at: string | null;
   observed_at: string | null; language: string | null; created_at: string; updated_at: string;
+  /** Set on the member view (MemberDocumentRead), which omits source, raw_uri and free-form metadata. */
+  has_raw?: boolean;
 };
 export type DocumentVersion = { id: string; document_id: string; version_number: number; content: string; content_hash: string; observed_at: string; created_at: string };
 export type CitationTarget = { document_id: string; document_version_id: string; version_number: number; chunk_id: string; title: string; excerpt: string; observed_at: string };
@@ -340,4 +342,47 @@ export function purgeMemoryData(payload: MemoryPurgeRequest, csrfToken: string) 
     headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
     body: JSON.stringify(payload),
   });
+}
+
+export type ShareResourceType = 'document' | 'brief';
+export type WorkspaceMember = { user_id: number; email: string | null; role: 'owner' | 'member'; membership_revision: number };
+export type ShareRow = { workspace_id: string; resource_type: ShareResourceType; resource_id: string; member_user_id: number; revision: number; resource_revision: number; membership_revision: number; granted_by_user_id: number; created_at: string; updated_at: string; revoked_at: string | null };
+export const shareKeys = {
+  members: (workspaceId: string) => ['workspaces', workspaceId, 'members'] as const,
+  list: (workspaceId: string, type: ShareResourceType, resourceId: string) => ['workspaces', workspaceId, 'shares', type, resourceId] as const,
+};
+
+/** Lists workspace members (owner only). */
+export function listWorkspaceMembers(workspaceId: string) { return apiRequest<{ items: WorkspaceMember[]; next_cursor: number | null }>(`/api/v1/workspaces/${workspaceId}/members?limit=100`); }
+/** Lists the share rows of one resource (owner only). */
+export function listShares(workspaceId: string, type: ShareResourceType, resourceId: string) {
+  const query = new URLSearchParams({ resource_type: type, resource_id: resourceId, limit: '100' });
+  return apiRequest<{ items: ShareRow[]; next_cursor: number | null }>(`/api/v1/workspaces/${workspaceId}/shares?${query}`);
+}
+/** Grants one member read access; `expectedRevision` is that member's membership revision. */
+export function grantShare(workspaceId: string, type: ShareResourceType, resourceId: string, member: WorkspaceMember, resourceRevision: number, csrfToken: string) {
+  return apiRequest<ShareRow>(`/api/v1/workspaces/${workspaceId}/shares/${type}/${resourceId}/${member.user_id}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify({ expected_revision: member.membership_revision, resource_revision: resourceRevision }),
+  });
+}
+/** Revokes one member's share; If-Match is the member's membership revision. */
+export function revokeShare(workspaceId: string, type: ShareResourceType, resourceId: string, member: WorkspaceMember, csrfToken: string) {
+  return apiRequest<void>(`/api/v1/workspaces/${workspaceId}/shares/${type}/${resourceId}/${member.user_id}`, {
+    method: 'DELETE', headers: { 'If-Match': String(member.membership_revision), ...csrfHeaders(csrfToken) },
+  });
+}
+
+/**
+ * Downloads the original file as a blob so the workspace header and publication gate apply
+ * (a plain link cannot send the header). apiRequest only parses JSON, so this uses fetch with the shared header helper.
+ */
+export async function downloadRawDocument(id: string, fileName: string): Promise<void> {
+  const response = await fetch(`/api/v1/documents/${id}/raw`, { cache: 'no-store', credentials: 'same-origin', headers: workspaceHeaders('selected') });
+  if (!response.ok) throw new Error(String(response.status));
+  const url = URL.createObjectURL(await response.blob());
+  const link = window.document.createElement('a');
+  link.href = url; link.download = fileName;
+  window.document.body.append(link); link.click(); link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }

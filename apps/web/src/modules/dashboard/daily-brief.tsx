@@ -11,6 +11,8 @@ import { DateSelector } from './date-selector';
 import { dailyKeys, generateBrief, getDailyContext, type DailyWidgetData } from './daily-api';
 import { useChatController } from '@/core/app-shell/chat-controller';
 import { useSelectedDay } from './selected-day';
+import { useWorkspace } from '@/core/workspace-context';
+import { BriefShareButton, SharedBriefs } from './brief-sharing';
 
 /** Renders one current-record widget summary with its own updated-at and source status. */
 function WidgetSummary({ widget }: { widget: DailyWidgetData }) {
@@ -43,6 +45,7 @@ export function DailyBrief() {
   const client = useQueryClient();
   const { date, timezone } = useSelectedDay();
   const chat = useChatController();
+  const { isOwner } = useWorkspace();
   const session = useQuery({ queryKey: ['session'], queryFn: () => apiRequest<{ authenticated: true; csrfToken: string }>('/api/v1/auth/session') });
   const context = useQuery({
     queryKey: dailyKeys.context(date, timezone),
@@ -61,13 +64,15 @@ export function DailyBrief() {
     <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto p-3.5">
       <header className="flex flex-wrap items-center justify-between gap-2">
         <DateSelector />
-        {context.data && <span className="rounded bg-secondary px-2 py-0.5 text-xs font-semibold">{t(`relation_${context.data.relation}`)}</span>}
+        {isOwner && context.data && <span className="rounded bg-secondary px-2 py-0.5 text-xs font-semibold">{t(`relation_${context.data.relation}`)}</span>}
       </header>
 
-      {context.isLoading && <p role="status" className="text-sm text-muted-foreground">{t('loading')}</p>}
-      {context.isError && <p role="alert" className="text-sm text-destructive">{t('loadError')}</p>}
+      {!isOwner && <SharedBriefs date={date} timezone={timezone} />}
 
-      {context.data && (
+      {isOwner && context.isLoading && <p role="status" className="text-sm text-muted-foreground">{t('loading')}</p>}
+      {isOwner && context.isError && <p role="alert" className="text-sm text-destructive">{t('loadError')}</p>}
+
+      {isOwner && context.data && (
         <>
           <section aria-labelledby="saved-brief-heading" className="space-y-2 border-b border-border pb-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -98,6 +103,7 @@ export function DailyBrief() {
                 <MessageSquare className="h-3.5 w-3.5" aria-hidden />
                 {t('askAboutDay')}
               </Button>
+              {brief && <BriefShareButton brief={brief} />}
             </div>
           </section>
 
