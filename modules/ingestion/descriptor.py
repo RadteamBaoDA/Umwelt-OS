@@ -15,6 +15,7 @@ class IngestionDescriptor:
     dependencies: tuple[str, ...] = ("sources", "knowledge.documents")
     scheduled_jobs: tuple[str, ...] = (
         "dispatch_pending_work", "process_ingestion_event", "process_normalize_event", "process_uploaded_file",
+        "purge_collection_receipts",
     )
     provides: tuple[str, ...] = (
         "ingestion_runs", "ingestion_receipts", "source_observations", "normalized_evidence",

@@ -1574,3 +1574,15 @@ async def cleanup_storage_orphans(ctx: dict[str, object]) -> int:
         async with factory() as session:
             await finish_activity(session, activity)
             await session.commit()
+
+
+async def purge_collection_receipts(ctx: dict[str, object]) -> int:
+    """Delete one bounded slice (500) of expired, no-longer-recoverable acceptance receipts.
+
+    Runs in its own session and commits itself; the remaining expired rows are taken by later runs.
+    """
+    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    async with factory() as session:
+        deleted = await ingestion_api.purge_expired_collection_receipts(session, limit=500)
+        await session.commit()
+        return deleted
