@@ -41,6 +41,7 @@ class Document(Base):
         ForeignKeyConstraint(["workspace_id", "source_id"], ["sources.workspace_id", "sources.id"], name="fk_w2_documents_source_id", ondelete="RESTRICT"),
         Index("ix_w2_documents_scope", 'workspace_id', 'id'),
         Index("ix_w2_documents_work", 'workspace_id', 'created_at', 'id'),
+        Index("ix_documents_workspace_language_created_at_id", "workspace_id", "language", "created_at", "id"),
     )
 
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)

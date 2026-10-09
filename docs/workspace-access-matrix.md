@@ -57,6 +57,7 @@ Each row is an explicit migration and mandatory base query predicate. A child in
 | `dashboard_groups` | `modules/dashboard/models.py::DashboardGroup` | R | N | dashboard_id -> scoped dashboard; child ID alone insufficient. |
 | `gadget_definitions` | `modules/dashboard/models.py::GadgetDefinition` | A+W | N | Add workspace_id; scoped source/topic/entity selection before count/highlight. |
 | `gadget_highlight_progress` | `modules/dashboard/models.py::GadgetHighlightProgress` | R | N | definition_id -> scoped definition; cursor actor/workspace/revision. |
+| `gadget_highlight_suppression` | `modules/dashboard/models.py::GadgetHighlightSuppression` | R | N | Inherited via definition_id (CASCADE) -> scoped definition, same as gadget_highlight_progress; no own workspace_id. |
 | `gadget_instances` | `modules/dashboard/models.py::GadgetInstance` | R | N | Dashboard/group/definition must match workspace. |
 | `dashboard_layouts` | `modules/dashboard/models.py::DashboardLayout` | R | N | dashboard_id root; layout references only same-dashboard instances. |
 | `gadget_placements` | `modules/dashboard/models.py::GadgetPlacement` | R | N | Composite dashboard+instance/layout consistency under scoped dashboard. |
