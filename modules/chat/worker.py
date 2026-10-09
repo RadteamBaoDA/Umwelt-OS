@@ -338,6 +338,9 @@ async def _search_for_run(
     session_factory: async_sessionmaker[AsyncSession],
     settings: Settings,
     redis: Redis,
+    *,
+    scope: InternalJobScope,
+    access_fence: AccessFence,
 ) -> _WebSearchRun:
     """Run the opted-in web search for the literal user message. Never raises except CancelledError.
 
@@ -369,20 +372,24 @@ async def _search_for_run(
         try:
             async with asyncio.timeout(WEB_SEARCH_FENCE_SECONDS) as deadline:
                 try:
-                    await _lock_live_response(fence, response_id, conversation_id, expected_fence)
+                    await _lock_live_response(
+                        fence, response_id, conversation_id, expected_fence, scope=scope, access_fence=access_fence,
+                    )
                 except (PrivacyFenceChanged, ResponseNoLongerActive):
                     return _web_search_run("run_inactive")  # the next main-path fence cancels/redacts as today
                 if await is_run_cancelled(response_id, redis):
                     return _web_search_run("run_inactive")
-                if not await settings_public.lock_ai_settings_for_share(fence):
+                if not await settings_public.lock_ai_settings_for_share(fence, scope=scope):
                     return _web_search_run("not_configured")  # no row: nothing to lock, so no consent either
-                config = await settings_public.get_ai_execution_config(fence, settings, redis)
+                config = await settings_public.get_ai_execution_config(fence, settings, redis, scope=scope)
                 endpoint = config.web_search_endpoint
                 if not web.web_search_permitted(config) or not endpoint:
                     return _web_search_run("not_configured")
                 for source_id in scoped_source_ids:
-                    source = await sources_public.get_source_fence(fence, source_id)
-                    if source is not None and source.local_only:
+                    source = await sources_public.get_source_fence(
+                        fence, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled(),
+                    )
+                    if source is None or source.local_only:  # OB-1: foreign/deleted fails closed
                         return _web_search_run("local_only_context")
                 provider = config.web_search_provider
                 transport = approved_web_search_transport(  # one per search: search() closes it; host check first
@@ -390,7 +397,9 @@ async def _search_for_run(
                 )
                 # ponytail: a P14 shutdown re-pend re-runs the search on re-claim, so the cap counts it twice.
                 # Also: the re-claim reuses event seqs, so a live client may keep the first outcome until reload.
-                if not await web.consume_daily_quota(redis, settings_public.OWNER_ID, settings.web_search_daily_limit):
+                if not await web.consume_daily_quota(
+                    redis, f"{scope.workspace_id}:{scope.actor_user_id}", settings.web_search_daily_limit,
+                ):
                     return _web_search_run("daily_limit")
 
                 async def body_written() -> None:
@@ -431,10 +440,15 @@ async def _publish_web_search(
     expected_fence: object,
     current_seq: int,
     outcome: dict[str, Any],
+    *,
+    scope: InternalJobScope,
+    access_fence: AccessFence,
 ) -> int:
     """Persist ``_web_search_outcome`` and publish the URL-free ``web_search`` event in one locked transaction."""
     async with session_factory() as session:
-        _, live_run = await _lock_live_response(session, response_id, conversation_id, expected_fence)
+        _, live_run = await _lock_live_response(
+            session, response_id, conversation_id, expected_fence, scope=scope, access_fence=access_fence,
+        )
         live_run.retrieval_context = {**dict(live_run.retrieval_context or {}), WEB_SEARCH_OUTCOME_KEY: outcome}
         seq = await _next_event_seq(session, response_id, current_seq)
         session.add(StreamEvent(
@@ -776,6 +790,7 @@ async def run_response_generation(
                 user_prompt,
                 [*answer_request.source_scope, *(f.source_id for f in answer_request.selection_fences)],
                 response_id, conversation_id, privacy_fence, session_factory, settings, redis,
+                scope=job_scope, access_fence=access_fence,
             )) if isinstance(web_opt_in, dict) and web_opt_in.get("requested") is True else None
             try:
                 answer_context = await build_context(
@@ -789,6 +804,7 @@ async def run_response_generation(
             if web_run is not None:
                 seq = await _publish_web_search(
                     session_factory, response_id, conversation_id, privacy_fence, seq, web_run.outcome,
+                    scope=job_scope, access_fence=access_fence,
                 )
 
             # Recheck cancellation before model egress

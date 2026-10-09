@@ -64,16 +64,18 @@ class _Search:
             self.steps.append("live_lock")
             return True, SimpleNamespace(status="streaming")
 
-        async def lock_settings(*_a: Any) -> bool:
+        async def lock_settings(*_a: Any, **_k: Any) -> bool:
             self.steps.append("ai_settings_share")
             return True
 
-        async def config_read(*_a: Any) -> Any:
+        async def config_read(*_a: Any, **_k: Any) -> Any:
             self.steps.append("config")
             return self.config
 
         self.lock = AsyncMock(side_effect=lock)
-        self.fence = AsyncMock(return_value=None)
+        self.scope = SimpleNamespace(workspace_id=uuid4(), actor_user_id=7)
+        self.access_fence = object()
+        self.fence = AsyncMock(return_value=SimpleNamespace(local_only=False))
         self.quota = AsyncMock(return_value=True)
         self.cancelled = AsyncMock(return_value=False)
         monkeypatch.setattr(worker, "_lock_live_response", self.lock)
@@ -93,6 +95,7 @@ class _Search:
         return await worker._search_for_run(
             message, scope or [], uuid4(), uuid4(), {"f": 1}, _factory(self.session),
             SETTINGS, MagicMock(),  # type: ignore[arg-type]
+            scope=self.scope, access_fence=self.access_fence,  # type: ignore[arg-type]
         )
 
 
@@ -333,7 +336,7 @@ class _WebGen(_Gen):
                  evidence: list[Any] | None = None) -> None:
         super().__init__(monkeypatch, tokens)
         self.session.execute = AsyncMock(return_value=SimpleNamespace(
-            fetchone=lambda: (uuid4(), uuid4(), {"_web_search": {"requested": True}}, False)))
+            fetchone=lambda: (uuid4(), uuid4(), {"_web_search": {"requested": True}}, False, uuid4(), 1)))
         self.run_row = SimpleNamespace(status="streaming", retrieval_context={"_web_search": {"requested": True}})
         monkeypatch.setattr(worker, "_lock_live_response", AsyncMock(return_value=(True, self.run_row)))
         context = AnswerContext(query="q", evidence=evidence if evidence is not None else [_evidence(content="Doc.")],
@@ -371,7 +374,7 @@ async def test_outcome_persisted_and_event_before_first_delta(monkeypatch: pytes
 
 async def test_not_requested_runs_no_search_and_no_event(monkeypatch: pytest.MonkeyPatch) -> None:
     gen = _WebGen(monkeypatch, ["Hi"], worker._web_search_run(None, [R1], "tavily"))
-    gen.session.execute = AsyncMock(return_value=SimpleNamespace(fetchone=lambda: (uuid4(), uuid4(), {}, False)))
+    gen.session.execute = AsyncMock(return_value=SimpleNamespace(fetchone=lambda: (uuid4(), uuid4(), {}, False, uuid4(), 1)))
     await gen.run()
     gen.search.assert_not_awaited()
     assert gen.events("web_search") == []
@@ -503,3 +506,33 @@ async def test_web_citations_with_same_url_are_deduped(monkeypatch: pytest.Monke
     await gen.run()
     assert [c["url"] for c in gen.message.citations] == [R1.url]
     assert gen.message.content == "Web says [1] and [1]"
+
+
+# ---------------------------------------------------------------- B1 scope / fail-closed
+
+
+async def test_search_scopes_every_read_and_quota_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    s = _Search(monkeypatch)
+    await s.run(scope=[uuid4()])
+    assert s.lock.await_args.kwargs == {"scope": s.scope, "access_fence": s.access_fence}
+    assert worker.settings_public.lock_ai_settings_for_share.await_args.kwargs == {"scope": s.scope}
+    assert worker.settings_public.get_ai_execution_config.await_args.kwargs == {"scope": s.scope}
+    assert s.fence.await_args.kwargs["scope"] is s.scope and "multi_workspace_enabled" in s.fence.await_args.kwargs
+    assert s.quota.await_args.args[1] == f"{s.scope.workspace_id}:{s.scope.actor_user_id}"
+
+
+async def test_stale_access_fence_is_inactive_without_egress(monkeypatch: pytest.MonkeyPatch) -> None:
+    s = _Search(monkeypatch)
+    s.lock.side_effect = worker.PrivacyFenceChanged("access changed")
+    assert (await s.run()).outcome["reason"] == "run_inactive"
+    s.search.assert_not_awaited()
+    s.quota.assert_not_awaited()
+
+
+async def test_missing_source_fence_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    s = _Search(monkeypatch)
+    s.fence.return_value = None
+    run = await s.run(scope=[uuid4()])
+    assert run.outcome == {"status": "skipped", "reason": "local_only_context", "result_count": 0}
+    s.search.assert_not_awaited()
+    s.quota.assert_not_awaited()
