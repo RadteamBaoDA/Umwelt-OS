@@ -175,6 +175,14 @@ Graphiti keeps existing per-source-generation partition UUID group_id. Add works
 
 Controlled cutover: enter maintenance admission; stop new writes/jobs; drain or durably fence remote attempts; inventory pending payloads/storage/checkpoints; apply migration; verify lineage/constraints; start same-version API+worker with flag still false; invalidate all sessions; require fresh login. Legacy scope-less jobs resolve only through proven lineage or quarantine. Downgrade refuses nonbootstrap/scoped data that singleton cannot represent, reporting table/count; no silent deletes. Redis is disposable coordination/cache, PostgreSQL remains job authority.
 
+**Session invalidation step (runbook, manual).** Verified 2026-10-09: `p14_workspace_scope.py` does not delete or revoke any `auth_session` rows, and no cutover code path does so. The only existing session revocation is `change_password` in `core/auth/routes.py`, which deletes all sessions for one owner. Before the same-version API/worker start, and with maintenance admission still active, run the following once in the target PostgreSQL database (`auth_session` is the table name from `core/auth/models.py`):
+
+```sql
+DELETE FROM auth_session;
+```
+
+Then confirm `SELECT count(*) FROM auth_session;` returns `0`, start the API and worker, and require a fresh login. Session lookup reads only this table (`_account_session` in `core/auth/dependencies.py`), so no Redis flush is needed. This step is not automated; the operator runs it and records the time in the cutover log.
+
 ## 6. Disjoint next-wave production ownership
 
 ### Immediate dispatch split, superseding the combined I scheduling below
@@ -219,3 +227,14 @@ Code-ready requires: every matrix row assigned and converted or explicitly insta
 V1 later compares live SQLAlchemy metadata, Alembic tables and external saver tables against the matrix, imports the real application route graph including mounted MCP, and checks worker registrations. Exercise two owners with same external_id/title/query/cursor/alias; invited member with no shares; raw/provider snapshots; current and historical Document versions; full captured Brief facts and dependency revoke; before_send retry; stale job/source generation; checkpoint guessing; graph partition/query prefilter; opaque/per-principal replay cursors; actual2s ASGI-send race; account/flag disable; instance backup/export; legacy and clean bootstrap migrations; rollback rejection; mixed-version/payload quarantine. V4/V5 cover provider/capacity/restore and slow-client/crash/history cases. No tests were created or run in W2a.
 
 Static inventory is finite and executable but is not deployed-schema proof. Read-only AST/source inventory found original132 declarations across28 files; dynamic MCP registrations and collector service routes are included separately. GitNexus query returned definitions but no matching processes for the collector-public query; source tracing supplied the actual contract details. No production symbols were edited, so no symbol impact edit claim is made.
+
+## 8. Workspace contract audit script
+
+`scripts/check-workspace-contracts.py` is a read-only AST audit of `core/`, `modules/` and `apps/` for direct-call keyword gaps, heuristic inserts without `workspace_id`, and frozen W2 contract calls. It imports no application code and touches no data. The frozen manifest `scripts/frozen-w2-contracts.json` is loaded by default.
+
+```bash
+python scripts/check-workspace-contracts.py . <out.json>
+# optional explicit manifest: python scripts/check-workspace-contracts.py . <out.json> scripts/frozen-w2-contracts.json
+```
+
+The stdout summary reports `static_calls`, `heuristic_inserts` and `frozen_contract_calls`. The gate is 0 for each in owned files. `expanded_calls` lists dynamic or expanded-argument calls that need manual source review; it is not a pass/fail count.

@@ -1,0 +1,25 @@
+{
+  "note": "Frozen W2 ruling section3. Direct-call keyword/owner-positional supplement only; no runtime, defaults, dynamic methods, source lineage or admission proof.",
+  "scope_and_flag": {
+    "modules/knowledge/documents/public.py": "document_metadata export_timeline_evidence get_news_document_projection get_ready_version_ref list_gadget_highlight_projection_page list_news_document_projections list_ready_version_refs lock_chat_evidence_chunks lock_document_ids lock_review_version_evidence news_current_scope_status news_projection_scope_unavailable news_retained_observation_allowed read_chat_evidence_chunks read_evidence_refs read_extraction_evidence_refs read_extraction_input revalidate_tool_document_fences review_version_fences validate_gadget_document_selection_fences list_gadget_document_projections cleanup_evidence_version_document existing_document_ids",
+    "modules/knowledge/observations/public.py": "list_observations",
+    "modules/search/public.py": "search compare_news_evidence_embeddings revalidate_tool_search_fences",
+    "modules/knowledge/temporal/public.py": "schedule_canonical_change schedule_version mapping_statuses",
+    "modules/knowledge/entities/public.py": "get_entity get_entity_refs get_temporal_node_seeds list_entity_evidence list_retained_version_membership_refs list_version_membership_refs lock_entity_ids resolve_canonical_entity_id list_changed_entities_after ensure_demo_entities",
+    "modules/knowledge/relationships/public.py": "get_neighbors get_relationship_snapshot list_relationships lock_relationship_ids ensure_demo_relationships",
+    "modules/timeline/public.py": "brief_event_support list_correlation_signals list_timeline lock_brief_events lock_event_ids temporal_event_refs list_changed_events_after ensure_demo_events",
+    "modules/tasks/public.py": "list_tasks list_due_within create_task_in_uow ensure_demo_tasks",
+    "modules/goals/public.py": "list_goals list_deadlines_within ensure_demo_goals",
+    "modules/agents/public.py": "create_profile_run_in_uow current_profile_revision reserve_browser_run_budget_in_uow revalidate_browser_run_authority redact_expired_agent_traces",
+    "modules/memory/public.py": "read_export_privacy",
+    "modules/notifications/public.py": "emit list_notifications",
+    "modules/tools/public.py": "purge_browser_results_in_uow",
+    "modules/automations/seed.py": "ensure_demo_automations",
+    "modules/ingestion/public.py": "list_ready_events_after list_terminal_runs_after",
+    "modules/connectors/github/mapping.py": "map_github_version"
+  },
+  "exports": ["modules/chat/public.py", "modules/dashboard/public.py", "modules/goals/public.py", "modules/memory/public.py", "modules/tasks/public.py", "modules/timeline/public.py", "modules/knowledge/documents/public.py", "modules/knowledge/entities/public.py", "modules/knowledge/observations/public.py", "modules/knowledge/relationships/public.py", "modules/news/public.py", "modules/news/stories.py"],
+  "operator": ["modules/knowledge/documents/public.py", "modules/knowledge/entities/public.py"],
+  "scope_only": {"core/tools/schemas.py": "ToolExecutionPrincipal"},
+  "limitations": "Does not declare every mechanically converted own API. Export public reexports included, but general transitive reexports and instance-method resolution remain manual. Frozen positional removal checked only if baseline top-level function exists. Agent trace identity-only discovery deliberately has no scope keyword. D2-reserved body rows must be classified by reviewer rather than suppressed."
+}
