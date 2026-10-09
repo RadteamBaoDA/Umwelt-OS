@@ -155,8 +155,6 @@ class _RealtimeResponse(Response):
                             multi_workspace_enabled=self.request.app.state.settings.multi_workspace_enabled,
                             auth_sessions=(self.auth_session,),
                         )
-                        if self.workspace.role != "owner":
-                            raise HTTPException(status_code=403, detail="Workspace owner required")
                 if message["type"] == "http.response.start":
                     start_attempted = True
                 send_attempted = True
@@ -230,7 +228,7 @@ async def _select_realtime_workspace(
 
     Query selection is required except proven bootstrap default; a supplied header must agree
     and never substitutes for an absent query selection. Malformed/missing/conflicting400,
-    inactive401, invisible404 and visible member403 precede any cursor disclosure.
+    inactive401 and invisible404 precede any cursor disclosure.
     """
     account = getattr(request.state, "account", None)
     if not isinstance(account, AccountRead):
@@ -250,8 +248,6 @@ async def _select_realtime_workspace(
     context = await workspaces.resolve_workspace_context(session, current.id, selected)
     if context is None:
         raise HTTPException(status_code=404, detail="Workspace not found")
-    if context.role != "owner":
-        raise HTTPException(status_code=403, detail="Workspace owner required")
     return context
 
 
@@ -364,7 +360,7 @@ async def _read_replay_page(
                       else "cursor_expired" if position.sequence < head.floor_sequence - 1 else None)
             if position.epoch == head.epoch and position.sequence > head.sequence:
                 raise HTTPException(status_code=400, detail="Replay cursor is ahead of the current stream")
-            records = [] if reason else list((await session.scalars(select(ReplayRecord).where(
+            records = [] if reason or getattr(workspace, "role", "owner") != "owner" else list((await session.scalars(select(ReplayRecord).where(
                 ReplayRecord.workspace_id == workspace.workspace_id, ReplayRecord.user_id == workspace.user_id,
                 ReplayRecord.epoch == head.epoch, ReplayRecord.sequence > position.sequence,
                 ReplayRecord.sequence <= head.sequence,

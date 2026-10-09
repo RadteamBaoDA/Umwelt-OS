@@ -14,6 +14,7 @@ from core.config import Settings
 from core.database import make_session_factory
 from core.errors import install_error_handling
 from core.modules import register_modules
+from core.publication import PublicationGateMiddleware
 from core.realtime_routes import MAX_STREAMS_PER_API_PROCESS
 from core.realtime_routes import router as realtime_router
 from core.system.routes import router as system_router
@@ -150,6 +151,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     install_log_redaction()
     install_error_handling(app)
+    app.add_middleware(PublicationGateMiddleware)
     app.add_middleware(BackupActivityMiddleware)
     app.add_middleware(
         BodyLimitMiddleware,

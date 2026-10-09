@@ -388,6 +388,7 @@ class _ReplayStorageError(RuntimeError):
 
 async def _validate_replay_fence(
     session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
+    allow_member: bool = False,
 ) -> None:
     """Compare the supplied original owner fence with fresh nonlocking admission.
 
@@ -398,7 +399,7 @@ async def _validate_replay_fence(
     """
     if not isinstance(scope, (WorkspaceContext, InternalJobScope)):
         raise ValueError("A typed replay scope is required")
-    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
+    if isinstance(scope, WorkspaceContext) and scope.role != "owner" and not allow_member:
         raise HTTPException(status_code=403, detail="Workspace owner required")
     if type(multi_workspace_enabled) is not bool or not isinstance(access_fence, AccessFence):
         raise ValueError("Actual configured flag and original access fence are required")
@@ -638,8 +639,11 @@ async def current_head(
     Caller owns short transaction release and actual later publication admission.
     """
     await _validate_replay_fence(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-                                 access_fence=access_fence)
+                                 access_fence=access_fence, allow_member=True)
     epoch = _replay_epoch(access_fence)
+    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
+        # Members have no replay rows (no member content push): virtual empty head, never a read.
+        return ReplayState(epoch=epoch, sequence=0, floor_sequence=1)
     head = await session.scalar(
         select(ReplayHead).where(ReplayHead.workspace_id == access_fence.workspace_id,
                                  ReplayHead.user_id == access_fence.user_id)
