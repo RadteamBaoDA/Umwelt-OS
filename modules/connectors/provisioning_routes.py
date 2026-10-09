@@ -29,6 +29,7 @@ from modules.connectors.credentials import (
     secret_fingerprint,
 )
 from modules.connectors.activation import activate_native_in_uow
+from modules.connectors.provider_specs import TERMS_INELIGIBLE
 from modules.connectors.models import ConnectorNativeCredential, ConnectorProvisioning, ConnectorRestCredential
 from modules.connectors.n8n import N8nApi
 from modules.connectors.public import (
@@ -294,7 +295,7 @@ async def get_configuration(
         activation_error_code=snapshot.activation_error_code,
         provider_credential_configured=snapshot.provider_credential_configured,
         provider_credential_state=snapshot.provider_credential_state,
-        execution_backend=snapshot.execution_backend,  # type: ignore[arg-type]
+        execution_backend=snapshot.execution_backend,
         transition_phase=snapshot.transition_phase,
     )
 
@@ -996,9 +997,9 @@ async def _activation_read(
         credential_recovery=(
             "unsupported_operation" if unresolved else "supported"
         ),
-        execution_backend=row.execution_backend,  # type: ignore[arg-type]
-        transition_phase=row.transition_phase,  # type: ignore[arg-type]
-        target_backend=row.target_backend,  # type: ignore[arg-type]
+        execution_backend=row.execution_backend,
+        transition_phase=row.transition_phase,
+        target_backend=row.target_backend,
         backend_revision=row.backend_revision,
     )
 
@@ -1111,7 +1112,7 @@ async def start_backend_transition(
     try:
         await provider_terms.require_terms_eligible(session, source)
     except HTTPException as exc:
-        if exc.detail == provider_terms.TERMS_INELIGIBLE:
+        if exc.detail == TERMS_INELIGIBLE:
             raise HTTPException(status_code=409, detail="terms_not_accepted") from exc
         raise
     await session.rollback()

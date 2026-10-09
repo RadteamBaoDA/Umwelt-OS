@@ -7,16 +7,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.workspaces.schemas import AccessFence, Scope
 from modules.connectors import provider_terms, provisioning, scheduler
-from modules.connectors.models import ConnectorProvisioning, ConnectorRestCredential
-from modules.sources.schemas import SourceFence
 from modules.connectors.credentials import (
     CredentialEncryptionUnavailable,
     N8nCredentials,
     encrypt_credential_input,
     secret_fingerprint,
 )
+from modules.connectors.models import ConnectorProvisioning, ConnectorRestCredential
 from modules.connectors.n8n import N8nApi, build_workflow, workflow_name
 from modules.sources import public as sources
+from modules.sources.schemas import SourceFence
 
 
 def prepare_credential_assignment(

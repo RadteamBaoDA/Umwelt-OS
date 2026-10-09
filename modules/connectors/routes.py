@@ -24,6 +24,7 @@ from modules.connectors.github import oauth as github_oauth
 from modules.connectors.github.adapter import collect_github_segment
 from modules.connectors.github.schemas import GitHubHintClaimProof, project_github_source_config
 from modules.connectors.github.sync import validate_github_segment
+from modules.connectors.provider_specs import TERMS_INELIGIBLE
 from modules.connectors.models import (
     ConnectorProvisioning,
     ConnectorWorldCredential,
@@ -1305,7 +1306,7 @@ async def trigger_collection(
             queued = await scheduler.request_collection(
                 session, scope, source_id, "manual", revision, multi_workspace_enabled=multi_workspace_enabled)
         except HTTPException as exc:
-            if exc.detail == provider_terms.TERMS_INELIGIBLE:
+            if exc.detail == TERMS_INELIGIBLE:
                 raise HTTPException(status_code=409, detail="terms_not_accepted") from exc
             raise
         return ManualSyncResult(status=queued.status, request_id=queued.request_id)
