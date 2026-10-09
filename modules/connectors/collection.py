@@ -7,19 +7,21 @@ which commits batch, cursor, outbox, request outcome and slot release in ONE tra
 Nothing here wraps a commit-owning ingestion API and assumes outer atomicity.
 
 Boundaries kept deliberately narrow:
-- GitHub (OAuth grant/hint proofs) and Telegram (verified bot/update semantics) keep their dedicated,
-  already-proven routes; they are refused here. Static web and MCP run natively; browser rendering stays on crawl.py.
+- GitHub (OAuth grant/hint proofs) and Telegram (verified bot/update semantics) reuse their proven
+  owner code (``github.adapter/sync``, ``providers.telegram``) behind the same lease/send/record flow.
+- Static web and MCP run natively; browser rendering stays on crawl.py.
 - Providers added by other slices (HN, macro, crypto, disasters) register in ``ADAPTERS``.
 """
 
 import asyncio
+import secrets
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from html.parser import HTMLParser
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from urllib.parse import urldefrag, urljoin
 from uuid import UUID
 
@@ -53,7 +55,7 @@ PURE_MAX_BYTES = {"ecb": 256 * 1024}  # every other P3 body is capped at macro.M
 PURE_PROVIDERS = ("world_bank", "frankfurter", "ecb", "binance", "alternative_me", "usgs", "coinpaprika")  # coingecko needs a key slot
 KEYED_PROVIDERS = {"coingecko": "x-cg-demo-api-key"}  # provider -> fixed header; key in connector_rest_credentials
 SIMPLE_NATIVE = frozenset({"youtube", "arxiv", "huggingface", "github_releases", "alpha_vantage", "open_meteo"})
-REFUSED_HERE = frozenset({"github", "telegram"})  # proof-bearing routes; see module docstring
+REFUSED_HERE: frozenset[str] = frozenset()  # providers that must never run here (GitHub/Telegram are native now)
 Snapshot = tuple[int, int, int]
 
 
@@ -844,6 +846,228 @@ ADAPTERS.update({
     "coingecko": _run_coingecko,
     "bbc_world": _run_feed, "vnexpress_business": _run_feed, "hn_top": _run_hn, "gdelt_economy": _run_gdelt,
 })
+
+
+# ---------------------------------------------------------------- GitHub / Telegram (proof-bearing)
+
+async def _credential_fence(
+    run: Run, *, github: tuple[Any, tuple[UUID, int]] | None = None, telegram: Any = None,
+) -> None:
+    """Before every send/accept: locked, rolled-back recheck of credential revision, grant/bot proof and lease."""
+    from modules.connectors.models import GithubOAuthGrant
+
+    a, lease = run.attempt, run.extras["lease"]
+    async with run.factory() as session:
+        try:
+            current, row, _ = await provisioning.lock_connector(
+                session, a.source.id, provisioning._ALL_CREDENTIAL_SLOTS, scope=a.scope,
+                multi_workspace_enabled=a.multi, expected_access_fence=a.access_fence)
+            if (current != a.source_fence or row is None or row.credential_revision != a.credential_revision
+                    or not await provisioning.require_collection_fence(
+                        session, a.source, lease.source_generation, lease.connector_revision,
+                        scope=a.scope, multi_workspace_enabled=a.multi)):
+                raise CollectionFenceLost("credential_changed", "revision_changed")
+            await ingestion.lock_source_credentials_in_uow(
+                session, a.source.id, scope=a.scope, multi_workspace_enabled=a.multi,
+                access_fence=a.access_fence, source_fence=a.source_fence)
+            if github is not None:
+                fence, binding = github
+                now_fence = await connectors.lock_github_binding_fence_in_uow(
+                    session, a.source.id, source_generation=lease.source_generation,
+                    connector_revision=lease.connector_revision, scope=a.scope, multi_workspace_enabled=a.multi,
+                    access_fence=a.access_fence, source_fence=a.source_fence)
+                grant = await session.get(GithubOAuthGrant, a.source.id, populate_existing=True)
+                if now_fence != fence or grant is None or binding != (grant.operation_id, grant.token_revision):
+                    raise CollectionFenceLost("credential_changed", "revision_changed")
+            if telegram is not None:
+                now_native = await connectors.get_native_credential_snapshot(
+                    session, a.source.id, source_generation=lease.source_generation,
+                    connector_revision=lease.connector_revision, scope=a.scope, multi_workspace_enabled=a.multi)
+                if now_native != telegram or telegram.access_fence != a.access_fence:
+                    raise CollectionFenceLost("credential_changed", "revision_changed")
+            if not await ingestion.validate_connector_collection_in_uow(
+                session, lease, collector_token=None, scope=a.scope, multi_workspace_enabled=a.multi,
+                access_fence=a.access_fence, source_fence=a.source_fence, request_ref=a.ref,
+            ):
+                raise CollectionFenceLost("admission_lost")
+        finally:
+            await session.rollback()
+
+
+async def _accept_proof(
+    run: Run, lease: Any, *, records: Sequence[IngestionRecord],
+    coverage: Literal["returned_snapshot", "pending_updates_only", "truncated"], cursor_after: str | None,
+    collected_at: datetime, github_segment: Any = None, telegram: Sequence[Any] = (), raw: Sequence[Any] = (),
+    native_operation_id: UUID | None = None,
+) -> None:
+    """Hand a proof-bearing page to the ingestion owner (one commit: batch, cursor, request outcome, slot)."""
+    a = run.attempt
+    batch = NativeCollectionBatch(
+        source_id=a.source.id, source_generation=lease.source_generation, connector_revision=lease.connector_revision,
+        lease_token=lease.token, cursor_before=lease.cursor_before, cursor_after=cursor_after,
+        records=list(records), telegram_deliveries=tuple(telegram), telegram_raw_deliveries=tuple(raw),
+        coverage=coverage, github_segment=github_segment, collected_at=collected_at)
+    async with run.factory() as session:
+        await ingestion.accept_native_collection(
+            session, batch, collector_token=None, lease=lease, scope=a.scope, multi_workspace_enabled=a.multi,
+            expected_native_operation_id=native_operation_id, expected_world_credential_operation_id=None,
+            request_ref=a.ref)
+    run.extras["accepted"] = True
+
+
+async def _run_github(run: Run) -> None:
+    """GitHub: lease, claim a due webhook hint, open the OAuth grant, one fenced GET, validate, record."""
+    from sqlalchemy import select
+
+    from modules.connectors.github import oauth as github_oauth
+    from modules.connectors.github.adapter import collect_github_segment
+    from modules.connectors.github.schemas import GitHubHintClaimProof, project_github_source_config
+    from modules.connectors.github.sync import validate_github_segment
+    from modules.connectors.models import GithubOAuthGrant
+
+    a = run.attempt
+    source, collected_at = a.source, datetime.now(UTC)
+    lease = await _lease(run)
+    async with run.factory() as session:
+        claim = await connectors.claim_github_hint(
+            session, source_id=source.id, source_generation=lease.source_generation,
+            connector_revision=lease.connector_revision, multi_workspace_enabled=a.multi, scope=a.scope)
+    async with run.factory() as session:
+        try:
+            await provisioning.lock_connector(
+                session, source.id, provisioning._ALL_CREDENTIAL_SLOTS, scope=a.scope,
+                multi_workspace_enabled=a.multi, expected_access_fence=a.access_fence)
+            fence = await connectors.lock_github_binding_fence_in_uow(
+                session, source.id, source_generation=lease.source_generation,
+                connector_revision=lease.connector_revision, scope=a.scope, multi_workspace_enabled=a.multi,
+                access_fence=a.access_fence, source_fence=a.source_fence)
+            if fence is None:
+                raise CredentialMissing
+            grant = await session.scalar(select(GithubOAuthGrant).where(GithubOAuthGrant.source_id == source.id).with_for_update())
+            if (grant is None or grant.state != "ready" or grant.encrypted_tokens is None
+                    or grant.source_generation != lease.source_generation
+                    or grant.configuration_revision != lease.connector_revision
+                    or grant.expires_at is None or grant.expires_at <= datetime.now(UTC)):
+                raise CredentialMissing
+            binding = (grant.operation_id, grant.token_revision)
+            pair = github_oauth._open_token_cipher(
+                run.settings.connector_credential_encryption_key.get_secret_value(), grant.encrypted_tokens,
+                source.id, grant.operation_id, grant.source_generation, grant.configuration_revision)
+        finally:
+            await session.rollback()
+    token = pair.get("access_token")
+    if not isinstance(token, str) or not token:
+        raise CredentialMissing
+    config = project_github_source_config(source.configuration)
+    redis, permit = run.ctx.get("redis"), secrets.token_urlsafe(24)
+    held = False
+
+    async def before_send() -> None:
+        nonlocal held
+        await run.gate()
+        await _credential_fence(run, github=(fence, binding))
+        if redis is not None:  # cluster-wide single GitHub network slot; expiry outlives the run deadline
+            if not await redis.set("connectors:provider:active:github", permit, nx=True, ex=75):
+                raise connectors.ProviderRateLimited(datetime.now(UTC) + timedelta(seconds=1))
+            held = True
+
+    try:
+        proof = await collect_github_segment(
+            config, token, fence=fence, cursor_before=lease.cursor_before, collected_at=collected_at,
+            before_request=before_send,
+            hint_claim=GitHubHintClaimProof.model_validate(claim.model_dump(mode="python")) if claim is not None else None)
+    finally:
+        if held and redis is not None:
+            with suppress(Exception):
+                await redis.eval(
+                    "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end",
+                    1, "connectors:provider:active:github", permit)
+    validated = validate_github_segment(fence, config, lease.cursor_before, proof, collected_at=collected_at)
+    await _credential_fence(run, github=(fence, binding))
+    await _accept_proof(
+        run, lease, records=validated.records, coverage=validated.coverage, cursor_after=validated.cursor_after,
+        collected_at=collected_at, github_segment=proof)
+
+
+async def _run_telegram(run: Run) -> None:
+    """Telegram: bot token read under locks, getUpdates fenced per send; one accepted page per request.
+
+    Pages that only replay already-ingested updates advance the offset (fresh lease each time, at most
+    five pages); the first page with new work is accepted and settles the request.
+    """
+    from modules.connectors.credentials import decrypt_native_token
+    from modules.connectors.providers.telegram import fetch_telegram_updates, map_telegram_update
+    from modules.ingestion.schemas import classify_telegram_probe
+
+    a, source = run.attempt, run.attempt.source
+    lease = await _lease(run)
+    async with run.factory() as session:
+        try:
+            await provisioning.lock_connector(
+                session, source.id, provisioning._ALL_CREDENTIAL_SLOTS, scope=a.scope,
+                multi_workspace_enabled=a.multi, expected_access_fence=a.access_fence)
+            snapshot = await connectors.get_native_credential_snapshot(
+                session, source.id, source_generation=lease.source_generation,
+                connector_revision=lease.connector_revision, scope=a.scope, multi_workspace_enabled=a.multi)
+            if snapshot is None or snapshot.state != "ready" or not snapshot.encrypted_token or not snapshot.verified_bot_id:
+                raise CredentialMissing
+            token = decrypt_native_token(run.settings.connector_credential_encryption_key.get_secret_value(), snapshot)
+        finally:
+            await session.rollback()
+        cursor = await ingestion.read_telegram_collection_state(
+            session, lease, scope=a.scope, multi_workspace_enabled=a.multi)
+    allowed = frozenset(cast("list[str]", source.configuration["telegram_chat_ids"]))
+
+    async def before_send() -> None:
+        await run.gate()
+        await _credential_fence(run, telegram=snapshot)
+
+    offset: int | None = None
+    total_bytes = total_updates = 0
+    for page_number in range(5):
+        remaining = 25 * 1024 * 1024 - total_bytes
+        page = await fetch_telegram_updates(
+            token, offset=offset, remaining_bytes=min(10 * 1024 * 1024, remaining), before_request=before_send)
+        total_bytes += page.transport_bytes
+        total_updates += len(page.deliveries)
+        if page.transport_bytes > remaining or total_updates > 500:
+            raise ValueError("telegram_trigger_limit_exceeded")
+        classification = classify_telegram_probe(
+            cursor, page.deliveries, received_at=page.collected_at, verified_bot_id=snapshot.verified_bot_id)
+        if classification.conflict_code is not None:
+            raise ValueError("telegram_stream_conflict")
+        replay = set(classification.replay_update_ids)
+        if page.deliveries and len(replay) == len(page.deliveries):
+            if page_number == 4 or cursor is None or cursor.last_update_id >= 2**63 - 1:
+                await _credential_fence(run, telegram=snapshot)
+                await _accept_proof(
+                    run, lease, records=(), coverage="pending_updates_only", cursor_after=lease.cursor_before,
+                    collected_at=page.collected_at, native_operation_id=snapshot.operation_id)
+                return
+            async with run.factory() as session:
+                await ingestion.release_connector_collection(
+                    session, lease, error_code=None, scope=a.scope, multi_workspace_enabled=a.multi)
+            lease = await _lease(run)
+            if lease.configuration_revision != a.access_fence.configuration_revision:
+                raise CollectionFenceLost("access_changed", "revision_changed")
+            offset = cursor.last_update_id + 1
+            continue
+        proofs = {p.update_id: p for p in classification.delivery_proofs}
+        records = [
+            record for d in page.deliveries if d.update_id not in replay
+            if (record := map_telegram_update(
+                d.update, allowed_chat_ids=allowed, proof=proofs[d.update_id], collected_at=page.collected_at)) is not None
+        ]
+        await _credential_fence(run, telegram=snapshot)
+        await _accept_proof(
+            run, lease, records=records, coverage="pending_updates_only",
+            cursor_after=classification.cursor_after.model_dump_json() if classification.cursor_after is not None else lease.cursor_before,
+            collected_at=page.collected_at, telegram=classification.delivery_proofs, raw=page.deliveries,
+            native_operation_id=snapshot.operation_id)
+        return
+
+
+ADAPTERS.update({"github": _run_github, "telegram": _run_telegram})
 
 
 # ---------------------------------------------------------------- orchestration
