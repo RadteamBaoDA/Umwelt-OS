@@ -2,18 +2,21 @@ import copy
 from typing import Any
 from uuid import UUID, uuid4
 
+from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.workspaces.schemas import AccessFence, Scope
-from modules.connectors import provisioning
+from modules.connectors import provider_terms, provisioning, scheduler
 from modules.connectors.credentials import (
     CredentialEncryptionUnavailable,
     N8nCredentials,
     encrypt_credential_input,
     secret_fingerprint,
 )
+from modules.connectors.models import ConnectorProvisioning, ConnectorRestCredential
 from modules.connectors.n8n import N8nApi, build_workflow, workflow_name
 from modules.sources import public as sources
+from modules.sources.schemas import SourceFence
 
 
 def prepare_credential_assignment(
@@ -258,6 +261,7 @@ async def drive_activation(
             collector_credential_id=ready_ids["collector"],
             manual_credential_id=ready_ids["manual_trigger"],
             provider_credential_id=ready_ids.get("provider"),
+            backend_revision=row.backend_revision,
         )
         prepared = await provisioning.begin_enable_in_uow(
             session,
@@ -289,3 +293,58 @@ async def drive_activation(
         session, source_id, api, original_operation=original_operation, access_fence=access_fence,
         multi_workspace_enabled=multi_workspace_enabled, scope=scope,
     )
+
+
+async def activate_native_in_uow(
+    session: AsyncSession, source_id: UUID, source_fence: SourceFence, row: ConnectorProvisioning,
+    *, scope: Scope, multi_workspace_enabled: bool,
+) -> str:
+    """Activate the native backend on already-locked Source/provisioning rows; the caller commits.
+
+    Validates active/private-allowed source, native support, terms eligibility and (for header
+    authentication) a ready owner-entered credential for this exact generation/revision. On success
+    persists desired+applied revision, applied backend revision and the schedule in the caller's
+    transaction and returns ""; otherwise returns a bounded owner-action code and changes nothing.
+    No n8n credential, workflow or key is involved.
+    """
+    from modules.connectors import collection, public
+    from modules.settings.public import module_is_enabled
+
+    source = await sources.get_connector_source(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    if (
+        source is None or source.status != "active" or source_fence.local_only
+        or row.source_generation != source.generation or row.workflow_operation is not None
+        or row.activation_intent is not None
+        or not await module_is_enabled(session, "connectors", scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    ):
+        return "source_inactive"
+    if not collection.supports_native(source):
+        return "native_unsupported"
+    try:
+        await provider_terms.require_terms_eligible(session, source)
+    except HTTPException:
+        return "terms_not_accepted"
+    if (row.desired_configuration or {}).get("auth_method") == "http_header":
+        credential = await session.get(ConnectorRestCredential, source_id, with_for_update=True)
+        if (
+            credential is None or credential.state != "ready" or credential.encrypted_secret is None
+            or credential.source_generation != source.generation
+            or credential.configuration_revision != row.desired_revision
+            or credential.header_name != (row.desired_configuration or {}).get("auth_header_name")
+        ):
+            return "invalid_credential"
+    elif (row.desired_configuration or {}).get("auth_method") not in (None, "none"):
+        return "native_unsupported"
+    row.execution_backend = "native"
+    row.desired_enabled = True
+    row.state = "active"
+    row.applied_revision = row.desired_revision
+    row.error_code = None
+    provisioning.finalize_backend(row)
+    interval = source.configuration.get("schedule_interval_minutes")
+    if interval not in {15, 30, 60, 360, 1440}:
+        interval = public.default_schedule_interval_minutes(source.type)
+    await scheduler.upsert_schedule(
+        session, workspace_id=source.workspace_id, source_id=source_id, interval_minutes=int(interval), enabled=True)
+    return ""

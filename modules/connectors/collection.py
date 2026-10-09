@@ -389,18 +389,54 @@ async def _accept_walk(run: Run, state: CollectionState, walk: Walk, resume: res
         CollectionStateUpdate(continuation_state=checkpoint.encode(), coverage="partial"))
 
 
+async def _rest_secret(run: Run) -> tuple[str, str]:
+    """Load the owner-entered header credential for this exact generation/revision, or require re-entry."""
+    from modules.connectors.credentials import CredentialEncryptionUnavailable, decrypt_rest_secret
+    from modules.connectors.models import ConnectorRestCredential
+
+    a = run.attempt
+    async with run.factory() as session:
+        credential = await session.get(ConnectorRestCredential, a.source.id)
+        await session.rollback()
+    if (
+        credential is None or credential.state != "ready" or credential.encrypted_secret is None
+        or credential.source_generation != a.source.generation
+        or credential.configuration_revision != a.connector_revision
+    ):
+        raise rest.ProviderHttpError(401)  # owner re-entry required
+    try:
+        secret = decrypt_rest_secret(
+            run.settings.connector_credential_encryption_key.get_secret_value(), credential.encrypted_secret,
+            source_id=a.source.id, operation_id=credential.operation_id, source_generation=credential.source_generation,
+            configuration_revision=credential.configuration_revision, header_name=credential.header_name)
+    except CredentialEncryptionUnavailable as exc:
+        raise rest.ProviderHttpError(401) from exc
+    return credential.header_name, secret
+
+
+def _with_header(
+    send: Callable[..., Awaitable[rest.Fetched]], header: str, secret: str,
+) -> Callable[..., Awaitable[rest.Fetched]]:
+    """Wrap a gated send so the owner-entered header rides every same-origin request."""
+    async def fetch(url: str, headers: dict[str, str] | None = None, **kwargs: Any) -> rest.Fetched:
+        return await send(url, headers={**(headers or {}), header: secret}, **kwargs)
+
+    return fetch
+
+
 async def _run_rest(run: Run) -> None:
     from modules.connectors.registry import configuration
 
     a = run.attempt
+    fetch: Callable[..., Awaitable[rest.Fetched]] = run.gate.fetch_bytes
     if a.authenticated:
-        raise rest.ProviderHttpError(401)  # credential only exists as an opaque n8n id: owner re-entry required
+        fetch = _with_header(run.gate.fetch_bytes, *await _rest_secret(run))
     config = configuration(a.source)
     state = await _state(run)
     resume = rest.Checkpoint.decode(
         state.continuation_state, revision=a.connector_revision, cursor=state.cursor, origin_url=str(config.url))
     collected = await rest.collect_rest(
-        config, state.cursor, fetch=run.gate.fetch_bytes, resume=resume,
+        config, state.cursor, fetch=fetch, resume=resume,
         conditional=None if resume else _conditional(state, a.connector_revision))
     await _accept_walk(run, state, Walk(
         collected.records, collected.continuation_url, collected.max_time, collected.etag,
@@ -695,6 +731,11 @@ def _adapter_for(source: ConnectorSource) -> Adapter | None:
     if provider in ADAPTERS:
         return ADAPTERS[provider]
     return _run_native if provider in SIMPLE_NATIVE else None
+
+
+def supports_native(source: ConnectorSource) -> bool:
+    """True when the shared executor can collect this source; activation refuses everything else."""
+    return _adapter_for(source) is not None and source.provider not in REFUSED_HERE
 
 
 async def execute_collection(ctx: dict[str, object], admission: CollectionAdmissionRead) -> None:

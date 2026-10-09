@@ -45,6 +45,7 @@ def build_workflow(
     source: ConnectorSource,
     *,
     desired_revision: int,
+    backend_revision: int,
     workflow_operation_id: UUID,
     workflow_name_value: str | None = None,
     collector_credential_id: str,
@@ -142,6 +143,7 @@ def build_workflow(
                 .replace("__BBD_SOURCE_ID__", source_id)
                 .replace("__BBD_SOURCE_GENERATION__", str(source.generation))
                 .replace("__BBD_CONNECTOR_REVISION__", str(desired_revision))
+                .replace("__BBD_BACKEND_REVISION__", str(backend_revision))
                 .replace("__BBD_MCP_CONNECTION_ID__", str(source.configuration.get("connection_id", "")))
             )
         if isinstance(value, list):

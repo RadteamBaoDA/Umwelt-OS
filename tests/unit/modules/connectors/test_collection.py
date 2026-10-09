@@ -230,7 +230,20 @@ async def test_ninety_second_run_deadline_is_a_retryable_timeout(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_authenticated_native_rest_requires_credential_reentry(monkeypatch):
-    run = SimpleNamespace(attempt=attempt(authenticated=True))
+    class _Empty:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+        async def get(self, *_args):
+            return None  # no owner-entered credential stored
+
+        async def rollback(self):
+            return None
+
+    run = SimpleNamespace(attempt=attempt(authenticated=True), factory=_Empty, gate=SimpleNamespace(fetch_bytes=None))
     with pytest.raises(rest.ProviderHttpError) as exc:
         await collection._run_rest(run)
     assert collection._classify(exc.value)["error_code"] == "invalid_credential"

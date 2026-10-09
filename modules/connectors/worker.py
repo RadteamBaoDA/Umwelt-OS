@@ -692,6 +692,66 @@ async def _recover_unknown_create(
     return 0
 
 
+async def _advance_transitions(
+    factory: async_sessionmaker[AsyncSession], settings: Settings, state: dict[str, object] | None,
+) -> int:
+    """Resume persisted backend transitions (draining, stop-old, native activation) after a crash or retry.
+
+    A transition carries no envelope of its own, so it runs as the workspace owner under a freshly read
+    access fence, like scheduled collection. reconciliation_required and an n8n activation wait for the owner.
+    Works without an n8n key: native-only deployments still finish transitions that need no n8n call.
+    """
+    from sqlalchemy import text
+
+    from core.workspaces.models import WorkspaceMembership
+    from modules.settings.public import module_is_enabled
+
+    flag = settings.multi_workspace_enabled
+    api_key = settings.n8n_api_key.get_secret_value()
+    api = N8nApi(str(settings.n8n_service_url), api_key) if api_key else None
+    async with factory() as session:
+        ids = list((await session.scalars(_page(
+            select(ConnectorProvisioning.source_id), ConnectorProvisioning.source_id,
+            await _read_cursor(state, "connectors_transitions"),
+            or_(ConnectorProvisioning.transition_phase.in_(("draining", "deactivating_old")),
+                and_(ConnectorProvisioning.transition_phase == "activating_new",
+                     ConnectorProvisioning.target_backend == "native",
+                     ConnectorProvisioning.error_code == "backend_transition_pending")),  # a failed activation waits for the owner
+        ))).all())
+        await session.rollback()
+    await _write_cursor(state, "connectors_transitions", ids[-1] if len(ids) >= _PASS_LIMIT else None)
+    advanced = 0
+    for source_id in ids:
+        async with factory() as session:
+            try:
+                workspace_id = await session.scalar(
+                    text("SELECT workspace_id FROM sources WHERE id = :id"), {"id": source_id})
+                row = await session.get(ConnectorProvisioning, source_id)
+                owner = await session.scalar(select(WorkspaceMembership).where(
+                    WorkspaceMembership.workspace_id == workspace_id, WorkspaceMembership.role == "owner",
+                )) if workspace_id is not None else None
+                if owner is None or row is None:
+                    await session.rollback()
+                    continue
+                scope = InternalJobScope(
+                    workspace_id=workspace_id, actor_user_id=owner.user_id, membership_revision=owner.revision,
+                    source_id=source_id, source_generation=row.source_generation)
+                await session.rollback()
+                if not await module_is_enabled(session, "connectors", scope=scope, multi_workspace_enabled=flag):
+                    await session.rollback()
+                    continue
+                fence = await read_access_fence(session, scope=scope, multi_workspace_enabled=flag)
+                await session.rollback()
+                await provisioning.advance_backend_transition(
+                    session, source_id, api, scope=scope, multi_workspace_enabled=flag, access_fence=fence)
+                advanced += 1
+            except HTTPException as exc:
+                await session.rollback()
+                if exc.status_code not in _DENIED:
+                    raise
+    return advanced
+
+
 async def reconcile_connectors(ctx: dict[str, object]) -> int:
     """Progress connector provisioning and one bounded GitHub hint dispatch pass.
 
@@ -707,6 +767,7 @@ async def reconcile_connectors(ctx: dict[str, object]) -> int:
     flag = settings.multi_workspace_enabled
     state = _cursor_ctx(ctx)
     completed = await dispatch_github_webhooks(ctx)
+    completed += await _advance_transitions(factory, settings, state)
     api_key = settings.n8n_api_key.get_secret_value()
     if not api_key:
         return completed

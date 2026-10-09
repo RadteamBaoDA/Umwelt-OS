@@ -39,6 +39,7 @@ from modules.connectors.models import (
     ConnectorManagedCredential,
     ConnectorNativeCredential,
     ConnectorProvisioning,
+    ConnectorRestCredential,
     ConnectorWorldCredential,
     GithubOAuthCoordinator,
     GithubOAuthGrant,
@@ -381,6 +382,9 @@ class ConnectorConfigurationSnapshot:
     activation_error_code: str | None
     provider_credential_configured: bool
     provider_credential_state: str | None
+    execution_backend: str = "n8n"
+    transition_phase: str = "idle"
+    target_backend: str | None = None
 
 
 @dataclass(frozen=True)
@@ -756,6 +760,11 @@ async def get_connector_configuration(
             ConnectorNativeCredential.configuration_revision == row.desired_revision,
         ).execution_options(populate_existing=True))
     world_credential = await session.get(ConnectorWorldCredential, source_id) if source.provider == "alpha_vantage" else None
+    rest_credential = (
+        await session.get(ConnectorRestCredential, source_id)
+        if row is not None and "native" in (row.execution_backend, row.target_backend)
+        else None
+    )
     configuration = ConnectorConfig.model_validate(source.configuration).model_dump(
         mode="json", exclude_none=True
     )
@@ -811,6 +820,10 @@ async def get_connector_configuration(
                       and world_credential.source_generation == source.generation
                       and world_credential.configuration_revision == row.desired_revision)
             if source.provider == "alpha_vantage"
+            else bool(rest_credential is not None and rest_credential.state == "ready" and row is not None
+                      and rest_credential.source_generation == source.generation
+                      and rest_credential.configuration_revision == row.desired_revision)
+            if rest_credential is not None
             else bool(provider_credential is not None and provider_credential.state == "ready"
                       and provider_credential.credential_id)
         ),
@@ -818,7 +831,11 @@ async def get_connector_configuration(
                                    and row is not None and world_credential.source_generation == source.generation
                                    and world_credential.configuration_revision == row.desired_revision
                                    else native_credential.state if source.provider == "telegram" and native_credential is not None
+                                   else "ready" if rest_credential is not None and rest_credential.state == "ready"
                                    else provider_credential.state if provider_credential is not None else None),
+        execution_backend=row.execution_backend if row is not None else "n8n",
+        transition_phase=row.transition_phase if row is not None else "idle",
+        target_backend=row.target_backend if row is not None else None,
     )
 
 
@@ -920,6 +937,7 @@ class ConnectorReceipt(BaseModel):
     cursor_after: str | None = Field(default=None, max_length=4096)
     source_generation: int = Field(ge=1)
     connector_revision: int = Field(ge=1)
+    backend_revision: int | None = Field(default=None, ge=1)
     records: list[ConnectorRecord] = Field(min_length=1, max_length=500)
 
 
@@ -940,6 +958,8 @@ class CollectionFence(BaseModel):
 
     source_generation: int = Field(ge=1)
     connector_revision: int = Field(ge=1)
+    # Every current n8n template sends it; a stale or late workflow carrying an older value is rejected.
+    backend_revision: int | None = Field(default=None, ge=1)
 
 
 class ConnectorConfigurationRequest(BaseModel):
@@ -970,7 +990,7 @@ async def collection_allowed(
         return False
     return await provisioning.require_collection_fence(
         session, source, fence.source_generation, fence.connector_revision, lock=lock,
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        backend_revision=fence.backend_revision, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
 
 
@@ -990,7 +1010,7 @@ async def require_collection_fence(
         source,
         fence.source_generation,
         fence.connector_revision,
-        lock=lock,
+        lock=lock, backend_revision=fence.backend_revision,
         scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
 
@@ -2740,6 +2760,7 @@ class CrawlRequest(BaseModel):
     source_id: UUID
     source_generation: int = Field(ge=1)
     connector_revision: int = Field(ge=1)
+    backend_revision: int | None = Field(default=None, ge=1)
     url: HttpUrl
     mode: str = Field(default="http", pattern="^(http|playwright)$")
     max_pages: int = Field(default=10, ge=1, le=10)
