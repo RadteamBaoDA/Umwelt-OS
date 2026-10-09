@@ -240,17 +240,25 @@ async def _load_attempt(
         source_fence: SourceFence | None = None
         access_fence: AccessFence | None = None
         row: ConnectorProvisioning | None = None
-        try:
-            await connectors._connector_access(session, scope=scope, multi_workspace_enabled=multi)
-            source = await sources.get_connector_source(session, request.source_id, scope=scope, multi_workspace_enabled=multi)
-            source_fence = await sources.get_source_fence(session, request.source_id, scope=scope, multi_workspace_enabled=multi)
-            access_fence = await read_access_fence(session, scope=scope, multi_workspace_enabled=multi)
-            row = await session.get(ConnectorProvisioning, request.source_id) if source is not None else None
-        except HTTPException:
-            source = None
+        denied = "permission_lost"
+        for resolve in (1, 2):  # a 409 is re-resolved once, then becomes terminal stale_scope
+            try:
+                await connectors._connector_access(session, scope=scope, multi_workspace_enabled=multi)
+                source = await sources.get_connector_source(session, request.source_id, scope=scope, multi_workspace_enabled=multi)
+                source_fence = await sources.get_source_fence(session, request.source_id, scope=scope, multi_workspace_enabled=multi)
+                access_fence = await read_access_fence(session, scope=scope, multi_workspace_enabled=multi)
+                row = await session.get(ConnectorProvisioning, request.source_id) if source is not None else None
+                break
+            except HTTPException as exc:
+                source = None
+                if exc.status_code == 409 and resolve == 1:
+                    await session.rollback()
+                    continue
+                denied = scheduler.denial_code(exc)
+                break
         await session.rollback()
     if source is None or source_fence is None or access_fence is None or row is None:
-        await _settle(factory, admission, outcome="cancelled", error_code="access_lost")
+        await _settle(factory, admission, outcome="cancelled", error_code=denied)
         return None
     current: Snapshot = (source.generation, row.desired_revision, row.backend_revision)
     if not snapshot_matches(captured, current) or (

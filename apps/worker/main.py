@@ -262,7 +262,7 @@ class WorkerSettings:
                  else function for function in functions]
     cron_jobs: ClassVar[list[object]] = [
         cron(purge_expired_sessions, minute=0),
-        cron(purge_collection_receipts, minute={7, 37}),
+        cron(purge_collection_receipts, minute=7),
         cron(run_retention_maintenance, minute=0),
         cron(cleanup_storage_orphans, minute=set(range(0, 60, 5))),
         cron(dispatch_pending_work, second=set(range(0, 60, 5)), run_at_startup=True),
