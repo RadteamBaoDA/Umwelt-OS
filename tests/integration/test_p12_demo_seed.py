@@ -26,6 +26,9 @@ WORKER_OWNED = {
     "realtime_replay_head", "realtime_replay_events", "auth_session", "backup_activity", "p12_backup_activity", "index_generations", "search_index_items",
     "entity_extraction_work", "timeline_extraction_work", "temporal_changes", "temporal_operations",
     "temporal_dispatches", "temporal_receipts", "news_recovery_checkpoints",
+    # brief_schedules: the worker's brief cron lazily inserts a default row for every workspace it visits
+    # (including ones other tests just created). document_chunks: ingestion of other tests' documents.
+    "brief_schedules", "document_chunks",
     "temporal_mappings", "temporal_supports", "automation_cursors", "news_stories", "news_story_identities", "news_observations",
 }
 # Seed-owned tables whose rows only the owner (or the seed) may change; compared by content digest.
