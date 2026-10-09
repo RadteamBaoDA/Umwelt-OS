@@ -56,8 +56,9 @@ async def system_health(
         "chat_worker": {"status": chat_worker_status},
         "model_gateway": {"status": gateway_status, "connectivity": "not_tested"},
         "graph": {"status": "not_installed"},
-        "n8n": {"status": "not_installed"},
-        "browser": {"status": "not_installed"},
+        # Optional sidecars: never part of `overall`; configured means a key/token is set, not reachable.
+        "n8n": {"status": "configured" if settings.n8n_api_key.get_secret_value() else "not_configured", "optional": True},
+        "browser": {"status": "configured" if settings.browser_shared_token.get_secret_value() else "not_configured", "optional": True},
     }
     core_statuses = (postgres, redis_status, worker_status, chat_worker_status)
     return {"overall": "healthy" if all(s == "healthy" for s in core_statuses) else "degraded",

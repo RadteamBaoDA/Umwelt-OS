@@ -115,3 +115,7 @@ Web search (Tavily or Brave) has its own policy and never uses `AI_ALLOWED_ENDPO
 - The chat-attachments upload path shares `UPLOAD_MAX_BYTES`.
 
 `r15_document_dismissed` adds the owner "Not relevant" state (`document_interactions.dismissed_at`; hides items from dashboard feed gadgets and highlights only). Its structural downgrade deletes dismissed-only interaction rows (rows that also carry read or saved state keep that state and lose only `dismissed_at`), so hidden-item preferences are lost on downgrade; not an operational rollback.
+
+## Optional connector services
+
+`docker-compose.browser.yml` (browser sidecar) and `docker-compose.connectors.yml` (n8n, includes the browser overlay; Compose >= 2.20) are opt-in. Health reports them as optional and excludes them from `overall`. `COLLECTOR_SCHEDULER_ENABLED` (default true) gates scheduled dispatch. Runbook: `docs/connectors/native-and-n8n.md`.

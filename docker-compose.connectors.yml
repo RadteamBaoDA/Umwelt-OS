@@ -1,3 +1,9 @@
+# Legacy connectors overlay: n8n plus (via include) the browser overlay, so the existing command keeps both.
+# include needs Docker Compose >= 2.20. n8n-only or browser-only: use docker-compose.browser.yml directly.
+# N8N_* and CONNECTOR_CREDENTIAL_ENCRYPTION_KEY reach api/worker through env_file: .env in docker-compose.yml.
+include:
+  - docker-compose.browser.yml
+
 services:
   n8n:
     build:
@@ -23,57 +29,9 @@ services:
       - n8n_egress
     restart: unless-stopped
 
-  browser:
-    build:
-      context: .
-      dockerfile: infrastructure/docker/browser.Dockerfile
-    environment:
-      BROWSER_SHARED_TOKEN: ${BROWSER_SHARED_TOKEN:-}
-    expose: ["8001"]
-    cap_add: ["NET_ADMIN"]
-    mem_limit: 1536m
-    cpus: 1.5
-    pids_limit: 128
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/docs', timeout=2)"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-    restart: unless-stopped
-    networks:
-      - connectors_internal
-      - browser_egress
-
-  api:
-    environment:
-      N8N_SERVICE_URL: ${N8N_SERVICE_URL:-http://n8n:5678}
-      N8N_API_KEY: ${N8N_API_KEY:-}
-      CONNECTOR_CREDENTIAL_ENCRYPTION_KEY: ${CONNECTOR_CREDENTIAL_ENCRYPTION_KEY:-}
-      N8N_WEBHOOK_TOKEN: ${N8N_WEBHOOK_TOKEN:-}
-    networks:
-      default: {}
-      connectors_internal:
-        ipv4_address: 172.29.250.10
-
-  worker:
-    environment:
-      N8N_SERVICE_URL: ${N8N_SERVICE_URL:-http://n8n:5678}
-      N8N_API_KEY: ${N8N_API_KEY:-}
-      CONNECTOR_CREDENTIAL_ENCRYPTION_KEY: ${CONNECTOR_CREDENTIAL_ENCRYPTION_KEY:-}
-    networks:
-      - default
-      - connectors_internal
-
 volumes:
   n8n-data:
 
 networks:
-  connectors_internal:
-    internal: true
-    ipam:
-      config:
-        - subnet: 172.29.250.0/24
-  browser_egress:
-    driver: bridge
   n8n_egress:
     driver: bridge
