@@ -9,6 +9,7 @@ hard: a page, record, byte or deadline cap reached while more data exists raises
 
 import asyncio
 import json
+import zlib
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -119,7 +120,8 @@ async def fetch_bounded(
     addresses = await resolve(parts.hostname, port)
     if not addresses or any(not ip_address(address).is_global for address in addresses):
         raise UnsafeDestination("non_public_destination")
-    pinned, request_headers, extensions = _pinned_request(url, addresses[0], dict(headers or {}))
+    pinned, request_headers, extensions = _pinned_request(
+        url, addresses[0], {"Accept-Encoding": "gzip, deflate", **(headers or {})})
     async with httpx.AsyncClient(
         transport=transport, timeout=httpx.Timeout(timeout), trust_env=False,
         follow_redirects=False, verify=True,
@@ -140,12 +142,49 @@ async def fetch_bounded(
             advertised = response.headers.get("content-length")
             if advertised is not None and advertised.isdigit() and int(advertised) > max_bytes:
                 raise CollectionIncomplete
-            body = bytearray()
-            async for chunk in response.aiter_bytes():  # decoded bytes: a compression bomb is cut at the cap
-                body.extend(chunk)
+            body = await _read_capped(response, max_bytes)
+            return Fetched(body, response.headers.get("etag"), response.headers.get("last-modified"))
+
+
+_WBITS = {"gzip": 16 + zlib.MAX_WBITS, "x-gzip": 16 + zlib.MAX_WBITS, "deflate": zlib.MAX_WBITS}
+
+
+async def _read_capped(response: httpx.Response, max_bytes: int) -> bytes:
+    """Read the body, bounding the DECOMPRESSED size before any inflated bytes are buffered.
+
+    ``aiter_bytes`` would inflate a whole raw chunk first (a gzip bomb expands ~1000x per chunk),
+    so raw bytes go through ``zlib`` with ``max_length``; the cap trips as soon as it is crossed.
+    Encodings other than identity/gzip/deflate are refused rather than decoded unbounded.
+    """
+    encoding = response.headers.get("content-encoding", "identity").strip().lower()
+    body = bytearray()
+    if response.is_stream_consumed:  # in-memory response (already read by the transport): decoded, cap only
+        if len(response.content) > max_bytes:
+            raise CollectionIncomplete
+        return response.content
+    if encoding in {"", "identity"}:
+        async for chunk in response.aiter_raw():
+            body.extend(chunk)
+            if len(body) > max_bytes:
+                raise CollectionIncomplete
+        return bytes(body)
+    if encoding not in _WBITS:
+        raise ProviderHttpError(415)
+    inflater = zlib.decompressobj(_WBITS[encoding])
+    try:
+        async for chunk in response.aiter_raw():
+            data = chunk
+            while data:
+                body.extend(inflater.decompress(data, max_bytes - len(body) + 1))
                 if len(body) > max_bytes:
                     raise CollectionIncomplete
-            return Fetched(bytes(body), response.headers.get("etag"), response.headers.get("last-modified"))
+                data = inflater.unconsumed_tail
+        body.extend(inflater.flush())
+    except zlib.error as exc:
+        raise ProviderHttpError(502) from exc
+    if len(body) > max_bytes:
+        raise CollectionIncomplete
+    return bytes(body)
 
 
 def _walk(value: Any, path: str | None) -> Any:

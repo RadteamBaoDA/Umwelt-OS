@@ -7,8 +7,8 @@ which commits batch, cursor, outbox, request outcome and slot release in ONE tra
 Nothing here wraps a commit-owning ingestion API and assumes outer atomicity.
 
 Boundaries kept deliberately narrow:
-- GitHub (OAuth grant/hint proofs), Telegram (verified bot/update semantics), browser crawl and
-  MCP keep their dedicated, already-proven routes; they are refused here rather than reimplemented.
+- GitHub (OAuth grant/hint proofs) and Telegram (verified bot/update semantics) keep their dedicated,
+  already-proven routes; they are refused here. Static web and MCP run natively; browser rendering stays on crawl.py.
 - Providers added by other slices (HN, macro, crypto, disasters) register in ``ADAPTERS``.
 """
 
@@ -18,7 +18,9 @@ from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from html.parser import HTMLParser
 from typing import Any, Literal
+from urllib.parse import urldefrag, urljoin
 from uuid import UUID
 
 import httpx
@@ -531,6 +533,99 @@ async def _run_rss(run: Run) -> None:
         resume.etag if resume else first.get("etag"), resume.last_modified if resume else first.get("lm")), resume)
 
 
+# ---------------------------------------------------------------- native web + MCP (generic sources)
+
+class _PageText(HTMLParser):
+    """Visible text and anchors of one HTML page (stdlib; no optional crawl extra needed)."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self.links: list[str] = []
+        self._skip = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in {"script", "style", "noscript"}:
+            self._skip += 1
+        elif tag == "a":
+            self.links.extend(v for k, v in attrs if k == "href" and v)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in {"script", "style", "noscript"} and self._skip:
+            self._skip -= 1
+
+    def handle_data(self, data: str) -> None:
+        if not self._skip and data.strip():
+            self.parts.append(data.strip())
+
+
+async def _run_web(run: Run) -> None:
+    """Static web read: same-origin BFS through the gated, pinned transport (browser mode stays on crawl.py)."""
+    from modules.connectors.registry import configuration, normalize
+
+    config = configuration(run.attempt.source)
+    start = str(config.url)
+    state = await _state(run)
+    origin = rest._origin(start)
+    queue, visited, records = [(start, 0)], {start}, []
+    spent = 0
+    while queue and len(records) < config.max_pages:
+        url, depth = queue.pop(0)
+        fetched = await run.gate.fetch_bytes(
+            url, headers={"Accept": "text/html,application/xhtml+xml"},
+            max_bytes=min(rest.MAX_PAGE_BYTES, rest.MAX_TRANSPORT_BYTES - spent), timeout=config.timeout_seconds)
+        body = _require_body(fetched)
+        spent += len(body)
+        page = _PageText()
+        page.feed(body.decode("utf-8", errors="replace"))
+        records.append(normalize({
+            "provider_id": url, "content": "\n".join(page.parts)[:200_000],
+            "observed_at": datetime.now(UTC).isoformat(), "metadata": {"url": url}}))
+        if depth < config.max_depth:
+            for href in page.links:
+                target = urldefrag(urljoin(url, href))[0]
+                if target not in visited and len(queue) < 100 and rest._origin(target) == origin:
+                    visited.add(target)
+                    queue.append((target, depth + 1))
+    await _accept_generic(run, records, state.cursor, state.cursor)
+
+
+async def _run_mcp(run: Run) -> None:
+    """MCP collection: each reviewed call is authorized by the gate, then ingested through the fenced receipt."""
+    from modules.connectors import mcp as mcp_collection
+    from modules.tools import public as tools
+
+    a = run.attempt
+    runtime = run.ctx.get("agent_mcp_runtime")
+    if runtime is None:
+        raise mcp_collection.McpCollectionError("mcp_runtime_unavailable")
+    config = mcp_collection.validate(a.source)
+    state = await _state(run)
+    collected_at = datetime.now(UTC)
+    records: list[dict[str, Any]] = []
+    failed = 0
+
+    async def authorized() -> bool:
+        await run.gate()  # raises CollectionFenceLost / TermsIneligible / TimeoutError; never returns False
+        return True
+
+    for call in config.calls:
+        try:
+            read = await tools.read_collection_capability(
+                runtime, connection_id=config.connection_id, grant_id=call.grant_id, source_id=a.source.id,
+                source_generation=a.source.generation, arguments=call.arguments, authorize_extra=authorized,
+                scope=a.scope, multi_workspace_enabled=a.multi)
+            records.extend(mcp_collection.normalize(read, call.arguments, collected_at))
+        except (CollectionFenceLost, TermsIneligible, TimeoutError, asyncio.CancelledError):
+            raise
+        except Exception:  # noqa: BLE001  # one failing call never blocks the others (as in mcp.collect)
+            failed += 1
+    if failed == len(config.calls):
+        raise mcp_collection.McpCollectionError("mcp_collection_failed")
+    await _accept_generic(
+        run, records[:mcp_collection.MAX_RECORDS], state.cursor, "mcp:" + collected_at.isoformat())
+
+
 # ---------------------------------------------------------------- simple native providers
 
 async def _run_native(run: Run) -> None:
@@ -794,7 +889,7 @@ async def _release_lease(run: Run, error_code: str) -> None:
 def _adapter_for(source: ConnectorSource) -> Adapter | None:
     provider = source.provider
     if provider is None:
-        return {"api": _run_rest, "rss": _run_rss}.get(source.type)
+        return {"api": _run_rest, "rss": _run_rss, "web": _run_web, "mcp": _run_mcp}.get(source.type)
     if provider in ADAPTERS:
         return ADAPTERS[provider]
     return _run_native if provider in SIMPLE_NATIVE else None
@@ -802,6 +897,8 @@ def _adapter_for(source: ConnectorSource) -> Adapter | None:
 
 def supports_native(source: ConnectorSource) -> bool:
     """True when the shared executor can collect this source; activation refuses everything else."""
+    if source.type == "web" and source.provider is None and (source.configuration or {}).get("js_render"):
+        return False  # browser rendering stays on crawl.py
     return _adapter_for(source) is not None and source.provider not in REFUSED_HERE
 
 
