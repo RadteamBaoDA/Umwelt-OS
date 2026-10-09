@@ -490,7 +490,13 @@ async def list_runs(
     owner_id = actor(scope)
     if not 1 <= limit <= 25:
         raise HTTPException(status_code=422, detail="Run history page size is outside its supported bound")
-    anchor = decode_cursor(cursor) if cursor else None
+    from modules.memory.public import bind_page_cursor, page_cursor_binding, unbind_page_cursor
+
+    binding = page_cursor_binding(
+        scope, kind="agent_runs", profile_id=profile_id,
+        conversation_id=str(conversation_id) if conversation_id else None,
+    )
+    anchor = decode_cursor(unbind_page_cursor(cursor, binding)) if cursor else None
     page: list[AgentRun] = []
     scanned = 0
     has_more = False
@@ -531,10 +537,10 @@ async def list_runs(
     next_cursor: str | None
     if has_more:
         # Continue after the last returned row so the first overflow row remains on the next page.
-        next_cursor = encode_cursor(page[limit - 1].created_at, page[limit - 1].id)
+        next_cursor = bind_page_cursor(encode_cursor(page[limit - 1].created_at, page[limit - 1].id), binding)
         page = page[:limit]
     elif scanned >= 100:
-        next_cursor = encode_cursor(*scan_anchor) if scan_anchor else None
+        next_cursor = bind_page_cursor(encode_cursor(*scan_anchor), binding) if scan_anchor else None
     else:
         next_cursor = None
     return AgentRunPage(

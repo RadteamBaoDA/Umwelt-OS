@@ -6,7 +6,9 @@ from modules.chat import public as chat_public
 
 async def _code(context):
     with pytest.raises(HTTPException) as caught:
-        await chat_public.resolve_gadget_context(None, context)  # type: ignore[arg-type]
+        await chat_public.resolve_gadget_context(  # type: ignore[arg-type]
+            None, context, scope=None, multi_workspace_enabled=False,
+        )
     return caught.value.status_code, caught.value.detail["code"]
 
 

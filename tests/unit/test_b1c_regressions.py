@@ -230,8 +230,6 @@ async def test_build_context_projects_neighbors_from_nested_neighbor_read(monkey
         relationship=SimpleNamespace(id=rel_id, type="depends_on"),
         entity=SimpleNamespace(id=other_id, name="Beta"),
     )
-    monkeypatch.setattr(retrieval, "owner_scope_kwargs", AsyncMock(
-        return_value={"scope": OWNER, "multi_workspace_enabled": False}))
     monkeypatch.setattr(retrieval.entities_public, "resolve_canonical_entity_id", AsyncMock(return_value=entity_id))
     monkeypatch.setattr(retrieval.entities_public, "get_entity", AsyncMock(return_value=entity))
     monkeypatch.setattr(retrieval.entities_public, "list_entity_evidence", AsyncMock(return_value=None))
@@ -242,7 +240,7 @@ async def test_build_context_projects_neighbors_from_nested_neighbor_read(monkey
 
     context = await retrieval.build_context(
         MagicMock(), MagicMock(), MagicMock(), MagicMock(),
-        AnswerContextRequest(query="alpha", entity_ids=[entity_id]),
+        AnswerContextRequest(query="alpha", entity_ids=[entity_id]), OWNER,
     )
     assert len(context.entity_summaries) == 1
     assert context.entity_summaries[0].neighbors == [
@@ -259,8 +257,6 @@ def _rerank_env(monkeypatch: pytest.MonkeyPatch, current_rows: list[Any] | None,
     from modules.chat import retrieval
 
     state: dict[str, Any] = {"gateways": [], "sent": False, "lock_calls": []}
-    monkeypatch.setattr(retrieval, "owner_scope_kwargs", AsyncMock(
-        return_value={"scope": OWNER, "multi_workspace_enabled": False}))
     monkeypatch.setattr(retrieval.settings_public, "get_ai_execution_config", AsyncMock(return_value=_config()))
 
     async def lock(session: Any, refs: list[Any], **kwargs: Any) -> list[Any]:
@@ -295,7 +291,7 @@ async def test_rerank_applies_and_revalidates_evidence_before_send(monkeypatch: 
     send_session.close = AsyncMock()
 
     reordered, status, warnings = await _apply_configured_reranking(
-        MagicMock(), lambda: send_session, redis, MagicMock(), "q", items,
+        MagicMock(), lambda: send_session, redis, MagicMock(), "q", items, OWNER,
     )
     assert status == "applied" and warnings == []
     assert reordered == [items[1], items[0]]
@@ -320,7 +316,7 @@ async def test_rerank_before_send_blocks_when_evidence_became_local_only(monkeyp
     send_session.close = AsyncMock()
 
     reordered, status, _ = await _apply_configured_reranking(
-        MagicMock(), lambda: send_session, MagicMock(), MagicMock(), "q", items,
+        MagicMock(), lambda: send_session, MagicMock(), MagicMock(), "q", items, OWNER,
     )
     assert status == "unavailable" and reordered == items
     assert state["sent"] is False  # revalidation raised before any remote send
@@ -333,7 +329,7 @@ async def test_rerank_local_only_evidence_never_reaches_gateway(monkeypatch: pyt
     items = [_evidence(local_only=True), _evidence()]
     state = _rerank_env(monkeypatch, None, items)
     reordered, status, warnings = await _apply_configured_reranking(
-        MagicMock(), MagicMock(), MagicMock(), MagicMock(), "q", items,
+        MagicMock(), MagicMock(), MagicMock(), MagicMock(), "q", items, OWNER,
     )
     assert status == "unavailable" and reordered == items
     assert any("local-only" in w.lower() for w in warnings)

@@ -284,8 +284,7 @@ async def test_attachment_becomes_a_selection_reference_and_local_only_is_refuse
         {"sourceId": str(source_id), "documentId": str(document_id), "documentVersionId": str(version_id)},
     ]}
 
-    monkeypatch.setattr("modules.chat.scope.owner_scope_kwargs", AsyncMock(return_value=KW))
-    resolved = await chat_public.resolve_gadget_context(MagicMock(), context)
+    resolved = await chat_public.resolve_gadget_context(MagicMock(), context, **KW)
     assert resolved["selected_only"] is True
     assert resolved["selected_refs"][0]["chunk_id"] == str(chunk_id)
     assert resolved["selection_fences"][0]["local_only"] is True

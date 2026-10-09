@@ -90,7 +90,8 @@ async def test_exactly_at_cap_is_not_capped() -> None:
 
 
 async def test_cursor_pages_omit_counts() -> None:
-    page = await _page([], cursor=encode_cursor(datetime.now(UTC), uuid4()))
+    binding = public.page_cursor_binding(OWNER, kind="memories", status="active", memory_type=None, query=None)
+    page = await _page([], cursor=public.bind_page_cursor(encode_cursor(datetime.now(UTC), uuid4()), binding))
     assert page.total_count is None and page.kind_counts is None and page.counts_capped is False
 
 

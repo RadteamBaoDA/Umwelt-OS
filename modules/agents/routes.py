@@ -7,7 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.auth.dependencies import require_owner, require_owner_write
+from core.auth.dependencies import require_account, require_account_write
 from core.auth.models import AuthSession
 from core.database import get_session
 from core.realtime import commit_with_replay
@@ -38,8 +38,8 @@ from modules.tools.webhook import load_webhook_profiles
 router = APIRouter(tags=["agents"], dependencies=[Depends(module_dependency("agents"))])
 logger = logging.getLogger(__name__)
 Session = Annotated[AsyncSession, Depends(get_session)]
-OwnerRead = Annotated[AuthSession, Depends(require_owner)]
-OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]
+OwnerRead = Annotated[AuthSession, Depends(require_account)]
+OwnerWrite = Annotated[AuthSession, Depends(require_account_write)]
 # Selected-workspace identity; owner role and the access fence are enforced by each Agents owner function.
 WorkspaceRead = Annotated[WorkspaceContext, Depends(require_default_workspace_read)]
 WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_default_workspace_write)]

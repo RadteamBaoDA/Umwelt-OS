@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.auth.dependencies import require_owner, require_owner_write
+from core.auth.dependencies import require_account, require_account_write
 from core.auth.models import AuthSession
 from core.database import get_session
 from core.workspaces.dependencies import (
@@ -37,8 +37,8 @@ from modules.settings.public import module_dependency
 router = APIRouter(tags=["memory"], dependencies=[Depends(module_dependency("memory"))])
 
 Session = Annotated[AsyncSession, Depends(get_session)]
-OwnerRead = Annotated[AuthSession, Depends(require_owner)]
-OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]
+OwnerRead = Annotated[AuthSession, Depends(require_account)]
+OwnerWrite = Annotated[AuthSession, Depends(require_account_write)]
 # Memory is private: only the actor's own default workspace is admitted (409 default_workspace_required).
 DefaultRead = Annotated[WorkspaceContext, Depends(require_default_workspace_read)]
 DefaultWrite = Annotated[WorkspaceContext, Depends(require_default_workspace_write)]

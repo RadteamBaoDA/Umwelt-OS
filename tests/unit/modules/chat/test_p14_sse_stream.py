@@ -94,7 +94,7 @@ def _install(monkeypatch: pytest.MonkeyPatch, store: _Store, *, auth: list[bool]
     async def auth_row(_session: Any, _hash: Any) -> int | None:
         return (1 if answers.pop(0) else None) if answers else 1
 
-    async def no_citations(_session: Any, citations: Any) -> list[Any]:
+    async def no_citations(_session: Any, citations: Any, **_kw: Any) -> list[Any]:
         return list(citations) if isinstance(citations, list) else []
 
     async def probe(_session: Any, _rid: Any, _seq: int, _hash: Any) -> bool:
@@ -395,7 +395,7 @@ async def test_batch_citations_filtered_with_one_call(monkeypatch: pytest.Monkey
     _install(monkeypatch, store)
     calls: list[list[Any]] = []
 
-    async def spy(_session: Any, citations: Any) -> list[Any]:
+    async def spy(_session: Any, citations: Any, **_kw: Any) -> list[Any]:
         calls.append(list(citations))
         return [c for c in citations if c.get("keep")]
 
@@ -435,21 +435,17 @@ async def test_conversation_citations_batched_identical_to_per_message(monkeypat
 
     monkeypatch.setattr(documents_public, "lock_chat_evidence_chunks", lock_chunks)
 
-    async def scope_kwargs(_session: Any, owner_id: int = 1) -> dict[str, object]:
-        return {"scope": SimpleNamespace(), "multi_workspace_enabled": False}
-
-    from modules.chat import scope as chat_scope
-
-    monkeypatch.setattr(chat_scope, "owner_scope_kwargs", scope_kwargs)
+    scope = SimpleNamespace()
+    kw: dict[str, Any] = {"scope": scope, "multi_workspace_enabled": False}
     messages: list[object] = [
         [_cite(v, c, source, document) for v, c in pairs[i:i + 30]] for i in range(0, 150, 30)
     ]
     messages += [[], {"not": "a list"}, ["junk", _cite(*pairs[0], uuid4(), document)]]
 
-    per_message = [await chat_public.filter_current_citations(None, m) for m in messages]  # type: ignore[arg-type]
+    per_message = [await chat_public.filter_current_citations(None, m, **kw) for m in messages]  # type: ignore[arg-type]
     old_calls = len(lock_calls)
     lock_calls.clear()
-    batched = await routes._filter_citation_lists(None, messages)  # type: ignore[arg-type]
+    batched = await routes._filter_citation_lists(None, messages, scope)  # type: ignore[arg-type]
 
     assert batched == per_message
     assert old_calls == 6 and lock_calls == [100, 50]  # one lock call per 100 unique refs, not per message
