@@ -11,7 +11,6 @@ from fastapi import HTTPException
 from sqlalchemy.dialects import postgresql
 
 from core.workspaces.schemas import WorkspaceContext
-
 from modules.chat import public as chat
 from modules.connectors import routes as connector_routes
 from modules.connectors.providers.telegram import _TelegramAPIError
@@ -21,7 +20,6 @@ from modules.knowledge.documents import public as documents
 from modules.sources import public as source_public
 from modules.sources import public as sources
 from modules.sources import routes as source_routes
-
 
 WORKSPACE_ID = uuid4()
 

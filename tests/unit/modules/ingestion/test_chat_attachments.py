@@ -22,7 +22,6 @@ from modules.ingestion import routes
 from modules.sources import public as sources_public
 from modules.sources.models import Source
 
-
 WS = uuid4()
 SCOPE = WorkspaceContext(user_id=7, workspace_id=WS, role="owner", membership_revision=3)
 KW: dict[str, Any] = {"scope": SCOPE, "multi_workspace_enabled": False}
@@ -184,7 +183,10 @@ async def test_attachment_upload_targets_server_chosen_source(monkeypatch: pytes
 
 
 def test_attachment_routes_bind_the_default_workspace_dependencies() -> None:
-    from core.workspaces.dependencies import require_default_workspace_read, require_default_workspace_write
+    from core.workspaces.dependencies import (
+        require_default_workspace_read,
+        require_default_workspace_write,
+    )
 
     def deps(route: Any) -> set[Any]:
         hint = typing.get_type_hints(route, include_extras=True)["_owner"]

@@ -9,9 +9,9 @@ import pytest
 from sqlalchemy.dialects import postgresql
 
 from modules.knowledge.documents import public
-from tests.unit.modules.knowledge.documents._scope import FENCE, SCOPE, SCOPE_KW
 from modules.knowledge.documents.models import DocumentInteraction
 from modules.knowledge.documents.schemas import GadgetDocumentInteractionPatch
+from tests.unit.modules.knowledge.documents._scope import FENCE, SCOPE, SCOPE_KW
 
 
 def _interaction_session(row: DocumentInteraction | None) -> AsyncMock:
