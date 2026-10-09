@@ -13,6 +13,7 @@ import { MapGadget } from './gadgets/map-gadget';
 import { GoalsGadget } from './gadgets/goals-gadget';
 import { MetricsChart } from './gadgets/metrics-chart';
 import { NewsFeed } from './gadgets/news-feed';
+import { ProviderObservationGadget } from './gadgets/provider-observation-gadget';
 import { PersonalContext } from './gadgets/personal-context';
 import { TablePanel } from './gadgets/table-panel';
 import { TasksGadget } from './gadgets/tasks-gadget';
@@ -51,6 +52,7 @@ const GADGET_REGISTRY: Record<string, React.ComponentType<GadgetRendererProps>> 
   metrics_chart: (props) => <MetricsChart instance={props.instance} />,
   github_project: (props) => <GithubProjectGadget instance={props.instance} />,
   weather: (props) => <WeatherPanel instance={props.instance} />,
+  provider_observation: (props) => <ProviderObservationGadget instance={props.instance} />,
   map: (props) => <MapGadget instance={props.instance} isEditMode={props.isEditMode} />,
   intelligence_panel: (props) => <IntelligencePanel instance={props.instance} />,
 };
@@ -75,7 +77,7 @@ export const GADGET_READING_BODY_FLOORS: Record<string, number> = {
   finance_chart: 276, metrics_chart: 276,
   github_project: 204,
   // MapGadget reserves 12rem for its plot plus 24rem for all bounded, coexisting controls and spacing.
-  weather: 204, map: 608, intelligence_panel: 180,
+  weather: 204, provider_observation: 240, map: 608, intelligence_panel: 180,
 };
 
 /** Resolves source-backed floors, scaling MapGadget's bounded controls and plot with root text size. */

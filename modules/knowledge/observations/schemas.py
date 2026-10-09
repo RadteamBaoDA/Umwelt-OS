@@ -1,10 +1,20 @@
 """Strict owner-facing observation and query DTOs."""
 
-from datetime import datetime
+from datetime import UTC, date, datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictInt,
+    computed_field,
+    field_validator,
+    model_validator,
+)
+
+_FX_PROVIDERS = frozenset({"frankfurter", "ecb"})
 
 
 class WorldMeasurement(BaseModel):
@@ -108,6 +118,22 @@ class ObservationRead(BaseModel):
     provider_delay_seconds: int | None
     document_id: UUID
     document_version_id: UUID
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def reference_date(self) -> date | None:
+        """FX reference day: the provider mapper stores it as the UTC start of day in ``observed_at``."""
+        if self.provider in _FX_PROVIDERS and self.metric == "fx_reference_rate":
+            return self.observed_at.astimezone(UTC).date()
+        return None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def period(self) -> str | None:
+        """Annual macro period: the mapper stores it as the UTC start of the year in ``observed_at``."""
+        if self.provider == "world_bank":
+            return str(self.observed_at.astimezone(UTC).year)
+        return None
 
 
 class GeospatialObservationRead(ObservationRead):
