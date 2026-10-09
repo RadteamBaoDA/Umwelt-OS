@@ -22,6 +22,15 @@ from modules.sources.schemas import (
     SourceRead,
 )
 
+async def _with_timing(session: AsyncSession, scope: WorkspaceContext, reads: list[SourceRead]) -> None:
+    """Fill next_due_at/retry_at from connector schedule state, scoped to the workspace."""
+    from modules.connectors import public as connectors
+
+    timing = await connectors.collection_timing(session, scope, [r.id for r in reads if r.type != "manual"])
+    for read in reads:
+        read.next_due_at, read.retry_at = timing.get(read.id, (None, None))
+
+
 router = APIRouter(
     prefix="/api/v1/sources",
     tags=["sources"],
@@ -52,8 +61,10 @@ async def list_sources(
         session, limit, cursor, scope=scope,
         multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
     )
+    reads = [SourceRead.model_validate(item, from_attributes=True) for item in items]
+    await _with_timing(session, scope, reads)
     return SourceList(
-        items=[SourceRead.model_validate(item, from_attributes=True) for item in items],
+        items=reads,
         next_cursor=next_cursor,
     )
 
@@ -83,7 +94,9 @@ async def get_source(
     )
     if source is None:
         raise HTTPException(status_code=404, detail="Source not found")
-    return SourceRead.model_validate(source, from_attributes=True)
+    read = SourceRead.model_validate(source, from_attributes=True)
+    await _with_timing(session, scope, [read])
+    return read
 
 
 @router.get("/{source_id}/impact", response_model=SourceImpactRead)
