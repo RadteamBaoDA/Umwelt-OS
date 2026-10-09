@@ -45,11 +45,11 @@ def select_turns(messages: Sequence[Message], runs: Iterable[ResponseRun], limit
     for user in messages:
         if user.role != "user":
             continue
-        run = run_for_user.get(user.id)
+        turn_run = run_for_user.get(user.id)
         # failed / cancelled / pending / answer-less runs never become model history
-        if run is None or run.status != "completed" or run.assistant_message_id is None:
+        if turn_run is None or turn_run.status != "completed" or turn_run.assistant_message_id is None:
             continue
-        assistant = by_id.get(run.assistant_message_id)
+        assistant = by_id.get(turn_run.assistant_message_id)
         if assistant is not None and assistant.role == "assistant":
             complete.append(Turn(user, assistant))
     superseded = {
@@ -114,8 +114,8 @@ async def revoked_assistant_ids(session: AsyncSession, turns: Sequence[Turn], sc
             revoked.add(aid)
             continue
         for source_id, document_id, version_id, chunk_id in refs:
-            item = current.get((version_id, chunk_id))
-            if item is None or item.local_only or item.source_id != source_id or item.document_id != document_id:
+            cur = current.get((version_id, chunk_id))
+            if cur is None or cur.local_only or cur.source_id != source_id or cur.document_id != document_id:
                 revoked.add(aid)
                 break
     return revoked
