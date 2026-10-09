@@ -94,10 +94,12 @@ async def _seed_run(
             "VALUES (CAST(:m AS uuid), CAST(:c AS uuid), 'user', 'p14-t4')"
         ), {"m": str(message_id), "c": str(conversation_id)})
         await connection.execute(text(
-            "INSERT INTO chat_response_runs (id, conversation_id, user_message_id, status, ephemeral, "
-            "retrieval_context, completed_at) VALUES (CAST(:r AS uuid), CAST(:c AS uuid), CAST(:m AS uuid), "
+            "INSERT INTO chat_response_runs (id, workspace_id, actor_user_id, conversation_id, user_message_id, "
+            "status, ephemeral, retrieval_context, completed_at) "
+            "SELECT CAST(:r AS uuid), workspace_id, actor_user_id, id, CAST(:m AS uuid), "
             "CAST(:status AS varchar), false, CAST(:ctx AS jsonb), "
-            "CASE WHEN CAST(:status AS varchar) = 'completed' THEN now() END)"
+            "CASE WHEN CAST(:status AS varchar) = 'completed' THEN now() END "
+            "FROM chat_conversations WHERE id = CAST(:c AS uuid)"
         ), {"r": str(response_id), "c": str(conversation_id), "m": str(message_id), "status": status,
             "ctx": context})
         await connection.execute(text(

@@ -277,7 +277,10 @@ async def test_reranker_alias_probe_and_chat_with_reranking(chat_ready: AsyncCli
     assert saved.status_code == 200, saved.text
     probe = await client.post("/api/v1/settings/models/reranker/test", json={"capability": "reranking"})
     assert probe.status_code == 200 and probe.json()["result"] == "supported", probe.text
+    # Saving settings invalidates earlier capability proofs; re-prove streaming for the chat alias.
+    stream_probe = await client.post("/api/v1/settings/models/reasoning-large/test", json={"capability": "streaming"})
+    assert stream_probe.status_code == 200 and stream_probe.json()["result"] == "supported", stream_probe.text
 
     response_id = await _send(client, "hello [fake:tokens=5]")
     frames = [frame async for frame in _events(client, response_id, None)]
-    assert frames[-1][1] == "message.done" and frames[-1][2]["status"] == "completed"
+    assert frames[-1][1] == "message.done" and frames[-1][2]["status"] == "completed", frames[-3:]

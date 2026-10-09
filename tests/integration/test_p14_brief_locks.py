@@ -115,13 +115,14 @@ async def _seed_supported_story(client: AsyncClient, engine: AsyncEngine, nonce:
     async with engine.begin() as connection:
         story_id = uuid4()
         await connection.execute(text(
-            "INSERT INTO news_stories (id, identity_key, identity_kind) VALUES (:id, :key, 'hash')"
-        ), {"id": story_id, "key": f"p14-brief-{nonce}"})
+            "INSERT INTO news_stories (id, workspace_id, identity_key, identity_kind) "
+            "SELECT :id, workspace_id, :key, 'hash' FROM documents WHERE id = :document"
+        ), {"id": story_id, "key": f"p14-brief-{nonce}", "document": document_id})
         await connection.execute(text(
-            "INSERT INTO news_observations (id, story_id, document_id, document_version_id, chunk_id, "
+            "INSERT INTO news_observations (id, workspace_id, story_id, document_id, document_version_id, chunk_id, "
             "source_id, source_generation, version_number, content_hash, title, excerpt, observed_at, "
-            "local_only, match_method) VALUES (:id, :story, :document, :version, :chunk, :source, "
-            ":generation, :number, :hash, :title, :excerpt, now(), false, 'hash')"
+            "local_only, match_method) SELECT :id, workspace_id, :story, :document, :version, :chunk, :source, "
+            ":generation, :number, :hash, :title, :excerpt, now(), false, 'hash' FROM documents WHERE id = :document"
         ), {
             "id": uuid4(), "story": story_id, "document": document_id, "version": row["version_id"],
             "chunk": row["chunk_id"], "source": source_id, "generation": row["generation"],
