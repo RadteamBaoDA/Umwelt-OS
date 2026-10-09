@@ -51,22 +51,18 @@ def upgrade() -> None:
                 break
             bind.execute(_UPDATE, {"ids": ids, "languages": list(LANGUAGES)})
             last = str(ids[-1])
-        # (language, created_at, id): equality on language plus the feed's created_at/id ORDER BY.
+        # (workspace_id, language, created_at, id): scoped equality plus the feed's created_at/id ORDER BY.
         # A cancelled CONCURRENTLY build leaves an INVALID index that IF NOT EXISTS would keep; drop first.
-        op.drop_index(
-            "ix_documents_language_created_at_id", table_name="documents",
-            postgresql_concurrently=True, if_exists=True,
-        )
+        for stale in ("ix_documents_language_created_at_id", "ix_documents_workspace_language_created_at_id"):
+            op.drop_index(stale, table_name="documents", postgresql_concurrently=True, if_exists=True)
         op.create_index(
-            "ix_documents_language_created_at_id", "documents", ["language", "created_at", "id"],
-            postgresql_concurrently=True,
+            "ix_documents_workspace_language_created_at_id", "documents",
+            ["workspace_id", "language", "created_at", "id"], postgresql_concurrently=True,
         )
 
 
 def downgrade() -> None:
     """Drop the index; backfilled values are indistinguishable from ingest-written ones, so keep them."""
     with op.get_context().autocommit_block():
-        op.drop_index(
-            "ix_documents_language_created_at_id", table_name="documents",
-            postgresql_concurrently=True, if_exists=True,
-        )
+        for name in ("ix_documents_workspace_language_created_at_id", "ix_documents_language_created_at_id"):
+            op.drop_index(name, table_name="documents", postgresql_concurrently=True, if_exists=True)

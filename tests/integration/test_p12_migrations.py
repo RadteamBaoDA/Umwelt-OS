@@ -235,7 +235,7 @@ async def test_r15_language_backfill_round_trip_with_seeded_documents(
         async with engine.connect() as connection:
             assert await connection.scalar(text("SELECT count(*) FROM documents")) == before["documents"]
             assert await connection.scalar(text(
-                "SELECT indisvalid FROM pg_index WHERE indexrelid = 'ix_documents_language_created_at_id'::regclass"
+                "SELECT indisvalid FROM pg_index WHERE indexrelid = 'ix_documents_workspace_language_created_at_id'::regclass"
             ))
     finally:
         await engine.dispose()

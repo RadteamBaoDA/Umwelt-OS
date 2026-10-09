@@ -75,3 +75,28 @@ def test_offline_head_renders_provider_terms_and_quota_ledger() -> None:
         "fk_connector_quota_debits_window",
     ):
         assert fragment in result.stdout
+
+
+def test_dismissed_migration_downgrade_sql_drops_dismissed_only_rows() -> None:
+    result = _alembic("downgrade", "r15_document_dismissed:r15_document_language_backfill", "--sql")
+    assert result.returncode == 0, result.stderr
+    out = result.stdout
+    delete = out.index("DELETE FROM document_interactions WHERE read_at IS NULL AND bookmarked_at IS NULL")
+    assert delete < out.index("DROP COLUMN dismissed_at")
+    assert "read_at IS NOT NULL OR bookmarked_at IS NOT NULL)" in out
+
+
+def test_rule_delivery_migration_adds_and_drops_rule_last_notified() -> None:
+    up = _alembic("upgrade", "r15_document_dismissed:r15_highlight_rule_delivery", "--sql")
+    assert up.returncode == 0, up.stderr
+    assert "ALTER TABLE gadget_highlight_progress ADD COLUMN rule_last_notified JSONB DEFAULT '{}' NOT NULL" in up.stdout
+    down = _alembic("downgrade", "r15_highlight_rule_delivery:r15_document_dismissed", "--sql")
+    assert down.returncode == 0, down.stderr
+    assert "DROP COLUMN rule_last_notified" in down.stdout
+
+
+def test_language_index_is_workspace_first_and_drops_legacy_name() -> None:
+    up = _alembic("upgrade", "p14_backend_activation:r15_document_language_backfill", "--sql")
+    assert up.returncode == 0, up.stderr
+    assert "ix_documents_workspace_language_created_at_id ON documents (workspace_id, language, created_at, id)" in up.stdout
+    assert "DROP INDEX CONCURRENTLY IF EXISTS ix_documents_language_created_at_id" in up.stdout
