@@ -19,6 +19,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.schemas import AccountSessionRef
+from core.telemetry import count
 from core.workspaces.public import lock_access_fence, read_access_fence
 from core.workspaces.schemas import Scope, WorkspaceContext
 from modules.settings.models import TranslationSettingsRecord
@@ -264,6 +265,9 @@ async def request_translations(
             fresh.append(found)
         elif found.expires_at <= now:
             retry.append(found)
+        elif found.status in ("ready", "unchanged"):
+            count("translation_cache_hits_total", resource_type=item.resource_type,
+                  target_language=settings.target_language)
         rows.append(found)
     if fresh or retry:  # only new work counts against the limits
         recent = await session.scalar(select(func.count()).select_from(TranslationBatch).where(

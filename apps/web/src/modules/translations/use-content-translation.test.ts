@@ -13,8 +13,9 @@ vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => 
 vi.mock('@/core/workspace-context', () => ({ useWorkspace: () => ({ selection: { id: ws.id } }) }));
 vi.mock('@/core/api', () => ({ workspaceGeneration: () => ws.generation }));
 
+const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 const wrapper = ({ children }: { children: ReactNode }) =>
-  createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) }, children);
+  createElement(QueryClientProvider, { client }, children);
 const ids = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `s${i}`, revision: 'r' }));
 const settle = () => act(async () => { await vi.advanceTimersByTimeAsync(0); });
 const accepted = (items: Array<{ resource_id: string; status: string }>, batch = 'b1') => ({
@@ -24,6 +25,7 @@ const accepted = (items: Array<{ resource_id: string; status: string }>, batch =
 describe('useContentTranslation', () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    client.clear();
     ws.id = 'w1'; ws.generation = 1;
     (Object.values(api) as Array<{ mockReset(): void }>).forEach((fn) => fn.mockReset());
     api.fetchTranslationSettings.mockResolvedValue({ enabled: true, target_language: 'vi', configuration_revision: 3 });
@@ -68,5 +70,24 @@ describe('useContentTranslation', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(POLL_MS * 5); });
     expect(api.readTranslationBatch.mock.calls.length).toBe(polls);
     expect(api.submitTranslationBatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('shares one cache between two consumers and exposes blocked reasons', async () => {
+    api.submitTranslationBatch.mockResolvedValue({
+      batch_id: null, items: [
+        { resource_type: 'news_story', resource_id: 's0', status: 'ready', translation: { title: 'x' }, original_revision: 'r' },
+        { resource_type: 'news_story', resource_id: 's1', status: 'blocked', error_code: 'privacy_blocked' },
+      ],
+    });
+    const first = renderHook(() => useContentTranslation('news_story', ids(2)), { wrapper });
+    await settle(); await settle();
+    await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+    const second = renderHook(() => useContentTranslation('news_story', ids(2)), { wrapper });
+    await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+    expect(api.submitTranslationBatch).toHaveBeenCalledTimes(1);
+    for (const hook of [first, second]) {
+      expect(hook.result.current.results.get('s0')?.translation?.title).toBe('x');
+      expect(hook.result.current.issues.get('s1')?.errorCode).toBe('privacy_blocked');
+    }
   });
 });

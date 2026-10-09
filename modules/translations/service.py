@@ -17,6 +17,7 @@ from core.model_gateway.client import (
     PrivacyPolicyDenied,
 )
 from core.model_gateway.schemas import AIExecutionConfig, RequestPolicy
+from core.telemetry import count
 from modules.translations.protection import (
     join_markdown,
     protect_text,
@@ -100,6 +101,11 @@ async def _ask(
             ALIAS, config.aliases.get(ALIAS), policy, messages, schema,
             max_tokens=4096, temperature=0, before_send=before_send), remaining)
         data = json.loads(response["choices"][0]["message"]["content"])
+        usage = response.get("usage") if isinstance(response, dict) else None
+        for key, direction in (("prompt_tokens", "in"), ("completion_tokens", "out")):
+            used = usage.get(key) if isinstance(usage, dict) else None
+            if isinstance(used, int) and not isinstance(used, bool) and used > 0:
+                count("translation_tokens_total", used, direction=direction, target_language=language)
     except TimeoutError as exc:
         raise TranslationBlocked("deadline_exceeded") from exc
     except PrivacyPolicyDenied as exc:
