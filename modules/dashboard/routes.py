@@ -10,12 +10,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from redis.exceptions import RedisError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.auth.dependencies import require_owner, require_owner_write
-from core.auth.models import AuthSession
+from core import publication
+from core.auth.public import authenticated_session_ref
 from core.database import get_session
+from core.workspaces import public as workspaces
 from core.workspaces.dependencies import require_workspace_read, require_workspace_write
-from core.workspaces.schemas import WorkspaceContext
-from modules.dashboard import briefs, context, public
+from core.workspaces.schemas import PublicationFence, WorkspaceContext
+from modules.dashboard import brief_sharing, briefs, context, public
 from modules.dashboard.daily_schemas import (
     BriefGenerateRequest,
     BriefRead,
@@ -53,8 +54,6 @@ from modules.sources.schemas import GadgetSourceSelectionPage
 
 router = APIRouter(prefix="/api/v1", tags=["dashboard"], dependencies=[Depends(module_dependency("dashboard"))])
 Session = Annotated[AsyncSession, Depends(get_session)]
-OwnerRead = Annotated[AuthSession, Depends(require_owner)]
-OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]
 WorkspaceRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
 WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 
@@ -80,21 +79,21 @@ async def _call[T](operation: Awaitable[T]) -> T:
 
 
 @router.get("/dashboards", response_model=list[DashboardSummary])
-async def list_dashboards(session: Session, owner: OwnerRead, scope: WorkspaceRead, request: Request, response: Response) -> list[DashboardSummary]:
+async def list_dashboards(session: Session, scope: WorkspaceRead, request: Request, response: Response) -> list[DashboardSummary]:
     """List the authenticated owner's dashboard summaries without accepting browser ownership."""
     _no_store(response)
     return await public.list_dashboards(session, scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
 
 
 @router.post("/dashboards", status_code=201, response_model=DashboardDetail)
-async def create_dashboard(payload: DashboardCreate, session: Session, owner: OwnerWrite, scope: WorkspaceWrite, request: Request, response: Response) -> DashboardDetail:
+async def create_dashboard(payload: DashboardCreate, session: Session, scope: WorkspaceWrite, request: Request, response: Response) -> DashboardDetail:
     """Create an owner dashboard only after Origin, session, and CSRF write checks pass."""
     _no_store(response)
     return await _call(public.create_dashboard(session, payload, scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled))
 
 
 @router.get("/dashboards/{dashboard_id}", response_model=DashboardDetail)
-async def get_dashboard(dashboard_id: UUID, session: Session, owner: OwnerRead, scope: WorkspaceRead, request: Request, response: Response) -> DashboardDetail:
+async def get_dashboard(dashboard_id: UUID, session: Session, scope: WorkspaceRead, request: Request, response: Response) -> DashboardDetail:
     """Read saved configuration and both layouts, returning 404 for absent or foreign dashboards."""
     _no_store(response)
     result = await public.get_dashboard(session, dashboard_id, scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
@@ -104,14 +103,14 @@ async def get_dashboard(dashboard_id: UUID, session: Session, owner: OwnerRead, 
 
 
 @router.patch("/dashboards/{dashboard_id}", response_model=DashboardDetail)
-async def patch_dashboard(dashboard_id: UUID, payload: DashboardPatch, session: Session, owner: OwnerWrite, scope: WorkspaceWrite, request: Request, response: Response) -> DashboardDetail:
+async def patch_dashboard(dashboard_id: UUID, payload: DashboardPatch, session: Session, scope: WorkspaceWrite, request: Request, response: Response) -> DashboardDetail:
     """Rename a dashboard under CSRF protection and its shared expected revision."""
     _no_store(response)
     return await _call(public.patch_dashboard(session, dashboard_id, payload, scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled))
 
 
 @router.delete("/dashboards/{dashboard_id}", status_code=204)
-async def delete_dashboard(dashboard_id: UUID, expected_revision: Annotated[int, Query(ge=1, le=9_007_199_254_740_991)], session: Session, owner: OwnerWrite, scope: WorkspaceWrite, request: Request, response: Response) -> Response:
+async def delete_dashboard(dashboard_id: UUID, expected_revision: Annotated[int, Query(ge=1, le=9_007_199_254_740_991)], session: Session, scope: WorkspaceWrite, request: Request, response: Response) -> Response:
     """Delete one dashboard tree using an explicit revision and return no cached body."""
     _no_store(response)
     await _call(public.delete_dashboard(session, dashboard_id, expected_revision, scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled))
@@ -119,7 +118,7 @@ async def delete_dashboard(dashboard_id: UUID, expected_revision: Annotated[int,
 
 
 @router.get("/dashboards/{dashboard_id}/groups", response_model=list[DashboardGroupRead])
-async def list_groups(dashboard_id: UUID, session: Session, owner: OwnerRead, scope: WorkspaceRead, request: Request, response: Response) -> list[DashboardGroupRead]:
+async def list_groups(dashboard_id: UUID, session: Session, scope: WorkspaceRead, request: Request, response: Response) -> list[DashboardGroupRead]:
     """List groups belonging to an authenticated owner's dashboard."""
     _no_store(response)
     rows = await public.list_groups(session, dashboard_id, scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
@@ -129,21 +128,21 @@ async def list_groups(dashboard_id: UUID, session: Session, owner: OwnerRead, sc
 
 
 @router.post("/dashboards/{dashboard_id}/groups", status_code=201, response_model=DashboardGroupRead)
-async def create_group(dashboard_id: UUID, payload: GroupCreate, session: Session, owner: OwnerWrite, scope: WorkspaceWrite, request: Request, response: Response) -> DashboardGroupRead:
+async def create_group(dashboard_id: UUID, payload: GroupCreate, session: Session, scope: WorkspaceWrite, request: Request, response: Response) -> DashboardGroupRead:
     """Create a group only after owner-write authorization and expected-revision validation."""
     _no_store(response)
     return await _call(public.create_group(session, dashboard_id, payload, scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled))
 
 
 @router.patch("/dashboards/{dashboard_id}/groups/{group_id}", response_model=DashboardGroupRead)
-async def patch_group(dashboard_id: UUID, group_id: UUID, payload: GroupPatch, session: Session, owner: OwnerWrite, scope: WorkspaceWrite, request: Request, response: Response) -> DashboardGroupRead:
+async def patch_group(dashboard_id: UUID, group_id: UUID, payload: GroupPatch, session: Session, scope: WorkspaceWrite, request: Request, response: Response) -> DashboardGroupRead:
     """Patch group name or order while rejecting explicit null for required values."""
     _no_store(response)
     return await _call(public.patch_group(session, dashboard_id, group_id, payload, scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled))
 
 
 @router.delete("/dashboards/{dashboard_id}/groups/{group_id}", status_code=204)
-async def delete_group(dashboard_id: UUID, group_id: UUID, expected_revision: Annotated[int, Query(ge=1, le=9_007_199_254_740_991)], session: Session, owner: OwnerWrite, scope: WorkspaceWrite, request: Request, response: Response) -> Response:
+async def delete_group(dashboard_id: UUID, group_id: UUID, expected_revision: Annotated[int, Query(ge=1, le=9_007_199_254_740_991)], session: Session, scope: WorkspaceWrite, request: Request, response: Response) -> Response:
     """Delete only an empty group and preserve its revision conflict details."""
     _no_store(response)
     await _call(public.delete_group(session, dashboard_id, group_id, expected_revision, scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled))
@@ -151,28 +150,28 @@ async def delete_group(dashboard_id: UUID, group_id: UUID, expected_revision: An
 
 
 @router.post("/dashboards/{dashboard_id}/instances", status_code=201, response_model=DashboardDetail)
-async def create_instance(dashboard_id: UUID, payload: InstanceCreate, session: Session, owner: OwnerWrite, scope: WorkspaceWrite, request: Request, response: Response) -> DashboardDetail:
+async def create_instance(dashboard_id: UUID, payload: InstanceCreate, session: Session, scope: WorkspaceWrite, request: Request, response: Response) -> DashboardDetail:
     """Place a reusable definition into an owned group and atomically set both breakpoint rectangles."""
     _no_store(response)
     return await _call(public.create_instance(session, dashboard_id, payload, scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled))
 
 
 @router.patch("/dashboards/{dashboard_id}/instances/{instance_id}", response_model=DashboardDetail)
-async def patch_instance(dashboard_id: UUID, instance_id: UUID, payload: InstancePatch, session: Session, owner: OwnerWrite, scope: WorkspaceWrite, request: Request, response: Response) -> DashboardDetail:
+async def patch_instance(dashboard_id: UUID, instance_id: UUID, payload: InstancePatch, session: Session, scope: WorkspaceWrite, request: Request, response: Response) -> DashboardDetail:
     """Change instance title, group, or order without changing either saved layout."""
     _no_store(response)
     return await _call(public.patch_instance(session, dashboard_id, instance_id, payload, scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled))
 
 
 @router.delete("/dashboards/{dashboard_id}/instances/{instance_id}", response_model=DashboardDetail)
-async def delete_instance(dashboard_id: UUID, instance_id: UUID, expected_revision: Annotated[int, Query(ge=1, le=9_007_199_254_740_991)], session: Session, owner: OwnerWrite, scope: WorkspaceWrite, request: Request, response: Response) -> DashboardDetail:
+async def delete_instance(dashboard_id: UUID, instance_id: UUID, expected_revision: Annotated[int, Query(ge=1, le=9_007_199_254_740_991)], session: Session, scope: WorkspaceWrite, request: Request, response: Response) -> DashboardDetail:
     """Remove an instance and its two placements while retaining its shared definition."""
     _no_store(response)
     return await _call(public.delete_instance(session, dashboard_id, instance_id, expected_revision, scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled))
 
 
 @router.put("/dashboards/{dashboard_id}/layout", response_model=DashboardDetail)
-async def replace_layout(dashboard_id: UUID, payload: LayoutReplace, session: Session, owner: OwnerWrite, scope: WorkspaceWrite, request: Request, response: Response) -> DashboardDetail:
+async def replace_layout(dashboard_id: UUID, payload: LayoutReplace, session: Session, scope: WorkspaceWrite, request: Request, response: Response) -> DashboardDetail:
     """Replace one complete breakpoint layout under its dashboard revision and owner authorization."""
     _no_store(response)
     return await _call(public.replace_layout(session, dashboard_id, payload, scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled))
@@ -199,21 +198,21 @@ async def _allow_preview(request: Request, scope: WorkspaceContext) -> None:
 
 
 @router.get("/gadget-definitions", response_model=list[GadgetDefinitionRead])
-async def list_definitions(session: Session, owner: OwnerRead, scope: WorkspaceRead, request: Request, response: Response, limit: Annotated[int, Query(ge=1, le=200)] = 200) -> list[GadgetDefinitionRead]:
+async def list_definitions(session: Session, scope: WorkspaceRead, request: Request, response: Response, limit: Annotated[int, Query(ge=1, le=200)] = 200) -> list[GadgetDefinitionRead]:
     """List a bounded page from the authenticated owner's reusable definition library."""
     _no_store(response)
     return await public.list_definitions(session, limit, scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
 
 
 @router.post("/gadget-definitions", status_code=201, response_model=GadgetDefinitionRead)
-async def create_definition(payload: GadgetDefinitionCreate, session: Session, owner: OwnerWrite, scope: WorkspaceWrite, request: Request, response: Response) -> GadgetDefinitionRead:
+async def create_definition(payload: GadgetDefinitionCreate, session: Session, scope: WorkspaceWrite, request: Request, response: Response) -> GadgetDefinitionRead:
     """Save validated renderer configuration after source lifecycle checks and quota enforcement."""
     _no_store(response)
     return await _call(public.create_definition(session, payload, scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled))
 
 
 @router.post("/gadget-definitions/highlight-preview", response_model=HighlightPreviewRead)
-async def preview_highlights(payload: HighlightPreviewRequest, session: Session, owner: OwnerWrite, scope: WorkspaceWrite, response: Response, request: Request) -> HighlightPreviewRead:
+async def preview_highlights(payload: HighlightPreviewRequest, session: Session, scope: WorkspaceWrite, response: Response, request: Request) -> HighlightPreviewRead:
     """Dry-run draft rules over the last days of current evidence; never persists or notifies."""
     _no_store(response)
     await _allow_preview(request, scope)
@@ -222,7 +221,7 @@ async def preview_highlights(payload: HighlightPreviewRequest, session: Session,
 
 
 @router.get("/gadget-definitions/{definition_id}/usage", response_model=list[GadgetDefinitionUsageRead])
-async def definition_usage(definition_id: UUID, session: Session, owner: OwnerRead, scope: WorkspaceRead, request: Request, response: Response) -> list[GadgetDefinitionUsageRead]:
+async def definition_usage(definition_id: UUID, session: Session, scope: WorkspaceRead, request: Request, response: Response) -> list[GadgetDefinitionUsageRead]:
     """List the owner dashboards using one definition, for edit and delete warnings."""
     _no_store(response)
     result = await public.definition_usage(
@@ -233,7 +232,7 @@ async def definition_usage(definition_id: UUID, session: Session, owner: OwnerRe
 
 
 @router.get("/gadget-definitions/{definition_id}", response_model=GadgetDefinitionRead)
-async def get_definition(definition_id: UUID, session: Session, owner: OwnerRead, scope: WorkspaceRead, request: Request, response: Response) -> GadgetDefinitionRead:
+async def get_definition(definition_id: UUID, session: Session, scope: WorkspaceRead, request: Request, response: Response) -> GadgetDefinitionRead:
     """Read one owner definition or conceal missing and foreign identifiers with 404."""
     _no_store(response)
     result = await public.get_definition(session, definition_id, scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
@@ -244,7 +243,7 @@ async def get_definition(definition_id: UUID, session: Session, owner: OwnerRead
 
 @router.get("/gadget-definitions/{definition_id}/highlights", response_model=list[DashboardHighlightRead])
 async def evaluate_highlights(
-    definition_id: UUID, session: Session, owner: OwnerRead, scope: WorkspaceRead, request: Request, response: Response,
+    definition_id: UUID, session: Session, scope: WorkspaceRead, request: Request, response: Response,
 ) -> list[DashboardHighlightRead]:
     """Read one owner's bounded highlight matches without persisting alerts."""
     _no_store(response)
@@ -252,14 +251,14 @@ async def evaluate_highlights(
 
 
 @router.patch("/gadget-definitions/{definition_id}", response_model=GadgetDefinitionRead)
-async def patch_definition(definition_id: UUID, payload: GadgetDefinitionPatch, session: Session, owner: OwnerWrite, scope: WorkspaceWrite, request: Request, response: Response) -> GadgetDefinitionRead:
+async def patch_definition(definition_id: UUID, payload: GadgetDefinitionPatch, session: Session, scope: WorkspaceWrite, request: Request, response: Response) -> GadgetDefinitionRead:
     """Update reusable configuration under its independent revision and owner write authorization."""
     _no_store(response)
     return await _call(public.patch_definition(session, definition_id, payload, scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled))
 
 
 @router.delete("/gadget-definitions/{definition_id}", status_code=204)
-async def delete_definition(definition_id: UUID, expected_revision: Annotated[int, Query(ge=1, le=9_007_199_254_740_991)], session: Session, owner: OwnerWrite, scope: WorkspaceWrite, request: Request, response: Response) -> Response:
+async def delete_definition(definition_id: UUID, expected_revision: Annotated[int, Query(ge=1, le=9_007_199_254_740_991)], session: Session, scope: WorkspaceWrite, request: Request, response: Response) -> Response:
     """Delete only unused reusable configuration and emit its final revision event."""
     _no_store(response)
     await _call(public.delete_definition(session, definition_id, expected_revision, scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled))
@@ -267,14 +266,14 @@ async def delete_definition(definition_id: UUID, expected_revision: Annotated[in
 
 
 @router.get("/gadget-renderers", response_model=list[RendererRead])
-async def list_renderers(owner: OwnerRead, response: Response) -> list[RendererRead]:
+async def list_renderers(response: Response) -> list[RendererRead]:
     """Return renderer adapter metadata and minimum geometry without runtime acceptance claims."""
     _no_store(response)
     return public.renderer_reads()
 
 
 @router.get("/gadget-sources", response_model=GadgetSourceSelectionPage)
-async def list_gadget_sources(session: Session, owner: OwnerRead, scope: WorkspaceRead, request: Request, response: Response, limit: Annotated[int, Query(ge=1, le=100)] = 50, cursor: str | None = Query(default=None, max_length=512)) -> dict[str, Any]:
+async def list_gadget_sources(session: Session, scope: WorkspaceRead, request: Request, response: Response, limit: Annotated[int, Query(ge=1, le=100)] = 50, cursor: str | None = Query(default=None, max_length=512)) -> dict[str, Any]:
     """Return owner source selection metadata without exposing connector configuration or content."""
     _no_store(response)
     page = await public.list_gadget_sources(session, limit, cursor, scope=scope,
@@ -283,14 +282,14 @@ async def list_gadget_sources(session: Session, owner: OwnerRead, scope: Workspa
 
 
 @router.get("/dashboard-presets", response_model=list[DashboardPresetRead])
-async def list_presets(owner: OwnerRead, response: Response) -> list[DashboardPresetRead]:
+async def list_presets(response: Response) -> list[DashboardPresetRead]:
     """Return stable static preset templates without creating sources or collecting data."""
     _no_store(response)
     return public.preset_catalog()
 
 
 @router.post("/dashboard-presets/{preset_id}/preview", response_model=PresetPreviewRead)
-async def preview_preset(preset_id: str, payload: PresetPreviewRequest, session: Session, owner: OwnerWrite, scope: WorkspaceWrite, request: Request, response: Response) -> PresetPreviewRead:
+async def preview_preset(preset_id: str, payload: PresetPreviewRequest, session: Session, scope: WorkspaceWrite, request: Request, response: Response) -> PresetPreviewRead:
     """Preview explicit source selectors through owner-write authorization without persistence."""
     _no_store(response)
     return await _call(public.preview_preset(session, preset_id, payload, scope=scope,
@@ -298,7 +297,7 @@ async def preview_preset(preset_id: str, payload: PresetPreviewRequest, session:
 
 
 @router.post("/dashboard-presets/{preset_id}/apply", status_code=201, response_model=DashboardDetail)
-async def apply_preset(preset_id: str, payload: PresetApplyRequest, session: Session, owner: OwnerWrite, scope: WorkspaceWrite, request: Request, response: Response) -> DashboardDetail:
+async def apply_preset(preset_id: str, payload: PresetApplyRequest, session: Session, scope: WorkspaceWrite, request: Request, response: Response) -> DashboardDetail:
     """Apply a fresh fingerprinted preset atomically after explicit replacement confirmation when needed."""
     _no_store(response)
     if payload.mode == "replace":
@@ -317,7 +316,7 @@ def _timezone(value: str) -> str:
 
 @router.get("/context/current", response_model=DailyContext)
 async def current_context(
-    session: Session, owner: OwnerRead, scope: WorkspaceRead, request: Request, response: Response, timezone: str = "Asia/Ho_Chi_Minh",
+    session: Session, scope: WorkspaceRead, request: Request, response: Response, timezone: str = "Asia/Ho_Chi_Minh",
 ) -> DailyContext:
     """Return the selected-day context for the current local date in the requested timezone."""
     from datetime import datetime
@@ -332,7 +331,7 @@ async def current_context(
 
 @router.get("/context/daily", response_model=DailyContext)
 async def daily_context(
-    session: Session, owner: OwnerRead, scope: WorkspaceRead, request: Request, response: Response, date: date, timezone: str = "Asia/Ho_Chi_Minh",
+    session: Session, scope: WorkspaceRead, request: Request, response: Response, date: date, timezone: str = "Asia/Ho_Chi_Minh",
 ) -> DailyContext:
     """Return the saved brief plus current-record widgets for one local date."""
     _no_store(response)
@@ -347,17 +346,37 @@ async def daily_context(
 
 @router.get("/briefs", response_model=list[BriefRead])
 async def list_brief_revisions(
-    session: Session, owner: OwnerRead, scope: WorkspaceRead, request: Request, response: Response, date: date, timezone: str = "Asia/Ho_Chi_Minh",
+    session: Session, scope: WorkspaceRead, request: Request, response: Response, date: date, timezone: str = "Asia/Ho_Chi_Minh",
 ) -> list[BriefRead]:
-    """List every saved revision of a day's brief, newest first."""
+    """List saved revisions of a day's brief, newest first; members see only shared, admissible ones."""
     _no_store(response)
-    return await briefs.list_briefs(session, date, _timezone(timezone), scope=scope,
-        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
+    flag = request.app.state.settings.multi_workspace_enabled
+    if scope.role == "owner":
+        return await briefs.list_briefs(session, date, _timezone(timezone), scope=scope, multi_workspace_enabled=flag)
+    shared = await brief_sharing.list_shared_briefs(session, date, _timezone(timezone), scope=scope, multi_workspace_enabled=flag)
+    await _gate_member(request, session, scope, shared, flag)
+    return [item.brief for item in shared]
+
+
+async def _gate_member(
+    request: Request, session: AsyncSession, scope: WorkspaceContext,
+    shared: list[brief_sharing.SharedBrief], multi_workspace_enabled: bool,
+) -> None:
+    """Fence a member publication on the brief grant and every dependency grant."""
+    grants = tuple(g for item in shared for g in item.grants)
+    if not grants:
+        return
+    publication.require_publication_gate(request, PublicationFence(
+        scope=scope,
+        access_fence=await workspaces.read_access_fence(
+            session, scope=scope, multi_workspace_enabled=multi_workspace_enabled),
+        auth_session=authenticated_session_ref(request), grants=grants,
+    ))
 
 
 @router.post("/briefs/generate", response_model=BriefRead, status_code=201)
 async def generate_brief(
-    payload: BriefGenerateRequest, request: Request, session: Session, owner: OwnerWrite, scope: WorkspaceWrite, response: Response,
+    payload: BriefGenerateRequest, request: Request, session: Session, scope: WorkspaceWrite, response: Response,
 ) -> BriefRead:
     """Generate a new brief revision; a model outage, or inputs changed or purged mid-call, returns 503 and keeps the earlier revisions."""
     _no_store(response)
@@ -374,7 +393,7 @@ async def generate_brief(
 
 
 @router.get("/briefs/schedule", response_model=BriefSchedule)
-async def read_brief_schedule(session: Session, owner: OwnerRead, scope: WorkspaceRead, request: Request, response: Response) -> BriefSchedule:
+async def read_brief_schedule(session: Session, scope: WorkspaceRead, request: Request, response: Response) -> BriefSchedule:
     """Read the editable daily brief schedule (default 07:00 Asia/Ho_Chi_Minh)."""
     _no_store(response)
     return await briefs.read_schedule(session, scope=scope,
@@ -382,7 +401,7 @@ async def read_brief_schedule(session: Session, owner: OwnerRead, scope: Workspa
 
 
 @router.get("/briefs/schedule/ownership")
-async def read_brief_schedule_ownership(session: Session, owner: OwnerRead, scope: WorkspaceRead, request: Request, response: Response) -> dict[str, object]:
+async def read_brief_schedule_ownership(session: Session, scope: WorkspaceRead, request: Request, response: Response) -> dict[str, object]:
     """Read which scheduler (internal cron or one automation) owns the daily brief slot."""
     _no_store(response)
     return await briefs.read_slot_owner(session, scope=scope,
@@ -390,8 +409,22 @@ async def read_brief_schedule_ownership(session: Session, owner: OwnerRead, scop
 
 
 @router.put("/briefs/schedule", response_model=BriefSchedule)
-async def save_brief_schedule(payload: BriefSchedule, session: Session, owner: OwnerWrite, scope: WorkspaceWrite, request: Request, response: Response) -> BriefSchedule:
+async def save_brief_schedule(payload: BriefSchedule, session: Session, scope: WorkspaceWrite, request: Request, response: Response) -> BriefSchedule:
     """Save the daily brief schedule consumed by the ARQ cron."""
     _no_store(response)
     return await briefs.save_schedule(session, payload, scope=scope,
         multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
+
+
+@router.get("/briefs/{brief_id}", response_model=BriefRead)
+async def read_brief(
+    brief_id: UUID, session: Session, scope: WorkspaceRead, request: Request, response: Response,
+) -> BriefRead:
+    """Read one saved brief revision; absent, foreign, unshared or unavailable ids share one 404."""
+    _no_store(response)
+    flag = request.app.state.settings.multi_workspace_enabled
+    item = await brief_sharing.read_shared_brief(session, brief_id, scope=scope, multi_workspace_enabled=flag)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Brief not found")
+    await _gate_member(request, session, scope, [item], flag)
+    return item.brief
