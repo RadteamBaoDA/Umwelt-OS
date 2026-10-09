@@ -13,6 +13,7 @@ from importlib import import_module
 from uuid import UUID
 
 from fastapi import HTTPException
+from pydantic import Field
 from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -145,6 +146,25 @@ def translation_fingerprint(parts: dict[str, str | int]) -> str:
     return hashlib.sha256(json.dumps(parts, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+def config_hash_for(
+    *, workspace_id: UUID, actor_user_id: int, resource_revision: str, content_hash: str, visibility_hash: str,
+    target_language: str, settings_revision: int, policy_fingerprint: str,
+) -> str:
+    """The one cache fingerprint; the worker recomputes it before every send and at publish."""
+    return translation_fingerprint({
+        "workspace": str(workspace_id), "actor": actor_user_id, "revision": resource_revision,
+        "content": content_hash, "visibility": visibility_hash, "target": target_language,
+        "settings": settings_revision, "policy": policy_fingerprint, "prompt": PROMPT_VERSION,
+    })
+
+
+async def policy_fingerprint(
+    session: AsyncSession, app_settings: object | None, redis: object | None, workspace_id: UUID,
+) -> str:
+    """AI policy identity for the fingerprint (public for the worker)."""
+    return await _policy_fingerprint(session, app_settings, redis, workspace_id)
+
+
 async def _policy_fingerprint(
     session: AsyncSession, app_settings: object | None, redis: object | None, workspace_id: UUID,
 ) -> str:
@@ -160,12 +180,34 @@ def _too_many(detail: str) -> HTTPException:
     return HTTPException(status_code=429, detail=detail, headers={"Retry-After": RETRY_AFTER_SECONDS})
 
 
+class TranslationBatchEnqueue(TranslationBatchAccepted):
+    """Accepted body plus the fresh row ids to enqueue after commit (never serialized)."""
+
+    enqueue_ids: list[UUID] = Field(default_factory=list, exclude=True)
+
+
 async def submit_batch(
     session: AsyncSession, request: TranslationBatchRequest,
     *, scope: Scope, multi_workspace_enabled: bool, auth_sessions: tuple[AccountSessionRef, ...] = (),
     app_settings: object | None = None, redis: object | None = None,
 ) -> TranslationBatchAccepted:
-    """Authorize every item first (404 uniformly, then 409 stale), dedup, bound, persist pending rows."""
+    """Admit a batch; see ``request_translations`` for the enqueue-aware variant."""
+    return await request_translations(
+        session, _member(scope), request, multi_workspace_enabled=multi_workspace_enabled,
+        auth_sessions=auth_sessions, app_settings=app_settings, redis=redis,
+    )
+
+
+async def request_translations(
+    session: AsyncSession, scope: WorkspaceContext, request: TranslationBatchRequest,
+    *, multi_workspace_enabled: bool, auth_sessions: tuple[AccountSessionRef, ...] = (),
+    app_settings: object | None = None, redis: object | None = None,
+) -> TranslationBatchEnqueue:
+    """Authorize every item first (404 uniformly, then 409 stale), dedup, bound, persist pending rows.
+
+    The caller commits, then enqueues ``enqueue_ids`` best effort (recovery covers a lost enqueue).
+    A ``failed`` row with an unchanged fingerprint is NOT retried; it waits for new input/settings.
+    """
     actor = _member(scope)
     await lock_access_fence(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, auth_sessions=auth_sessions,
@@ -175,7 +217,7 @@ async def submit_batch(
     ).with_for_update().execution_options(populate_existing=True))
     settings = _read(row)
     if not settings.enabled:
-        return TranslationBatchAccepted(batch_id=None, settings=settings, items=[
+        return TranslationBatchEnqueue(batch_id=None, settings=settings, items=[
             TranslationItemStatusRead(resource_type=i.resource_type, resource_id=i.resource_id, status="blocked")
             for i in request.items])
     verdicts: list[ResourceAuthorization] = []
@@ -190,11 +232,11 @@ async def submit_batch(
         raise HTTPException(status_code=409, detail="Resource revision changed")
     now = datetime.now(UTC)
     policy_fp = await _policy_fingerprint(session, app_settings, redis, actor.workspace_id)
-    configs = [translation_fingerprint({
-        "workspace": str(actor.workspace_id), "actor": actor.user_id, "revision": v.resource_revision,
-        "content": v.content_hash, "visibility": v.visibility_hash, "target": settings.target_language,
-        "settings": settings.configuration_revision, "policy": policy_fp, "prompt": PROMPT_VERSION,
-    }) for v in verdicts]
+    configs = [config_hash_for(
+        workspace_id=actor.workspace_id, actor_user_id=actor.user_id, resource_revision=v.resource_revision,
+        content_hash=v.content_hash, visibility_hash=v.visibility_hash, target_language=settings.target_language,
+        settings_revision=settings.configuration_revision, policy_fingerprint=policy_fp,
+    ) for v in verdicts]
     existing = {
         (t.resource_type, t.resource_id, t.resource_revision, t.content_hash, t.visibility_hash, t.config_hash): t
         for t in (await session.scalars(select(ContentTranslation).where(
@@ -220,7 +262,7 @@ async def submit_batch(
                 target_language=settings.target_language, config_hash=config, prompt_version=PROMPT_VERSION,
                 status="pending", attempt_count=0)
             fresh.append(found)
-        elif found.expires_at <= now or found.status == "failed":
+        elif found.expires_at <= now:
             retry.append(found)
         rows.append(found)
     if fresh or retry:  # only new work counts against the limits
@@ -237,6 +279,7 @@ async def submit_batch(
     for found in retry:
         found.status, found.error_code, found.result = "pending", None, None
         found.attempt_count, found.completed_at, found.next_attempt_at = 0, None, None
+        found.lease_token = found.lease_expires_at = None
         found.expires_at = now + timedelta(days=30)
     session.add_all(fresh)
     batch = TranslationBatch(
@@ -249,10 +292,10 @@ async def submit_batch(
         resource_id=i.resource_id, resource_revision=i.resource_revision, translation_id=t.id)
         for n, (i, t) in enumerate(zip(request.items, rows)))
     await session.flush()
-    return TranslationBatchAccepted(batch_id=batch.id, settings=settings, items=[
+    return TranslationBatchEnqueue(batch_id=batch.id, settings=settings, items=[
         TranslationItemStatusRead(
             resource_type=i.resource_type, resource_id=i.resource_id, status=t.status)
-        for i, t in zip(request.items, rows)])
+        for i, t in zip(request.items, rows)], enqueue_ids=[t.id for t in (*fresh, *retry)])
 
 
 async def read_batch(

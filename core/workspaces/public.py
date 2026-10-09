@@ -621,6 +621,19 @@ async def revoke_share_in_uow(
         row.revoked_at = row.updated_at = datetime.now(UTC)
         row.revision += 1
         await session.flush()
+        await _purge_translations(session, workspace_id, resource_type, (resource_id,))
+
+
+async def _purge_translations(
+    session: AsyncSession, workspace_id: UUID, resource_type: ShareKind, resource_ids: tuple[UUID, ...],
+) -> None:
+    """Drop every actor's derived translations of a brief whose share ended (documents have none)."""
+    if resource_type != "brief":
+        return
+    from modules.translations.lifecycle import purge_resource_translations
+
+    for resource_id in resource_ids:
+        await purge_resource_translations(session, workspace_id, "daily_brief", resource_id)
 
 
 async def revoke_resource_shares_in_uow(
@@ -637,4 +650,5 @@ async def revoke_resource_shares_in_uow(
         ).values(revoked_at=now, updated_at=now, revision=WorkspaceShare.revision + 1)
         .execution_options(synchronize_session=False)
     )
+    await _purge_translations(session, workspace_id, resource_type, resource_ids)
     return int(getattr(result, "rowcount", 0) or 0)

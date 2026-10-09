@@ -1,5 +1,6 @@
 """Translation batch endpoints: members may request/read shared resources; no owner role needed."""
 
+import contextlib
 from typing import Annotated
 from uuid import UUID
 
@@ -34,12 +35,16 @@ async def create_batch(
     member: Member, _admission: WriteAdmission,
 ) -> TranslationBatchAccepted:
     """Authorize and queue references; disabled workspaces get blocked items and nothing is queued."""
-    result = await public.submit_batch(
-        session, value, scope=member,
+    result = await public.request_translations(
+        session, member, value,
         multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
         auth_sessions=(authenticated_session_ref(request),),
         app_settings=request.app.state.settings, redis=request.app.state.redis)
     await session.commit()
+    for translation_id in result.enqueue_ids:  # best effort: recover_translation_jobs covers a lost enqueue
+        with contextlib.suppress(Exception):
+            await request.app.state.redis.enqueue_job(
+                "translate_content", str(translation_id), _job_id=f"translation:{translation_id}")
     return result
 
 

@@ -71,6 +71,12 @@ from modules.timeline.worker import (
     process_timeline_extraction_work,
     recover_timeline_extraction_work,
 )
+from modules.translations.worker import (
+    expire_translations,
+    recover_translation_jobs,
+    sweep_translation_orphans,
+    translate_content,
+)
 
 _JOB_OWNERS = scheduled_job_owners(register_modules())
 _BUILD_AVAILABLE = frozenset(module_id for module_id, item in effective_modules(()).items() if item.enabled)
@@ -145,6 +151,8 @@ HEAVY_SLOT_JOBS = frozenset({
 def _arq_options(name: str) -> dict[str, Any]:
     """Per-function arq options: outbox consumers drop their result, heavy-slot jobs get a long retry budget."""
     options: dict[str, Any] = {}
+    if name == "translate_content":
+        options["keep_result"] = 0  # fixed `translation:{id}` job ids must be re-enqueueable by recovery
     if name in set(WORKER_BY_EVENT.values()):
         options["keep_result"] = 0
     if name in HEAVY_SLOT_JOBS:
@@ -250,6 +258,7 @@ class WorkerSettings:
         instrument_job(process_timeline_extraction_work), instrument_job(process_graph_operation),
         instrument_job(process_news_document_ready), purge_expired_chat_runs,
         instrument_job(process_agent_run, run_id_kind="agent_run_id"), instrument_job(process_automation_run),
+        instrument_job(translate_content),
     ]
     functions = [_gate_module_job(function) for function in functions]
     functions = [_gate_backup_job(function) for function in functions]
@@ -282,6 +291,9 @@ class WorkerSettings:
         cron(purge_expired_chat_runs, minute=set(range(0, 60, 15))),
         cron(reconcile_agent_dispatch, second=set(range(0, 60, 5)), run_at_startup=True),
         cron(reconcile_automation_runs, second=set(range(0, 60, 5)), run_at_startup=True),
+        cron(recover_translation_jobs, minute=set(range(0, 60, 1))),
+        cron(sweep_translation_orphans, minute=set(range(0, 60, 5))),
+        cron(expire_translations, hour=3, minute=17),
     ]
     redis_settings = RedisSettings.from_dsn(Settings().redis_url)
 
