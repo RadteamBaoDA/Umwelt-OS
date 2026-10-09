@@ -1,6 +1,5 @@
 'use client';
 
-import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { MessageSquare, RefreshCw, Sparkles } from 'lucide-react';
 import { useTranslations } from 'next-intl';
@@ -14,21 +13,9 @@ import { useChatController } from '@/core/app-shell/chat-controller';
 import { useSelectedDay } from './selected-day';
 import { useWorkspace } from '@/core/workspace-context';
 import { BriefShareButton, SharedBriefs } from './brief-sharing';
-import { useContentTranslation } from '@/modules/translations/use-content-translation';
-import { TranslatedBadge } from '@/modules/translations/translated-badge';
+import { BriefText } from './brief-text';
 
-/** Brief text with the automatic translation of this saved revision; the original is shown first. */
-export function BriefText({ brief }: { brief: DailyBriefRevision }) {
-  const [showOriginal, setShowOriginal] = useState(false);
-  const targets = useMemo(() => [{ id: brief.id, revision: String(brief.revision) }], [brief.id, brief.revision]);
-  const translated = useContentTranslation('daily_brief', targets).results.get(brief.id)?.translation?.content;
-  return (
-    <>
-      <p className="whitespace-pre-wrap text-sm leading-relaxed">{translated && !showOriginal ? translated : brief.content}</p>
-      {translated && <TranslatedBadge showOriginal={showOriginal} onToggle={() => setShowOriginal((v) => !v)} />}
-    </>
-  );
-}
+export { BriefText };
 
 /** Renders one current-record widget summary with its own updated-at and source status. */
 function WidgetSummary({ widget }: { widget: DailyWidgetData }) {

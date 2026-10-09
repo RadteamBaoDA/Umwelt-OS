@@ -9,6 +9,7 @@ import { useDisplayPreferences } from '@/core/query-provider';
 import { useWorkspace } from '@/core/workspace-context';
 import { getDocument, grantShare, type ShareRow, type WorkspaceMember } from '@/modules/knowledge/api';
 import { ShareDialog, shareErrorKey } from '@/modules/knowledge/document-sharing';
+import { BriefText } from './brief-text';
 import { dailyKeys, listBriefRevisions, type DailyBriefRevision } from './daily-api';
 
 /** Raised when a brief share is blocked until the listed owner-visible documents are shared. */
@@ -65,7 +66,7 @@ export function SharedBriefs({ date, timezone }: { date: string; timezone: strin
       {briefs.data?.map((brief) => (
         <article key={brief.id} className="space-y-1 border-b border-border pb-2">
           <p className="text-xs text-muted-foreground">{t('briefMeta', { revision: brief.revision, time: formatDateTime(brief.generated_at, display.locale, display.timezone) })}</p>
-          <p className="whitespace-pre-wrap text-sm leading-relaxed">{brief.content}</p>
+          <BriefText brief={brief} />
         </article>
       ))}
     </section>
