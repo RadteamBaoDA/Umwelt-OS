@@ -298,7 +298,10 @@ def export_eligible_source_ids(*, scope: Scope) -> Select[UUID]:
         SourcePurgeOperation.workspace_id == scope.workspace_id,
         SourcePurgeOperation.status.in_(("queued", "running", "failed"))
     )
-    return select(Source.id).where(*_source_scope(scope), ~Source.id.in_(pending_data_purges))
+    # Member branch: workspace-only; Documents adds the grant predicate. No Source config is read.
+    scoped = ((Source.workspace_id == scope.workspace_id,)
+              if isinstance(scope, WorkspaceContext) and scope.role != "owner" else _source_scope(scope))
+    return select(Source.id).where(*scoped, ~Source.id.in_(pending_data_purges))
 
 
 async def filter_export_eligible_sources(

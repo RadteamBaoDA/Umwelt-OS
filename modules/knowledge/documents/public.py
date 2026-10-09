@@ -38,8 +38,15 @@ from core.heavy_work import to_thread_joined
 from core.pagination import decode_cursor, encode_cursor
 from core.realtime import ReplayDraft, commit_with_replay, make_knowledge_change
 from core.tools.schemas import ToolDestination, ToolOutputFence
+from core.workspaces import public as workspaces
 from core.workspaces.public import authorize_internal_job, read_access_fence
-from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
+from core.workspaces.schemas import (
+    AccessFence,
+    InternalJobScope,
+    ResourceAccessProjection,
+    Scope,
+    WorkspaceContext,
+)
 from modules.knowledge.documents.models import (
     Document,
     DocumentChunk,
@@ -2448,22 +2455,30 @@ def _require_document_owner(scope: Scope) -> None:
         raise HTTPException(status_code=403, detail="Workspace owner required")
 
 
-def _document_scope(scope: Scope) -> tuple[ColumnElement[bool], ...]:
+def _document_scope(scope: Scope, *, allow_member: bool = False) -> tuple[ColumnElement[bool], ...]:
     """Constrain roots before paging to admitted workspace and Source-owned retained lineage.
 
     Paused and connector-only archived Sources remain readable. Queued/running/failed
     data purges hide their content; the Source projection grants no membership/resource
     authority and callers must first perform real owner admission. No Source ORM is read.
+    Only member-read callers pass ``allow_member``; a member then sees just active-grant
+    Documents (grant subquery is part of the predicate, so it precedes LIMIT/count/cursor).
     """
-    _require_document_owner(scope)
-    return (
+    member = allow_member and isinstance(scope, WorkspaceContext) and scope.role != "owner"
+    if not member:
+        _require_document_owner(scope)
+    predicates: tuple[ColumnElement[bool], ...] = (
         Document.workspace_id == scope.workspace_id,
         Document.source_id.in_(sources.export_eligible_source_ids(scope=scope)),
     )
+    if member:
+        assert isinstance(scope, WorkspaceContext)
+        predicates += (Document.id.in_(workspaces.granted_resource_ids(scope=scope, kind="document")),)
+    return predicates
 
 
 async def _admit_document_scope(
-    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool, allow_member: bool = False,
 ) -> AccessFence:
     """Revalidate actual owner/default membership with the explicit rollout gate, without locks.
 
@@ -2471,7 +2486,8 @@ async def _admit_document_scope(
     or final-send proof; writers acquire their early Source/access set and routes retain
     exact authenticated-session locks through commit. No commit or external I/O occurs.
     """
-    _require_document_owner(scope)
+    if not (allow_member and isinstance(scope, WorkspaceContext)):
+        _require_document_owner(scope)
     return await read_access_fence(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
 
 
@@ -2592,10 +2608,27 @@ async def get_document(
     metadata remains eligible except unfinished/failed data purges. Own ORM serves only
     Documents routes; external callers must migrate to detached owner projections.
     """
-    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await _admit_document_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, allow_member=True)
     return await session.scalar(select(Document).where(
-        Document.id == document_id, *_document_scope(scope),
+        Document.id == document_id, *_document_scope(scope, allow_member=True),
     ).execution_options(populate_existing=True))
+
+
+async def read_document_access_projection(
+    session: AsyncSession, resource_id: UUID, *, scope: Scope,
+) -> ResourceAccessProjection | None:
+    """Return the share-binding revision (current_version) of one in-scope Document, else None.
+
+    Caller admitted ``scope``; a member sees only active-grant Documents. Detached, no locks.
+    """
+    row = (await session.execute(select(Document.workspace_id, Document.current_version).where(
+        Document.id == resource_id, *_document_scope(scope, allow_member=True),
+    ))).one_or_none()
+    if row is None:
+        return None
+    return ResourceAccessProjection(
+        workspace_id=row[0], resource_id=resource_id, resource_revision=row[1], available=True)
 
 
 async def existing_document_ids(
@@ -3831,10 +3864,11 @@ async def list_documents(
     """
     if not isinstance(scope, WorkspaceContext):
         raise TypeError("Document list requires a workspace owner")
-    fence = await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    fence = await _admit_document_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, allow_member=True)
     if not 1 <= limit <= 100:
         raise ValueError("Document page size must be between 1 and 100")
-    statement = select(Document).where(*_document_scope(scope))
+    statement = select(Document).where(*_document_scope(scope, allow_member=True))
     if source_id is not None:
         statement = statement.where(Document.source_id == source_id)
     statement = statement.order_by(desc(Document.created_at), desc(Document.id))
@@ -4221,6 +4255,8 @@ async def delete_document(
     )).first() is not None
     if not deleted:
         raise RuntimeError("Locked document disappeared during its cleanup transaction")
+    await workspaces.revoke_resource_shares_in_uow(
+        session, workspace_id=scope.workspace_id, resource_type="document", resource_ids=(document_id,))
     drafts: list[ReplayDraft] = [
         *timeline_drafts, make_knowledge_change(source_id, document_id, deleted=True, scope=scope),
     ]
@@ -4386,6 +4422,11 @@ async def delete_source_documents_in_uow(
         session, closure, scope=scope, flag=flag, access_fence=access_fence, source_fence=source_fence)
     await session.execute(delete(Document).where(
         Document.workspace_id == scope.workspace_id, Document.source_id == source_id))
+    # Workspace-wide revoke (never actor-bound): document_ids is the locked Source-wide set.
+    for start in range(0, len(document_ids), 1000):
+        await workspaces.revoke_resource_shares_in_uow(
+            session, workspace_id=scope.workspace_id, resource_type="document",
+            resource_ids=tuple(document_ids[start:start + 1000]))
     return timeline_drafts
 
 
@@ -4706,15 +4747,17 @@ async def list_versions(
     """
     if not isinstance(scope, WorkspaceContext):
         raise TypeError("Document history requires a workspace owner")
-    fence = await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    fence = await _admit_document_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, allow_member=True)
     if not 1 <= limit <= 100:
         raise ValueError("Version page size must be between 1 and 100")
     after_version = decode_version_cursor(_decode_document_owner_cursor(
         cursor, kind="versions", fence=fence, resource_id=document_id)) if cursor is not None else None
-    if await session.scalar(select(Document.id).where(Document.id == document_id, *_document_scope(scope))) is None:
+    scoped = _document_scope(scope, allow_member=True)
+    if await session.scalar(select(Document.id).where(Document.id == document_id, *scoped)) is None:
         return None, None
     statement = select(DocumentVersion).join(Document, Document.id == DocumentVersion.document_id).where(
-        Document.id == document_id, *_document_scope(scope),
+        Document.id == document_id, *scoped,
     )
     if after_version is not None:
         statement = statement.where(DocumentVersion.version_number > after_version)
@@ -4740,12 +4783,13 @@ async def get_version(
     """
     if not isinstance(scope, WorkspaceContext):
         raise TypeError("Document history requires a workspace owner")
-    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await _admit_document_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, allow_member=True)
     return await session.scalar(
         select(DocumentVersion).join(Document, Document.id == DocumentVersion.document_id).where(
             DocumentVersion.document_id == document_id,
             DocumentVersion.version_number == number,
-            *_document_scope(scope),
+            *_document_scope(scope, allow_member=True),
         )
     )
 
@@ -5095,7 +5139,8 @@ async def read_chat_evidence_chunks(
         ValueError: If refs list exceeds 100 items or contains duplicates. Exact selected reads also
             fail when a requested reference is missing instead of silently shrinking the selection.
     """
-    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await _admit_document_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, allow_member=True)
     if len(refs) > 100 or len(set(refs)) != len(refs):
         raise ValueError("Evidence references must be unique and contain at most 100 items")
     if not refs:
@@ -5110,7 +5155,7 @@ async def read_chat_evidence_chunks(
         .join(DocumentVersion, DocumentVersion.document_id == Document.id)
         .join(DocumentChunk, DocumentChunk.document_version_id == DocumentVersion.id)
         .join(Source, Source.id == Document.source_id)
-        .where(tuple_(DocumentVersion.id, DocumentChunk.id).in_(refs), *_document_scope(scope))
+        .where(tuple_(DocumentVersion.id, DocumentChunk.id).in_(refs), *_document_scope(scope, allow_member=True))
     )
     if require_active_source:
         statement = statement.where(Source.status == "active")

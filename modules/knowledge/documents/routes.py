@@ -7,14 +7,13 @@ from fastapi.responses import FileResponse
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.auth.dependencies import require_owner, require_owner_write
-from core.auth.models import AuthSession
 from core.auth.public import authenticated_session_ref
 from core.database import get_session
+from core.publication import require_publication_gate
 from core.storage import storage_path
 from core.workspaces.dependencies import require_workspace_read, require_workspace_write
-from core.workspaces.public import lock_access_fence
-from core.workspaces.schemas import WorkspaceContext
+from core.workspaces.public import lock_access_fence, read_access_fence, read_resource_grants
+from core.workspaces.schemas import PublicationFence, WorkspaceContext
 from modules.knowledge.documents import public
 from modules.knowledge.documents.models import Document
 from modules.knowledge.documents.schemas import (
@@ -29,6 +28,8 @@ from modules.knowledge.documents.schemas import (
     GadgetDocumentInteractionPatch,
     GadgetDocumentInteractionRead,
     GadgetDocumentProjectionList,
+    MemberDocumentList,
+    MemberDocumentRead,
     ProviderDocumentSnapshotList,
     ProviderDocumentSnapshotRead,
     ProviderSnapshotRequest,
@@ -43,8 +44,6 @@ router = APIRouter(
     dependencies=[Depends(module_dependency("knowledge.documents"))],
 )
 Session = Annotated[AsyncSession, Depends(get_session)]
-OwnerRead = Annotated[AuthSession, Depends(require_owner)]
-OwnerWrite = Annotated[AuthSession, Depends(require_owner_write)]
 WorkspaceRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
 WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 
@@ -53,6 +52,38 @@ def _require_document_route_owner(scope: WorkspaceContext) -> None:
     """Deny members before owner Document IDs/content; W3 grants remain separately owned."""
     if scope.role != "owner":
         raise HTTPException(status_code=403, detail="Workspace owner required")
+
+
+async def _gate_member_read(
+    request: Request, session: AsyncSession, scope: WorkspaceContext, document_ids: tuple[UUID, ...],
+) -> None:
+    """Arm the publication gate for a member read; owners are unaffected.
+
+    The grant set is read after the query; any returned ID without an active grant (revoked in
+    between) fails closed as 404 so unshared bytes are never sent.
+    """
+    if scope.role == "owner":
+        return
+    flag = request.app.state.settings.multi_workspace_enabled
+    unique = tuple(dict.fromkeys(document_ids))
+    grants = await read_resource_grants(session, scope=scope, kind="document", resource_ids=unique) if unique else ()
+    if len(grants) != len(unique):
+        raise HTTPException(status_code=404, detail="Document not found")
+    fence = await read_access_fence(session, scope=scope, multi_workspace_enabled=flag)
+    require_publication_gate(request, PublicationFence(
+        scope=scope, access_fence=fence, auth_session=authenticated_session_ref(request), grants=grants))
+
+
+def as_member_document_read(document: Document) -> MemberDocumentRead:
+    """Project a shared Document without Source, storage URI, external id or metadata."""
+    return MemberDocumentRead(
+        id=document.id, title=document.title, content_type=document.content_type,
+        mime_type=document.mime_type, canonical_url=document.canonical_url, author=document.author,
+        current_version=document.current_version, content_hash=document.content_hash,
+        extraction_status=document.extraction_status, published_at=document.published_at,
+        observed_at=document.observed_at, language=document.language,
+        has_raw=document.raw_uri is not None, created_at=document.created_at, updated_at=document.updated_at,
+    )
 
 
 async def _lock_document_write_request(request: Request, session: AsyncSession, scope: WorkspaceContext) -> None:
@@ -70,7 +101,7 @@ async def _lock_document_write_request(request: Request, session: AsyncSession, 
 
 @router.post("/provider-snapshots", response_model=list[ProviderDocumentSnapshotRead])
 async def read_provider_snapshots(
-    payload: ProviderSnapshotRequest, session: Session, request: Request, _owner: OwnerRead,
+    payload: ProviderSnapshotRequest, session: Session, request: Request,
     workspace: WorkspaceRead,
 ) -> list[ProviderDocumentSnapshotRead]:
     """Return exact immutable provider versions after owner-route authentication."""
@@ -86,7 +117,6 @@ async def read_provider_snapshots(
 async def list_provider_snapshots(
     session: Session,
     request: Request,
-    _owner: OwnerRead,
     workspace: WorkspaceRead,
     source_ids: Annotated[list[UUID], Query(min_length=1, max_length=100)],
     channel_ids: Annotated[list[str] | None, Query(max_length=100)] = None,
@@ -129,7 +159,7 @@ def as_document_read(document: Document) -> DocumentRead:
     )
 
 
-@router.get("", response_model=DocumentList)
+@router.get("", response_model=DocumentList | MemberDocumentList)
 async def list_documents(
     session: Session,
     request: Request,
@@ -137,15 +167,17 @@ async def list_documents(
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     cursor: str | None = None,
     source_id: UUID | None = None,
-) -> DocumentList:
-    """Page owned retained roots after real workspace admission; members remain denied.
+) -> DocumentList | MemberDocumentList:
+    """Page retained roots after real workspace admission; members see only granted Documents.
 
     Public query applies Source deletion scope before paging. Response send fencing is W4;
     selected identity never enables pending provider/gadget/deletion/citation handlers.
     """
-    _require_document_route_owner(scope)
     items, next_cursor = await public.list_documents(session, limit, cursor, source_id,
         scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
+    if scope.role != "owner":
+        await _gate_member_read(request, session, scope, tuple(item.id for item in items))
+        return MemberDocumentList(items=[as_member_document_read(item) for item in items], next_cursor=next_cursor)
     return DocumentList(items=[as_document_read(item) for item in items], next_cursor=next_cursor)
 
 
@@ -153,7 +185,6 @@ async def list_documents(
 async def list_dashboard_projections(
     session: Session,
     request: Request,
-    _owner: OwnerRead,
     workspace: WorkspaceRead,
     source_ids: Annotated[list[UUID], Query(min_length=1, max_length=32)],
     channel_ids: Annotated[list[str] | None, Query(max_length=32)] = None,
@@ -183,7 +214,6 @@ async def set_dashboard_document_interaction(
     payload: GadgetDocumentInteractionPatch,
     session: Session,
     request: Request,
-    _owner: OwnerWrite,
     workspace: WorkspaceWrite,
 ) -> GadgetDocumentInteractionRead:
     """Set durable owner read/bookmark state for an active exact current document version."""
@@ -221,18 +251,18 @@ async def create_document(
 
 @router.get("/{document_id}/raw")
 async def get_raw_document(
-    document_id: UUID, request: Request, session: Session, _owner: OwnerRead, scope: WorkspaceRead,
+    document_id: UUID, request: Request, session: Session, scope: WorkspaceRead,
 ) -> FileResponse:
     """Keep bootstrap-only file admission while using the scoped owner root locator.
 
     Retain private/no-store/nosniff headers and exact storage path behavior. The root query
     denies foreign/data-purged content, but it is not W4 actual FileResponse-send proof.
     """
-    _require_document_route_owner(scope)
     document = await public.get_document(session, document_id, scope=scope,
         multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
     if document is None or document.raw_uri is None:
         raise HTTPException(status_code=404, detail="Raw document not found")
+    await _gate_member_read(request, session, scope, (document.id,))
     try:
         path = storage_path(request.app.state.settings.data_dir, document.raw_uri)
     except ValueError as exc:
@@ -246,20 +276,22 @@ async def get_raw_document(
     return response
 
 
-@router.get("/{document_id}", response_model=DocumentRead)
+@router.get("/{document_id}", response_model=DocumentRead | MemberDocumentRead)
 async def get_document(
     document_id: UUID, session: Session, request: Request, scope: WorkspaceRead,
-) -> DocumentRead:
-    """Read one retained owned root; foreign/deleted IDs are 404 and members are denied.
+) -> DocumentRead | MemberDocumentRead:
+    """Read one retained root; foreign, deleted and ungranted IDs are the same 404.
 
     Scope query admission preserves inactive retained metadata and Source purge privacy;
     it does not replace the separately owned exact-session final response-send fence.
     """
-    _require_document_route_owner(scope)
     document = await public.get_document(session, document_id, scope=scope,
         multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
+    if scope.role != "owner":
+        await _gate_member_read(request, session, scope, (document.id,))
+        return as_member_document_read(document)
     return as_document_read(document)
 
 
@@ -416,11 +448,11 @@ async def list_versions(
     Deny members before enrichment, preserve ascending ordering/404 and defer actual-send
     admission to W4. Workspace context alone does not enable shared-document history.
     """
-    _require_document_route_owner(scope)
     versions, next_cursor = await public.list_versions(session, document_id, limit, cursor,
         scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
     if versions is None:
         raise HTTPException(status_code=404, detail="Document not found")
+    await _gate_member_read(request, session, scope, (document_id,))
     return VersionList(
         items=[VersionRead.model_validate(version, from_attributes=True) for version in versions],
         next_cursor=next_cursor,
@@ -440,11 +472,11 @@ async def get_version(
     Deny members before root/version query; scoped unavailable versions are 404. Source purge
     privacy and retained inactive eligibility stay in owner query, with W4 send work separate.
     """
-    _require_document_route_owner(scope)
     version = await public.get_version(session, document_id, number, scope=scope,
         multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
     if version is None:
         raise HTTPException(status_code=404, detail="Document version not found")
+    await _gate_member_read(request, session, scope, (document_id,))
     return VersionRead.model_validate(version, from_attributes=True)
 
 
@@ -453,7 +485,6 @@ async def get_citation_target(
     document_id: UUID,
     session: Session,
     request: Request,
-    _owner: OwnerRead,
     workspace: WorkspaceRead,
     document_version_id: UUID,
     chunk_id: UUID,
@@ -464,13 +495,13 @@ async def get_citation_target(
     it never remaps a citation to a newer current version. Owner authentication is not replaced
     by the version IDs supplied in the navigation URL.
     """
-    _require_document_route_owner(workspace)
     chunks = await public.read_chat_evidence_chunks(
         session, [(document_version_id, chunk_id)], require_current_version=False,
         scope=workspace, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
     )
     if not chunks or chunks[0].document_id != document_id:
         raise HTTPException(status_code=404, detail="Citation evidence is no longer available")
+    await _gate_member_read(request, session, workspace, (document_id,))
     chunk = chunks[0]
     return CitationTargetRead(
         document_id=chunk.document_id,
