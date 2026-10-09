@@ -20,13 +20,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from core.config import Settings
 from core.model_gateway.client import ModelGateway, PrivacyPolicyDenied
 from core.model_gateway.schemas import RequestPolicy
-from core.workspaces import public as workspaces
-from core.workspaces.schemas import AccessFence, InternalJobScope, Scope
 from core.model_gateway.transport import (
     EndpointNetworkPolicyError,
     approved_web_search_transport,
     body_sent,
 )
+from core.workspaces import public as workspaces
+from core.workspaces.schemas import AccessFence, InternalJobScope, Scope
 from modules.chat import web_search as web
 from modules.chat.citations import (
     parse_citation_markers,
