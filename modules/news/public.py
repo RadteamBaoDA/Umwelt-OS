@@ -34,7 +34,12 @@ from modules.news.schemas import (
     TrendRead,
 )
 from modules.news.seed import ensure_demo_topics
-from modules.news.stories import cluster_observation, get_story, list_stories
+from modules.news.stories import (
+    cluster_observation,
+    get_story,
+    list_stories,
+    read_story_translation_input,
+)
 from modules.news.topics import (
     TopicConflict,
     TopicCreate,
@@ -97,6 +102,7 @@ __all__ = [
     "list_trends",
     "live_topic_ids",
     "process_news_document_ready",
+    "read_story_translation_input",
     "recover_news_work",
     "resolve_topic_terms",
     "score_relevance",

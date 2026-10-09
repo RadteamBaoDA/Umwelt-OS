@@ -74,6 +74,7 @@ class StoryRead(BaseModel):
     relevance_profile_revisions: list[dict[str, str | int]] = Field(default_factory=list, max_length=2000)
     relevance_as_of: datetime | None = None
     relevance_state: Literal["available", "partial", "unavailable"] = "unavailable"
+    translation_revision: str = Field(default="", max_length=32)
 
 
 class StoryPage(BaseModel):
