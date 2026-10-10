@@ -15,3 +15,6 @@ data/
 .backup-restores/
 .superpowers/sdd/
 .gitnexus
+
+# Git worktrees
+.worktrees/
