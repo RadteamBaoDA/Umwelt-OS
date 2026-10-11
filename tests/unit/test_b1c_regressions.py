@@ -35,8 +35,8 @@ def _config(**overrides: Any) -> AIExecutionConfig:
         "workspace_id": OWNER.workspace_id, "actor_user_id": 1, "membership_revision": 1,
         "access_configuration_revision": 1, "configuration_revision": 1, "gateway_identity": "a" * 64,
         "endpoint_destination_id": "omniroute",
-        "omniroute_base_url": "http://localhost:8000", "omniroute_api_key": "key",
-        "omniroute_credential_configured": True,
+        "gateway_base_url": "http://localhost:8000", "gateway_api_key": "key",
+        "gateway_credential_configured": True,
         "aliases": {"reranker": ModelMapping(model="rr", destination="remote")},
         "privacy": PrivacySettings(
             allow_remote_embeddings=True, allow_remote_reasoning=True,

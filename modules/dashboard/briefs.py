@@ -716,7 +716,7 @@ async def generate_brief(
                 or now_mapping != mapping):
             raise BriefUnavailable("Gateway configuration changed before model egress")
         if not may_send(_brief_policy(now), alias, now_mapping, destination or "",
-                        bool(now.omniroute_api_key), "chat"):
+                        bool(now.gateway_api_key), "chat"):
             raise PrivacyPolicyDenied("Brief egress denied by current settings")
 
     # Phase B: per-attempt egress fence, released when the request body is handed to the transport.
@@ -741,7 +741,7 @@ async def generate_brief(
             await session.rollback()
 
     gateway = ModelGateway(
-        redis=redis, base_url=config.omniroute_base_url, api_key=config.omniroute_api_key,
+        redis=redis, base_url=config.gateway_base_url, api_key=config.gateway_api_key,
         destination_id=destination or "", timeout_seconds=config.request_timeout_seconds,
         scope=scope, gateway_identity=config.gateway_identity,
         configuration_revision=config.configuration_revision, before_send=send_fence,

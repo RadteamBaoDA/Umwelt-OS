@@ -19,8 +19,8 @@ def _config(**over: object) -> AIExecutionConfig:
     base: dict[str, object] = {
         "workspace_id": WS, "actor_user_id": 1, "membership_revision": 1, "access_configuration_revision": 1,
         "configuration_revision": 2, "gateway_identity": "a" * 64, "endpoint_destination_id": "omniroute:abc",
-        "omniroute_base_url": "https://gw.example/v1", "omniroute_api_key": SECRET,
-        "omniroute_credential_configured": True,
+        "gateway_base_url": "https://gw.example/v1", "gateway_api_key": SECRET,
+        "gateway_credential_configured": True,
         "aliases": {"fast": ModelMapping(model="m1", version="1", destination="remote")},
         "privacy": PrivacySettings(allow_remote_reasoning=True, reasoning_destinations=["omniroute:abc"]),
         "chat_alias": "fast", "brief_alias": "fast", "request_timeout_seconds": 20,
@@ -42,7 +42,7 @@ async def test_fingerprint_stable_nonsecret_and_sensitive() -> None:
     assert base and len(base) == 64 and SECRET not in base
     assert base == await _fp(_config())
     assert base != await _fp(_config(aliases={"fast": ModelMapping(model="m2", version="1", destination="remote")}))
-    assert base != await _fp(_config(omniroute_base_url="https://other/v1", endpoint_destination_id="omniroute:zzz"))
+    assert base != await _fp(_config(gateway_base_url="https://other/v1", endpoint_destination_id="omniroute:zzz"))
     assert base != await _fp(_config(privacy=PrivacySettings(allow_remote_reasoning=True, reasoning_destinations=[])))
     assert base != await _fp(_config(configuration_revision=3))
 
@@ -52,4 +52,4 @@ async def test_none_when_disabled_or_unconfigured() -> None:
     assert await _fp(None) is None
     assert await _fp(_config(privacy=PrivacySettings())) is None
     assert await _fp(_config(), alias="missing") is None
-    assert await _fp(_config(omniroute_credential_configured=False)) is None
+    assert await _fp(_config(gateway_credential_configured=False)) is None

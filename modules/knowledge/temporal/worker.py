@@ -937,7 +937,7 @@ async def _context(factory: async_sessionmaker[AsyncSession], adm: _Admission, s
         authorize_dispatch_cessation=authorize_cessation,
         authorize_rebuild_absence=authorize_rebuild_absence,
     )
-    gateway = ModelGateway(redis, config.omniroute_base_url, config.omniroute_api_key,
+    gateway = ModelGateway(redis, config.gateway_base_url, config.gateway_api_key,
                            config.endpoint_destination_id or "", timeout_seconds=min(config.request_timeout_seconds, 30),
                            scope=adm.scope, gateway_identity=config.gateway_identity,
                            configuration_revision=config.configuration_revision, before_send=fence_check,
@@ -1084,7 +1084,7 @@ async def _fresh_fact_action(factory: async_sessionmaker[AsyncSession], adm: _Ad
                 or current_config.aliases.get("embedding") != model.mapping):
             raise PrivacyPolicyDenied("Current surviving fact support or model policy changed")
 
-    gateway = ModelGateway(redis, config.omniroute_base_url, config.omniroute_api_key,
+    gateway = ModelGateway(redis, config.gateway_base_url, config.gateway_api_key,
         config.endpoint_destination_id or "", timeout_seconds=min(config.request_timeout_seconds, 30),
         scope=adm.scope, gateway_identity=config.gateway_identity,
         configuration_revision=config.configuration_revision, before_send=before_send,

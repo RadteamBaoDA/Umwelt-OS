@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
@@ -85,7 +86,7 @@ async def test_missing_chat_worker_heartbeat_degrades_health() -> None:
 
     class OkSession:
         async def execute(self, _statement):
-            return None
+            return SimpleNamespace(first=lambda: None)
 
     result = await system_health(cast(AsyncSession, OkSession()), cast(Redis, FakeRedis()), Settings())
     assert result["components"]["worker"]["status"] == "healthy"
@@ -107,7 +108,7 @@ async def test_present_chat_worker_heartbeat_is_healthy() -> None:
 
     class OkSession:
         async def execute(self, _statement):
-            return None
+            return SimpleNamespace(first=lambda: None)
 
     result = await system_health(cast(AsyncSession, OkSession()), cast(Redis, FakeRedis()), Settings())
     assert result["components"]["chat_worker"]["status"] == "healthy"
@@ -119,10 +120,13 @@ def test_ready_timeout_exceeds_health_probe_and_fits_compose_healthcheck() -> No
 
 
 @pytest.mark.asyncio
-async def test_absent_optional_n8n_and_browser_do_not_degrade_overall() -> None:
+async def test_absent_optional_n8n_and_browser_do_not_degrade_overall(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("N8N_API_KEY", "N8N_WEBHOOK_TOKEN", "N8N_SERVICE_URL", "BROWSER_SHARED_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+    hermetic = Settings(_env_file=None)  # type: ignore[call-arg]  # ignore the developer's local .env
     class OkSession:
         async def execute(self, _statement):
-            return None
+            return SimpleNamespace(first=lambda: None)
 
     class OkRedis:
         async def ping(self):
@@ -134,7 +138,7 @@ async def test_absent_optional_n8n_and_browser_do_not_degrade_overall() -> None:
         async def info(self, _section):
             return {}
 
-    result = await system_health(cast(AsyncSession, OkSession()), cast(Redis, OkRedis()), Settings())
+    result = await system_health(cast(AsyncSession, OkSession()), cast(Redis, OkRedis()), hermetic)
     assert result["overall"] == "healthy"
     for name in ("n8n", "browser"):
         assert result["components"][name] == {"status": "not_configured", "optional": True}

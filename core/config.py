@@ -66,10 +66,7 @@ class Settings(BaseSettings):
     github_app_id: str = Field(default="", max_length=19, validation_alias="GITHUB_APP_ID")
     github_app_webhook_secret: SecretStr = Field(default=SecretStr(""), validation_alias="GITHUB_APP_WEBHOOK_SECRET", repr=False)
     github_webhook_receiver_revision: str = Field(default="1", min_length=1, max_length=64, validation_alias="GITHUB_WEBHOOK_RECEIVER_REVISION")
-    omniroute_base_url: AnyHttpUrl | None = Field(default=None, repr=False)
-    omniroute_api_key: SecretStr = SecretStr("")
     model_gateway_slots: int = Field(default=24, ge=1, le=1000, validation_alias="MODEL_GATEWAY_SLOTS")
-    omniroute_models: dict[str, str] = Field(default_factory=dict, repr=False)
     ai_credential_encryption_key: SecretStr = Field(
         default=SecretStr(""), validation_alias="AI_CREDENTIAL_ENCRYPTION_KEY", repr=False
     )
@@ -201,12 +198,6 @@ class Settings(BaseSettings):
                 networks.append(network.with_prefixlen)
             normalized[origin] = tuple(sorted(set(networks)))
         return normalized
-
-    @field_validator("omniroute_base_url", mode="before")
-    @classmethod
-    def blank_gateway_url_is_unconfigured(cls, value: object) -> object:
-        """Treat an empty OmniRoute URL as absent before Pydantic URL validation."""
-        return None if value == "" else value
 
     @field_validator("public_origin")
     @classmethod

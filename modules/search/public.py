@@ -415,8 +415,8 @@ async def search(
                         or latest.endpoint_destination_id != config.endpoint_destination_id
                         or latest.gateway_identity != config.gateway_identity or latest_mapping != mapping
                         or not may_send(latest_policy, "embedding", latest_mapping,
-                                        latest.endpoint_destination_id or "omniroute",
-                                        bool(latest.omniroute_api_key), "embeddings")):
+                                        latest.endpoint_destination_id or "remote",
+                                        bool(latest.gateway_api_key), "embeddings")):
                     raise PrivacyPolicyDenied("Search embedding denied by current settings")
                 if before_embedding_send is not None:
                     await before_embedding_send(
@@ -645,8 +645,8 @@ async def index_status(
         else:
             config, mapping, policy = await configured_embedding(session, settings, redis, scope=scope)
             status = "pending" if not config.endpoint_policy_denied and may_send(
-                policy, "embedding", mapping, config.endpoint_destination_id or "omniroute",
-                bool(config.omniroute_api_key), "embeddings",
+                policy, "embedding", mapping, config.endpoint_destination_id or "remote",
+                bool(config.gateway_api_key), "embeddings",
             ) else "unconfigured"
         return SearchIndexStatus(run_id=None, status=status, model_id=None, dimensions=None, indexed_items=0, failed_items=0)
     counts = dict((await session.execute(

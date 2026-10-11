@@ -138,7 +138,7 @@ async def _dependency_snapshot(config: AIExecutionConfig, redis: Redis, *, scope
         "gateway": gateway_identity,
         "destination": config.endpoint_destination_id,
         "endpoint_denied": config.endpoint_policy_denied,
-        "credential_configured": config.omniroute_credential_configured,
+        "credential_configured": config.gateway_credential_configured,
         "mapping": (mapping.model, mapping.version) if mapping is not None else None,
         "capability_key": key,
         "remote_reasoning": privacy.allow_remote_reasoning,
@@ -165,7 +165,7 @@ def _policy_allows_extraction(config: AIExecutionConfig, mapping: ModelMapping |
     )
     return may_send(
         policy, EXTRACTION_ALIAS, mapping, destination,
-        config.omniroute_credential_configured, "structured",
+        config.gateway_credential_configured, "structured",
     )
 
 
@@ -630,7 +630,7 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
                     )
                     if not may_send(
                         current_policy, alias, current_mapping, current_destination,
-                        current.omniroute_credential_configured, "structured",
+                        current.gateway_credential_configured, "structured",
                     ):
                         raise PrivacyPolicyDenied("Extraction policy denied before send")
                 current_ready = await documents.get_ready_version_ref(
@@ -644,7 +644,7 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
                     raise PrivacyPolicyDenied("Extraction source revision changed before send")
 
             gateway = ModelGateway(
-                redis=redis, base_url=config.omniroute_base_url, api_key=config.omniroute_api_key,
+                redis=redis, base_url=config.gateway_base_url, api_key=config.gateway_api_key,
                 destination_id=cast(str, destination), timeout_seconds=min(config.request_timeout_seconds, EXTRACTION_TIMEOUT_SECONDS),
                 scope=scope, gateway_identity=config.gateway_identity,
                 configuration_revision=config.configuration_revision, before_send=before_send,

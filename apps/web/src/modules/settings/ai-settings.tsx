@@ -15,12 +15,12 @@ import { AgentSettingsWorkspace } from '@/modules/agents/agent-settings';
 import { CheckboxField, FieldGrid, SettingsActions, SettingsPageHeader, SettingsSection } from './settings-layout';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { AutomationSettings } from '@/modules/automations/rule-list';
-import { aliasProviderId, parseDraftSnapshot, ProviderEditor, providerPresets, type ProviderRead, type ProviderSecret } from './provider-editor';
+import { aliasProviderId, mergeDiscovered, modelIdsForAlias, parseDraftSnapshot, ProviderEditor, type ProviderRead, type ProviderSecret } from './provider-editor';
 
 type Mapping = { model: string; version: string | null; destination: 'unknown' | 'remote'; provider_id?: string | null };
 type Privacy = { allow_remote_reasoning: boolean; allow_remote_embeddings: boolean; allow_remote_web_search: boolean; reasoning_destinations: string[]; embedding_destinations: string[]; web_search_destinations: string[] };
 type Capability = { alias: string; capability: string; result: string; expires_at: string };
-type AISettings = { configuration_revision: number; providers: ProviderRead[]; web_search_provider: 'none' | 'tavily' | 'brave'; web_search_endpoint: string | null; web_search_credential_configured: boolean; chat_alias: string; brief_alias: string; aliases: Record<string, Mapping>; capabilities: Capability[]; privacy: Privacy; request_timeout_seconds: number };
+type AISettings = { configuration_revision: number; providers: ProviderRead[]; web_search_provider: 'none' | 'tavily' | 'brave' | 'searxng'; web_search_endpoint: string | null; web_search_credential_configured: boolean; chat_alias: string; brief_alias: string; aliases: Record<string, Mapping>; capabilities: Capability[]; privacy: Privacy; request_timeout_seconds: number };
 const aliases = ['reasoning-large', 'reasoning-small', 'fast', 'embedding', 'reranker', 'vision', 'local-private'];
 const chatAliases = ['reasoning-large', 'reasoning-small', 'fast'];
 const capabilityTypes = ['chat', 'streaming', 'embeddings', 'structured', 'tools', 'reranking'];
@@ -35,11 +35,8 @@ export function AISettingsWorkspace() {
   const query = useQuery({ queryKey: ['ai-settings'], queryFn: () => apiRequest<AISettings>('/api/v1/settings/ai') });
   const [draft, setDraft] = useState<AISettings | null>(null);
   const [secrets, setSecrets] = useState<Record<string, ProviderSecret>>({});
-  const [models, setModels] = useState<Record<string, string[]>>({});
   const [discoveringId, setDiscoveringId] = useState<string | null>(null);
   const [discoverError, setDiscoverError] = useState<{ id: string; text: string } | null>(null);
-  const [searchKey, setSearchKey] = useState('');
-  const [searchAction, setSearchAction] = useState<'unchanged' | 'replaced' | 'removed'>('unchanged');
   const [probeTypes, setProbeTypes] = useState<Record<string, string>>({});
   const allowNavigation = useRef(false);
   const [restoredDraft, setRestoredDraft] = useState(false);
@@ -47,8 +44,8 @@ export function AISettingsWorkspace() {
   const base = draft ?? query.data;
   const saved = base ? { ...base, providers: base.providers ?? [] } : undefined;
   const secretList = Object.values(secrets);
-  const dirty = Boolean(query.data && (JSON.stringify(draft ?? query.data) !== JSON.stringify(query.data) || secretList.some((item) => item.key || item.action !== 'unchanged') || searchKey || searchAction !== 'unchanged'));
-  const save = useMutation({ mutationFn: (value: AISettings) => apiRequest<AISettings>('/api/v1/settings/ai', { method: 'PUT', headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' }, body: JSON.stringify({ expected_revision: value.configuration_revision, providers: value.providers.map((item) => ({ id: item.id, kind: item.kind, label: item.label, base_url: item.base_url || null, credential_action: secrets[item.id]?.action ?? 'unchanged', api_key: secrets[item.id]?.key || null })), web_search_provider: value.web_search_provider, web_search_endpoint: value.web_search_endpoint || null, web_search_credential_action: searchAction, web_search_api_key: searchKey || null, chat_alias: value.chat_alias, brief_alias: value.brief_alias, aliases: value.aliases, privacy: value.privacy, request_timeout_seconds: value.request_timeout_seconds }) }), onSuccess: (value) => { setDraft(null); setSecrets({}); setSearchAction('unchanged'); setSearchKey(''); client.setQueryData(['ai-settings'], value); } });
+  const dirty = Boolean(query.data && (JSON.stringify(draft ?? query.data) !== JSON.stringify(query.data) || secretList.some((item) => item.key || item.action !== 'unchanged')));
+  const save = useMutation({ mutationFn: (value: AISettings) => apiRequest<AISettings>('/api/v1/settings/ai', { method: 'PUT', headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' }, body: JSON.stringify({ expected_revision: value.configuration_revision, providers: value.providers.map((item) => ({ id: item.id, kind: item.kind, label: item.label, base_url: item.base_url || null, models: item.models ?? [], credential_action: secrets[item.id]?.action ?? 'unchanged', api_key: secrets[item.id]?.key || null })), web_search_provider: value.web_search_provider, web_search_endpoint: value.web_search_endpoint || null, web_search_credential_action: 'unchanged', web_search_api_key: null, chat_alias: value.chat_alias, brief_alias: value.brief_alias, aliases: value.aliases, privacy: value.privacy, request_timeout_seconds: value.request_timeout_seconds }) }), onSuccess: (value) => { setDraft(null); setSecrets({}); client.setQueryData(['ai-settings'], value); } });
   if (query.data && !restoredDraft) {
     // Restores a same-revision draft once, during render, before the persistence effect runs.
     setRestoredDraft(true);
@@ -58,7 +55,6 @@ export function AISettingsWorkspace() {
     if (snapshot) {
       if (snapshot.draft) setDraft(snapshot.draft);
       setSecrets(Object.fromEntries(Object.entries(snapshot.providerActions).map(([id, action]) => [id, { key: '', action }])));
-      if (snapshot.searchAction) setSearchAction(snapshot.searchAction);
       setRestoredSecret(snapshot.hadSecret);
     } else {
       try { sessionStorage.removeItem(draftStorageKey); } catch { /* storage unavailable */ }
@@ -72,8 +68,7 @@ export function AISettingsWorkspace() {
           revision: query.data.configuration_revision,
           draft,
           providerActions: Object.fromEntries(Object.entries(secrets).filter(([, item]) => item.action !== 'unchanged').map(([id, item]) => [id, item.action])),
-          searchAction,
-          hadSecret: secretList.some((item) => item.key) || Boolean(searchKey),
+          hadSecret: secretList.some((item) => item.key),
         }));
       } catch {
         // The in-memory draft remains available for this mount.
@@ -81,7 +76,7 @@ export function AISettingsWorkspace() {
     } else {
       sessionStorage.removeItem(draftStorageKey);
     }
-  }, [query.data, restoredDraft, dirty, draft, secrets, searchAction, searchKey, save.isPending]);
+  }, [query.data, restoredDraft, dirty, draft, secrets, save.isPending]);
   useEffect(() => {
     if (!dirty && !save.isPending) return;
     /** Prevents browser navigation while unsaved AI settings remain. */
@@ -142,7 +137,7 @@ export function AISettingsWorkspace() {
   const discover = useMutation({
     mutationFn: (provider: ProviderRead) => apiRequest<{ model_ids: string[] }>('/api/v1/settings/ai/discover', { method: 'POST', headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' }, body: JSON.stringify({ provider_id: savedIds.includes(provider.id) ? provider.id : undefined, base_url: provider.base_url, kind: provider.kind, api_key: secrets[provider.id]?.key ?? '' }) }),
     onMutate: (provider) => { setDiscoveringId(provider.id); setDiscoverError(null); },
-    onSuccess: (data, provider) => setModels((current) => ({ ...current, [provider.id]: data.model_ids })),
+    onSuccess: (data, provider) => setDraft((current) => { const from = current ?? query.data; return from ? { ...from, providers: (from.providers ?? []).map((item) => (item.id === provider.id ? { ...item, models: mergeDiscovered(item.models, data.model_ids) } : item)) } : current; }),
     onError: (error, provider) => setDiscoverError({ id: provider.id, text: describeError(error, t, 'discoveryFailed') }),
     onSettled: () => setDiscoveringId(null),
   });
@@ -166,14 +161,14 @@ export function AISettingsWorkspace() {
   /** Clears every local change after the owner confirms discarding the draft. */
   const cancelChanges = () => {
     if (!window.confirm(t('discardDraft'))) return;
-    try { sessionStorage.removeItem(draftStorageKey); } catch { /* storage unavailable */ } setDraft(null); setSecrets({}); setModels({}); setSearchKey(''); setSearchAction('unchanged'); setRestoredSecret(false); save.reset(); draftProbe.reset(); discover.reset(); setDiscoverError(null);
+    try { sessionStorage.removeItem(draftStorageKey); } catch { /* storage unavailable */ } setDraft(null); setSecrets({}); setRestoredSecret(false); save.reset(); draftProbe.reset(); discover.reset(); setDiscoverError(null);
   };
   const capabilityLabel = (kind: string) => t(`capability${kind[0].toUpperCase()}${kind.slice(1)}` as 'capabilityChat');
   /** Renders the model mapping fields and probe actions for one alias inside the Model details group. */
   const probeRow = (alias: string, value: Mapping) => {
     const providerId = aliasProviderId(value.provider_id, saved.providers);
     const provider = saved.providers.find((item) => item.id === providerId);
-    const hints = [...new Set([...(models[providerId] ?? []), ...(provider ? providerPresets[provider.kind].models : [])])];
+    const hints = modelIdsForAlias(alias, saved.providers);
     const listId = `ai-models-${alias}`;
     return <div className="rounded-lg border border-border p-4" key={alias}>
     <h3 className="m-0 mb-3 text-base font-bold">{alias}</h3>
@@ -195,7 +190,7 @@ export function AISettingsWorkspace() {
     <form className="flex flex-col gap-5" onSubmit={(event) => { event.preventDefault(); save.mutate(saved); }}>
       <SettingsSection title={t('providersSection')}>
         <p className="muted m-0 text-xs">{t('providersHelp')}</p>
-        <ProviderEditor providers={saved.providers} savedIds={savedIds} secrets={secrets} models={models} disabled={save.isPending} discoveringId={discoveringId} discoverError={discoverError} t={t as never}
+        <ProviderEditor providers={saved.providers} savedIds={savedIds} secrets={secrets} disabled={save.isPending} discoveringId={discoveringId} discoverError={discoverError} t={t as never}
           onChange={(providers) => set({ providers })} onSecret={(id, secret) => setSecrets({ ...secrets, [id]: secret })} onDiscover={(provider) => discover.mutate(provider)} />
       </SettingsSection>
       <SettingsSection title={t('modelsSection')}>
@@ -211,15 +206,6 @@ export function AISettingsWorkspace() {
         <details className={advancedClass}><summary className={summaryClass}>{t('modelDetails')}</summary>
           <div className="flex flex-col gap-4 px-5 pb-5">{aliases.map((alias) => probeRow(alias, saved.aliases[alias] ?? { model: '', version: null, destination: 'unknown' as const }))}</div>
         </details>
-      </SettingsSection>
-      <SettingsSection title={t('webSearch')}>
-        <FieldGrid>
-          <label className="field"><span className="label">{t('provider')}</span><Select disabled={save.isPending} value={saved.web_search_provider} onValueChange={(value) => set({ web_search_provider: value as AISettings['web_search_provider'] })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">{t('none')}</SelectItem><SelectItem value="tavily">Tavily</SelectItem><SelectItem value="brave">Brave</SelectItem></SelectContent></Select></label>
-          <label className="field"><span className="label">{t('providerEndpoint')}</span><Input type="url" disabled={save.isPending} value={saved.web_search_endpoint ?? ''} onChange={(event) => set({ web_search_endpoint: event.target.value || null })} /></label>
-          <label className="field"><span className="label">{t('providerCredential')}</span><Input type="password" disabled={save.isPending} autoComplete="new-password" value={searchKey} onChange={(event) => { setSearchKey(event.target.value); setSearchAction(event.target.value ? 'replaced' : 'unchanged'); }} placeholder={t('keepSavedCredential')} /></label>
-        </FieldGrid>
-        <p className="muted m-0 text-xs">{t('credential')} {saved.web_search_credential_configured ? t('configured') : t('notConfigured')}. {t('credentialNeverShown')}</p>
-        <CheckboxField><Checkbox id="ai-remove-search" disabled={save.isPending} checked={searchAction === 'removed'} onCheckedChange={(checked) => setSearchAction(checked ? 'removed' : 'unchanged')} /><label htmlFor="ai-remove-search">{t('removeSearchCredential')}</label></CheckboxField>
       </SettingsSection>
       <details className={advancedClass}><summary className={summaryClass}>{t('embeddingsTitle')}</summary>
         <div className="flex flex-col gap-3 px-5 pb-5">{embeddingsAvailable
@@ -238,7 +224,6 @@ export function AISettingsWorkspace() {
           <p className="muted m-0">{t('localProvidersNote')}</p>
           <CheckboxField><Checkbox id="ai-remote-reasoning" disabled={save.isPending} checked={saved.privacy.allow_remote_reasoning} onCheckedChange={(checked) => setPrivacy({ allow_remote_reasoning: checked === true })} /><label htmlFor="ai-remote-reasoning">{t('allowRemoteReasoning')}</label></CheckboxField>
           <CheckboxField><Checkbox id="ai-remote-embeddings" disabled={save.isPending} checked={saved.privacy.allow_remote_embeddings} onCheckedChange={(checked) => setPrivacy({ allow_remote_embeddings: checked === true })} /><label htmlFor="ai-remote-embeddings">{t('allowRemoteEmbeddings')}</label></CheckboxField>
-          <CheckboxField><Checkbox id="ai-remote-search" disabled={save.isPending} checked={saved.privacy.allow_remote_web_search} onCheckedChange={(checked) => setPrivacy({ allow_remote_web_search: checked === true })} /><label htmlFor="ai-remote-search">{t('allowRemoteSearch')}</label></CheckboxField>
           <p className="muted m-0">{t('historyStorage')} <a href="/settings/memory">{t('memoryPrivacyLink')}</a></p>
         </div>
       </details>

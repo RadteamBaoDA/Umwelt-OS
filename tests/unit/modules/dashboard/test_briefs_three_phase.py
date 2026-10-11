@@ -89,7 +89,7 @@ class _Env:
         return SimpleNamespace(
             brief_alias="brief", system_prompts={}, aliases={"brief": "mapping"}, endpoint_destination_id="dest",
             privacy=SimpleNamespace(allow_remote_reasoning=True, reasoning_destinations=["dest"]),
-            configuration_revision=self.revision, omniroute_base_url="http://gw", omniroute_api_key="k",
+            configuration_revision=self.revision, gateway_base_url="http://gw", gateway_api_key="k",
             request_timeout_seconds=5, gateway_identity="a" * 64, endpoint_allowed_cidrs=[],
             workspace_id=SCOPE.workspace_id, actor_user_id=1, membership_revision=1,
             providers={}, allow_public_providers=False,

@@ -2,7 +2,7 @@
 
 Phase 0 stores one owner password hash, opaque session-token hashes, CSRF-token hashes, and service data in local PostgreSQL/Redis volumes. Raw owner passwords and session tokens are not persisted. Browser cookies are HTTPOnly, SameSite=Lax, and Secure when enabled for HTTPS.
 
-The setup token, CSRF signing secret, database password, and optional OmniRoute key belong only in the ignored local `.env` file or the deployment's protected secret store. Do not commit them or include them in screenshots, support bundles, or shared logs. Request validation errors omit submitted input; unhandled errors log a request ID without request bodies.
+The setup token, CSRF signing secret, database password, and AI connector API keys (encrypted in the database via `AI_CREDENTIAL_ENCRYPTION_KEY`) belong only in the ignored local `.env` file or the deployment's protected secret store. Do not commit them or include them in screenshots, support bundles, or shared logs. Request validation errors omit submitted input; unhandled errors log a request ID without request bodies.
 
 Phase 2 stores uploaded originals under the local data directory and extracted text, chunks, connector observations, and provenance in local PostgreSQL. Phase 2 does not create embeddings, semantic indexes, or AI prompts. Search and AI answers must not be presented as ready until their later phases are implemented.
 

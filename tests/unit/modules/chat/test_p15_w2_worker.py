@@ -290,7 +290,7 @@ async def test_fence_released_after_body_written_before_response(
     port = server.sockets[0].getsockname()[1]
     s.config = _web_config(web_search_provider=provider, web_search_endpoint=f"http://127.0.0.1:{port}")
 
-    def factory(endpoint: str, *_a: Any) -> ApprovedEndpointTransport:
+    def factory(endpoint: str, *_a: Any, **_k: Any) -> ApprovedEndpointTransport:
         transport = approved_transport(endpoint, ["127.0.0.0/8"])
         inner = transport._delegate.handle_async_request
 
@@ -316,7 +316,7 @@ async def test_nat64_metadata_answer_is_network_denied(monkeypatch: pytest.Monke
     s = _Search(monkeypatch)
     monkeypatch.setattr(worker.web, "search", real_search)
     delegate = AsyncMock()
-    monkeypatch.setattr(worker, "approved_web_search_transport", lambda *_a: ApprovedEndpointTransport(
+    monkeypatch.setattr(worker, "approved_web_search_transport", lambda *_a, **_k: ApprovedEndpointTransport(
         httpx.URL("https://api.tavily.com"), (), delegate, allow_global=True))
     answer = (socket.AF_INET6, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("64:ff9b::a9fe:a9fe", 443, 0, 0))
     with patch.object(asyncio.get_running_loop(), "getaddrinfo", AsyncMock(return_value=[answer])):

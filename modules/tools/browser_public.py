@@ -80,7 +80,7 @@ async def _job_authority(
 
 
 def browser_capability_verified() -> bool:
-    """Report whether network isolation and the OmniRoute browser/tool probe are accepted.
+    """Report whether network isolation and the gateway browser/tool probe are accepted.
 
     Single gate for registration, the specialist tool list and the control callbacks.
     Stays False until S4 records that proof; never derive it from config or health.

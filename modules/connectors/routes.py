@@ -69,7 +69,7 @@ from modules.ingestion.schemas import (
     ReceiveBatch,
     classify_telegram_probe,
 )
-from modules.settings.public import module_dependency, module_is_enabled
+from modules.settings.public import module_dependency, module_is_enabled, resolve_n8n
 from modules.sources import public as sources
 from modules.sources.schemas import ConnectorSource, SourceFence
 
@@ -1439,7 +1439,7 @@ async def trigger_collection(
         return ManualSyncResult(run_id=result.run_id, batch_id=result.batch_id, status=result.status or "queued")
     if result.outcome == "deferred":
         raise HTTPException(status_code=409, detail="A collection wake is already pending")
-    if not settings.n8n_webhook_token.get_secret_value():
+    if not (await resolve_n8n(session, settings, workspace_id=scope.workspace_id)).webhook_token:
         raise HTTPException(status_code=503, detail="Manual n8n trigger authentication is not configured")
     if await sources.record_collection_result(
         session, source_id, source.generation, datetime.now(UTC), "n8n_unavailable",

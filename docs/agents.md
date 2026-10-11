@@ -27,7 +27,7 @@ config or grants invalidate in-flight jobs. Page text is untrusted evidence. Res
 run, conversation or source is purged; job ids and digests remain as tombstones.
 
 The tool is not registered (so specialists report browser reading unavailable) until browser network isolation and an
-OmniRoute browser/tool capability probe are accepted; the control callback refuses `register` and
+configured connector browser/tool capability probe are accepted; the control callback refuses `register` and
 `authorize` while unverified. Static reads retain no session state. Remote-work guards expire shortly after the 45 s job bound, and ingestion defers (retries) while one is live.
 
 Lock order across modules: Sources, then Agents, then Tools.

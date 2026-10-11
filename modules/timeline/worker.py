@@ -109,7 +109,7 @@ async def _dependency_snapshot(config: AIExecutionConfig, redis: Redis, *, scope
         "gateway": config.gateway_identity,
         "destination": config.endpoint_destination_id,
         "denied": config.endpoint_policy_denied,
-        "credential": config.omniroute_credential_configured,
+        "credential": config.gateway_credential_configured,
         "mapping": (mapping.model, mapping.version) if mapping else None,
         "remote": privacy.allow_remote_reasoning,
         "destinations": sorted(privacy.reasoning_destinations),
@@ -139,7 +139,7 @@ def _allowed(config: AIExecutionConfig, mapping: ModelMapping | None, destinatio
         return False
     return may_send(
         _policy(config, mapping, destination, local_only), ALIAS, mapping, destination,
-        config.omniroute_credential_configured, "structured",
+        config.gateway_credential_configured, "structured",
     )
 
 
@@ -307,7 +307,7 @@ async def process_timeline_extraction_work(ctx: dict[str, object], work_id_value
                     raise PrivacyPolicyDenied("Timeline extraction source revision changed before send")
 
             gateway = ModelGateway(
-                redis=redis, base_url=config.omniroute_base_url, api_key=config.omniroute_api_key,
+                redis=redis, base_url=config.gateway_base_url, api_key=config.gateway_api_key,
                 destination_id=cast(str, destination), timeout_seconds=min(config.request_timeout_seconds, TIMEOUT_SECONDS),
                 scope=scope, gateway_identity=config.gateway_identity,
                 configuration_revision=config.configuration_revision, before_send=before_send,

@@ -521,7 +521,7 @@ class HarnessContext:
             configuration_revision=config.configuration_revision,
         )
         if config.endpoint_policy_denied or not may_send(
-            policy, alias, mapping, destination, bool(config.omniroute_api_key), "tools"
+            policy, alias, mapping, destination, bool(config.gateway_api_key), "tools"
         ) or mapping is None:
             raise PermissionError("Remote model execution is not authorized")
         return config, policy, alias, mapping
@@ -551,7 +551,7 @@ class HarnessContext:
         ):
             raise RunCancelled("Search source snapshot is invalid")
         current = await self.read_gateway_config("embedding")
-        destination = current.endpoint_destination_id or "omniroute"
+        destination = current.endpoint_destination_id or "remote"
         principal = self.owner_principal(state, destination)
         fence = {"source_generations": source_generations, "records": []}
         if state.get("source_fences") and not await revalidate_native_output_fences(
@@ -586,7 +586,7 @@ class HarnessContext:
         )
         if current.endpoint_policy_denied or not may_send(
             current_policy, "embedding", current_mapping, destination,
-            bool(current.omniroute_api_key), "embeddings",
+            bool(current.gateway_api_key), "embeddings",
         ):
             raise PermissionError("Remote embedding execution is not authorized")
 
@@ -987,8 +987,8 @@ def build_workflow(context: HarnessContext, checkpointer: Any) -> Any:
             context.model_send_attempts += 1
 
         gateway = ModelGateway(
-            redis=context.redis, base_url=config.omniroute_base_url,
-            api_key=config.omniroute_api_key, destination_id=config.endpoint_destination_id or "",
+            redis=context.redis, base_url=config.gateway_base_url,
+            api_key=config.gateway_api_key, destination_id=config.endpoint_destination_id or "",
             timeout_seconds=max(1.0, min(float(config.request_timeout_seconds), remaining, 25.0)),
             scope=context.scope, gateway_identity=config.gateway_identity,
             configuration_revision=config.configuration_revision, before_send=before_send,

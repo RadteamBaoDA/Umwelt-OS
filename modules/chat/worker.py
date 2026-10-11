@@ -399,6 +399,7 @@ async def _search_for_run(
                 provider = config.web_search_provider
                 transport = approved_web_search_transport(  # one per search: search() closes it; host check first
                     endpoint, settings.ai_allowed_endpoint_hosts, settings.web_search_allowed_cidrs,
+                    allow_http=provider == "searxng",
                 )
                 # ponytail: a P14 shutdown re-pend re-runs the search on re-claim, so the cap counts it twice.
                 # Also: the re-claim reuses event seqs, so a live client may keep the first outcome until reload.
@@ -655,7 +656,7 @@ async def run_response_generation(
     Args:
         response_id: Unique UUID of the ResponseRun to process.
         session_factory: Database async session factory for creating isolated transactions.
-        settings: Application settings containing omniroute and network configuration.
+        settings: Application settings containing gateway and network configuration.
         redis: Asynchronous Redis client for cancellation tracking and gateway leasing.
 
     Raises:
@@ -839,9 +840,9 @@ async def run_response_generation(
                 configuration_revision=ai_config.configuration_revision,
             )
 
-            endpoint = ai_config.omniroute_base_url
-            credential = ai_config.omniroute_api_key
-            destination = ai_config.endpoint_destination_id or "omniroute"
+            endpoint = ai_config.gateway_base_url
+            credential = ai_config.gateway_api_key
+            destination = ai_config.endpoint_destination_id or "remote"
 
             send_attempt_session: AsyncSession | None = None
 

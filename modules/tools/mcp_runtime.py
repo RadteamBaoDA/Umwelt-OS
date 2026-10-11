@@ -437,7 +437,7 @@ class McpRuntime:
         destination_id: str,
     ) -> ExecutionFence:
         """Resolve a freshly locked, exact grant fence and close the short transaction before SDK I/O."""
-        if destination_id != "local" and destination_id != "omniroute":
+        if destination_id != "local" and destination_id != "remote":
             if not destination_id.startswith("mcp-client:"):
                 raise PermissionError("Unknown MCP destination identity")
             try:
@@ -463,7 +463,7 @@ class McpRuntime:
         if not await self.admission.lease_current():
             return False
         destination_id = fence.destination_id
-        if destination_id != "local" and destination_id != "omniroute":
+        if destination_id != "local" and destination_id != "remote":
             if not destination_id.startswith("mcp-client:"):
                 return False
             try:

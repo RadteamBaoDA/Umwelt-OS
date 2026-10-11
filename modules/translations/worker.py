@@ -310,7 +310,7 @@ async def _translate(run: _Run, source: TranslationInput) -> dict[str, str]:
         await _checked(run)
 
     gateway = ModelGateway(
-        redis=run.redis, base_url=config.omniroute_base_url, api_key=config.omniroute_api_key,
+        redis=run.redis, base_url=config.gateway_base_url, api_key=config.gateway_api_key,
         destination_id=destination, timeout_seconds=min(config.request_timeout_seconds, ATTEMPT_TIMEOUT_SECONDS),
         scope=run.gateway_scope, gateway_identity=config.gateway_identity,
         configuration_revision=config.configuration_revision, before_send=before_send,

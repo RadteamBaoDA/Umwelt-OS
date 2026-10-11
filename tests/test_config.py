@@ -9,8 +9,8 @@ def test_invalid_public_origin_is_rejected() -> None:
         Settings(public_origin="not-a-url")
 
 
-def test_gateway_key_is_redacted() -> None:
-    settings = Settings(omniroute_api_key="test-secret-only")
+def test_n8n_key_is_redacted() -> None:
+    settings = Settings(n8n_api_key="test-secret-only")
     assert "test-secret-only" not in repr(settings)
 
 
@@ -18,14 +18,9 @@ def test_credential_bearing_urls_are_redacted() -> None:
     settings = Settings(
         database_url="postgresql+asyncpg://bbd:db-secret@db:5432/bbd",
         redis_url="redis://:redis-secret@redis:6379/0",
-        omniroute_base_url="https://user:gateway-secret@gateway.example",
     )
     rendered = repr(settings)
-    assert all(secret not in rendered for secret in ("db-secret", "redis-secret", "gateway-secret"))
-
-
-def test_blank_optional_gateway_url_means_unconfigured() -> None:
-    assert Settings(omniroute_base_url="").omniroute_base_url is None
+    assert all(secret not in rendered for secret in ("db-secret", "redis-secret"))
 
 
 @pytest.mark.asyncio

@@ -549,7 +549,7 @@ async def _resume_activation(
     before ``drive_activation`` reacquires its own ordered locks and does all provider I/O.
     """
     from modules.connectors.activation import drive_activation
-    from modules.settings.public import module_is_enabled
+    from modules.settings.public import module_is_enabled, resolve_n8n
 
     flag = settings.multi_workspace_enabled
     intent = await session.scalar(select(ConnectorProvisioning.activation_intent).where(
@@ -708,8 +708,10 @@ async def _advance_transitions(
     from modules.settings.public import module_is_enabled
 
     flag = settings.multi_workspace_enabled
-    api_key = settings.n8n_api_key.get_secret_value()
-    api = N8nApi(str(settings.n8n_service_url), api_key) if api_key else None
+    async with factory() as session:
+        n8n = await resolve_n8n(session, settings)
+        await session.rollback()
+    api = N8nApi(n8n.service_url, n8n.api_key) if n8n.api_key else None
     async with factory() as session:
         ids = list((await session.scalars(_page(
             select(ConnectorProvisioning.source_id), ConnectorProvisioning.source_id,
@@ -763,17 +765,22 @@ async def reconcile_connectors(ctx: dict[str, object]) -> int:
     recorded in its own envelope. A denied or legacy subject is skipped, never rebased, and
     cannot starve later subjects because the cursor advances past every discovered page.
     """
+    from modules.settings.public import resolve_n8n
+
     settings = cast(Settings, ctx["settings"])
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     flag = settings.multi_workspace_enabled
     state = _cursor_ctx(ctx)
     completed = await dispatch_github_webhooks(ctx)
     completed += await _advance_transitions(factory, settings, state)
-    api_key = settings.n8n_api_key.get_secret_value()
+    async with factory() as session:
+        n8n = await resolve_n8n(session, settings)
+        await session.rollback()
+    api_key = n8n.api_key
     if not api_key:
         return completed
-    credentials = N8nCredentials(str(settings.n8n_service_url), api_key)
-    api = N8nApi(str(settings.n8n_service_url), api_key)
+    credentials = N8nCredentials(n8n.service_url, api_key)
+    api = N8nApi(n8n.service_url, api_key)
     credential_after = _read_slot_cursor(state, "connectors_credentials")
     async with factory() as session:
         credential_rows: list[Any] = list((await session.execute(_page(

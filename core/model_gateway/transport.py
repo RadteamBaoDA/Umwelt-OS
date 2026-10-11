@@ -244,17 +244,18 @@ def approved_http_client(base_url: str, approved_cidrs: Sequence[str], *, allow_
 
 
 def approved_web_search_transport(
-    base_url: str, allowed_hosts: Collection[str], approved_cidrs: Sequence[str] = ()
+    base_url: str, allowed_hosts: Collection[str], approved_cidrs: Sequence[str] = (), *, allow_http: bool = False,
 ) -> ApprovedEndpointTransport:
     """Transport for ``modules.chat.web_search.search``: public addresses (``_is_public``) plus ``approved_cidrs``.
 
     ``allowed_hosts`` is ``AI_ALLOWED_ENDPOINT_HOSTS`` (normalized by Settings); ``approved_cidrs`` is
     ``WEB_SEARCH_ALLOWED_CIDRS``, never the gateway CIDRs (review P3-8). No redirects and
-    ``trust_env=False`` are enforced by ``search``'s own ``AsyncClient`` and by this delegate. https only.
+    ``trust_env=False`` are enforced by ``search``'s own ``AsyncClient`` and by this delegate. https only,
+    unless ``allow_http`` (self-hosted SearXNG on a private address; ``approved_cidrs`` still gates the address).
     ``search()`` closes the transport it is given, so build one transport per search call.
     """
     origin = httpx.URL(base_url)
-    if origin.scheme != "https" or not origin.raw_host or origin.userinfo:
+    if origin.scheme not in (("https", "http") if allow_http else ("https",)) or not origin.raw_host or origin.userinfo:
         raise EndpointNetworkPolicyError("Web search endpoint is invalid")
     host = origin.raw_host.decode("ascii").lower()
     if ":" in host:
@@ -263,8 +264,9 @@ def approved_web_search_transport(
         except ValueError as exc:
             raise EndpointNetworkPolicyError("Web search endpoint is invalid") from exc
     authority = f"[{host}]" if ":" in host else host
-    port = origin.port or 443
+    default_port = 443 if origin.scheme == "https" else 80
+    port = origin.port or default_port
     # Mirrors modules.settings.public: a bare entry admits only the default port, otherwise host:port is required.
-    if (authority if port == 443 else f"{authority}:{port}") not in allowed_hosts:
+    if (authority if port == default_port else f"{authority}:{port}") not in allowed_hosts:
         raise EndpointNetworkPolicyError("Web search endpoint host is not allowed by deployment policy")
     return approved_transport(base_url, approved_cidrs, allow_global=True)

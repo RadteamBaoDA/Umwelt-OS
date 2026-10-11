@@ -7,10 +7,41 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { FieldGrid } from './settings-layout';
 
-export const providerKinds = ['openai', 'openrouter', 'groq', 'gemini', 'anthropic', 'ollama', 'lmstudio', 'omniroute', 'custom'] as const;
+export const providerKinds = ['openai', 'openrouter', 'groq', 'gemini', 'anthropic', 'ollama', 'lmstudio', 'custom'] as const;
 export type ProviderKind = (typeof providerKinds)[number];
 export type CredentialAction = 'unchanged' | 'replaced' | 'removed';
-export type ProviderRead = { id: string; kind: ProviderKind; label: string; base_url: string | null; destination_id: string | null; credential_configured: boolean; local: boolean; policy_denied: boolean };
+export const modelTypes = ['llm', 'embedding', 'reranker', 'vision', 'asr', 'tts'] as const;
+export type ModelType = (typeof modelTypes)[number];
+export type ProviderModel = { id: string; type: ModelType };
+export type ProviderRead = { id: string; kind: ProviderKind; label: string; base_url: string | null; destination_id: string | null; credential_configured: boolean; local: boolean; policy_denied: boolean; models: ProviderModel[] };
+
+/** Guesses a model type from its id; the owner can override it. */
+export function guessModelType(id: string): ModelType {
+  const v = id.toLowerCase();
+  if (v.includes('embed')) return 'embedding';
+  if (v.includes('rerank')) return 'reranker';
+  if (/whisper|asr|transcri/.test(v)) return 'asr';
+  if (/tts|speech/.test(v)) return 'tts';
+  if (/vision|-vl|llava/.test(v)) return 'vision';
+  return 'llm';
+}
+
+/** Merges discovered ids into a provider's models, keeping already-saved types. */
+export function mergeDiscovered(current: ProviderModel[] | undefined, ids: string[]): ProviderModel[] {
+  const known = new Map((current ?? []).map((item) => [item.id, item.type]));
+  return ids.map((id) => ({ id, type: known.get(id) ?? guessModelType(id) }));
+}
+
+/** Model type an alias slot requires. */
+export function aliasModelType(alias: string): ModelType {
+  return alias === 'embedding' ? 'embedding' : alias === 'reranker' ? 'reranker' : alias === 'vision' ? 'vision' : 'llm';
+}
+
+/** Ids of models across all providers whose type matches the alias slot. */
+export function modelIdsForAlias(alias: string, providers: ProviderRead[]): string[] {
+  const type = aliasModelType(alias);
+  return [...new Set(providers.flatMap((item) => (item.models ?? []).filter((model) => model.type === type).map((model) => model.id)))];
+}
 export type ProviderSecret = { key: string; action: CredentialAction };
 export const maxProviders = 8;
 /** Frontend-only presets: default endpoint, locality and model-id hints per provider kind. */
@@ -22,7 +53,6 @@ export const providerPresets: Record<ProviderKind, { baseUrl: string; local: boo
   anthropic: { baseUrl: 'https://api.anthropic.com/v1', local: false, models: ['claude-sonnet-4-5', 'claude-haiku-4-5'] },
   ollama: { baseUrl: 'http://localhost:11434/v1', local: true, models: ['llama3.2', 'qwen2.5', 'nomic-embed-text'] },
   lmstudio: { baseUrl: 'http://localhost:1234/v1', local: true, models: [] },
-  omniroute: { baseUrl: '', local: false, models: [] },
   custom: { baseUrl: '', local: false, models: [] },
 };
 
@@ -32,7 +62,7 @@ export function newProvider(kind: ProviderKind, existing: ProviderRead[]): Provi
   let n = 1;
   while (ids.has(`${kind}-${n}`)) n += 1;
   const preset = providerPresets[kind];
-  return { id: `${kind}-${n}`, kind, label: kind, base_url: preset.baseUrl || null, destination_id: null, credential_configured: false, local: preset.local, policy_denied: false };
+  return { id: `${kind}-${n}`, kind, label: kind, base_url: preset.baseUrl || null, destination_id: null, credential_configured: false, local: preset.local, policy_denied: false, models: [] };
 }
 
 /** Provider id used by an alias mapping: its own id, else "default", else the first provider. */
@@ -57,7 +87,6 @@ type Props = {
   providers: ProviderRead[];
   savedIds: string[];
   secrets: Record<string, ProviderSecret>;
-  models: Record<string, string[]>;
   disabled: boolean;
   discoveringId: string | null;
   discoverError: { id: string; text: string } | null;
@@ -68,13 +97,13 @@ type Props = {
 };
 
 /** Editable list of provider cards: preset, label, endpoint, credential, model discovery and removal. */
-export function ProviderEditor({ providers, savedIds, secrets, models, disabled, discoveringId, discoverError, onChange, onSecret, onDiscover, t }: Props) {
+export function ProviderEditor({ providers, savedIds, secrets, disabled, discoveringId, discoverError, onChange, onSecret, onDiscover, t }: Props) {
   const patch = (id: string, change: Partial<ProviderRead>) => onChange(providers.map((item) => (item.id === id ? { ...item, ...change } : item)));
   return <div className="flex flex-col gap-4">
     {providers.length === 0 && <p className="muted m-0">{t('providersEmpty')}</p>}
     {providers.map((provider) => {
       const secret = secrets[provider.id] ?? { key: '', action: 'unchanged' as const };
-      const found = models[provider.id];
+      const found = provider.models ?? [];
       const isNew = !savedIds.includes(provider.id);
       const hostHint = provider.kind === 'ollama' || provider.kind === 'lmstudio';
       return <div key={provider.id} className="flex flex-col gap-3 rounded-lg border border-border p-4" data-testid={`provider-${provider.id}`}>
@@ -103,7 +132,14 @@ export function ProviderEditor({ providers, savedIds, secrets, models, disabled,
           <Button type="button" className="secondary" disabled={disabled || discoveringId === provider.id || !provider.base_url || (isNew && !provider.local && !secret.key)} onClick={() => onDiscover(provider)}>{discoveringId === provider.id ? t('checkingConnection') : t('providerDiscover')}</Button>
           {provider.credential_configured && <Button type="button" className="secondary" disabled={disabled} onClick={() => onSecret(provider.id, secret.action === 'removed' ? { key: '', action: 'unchanged' } : { key: '', action: 'removed' })}>{secret.action === 'removed' ? t('providerKeyKeep') : t('removeGatewayCredential')}</Button>}
         </div>
-        <div role="status" aria-live="polite">{found && <p className="muted m-0"><Check className="inline size-4" aria-hidden="true" /> {t('providerModelsFound', { count: found.length })}{found.length > 0 && <><br />{t('availableIds')} {found.join(', ')}</>}</p>}</div>
+        <div role="status" aria-live="polite">{found.length > 0 && <div className="flex flex-col gap-2">
+          <p className="muted m-0"><Check className="inline size-4" aria-hidden="true" /> {t('providerModelsFound', { count: found.length })}</p>
+          <p className="muted m-0 text-xs">{t('modelTypeHelp')}</p>
+          <ul className="m-0 flex flex-col gap-2 p-0">{found.map((model) => <li key={model.id} className="flex list-none flex-wrap items-center gap-2">
+            <span className="min-w-0 flex-1 break-all text-sm">{model.id}</span>
+            <Select disabled={disabled} value={model.type} onValueChange={(type) => patch(provider.id, { models: found.map((item) => (item.id === model.id ? { ...item, type: type as ModelType } : item)) })}><SelectTrigger className="w-48" aria-label={t('modelType', { id: model.id })}><SelectValue /></SelectTrigger><SelectContent>{modelTypes.map((type) => <SelectItem key={type} value={type}>{t(`type_${type}`)}</SelectItem>)}</SelectContent></Select>
+            <Button type="button" className="secondary" disabled={disabled} aria-label={t('modelRemove', { id: model.id })} onClick={() => patch(provider.id, { models: found.filter((item) => item.id !== model.id) })}><Trash2 className="size-4" aria-hidden="true" /></Button>
+          </li>)}</ul></div>}</div>
         {discoverError?.id === provider.id && <p className="error m-0" role="alert"><X className="inline size-4" aria-hidden="true" /> {discoverError.text}</p>}
       </div>;
     })}

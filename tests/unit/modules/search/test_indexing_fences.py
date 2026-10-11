@@ -29,7 +29,7 @@ MAPPING = ModelMapping(model="embed", version="1", destination="remote")
 def _config(revision: int = 5) -> Any:
     return SimpleNamespace(
         configuration_revision=revision, gateway_identity="g" * 64,
-        endpoint_destination_id="dest", endpoint_policy_denied=False, omniroute_api_key="k",
+        endpoint_destination_id="dest", endpoint_policy_denied=False, gateway_api_key="k",
     )
 
 

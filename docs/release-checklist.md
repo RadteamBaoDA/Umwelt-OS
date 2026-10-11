@@ -17,7 +17,7 @@ Local develop `00ddd32` includes P01–P11, Collector/MCP, R07, R12, R14 and R15
 | Realtime/proxy | Authenticated SSE replay/reset, long-lived proxy response and client status | Runtime pending |
 | Privacy/deletion | Consent, immediate access revocation, exact evidence cleanup and durable retry receipts | Integration tests pass: Source purge leaves no residue (bytea-aware scan), outbox replay never resurrects, success gated on historical + Memory coverage, deleted content hidden while purge pending; physical erasure unverified |
 | Backup/restore | Encrypted archive, protected keys, isolated restore, component readiness and explicit recovery | Database-level drill passes (real `modules/backup/host.py` pg_dump/pg_restore argv, row-level equality, truncated dump rejected); full encrypted `scripts/backup.py`/`restore.py` isolated restore not run |
-| Provider integration | Explicit live Google, connector, OmniRoute, graph/n8n/browser receipts for enabled capabilities | BLOCKED: no provider credentials in the validation environment |
+| Provider integration | Explicit live Google, connector, AI connector, graph/n8n/browser receipts for enabled capabilities | BLOCKED: no provider credentials in the validation environment |
 | Mobile/accessibility | Viewport, keyboard/focus, screen-reader labels, edit-grid and drawer/full-chat behavior | Deferred test stage |
 | Capacity | Measured 2-core/8GiB workload, configuration, concurrency, memory/CPU/latency and OOM/disk evidence | BLOCKED: no target host; worker concurrency raised to 4 slots with heavy-work serialization |
 | OSS | Exact dependencies/copied source revisions, licenses, modifications and notices | Final inventory reconciliation pending |

@@ -73,7 +73,7 @@ The prescribed `./scripts/dev.ps1 build` result is recorded in the bounded sourc
 ## Deferred gates
 
 - Verify actual FalkorDB 1.2.0 client and v4.22.0 server connection, authentication, RESP2, index behavior, query/filter semantics, episode upsert/search/delete and restart.
-- Verify configured OmniRoute structured output, embeddings, reranking and embedding dimension; keep telemetry disabled and enforce privacy/revocation on every retry.
+- Verify configured connector structured output, embeddings, reranking and embedding dimension; keep telemetry disabled and enforce privacy/revocation on every retry.
 - Verify exact support mappings, episode reprocessing, partial writes, shared-edge deletion, tombstones, reconciliation and stale replay prevention.
 - Runtime activation remains blocked until T3 persists every ordered phase receipt, owner-proved node seeds and mapping fingerprints, cleanup history, and live-lease recovery authorization. `inspect_write_receipt` reports bounded exact-ID state and links; it does not grant permission to publish or replay graph content.
 - Review resolved artifact notices and current advisories, including the older client/backoff maintenance tradeoff.

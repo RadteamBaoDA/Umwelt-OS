@@ -38,6 +38,7 @@ from modules.connectors.public import (
     validate_public_url,
 )
 from modules.ingestion import public as ingestion
+from modules.settings.public import resolve_n8n
 from modules.sources import public as sources
 from modules.sources.schemas import ConnectorSource
 
@@ -614,12 +615,13 @@ async def activate_source(
     if backend != row.execution_backend and not _is_fresh(row):
         raise HTTPException(status_code=409, detail="Use backend-transition to change the backend")
     settings = request.app.state.settings
-    api_key = settings.n8n_api_key.get_secret_value()
+    n8n = await resolve_n8n(session, settings, workspace_id=scope.workspace_id)
+    api_key = n8n.api_key
     if not api_key:
         if connector_owner.is_native_provider(source.provider):
             raise HTTPException(status_code=503, detail="Native activation contract is pending")
         raise HTTPException(status_code=503, detail="n8n provisioning is not configured")
-    webhook_token = settings.n8n_webhook_token.get_secret_value()
+    webhook_token = n8n.webhook_token
     if not webhook_token:
         raise HTTPException(status_code=503, detail="Manual trigger authentication is not configured")
     encryption_key = settings.connector_credential_encryption_key.get_secret_value()
@@ -826,8 +828,8 @@ async def activate_source(
         make_source_change(source.id, source.generation, source.status, connector_state=row.state, scope=scope),
     ], access_fence=access_fence, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
 
-    credentials = N8nCredentials(str(settings.n8n_service_url), api_key)
-    api = N8nApi(str(settings.n8n_service_url), api_key)
+    credentials = N8nCredentials(n8n.service_url, api_key)
+    api = N8nApi(n8n.service_url, api_key)
     await drive_activation(
         session,
         source_id,
@@ -1081,8 +1083,8 @@ async def _drive_transition(
     """Advance a persisted transition with the n8n API when it is configured, then project its state."""
     settings = request.app.state.settings
     gate = settings.multi_workspace_enabled
-    api_key = settings.n8n_api_key.get_secret_value()
-    api = N8nApi(str(settings.n8n_service_url), api_key) if api_key else None
+    n8n = await resolve_n8n(session, settings, workspace_id=scope.workspace_id)
+    api = N8nApi(n8n.service_url, n8n.api_key) if n8n.api_key else None
     await provisioning.advance_backend_transition(
         session, source_id, api, scope=scope, multi_workspace_enabled=gate, access_fence=access_fence)
     row = await provisioning.activation_status(session, source_id, multi_workspace_enabled=gate, scope=scope)

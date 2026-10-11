@@ -1,4 +1,4 @@
-"""Persist the single owner's AI and OmniRoute settings."""
+"""Persist the single owner's AI gateway settings."""
 
 from collections.abc import Sequence
 
@@ -18,8 +18,6 @@ def upgrade() -> None:
         "ai_settings",
         sa.Column("owner_id", sa.Integer(), nullable=False),
         sa.Column("configuration_revision", sa.Integer(), server_default="1", nullable=False),
-        sa.Column("omniroute_base_url", sa.Text()),
-        sa.Column("omniroute_api_key_ciphertext", sa.Text()),
         sa.Column("aliases", postgresql.JSONB(astext_type=sa.Text()), server_default=sa.text("'{}'::jsonb"), nullable=False),
         sa.Column("privacy", postgresql.JSONB(astext_type=sa.Text()), server_default=sa.text("'{}'::jsonb"), nullable=False),
         sa.Column("chat_alias", sa.String(length=32), server_default="reasoning-large", nullable=False),

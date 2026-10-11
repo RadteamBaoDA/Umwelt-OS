@@ -11,15 +11,18 @@ from uuid import UUID
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import HTTPException
 from redis.asyncio import Redis
-from sqlalchemy import select
+from pydantic import BaseModel, Field
+from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 
+from core.auth.models import Owner
 from core.auth.public import get_active_account, lock_account_admission
 from core.auth.schemas import AccountSessionRef
 from core.config import Settings
 from core.model_gateway.schemas import (
+    ALIAS_MODEL_TYPE,
     DEFAULT_PROVIDER_ID,
     LOCAL_PROVIDER_KINDS,
     MAX_PROVIDERS,
@@ -29,6 +32,7 @@ from core.model_gateway.schemas import (
     ModelMapping,
     PrivacySettings,
     ProviderConfig,
+    ProviderModel,
     ProviderRead,
 )
 from core.workspaces.public import (
@@ -44,6 +48,8 @@ from modules.settings.models import new_capability_result as new_capability_resu
 from modules.settings.models import save_capability as save_capability
 from modules.settings.schemas import (
     ModuleLifecycleRead,
+    N8nRead,
+    N8nUpdate,
     OwnerPreferencesRead,
     OwnerPreferencesUpdate,
     RetentionSettingsRead,
@@ -51,6 +57,8 @@ from modules.settings.schemas import (
     SystemPromptsRead,
     SystemPromptsUpdate,
     TranslationSettingsRead,
+    WebSearchRead,
+    WebSearchUpdate,
 )
 from modules.settings.prompts import DEFAULT_SYSTEM_PROMPTS, MAX_PROMPT_CHARS
 
@@ -191,13 +199,6 @@ async def _row(session: AsyncSession, *, scope: Scope, locked: bool = False) -> 
     return await session.scalar(query.execution_options(populate_existing=True))
 
 
-def _defaults(settings: Settings) -> tuple[str | None, str, dict[str, ModelMapping]]:
-    """Read deployment-provided endpoint, key, and supported model defaults."""
-    endpoint = str(settings.omniroute_base_url) if settings.omniroute_base_url else None
-    aliases = {name: ModelMapping(model=model, destination="remote") for name, model in settings.omniroute_models.items() if name in ALIASES}
-    return endpoint, settings.omniroute_api_key.get_secret_value(), aliases
-
-
 def _privacy(raw: dict[str, object] | None, destinations: list[str], web_destination: str | None) -> PrivacySettings:
     """Project explicit consent onto each remote provider's validated destination.
 
@@ -228,18 +229,26 @@ def _privacy(raw: dict[str, object] | None, destinations: list[str], web_destina
 def _identity(endpoint: str | None, credential: str, *, local: bool = False) -> tuple[str, str | None]:
     """Derive non-secret gateway and destination identifiers from configuration.
 
-    Remote destinations keep the legacy ``omniroute:`` prefix so consent saved before multi-provider survives.
+    Remote destinations use the ``remote:`` prefix, local ones ``local:``.
     """
-    destination = f"{'local' if local else 'omniroute'}:{_fingerprint(endpoint or '')[:32]}" if endpoint else None
+    destination = f"{'local' if local else 'remote'}:{_fingerprint(endpoint or '')[:32]}" if endpoint else None
     return _fingerprint(json.dumps((endpoint, _fingerprint(credential)), separators=(",", ":"))), destination
 
 
 def _stored_providers(row: AISettingsRecord) -> dict[str, dict[str, Any]]:
-    """Stored provider records; synthesise ``default`` from the legacy columns while ``providers`` is empty."""
-    if row.providers:
-        return {pid: dict(rec) for pid, rec in row.providers.items()}
-    return {DEFAULT_PROVIDER_ID: {"kind": "omniroute", "label": "Default", "base_url": row.omniroute_base_url,
-                                  "key_ciphertext": row.omniroute_api_key_ciphertext, "local": False}}
+    """Stored provider records keyed by id."""
+    return {pid: dict(rec) for pid, rec in (row.providers or {}).items()}
+
+
+def _models(record: dict[str, Any]) -> tuple[ProviderModel, ...]:
+    """Typed models of a stored provider; malformed entries are dropped."""
+    out = []
+    for item in record.get("models") or []:
+        try:
+            out.append(ProviderModel.model_validate(item))
+        except ValueError:
+            continue
+    return tuple(out)
 
 
 def _destination(record: dict[str, Any], settings: Settings) -> str | None:
@@ -268,7 +277,7 @@ def _resolve_provider(record: dict[str, Any], settings: Settings) -> ProviderCon
     return ProviderConfig(
         kind=kind, label=record.get("label") or "", base_url=endpoint, policy_denied=denied, local=local,
         api_key="" if denied else _decrypt(ciphertext, settings), credential_configured=bool(ciphertext),
-        destination_id=None if denied else _identity(endpoint, "", local=local)[1])
+        destination_id=None if denied else _identity(endpoint, "", local=local)[1], models=_models(record))
 
 
 def resolve_draft_provider(
@@ -295,12 +304,15 @@ def derive_for_alias(config: AIExecutionConfig, alias: str) -> AIExecutionConfig
     if not config.providers:
         return config
     mapping = config.aliases.get(alias)
-    provider = config.providers.get((mapping.provider_id if mapping else None) or DEFAULT_PROVIDER_ID)
+    pid = (mapping.provider_id if mapping else None) or DEFAULT_PROVIDER_ID
+    provider = config.providers.get(pid)
+    if provider is None and pid == DEFAULT_PROVIDER_ID:
+        provider = next(iter(config.providers.values()), None)  # no "default" provider: use the first one
     if provider is None:
         provider = ProviderConfig(kind="custom", base_url=None, destination_id=None)
     return config.model_copy(update={
-        "omniroute_base_url": provider.base_url, "omniroute_api_key": provider.api_key,
-        "endpoint_destination_id": provider.destination_id, "omniroute_credential_configured": provider.credential_configured,
+        "gateway_base_url": provider.base_url, "gateway_api_key": provider.api_key,
+        "endpoint_destination_id": provider.destination_id, "gateway_credential_configured": provider.credential_configured,
         "endpoint_policy_denied": provider.policy_denied})
 
 
@@ -314,21 +326,8 @@ async def get_ai_execution_config(session: AsyncSession, settings: Settings, red
     fence = await require_settings_scope(session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled)
     row = await _row(session, scope=scope)
     if row is None:
-        endpoint, credential, aliases = _defaults(settings)
-        endpoint_policy_denied = False
-        try:
-            endpoint = _endpoint(endpoint, settings)
-        except HTTPException as exc:
-            if exc.status_code != 422:
-                raise
-            endpoint, credential, endpoint_policy_denied = None, "", True
+        providers: dict[str, ProviderConfig] = {}
         aliases = await legacy_aliases(redis, settings, scope=scope)
-        if credential:
-            _cipher(settings)
-        providers = {DEFAULT_PROVIDER_ID: ProviderConfig(
-            kind="omniroute", label="Default", base_url=endpoint, api_key=credential, policy_denied=endpoint_policy_denied,
-            credential_configured=bool(settings.omniroute_api_key.get_secret_value()),
-            destination_id=_identity(endpoint, credential)[1])}
         privacy = PrivacySettings()
         revision, chat_alias, brief_alias, timeout = 1, "reasoning-large", "reasoning-small", 20
         system_prompts: dict[str, str] = {}
@@ -350,7 +349,8 @@ async def get_ai_execution_config(session: AsyncSession, settings: Settings, red
             # Web search is an independent capability; a broken web-search key
             # must not block lexical or semantic retrieval.
             web_credential = ""
-    default = providers.get(DEFAULT_PROVIDER_ID) or ProviderConfig(kind="omniroute", base_url=None, destination_id=None)
+    default = providers.get(DEFAULT_PROVIDER_ID) or next(iter(providers.values()), None) or ProviderConfig(
+        kind="custom", base_url=None, destination_id=None)
     # Labels are display-only and stay out of the identity; any kind/endpoint/key change rotates it.
     credential_identity = _fingerprint(json.dumps(
         {pid: (p.kind, p.base_url, _fingerprint(p.api_key), p.destination_id, p.policy_denied) for pid, p in sorted(providers.items())},
@@ -364,9 +364,9 @@ async def get_ai_execution_config(session: AsyncSession, settings: Settings, red
         workspace_id=scope.workspace_id, actor_user_id=scope_actor(scope), membership_revision=fence.membership_revision,
         access_configuration_revision=fence.configuration_revision,
         configuration_revision=revision, gateway_identity=identity, endpoint_destination_id=default.destination_id,
-        endpoint_policy_denied=default.policy_denied, omniroute_credential_configured=default.credential_configured,
+        endpoint_policy_denied=default.policy_denied, gateway_credential_configured=default.credential_configured,
         endpoint_allowed_cidrs=tuple(settings.ai_allowed_endpoint_cidrs), allow_public_providers=settings.ai_allow_public_providers,
-        omniroute_base_url=default.base_url, omniroute_api_key=default.api_key, aliases=aliases, privacy=privacy,
+        gateway_base_url=default.base_url, gateway_api_key=default.api_key, aliases=aliases, privacy=privacy,
         chat_alias=chat_alias, brief_alias=brief_alias, request_timeout_seconds=timeout,
         web_search_provider=web_provider, web_search_endpoint=web_endpoint, web_search_api_key=web_credential,
         web_search_credential_configured=web_configured, system_prompts=system_prompts, providers=providers,
@@ -376,12 +376,12 @@ async def get_ai_execution_config(session: AsyncSession, settings: Settings, red
 def _read(config: AIExecutionConfig) -> AISettingsRead:
     """Project execution settings into the API response without secret values."""
     return AISettingsRead(
-        configuration_revision=config.configuration_revision, omniroute_base_url=config.omniroute_base_url,
+        configuration_revision=config.configuration_revision,
         endpoint_destination_id=config.endpoint_destination_id,
-        omniroute_credential_configured=config.omniroute_credential_configured,
         endpoint_policy_denied=config.endpoint_policy_denied,
         providers=[ProviderRead(id=pid, kind=p.kind, label=p.label, base_url=p.base_url, destination_id=p.destination_id,
-                                credential_configured=p.credential_configured, local=p.local, policy_denied=p.policy_denied)
+                                credential_configured=p.credential_configured, local=p.local, policy_denied=p.policy_denied,
+                                models=list(p.models))
                    for pid, p in config.providers.items()],
         web_search_provider=config.web_search_provider, web_search_endpoint=config.web_search_endpoint,
         web_search_destination_id=(f"web-search:{_fingerprint(config.web_search_endpoint or '')[:32]}" if config.web_search_endpoint else None),
@@ -508,36 +508,10 @@ async def save_ai_settings(session: AsyncSession, update: AISettingsUpdate, sett
         raise HTTPException(status_code=409, detail="AI settings changed; reload before saving")
     if any(alias not in ALIASES for alias in update.aliases):
         raise HTTPException(status_code=422, detail="Unknown model alias")
-    bootstrap = row.configuration_revision == 1
-    default_endpoint, default_credential, _ = _defaults(settings)
-    try:
-        default_endpoint = _endpoint(default_endpoint, settings)
-    except HTTPException as exc:
-        if exc.status_code != 422:
-            raise
-        default_endpoint = None
-    if bootstrap:
-        row.omniroute_base_url = row.omniroute_base_url or default_endpoint
-        if not row.aliases:
-            row.aliases = {key: value.model_dump(mode="json") for key, value in (await legacy_aliases(None, settings, scope=scope)).items()}
-        if not row.omniroute_api_key_ciphertext and default_credential:
-            row.omniroute_api_key_ciphertext = _cipher(settings).encrypt(default_credential.encode()).decode()
     stored = _stored_providers(row)
     providers: dict[str, dict[str, Any]]
     if update.providers is None:
-        # Legacy omniroute_* fields edit provider "default"; every other provider is untouched.
-        endpoint = _endpoint(str(update.omniroute_base_url) if update.omniroute_base_url else None, settings)
-        ciphertext = _kept_ciphertext(stored.get(DEFAULT_PROVIDER_ID), endpoint, settings)
-        if update.omniroute_credential_action == "replaced":
-            if not update.omniroute_api_key:
-                raise HTTPException(status_code=422, detail="Replacement gateway credential is required")
-            ciphertext = _cipher(settings).encrypt(update.omniroute_api_key.encode()).decode()
-        elif update.omniroute_credential_action == "removed":
-            ciphertext = None
-        providers = dict(stored)
-        if endpoint or ciphertext or DEFAULT_PROVIDER_ID in stored:
-            providers[DEFAULT_PROVIDER_ID] = {"kind": "omniroute", "label": "Default", **stored.get(DEFAULT_PROVIDER_ID, {}),
-                                              "base_url": endpoint, "key_ciphertext": ciphertext}
+        providers = dict(stored)  # providers are edited only by a full list
     else:
         if len(update.providers) > MAX_PROVIDERS:
             raise HTTPException(status_code=422, detail="Too many providers")
@@ -555,20 +529,32 @@ async def save_ai_settings(session: AsyncSession, update: AISettingsUpdate, sett
                 ciphertext = _cipher(settings).encrypt(item.api_key.encode()).decode()
             elif item.credential_action == "removed":
                 ciphertext = None
+            if len({m.id for m in item.models}) != len(item.models):
+                raise HTTPException(status_code=422, detail="Duplicate model id")
             providers[item.id] = {"kind": item.kind, "label": item.label or item.id, "base_url": endpoint,
-                                  "key_ciphertext": ciphertext, "local": item.kind in LOCAL_PROVIDER_KINDS}
+                                  "key_ciphertext": ciphertext, "local": item.kind in LOCAL_PROVIDER_KINDS,
+                                  "models": [m.model_dump(mode="json") for m in item.models]}
     for mapping in update.aliases.values():
         if mapping.provider_id is not None and mapping.provider_id not in providers:
             raise HTTPException(status_code=422, detail="Unknown model provider")
     for alias, mapping in update.aliases.items():
+        provider = providers.get(mapping.provider_id or DEFAULT_PROVIDER_ID) or (
+            next(iter(providers.values()), None) if mapping.provider_id is None else None)
         if alias == "local-private" and mapping.provider_id is not None and providers[mapping.provider_id]["kind"] not in LOCAL_PROVIDER_KINDS:
             raise HTTPException(status_code=422, detail="Local-private models require a local provider")
+        # A listed model must be of the type the alias needs; once a provider has a model list, unlisted ids are
+        # rejected (an empty list means not yet discovered, so anything is accepted).
+        listed = {m.id: m.type for m in _models(provider)} if provider else {}
+        if listed and mapping.model not in listed:
+            raise HTTPException(status_code=422, detail=f"Model {mapping.model} is not in the provider's model list")
+        if mapping.model in listed and listed[mapping.model] != ALIAS_MODEL_TYPE.get(alias, "llm"):
+            raise HTTPException(status_code=422, detail=f"Alias {alias} needs a {ALIAS_MODEL_TYPE.get(alias, 'llm')} model")
     next_web_endpoint = _endpoint(str(update.web_search_endpoint) if update.web_search_endpoint else None, settings)
     current_web_destination = f"web-search:{_fingerprint(row.web_search_endpoint or '')[:32]}" if row.web_search_endpoint else None
     next_web_destination = f"web-search:{_fingerprint(next_web_endpoint or '')[:32]}" if next_web_endpoint else None
     privacy = update.privacy.model_dump(mode="json")
     # Consent is bound to each remote provider's destination: a new provider or a changed endpoint/kind never inherits it,
-    # and removed providers drop out. A legacy save (no providers) keeps the old toggle-grants-default behaviour.
+    # and removed providers drop out.
     grants: dict[str, list[str]] = {"reasoning_destinations": [], "embedding_destinations": []}
     for pid, record in providers.items():
         destination = _destination(record, settings)
@@ -576,7 +562,7 @@ async def save_ai_settings(session: AsyncSession, update: AISettingsUpdate, sett
         if not destination or record["kind"] in LOCAL_PROVIDER_KINDS or not unchanged:
             continue
         for enabled, key in (("allow_remote_reasoning", "reasoning_destinations"), ("allow_remote_embeddings", "embedding_destinations")):
-            if privacy[enabled] and (destination in privacy[key] or (update.providers is None and pid == DEFAULT_PROVIDER_ID)):
+            if privacy[enabled] and destination in privacy[key]:
                 grants[key].append(destination)
     for enabled, key in (("allow_remote_reasoning", "reasoning_destinations"), ("allow_remote_embeddings", "embedding_destinations")):
         privacy[key] = list(dict.fromkeys(grants[key]))
@@ -586,9 +572,6 @@ async def save_ai_settings(session: AsyncSession, update: AISettingsUpdate, sett
         privacy["allow_remote_web_search"] = False
     privacy["web_search_destinations"] = [next_web_destination] if privacy["allow_remote_web_search"] else []
     row.providers = providers
-    # Legacy columns mirror provider "default" for old readers.
-    row.omniroute_base_url = (providers.get(DEFAULT_PROVIDER_ID) or {}).get("base_url")
-    row.omniroute_api_key_ciphertext = (providers.get(DEFAULT_PROVIDER_ID) or {}).get("key_ciphertext")
     row.privacy = privacy
     row.aliases = {key: value.model_dump(mode="json") for key, value in update.aliases.items() if key in ALIASES}
     row.chat_alias, row.brief_alias = update.chat_alias, update.brief_alias
@@ -604,6 +587,171 @@ async def save_ai_settings(session: AsyncSession, update: AISettingsUpdate, sett
     row.configuration_revision += 1
     await session.flush()
     return await read_ai_settings(session, settings, scope=scope)
+
+
+def _web_destination(endpoint: str | None) -> str | None:
+    """Privacy destination id of a web-search endpoint."""
+    return f"web-search:{_fingerprint(endpoint)[:32]}" if endpoint else None
+
+
+async def read_web_search(session: AsyncSession, settings: Settings, redis: Redis | None = None, *, scope: Scope) -> WebSearchRead:
+    """Return web-search settings for the owner workspace without the key."""
+    config = await get_ai_execution_config(session, settings, redis, scope=scope)
+    return WebSearchRead(
+        configuration_revision=config.configuration_revision, provider=config.web_search_provider,
+        endpoint=config.web_search_endpoint, credential_configured=config.web_search_credential_configured,
+        allow_remote_web_search=config.privacy.allow_remote_web_search,
+        destination_id=_web_destination(config.web_search_endpoint))
+
+
+async def save_web_search(session: AsyncSession, update: WebSearchUpdate, settings: Settings, *, scope: Scope,
+                          auth_sessions: tuple[AccountSessionRef, ...] = ()) -> WebSearchRead:
+    """Revision-checked replace of the web-search provider, endpoint, key and remote-search consent.
+
+    A key is kept only while the endpoint is unchanged. Consent is bound to the endpoint's destination
+    and cleared when the provider is ``none`` or the endpoint is empty. Bumps ``configuration_revision``.
+    """
+    endpoint = _endpoint(str(update.endpoint) if update.endpoint else None, settings)
+    if update.provider != "none" and endpoint is None:
+        raise HTTPException(status_code=422, detail="Web search endpoint is required")
+    await require_settings_scope(session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
+                                 locked=True, auth_sessions=auth_sessions)
+    await session.execute(insert(AISettingsRecord).values(owner_id=scope_actor(scope), workspace_id=scope.workspace_id)
+                          .on_conflict_do_nothing(index_elements=["owner_id"]))
+    row = await _row(session, scope=scope, locked=True)
+    if row is None:
+        raise RuntimeError("AI settings singleton could not be initialized")
+    if row.configuration_revision != update.expected_revision:
+        raise HTTPException(status_code=409, detail="AI settings changed; reload before saving")
+    ciphertext = row.web_search_api_key_ciphertext if row.web_search_endpoint == endpoint else None
+    if update.credential_action == "replaced":
+        if not update.api_key:
+            raise HTTPException(status_code=422, detail="Replacement search credential is required")
+        ciphertext = _cipher(settings).encrypt(update.api_key.encode()).decode()
+    elif update.credential_action == "removed":
+        ciphertext = None
+    if update.provider in ("tavily", "brave") and not ciphertext:
+        raise HTTPException(status_code=422, detail="Search credential is required for this provider")
+    consent = bool(update.allow_remote_web_search and update.provider != "none" and endpoint)
+    destination = _web_destination(endpoint)
+    row.privacy = {**(row.privacy or {}), "allow_remote_web_search": consent,
+                   "web_search_destinations": [destination] if consent and destination else []}
+    row.web_search_provider, row.web_search_endpoint, row.web_search_api_key_ciphertext = update.provider, endpoint, ciphertext
+    row.configuration_revision += 1
+    await session.flush()
+    return await read_web_search(session, settings, scope=scope)
+
+
+class N8nResolved(BaseModel):
+    """Effective n8n connection: stored value first, ``N8N_*`` environment otherwise. Secrets stay out of repr."""
+    service_url: str
+    api_key: str = Field(default="", repr=False)
+    webhook_token: str = Field(default="", repr=False)
+    service_url_source: str = "environment"
+    api_key_source: str = "none"
+    webhook_token_source: str = "none"
+
+
+async def resolve_n8n(session: AsyncSession, settings: Settings, *, workspace_id: UUID | None = None) -> N8nResolved:
+    """Resolve n8n URL, API key and webhook token: owner-saved settings, then environment.
+
+    Each field falls back independently. Request paths pass their ``workspace_id``; host-level workers
+    (no workspace) read the first owner row that has n8n settings. A ciphertext that cannot be decrypted
+    counts as unset. Plain read: no admission, no lock.
+    """
+    query = select(AISettingsRecord.n8n)
+    if workspace_id is not None:
+        query = query.where(AISettingsRecord.workspace_id == workspace_id)
+    else:
+        # Workers: deterministic pick among owners with n8n settings - the owner's default workspace first,
+        # then by workspace id, then owner id. ponytail: single n8n per host; per-workspace worker routing if needed.
+        query = (query.outerjoin(Owner, Owner.id == AISettingsRecord.owner_id)
+                 .where(AISettingsRecord.n8n != text("'{}'::jsonb"))
+                 .order_by((AISettingsRecord.workspace_id == Owner.default_workspace_id).desc(),
+                           AISettingsRecord.workspace_id, AISettingsRecord.owner_id))
+    stored: dict[str, Any] = await session.scalar(query.limit(1)) or {}
+
+    url = stored.get("service_url")
+    # Env secrets belong to the env URL only; never send them to an owner-chosen host.
+    env_ok = not url or url.rstrip("/") == str(settings.n8n_service_url).rstrip("/")
+
+    def pick(name: str, env: str) -> tuple[str, str]:
+        ciphertext = stored.get(f"{name}_ciphertext")
+        if ciphertext:
+            try:
+                return _decrypt(ciphertext, settings), "database"
+            except HTTPException:
+                pass
+        return (env, "environment") if env and env_ok else ("", "none")
+
+    key, key_source = pick("api_key", settings.n8n_api_key.get_secret_value())
+    token, token_source = pick("webhook_token", settings.n8n_webhook_token.get_secret_value())
+    return N8nResolved(
+        service_url=url or str(settings.n8n_service_url), service_url_source="database" if url else "environment",
+        api_key=key, api_key_source=key_source, webhook_token=token, webhook_token_source=token_source)
+
+
+def _n8n_revision(row: Any) -> int:
+    """n8n optimistic-concurrency revision, kept inside the n8n JSON (absent = 1)."""
+    return int((getattr(row, "n8n", None) or {}).get("revision", 1)) if row else 1
+
+
+def n8n_service_url(value: Any, settings: Settings) -> str | None:
+    """Validate an owner-chosen n8n URL: the env URL's host is always allowed, others follow endpoint policy."""
+    if not value:
+        return None
+    url = str(value).rstrip("/")
+    if urlsplit(url).netloc.lower() == urlsplit(str(settings.n8n_service_url)).netloc.lower():
+        return url
+    return _endpoint(url, settings)
+
+
+async def read_n8n(session: AsyncSession, settings: Settings, *, scope: Scope) -> N8nRead:
+    """Return n8n settings for the owner workspace: configured flags and sources, never secrets."""
+    await require_settings_scope(session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled)
+    row = await _row(session, scope=scope)
+    resolved = await resolve_n8n(session, settings, workspace_id=scope.workspace_id)
+    return N8nRead(
+        configuration_revision=_n8n_revision(row), service_url=resolved.service_url,
+        api_key_configured=bool(resolved.api_key), webhook_token_configured=bool(resolved.webhook_token),
+        service_url_source=resolved.service_url_source, api_key_source=resolved.api_key_source,
+        webhook_token_source=resolved.webhook_token_source)
+
+
+async def save_n8n(session: AsyncSession, update: N8nUpdate, settings: Settings, *, scope: Scope,
+                   auth_sessions: tuple[AccountSessionRef, ...] = ()) -> N8nRead:
+    """Revision-checked replace of the stored n8n URL; secrets change only by their ``*_action``.
+
+    ``service_url`` None clears the stored URL. Secrets are Fernet-encrypted like AI credentials.
+    Uses its own ``revision`` inside the n8n JSON and never bumps ``configuration_revision``
+    (that would fail in-flight AI runs).
+    """
+    service_url = n8n_service_url(update.service_url, settings)
+    await require_settings_scope(session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
+                                 locked=True, auth_sessions=auth_sessions)
+    await session.execute(insert(AISettingsRecord).values(owner_id=scope_actor(scope), workspace_id=scope.workspace_id)
+                          .on_conflict_do_nothing(index_elements=["owner_id"]))
+    row = await _row(session, scope=scope, locked=True)
+    if row is None:
+        raise RuntimeError("AI settings singleton could not be initialized")
+    if _n8n_revision(row) != update.expected_revision:
+        raise HTTPException(status_code=409, detail="n8n settings changed; reload before saving")
+    stored = dict(row.n8n or {})
+    stored.pop("service_url", None)
+    if service_url:
+        stored["service_url"] = service_url
+    for name, action, value in (("api_key", update.api_key_action, update.api_key),
+                                ("webhook_token", update.webhook_token_action, update.webhook_token)):
+        if action == "replaced":
+            if not value:
+                raise HTTPException(status_code=422, detail=f"Replacement n8n {name.replace('_', ' ')} is required")
+            stored[f"{name}_ciphertext"] = _cipher(settings).encrypt(value.encode()).decode()
+        elif action == "removed":
+            stored.pop(f"{name}_ciphertext", None)
+    stored["revision"] = _n8n_revision(row) + 1
+    row.n8n = stored
+    await session.flush()
+    return await read_n8n(session, settings, scope=scope)
 
 
 async def read_owner_preferences(session: AsyncSession, *, actor_user_id: int, multi_workspace_enabled: bool) -> OwnerPreferencesRead:
@@ -757,15 +905,15 @@ async def read_ai_policy_fingerprint(
         return None
     config = derive_for_alias(await get_ai_execution_config(session, settings, redis, scope=owner), alias)
     mapping = config.aliases.get(alias)
-    if mapping is None or config.omniroute_base_url is None or config.endpoint_policy_denied:
+    if mapping is None or config.gateway_base_url is None or config.endpoint_policy_denied:
         return None
     destination = config.endpoint_destination_id
     if destination is None:
         return None
     # Local providers need neither a credential nor remote consent.
-    if not destination.startswith("local:") and not (config.omniroute_credential_configured and config.privacy.allow_remote_reasoning):
+    if not destination.startswith("local:") and not (config.gateway_credential_configured and config.privacy.allow_remote_reasoning):
         return None
     return hashlib.sha256(json.dumps(
-        (destination, _fingerprint(config.omniroute_api_key), alias, mapping.model, mapping.version, mapping.destination,
+        (destination, _fingerprint(config.gateway_api_key), alias, mapping.model, mapping.version, mapping.destination,
          config.privacy.model_dump(mode="json"), config.configuration_revision),
         sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()

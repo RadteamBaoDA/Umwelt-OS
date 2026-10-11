@@ -2589,7 +2589,7 @@ async def wake_packaged_collection(
 
     if not 1 <= timeout_seconds <= 75:
         raise ValueError("Packaged collection wake timeout is out of range")
-    from modules.settings.public import module_is_enabled
+    from modules.settings.public import module_is_enabled, resolve_n8n
 
     access_fence = await _connector_access(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     locked = await sources.lock_source(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=access_fence)
@@ -2613,13 +2613,15 @@ async def wake_packaged_collection(
         return PackagedCollectionWakeResult(workspace_id=scope.workspace_id, source_id=source_id, outcome="unavailable")
     source_type = source.type
     await session.rollback()
-    token = settings.n8n_webhook_token.get_secret_value()
+    n8n = await resolve_n8n(session, settings, workspace_id=scope.workspace_id)
+    await session.rollback()
+    token = n8n.webhook_token
     if not token:
         return PackagedCollectionWakeResult(workspace_id=scope.workspace_id, source_id=source_id, outcome="unavailable")
     try:
         async with httpx.AsyncClient(timeout=timeout_seconds, trust_env=False) as client:
             response = await client.post(
-                f"{str(settings.n8n_service_url).rstrip('/')}/webhook/{workflow_webhook_path(source_id, source_type)}",
+                f"{n8n.service_url.rstrip('/')}/webhook/{workflow_webhook_path(source_id, source_type)}",
                 json={
                     "source_id": str(source_id), "source_generation": source_generation,
                     "connector_revision": connector_revision,

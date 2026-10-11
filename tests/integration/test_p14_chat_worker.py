@@ -78,8 +78,8 @@ async def chat_ready(ready_owner_client: AsyncClient) -> AsyncClient:
     client = ready_owner_client
     current = (await client.get("/api/v1/settings/ai")).json()
     saved = await client.put("/api/v1/settings/ai", json={
-        "omniroute_base_url": FAKE_BASE_URL,
-        "omniroute_credential_action": "replaced", "omniroute_api_key": "fake-model-key",
+        "gateway_base_url": FAKE_BASE_URL,
+        "omniroute_credential_action": "replaced", "gateway_api_key": "fake-model-key",
         "chat_alias": "reasoning-large", "brief_alias": "reasoning-large",
         "aliases": {"reasoning-large": {"model": "fake-chat", "destination": "remote"}},
         "privacy": {"allow_remote_reasoning": True, "allow_remote_embeddings": False},
@@ -265,8 +265,8 @@ async def test_reranker_alias_probe_and_chat_with_reranking(chat_ready: AsyncCli
     client = chat_ready
     current = (await client.get("/api/v1/settings/ai")).json()
     saved = await client.put("/api/v1/settings/ai", json={
-        "omniroute_base_url": FAKE_BASE_URL,
-        "omniroute_credential_action": "replaced", "omniroute_api_key": "fake-model-key",
+        "gateway_base_url": FAKE_BASE_URL,
+        "omniroute_credential_action": "replaced", "gateway_api_key": "fake-model-key",
         "chat_alias": "reasoning-large", "brief_alias": "reasoning-large",
         "aliases": {"reasoning-large": {"model": "fake-chat", "destination": "remote"},
                     "reranker": {"model": "fake-rerank", "destination": "remote"}},

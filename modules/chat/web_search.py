@@ -1,4 +1,4 @@
-"""Egress client for chat web search (Tavily/Brave). Sends only the literal user query.
+"""Egress client for chat web search (Tavily/Brave/SearXNG). Sends only the literal user query.
 
 Security contract (p15 design W1 + review P2-4/P3-5/P3-6): key only in a header, never logged;
 no redirects/retries/proxy; 8 s hard timeout; 256 KiB decoded-body cap; JSON content-type only;
@@ -119,7 +119,7 @@ def _result(title: Any, url: Any, snippet: Any) -> WebSearchResult | None:
 def parse_results(provider: str, payload: Any) -> list[WebSearchResult]:
     """Strict parse; wrong container shape -> provider_error, malformed items are dropped."""
     items: Any
-    if provider == "tavily":
+    if provider in ("tavily", "searxng"):  # both: top-level ``results``; SearXNG snippets are ``content``
         items, snippet_key = (payload.get("results") if isinstance(payload, dict) else None), "content"
     else:
         web = payload.get("web") if isinstance(payload, dict) else None
@@ -151,11 +151,11 @@ def format_web_results(results: list[WebSearchResult], start: int) -> str:
 
 def web_search_permitted(config: AIExecutionConfig) -> bool:
     """Config/consent gate. Callers must evaluate it inside the fence (review P1-1)."""
+    keyed = config.web_search_provider in ("tavily", "brave") and (
+        config.web_search_credential_configured and bool(config.web_search_api_key))
     return (
-        config.web_search_provider in ("tavily", "brave")
+        (keyed or config.web_search_provider == "searxng")  # SearXNG is keyless
         and bool(config.web_search_endpoint)
-        and config.web_search_credential_configured
-        and bool(config.web_search_api_key)
         and config.privacy.allow_remote_web_search
     )
 
@@ -164,7 +164,10 @@ async def _fetch(
     provider: str, endpoint: str, api_key: str, query: str, transport: httpx.AsyncBaseTransport
 ) -> Any:
     base = endpoint.rstrip("/")
-    if provider == "tavily":
+    if provider == "searxng":
+        request = httpx.Request("GET", f"{base}/search", headers={"Accept": "application/json"},
+                                params={"q": query, "format": "json", "safesearch": 1})
+    elif provider == "tavily":
         request = httpx.Request(
             "POST", f"{base}/search", headers={"Authorization": f"Bearer {api_key}"},
             json={"query": query, "max_results": MAX_RESULTS, "search_depth": "basic",
@@ -208,7 +211,7 @@ async def search(
     is built (``provider_error``: a bad credential, and no new failure code is needed).
     """
     query = normalize_query(message)
-    if provider not in ("tavily", "brave") or not (api_key.isascii() and api_key.isprintable()):
+    if provider not in ("tavily", "brave", "searxng") or not (api_key.isascii() and api_key.isprintable()):
         raise WebSearchError("provider_error")
     loop = asyncio.get_running_loop()
     started, code = loop.time(), "ok"

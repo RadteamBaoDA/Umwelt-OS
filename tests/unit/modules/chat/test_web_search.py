@@ -54,6 +54,30 @@ def test_tavily_request_and_parse() -> None:
     assert KEY not in str(request.url) and KEY not in request.content.decode()
 
 
+def test_searxng_request_and_parse() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, headers=JSON, json={"results": [
+            {"title": "S", "url": "https://s.example/p", "content": "snippet"}, {"title": "no url"}]})
+
+    results = asyncio.run(ws.search("searxng", "http://searx:8080/", "", "weather", transport=httpx.MockTransport(handler)))
+    assert [(r.title, r.host, r.snippet) for r in results] == [("S", "s.example", "snippet")]
+    assert seen[0].method == "GET" and seen[0].url.path == "/search"
+    assert seen[0].url.params["format"] == "json" and seen[0].url.params["q"] == "weather"
+    assert "authorization" not in seen[0].headers
+
+
+def test_searxng_is_keyless_but_keyed_providers_still_need_a_key() -> None:
+    searx = {"web_search_provider": "searxng", "web_search_endpoint": "http://searx:8080",
+             "web_search_api_key": "", "web_search_credential_configured": False}
+    assert ws.web_search_permitted(_config(**searx))
+    assert not ws.web_search_permitted(_config(**{**searx, "privacy": PrivacySettings(allow_remote_web_search=False)}))
+    assert not ws.web_search_permitted(_config(**{**searx, "web_search_endpoint": None}))
+    assert not ws.web_search_permitted(_config(web_search_api_key="", web_search_credential_configured=False))
+
+
 def test_brave_request_and_parse() -> None:
     seen: list[httpx.Request] = []
 
@@ -177,7 +201,7 @@ def _config(**over: Any) -> AIExecutionConfig:
     base: dict[str, Any] = {
         "workspace_id": uuid4(), "actor_user_id": 1, "membership_revision": 1, "access_configuration_revision": 1,
         "configuration_revision": 1, "gateway_identity": "a" * 64, "endpoint_destination_id": None,
-        "omniroute_base_url": None, "omniroute_api_key": "", "aliases": {},
+        "gateway_base_url": None, "gateway_api_key": "", "aliases": {},
         "privacy": PrivacySettings(allow_remote_web_search=True), "chat_alias": "a", "brief_alias": "b",
         "request_timeout_seconds": 20, "web_search_provider": "tavily",
         "web_search_endpoint": "https://api.tavily.com", "web_search_api_key": KEY,

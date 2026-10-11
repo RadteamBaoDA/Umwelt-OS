@@ -51,13 +51,13 @@ class AISettingsRecord(Base):
 
     owner_id: Mapped[int] = mapped_column(ForeignKey("owner.id", ondelete="CASCADE"), primary_key=True)
     configuration_revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
-    omniroute_base_url: Mapped[str | None] = mapped_column(Text)
-    omniroute_api_key_ciphertext: Mapped[str | None] = mapped_column(Text)
     aliases: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
     privacy: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
     system_prompts: Mapped[dict[str, str]] = mapped_column(JSONB, nullable=False, server_default="{}")
-    # {provider_id: {kind, label, base_url, key_ciphertext, local}}; empty means "synthesise default from legacy columns".
+    # {provider_id: {kind, label, base_url, key_ciphertext, local, models: [{id, type}]}}.
     providers: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    # {service_url, api_key_ciphertext, webhook_token_ciphertext}; empty means "use the N8N_* environment".
+    n8n: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
     chat_alias: Mapped[str] = mapped_column(String(32), nullable=False, server_default="reasoning-large")
     brief_alias: Mapped[str] = mapped_column(String(32), nullable=False, server_default="reasoning-small")
     web_search_provider: Mapped[str] = mapped_column(String(32), nullable=False, server_default="none")
@@ -208,7 +208,7 @@ async def legacy_aliases(redis: Redis | None, settings: Settings, *, scope: Scop
         raise ValueError("An admitted owner scope is required")
     if actor != 1 and not settings.multi_workspace_enabled:
         raise ValueError("Multi-workspace execution is disabled")
-    configured = {name: ModelMapping(model=model, destination="remote") for name, model in settings.omniroute_models.items() if name in ALIASES}
+    configured: dict[str, ModelMapping] = {}
     if redis is not None and actor == 1:
         try:
             legacy = await cast("Awaitable[dict[Any, Any]]", redis.hgetall(_MAPPINGS))

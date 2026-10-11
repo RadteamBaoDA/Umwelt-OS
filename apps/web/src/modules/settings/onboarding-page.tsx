@@ -13,9 +13,8 @@ import { OnboardingTopics } from './onboarding-topics';
 import { getOnboardingState, saveOnboardingStep, type OnboardingStep } from './onboarding-api';
 
 type ReadinessAI = {
-  omniroute_base_url: string | null;
+  providers: { base_url: string | null; credential_configured: boolean; local: boolean }[];
   endpoint_policy_denied: boolean;
-  omniroute_credential_configured: boolean;
   chat_alias: string;
   aliases: Record<string, { model: string; destination: string }>;
   capabilities: { alias: string; capability: string; result: string; expires_at: string }[];
@@ -55,7 +54,7 @@ export function OnboardingPage() {
   const currentStep = steps[Math.max(0, currentIndex)];
   const activeSources = sources.data?.items.filter((source) => source.status === 'active').length ?? 0;
   const chatAlias = ai.data?.aliases[ai.data.chat_alias];
-  const aiReady = Boolean(ai.data?.omniroute_base_url && ai.data.omniroute_credential_configured
+  const aiReady = Boolean(ai.data?.providers?.some((item) => item.base_url && (item.credential_configured || item.local))
     && !ai.data.endpoint_policy_denied && ai.data.privacy.allow_remote_reasoning
     && chatAlias?.model && chatAlias.destination === 'remote');
   const chatCapability = ai.data?.capabilities.some((capability) => capability.alias === ai.data?.chat_alias

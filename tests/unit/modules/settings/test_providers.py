@@ -40,9 +40,6 @@ def _settings(public_ok: bool = False) -> MagicMock:
     settings.ai_allow_public_providers = public_ok
     settings.ai_credential_encryption_key = SecretStr(KEY)
     settings.multi_workspace_enabled = False
-    settings.omniroute_base_url = None
-    settings.omniroute_api_key = SecretStr("")
-    settings.omniroute_models = {}
     return settings
 
 
@@ -52,7 +49,7 @@ def _enc(value: str) -> str:
 
 def _row(**over: object) -> SimpleNamespace:
     base = dict(
-        configuration_revision=2, omniroute_base_url=None, omniroute_api_key_ciphertext=None, providers={}, aliases={},
+        configuration_revision=2, providers={}, aliases={}, n8n={},
         privacy={}, system_prompts={}, chat_alias="reasoning-large", brief_alias="reasoning-small",
         web_search_provider="none", web_search_endpoint=None, web_search_api_key_ciphertext=None, request_timeout_seconds=20)
     return SimpleNamespace(**{**base, **over})
@@ -87,34 +84,34 @@ def _provider(pid: str, kind: str = "openai", url: str = GW, **over: object) -> 
 def _derived_config() -> AIExecutionConfig:
     return AIExecutionConfig(
         workspace_id=WS, actor_user_id=1, membership_revision=1, access_configuration_revision=1, configuration_revision=2,
-        gateway_identity="a" * 64, endpoint_destination_id="omniroute:default", omniroute_base_url="https://d.example",
-        omniroute_api_key="default-key", omniroute_credential_configured=True,
+        gateway_identity="a" * 64, endpoint_destination_id="remote:default", gateway_base_url="https://d.example",
+        gateway_api_key="default-key", gateway_credential_configured=True,
         aliases={"fast": ModelMapping(model="a", destination="remote", provider_id="local1"),
                  "reasoning-large": ModelMapping(model="b", destination="remote"),
                  "reranker": ModelMapping(model="c", destination="remote", provider_id="ghost")},
         privacy=PrivacySettings(), chat_alias="fast", brief_alias="fast", request_timeout_seconds=20,
         web_search_provider="none", web_search_endpoint=None, web_search_api_key="",
         providers={
-            "default": ProviderConfig(kind="omniroute", base_url="https://d.example", api_key="default-key",
-                                      destination_id="omniroute:default", credential_configured=True),
+            "default": ProviderConfig(kind="custom", base_url="https://d.example", api_key="default-key",
+                                      destination_id="remote:default", credential_configured=True),
             "local1": ProviderConfig(kind="ollama", base_url="http://ollama:11434", destination_id="local:abc", local=True)})
 
 
 def test_derive_overrides_endpoint_key_and_destination_from_the_alias_provider() -> None:
     config = _derived_config()
     fast = public.derive_for_alias(config, "fast")
-    assert (fast.omniroute_base_url, fast.omniroute_api_key, fast.endpoint_destination_id, fast.omniroute_credential_configured) == (
+    assert (fast.gateway_base_url, fast.gateway_api_key, fast.endpoint_destination_id, fast.gateway_credential_configured) == (
         "http://ollama:11434", "", "local:abc", False)
     default = public.derive_for_alias(config, "reasoning-large")
-    assert (default.omniroute_api_key, default.endpoint_destination_id) == ("default-key", "omniroute:default")
+    assert (default.gateway_api_key, default.endpoint_destination_id) == ("default-key", "remote:default")
     assert public.derive_for_alias(fast, "fast") == fast  # idempotent
-    assert config.omniroute_base_url == "https://d.example"  # pure: input untouched
+    assert config.gateway_base_url == "https://d.example"  # pure: input untouched
 
 
 def test_derive_unknown_provider_is_unconfigured_and_providerless_config_passes_through() -> None:
     config = _derived_config()
     ghost = public.derive_for_alias(config, "reranker")
-    assert ghost.omniroute_base_url is None and ghost.endpoint_destination_id is None and not ghost.omniroute_credential_configured
+    assert ghost.gateway_base_url is None and ghost.endpoint_destination_id is None and not ghost.gateway_credential_configured
     bare = config.model_copy(update={"providers": {}})
     assert public.derive_for_alias(bare, "fast") is bare
 
@@ -128,22 +125,27 @@ def test_execution_config_never_dumps_or_reprs_provider_keys() -> None:
 
 def test_identity_prefix_local_vs_remote() -> None:
     assert public._identity("http://x", "", local=True)[1].startswith("local:")  # type: ignore[union-attr]
-    assert public._identity("http://x", "")[1].startswith("omniroute:")  # type: ignore[union-attr]
+    assert public._identity("http://x", "")[1].startswith("remote:")  # type: ignore[union-attr]
 
 
 @pytest.mark.asyncio
-async def test_legacy_row_becomes_default_provider_with_the_same_destination_id() -> None:
-    row = _row(omniroute_base_url=GW, omniroute_api_key_ciphertext=_enc("k1"))
-    config = await _config(row)
-    legacy_destination = f"omniroute:{public._fingerprint(GW)[:32]}"
-    assert config.endpoint_destination_id == legacy_destination
-    assert list(config.providers) == ["default"]
-    default = config.providers["default"]
-    assert (default.kind, default.destination_id, default.api_key, default.credential_configured) == (
-        "omniroute", legacy_destination, "k1", True)
+async def test_first_provider_backs_the_top_level_mirror_when_no_default_exists() -> None:
+    config = await _config(_row(providers={"main": {"kind": "custom", "label": "M", "base_url": GW, "key_ciphertext": _enc("k1"),
+                                                    "models": [{"id": "m1", "type": "embedding"}]}}))
+    main = config.providers["main"]
+    assert (config.gateway_base_url, config.gateway_api_key) == (GW, "k1")
+    assert main.destination_id.startswith("remote:") and [(m.id, m.type) for m in main.models] == [("m1", "embedding")]  # type: ignore[union-attr]
+    derived = public.derive_for_alias(config, "fast")  # alias without provider_id -> first provider
+    assert derived.gateway_base_url == GW and derived.gateway_credential_configured
     read = public._read(config)
-    assert read.providers[0].id == "default" and read.omniroute_credential_configured
+    assert read.providers[0].id == "main" and read.providers[0].models[0].type == "embedding"
     assert "k1" not in read.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_no_row_defaults_to_unconfigured_without_env_bootstrap() -> None:
+    config = await _config(None)  # type: ignore[arg-type]
+    assert config.providers == {} and config.gateway_base_url is None and config.aliases == {}
 
 
 @pytest.mark.asyncio
@@ -164,7 +166,7 @@ async def test_local_flag_is_derived_from_kind_not_stored_value() -> None:
     config = await _config(_row(providers={"x": {"kind": "ollama", "label": "x", "base_url": OLLAMA, "local": False},
                                            "y": {"kind": "custom", "label": "y", "base_url": GW, "local": True}}))
     assert config.providers["x"].local and config.providers["x"].destination_id.startswith("local:")  # type: ignore[union-attr]
-    assert not config.providers["y"].local and config.providers["y"].destination_id.startswith("omniroute:")  # type: ignore[union-attr]
+    assert not config.providers["y"].local and config.providers["y"].destination_id.startswith("remote:")  # type: ignore[union-attr]
     assert config.privacy.reasoning_destinations == []  # local providers never appear in consent lists
 
 
@@ -194,7 +196,6 @@ async def test_save_encrypts_keys_and_allows_local_private_only_on_local() -> No
     assert "sk-secret" not in str(row.providers)
     assert Fernet(KEY.encode()).decrypt(row.providers["cloud"]["key_ciphertext"].encode()).decode() == "sk-secret"
     assert row.providers["ol"]["local"] is True and row.providers["cloud"]["local"] is False
-    assert row.omniroute_base_url is None  # no "default" provider -> legacy mirror cleared
 
 
 @pytest.mark.asyncio
@@ -215,22 +216,45 @@ async def test_provider_endpoint_change_drops_stored_key() -> None:
 
 
 @pytest.mark.asyncio
-async def test_absent_providers_keeps_them_and_legacy_fields_edit_default_only() -> None:
-    other = {"kind": "ollama", "label": "O", "base_url": OLLAMA, "key_ciphertext": None, "local": True}
-    ciphertext = _enc("k")
-    row = _row(providers={"default": {"kind": "omniroute", "label": "Default", "base_url": GW, "key_ciphertext": ciphertext},
-                          "o": other})
-    await _save(row, _update(omniroute_base_url="https://other.example/v1"))
-    assert row.providers["o"] == other
-    assert row.providers["default"]["base_url"] == "https://other.example/v1"
-    # endpoint changed -> saved key must not follow it to the new host
-    assert row.omniroute_base_url == "https://other.example/v1" and row.omniroute_api_key_ciphertext is None
+async def test_absent_providers_keeps_them_untouched() -> None:
+    other = {"kind": "ollama", "label": "O", "base_url": OLLAMA, "key_ciphertext": None, "local": True,
+             "models": [{"id": "llama3", "type": "llm"}]}
+    row = _row(providers={"o": other})
+    await _save(row, _update())
+    assert row.providers == {"o": other}
+
+
+def _typed(pid: str = "a", **models: str) -> ProviderUpdate:
+    return _provider(pid, models=[{"id": mid, "type": mtype} for mid, mtype in models.items()])  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio
-async def test_legacy_save_without_providers_creates_default() -> None:
-    row = await _save(_row(), _update(omniroute_base_url=GW, omniroute_credential_action="replaced", omniroute_api_key="k"))
-    assert list(row.providers) == ["default"] and row.providers["default"]["kind"] == "omniroute"
+@pytest.mark.parametrize(("alias", "mtype", "ok"), [
+    ("embedding", "embedding", True), ("embedding", "llm", False),
+    ("reranker", "reranker", True), ("reranker", "embedding", False),
+    ("vision", "vision", True), ("vision", "llm", False),
+    ("fast", "llm", True), ("reasoning-large", "embedding", False), ("reasoning-small", "tts", False),
+])
+async def test_alias_requires_matching_model_type(alias: str, mtype: str, ok: bool) -> None:
+    update = _update(providers=[_typed("a", m1=mtype)], aliases={alias: ModelMapping(model="m1", provider_id="a")})
+    if ok:
+        row = await _save(_row(), update)
+        assert row.providers["a"]["models"] == [{"id": "m1", "type": mtype}]
+    else:
+        with pytest.raises(HTTPException) as exc:
+            await _save(_row(), update)
+        assert exc.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_unlisted_model_is_rejected_when_listed_and_duplicate_model_ids_rejected() -> None:
+    with pytest.raises(HTTPException) as exc:  # provider has a model list -> unlisted id is 422
+        await _save(_row(), _update(providers=[_typed("a", m1="llm")], aliases={"embedding": ModelMapping(model="other", provider_id="a")}))
+    assert exc.value.status_code == 422
+    # empty model list = not yet discovered -> anything accepted
+    await _save(_row(), _update(providers=[_provider("a")], aliases={"embedding": ModelMapping(model="other", provider_id="a")}))
+    with pytest.raises(HTTPException):
+        await _save(_row(), _update(providers=[_provider("a", models=[{"id": "m", "type": "llm"}, {"id": "m", "type": "tts"}])]))  # type: ignore[arg-type]
 
 
 # ---- consent ----------------------------------------------------------------------------------------------------
@@ -263,10 +287,11 @@ async def test_changed_endpoint_and_removed_provider_lose_consent() -> None:
 
 
 @pytest.mark.asyncio
-async def test_legacy_toggle_still_grants_default_and_local_never_gets_a_grant() -> None:
-    row = _row(omniroute_base_url=GW, providers={"default": {"kind": "omniroute", "label": "D", "base_url": GW, "key_ciphertext": None},
-                                                 "ol": {"kind": "ollama", "label": "O", "base_url": OLLAMA, "key_ciphertext": None}})
-    await _save(row, _update(omniroute_base_url=GW, privacy=PrivacySettings(allow_remote_reasoning=True)))
+async def test_toggle_keeps_grant_for_unchanged_remote_provider_and_local_never_gets_one() -> None:
+    row = _row(providers={"default": {"kind": "custom", "label": "D", "base_url": GW, "key_ciphertext": None},
+                          "ol": {"kind": "ollama", "label": "O", "base_url": OLLAMA, "key_ciphertext": None}})
+    await _save(row, _update(privacy=PrivacySettings(allow_remote_reasoning=True,
+                                                     reasoning_destinations=[_dest(GW), _dest(OLLAMA, True)])))
     assert row.privacy["reasoning_destinations"] == [_dest(GW)]
 
 
@@ -287,7 +312,7 @@ def test_public_providers_flag_admits_only_https_hostnames() -> None:
 def test_draft_reuses_stored_key_only_for_the_same_endpoint() -> None:
     config = _derived_config()
     key, local, destination = public.resolve_draft_provider(config, "https://d.example", "", None, None)
-    assert (key, local) == ("default-key", False) and destination.startswith("omniroute:")
+    assert (key, local) == ("default-key", False) and destination.startswith("remote:")
     assert public.resolve_draft_provider(config, "https://evil.example", "", None, None)[0] == ""
     assert public.resolve_draft_provider(config, "https://d.example", "typed", None, None)[0] == "typed"
     key, local, destination = public.resolve_draft_provider(config, "http://x:11434", "", None, "ollama")
@@ -299,11 +324,10 @@ def test_draft_reuses_stored_key_only_for_the_same_endpoint() -> None:
 @pytest.mark.asyncio
 async def test_legacy_aliases_degrades_to_defaults_when_redis_is_down() -> None:
     settings = _settings()
-    settings.omniroute_models = {"fast": "m-fast"}
     redis = MagicMock()
     redis.hgetall = AsyncMock(side_effect=RedisError("down"))
     aliases = await models.legacy_aliases(redis, settings, scope=SCOPE)
-    assert aliases["fast"].model == "m-fast"
+    assert aliases == {}
 
 
 @pytest.mark.asyncio

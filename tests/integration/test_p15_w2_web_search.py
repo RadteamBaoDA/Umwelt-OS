@@ -87,7 +87,7 @@ def _answer(ip: str) -> tuple[Any, ...]:
     return (family, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", (ip, 443, 0, 0) if ":" in ip else (ip, 443))
 
 
-def _fake_provider(endpoint: str, hosts: Any, cidrs: Any) -> ApprovedEndpointTransport:
+def _fake_provider(endpoint: str, hosts: Any, cidrs: Any, **_kw: Any) -> ApprovedEndpointTransport:
     approved_web_search_transport(endpoint, hosts, cidrs)  # the real host/https policy check
     delegate = httpx.ASGITransport(app=fake_model.app)
     return ApprovedEndpointTransport(httpx.URL(endpoint), tuple(cidrs), delegate, allow_global=True)
@@ -266,7 +266,7 @@ async def test_save_after_fence_read_blocks_until_body_is_sent(
             await asyncio.wait_for(go.wait(), 3)  # shorter than the 4 s fence deadline
             return await super().handle_async_request(request)
 
-    def parked_provider(endpoint: str, hosts: Any, cidrs: Any) -> ApprovedEndpointTransport:
+    def parked_provider(endpoint: str, hosts: Any, cidrs: Any, **_kw: Any) -> ApprovedEndpointTransport:
         approved_web_search_transport(endpoint, hosts, cidrs)
         return ApprovedEndpointTransport(
             httpx.URL(endpoint), tuple(cidrs), _Parked(app=fake_model.app), allow_global=True,

@@ -96,8 +96,8 @@ def _config() -> AIExecutionConfig:
     return AIExecutionConfig(
         workspace_id=OWNER.workspace_id, actor_user_id=1, membership_revision=2,
         access_configuration_revision=1, configuration_revision=3, gateway_identity="a" * 64,
-        endpoint_destination_id="omniroute", omniroute_base_url="http://x", omniroute_api_key="k",
-        omniroute_credential_configured=True,
+        endpoint_destination_id="omniroute", gateway_base_url="http://x", gateway_api_key="k",
+        gateway_credential_configured=True,
         aliases={"reasoning-small": ModelMapping(model="m", destination="remote")},
         privacy=PrivacySettings(allow_remote_reasoning=True, reasoning_destinations=["omniroute"]),
         chat_alias="reasoning-large", brief_alias="reasoning-small", request_timeout_seconds=5,

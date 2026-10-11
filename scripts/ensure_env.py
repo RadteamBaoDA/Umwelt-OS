@@ -25,8 +25,6 @@ def main() -> None:
         "N8N_ENCRYPTION_KEY": n8n_key,
         "BACKUP_AGE_RECIPIENT": "",
         "BACKUP_AGE_IDENTITY_PATH": "",
-        "OMNIROUTE_BASE_URL": "",
-        "OMNIROUTE_API_KEY": "",
     }
     env_path.write_text("".join(f"{key}={value}\n" for key, value in values.items()), encoding="utf-8")
     print("Created local .env with generated secrets. Keep it private.")

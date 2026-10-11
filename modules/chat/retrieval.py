@@ -135,13 +135,13 @@ async def _apply_configured_reranking(
             configuration_revision=config.configuration_revision,
         )
 
-        destination_id = config.endpoint_destination_id or "omniroute"
+        destination_id = config.endpoint_destination_id or "remote"
         is_permitted = may_send(
             policy,
             "reranker",
             rerank_mapping,
             destination_id,
-            config.omniroute_credential_configured,
+            config.gateway_credential_configured,
             "reranking",
         )
         if not is_permitted:
@@ -187,8 +187,8 @@ async def _apply_configured_reranking(
 
         gateway = ModelGateway(
             redis=redis,
-            base_url=config.omniroute_base_url or "http://localhost:8000",
-            api_key=config.omniroute_api_key,
+            base_url=config.gateway_base_url or "http://localhost:8000",
+            api_key=config.gateway_api_key,
             destination_id=destination_id,
             timeout_seconds=config.request_timeout_seconds,
             scope=scope_kw["scope"],

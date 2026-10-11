@@ -1,4 +1,4 @@
-"""Add per-alias multi-provider storage to AI settings."""
+"""Add multi-provider and n8n storage to AI settings."""
 
 from collections.abc import Sequence
 
@@ -13,20 +13,14 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    """Add ``providers`` and move the single OmniRoute endpoint/key into provider ``default``.
-
-    Legacy columns stay as a mirror of ``default`` so old readers and consent destination ids keep working.
-    """
+    """Add per-provider storage (with typed models) and the n8n connection settings to AI settings."""
     op.add_column("ai_settings", sa.Column(
         "providers", postgresql.JSONB(astext_type=sa.Text()), server_default=sa.text("'{}'::jsonb"), nullable=False))
-    op.execute("""
-        UPDATE ai_settings SET providers = jsonb_build_object('default', jsonb_build_object(
-            'kind', 'omniroute', 'label', 'Default', 'base_url', omniroute_base_url,
-            'key_ciphertext', omniroute_api_key_ciphertext, 'local', false))
-        WHERE omniroute_base_url IS NOT NULL OR omniroute_api_key_ciphertext IS NOT NULL
-    """)
+    op.add_column("ai_settings", sa.Column(
+        "n8n", postgresql.JSONB(astext_type=sa.Text()), server_default=sa.text("'{}'::jsonb"), nullable=False))
 
 
 def downgrade() -> None:
-    """Drop provider storage; the legacy columns still hold the default provider."""
+    """Drop provider and n8n storage."""
+    op.drop_column("ai_settings", "n8n")
     op.drop_column("ai_settings", "providers")

@@ -50,8 +50,6 @@ jobs:
           REDIS_URL=redis://redis:6379/0
           DATA_DIR=/data
           WEB_PORT=3300
-          OMNIROUTE_BASE_URL=
-          OMNIROUTE_API_KEY=
           EOF
       - name: Run deferred backend and browser acceptance on disposable Compose stack
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_deferred_validation }}

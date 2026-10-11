@@ -102,7 +102,7 @@ async def probe_draft(
         finally:
             await session.rollback()
 
-    client = ModelGateway(redis, endpoint, credential, destination or "omniroute",
+    client = ModelGateway(redis, endpoint, credential, destination or "remote",
         timeout_seconds=15, scope=_owner, configuration_revision=0, gateway_identity=identity, before_send=recheck_send,
         approved_endpoint_cidrs=tuple(settings.ai_allowed_endpoint_cidrs), allow_public_endpoints=settings.ai_allow_public_providers)
     message = [{"role": "user", "content": "Reply with the word ready."}]
@@ -189,15 +189,15 @@ async def probe_model(
         try:
             await ai_settings.check_ai_execution_config(session, settings, redis, scope=_owner,
                                                         expected=config, auth_sessions=(session_ref,))
-            if not may_send(policy, alias, mapping, destination or "omniroute", bool(config.omniroute_api_key), body.capability):
+            if not may_send(policy, alias, mapping, destination or "remote", bool(config.gateway_api_key), body.capability):
                 raise PrivacyPolicyDenied("Probe denied by current settings")
         finally:
             await session.rollback()
 
     session_ref = authenticated_session_ref(request)
     await session.rollback()
-    client = ModelGateway(redis, config.omniroute_base_url, config.omniroute_api_key,
-        destination or "omniroute", timeout_seconds=15, scope=_owner,
+    client = ModelGateway(redis, config.gateway_base_url, config.gateway_api_key,
+        destination or "remote", timeout_seconds=15, scope=_owner,
         configuration_revision=config.configuration_revision, gateway_identity=config.gateway_identity,
         before_send=recheck_send, approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
         allow_public_endpoints=config.allow_public_providers)

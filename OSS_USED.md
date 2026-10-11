@@ -25,7 +25,7 @@ Inventory reconciliation is in progress. The "Direct application runtime depende
 | [deck.gl](https://github.com/visgl/deck.gl) (`@deck.gl/core`, `@deck.gl/layers`, `@deck.gl/react`) | 9.4.0 | MIT | Client-side flat map and point rendering using local geometry and owner-authorized observation points. |
 | [world-atlas](https://github.com/topojson/world-atlas) | 2.0.2 | ISC; bundled Natural Earth data is public domain | Local 1:110m Natural Earth land geometry for the flat map. |
 | [topojson-client](https://github.com/topojson/topojson-client) | 3.1.0 | ISC | Converts the bundled world-atlas TopoJSON land geometry to GeoJSON for deck.gl. |
-| [HTTPX](https://github.com/encode/httpx) | 0.28.1 | BSD-3-Clause | OpenAI SDK HTTP transport with DNS result CIDR approval, numeric-IP pinning, and proxy/redirect denial at the OmniRoute boundary. |
+| [HTTPX](https://github.com/encode/httpx) | 0.28.1 | BSD-3-Clause | OpenAI SDK HTTP transport with DNS result CIDR approval, numeric-IP pinning, and proxy/redirect denial at the model gateway boundary. |
 | [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) | 2.3.0 | MIT | Maintained Model Context Protocol client/server SDK used for the remote MCP transport and typed protocol operations. |
 | [MCP Types](https://github.com/modelcontextprotocol/python-sdk/tree/main/src/mcp-types) | 2.3.0 | MIT | Typed protocol models required by the MCP Python SDK. |
 | [LangGraph](https://github.com/langchain-ai/langgraph/tree/1.2.12/libs/langgraph) | 1.2.12 | MIT | Runs bounded checkpointed Agent workflows, specialist handoffs and approved effects through the existing ModelGateway and ToolRegistry. |
@@ -106,7 +106,7 @@ These additions use exact lockfile versions and matching installed distribution/
 | [structlog](https://github.com/hynek/structlog) | 25.5.0 | MIT OR Apache-2.0 | Structured application logging. |
 | [tiktoken](https://github.com/openai/tiktoken) | 0.14.0 | MIT License | Bounded document token/chunk accounting. |
 | [Uvicorn](https://github.com/Kludex/uvicorn) | 0.54.0 | BSD-3-Clause | API ASGI server. |
-| [OpenAI Python SDK](https://github.com/openai/openai-python) | 2.54.0 | Apache-2.0 | OpenAI-compatible OmniRoute transport; gateway retains policy ownership. |
+| [OpenAI Python SDK](https://github.com/openai/openai-python) | 2.54.0 | Apache-2.0 | OpenAI-compatible connector transport; gateway retains policy ownership. |
 | [cryptography](https://github.com/pyca/cryptography) | 50.0.2 | Apache-2.0 OR BSD-3-Clause | Protected connector/settings credentials. |
 | [@hookform/resolvers](https://github.com/react-hook-form/resolvers) | 5.9.1 | MIT | Form schema integration. |
 | [@tanstack/react-query](https://github.com/TanStack/query) | 5.103.2 | MIT | Authenticated client query/mutation caching. |

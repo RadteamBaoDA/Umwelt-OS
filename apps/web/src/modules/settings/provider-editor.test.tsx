@@ -3,14 +3,14 @@ import userEvent from '@testing-library/user-event';
 import { NextIntlClientProvider, useTranslations } from 'next-intl';
 import { describe, expect, it, vi } from 'vitest';
 import { messages } from '@/core/messages';
-import { aliasProviderId, maxProviders, newProvider, parseDraftSnapshot, ProviderEditor, type ProviderRead } from './provider-editor';
+import { aliasProviderId, aliasModelType, guessModelType, maxProviders, mergeDiscovered, modelIdsForAlias, newProvider, parseDraftSnapshot, ProviderEditor, type ProviderRead } from './provider-editor';
 
-const cloud: ProviderRead = { id: 'default', kind: 'openai', label: 'OpenAI', base_url: 'https://api.openai.com/v1', destination_id: 'remote:x', credential_configured: true, local: false, policy_denied: false };
+const cloud: ProviderRead = { id: 'default', kind: 'openai', label: 'OpenAI', base_url: 'https://api.openai.com/v1', destination_id: 'remote:x', credential_configured: true, local: false, policy_denied: false, models: [{ id: 'gpt-4o', type: 'llm' }] };
 const local: ProviderRead = { ...cloud, id: 'ollama-1', kind: 'ollama', label: 'Ollama', base_url: 'http://localhost:11434/v1', local: true, policy_denied: true, credential_configured: false };
 
 function Harness({ providers, onChange = vi.fn(), onDiscover = vi.fn() }: { providers: ProviderRead[]; onChange?: (p: ProviderRead[]) => void; onDiscover?: (p: ProviderRead) => void }) {
   const t = useTranslations('aiSettings');
-  return <ProviderEditor providers={providers} savedIds={providers.map((p) => p.id)} secrets={{}} models={{}} disabled={false} discoveringId={null} discoverError={null} onChange={onChange} onSecret={vi.fn()} onDiscover={onDiscover} t={t as never} />;
+  return <ProviderEditor providers={providers} savedIds={providers.map((p) => p.id)} secrets={{}} disabled={false} discoveringId={null} discoverError={null} onChange={onChange} onSecret={vi.fn()} onDiscover={onDiscover} t={t as never} />;
 }
 const renderEditor = (props: Parameters<typeof Harness>[0]) => render(<NextIntlClientProvider locale="en-US" messages={messages['en-us']}><Harness {...props} /></NextIntlClientProvider>);
 
@@ -31,6 +31,14 @@ describe('provider editor', () => {
     expect(onChange.mock.calls[0][0]).toHaveLength(2);
     await userEvent.click(screen.getByRole('button', { name: 'Remove provider OpenAI' }));
     expect(onChange).toHaveBeenLastCalledWith([]);
+  });
+
+  it('removes a single model from a provider', async () => {
+    const onChange = vi.fn();
+    const two: ProviderRead = { ...cloud, models: [{ id: 'gpt-4o', type: 'llm' }, { id: 'text-embed', type: 'embedding' }] };
+    renderEditor({ providers: [two], onChange });
+    await userEvent.click(screen.getByRole('button', { name: 'Remove model gpt-4o' }));
+    expect(onChange).toHaveBeenLastCalledWith([{ ...two, models: [{ id: 'text-embed', type: 'embedding' }] }]);
   });
 
   it('disables add at the maximum', () => {
@@ -54,5 +62,20 @@ describe('provider helpers', () => {
     expect(parseDraftSnapshot(old, 4)).toBeNull();
     expect(parseDraftSnapshot('not json', 3)).toBeNull();
     expect(parseDraftSnapshot(null, 3)).toBeNull();
+  });
+});
+
+describe('model types', () => {
+  it('guesses types from ids', () => {
+    const cases: [string, string][] = [['text-embedding-3-small', 'embedding'], ['bge-reranker-v2', 'reranker'], ['whisper-1', 'asr'], ['tts-1', 'tts'], ['llava:7b', 'vision'], ['qwen2-vl', 'vision'], ['gpt-4o', 'llm']];
+    for (const [id, type] of cases) expect(guessModelType(id)).toBe(type);
+  });
+
+  it('keeps saved types on discover and filters by alias', () => {
+    expect(mergeDiscovered([{ id: 'x-embed', type: 'llm' }], ['x-embed', 'whisper-1'])).toEqual([{ id: 'x-embed', type: 'llm' }, { id: 'whisper-1', type: 'asr' }]);
+    const p = { ...cloud, models: [{ id: 'e', type: 'embedding' as const }, { id: 'c', type: 'llm' as const }] };
+    expect(modelIdsForAlias('embedding', [p])).toEqual(['e']);
+    expect(modelIdsForAlias('fast', [p])).toEqual(['c']);
+    expect(aliasModelType('local-private')).toBe('llm');
   });
 });

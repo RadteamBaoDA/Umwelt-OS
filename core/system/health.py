@@ -44,11 +44,20 @@ async def system_health(
         worker_status = "unavailable"
         chat_worker_status = "unavailable"
 
-    gateway_status = (
-        "configured"
-        if settings.omniroute_base_url and settings.omniroute_api_key.get_secret_value()
-        else "unconfigured"
-    )
+    # Configured = some owner saved a provider with an endpoint (no env bootstrap); not a connectivity claim.
+    gateway_configured = n8n_stored = False
+    try:
+        async with asyncio.timeout(PROBE_TIMEOUT_SECONDS):
+            if postgres != "healthy":
+                raise TimeoutError
+            gateway_configured = bool((await session.execute(text(
+                "SELECT 1 FROM ai_settings, jsonb_each(providers) AS p(id, rec) "
+                "WHERE rec->>'base_url' IS NOT NULL LIMIT 1"))).first())
+            n8n_stored = bool((await session.execute(text(
+                "SELECT 1 FROM ai_settings WHERE n8n->>'api_key_ciphertext' IS NOT NULL LIMIT 1"))).first())
+    except (SQLAlchemyError, TimeoutError):
+        pass
+    gateway_status = "configured" if gateway_configured else "unconfigured"
     components = {
         "postgres": {"status": postgres},
         "redis": {"status": redis_status, **({"memory": redis_memory} if redis_memory else {})},
@@ -57,7 +66,7 @@ async def system_health(
         "model_gateway": {"status": gateway_status, "connectivity": "not_tested"},
         "graph": {"status": "not_installed"},
         # Optional sidecars: never part of `overall`; configured means a key/token is set, not reachable.
-        "n8n": {"status": "configured" if settings.n8n_api_key.get_secret_value() else "not_configured", "optional": True},
+        "n8n": {"status": "configured" if n8n_stored or settings.n8n_api_key.get_secret_value() else "not_configured", "optional": True},
         "browser": {"status": "configured" if settings.browser_shared_token.get_secret_value() else "not_configured", "optional": True},
     }
     core_statuses = (postgres, redis_status, worker_status, chat_worker_status)

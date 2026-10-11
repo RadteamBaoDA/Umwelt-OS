@@ -1,6 +1,7 @@
 import hashlib
 from typing import Annotated
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,6 +11,7 @@ from core.workspaces.dependencies import require_workspace_read, require_workspa
 from core.workspaces.schemas import WorkspaceContext
 from core.database import get_session
 from core.model_gateway.client import ModelGateway, ModelGatewayError
+from core.model_gateway.transport import EndpointNetworkPolicyError, approved_web_search_transport
 from core.model_gateway.schemas import (
     AISettingsRead,
     AISettingsUpdate,
@@ -18,8 +20,13 @@ from core.model_gateway.schemas import (
     ModelSettingsRead,
     PrivacySettings,
 )
+from modules.chat import web_search as web
 from modules.settings import lifecycle, models, public
 from modules.settings.schemas import (
+    ConnectionTestResult,
+    N8nRead,
+    N8nTest,
+    N8nUpdate,
     ModuleLifecycleRead,
     ModuleLifecycleUpdate,
     OwnerPreferencesRead,
@@ -30,6 +37,9 @@ from modules.settings.schemas import (
     SystemPromptsUpdate,
     TranslationSettingsRead,
     TranslationSettingsUpdate,
+    WebSearchRead,
+    WebSearchTest,
+    WebSearchUpdate,
 )
 from modules.translations import public as translations
 
@@ -176,7 +186,7 @@ async def read_models(session: Session, request: Request, _owner: OwnerRead) -> 
     """Return model aliases and capability status without exposing credentials."""
     value = await _read(session, request, scope=_owner)
     return ModelSettingsRead(aliases=value.aliases, capabilities=value.capabilities,
-        credential_configured=value.omniroute_credential_configured)
+        credential_configured=any(p.credential_configured for p in value.providers))
 
 
 @router.patch("/models", response_model=ModelSettingsRead)
@@ -187,13 +197,12 @@ async def patch_models(values: dict[str, ModelMapping], session: Session, reques
         raise HTTPException(status_code=422, detail="Unknown or empty model alias mapping")
     config = await public.get_ai_execution_config(session, request.app.state.settings, request.app.state.redis, scope=_owner)
     update = AISettingsUpdate(expected_revision=current.configuration_revision,
-        omniroute_base_url=config.omniroute_base_url, omniroute_credential_action="unchanged",
         web_search_provider=config.web_search_provider, web_search_endpoint=config.web_search_endpoint,
         chat_alias=config.chat_alias, brief_alias=config.brief_alias, aliases={**config.aliases, **values},
         privacy=config.privacy, request_timeout_seconds=config.request_timeout_seconds)
     saved = await public.save_ai_settings(session, update, request.app.state.settings, scope=_owner, auth_sessions=(authenticated_session_ref(request),))
     await session.commit()
-    return ModelSettingsRead(aliases=saved.aliases, capabilities=[], credential_configured=saved.omniroute_credential_configured)
+    return ModelSettingsRead(aliases=saved.aliases, capabilities=[], credential_configured=any(p.credential_configured for p in saved.providers))
 
 
 @router.get("/privacy", response_model=PrivacySettings)
@@ -208,7 +217,7 @@ async def patch_privacy(value: PrivacySettings, session: Session, request: Reque
     current = await _read(session, request, scope=_owner)
     config = await public.get_ai_execution_config(session, request.app.state.settings, request.app.state.redis, scope=_owner)
     update = AISettingsUpdate(expected_revision=current.configuration_revision,
-        omniroute_base_url=config.omniroute_base_url, web_search_provider=config.web_search_provider,
+        web_search_provider=config.web_search_provider,
         web_search_endpoint=config.web_search_endpoint, chat_alias=config.chat_alias, brief_alias=config.brief_alias,
         aliases=config.aliases, privacy=value, request_timeout_seconds=config.request_timeout_seconds)
     saved = await public.save_ai_settings(session, update, request.app.state.settings, scope=_owner, auth_sessions=(authenticated_session_ref(request),))
@@ -229,3 +238,75 @@ async def save_prompts(value: SystemPromptsUpdate, session: Session, request: Re
                                              auth_sessions=(authenticated_session_ref(request),))
     await session.commit()
     return saved
+
+
+@router.get("/web-search", response_model=WebSearchRead)
+async def read_web_search(session: Session, request: Request, _owner: OwnerRead) -> WebSearchRead:
+    """Return web-search provider, endpoint, key presence and remote-search consent; never the key."""
+    return await public.read_web_search(session, request.app.state.settings, request.app.state.redis, scope=_owner)
+
+
+@router.put("/web-search", response_model=WebSearchRead)
+async def save_web_search(value: WebSearchUpdate, session: Session, request: Request, _owner: OwnerWrite) -> WebSearchRead:
+    """Save web-search settings under the shared revision check (409 when stale)."""
+    saved = await public.save_web_search(session, value, request.app.state.settings, scope=_owner,
+                                         auth_sessions=(authenticated_session_ref(request),))
+    await session.commit()
+    return saved
+
+
+@router.post("/web-search/test", response_model=ConnectionTestResult)
+async def test_web_search(body: WebSearchTest, session: Session, request: Request, _owner: OwnerWrite) -> ConnectionTestResult:
+    """Run one fixed query against a draft provider; a blank key reuses the stored one only for the stored endpoint."""
+    settings = request.app.state.settings
+    endpoint = public.validate_endpoint(str(body.endpoint), settings)
+    config = await public.get_ai_execution_config(session, settings, request.app.state.redis, scope=_owner)
+    key = body.api_key or (config.web_search_api_key if config.web_search_endpoint == endpoint else "")
+    await session.rollback()  # no SQL held across egress
+    if endpoint is None or (body.provider != "searxng" and not key):
+        return ConnectionTestResult(ok=False, error="credential_required")
+    try:
+        transport = approved_web_search_transport(endpoint, settings.ai_allowed_endpoint_hosts,
+                                                  settings.web_search_allowed_cidrs, allow_http=body.provider == "searxng")
+        results = await web.search(body.provider, endpoint, key, "test", transport=transport)
+    except web.WebSearchError as exc:
+        return ConnectionTestResult(ok=False, error=exc.code)
+    except EndpointNetworkPolicyError:
+        return ConnectionTestResult(ok=False, error="network_denied")
+    return ConnectionTestResult(ok=True, detail=len(results))
+
+
+@router.get("/n8n", response_model=N8nRead)
+async def read_n8n(session: Session, request: Request, _owner: OwnerRead) -> N8nRead:
+    """Return the effective n8n URL and whether a key/webhook token is set (database or environment); never secrets."""
+    return await public.read_n8n(session, request.app.state.settings, scope=_owner)
+
+
+@router.put("/n8n", response_model=N8nRead)
+async def save_n8n(value: N8nUpdate, session: Session, request: Request, _owner: OwnerWrite) -> N8nRead:
+    """Save n8n URL and encrypted secrets under the shared revision check. A new webhook token needs workflows re-provisioned."""
+    saved = await public.save_n8n(session, value, request.app.state.settings, scope=_owner,
+                                  auth_sessions=(authenticated_session_ref(request),))
+    await session.commit()
+    return saved
+
+
+@router.post("/n8n/test", response_model=ConnectionTestResult)
+async def test_n8n(body: N8nTest, session: Session, request: Request, _owner: OwnerWrite) -> ConnectionTestResult:
+    """Call n8n ``GET /api/v1/workflows?limit=1``; blanks use the effective value, a stored key only for its own URL."""
+    settings = request.app.state.settings
+    resolved = await public.resolve_n8n(session, settings, workspace_id=_owner.workspace_id)
+    url = public.n8n_service_url(body.service_url, settings) or resolved.service_url.rstrip("/")
+    key = body.api_key or (resolved.api_key if url == resolved.service_url.rstrip("/") else "")
+    await session.rollback()
+    if not key:
+        return ConnectionTestResult(ok=False, error="credential_required")
+    try:
+        async with httpx.AsyncClient(timeout=10, trust_env=False, follow_redirects=False) as client:
+            response = await client.get(f"{url}/api/v1/workflows", params={"limit": 1}, headers={"X-N8N-API-KEY": key})
+    except httpx.HTTPError:
+        return ConnectionTestResult(ok=False, error="unreachable")
+    if response.is_success:
+        return ConnectionTestResult(ok=True, detail=response.status_code)
+    return ConnectionTestResult(ok=False, error="unauthorized" if response.status_code in (401, 403) else "http_error",
+                                detail=response.status_code)

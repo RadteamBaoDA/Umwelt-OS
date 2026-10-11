@@ -32,7 +32,7 @@ from modules.connectors import provider_terms, provisioning, registry
 from modules.connectors.backends import CURRENT_TEMPLATE_REVISION
 from modules.connectors.models import ConnectorProvisioning
 from modules.connectors.n8n import N8nApi
-from modules.settings.public import module_is_enabled
+from modules.settings.public import module_is_enabled, resolve_n8n
 from modules.sources import public as sources
 
 _DENIED = frozenset({401, 403, 404, 409})
@@ -95,8 +95,10 @@ async def run(
     after: UUID | None = None,
 ) -> dict[str, Any]:
     """Process at most ``limit`` stale sources after ``after``; idempotent, safe to re-run with ``last_source_id``."""
-    key = settings.n8n_api_key.get_secret_value()
-    api = N8nApi(str(settings.n8n_service_url), key) if key else None
+    async with factory() as session:
+        n8n = await resolve_n8n(session, settings)
+        await session.rollback()
+    api = N8nApi(n8n.service_url, n8n.api_key) if n8n.api_key else None
     statement = select(ConnectorProvisioning.source_id).where(*_STALE).order_by(ConnectorProvisioning.source_id).limit(limit)
     if after is not None:
         statement = statement.where(ConnectorProvisioning.source_id > after)

@@ -1,4 +1,6 @@
 import * as React from 'react';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Input } from '@/components/ui/input';
 
 /** Page header for a settings screen: eyebrow, h1 title, muted description and an optional right-aligned status slot. */
 export function SettingsPageHeader({ eyebrow, title, description, status }: { eyebrow: React.ReactNode; title: React.ReactNode; description?: React.ReactNode; status?: React.ReactNode }) {
@@ -37,4 +39,13 @@ export function CheckboxField({ children }: { children: React.ReactNode }) {
 /** Right-aligned Cancel/Save footer with a top border, in normal document flow (never sticky or overlaying fields). */
 export function SettingsActions({ children }: { children: React.ReactNode }) {
   return <div className="flex flex-wrap justify-end gap-2 border-t border-border pt-4">{children}</div>;
+}
+
+/** Write-only secret field: never shows the stored value; typing replaces it, the checkbox removes it. */
+export function SecretField({ id, label, value, onValue, removed, onRemoved, configured, disabled, placeholder, removeLabel, status }: { id: string; label: string; value: string; onValue: (value: string) => void; removed: boolean; onRemoved: (removed: boolean) => void; configured: boolean; disabled?: boolean; placeholder: string; removeLabel: string; status: React.ReactNode }) {
+  return <div className="flex flex-col gap-2">
+    <label className="field" htmlFor={id}><span className="label">{label}</span><Input id={id} type="password" disabled={disabled} autoComplete="new-password" value={value} onChange={(event) => onValue(event.target.value)} placeholder={placeholder} /></label>
+    <p className="m-0 text-xs text-muted-foreground">{status}</p>
+    {configured ? <CheckboxField><Checkbox id={`${id}-remove`} disabled={disabled} checked={removed} onCheckedChange={(checked) => onRemoved(checked === true)} /><label htmlFor={`${id}-remove`}>{removeLabel}</label></CheckboxField> : null}
+  </div>;
 }

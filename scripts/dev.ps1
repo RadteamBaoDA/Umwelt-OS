@@ -95,9 +95,6 @@ WEB_PORT=3000
 N8N_ENCRYPTION_KEY=$(New-Secret)
 BACKUP_AGE_RECIPIENT=
 BACKUP_AGE_IDENTITY_PATH=
-OMNIROUTE_BASE_URL=
-OMNIROUTE_API_KEY=
-OMNIROUTE_MODELS={}
 "@
         [System.IO.File]::WriteAllText((Join-Path $repo '.env'), $config, [System.Text.UTF8Encoding]::new($false))
         Write-Output 'Created local .env with generated secrets. Keep it private.'

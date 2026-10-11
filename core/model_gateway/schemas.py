@@ -4,7 +4,11 @@ from uuid import UUID
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field
 
 Capability = Literal["chat", "streaming", "embeddings", "structured", "tools", "reranking"]
-ProviderKind = Literal["openai", "openrouter", "groq", "gemini", "anthropic", "ollama", "lmstudio", "omniroute", "custom"]
+ProviderKind = Literal["openai", "openrouter", "groq", "gemini", "anthropic", "ollama", "lmstudio", "custom"]
+ModelType = Literal["llm", "embedding", "reranker", "vision", "asr", "tts"]
+WebSearchProvider = Literal["none", "tavily", "brave", "searxng"]
+# Alias slots that need a specific model type; every other alias takes an llm.
+ALIAS_MODEL_TYPE = {"embedding": "embedding", "reranker": "reranker", "vision": "vision"}
 LOCAL_PROVIDER_KINDS = frozenset({"ollama", "lmstudio"})
 MAX_PROVIDERS = 8
 DEFAULT_PROVIDER_ID = "default"
@@ -53,6 +57,13 @@ class PrivacySettings(BaseModel):
     web_search_destinations: list[str] = Field(default_factory=list, max_length=8)
 
 
+class ProviderModel(BaseModel):
+    """One model id exposed by a provider, tagged with what it is for."""
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    id: str = Field(min_length=1, max_length=200)
+    type: ModelType = "llm"
+
+
 class ProviderUpdate(BaseModel):
     """One provider in a full-replace provider list; the key is write-only."""
     model_config = ConfigDict(extra="forbid")
@@ -62,6 +73,7 @@ class ProviderUpdate(BaseModel):
     base_url: AnyHttpUrl | None = None
     credential_action: Literal["unchanged", "replaced", "removed"] = "unchanged"
     api_key: str | None = Field(default=None, max_length=4096, repr=False)
+    models: list[ProviderModel] = Field(default_factory=list, max_length=500)
 
 
 class ProviderRead(BaseModel):
@@ -74,6 +86,7 @@ class ProviderRead(BaseModel):
     credential_configured: bool = False
     local: bool = False
     policy_denied: bool = False
+    models: list[ProviderModel] = Field(default_factory=list)
 
 
 class ProviderConfig(BaseModel):
@@ -87,17 +100,15 @@ class ProviderConfig(BaseModel):
     credential_configured: bool = False
     local: bool = False
     policy_denied: bool = False
+    models: tuple[ProviderModel, ...] = ()
 
 
 class AISettingsUpdate(BaseModel):
     """Validated update payload with expected revision, provider credentials/actions, aliases, privacy, and timeout bounds."""
     model_config = ConfigDict(extra="forbid")
-    omniroute_base_url: AnyHttpUrl | None = None
-    omniroute_credential_action: Literal["unchanged", "replaced", "removed"] = "unchanged"
-    omniroute_api_key: str | None = Field(default=None, max_length=4096, repr=False)
-    # None keeps the stored providers (legacy omniroute_* fields then edit "default"); a list replaces them all.
+    # None keeps the stored providers; a list replaces them all.
     providers: list[ProviderUpdate] | None = None
-    web_search_provider: Literal["none", "tavily", "brave"] = "none"
+    web_search_provider: WebSearchProvider = "none"
     web_search_endpoint: AnyHttpUrl | None = None
     web_search_credential_action: Literal["unchanged", "replaced", "removed"] = "unchanged"
     web_search_api_key: str | None = Field(default=None, max_length=4096, repr=False)
@@ -154,9 +165,9 @@ class AIExecutionConfig(BaseModel):
     endpoint_policy_denied: bool = False
     endpoint_allowed_cidrs: tuple[str, ...] = ()
     allow_public_providers: bool = False
-    omniroute_base_url: str | None
-    omniroute_api_key: str = Field(repr=False, exclude=True)
-    omniroute_credential_configured: bool = False
+    gateway_base_url: str | None
+    gateway_api_key: str = Field(repr=False, exclude=True)
+    gateway_credential_configured: bool = False
     aliases: dict[str, ModelMapping]
     privacy: PrivacySettings
     chat_alias: str
@@ -189,12 +200,10 @@ class CapabilityResult(BaseModel):
 class AISettingsRead(BaseModel):
     """Safe AI settings response exposing credential presence but not credential values."""
     configuration_revision: int
-    omniroute_base_url: AnyHttpUrl | None = None
     endpoint_destination_id: str | None = None
     endpoint_policy_denied: bool = False
-    omniroute_credential_configured: bool
     providers: list[ProviderRead] = Field(default_factory=list)
-    web_search_provider: Literal["none", "tavily", "brave"]
+    web_search_provider: WebSearchProvider
     web_search_endpoint: AnyHttpUrl | None = None
     web_search_destination_id: str | None = None
     web_search_credential_configured: bool

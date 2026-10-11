@@ -43,6 +43,10 @@ def _settings(key=""):
         n8n_api_key=SimpleNamespace(get_secret_value=lambda: key), n8n_service_url="http://n8n", multi_workspace_enabled=True)
 
 
+async def _no_n8n(_session, _settings, **_kw):
+    return SimpleNamespace(service_url="http://n8n", api_key="")
+
+
 @pytest.mark.asyncio
 async def test_run_tallies_each_outcome_and_reports_resume_cursor(monkeypatch):
     ids = [uuid4() for _ in range(4)]
@@ -53,6 +57,7 @@ async def test_run_tallies_each_outcome_and_reports_resume_cursor(monkeypatch):
         return next(outcomes)
 
     monkeypatch.setattr(ut, "_upgrade_one", one)
+    monkeypatch.setattr(ut, "resolve_n8n", _no_n8n)
     summary = await ut.run(lambda: _Session(ids), _settings(), limit=4)
     assert summary == {
         "dry_run": True, "examined": 4, "upgraded": 1, "would_upgrade": 1, "reconciliation_required": 1,
@@ -61,7 +66,8 @@ async def test_run_tallies_each_outcome_and_reports_resume_cursor(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_run_with_nothing_stale_is_empty():
+async def test_run_with_nothing_stale_is_empty(monkeypatch):
+    monkeypatch.setattr(ut, "resolve_n8n", _no_n8n)
     summary = await ut.run(lambda: _Session(), _settings(), apply=True)
     assert summary["examined"] == 0 and summary["last_source_id"] is None and summary["more"] is False
 

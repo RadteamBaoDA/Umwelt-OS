@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, field_validator
 
 from core.model_gateway.schemas import ModelMapping, PrivacySettings
 
@@ -129,7 +129,86 @@ class SystemPromptsUpdate(BaseModel):
     prompts: dict[str, str | None] = Field(min_length=1)
 
 
+CredentialAction = Literal["unchanged", "replaced", "removed"]
+
+
+class WebSearchRead(BaseModel):
+    """Web-search settings; the key is never returned, only whether one is stored."""
+    configuration_revision: int = Field(ge=1)
+    provider: Literal["none", "tavily", "brave", "searxng"]
+    endpoint: str | None = None
+    credential_configured: bool
+    allow_remote_web_search: bool
+    destination_id: str | None = None
+
+
+class WebSearchUpdate(BaseModel):
+    """Full replace of web-search settings under the shared revision check."""
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: int = Field(ge=1)
+    provider: Literal["none", "tavily", "brave", "searxng"]
+    endpoint: AnyHttpUrl | None = None
+    credential_action: CredentialAction = "unchanged"
+    api_key: str | None = Field(default=None, max_length=4096, repr=False)
+    allow_remote_web_search: bool = False
+
+
+class WebSearchTest(BaseModel):
+    """Draft probe input; a blank key falls back to the stored key only for the stored endpoint."""
+    model_config = ConfigDict(extra="forbid")
+
+    provider: Literal["tavily", "brave", "searxng"]
+    endpoint: AnyHttpUrl
+    api_key: str = Field(default="", max_length=4096, repr=False)
+
+
+class ConnectionTestResult(BaseModel):
+    """Outcome of a connection test; ``error`` is a short code, never a URL or secret."""
+    ok: bool
+    error: str | None = None
+    detail: int | None = None  # result count (web search) or HTTP status (n8n)
+
+
+class N8nRead(BaseModel):
+    """n8n connection settings; secrets are never returned. ``*_source`` says where the effective value comes from."""
+    configuration_revision: int = Field(ge=1)
+    service_url: str
+    api_key_configured: bool
+    webhook_token_configured: bool
+    service_url_source: Literal["database", "environment"]
+    api_key_source: Literal["database", "environment", "none"]
+    webhook_token_source: Literal["database", "environment", "none"]
+
+
+class N8nUpdate(BaseModel):
+    """Full replace of the stored n8n settings; ``service_url`` None clears it (environment fallback)."""
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: int = Field(ge=1)
+    service_url: AnyHttpUrl | None = None
+    api_key_action: CredentialAction = "unchanged"
+    api_key: str | None = Field(default=None, max_length=4096, repr=False)
+    webhook_token_action: CredentialAction = "unchanged"
+    webhook_token: str | None = Field(default=None, max_length=4096, repr=False)
+
+
+class N8nTest(BaseModel):
+    """Optional draft; blank fields fall back to the effective (stored, then environment) value."""
+    model_config = ConfigDict(extra="forbid")
+
+    service_url: AnyHttpUrl | None = None
+    api_key: str = Field(default="", max_length=4096, repr=False)
+
+
 __all__ = [
+    "ConnectionTestResult",
+    "N8nRead",
+    "N8nTest",
+    "N8nUpdate",
+    "WebSearchRead",
+    "WebSearchTest",
+    "WebSearchUpdate",
     "SystemPromptEntry",
     "SystemPromptsRead",
     "SystemPromptsUpdate",
