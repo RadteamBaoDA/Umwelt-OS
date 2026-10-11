@@ -16,7 +16,7 @@ Keep module internals private; integrate through public contracts or events. Cre
 
 ## Build, Test, and Development Commands
 
-Use `make setup`, `make dev`, `make stop`, `make migrate`, `make seed`, `make lint`, `make typecheck`, `make test`, and `make build` on macOS/Linux. Windows PowerShell equivalents are `./scripts/dev.ps1 <task>`. `test` creates a uniquely named disposable Compose project and removes only its own volumes. `seed` explicitly creates fictional Phase 1/8/10/12 demo data under privacy and stable-owner receipt controls. Named development workspace reset and backup/isolated restore/recovery commands are implemented; their operational acceptance is separate. Follow `docs/development.md` and `docs/backup-recovery.md`; never run these state-changing commands during the production code/build-only stage.
+Use `make setup`, `make dev`, `make stop`, `make migrate`, `make seed`, `make lint`, `make typecheck`, `make test`, and `make build` on macOS/Linux. Windows PowerShell equivalents are `./scripts/dev.ps1 <task>`. `test` creates a uniquely named disposable Compose project and removes only its own volumes. `seed` explicitly creates fictional Phase 1/8/10/12 demo data under privacy and stable-owner receipt controls. Named development workspace reset and backup/isolated restore/recovery commands are implemented; their operational acceptance is separate. Follow `docs/development.md` and `docs/backup-recovery.md`; do not run state-changing commands (seed, reset, backup/restore) without owner approval.
 
 ## Coding Style & Naming Conventions
 
@@ -26,11 +26,18 @@ The specification requires ESLint and TypeScript checks for frontend code, and R
 
 ## UI Design System
 
-For Umwelt-OS frontend design, implementation, or review, load `.agents/skills/umwelt-os-ui-system/SKILL.md` and follow `docs/DESIGN_SYSTEM.md`. Use shadcn/ui components and semantic tokens, Recharts for financial charts, light/dark/system themes, and the two locale preferences `en-us` / `vi-vi` (normalized to `en-US` / `vi-VN` for formatting). Main navigation remains Dashboard / Chat / Settings. These explicit UI decisions govern older UI examples; they do not authorize unrelated backend changes or override the code/build-only stage.
+All frontend work (`apps/web`) follows the Umwelt-OS design system. Use the `umwelt-os-ui-system` skill (`.agents/skills/umwelt-os-ui-system/SKILL.md`) for any UI component, dashboard gadget, chat surface or User settings work.
+
+- **Rules and contracts:** `docs/DESIGN_SYSTEM.md` (component mapping, theme, i18n, charts, layout).
+- **Tokens and brand book:** `docs/design-system/` — read `README.md` first (voice, color, type, spacing, states, iconography), then `tokens.json` (colors in light/dark, type styles, spacing, radii, shadows) and `components/<Name>/README.md` for each shadcn primitive.
+- **Source of truth for values:** `apps/web/src/app/globals.css`. `docs/design-system/tokens.json` mirrors it; when you change a token in CSS, update `tokens.json` in the same change (and the reverse).
+- **Published copy:** https://claude.ai/artifact/HsmKMkv9nMkoCrhnoZNM1X (re-publish after changing `docs/design-system/`).
+- Use semantic tokens only (`bg`, `surface`, `text`, `muted`, `line`, `accent`, `on-accent`, `danger` or their Tailwind aliases); never literal colors in feature code. Compose `apps/web/src/components/ui` primitives; no parallel button/dialog/form systems.
+- Use shadcn/ui components, Recharts for financial charts, light/dark/system themes, and the two locale preferences `en-us` / `vi-vi` (normalized to `en-US` / `vi-VN` for formatting). Main navigation remains Dashboard / Chat / Settings. These UI decisions govern older UI examples; they do not authorize unrelated backend changes.
 
 ## Testing Guidelines
 
-Use pytest for backend tests and Playwright for end-to-end flows; the frontend unit-test framework is not selected. For Phases 1-12 and reconciliation tasks, do not create, modify or run tests, lint, or typecheck during implementation; run builds only. Begin the deferred validation stage after all original and reconciliation production code is complete. Name Python tests `test_*.py` and Playwright tests `*.spec.ts`. Cover module contracts, ingestion, permissions, search, and citation flows. No numeric coverage threshold is specified. Report checks run and any unavailable validation.
+Use pytest for backend tests, Vitest for frontend unit tests (`apps/web`), and Playwright for end-to-end flows. Run the smallest sufficient check for what changed (targeted tests, typecheck, lint, build) and report the real result, including failures and any unavailable validation. Name Python tests `test_*.py` and Playwright tests `*.spec.ts`. Cover module contracts, ingestion, permissions, search, and citation flows. No numeric coverage threshold is specified. The Docker-based integration/e2e harness and live provider calls need owner approval.
 
 Cross-module reads use owner `public.py` DTO/query contracts. A narrowly scoped read projection may be approved when its owner, fields, permission and deletion checks are documented; callers must not use that projection for writes. Module persistence models remain private.
 
@@ -148,11 +155,11 @@ To check whether embeddings exist, inspect `.gitnexus/meta.json` — the `stats.
 
 - Every generated or changed named production function/method/component/hook must have an adjacent JSDoc block in JavaScript/TypeScript or a Python docstring immediately inside its body. Document classes and module/public contracts where they own behavior.
 - Explain the function's purpose and relevant inputs, output, side effects, errors, authorization, ordering, concurrency, bounds and deletion/provenance invariants. Use @param/@returns/@throws when useful; keep TypeScript types in the signature instead of repeating them in prose. Python docstrings must identify the function's actual contract, not merely restate its name.
-- For other authored production languages, use their native documentation format for named functions (for example PowerShell comment-based help) and focused inline rationale. Keep test-only helpers and scripts deferred with the test stage.
+- For other authored production languages, use their native documentation format for named functions (for example PowerShell comment-based help) and focused inline rationale. Test-only helpers and scripts need no docs beyond a clear name.
 - Add focused inline comments at non-obvious branches, transactions, locking/retry/idempotency paths, parsing/normalization and UI state transitions. Explain why the rule exists. Do not add noise that narrates each obvious statement or invent guarantees the implementation does not provide.
-- Cover existing generated production code as it is brought into compliance. Preserve existing correct comments and OSS notices. Do not edit vendored dependencies, generated framework artifacts or lockfiles solely for comments. Keep test edits deferred under the implementation-stage rule; future generated tests follow this documentation convention.
+- Cover existing generated production code as it is brought into compliance. Preserve existing correct comments and OSS notices. Do not edit vendored dependencies, generated framework artifacts or lockfiles solely for comments. Generated tests follow this documentation convention.
 - Comment-only work must preserve application logic, public signatures and schema operations. Historical migration documentation may describe operations; it must not change revision IDs, ancestry or database behavior.
-- Include documentation compliance in each agent handoff and source review. GitNexus impact/change-scope rules and code/build-only validation still apply.
+- Include documentation compliance in each agent handoff and source review. GitNexus impact/change-scope rules still apply.
 - Update status/checkpoint files as work proceeds, but commit status documentation only with a large completed task or phase; do not make a standalone docs commit for every progress update.
 
 ## Execution context after repository rename

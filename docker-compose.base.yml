@@ -3,16 +3,13 @@
 services:
   postgres:
     image: pgvector/pgvector:0.8.6-pg16-bookworm
-    environment:
-      POSTGRES_DB: bbd
-      POSTGRES_USER: bbd
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run setup to create .env}
+    env_file: .env
     ports:
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U bbd -d bbd"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -39,7 +36,9 @@ services:
 
   redis:
     image: redis:7.4.11-alpine
-    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1000", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+    env_file: .env
+    # Password comes from REDISCLI_AUTH in .env; redis-cli (healthcheck, backup exec) reads the same variable.
+    command: ["sh", "-c", "exec redis-server --appendonly yes --save 60 1000 --maxmemory 256mb --maxmemory-policy noeviction --requirepass \"$$REDISCLI_AUTH\""]
     ports:
       - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     volumes:
@@ -56,6 +55,26 @@ services:
         reservations: {memory: 64M}
     restart: unless-stopped
 
+  # Optional temporal-knowledge graph (Graphiti). Start with: docker compose --profile graph up -d
+  # Community edition = one database ("neo4j"); partitions are separated by group_id, not by database.
+  graph:
+    profiles: ["graph"]
+    image: neo4j:5.26.2-community
+    env_file: .env
+    ports:
+      - "127.0.0.1:${GRAPH_PORT:-7687}:7687"
+    volumes:
+      - graph-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u \"$$GRAPH_USERNAME\" -p \"$$GRAPH_PASSWORD\" 'RETURN 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    cpus: 1.0
+    mem_limit: 1792m
+    restart: unless-stopped
+
 volumes:
   postgres-data:
   redis-data:
+  graph-data:

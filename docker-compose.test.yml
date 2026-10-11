@@ -15,6 +15,10 @@ services:
       retries: 20
 
   redis:
+    # Disposable stack: no password, never the developer's real .env.
+    env_file: !reset []
+    environment:
+      REDISCLI_AUTH: ""
     volumes:
       - test-redis-data:/data
 
