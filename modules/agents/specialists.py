@@ -23,6 +23,7 @@ from modules.agents.internal_writes import (
 )
 from modules.agents.models import AgentProfile, AgentProfileRevision
 from modules.agents.schemas import AgentProfilePatch, AgentProfileRead
+from modules.settings import public as settings_public
 
 PROFILE_TITLES = {
     "supervisor": "Supervisor", "knowledge": "Knowledge", "research": "Research",
@@ -290,6 +291,7 @@ async def resolve_profile_snapshot(
     snapshot["profile_revision_hash"] = digest
     if not snapshot["allowed_tools"] or any(contracts.get(item["name"]) != item for item in snapshot["allowed_tools"]):
         raise HTTPException(status_code=503, detail="Agent profile tools are unavailable")
+    config = settings_public.derive_for_alias(config, profile.model_alias)
     mapping = config.aliases.get(profile.model_alias)
     if mapping is None or not mapping.model:
         raise HTTPException(status_code=503, detail="Agent profile model alias is unavailable")

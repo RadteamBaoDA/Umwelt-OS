@@ -8,21 +8,23 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { apiRequest, csrfHeaders } from '@/core/api';
+import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
 import { apiFailureKey } from '@/core/api-failure-key';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { AgentSettingsWorkspace } from '@/modules/agents/agent-settings';
-import { TranslationSettings } from './translation-settings';
+import { CheckboxField, FieldGrid, SettingsActions, SettingsPageHeader, SettingsSection } from './settings-layout';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { AutomationSettings } from '@/modules/automations/rule-list';
+import { aliasProviderId, parseDraftSnapshot, ProviderEditor, providerPresets, type ProviderRead, type ProviderSecret } from './provider-editor';
 
-type Mapping = { model: string; version: string | null; destination: 'unknown' | 'remote' };
+type Mapping = { model: string; version: string | null; destination: 'unknown' | 'remote'; provider_id?: string | null };
 type Privacy = { allow_remote_reasoning: boolean; allow_remote_embeddings: boolean; allow_remote_web_search: boolean; reasoning_destinations: string[]; embedding_destinations: string[]; web_search_destinations: string[] };
 type Capability = { alias: string; capability: string; result: string; expires_at: string };
-type AISettings = { configuration_revision: number; omniroute_base_url: string | null; endpoint_destination_id: string | null; endpoint_policy_denied: boolean; omniroute_credential_configured: boolean; web_search_provider: 'none' | 'tavily' | 'brave'; web_search_endpoint: string | null; web_search_credential_configured: boolean; chat_alias: string; brief_alias: string; aliases: Record<string, Mapping>; capabilities: Capability[]; privacy: Privacy; request_timeout_seconds: number };
+type AISettings = { configuration_revision: number; providers: ProviderRead[]; web_search_provider: 'none' | 'tavily' | 'brave'; web_search_endpoint: string | null; web_search_credential_configured: boolean; chat_alias: string; brief_alias: string; aliases: Record<string, Mapping>; capabilities: Capability[]; privacy: Privacy; request_timeout_seconds: number };
 const aliases = ['reasoning-large', 'reasoning-small', 'fast', 'embedding', 'reranker', 'vision', 'local-private'];
 const chatAliases = ['reasoning-large', 'reasoning-small', 'fast'];
 const capabilityTypes = ['chat', 'streaming', 'embeddings', 'structured', 'tools', 'reranking'];
-const draftStorageKey = 'bbd:settings:ai:draft:v1';
+const draftStorageKey = 'bbd:settings:ai:draft:v2';
 const defaultPrivacy: Privacy = { allow_remote_reasoning: false, allow_remote_embeddings: false, allow_remote_web_search: false, reasoning_destinations: [], embedding_destinations: [], web_search_destinations: [] };
 
 /** Loads AI, provider, privacy and specialist settings while guarding unsaved gateway drafts. */
@@ -32,33 +34,32 @@ export function AISettingsWorkspace() {
   const client = useQueryClient();
   const query = useQuery({ queryKey: ['ai-settings'], queryFn: () => apiRequest<AISettings>('/api/v1/settings/ai') });
   const [draft, setDraft] = useState<AISettings | null>(null);
-  const [gatewayKey, setGatewayKey] = useState('');
-  const [gatewayAction, setGatewayAction] = useState<'unchanged' | 'replaced' | 'removed'>('unchanged');
+  const [secrets, setSecrets] = useState<Record<string, ProviderSecret>>({});
+  const [models, setModels] = useState<Record<string, string[]>>({});
+  const [discoveringId, setDiscoveringId] = useState<string | null>(null);
+  const [discoverError, setDiscoverError] = useState<{ id: string; text: string } | null>(null);
   const [searchKey, setSearchKey] = useState('');
   const [searchAction, setSearchAction] = useState<'unchanged' | 'replaced' | 'removed'>('unchanged');
   const [probeTypes, setProbeTypes] = useState<Record<string, string>>({});
   const allowNavigation = useRef(false);
   const [restoredDraft, setRestoredDraft] = useState(false);
-  const [discoveredAt, setDiscoveredAt] = useState<string | null>(null);
   const [restoredSecret, setRestoredSecret] = useState(false);
-  const saved = draft ?? query.data;
-  const dirty = Boolean(query.data && (JSON.stringify(draft ?? query.data) !== JSON.stringify(query.data) || gatewayKey || searchKey || gatewayAction !== 'unchanged' || searchAction !== 'unchanged'));
-  const save = useMutation({ mutationFn: (value: AISettings) => apiRequest<AISettings>('/api/v1/settings/ai', { method: 'PUT', headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' }, body: JSON.stringify({ expected_revision: value.configuration_revision, omniroute_base_url: value.omniroute_base_url || null, omniroute_credential_action: gatewayAction, omniroute_api_key: gatewayKey || null, web_search_provider: value.web_search_provider, web_search_endpoint: value.web_search_endpoint || null, web_search_credential_action: searchAction, web_search_api_key: searchKey || null, chat_alias: value.chat_alias, brief_alias: value.brief_alias, aliases: value.aliases, privacy: value.privacy, request_timeout_seconds: value.request_timeout_seconds }) }), onSuccess: (value) => { setDraft(null); setGatewayAction('unchanged'); setSearchAction('unchanged'); setGatewayKey(''); setSearchKey(''); client.setQueryData(['ai-settings'], value); } });
+  const base = draft ?? query.data;
+  const saved = base ? { ...base, providers: base.providers ?? [] } : undefined;
+  const secretList = Object.values(secrets);
+  const dirty = Boolean(query.data && (JSON.stringify(draft ?? query.data) !== JSON.stringify(query.data) || secretList.some((item) => item.key || item.action !== 'unchanged') || searchKey || searchAction !== 'unchanged'));
+  const save = useMutation({ mutationFn: (value: AISettings) => apiRequest<AISettings>('/api/v1/settings/ai', { method: 'PUT', headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' }, body: JSON.stringify({ expected_revision: value.configuration_revision, providers: value.providers.map((item) => ({ id: item.id, kind: item.kind, label: item.label, base_url: item.base_url || null, credential_action: secrets[item.id]?.action ?? 'unchanged', api_key: secrets[item.id]?.key || null })), web_search_provider: value.web_search_provider, web_search_endpoint: value.web_search_endpoint || null, web_search_credential_action: searchAction, web_search_api_key: searchKey || null, chat_alias: value.chat_alias, brief_alias: value.brief_alias, aliases: value.aliases, privacy: value.privacy, request_timeout_seconds: value.request_timeout_seconds }) }), onSuccess: (value) => { setDraft(null); setSecrets({}); setSearchAction('unchanged'); setSearchKey(''); client.setQueryData(['ai-settings'], value); } });
   if (query.data && !restoredDraft) {
     // Restores a same-revision draft once, during render, before the persistence effect runs.
     setRestoredDraft(true);
-    let snapshot: { revision?: number; draft?: AISettings | null; gatewayAction?: 'unchanged' | 'replaced' | 'removed'; searchAction?: 'unchanged' | 'replaced' | 'removed'; hadGatewayKey?: boolean; hadSearchKey?: boolean } | null = null;
-    try {
-      const raw = sessionStorage.getItem(draftStorageKey);
-      snapshot = raw ? JSON.parse(raw) : null;
-    } catch {
-      snapshot = null;
-    }
-    if (snapshot?.revision === query.data.configuration_revision) {
+    let raw: string | null = null;
+    try { raw = sessionStorage.getItem(draftStorageKey); } catch { /* storage unavailable */ }
+    const snapshot = parseDraftSnapshot<AISettings>(raw, query.data.configuration_revision);
+    if (snapshot) {
       if (snapshot.draft) setDraft(snapshot.draft);
-      if (snapshot.gatewayAction) setGatewayAction(snapshot.gatewayAction);
+      setSecrets(Object.fromEntries(Object.entries(snapshot.providerActions).map(([id, action]) => [id, { key: '', action }])));
       if (snapshot.searchAction) setSearchAction(snapshot.searchAction);
-      setRestoredSecret(Boolean(snapshot.hadGatewayKey || snapshot.hadSearchKey));
+      setRestoredSecret(snapshot.hadSecret);
     } else {
       try { sessionStorage.removeItem(draftStorageKey); } catch { /* storage unavailable */ }
     }
@@ -70,10 +71,9 @@ export function AISettingsWorkspace() {
         sessionStorage.setItem(draftStorageKey, JSON.stringify({
           revision: query.data.configuration_revision,
           draft,
-          gatewayAction,
+          providerActions: Object.fromEntries(Object.entries(secrets).filter(([, item]) => item.action !== 'unchanged').map(([id, item]) => [id, item.action])),
           searchAction,
-          hadGatewayKey: Boolean(gatewayKey),
-          hadSearchKey: Boolean(searchKey),
+          hadSecret: secretList.some((item) => item.key) || Boolean(searchKey),
         }));
       } catch {
         // The in-memory draft remains available for this mount.
@@ -81,7 +81,7 @@ export function AISettingsWorkspace() {
     } else {
       sessionStorage.removeItem(draftStorageKey);
     }
-  }, [query.data, restoredDraft, dirty, draft, gatewayAction, searchAction, gatewayKey, searchKey, save.isPending]);
+  }, [query.data, restoredDraft, dirty, draft, secrets, searchAction, searchKey, save.isPending]);
   useEffect(() => {
     if (!dirty && !save.isPending) return;
     /** Prevents browser navigation while unsaved AI settings remain. */
@@ -138,11 +138,18 @@ export function AISettingsWorkspace() {
       document.removeEventListener('click', guardLinks, true);
     };
   }, [dirty, save.isPending, t]);
-  const discover = useMutation({ mutationFn: () => apiRequest<{ model_ids: string[] }>('/api/v1/settings/ai/discover', { method: 'POST', headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' }, body: JSON.stringify({ base_url: saved?.omniroute_base_url, api_key: gatewayKey }) }), onSuccess: () => setDiscoveredAt(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })) });
-  const draftProbe = useMutation({ mutationFn: ({ alias, mapping, capability }: { alias: string; mapping: Mapping; capability: string }) => apiRequest<Capability>(`/api/v1/settings/models/${alias}/draft-test`, { method: 'POST', headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' }, body: JSON.stringify({ base_url: saved?.omniroute_base_url, api_key: gatewayKey, model: mapping.model, version: mapping.version, capability }) }) });
+  const savedIds = (query.data?.providers ?? []).map((item) => item.id);
+  const discover = useMutation({
+    mutationFn: (provider: ProviderRead) => apiRequest<{ model_ids: string[] }>('/api/v1/settings/ai/discover', { method: 'POST', headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' }, body: JSON.stringify({ provider_id: savedIds.includes(provider.id) ? provider.id : undefined, base_url: provider.base_url, kind: provider.kind, api_key: secrets[provider.id]?.key ?? '' }) }),
+    onMutate: (provider) => { setDiscoveringId(provider.id); setDiscoverError(null); },
+    onSuccess: (data, provider) => setModels((current) => ({ ...current, [provider.id]: data.model_ids })),
+    onError: (error, provider) => setDiscoverError({ id: provider.id, text: describeError(error, t, 'discoveryFailed') }),
+    onSettled: () => setDiscoveringId(null),
+  });
+  const draftProbe = useMutation({ mutationFn: ({ alias, mapping, capability, provider }: { alias: string; mapping: Mapping; capability: string; provider: ProviderRead | undefined }) => apiRequest<Capability>(`/api/v1/settings/models/${alias}/draft-test`, { method: 'POST', headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' }, body: JSON.stringify({ provider_id: provider && savedIds.includes(provider.id) ? provider.id : undefined, base_url: provider?.base_url, kind: provider?.kind, api_key: provider ? secrets[provider.id]?.key ?? '' : '', model: mapping.model, version: mapping.version, capability }) }) });
   const probe = useMutation({ mutationFn: ({ alias, capability }: { alias: string; capability: string }) => apiRequest<Capability>(`/api/v1/settings/models/${alias}/test`, { method: 'POST', headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' }, body: JSON.stringify({ capability }) }), onSuccess: () => client.invalidateQueries({ queryKey: ['ai-settings'] }) });
   if (query.isPending) return <section className="content-panel skeleton" aria-label={t('loading')} />;
-  if (query.isError || !saved) return <section className="content-panel"><h1>{t('unavailable')}</h1><p className="error">{t(apiFailureKey(query.error) ?? 'loadFailed')}</p><Button className="secondary" onClick={() => query.refetch()}>{t('retry')}</Button></section>;
+  if (query.isError || !saved) return <section className="content-panel"><h1>{t('unavailable')}</h1><p className="error">{describeError(query.error, t, 'loadFailed')}</p><Button className="secondary" onClick={() => query.refetch()}>{t('retry')}</Button></section>;
   /** Applies a partial update to the AI settings draft. */
   const set = (patch: Partial<AISettings>) => setDraft({ ...saved, ...patch });
   /** Merges a partial privacy update into the current AI settings draft. */
@@ -159,79 +166,102 @@ export function AISettingsWorkspace() {
   /** Clears every local change after the owner confirms discarding the draft. */
   const cancelChanges = () => {
     if (!window.confirm(t('discardDraft'))) return;
-    sessionStorage.removeItem(draftStorageKey); setDraft(null); setGatewayKey(''); setGatewayAction('unchanged'); setSearchKey(''); setSearchAction('unchanged'); setRestoredSecret(false); save.reset(); draftProbe.reset(); discover.reset();
+    try { sessionStorage.removeItem(draftStorageKey); } catch { /* storage unavailable */ } setDraft(null); setSecrets({}); setModels({}); setSearchKey(''); setSearchAction('unchanged'); setRestoredSecret(false); save.reset(); draftProbe.reset(); discover.reset(); setDiscoverError(null);
   };
   const capabilityLabel = (kind: string) => t(`capability${kind[0].toUpperCase()}${kind.slice(1)}` as 'capabilityChat');
-  return <section className="content-panel space-y-4">
-    <div><span className="brand">{t('gateway')}</span><h1>{t('title')}</h1><p className="muted">{t('description')}</p></div>
-    <form className="form" onSubmit={(event) => { event.preventDefault(); save.mutate(saved); }}>
-      <fieldset disabled={save.isPending} className="form-fields">
-      <fieldset className="sub-panel"><legend>{t('gateway')}</legend>
-        <label className="field"><span className="label">{t('gatewayEndpoint')}</span><Input type="url" value={saved.omniroute_base_url ?? ''} onChange={(event) => set({ omniroute_base_url: event.target.value || null })} placeholder="https://gateway.example/v1" /></label>
-        {saved.endpoint_policy_denied && <p className="error" role="alert">{t('blockedEndpoint')}</p>}
-        <p className="muted">{t('credential')} {saved.omniroute_credential_configured ? t('configured') : t('notConfigured')}{saved.endpoint_destination_id ? ` · ${saved.endpoint_destination_id}` : ''}. {t('credentialNeverShown')}</p>
-        <label className="field"><span className="label">{t('gatewayCredential')}</span><Input type="password" autoComplete="new-password" value={gatewayKey} onChange={(event) => { setGatewayKey(event.target.value); setGatewayAction(event.target.value ? 'replaced' : 'unchanged'); }} placeholder={t('gatewayCredentialHelp')} /></label>
-        <label className="field"><Checkbox checked={gatewayAction === 'removed'} onCheckedChange={(checked) => setGatewayAction(checked ? 'removed' : 'unchanged')} /> {t('removeGatewayCredential')}</label>
-        <div className="form-actions"><Button type="button" className="secondary" disabled={discover.isPending || !saved.omniroute_base_url || !gatewayKey} onClick={() => discover.mutate()}>{discover.isPending ? t('checkingConnection') : t('checkConnection')}</Button></div>
-        <div role="status" aria-live="polite">{discover.data && <p className="muted"><Check className="inline size-4" aria-hidden="true" /> {t('connectionReachable', { count: discover.data.model_ids.length, time: discoveredAt ?? '' })}{discover.data.model_ids.length > 0 && <><br />{t('availableIds')} {discover.data.model_ids.join(', ')}</>}</p>}</div>
-        {discover.error && <p className="error" role="alert"><X className="inline size-4" aria-hidden="true" /> {t(apiFailureKey(discover.error) ?? 'discoveryFailed')}</p>}
-      </fieldset>
-      <fieldset className="sub-panel"><legend>{t('modelsSection')}</legend>
-        <label className="field"><span className="label">{t('chatModel')}</span><Select value={saved.chat_alias} onValueChange={(value) => set({ chat_alias: value as AISettings['chat_alias'] })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{chatAliases.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}</SelectContent></Select></label>
-        <label className="field"><span className="label">{t('briefModel')}</span><Select value={saved.brief_alias} onValueChange={(value) => set({ brief_alias: value as AISettings['brief_alias'] })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{chatAliases.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}</SelectContent></Select></label>
-        <p className="muted">{t('modelNotListed')}</p>
-        <div role="group" aria-label={t('capabilityMatrix', { alias: saved.chat_alias })}><p className="label">{t('capabilityMatrix', { alias: saved.chat_alias })}</p>
-          <ul className="flex flex-wrap gap-2">{capabilityTypes.map((kind) => <li key={kind}><CapabilityChip status={capabilityStatus(saved.chat_alias, kind)} label={capabilityLabel(kind)} t={t} /></li>)}</ul></div>
-        <details className="rounded-md border border-border p-3"><summary className="min-h-11 cursor-pointer py-2 font-semibold">{t('modelDetails')}</summary>
-        {aliases.map((alias) => { const value = saved.aliases[alias] ?? { model: '', version: null, destination: 'unknown' as const }; return <div className="sub-panel" key={alias}><h2>{alias}</h2>
-          <label className="field"><span className="label">{t('modelId')}</span><Input value={value.model} maxLength={200} onChange={(event) => set({ aliases: { ...saved.aliases, [alias]: { ...value, model: event.target.value } } })} /></label>
-          <label className="field"><span className="label">{t('modelVersion')}</span><Input value={value.version ?? ''} maxLength={200} onChange={(event) => set({ aliases: { ...saved.aliases, [alias]: { ...value, version: event.target.value || null } } })} /></label>
-          <label className="field"><span className="label">{t('destination')}</span><Select value={value.destination} onValueChange={(destination) => set({ aliases: { ...saved.aliases, [alias]: { ...value, destination: destination as Mapping['destination'] } } })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="unknown">{t('unknownDenied')}</SelectItem><SelectItem value="remote">{t('remote')}</SelectItem></SelectContent></Select></label>
-          <ul className="flex flex-wrap gap-2">{capabilityTypes.map((kind) => <li key={kind}><CapabilityChip status={capabilityStatus(alias, kind)} label={capabilityLabel(kind)} t={t} /></li>)}</ul>
-          <div className="form-actions"><Select value={probeTypes[alias] ?? 'chat'} onValueChange={(value) => setProbeTypes({ ...probeTypes, [alias]: value })}><SelectTrigger aria-label={t('probeCapability', { alias })}><SelectValue /></SelectTrigger><SelectContent>{capabilityTypes.map((kind) => <SelectItem key={kind} value={kind}>{capabilityLabel(kind)}</SelectItem>)}</SelectContent></Select><Button type="button" className="secondary" disabled={!value.model || value.destination !== 'remote' || probe.isPending || JSON.stringify(value) !== JSON.stringify(query.data?.aliases[alias])} onClick={() => probe.mutate({ alias, capability: probeTypes[alias] ?? 'chat' })}>{t('probeSaved')}</Button><Button type="button" className="secondary" disabled={!saved.omniroute_base_url || !value.model || value.destination !== 'remote' || draftProbe.isPending} onClick={() => draftProbe.mutate({ alias, mapping: value, capability: probeTypes[alias] ?? 'chat' })}>{t('probeDraft')}</Button></div>
-        </div>; })}
+  /** Renders the model mapping fields and probe actions for one alias inside the Model details group. */
+  const probeRow = (alias: string, value: Mapping) => {
+    const providerId = aliasProviderId(value.provider_id, saved.providers);
+    const provider = saved.providers.find((item) => item.id === providerId);
+    const hints = [...new Set([...(models[providerId] ?? []), ...(provider ? providerPresets[provider.kind].models : [])])];
+    const listId = `ai-models-${alias}`;
+    return <div className="rounded-lg border border-border p-4" key={alias}>
+    <h3 className="m-0 mb-3 text-base font-bold">{alias}</h3>
+    <FieldGrid>
+      <label className="field"><span className="label">{t('aliasProvider')}</span><Select disabled={save.isPending || saved.providers.length === 0} value={providerId} onValueChange={(next) => set({ aliases: { ...saved.aliases, [alias]: { ...value, provider_id: next } } })}><SelectTrigger aria-label={t('aliasProvider')}><SelectValue placeholder={t('noProviders')} /></SelectTrigger><SelectContent>{saved.providers.map((item) => <SelectItem key={item.id} value={item.id}>{item.label || item.id}</SelectItem>)}</SelectContent></Select></label>
+      <label className="field"><span className="label">{t('modelId')}</span><Input list={listId} value={value.model} maxLength={200} onChange={(event) => set({ aliases: { ...saved.aliases, [alias]: { ...value, model: event.target.value } } })} /></label>
+      <datalist id={listId}>{hints.map((id) => <option key={id} value={id} />)}</datalist>
+      <label className="field"><span className="label">{t('modelVersion')}</span><Input value={value.version ?? ''} maxLength={200} onChange={(event) => set({ aliases: { ...saved.aliases, [alias]: { ...value, version: event.target.value || null } } })} /></label>
+      <label className="field"><span className="label">{t('destination')}</span><Select value={value.destination} onValueChange={(destination) => set({ aliases: { ...saved.aliases, [alias]: { ...value, destination: destination as Mapping['destination'] } } })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="unknown">{t('unknownDenied')}</SelectItem><SelectItem value="remote">{t('remote')}</SelectItem></SelectContent></Select></label>
+      <label className="field"><span className="label">{t('probeCapability', { alias })}</span><Select value={probeTypes[alias] ?? 'chat'} onValueChange={(next) => setProbeTypes({ ...probeTypes, [alias]: next })}><SelectTrigger aria-label={t('probeCapability', { alias })}><SelectValue /></SelectTrigger><SelectContent>{capabilityTypes.map((kind) => <SelectItem key={kind} value={kind}>{capabilityLabel(kind)}</SelectItem>)}</SelectContent></Select></label>
+    </FieldGrid>
+    <div className="mt-3 flex flex-wrap gap-2"><Button type="button" className="secondary" disabled={!value.model || (value.destination !== 'remote' && !provider?.local) || probe.isPending || JSON.stringify(value) !== JSON.stringify(query.data?.aliases[alias])} onClick={() => probe.mutate({ alias, capability: probeTypes[alias] ?? 'chat' })}>{t('probeSaved')}</Button><Button type="button" className="secondary" disabled={!provider?.base_url || !value.model || (value.destination !== 'remote' && !provider.local) || draftProbe.isPending} onClick={() => draftProbe.mutate({ alias, mapping: value, capability: probeTypes[alias] ?? 'chat', provider })}>{t('probeDraft')}</Button></div>
+  </div>;
+  };
+  const advancedClass = 'rounded-lg border border-border bg-card';
+  const summaryClass = 'flex min-h-[52px] cursor-pointer items-center px-5 font-bold';
+  return <div className="flex flex-col gap-5">
+    <SettingsPageHeader eyebrow={t('eyebrow')} title={t('title')} description={t('description')} status={<p className="m-0 text-sm text-muted-foreground" role="status">{save.isPending ? t('saving') : dirty ? t('unsaved') : t('saved')}</p>} />
+    <form className="flex flex-col gap-5" onSubmit={(event) => { event.preventDefault(); save.mutate(saved); }}>
+      <SettingsSection title={t('providersSection')}>
+        <p className="muted m-0 text-xs">{t('providersHelp')}</p>
+        <ProviderEditor providers={saved.providers} savedIds={savedIds} secrets={secrets} models={models} disabled={save.isPending} discoveringId={discoveringId} discoverError={discoverError} t={t as never}
+          onChange={(providers) => set({ providers })} onSecret={(id, secret) => setSecrets({ ...secrets, [id]: secret })} onDiscover={(provider) => discover.mutate(provider)} />
+      </SettingsSection>
+      <SettingsSection title={t('modelsSection')}>
+        <FieldGrid>
+          <label className="field"><span className="label">{t('chatModel')}</span><Select disabled={save.isPending} value={saved.chat_alias} onValueChange={(value) => set({ chat_alias: value as AISettings['chat_alias'] })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{chatAliases.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}</SelectContent></Select></label>
+          <label className="field"><span className="label">{t('briefModel')}</span><Select disabled={save.isPending} value={saved.brief_alias} onValueChange={(value) => set({ brief_alias: value as AISettings['brief_alias'] })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{chatAliases.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}</SelectContent></Select></label>
+        </FieldGrid>
+        <p className="muted m-0 text-xs">{t('modelNotListed')}</p>
+        <Table aria-label={t('capabilityTable')}>
+          <TableHeader><TableRow><TableHead>{t('aliasColumn')}</TableHead>{capabilityTypes.map((kind) => <TableHead key={kind}>{capabilityLabel(kind)}</TableHead>)}</TableRow></TableHeader>
+          <TableBody>{aliases.map((alias) => <TableRow key={alias}><TableCell className="font-semibold">{alias}</TableCell>{capabilityTypes.map((kind) => <TableCell key={kind}><CapabilityChip status={capabilityStatus(alias, kind)} label="" t={t} /></TableCell>)}</TableRow>)}</TableBody>
+        </Table>
+        <details className={advancedClass}><summary className={summaryClass}>{t('modelDetails')}</summary>
+          <div className="flex flex-col gap-4 px-5 pb-5">{aliases.map((alias) => probeRow(alias, saved.aliases[alias] ?? { model: '', version: null, destination: 'unknown' as const }))}</div>
         </details>
-      </fieldset>
-      <fieldset className="sub-panel"><legend>{t('webSearch')}</legend>
-        <label className="field"><span className="label">{t('provider')}</span><Select value={saved.web_search_provider} onValueChange={(value) => set({ web_search_provider: value as AISettings['web_search_provider'] })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">{t('none')}</SelectItem><SelectItem value="tavily">Tavily</SelectItem><SelectItem value="brave">Brave</SelectItem></SelectContent></Select></label>
-        <label className="field"><span className="label">{t('providerEndpoint')}</span><Input type="url" value={saved.web_search_endpoint ?? ''} onChange={(event) => set({ web_search_endpoint: event.target.value || null })} /></label>
-        <p className="muted">{t('credential')} {saved.web_search_credential_configured ? t('configured') : t('notConfigured')}. {t('credentialNeverShown')}</p>
-        <label className="field"><span className="label">{t('providerCredential')}</span><Input type="password" autoComplete="new-password" value={searchKey} onChange={(event) => { setSearchKey(event.target.value); setSearchAction(event.target.value ? 'replaced' : 'unchanged'); }} placeholder={t('keepSavedCredential')} /></label>
-        <label className="field"><Checkbox checked={searchAction === 'removed'} onCheckedChange={(checked) => setSearchAction(checked ? 'removed' : 'unchanged')} /> {t('removeSearchCredential')}</label>
-      </fieldset>
-      <fieldset className="sub-panel"><legend>{t('advanced')}</legend>
-        <details className="rounded-md border border-border p-3"><summary className="min-h-11 cursor-pointer py-2 font-semibold">{t('embeddingsTitle')}</summary>
-          {embeddingsAvailable
-            ? <ul className="flex flex-wrap gap-2"><li><CapabilityChip status={capabilityStatus('embedding', 'embeddings')} label={capabilityLabel('embeddings')} t={t} /></li></ul>
-            : <><p className="label">{t('embeddingsUnavailable')}</p><p className="muted">{t('embeddingsUnavailableHelp')}</p></>}
-        </details>
-        <details className="rounded-md border border-border p-3"><summary className="min-h-11 cursor-pointer py-2 font-semibold">{t('budgetsTitle')}</summary>
-          <label className="field"><span className="label">{t('timeout')}</span><Input type="number" min={5} max={180} value={saved.request_timeout_seconds} onChange={(event) => set({ request_timeout_seconds: Number(event.target.value) })} /></label>
-          <p className="muted">{t('budgetsUnavailable')}</p>
-        </details>
-        <details className="rounded-md border border-border p-3"><summary className="min-h-11 cursor-pointer py-2 font-semibold">{t('privacyTitle')}</summary>
-          <p className="muted">{t('endpointGrantHelp')}</p>
-          <label className="field"><Checkbox checked={saved.privacy.allow_remote_reasoning} onCheckedChange={(checked) => setPrivacy({ allow_remote_reasoning: checked === true })} /> {t('allowRemoteReasoning')}</label>
-          <label className="field"><Checkbox checked={saved.privacy.allow_remote_embeddings} onCheckedChange={(checked) => setPrivacy({ allow_remote_embeddings: checked === true })} /> {t('allowRemoteEmbeddings')}</label>
-          <label className="field"><Checkbox checked={saved.privacy.allow_remote_web_search} onCheckedChange={(checked) => setPrivacy({ allow_remote_web_search: checked === true })} /> {t('allowRemoteSearch')}</label>
-          <p className="muted">{t('historyStorage')} <a href="/settings/memory">{t('memoryPrivacyLink')}</a></p>
-        </details>
-      </fieldset>
-      </fieldset>
-      {restoredSecret && <p className="error" role="status">{t('restoredDraft')}</p>}
-      {save.error && <p className="error" role="alert">{t(apiFailureKey(save.error) ?? 'saveFailed')}</p>}{probe.error && <p className="error" role="alert">{t(apiFailureKey(probe.error) ?? 'probeFailed')}</p>}{draftProbe.data && <p className="muted" role="status">{t('draftProbe')} {draftProbe.data.capability} {draftProbe.data.result}; {t('draftProbeUnstored')}</p>}{draftProbe.error && <p className="error" role="alert">{t(apiFailureKey(draftProbe.error) ?? 'draftProbeFailed')}</p>}
-      <div className="form-actions sticky bottom-0 z-10 items-center border-t border-border bg-background py-3">
-        <p className="muted me-auto" role="status">{save.isPending ? t('saving') : dirty ? t('unsaved') : t('saved')}</p>
+      </SettingsSection>
+      <SettingsSection title={t('webSearch')}>
+        <FieldGrid>
+          <label className="field"><span className="label">{t('provider')}</span><Select disabled={save.isPending} value={saved.web_search_provider} onValueChange={(value) => set({ web_search_provider: value as AISettings['web_search_provider'] })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">{t('none')}</SelectItem><SelectItem value="tavily">Tavily</SelectItem><SelectItem value="brave">Brave</SelectItem></SelectContent></Select></label>
+          <label className="field"><span className="label">{t('providerEndpoint')}</span><Input type="url" disabled={save.isPending} value={saved.web_search_endpoint ?? ''} onChange={(event) => set({ web_search_endpoint: event.target.value || null })} /></label>
+          <label className="field"><span className="label">{t('providerCredential')}</span><Input type="password" disabled={save.isPending} autoComplete="new-password" value={searchKey} onChange={(event) => { setSearchKey(event.target.value); setSearchAction(event.target.value ? 'replaced' : 'unchanged'); }} placeholder={t('keepSavedCredential')} /></label>
+        </FieldGrid>
+        <p className="muted m-0 text-xs">{t('credential')} {saved.web_search_credential_configured ? t('configured') : t('notConfigured')}. {t('credentialNeverShown')}</p>
+        <CheckboxField><Checkbox id="ai-remove-search" disabled={save.isPending} checked={searchAction === 'removed'} onCheckedChange={(checked) => setSearchAction(checked ? 'removed' : 'unchanged')} /><label htmlFor="ai-remove-search">{t('removeSearchCredential')}</label></CheckboxField>
+      </SettingsSection>
+      <details className={advancedClass}><summary className={summaryClass}>{t('embeddingsTitle')}</summary>
+        <div className="flex flex-col gap-3 px-5 pb-5">{embeddingsAvailable
+          ? <ul className="m-0 flex flex-wrap gap-2 p-0"><li className="list-none"><CapabilityChip status={capabilityStatus('embedding', 'embeddings')} label={capabilityLabel('embeddings')} t={t} /></li></ul>
+          : <><p className="label m-0">{t('embeddingsUnavailable')}</p><p className="muted m-0">{t('embeddingsUnavailableHelp')}</p></>}</div>
+      </details>
+      <details className={advancedClass}><summary className={summaryClass}>{t('budgetsTitle')}</summary>
+        <div className="flex flex-col gap-3 px-5 pb-5">
+          <label className="field max-w-xs"><span className="label">{t('timeout')}</span><Input type="number" disabled={save.isPending} min={5} max={180} value={saved.request_timeout_seconds} onChange={(event) => set({ request_timeout_seconds: Number(event.target.value) })} /></label>
+          <p className="muted m-0">{t('budgetsUnavailable')}</p>
+        </div>
+      </details>
+      <details className={advancedClass}><summary className={summaryClass}>{t('privacyTitle')}</summary>
+        <div className="flex flex-col gap-3 px-5 pb-5">
+          <p className="muted m-0">{t('endpointGrantHelp')}</p>
+          <p className="muted m-0">{t('localProvidersNote')}</p>
+          <CheckboxField><Checkbox id="ai-remote-reasoning" disabled={save.isPending} checked={saved.privacy.allow_remote_reasoning} onCheckedChange={(checked) => setPrivacy({ allow_remote_reasoning: checked === true })} /><label htmlFor="ai-remote-reasoning">{t('allowRemoteReasoning')}</label></CheckboxField>
+          <CheckboxField><Checkbox id="ai-remote-embeddings" disabled={save.isPending} checked={saved.privacy.allow_remote_embeddings} onCheckedChange={(checked) => setPrivacy({ allow_remote_embeddings: checked === true })} /><label htmlFor="ai-remote-embeddings">{t('allowRemoteEmbeddings')}</label></CheckboxField>
+          <CheckboxField><Checkbox id="ai-remote-search" disabled={save.isPending} checked={saved.privacy.allow_remote_web_search} onCheckedChange={(checked) => setPrivacy({ allow_remote_web_search: checked === true })} /><label htmlFor="ai-remote-search">{t('allowRemoteSearch')}</label></CheckboxField>
+          <p className="muted m-0">{t('historyStorage')} <a href="/settings/memory">{t('memoryPrivacyLink')}</a></p>
+        </div>
+      </details>
+      {restoredSecret && <p className="error m-0" role="status">{t('restoredDraft')}</p>}
+      {save.error && <p className="error m-0" role="alert">{describeError(save.error, t, 'saveFailed')}</p>}{probe.error && <p className="error m-0" role="alert">{describeError(probe.error, t, 'probeFailed')}</p>}{draftProbe.data && <p className="muted m-0" role="status">{t('draftProbe')} {draftProbe.data.capability} {draftProbe.data.result}; {t('draftProbeUnstored')}</p>}{draftProbe.error && <p className="error m-0" role="alert">{describeError(draftProbe.error, t, 'draftProbeFailed')}</p>}
+      <SettingsActions>
         <Button type="button" className="secondary" disabled={save.isPending || !dirty} onClick={cancelChanges}>{t('cancelChanges')}</Button><Button type="submit" disabled={save.isPending || !dirty}>{t('saveButton')}</Button>
-      </div>
+      </SettingsActions>
     </form>
-    <TranslationSettings />
-    <details className="rounded-md border border-border p-3"><summary className="min-h-11 cursor-pointer py-2 font-semibold">{t('agentsAutomations')}</summary><AgentSettingsWorkspace /><AutomationSettings /></details>
-  </section>;
+    <details className={advancedClass}><summary className={summaryClass}>{t('agentsAutomations')}</summary><div className="px-5 pb-5"><AgentSettingsWorkspace /><AutomationSettings /></div></details>
+  </div>;
 }
 
 /** Capability result chip that always pairs an icon with text so state never depends on color. */
 function CapabilityChip({ status, label, t }: { status: string | null; label: string; t: (key: 'capPassed' | 'capFailed' | 'capUnsupported' | 'capNotChecked') => string }) {
   const [Icon, key] = status === 'supported' ? [Check, 'capPassed' as const] : status === 'failed' ? [AlertCircle, 'capFailed' as const] : status === 'unsupported' ? [X, 'capUnsupported' as const] : [Minus, 'capNotChecked' as const];
-  return <span className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-xs"><Icon className="size-3" aria-hidden="true" />{label}: {t(key)}</span>;
+  return <span className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-xs"><Icon className="size-3" aria-hidden="true" />{label ? `${label}: ` : ''}{t(key)}</span>;
+}
+
+/** Localized failure text plus the HTTP status and server detail when the API supplied them. */
+function describeError(error: unknown, t: (key: never) => string, fallback: string): string {
+  const base = (t as (key: string) => string)(apiFailureKey(error) ?? fallback);
+  if (!(error instanceof ApiError)) return base;
+  const detail = error.message && error.message !== String(error.status) ? `: ${error.message}` : '';
+  return `${base} (HTTP ${error.status}${detail})`;
 }

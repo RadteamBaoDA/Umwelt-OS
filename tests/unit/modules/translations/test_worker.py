@@ -96,7 +96,7 @@ def _config():
         workspace_id=WS, actor_user_id=1, membership_revision=1, gateway_identity="a" * 64, configuration_revision=1,
         privacy=privacy, aliases={worker.ALIAS: ModelMapping(model="m")}, endpoint_destination_id="dest",
         endpoint_policy_denied=False, omniroute_base_url="http://x", omniroute_api_key="k", request_timeout_seconds=60,
-        endpoint_allowed_cidrs=())
+        endpoint_allowed_cidrs=(), system_prompts={}, providers={}, allow_public_providers=False)
 
 
 def _brief(segments: int) -> TranslationInput:

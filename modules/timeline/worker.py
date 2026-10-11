@@ -42,6 +42,7 @@ from core.workspaces.schemas import InternalJobScope, Scope
 from modules.knowledge.documents import public as documents
 from modules.knowledge.entities import public as entities
 from modules.settings import public as settings_public
+from modules.settings.prompts import resolve_prompt
 from modules.sources import public as sources
 from modules.timeline import public as timeline
 from modules.timeline.extraction import (
@@ -256,7 +257,8 @@ async def process_timeline_extraction_work(ctx: dict[str, object], work_id_value
                     scope=scope, multi_workspace_enabled=multi_workspace_enabled)
                 await session.commit()
                 return
-            config = await settings_public.get_ai_execution_config(session, settings, redis, scope=scope)
+            config = settings_public.derive_for_alias(
+                await settings_public.get_ai_execution_config(session, settings, redis, scope=scope), ALIAS)
             mapping = config.aliases.get(ALIAS)
             destination = config.endpoint_destination_id
             fingerprint, capability_supported = await _dependency_snapshot(config, redis, scope=scope)
@@ -281,7 +283,8 @@ async def process_timeline_extraction_work(ctx: dict[str, object], work_id_value
             async def before_send() -> None:
                 """Recheck destination, configuration revision, capability, and policy immediately before egress."""
                 async with factory() as check_session:
-                    current = await settings_public.get_ai_execution_config(check_session, settings, redis, scope=scope)
+                    current = settings_public.derive_for_alias(
+                        await settings_public.get_ai_execution_config(check_session, settings, redis, scope=scope), ALIAS)
                     current_mapping = current.aliases.get(ALIAS)
                     current_destination = current.endpoint_destination_id
                     current_fingerprint, current_supported = await _dependency_snapshot(current, redis, scope=scope)
@@ -309,12 +312,14 @@ async def process_timeline_extraction_work(ctx: dict[str, object], work_id_value
                 scope=scope, gateway_identity=config.gateway_identity,
                 configuration_revision=config.configuration_revision, before_send=before_send,
                 approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
+                allow_public_endpoints=config.allow_public_providers,
             )
             response = await gateway.structured(
                 ALIAS, mapping, _policy(config, mapping, destination, source.local_only),
                 extraction_messages(
                     [(item.id, item.content) for item in data.chunks],
                     [item.model_dump(mode="json", exclude={"name", "entity_id", "entity_revision", "observed_at"}) for item in membership_refs],
+                    resolve_prompt(config.system_prompts, "timeline_extraction"),
                 ),
                 response_schema(), probe=False, before_send=before_send,
             )
@@ -322,7 +327,8 @@ async def process_timeline_extraction_work(ctx: dict[str, object], work_id_value
                 raise ValueError("invalid_model_response")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
             proposals, model = response_content(response)
             async with factory() as check_session:
-                current_config = await settings_public.get_ai_execution_config(check_session, settings, redis, scope=scope)
+                current_config = settings_public.derive_for_alias(
+                    await settings_public.get_ai_execution_config(check_session, settings, redis, scope=scope), ALIAS)
                 current_mapping = current_config.aliases.get(ALIAS)
                 current_destination = current_config.endpoint_destination_id
                 current_fingerprint, current_supported = await _dependency_snapshot(current_config, redis, scope=scope)
@@ -533,9 +539,9 @@ async def recover_timeline_extraction_work(ctx: dict[str, object]) -> int:
                     )
                     await session.commit()
                     continue
-                config = await settings_public.get_ai_execution_config(
+                config = settings_public.derive_for_alias(await settings_public.get_ai_execution_config(
                     session, cast(Settings, ctx["settings"]), redis, scope=scope,
-                )
+                ), ALIAS)
                 mapping = config.aliases.get(ALIAS)
                 fingerprint, capability_supported = await _dependency_snapshot(config, redis, scope=scope)
                 if (

@@ -4,6 +4,7 @@ import * as React from 'react';
 import { useTranslations } from 'next-intl';
 import { useQuery } from '@tanstack/react-query';
 import { FileTextIcon, PlusIcon, XIcon } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -88,7 +89,7 @@ function ContextPicker({ open, onOpenChange, current, onConfirm }: { open: boole
   );
 }
 
-/** Removable context chip row shared by the quick-chat drawer and the full Chat page; `onChange` enables the add-context picker. */
+/** Removable context badge row (`variant` picks the bordered bar or the composer's borderless badges) shared by the quick-chat drawer and the full Chat page; `onChange` enables the add-context picker. */
 function focusChip(bar: HTMLElement | null, idx: number) {
   setTimeout(() => {
     const btns = bar?.querySelectorAll<HTMLButtonElement>('button[data-chip-remove]');
@@ -96,7 +97,7 @@ function focusChip(bar: HTMLElement | null, idx: number) {
   }, 0);
 }
 
-export function ChatContextBar({ context, onRemove, onChange }: { context: ChatContext | null; onRemove: () => void; onChange?: (context: ChatContext | null) => void }) {
+export function ChatContextBar({ context, onRemove, onChange, variant = 'bar' }: { context: ChatContext | null; onRemove: () => void; onChange?: (context: ChatContext | null) => void; variant?: 'bar' | 'badges' }) {
   const t = useTranslations('chat');
   const label = useContextLabel(context);
   const [open, setOpen] = React.useState(false);
@@ -106,14 +107,14 @@ export function ChatContextBar({ context, onRemove, onChange }: { context: ChatC
   if (!canPick && !label) return null;
   const items = context?.kind === 'selection' ? context.items ?? [] : [];
   const chip = (key: string, text: string, remove: () => void) => (
-    <span key={key} className="inline-flex min-h-8 max-w-full items-center gap-1 rounded-full border border-border bg-background py-1 pl-2 pr-0">
-      <FileTextIcon className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />
+    <Badge key={key} variant="outline" className="min-h-6 max-w-full gap-1 bg-surface py-0.5 pl-2 pr-0 text-foreground">
+      <FileTextIcon className="shrink-0 text-muted-foreground" aria-hidden="true" />
       <span className="truncate">{text}</span>
-      {/* 44px hit area; the negative margin keeps the chip's visual height. */}
-      <Button type="button" variant="ghost" size="icon" className="-my-1.5 rounded-full text-muted-foreground" data-chip-remove onClick={remove} title={t('contextRemove', { label: text })} aria-label={t('contextRemove', { label: text })}>
+      {/* 44px hit area; the negative margin keeps the badge's visual height. */}
+      <Button type="button" variant="ghost" size="icon" className="-my-2 rounded-full text-muted-foreground" data-chip-remove onClick={remove} title={t('contextRemove', { label: text })} aria-label={t('contextRemove', { label: text })}>
         <XIcon className="size-3.5" aria-hidden="true" />
       </Button>
-    </span>
+    </Badge>
   );
   const setItems = (next: Item[]) => {
     const unique = next.filter((i, k, a) => a.findIndex((x) => x.documentId === i.documentId) === k).slice(0, MAX_ITEMS);
@@ -128,14 +129,14 @@ export function ChatContextBar({ context, onRemove, onChange }: { context: ChatC
     focusChip(document.getElementById(barId), idx);
   };
   return (
-    <div id={barId} className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border bg-secondary px-4 py-2 text-xs text-foreground">
+    <div id={barId} className={variant === 'badges' ? 'flex flex-wrap items-center gap-1.5 text-xs text-foreground' : 'flex shrink-0 flex-wrap items-center gap-2 border-b border-border bg-secondary px-4 py-2 text-xs text-foreground'}>
       {label && <span className="sr-only">{t('contextLabel')}</span>}
       {canPick && items.length > 0
         ? items.map((i, idx) => chip(i.documentId, nameOf(i, idx), () => removeAt(idx)))
         : label && chip('ctx', label, onRemove)}
       <span role="status" className="sr-only">{announce}</span>
       {canPick && (
-        <Button type="button" variant="outline" size="sm" className="min-h-11" data-add-context disabled={items.length >= MAX_ITEMS} onClick={() => setOpen(true)}>
+        <Button type="button" variant={variant === 'badges' ? 'ghost' : 'outline'} size="sm" className="min-h-11" data-add-context disabled={items.length >= MAX_ITEMS} onClick={() => setOpen(true)}>
           <PlusIcon className="size-3.5" aria-hidden="true" />{t('addContext')}
         </Button>
       )}

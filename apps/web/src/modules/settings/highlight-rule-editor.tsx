@@ -18,6 +18,7 @@ import {
 } from '@/modules/dashboard/api';
 import { fetchAllTopics } from '@/modules/news/api';
 import { parseKeywordList } from './gadget-library';
+import { CheckboxField, FieldGrid } from './settings-layout';
 
 type Severity = HighlightRule['severity'];
 type SourceMode = 'any' | 'only' | 'exclude';
@@ -140,7 +141,7 @@ function RuleList({ def, onRuleDeleted }: { def: GadgetDefinition; onRuleDeleted
       <fieldset disabled={write.isPending} className="space-y-3">
         <h3 className="font-semibold">{isNew ? t('ruleNew') : t('ruleTitle')}</h3>
         <div className="field"><label htmlFor={`${fid}-keywords`} className="label">{t('ruleKeywords')}</label><Input id={`${fid}-keywords`} value={editing.keywords} aria-invalid={touched && !keywordsValid} aria-describedby={touched && !keywordsValid ? `${fid}-keywords-help ${fid}-keywords-error` : `${fid}-keywords-help`} onChange={(event) => setEditing({ ...editing, keywords: event.target.value })} /><span id={`${fid}-keywords-help`} className="muted text-xs">{t('ruleKeywordsHelp')}</span>{touched && !keywordsValid && <span id={`${fid}-keywords-error`} className="error" role="alert">{t('ruleNeedsCondition')}</span>}</div>
-        <fieldset className="field"><legend className="label">{t('ruleTopics')}</legend><span className="muted text-xs">{t('ruleTopicsHelp')}</span>
+        <fieldset className="m-0 flex min-w-0 flex-col gap-2 border-0 p-0"><legend className="label mb-1 p-0">{t('ruleTopics')}</legend><span className="muted text-xs">{t('ruleTopicsHelp')}</span>
           {topics.isPending && <span className="muted" role="status">{t('ruleTopicsLoading')}</span>}
           {topics.isError && <span className="error" role="alert">{t('ruleTopicsError')} <Button type="button" className="secondary" onClick={() => topics.refetch()}>{t('retry')}</Button></span>}
           {topics.isSuccess && topics.data.length === 0 && editing.topicIds.length === 0 && <span className="muted">{t('ruleTopicsNone')}</span>}
@@ -148,20 +149,20 @@ function RuleList({ def, onRuleDeleted }: { def: GadgetDefinition; onRuleDeleted
           {topics.isSuccess && editing.topicIds.filter((id) => !topics.data.some((topic) => topic.id === id)).map((id) => <div key={id} className="flex items-center gap-2"><span className="muted min-w-0 flex-1">{t('ruleTopicUnavailable')}</span><Button type="button" className="secondary" onClick={() => setEditing({ ...editing, topicIds: editing.topicIds.filter((value) => value !== id) })}>{t('ruleTopicRemove')}</Button></div>)}
           {editing.topicIds.length > MAX_TOPICS && <span className="error" role="alert">{t('ruleTopicsLimit')}</span>}
         </fieldset>
-        {(def.source_ids.length > 1 || Object.values(editing.sourceModes).some((mode) => mode !== 'any')) && <fieldset className="field"><legend className="label">{t('ruleSources')}</legend><span className="muted text-xs">{t('ruleSourcesHelp')}</span>
+        {(def.source_ids.length > 1 || Object.values(editing.sourceModes).some((mode) => mode !== 'any')) && <fieldset className="m-0 flex min-w-0 flex-col gap-2 border-0 p-0"><legend className="label mb-1 p-0">{t('ruleSources')}</legend><span className="muted text-xs">{t('ruleSourcesHelp')}</span>
           {def.source_ids.map((id) => <div key={id} className="flex flex-wrap items-center gap-2"><span className="min-w-0 flex-1">{sourceName(id)}</span>
             <Select value={editing.sourceModes[id] ?? 'any'} onValueChange={(value) => setEditing({ ...editing, sourceModes: { ...editing.sourceModes, [id]: value as SourceMode } })}><SelectTrigger aria-label={t('ruleSourceModeFor', { name: sourceName(id) })} className="w-40"><SelectValue /></SelectTrigger><SelectContent>{(Object.keys(sourceModeKeys) as SourceMode[]).map((mode) => <SelectItem key={mode} value={mode}>{t(sourceModeKeys[mode])}</SelectItem>)}</SelectContent></Select></div>)}
         </fieldset>}
         <label className="field max-w-xs"><span className="label">{t('severity')}</span>
           <Select value={editing.severity} onValueChange={(value) => setEditing({ ...editing, severity: value as Severity })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{(Object.keys(severityKeys) as Severity[]).map((item) => <SelectItem key={item} value={item}>{t(severityKeys[item])}</SelectItem>)}</SelectContent></Select></label>
-        <label className="field"><Checkbox checked={editing.notify} onCheckedChange={(checked) => setEditing({ ...editing, notify: checked === true })} /> {t('notify')}</label>
-        <fieldset className="field"><legend className="label">{t('ruleDelivery')}</legend><span className="muted text-xs">{t('ruleDeliveryHelp')}</span>
-          <div className="grid gap-3 sm:grid-cols-2">
+        <CheckboxField><Checkbox id={`${fid}-notify`} checked={editing.notify} onCheckedChange={(checked) => setEditing({ ...editing, notify: checked === true })} /><label htmlFor={`${fid}-notify`}>{t('notify')}</label></CheckboxField>
+        <fieldset className="m-0 flex min-w-0 flex-col gap-2 border-0 p-0"><legend className="label mb-1 p-0">{t('ruleDelivery')}</legend><span className="muted text-xs">{t('ruleDeliveryHelp')}</span>
+          <FieldGrid>
             <label className="field"><span className="label">{t('ruleCooldown')}</span><Input type="number" min={0} max={MAX_COOLDOWN} step={1} inputMode="numeric" value={editing.cooldown} aria-invalid={touched && !deliveryValid} aria-describedby={touched && !deliveryValid ? `${fid}-cooldown-help ${fid}-delivery-error` : `${fid}-cooldown-help`} onChange={(event) => setEditing({ ...editing, cooldown: event.target.value })} /><span id={`${fid}-cooldown-help`} className="muted text-xs">{t('ruleCooldownHelp')}</span></label>
             <label className="field"><span className="label">{t('ruleExpires')}</span><Input type="datetime-local" value={editing.expires} onChange={(event) => setEditing({ ...editing, expires: event.target.value })} /><span className="muted text-xs">{t('ruleExpiresHelp')}</span></label>
             <label className="field"><span className="label">{t('ruleQuietStart')}</span><Input type="time" value={editing.quietStart} aria-invalid={touched && !deliveryValid} aria-describedby={touched && !deliveryValid ? `${fid}-delivery-error ${fid}-quiet-note` : `${fid}-quiet-note`} onChange={(event) => setEditing({ ...editing, quietStart: event.target.value })} /></label>
             <label className="field"><span className="label">{t('ruleQuietEnd')}</span><Input type="time" value={editing.quietEnd} aria-invalid={touched && !deliveryValid} aria-describedby={touched && !deliveryValid ? `${fid}-delivery-error ${fid}-quiet-note` : `${fid}-quiet-note`} onChange={(event) => setEditing({ ...editing, quietEnd: event.target.value })} /></label>
-          </div>
+          </FieldGrid>
           <span id={`${fid}-quiet-note`} className="muted text-xs">{t('ruleQuietNote')}</span>
           {touched && !deliveryValid && <span id={`${fid}-delivery-error`} className="error" role="alert">{t('ruleDeliveryInvalid')}</span>}
         </fieldset>

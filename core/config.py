@@ -79,6 +79,8 @@ class Settings(BaseSettings):
     ai_allowed_endpoint_cidrs: list[str] = Field(
         default_factory=list, validation_alias="AI_ALLOWED_ENDPOINT_CIDRS", repr=False
     )
+    # Operator opt-in: cloud providers (https, public hostnames) bypass the host/CIDR allowlists; private ranges stay allowlist-only.
+    ai_allow_public_providers: bool = Field(default=False, validation_alias="AI_ALLOW_PUBLIC_PROVIDERS")
     # This administrator-only map is separate from AI gateway egress exceptions.
     mcp_allowed_endpoint_cidrs: dict[tuple[str, str, int], tuple[str, ...]] = Field(
         default_factory=dict, validation_alias="MCP_ALLOWED_ENDPOINT_CIDRS", repr=False

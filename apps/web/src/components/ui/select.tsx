@@ -1,15 +1,15 @@
 "use client";
 
 import * as React from 'react';
-import { CheckIcon } from 'lucide-react';
+import { CheckIcon, ChevronDownIcon } from 'lucide-react';
 import { Select as SelectPrimitive } from 'radix-ui';
 
 export const Select = SelectPrimitive.Root;
 export const SelectGroup = SelectPrimitive.Group;
 export const SelectValue = SelectPrimitive.Value;
-/** Renders the select trigger UI wrapper and forwards its typed props to the underlying control. */
-export function SelectTrigger(props: React.ComponentProps<typeof SelectPrimitive.Trigger>) {
-  return <SelectPrimitive.Trigger data-slot="select-trigger" {...props} className={`input ${props.className ?? ''}`} />;
+/** Renders the select trigger as a start-aligned flex row with a trailing muted chevron; width comes from caller utilities. */
+export function SelectTrigger({ children, className, ...props }: React.ComponentProps<typeof SelectPrimitive.Trigger>) {
+  return <SelectPrimitive.Trigger data-slot="select-trigger" {...props} className={`input flex items-center justify-between gap-2 text-start ${className ?? ''}`}>{children}<SelectPrimitive.Icon asChild><ChevronDownIcon size={16} className="shrink-0 text-muted-foreground" aria-hidden="true" /></SelectPrimitive.Icon></SelectPrimitive.Trigger>;
 }
 /** Renders the select content UI wrapper and forwards its typed props to the underlying control. */
 export function SelectContent({ children, ...props }: React.ComponentProps<typeof SelectPrimitive.Content>) {

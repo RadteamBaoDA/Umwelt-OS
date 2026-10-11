@@ -7,16 +7,21 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
+import { Check, Link2 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Table, TableBody, TableCell, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ApiError } from '@/core/api';
+import { useChatController } from '@/core/app-shell/chat-controller';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
+import { CheckboxField, FieldGrid, SettingsActions, SettingsSection } from '@/modules/settings/settings-layout';
 import { useGuardedNavigation } from '@/core/guarded-navigation';
 import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
@@ -63,6 +68,9 @@ export function EntityDetail() {
   const client = useQueryClient();
   const { registerLeaveGuard, ensureEntityDocument } = useGuardedNavigation();
   const [documentReadyId, setDocumentReadyId] = useState<string | null>(null);
+  const [tab, setTab] = useState('overview');
+  const [copied, setCopied] = useState(false);
+  const chat = useChatController();
   const [selected, setSelected] = useState<string[]>([]);
   const [selectionRevision, setSelectionRevision] = useState<number | null>(null);
   const [selectedRelationshipId, setSelectedRelationshipId] = useState<string | null>(null);
@@ -255,53 +263,74 @@ export function EntityDetail() {
     if (!checked && selected.length <= 1) setSelectionRevision(null);
   };
 
+  const unconfirmedAliases = value.aliases.filter((item) => !item.confirmed);
+  /** Copies a plain-text citation (name, type and page address) for this entity to the clipboard. */
+  const copyCitation = () => {
+    const citation = `${value.name ?? t('unnamedEntity')} (${t(`type_${value.type}` as 'type_person')}, ${t('revision')} ${value.revision}) ${window.location.href}`;
+    void navigator.clipboard?.writeText(citation).then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 2000); }).catch(() => undefined);
+  };
+  /** Opens the Chat drawer scoped to this entity. */
+  const askAi = () => chat.openDrawer({ context: { kind: 'entity', resource_id: value.id } });
+  /** Returns to Overview and moves focus to the identity name field. */
+  const correctIdentity = () => { setTab('overview'); window.setTimeout(() => document.getElementById('entity-name')?.focus(), 0); };
+  /** Shared underline-style class for the tab strip triggers. */
+  const tabClass = 'min-h-10 rounded-none border-b-2 border-transparent bg-transparent px-3 data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none';
+
   return <section className="content-panel">
-    <Link href="/knowledge/entities">← {t('title')}</Link>
-    <h1>{value.name ?? t('unnamedEntity')}</h1>
-    <FollowEntityButton entityId={value.id} name={value.name} />
-    <p className="muted">{t(`type_${value.type}` as 'type_person')} · {t('revision')} {value.revision} · {value.first_seen_at ? `${t('firstSeen')} ${formatDateTime(value.first_seen_at, display.locale, display.timezone)}` : t('ownerManaged')}</p>
+    <Link href="/knowledge/entities" className="inline-flex min-h-11 w-fit items-center text-sm font-semibold">← {t('title')}</Link>
+    <header className="flex items-start gap-1"><div className="min-w-0 flex-1"><p className="brand m-0">{t(`type_${value.type}` as 'type_person')}</p><h1 className="mt-1 mb-1">{value.name ?? t('unnamedEntity')}</h1><p className="meta muted m-0">{t('revision')} {value.revision} · {value.first_seen_at ? `${t('firstSeen')} ${formatDateTime(value.first_seen_at, display.locale, display.timezone)}` : t('ownerManaged')}</p></div><Button type="button" variant="ghost" size="icon" aria-label={t('copyCitation')} title={t('copyCitation')} onClick={copyCitation}>{copied ? <Check className="h-[18px] w-[18px]" aria-hidden="true" /> : <Link2 className="h-[18px] w-[18px]" aria-hidden="true" />}</Button></header>
     {staleIdentity && <div className="card" role="status"><p>{t('revisionChanged', { base: baseline.current?.revision ?? 0, current: value.revision })}</p><Button type="button" className="secondary" onClick={() => { baseline.current = { id: value.id, revision: value.revision, name: value.name ?? '', description: value.description ?? '' }; }}>{t('keepDraft')}</Button><Button type="button" className="secondary" onClick={clearIdentityDraft}>{t('discardDraft')}</Button></div>}
     {update.error && <p className="error" role="alert">{formatError(update.error)}{update.error instanceof ApiError && update.error.status === 409 ? ` ${t('conflictReload')}` : ''}</p>}
     {conflictDetails(update.error).map((line, index) => <p className="error" key={index}>{line}</p>)}
-    <h2>{t('identity')}</h2>
-    <p className="muted">{value.name_origin === 'owner' ? t('ownerIdentity') : value.name_origin ? t('derivedIdentity') : t('unknownOrigin')} · {t('nameOrigin')}: {value.name_origin ?? t('unknownOrigin')}</p>
-    <p className="muted">{t('descriptionOrigin')}: {value.description_origin ?? t('unknownOrigin')}</p>
-    <form className="form" onSubmit={identity.handleSubmit((values) => update.mutate(values))}>
-      <div className="field"><Label htmlFor="entity-name">{t('name')}</Label><Input id="entity-name" maxLength={300} {...identity.register('name')} /><small>{value.name_origin === 'owner' ? t('ownerFieldHelp') : t('derivedFieldHelp')}</small></div>
-      <div className="field"><Label htmlFor="entity-description">{t('description')}</Label><Input id="entity-description" maxLength={10_000} {...identity.register('description')} /><small>{value.description_origin === 'owner' ? t('ownerFieldHelp') : t('derivedFieldHelp')}</small></div>
-      <div className="field"><Label htmlFor="entity-reason">{t('reason')}</Label><Input id="entity-reason" maxLength={300} {...identity.register('reason')} />{identity.formState.errors.reason && <p className="error">{t('reasonRequired')}</p>}</div>
-      <Button disabled={update.isPending || !identity.formState.isDirty || (!identity.formState.dirtyFields.name && !identity.formState.dirtyFields.description)}>{update.isPending ? t('saving') : t('saveIdentity')}</Button>
-    </form>
-
-    <h2>{t('aliases')}</h2>
-    {value.aliases.length ? <ul className="stack">{value.aliases.map((item) => <li key={item.id}>{item.alias} · {item.confirmed ? t('confirmed') : t('unconfirmed')} · {t('aliasOrigin')}: {item.origin}{item.confidence !== null && Number.isFinite(item.confidence) ? ` · ${t('confidence')} ${item.confidence.toFixed(2)}` : ` · ${t('confidence')} ${t('unknownValue')}`}{item.source_id && <span> · {t('source')} {item.source_id}</span>} <Button type="button" className="secondary" disabled={removeAlias.isPending} onClick={() => openAliasRemoval(item.id, item.alias)}>{t('removeAlias')}</Button></li>)}</ul> : <p className="muted">{t('noAliases')}</p>}
+    <Tabs value={tab} onValueChange={setTab}>
+      <TabsList className="mt-2 h-auto w-full justify-start gap-0.5 overflow-x-auto rounded-none border-b border-border bg-transparent p-0">
+        <TabsTrigger value="overview" className={tabClass}>{t('tabOverview')}</TabsTrigger>
+        <TabsTrigger value="timeline" className={tabClass}>{t('tabTimeline')}</TabsTrigger>
+        <TabsTrigger value="documents" className={tabClass}>{t('tabDocuments')}{evidenceItems.length > 0 ? ` ${evidenceItems.length}${evidence.hasNextPage ? '+' : ''}` : ''}</TabsTrigger>
+        <TabsTrigger value="events" className={tabClass}>{t('tabEvents')}{entityEvents.length > 0 ? ` ${entityEvents.length}${entityTimeline.hasNextPage ? '+' : ''}` : ''}</TabsTrigger>
+        <TabsTrigger value="review" className={tabClass}>{t('tabReview')}{unconfirmedAliases.length > 0 ? ` ${unconfirmedAliases.length}` : ''}</TabsTrigger>
+      </TabsList>
+      <TabsContent value="overview" className="mt-5"><div className="grid grid-cols-1 gap-6 min-[900px]:grid-cols-5">
+        <div className="flex min-w-0 flex-col gap-4 min-[900px]:col-span-2">
+          {unconfirmedAliases.length > 0 && <div className="flex flex-col gap-2 rounded-lg border border-dashed border-border px-4 py-3" role="status"><h3 className="m-0 text-[15px] font-bold">{t('needsReview')}</h3><span className="text-sm">{t('needsReviewBody', { count: unconfirmedAliases.length })}</span><Button type="button" variant="outline" className="self-start" onClick={() => setTab('review')}>{t('openReview')}</Button></div>}
+          <SettingsSection title={t('identity')}>
+            <p className="muted m-0">{value.name_origin === 'owner' ? t('ownerIdentity') : value.name_origin ? t('derivedIdentity') : t('unknownOrigin')} · {t('nameOrigin')}: {value.name_origin ?? t('unknownOrigin')}</p>
+            <p className="muted m-0">{t('descriptionOrigin')}: {value.description_origin ?? t('unknownOrigin')}</p>
+            <form className="flex flex-col gap-4" onSubmit={identity.handleSubmit((values) => update.mutate(values))}>
+              <FieldGrid>
+                <div className="field"><Label htmlFor="entity-name">{t('name')}</Label><Input id="entity-name" maxLength={300} {...identity.register('name')} /><small>{value.name_origin === 'owner' ? t('ownerFieldHelp') : t('derivedFieldHelp')}</small></div>
+                <div className="field"><Label htmlFor="entity-description">{t('description')}</Label><Input id="entity-description" maxLength={10_000} {...identity.register('description')} /><small>{value.description_origin === 'owner' ? t('ownerFieldHelp') : t('derivedFieldHelp')}</small></div>
+              </FieldGrid>
+              <div className="field"><Label htmlFor="entity-reason">{t('reason')}</Label><Input id="entity-reason" maxLength={300} {...identity.register('reason')} />{identity.formState.errors.reason && <p className="error">{t('reasonRequired')}</p>}</div>
+              <SettingsActions><Button disabled={update.isPending || !identity.formState.isDirty || (!identity.formState.dirtyFields.name && !identity.formState.dirtyFields.description)}>{update.isPending ? t('saving') : t('saveIdentity')}</Button></SettingsActions>
+            </form>
+          </SettingsSection>
+          <SettingsSection title={t('aliases')}>
+    {value.aliases.length ? <ul className="m-0 flex list-none flex-col gap-2 p-0">{value.aliases.map((item) => <li key={item.id} className="flex flex-wrap items-center gap-2"><Badge variant="outline" className={item.confirmed ? undefined : 'border-dashed'}>{item.alias} · {item.confirmed ? t('confirmed') : t('unconfirmed')}</Badge><span className="meta">{t('aliasOrigin')}: {item.origin}{item.confidence !== null && Number.isFinite(item.confidence) ? ` · ${t('confidence')} ${item.confidence.toFixed(2)}` : ` · ${t('confidence')} ${t('unknownValue')}`}{item.source_id && <span> · {t('source')} {item.source_id}</span>}</span> <Button type="button" className="secondary" disabled={removeAlias.isPending} onClick={() => openAliasRemoval(item.id, item.alias)}>{t('removeAlias')}</Button></li>)}</ul> : <p className="muted">{t('noAliases')}</p>}
     {addAlias.error && <p className="error" role="alert">{t('aliasFailed')} {formatError(addAlias.error)}</p>}
-    <form className="form" onSubmit={aliasForm.handleSubmit((values) => addAlias.mutate(values))}><div className="field"><Label htmlFor="entity-alias">{t('addAlias')}</Label><Input id="entity-alias" maxLength={300} {...aliasForm.register('alias')} />{aliasForm.formState.errors.alias && <p className="error">{t('aliasRequired')}</p>}</div><div className="field"><Label htmlFor="alias-reason">{t('reason')}</Label><Input id="alias-reason" maxLength={300} {...aliasForm.register('reason')} /></div><Button disabled={addAlias.isPending}>{t('addAlias')}</Button></form>
-
-    <h2>{t('evidence')}</h2>
-    {evidence.isError && <p className="error" role="alert">{t('evidenceUnavailable')} <Button className="secondary" onClick={() => evidence.refetch()}>{t('retry')}</Button></p>}
-    <ul className="stack">{evidenceItems.map((item) => <li className="card" key={item.id}>
-      <label className="field"><span>{t('selectEvidence')}</span><Checkbox checked={selected.includes(item.id)} onCheckedChange={(checked) => addSelectedEvidence(item.id, checked === true)} /></label>
-      <h3><Link href={`/knowledge/documents/${item.document_id}?version=${item.version_number}#cited-revision`}>{item.title}</Link></h3>
-      <small className="muted">{item.metadata_is_version_snapshot ? t('metadataVersionSnapshot') : t('metadataCurrentFallback')}</small>
-      <blockquote>{item.excerpt}</blockquote>
-      <small className="muted">{t('observed')} {formatDateTime(item.observed_at, display.locale, display.timezone)} · {t('confidence')} {Number.isFinite(item.confidence) ? item.confidence.toFixed(2) : t('unknownValue')} · {t('membership')} {item.id}</small>
-    </li>)}</ul>
-    {evidence.hasNextPage && <Button className="secondary" disabled={evidence.isFetchingNextPage} onClick={() => evidence.fetchNextPage()}>{t('loadEvidence')}</Button>}
-    {staleSelection && <p className="error" role="status">{t('selectionRevisionChanged', { base: selectionRevision ?? 0, current: value.revision })} <Button className="secondary" onClick={() => { setSelected([]); setSelectionRevision(null); }}>{t('clearSelection')}</Button></p>}
-    <label className="field"><span>{t('confirmSuppress', { count: selected.length })}</span><Checkbox checked={suppressConfirmed} onCheckedChange={(checked) => setSuppressConfirmed(checked === true)} /></label>
-    <AlertDialog open={!!suppressSnapshot} onOpenChange={(open) => { if (!open) setSuppressSnapshot(null); }}>
-      <Button className="secondary" disabled={!selected.length || !suppressConfirmed || staleSelection || suppress.isPending || !reason.trim()} onClick={() => { if (selectionRevision !== null) setSuppressSnapshot({ evidenceIds: [...selected], revision: selectionRevision, reason: reason.trim() }); }}>{t('suppressEvidence')}</Button>
-      <AlertDialogContent onEscapeKeyDown={(event) => { if (suppress.isPending) event.preventDefault(); }}>
-        <AlertDialogHeader><AlertDialogTitle>{t('confirmSuppress', { count: suppressSnapshot?.evidenceIds.length ?? 0 })}</AlertDialogTitle><AlertDialogDescription>{t('suppressConfirmationDescription')}</AlertDialogDescription></AlertDialogHeader>
-        {suppressSnapshot && <div className="stack"><p>{value.name ?? t('unnamedEntity')} · {t('revision')} {suppressSnapshot.revision}</p><p>{t('reason')}: {suppressSnapshot.reason}</p><p>{t('selectedMemberships')}: {suppressSnapshot.evidenceIds.slice(0, 20).join(', ')}{suppressSnapshot.evidenceIds.length > 20 ? ` · ${t('additionalItems', { count: suppressSnapshot.evidenceIds.length - 20 })}` : ''}</p></div>}
-        {suppress.error && <p className="error" role="alert">{formatError(suppress.error)}</p>}
-        <AlertDialogFooter><AlertDialogCancel disabled={suppress.isPending}>{t('cancel')}</AlertDialogCancel><Button disabled={suppress.isPending} onClick={suppressForm}>{suppress.isPending ? t('saving') : t('suppressEvidence')}</Button></AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-    {suppress.error && <p className="error" role="alert">{formatError(suppress.error)}</p>}
-
-    <h2>{t('history')}</h2>
+            <form className="flex flex-col gap-4" onSubmit={aliasForm.handleSubmit((values) => addAlias.mutate(values))}><FieldGrid><div className="field"><Label htmlFor="entity-alias">{t('addAlias')}</Label><Input id="entity-alias" maxLength={300} {...aliasForm.register('alias')} />{aliasForm.formState.errors.alias && <p className="error">{t('aliasRequired')}</p>}</div><div className="field"><Label htmlFor="alias-reason">{t('reason')}</Label><Input id="alias-reason" maxLength={300} {...aliasForm.register('reason')} /></div></FieldGrid><SettingsActions><Button disabled={addAlias.isPending}>{t('addAlias')}</Button></SettingsActions></form>
+          </SettingsSection>
+        </div>
+        <div className="flex min-w-0 flex-col gap-3 min-[900px]:col-span-3"><h2 className="m-0 text-[15px] font-bold">{t('relationships')}</h2>
+    {neighbors.isError && <p className="error" role="alert">{t('relationshipUnavailable')} <Button className="secondary" onClick={() => neighbors.refetch()}>{t('retry')}</Button></p>}
+    {neighborsItems.length > 0 && <Table><TableBody>{neighborsItems.map(({ entity: neighbor, relationship }) => <TableRow key={relationship.id}>
+      <TableCell><Link className="font-semibold" href={`/knowledge/entities/${neighbor.id}`}>{neighbor.name ?? t(`type_${neighbor.type}` as 'type_person')}</Link><span className="meta block">{relationship.type}</span></TableCell>
+      <TableCell><Badge variant="outline" className={relationship.origin === 'derived' ? 'border-dashed' : undefined}>{relationship.origin}</Badge></TableCell>
+      <TableCell className="text-end"><Button type="button" className="secondary" aria-pressed={selectedRelationshipId === relationship.id} onClick={() => setSelectedRelationshipId(relationship.id)}>{t('selectRelationship')}</Button></TableCell>
+    </TableRow>)}</TableBody></Table>}
+    {neighbors.hasNextPage && <Button className="secondary" disabled={neighbors.isFetchingNextPage} onClick={() => neighbors.fetchNextPage()}>{t('loadRelationships')}</Button>}
+    {!neighborsItems.length && <p className="muted">{t('noRelationships')}</p>}
+    <EntityGraph entityId={value.id} title={value.name ?? t('unnamedEntity')} selectedRelationshipId={selectedRelationshipId ?? undefined} onSelectRelationship={setSelectedRelationshipId} />
+    <section aria-labelledby="relationship-evidence-heading"><h3 id="relationship-evidence-heading">{t('relationshipEvidence')}</h3>
+      {!selectedRelationshipId && <p className="muted">{t('relationshipSelected')}</p>}
+      {relationshipEvidence.isError && <p className="error" role="alert">{t('relationshipUnavailable')} <Button className="secondary" onClick={() => relationshipEvidence.refetch()}>{t('retry')}</Button></p>}
+      {relationshipRows.map((item) => <article className="card" key={item.id}><p><Link href={`/knowledge/documents/${item.document_id}?version=${item.version_number}#cited-revision`}>{item.title} · {t('documentVersion')} {item.version_number}</Link> · {t('source')} {item.source_id}</p><small className="muted">{item.metadata_is_version_snapshot ? t('metadataVersionSnapshot') : t('metadataCurrentFallback')}</small><blockquote>{item.excerpt}</blockquote><small>{t('observed')} {formatDateTime(item.observed_at, display.locale, display.timezone)} · {t('confidence')} {Number.isFinite(item.confidence) ? item.confidence.toFixed(2) : t('unknownValue')}</small><p>{t('citationCount')}: 1 · {t('membership')} {item.source_entity_membership_id ?? t('unknownValue')} / {item.target_entity_membership_id ?? t('unknownValue')}</p></article>)}
+      {relationshipEvidence.hasNextPage && <Button className="secondary" disabled={relationshipEvidence.isFetchingNextPage} onClick={() => relationshipEvidence.fetchNextPage()}>{t('loadEvidence')}</Button>}
+    </section>
+        <span className="meta">{t('inferredLegend')}</span>
+        </div>
+      </div></TabsContent>
+      <TabsContent value="timeline" className="mt-5"><SettingsSection title={t('history')}>
     <Tabs defaultValue="owner-actions">
       <TabsList><TabsTrigger value="owner-actions">{t('ownerActions')}</TabsTrigger><TabsTrigger value="retained-evidence">{t('retainedEvidence')}</TabsTrigger></TabsList>
       <TabsContent value="owner-actions">
@@ -316,47 +345,45 @@ export function EntityDetail() {
         {historyEvidence.hasNextPage && <Button className="secondary" disabled={historyEvidence.isFetchingNextPage} onClick={() => historyEvidence.fetchNextPage()}>{t('loadHistory')}</Button>}
       </TabsContent>
     </Tabs>
-
-    <section aria-labelledby="entity-timeline-heading"><h2 id="entity-timeline-heading">{t('entityTimeline')}</h2>
+      </SettingsSection></TabsContent>
+      <TabsContent value="documents" className="mt-5"><SettingsSection title={t('evidence')}>
+    {evidence.isError && <p className="error" role="alert">{t('evidenceUnavailable')} <Button className="secondary" onClick={() => evidence.refetch()}>{t('retry')}</Button></p>}
+    <ul className="m-0 flex list-none flex-col gap-3 p-0">{evidenceItems.map((item) => <li className="card" key={item.id}>
+      <CheckboxField><Checkbox id={`evidence-${item.id}`} checked={selected.includes(item.id)} onCheckedChange={(checked) => addSelectedEvidence(item.id, checked === true)} /><Label htmlFor={`evidence-${item.id}`}>{t('selectEvidence')}</Label></CheckboxField>
+      <h3><Link href={`/knowledge/documents/${item.document_id}?version=${item.version_number}#cited-revision`}>{item.title}</Link></h3>
+      <small className="muted">{item.metadata_is_version_snapshot ? t('metadataVersionSnapshot') : t('metadataCurrentFallback')}</small>
+      <blockquote>{item.excerpt}</blockquote>
+      <small className="muted">{t('observed')} {formatDateTime(item.observed_at, display.locale, display.timezone)} · {t('confidence')} {Number.isFinite(item.confidence) ? item.confidence.toFixed(2) : t('unknownValue')} · {t('membership')} {item.id}</small>
+    </li>)}</ul>
+    {evidence.hasNextPage && <Button className="secondary" disabled={evidence.isFetchingNextPage} onClick={() => evidence.fetchNextPage()}>{t('loadEvidence')}</Button>}
+    {staleSelection && <p className="error" role="status">{t('selectionRevisionChanged', { base: selectionRevision ?? 0, current: value.revision })} <Button className="secondary" onClick={() => { setSelected([]); setSelectionRevision(null); }}>{t('clearSelection')}</Button></p>}
+    <CheckboxField><Checkbox id="entity-suppress-confirm" checked={suppressConfirmed} onCheckedChange={(checked) => setSuppressConfirmed(checked === true)} /><Label htmlFor="entity-suppress-confirm">{t('confirmSuppress', { count: selected.length })}</Label></CheckboxField>
+    <AlertDialog open={!!suppressSnapshot} onOpenChange={(open) => { if (!open) setSuppressSnapshot(null); }}>
+      <Button className="secondary" disabled={!selected.length || !suppressConfirmed || staleSelection || suppress.isPending || !reason.trim()} onClick={() => { if (selectionRevision !== null) setSuppressSnapshot({ evidenceIds: [...selected], revision: selectionRevision, reason: reason.trim() }); }}>{t('suppressEvidence')}</Button>
+      <AlertDialogContent onEscapeKeyDown={(event) => { if (suppress.isPending) event.preventDefault(); }}>
+        <AlertDialogHeader><AlertDialogTitle>{t('confirmSuppress', { count: suppressSnapshot?.evidenceIds.length ?? 0 })}</AlertDialogTitle><AlertDialogDescription>{t('suppressConfirmationDescription')}</AlertDialogDescription></AlertDialogHeader>
+        {suppressSnapshot && <div className="stack"><p>{value.name ?? t('unnamedEntity')} · {t('revision')} {suppressSnapshot.revision}</p><p>{t('reason')}: {suppressSnapshot.reason}</p><p>{t('selectedMemberships')}: {suppressSnapshot.evidenceIds.slice(0, 20).join(', ')}{suppressSnapshot.evidenceIds.length > 20 ? ` · ${t('additionalItems', { count: suppressSnapshot.evidenceIds.length - 20 })}` : ''}</p></div>}
+        {suppress.error && <p className="error" role="alert">{formatError(suppress.error)}</p>}
+        <AlertDialogFooter><AlertDialogCancel disabled={suppress.isPending}>{t('cancel')}</AlertDialogCancel><Button disabled={suppress.isPending} onClick={suppressForm}>{suppress.isPending ? t('saving') : t('suppressEvidence')}</Button></AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+    {suppress.error && <p className="error" role="alert">{formatError(suppress.error)}</p>}
+      </SettingsSection></TabsContent>
+      <TabsContent value="events" className="mt-5"><SettingsSection title={t('entityTimeline')}>
       {entityTimeline.isError && <p className="error" role="alert">{t('timelineUnavailable')} <Button className="secondary" onClick={() => entityTimeline.refetch()}>{t('retry')}</Button></p>}
       {entityTimeline.data && <p className="muted" role="status">{t('graphStatuses')}: {entityGraphStatuses.map((status) => `${status.status}${status.graph_enabled ? '' : ` (${t('graphDisabled')})`}${status.error_code ? ` (${status.error_code})` : ''}`).join(', ') || t('noGraphStatuses')}</p>}
       <div className="stack">{entityEvents.map((event) => <EventDetail key={event.id} event={event} locale={display.locale} timezone={display.timezone} entityNames={new Map([[value.id, value.name ?? t('unnamedEntity')]])} />)}</div>
       {entityTimeline.hasNextPage && <Button className="secondary" disabled={entityTimeline.isFetchingNextPage} onClick={() => entityTimeline.fetchNextPage()}>{t('loadTimeline')}</Button>}
-    </section>
-
-    <AlertDialog open={!!aliasRemovalSnapshot} onOpenChange={(open) => { if (!open && !removeAlias.isPending) { setAliasRemovalSnapshot(null); removeAlias.reset(); } }}>
-      <AlertDialogContent onEscapeKeyDown={(event) => { if (removeAlias.isPending) event.preventDefault(); }}>
-        <AlertDialogHeader><AlertDialogTitle>{t('removeAliasConfirmation')}</AlertDialogTitle><AlertDialogDescription>{t('aliasRemovalDescription')}</AlertDialogDescription></AlertDialogHeader>
-        {aliasRemovalSnapshot && <div className="stack"><p>{t('name')}: {aliasRemovalSnapshot.aliasName}</p><p>{t('reason')}: {aliasRemovalSnapshot.reason}</p></div>}
-        {removeAlias.error && <p className="error" role="alert">{t('aliasFailed')} {formatError(removeAlias.error)}</p>}
-        <AlertDialogFooter><AlertDialogCancel disabled={removeAlias.isPending}>{t('cancel')}</AlertDialogCancel><Button disabled={!aliasRemovalSnapshot || removeAlias.isPending} onClick={confirmAliasRemoval}>{removeAlias.isPending ? t('saving') : t('removeAlias')}</Button></AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-
-    <h2>{t('relationships')}</h2>
-    {neighbors.isError && <p className="error" role="alert">{t('relationshipUnavailable')} <Button className="secondary" onClick={() => neighbors.refetch()}>{t('retry')}</Button></p>}
-    <ul className="stack">{neighborsItems.map(({ entity: neighbor, relationship }) => <li className="card" key={relationship.id}>
-      <Link href={`/knowledge/entities/${neighbor.id}`}>{neighbor.name ?? t(`type_${neighbor.type}` as 'type_person')}</Link><span> — {relationship.type} ({relationship.origin})</span>
-      <Button type="button" className="secondary" aria-pressed={selectedRelationshipId === relationship.id} onClick={() => setSelectedRelationshipId(relationship.id)}>{t('selectRelationship')}</Button>
-    </li>)}</ul>
-    {neighbors.hasNextPage && <Button className="secondary" disabled={neighbors.isFetchingNextPage} onClick={() => neighbors.fetchNextPage()}>{t('loadRelationships')}</Button>}
-    {!neighborsItems.length && <p className="muted">{t('noRelationships')}</p>}
-    <EntityGraph entityId={value.id} title={value.name ?? t('unnamedEntity')} selectedRelationshipId={selectedRelationshipId ?? undefined} onSelectRelationship={setSelectedRelationshipId} />
-    <section aria-labelledby="relationship-evidence-heading"><h3 id="relationship-evidence-heading">{t('relationshipEvidence')}</h3>
-      {!selectedRelationshipId && <p className="muted">{t('relationshipSelected')}</p>}
-      {relationshipEvidence.isError && <p className="error" role="alert">{t('relationshipUnavailable')} <Button className="secondary" onClick={() => relationshipEvidence.refetch()}>{t('retry')}</Button></p>}
-      {relationshipRows.map((item) => <article className="card" key={item.id}><p><Link href={`/knowledge/documents/${item.document_id}?version=${item.version_number}#cited-revision`}>{item.title} · {t('documentVersion')} {item.version_number}</Link> · {t('source')} {item.source_id}</p><small className="muted">{item.metadata_is_version_snapshot ? t('metadataVersionSnapshot') : t('metadataCurrentFallback')}</small><blockquote>{item.excerpt}</blockquote><small>{t('observed')} {formatDateTime(item.observed_at, display.locale, display.timezone)} · {t('confidence')} {Number.isFinite(item.confidence) ? item.confidence.toFixed(2) : t('unknownValue')}</small><p>{t('citationCount')}: 1 · {t('membership')} {item.source_entity_membership_id ?? t('unknownValue')} / {item.target_entity_membership_id ?? t('unknownValue')}</p></article>)}
-      {relationshipEvidence.hasNextPage && <Button className="secondary" disabled={relationshipEvidence.isFetchingNextPage} onClick={() => relationshipEvidence.fetchNextPage()}>{t('loadEvidence')}</Button>}
-    </section>
-
-    <h2>{t('split')}</h2><p className="muted">{t('splitHelp')}</p>
+      </SettingsSection></TabsContent>
+      <TabsContent value="review" className="mt-5 flex flex-col gap-5">
+        <SettingsSection title={t('split')}><p className="muted m-0">{t('splitHelp')}</p>
     <div className="field"><Label htmlFor="split-name">{t('newEntityName')}</Label><Input id="split-name" maxLength={300} aria-invalid={!!correction.formState.errors.splitName} {...correction.register('splitName')} onChange={(event) => { correction.setValue('splitName', event.target.value, { shouldDirty: true }); correction.clearErrors('splitName'); }} />{correction.formState.errors.splitName && <p className="error" role="alert">{t('splitNameRequired')}</p>}</div>
     <Button className="secondary" disabled={!selected.length || staleSelection || splitPreview.isPending} onClick={previewSplitForm}>{t('previewSplit')}</Button>
     {splitPreview.error && <p className="error" role="alert">{t('splitPreviewFailed')} {formatError(splitPreview.error)}</p>}
     {currentSplitPreview && <div className="card" role="status"><p>{t('correctionScope')}: {currentSplitPreview.preview.entity_ids.length} · {t('memberships')}: {currentSplitPreview.preview.membership_ids.length} · {t('relationshipCount')}: {currentSplitPreview.preview.relationship_ids.length} · {t('evidenceReferences')}: {currentSplitPreview.preview.evidence_ref_count}</p><p>{t('selectedMemberships')}: {currentSplitPreview.payload.evidence_ids.slice(0, 20).join(', ')}{currentSplitPreview.payload.evidence_ids.length > 20 ? ` · ${t('additionalItems', { count: currentSplitPreview.payload.evidence_ids.length - 20 })}` : ''}</p><p>{t('reason')}: {currentSplitPreview.payload.reason} · {t('revision')} {currentSplitPreview.payload.expected_revision}</p>{currentSplitPreview.preview.conflicts.map((conflict) => <p className="error" key={conflict.code}>{conflict.code}: {conflict.message} · {conflict.entity_ids.slice(0, 5).join(', ')} · {conflict.membership_ids.slice(0, 5).join(', ')} · {conflict.relationship_ids.slice(0, 5).join(', ')}</p>)}<AlertDialog><AlertDialogTrigger asChild><Button type="button" disabled={split.isPending || !!currentSplitPreview.preview.conflicts.length}>{t('confirmSplit')}</Button></AlertDialogTrigger><AlertDialogContent onEscapeKeyDown={(event) => { if (split.isPending) event.preventDefault(); }}><AlertDialogHeader><AlertDialogTitle>{t('confirmSplit')}</AlertDialogTitle><AlertDialogDescription>{t('splitConfirmationDescription')}</AlertDialogDescription></AlertDialogHeader><div className="stack"><p>{t('newEntityName')}: {currentSplitPreview.payload.new_entity.name} · {t(`type_${currentSplitPreview.payload.new_entity.type}` as 'type_person')}</p><p>{t('revision')}: {currentSplitPreview.payload.expected_revision} · {t('memberships')}: {currentSplitPreview.payload.evidence_ids.length} · {t('relationshipCount')}: {currentSplitPreview.preview.relationship_ids.length} · {t('evidenceReferences')}: {currentSplitPreview.preview.evidence_ref_count}</p><p>{t('reason')}: {currentSplitPreview.payload.reason}</p><p>{t('selectedMemberships')}: {currentSplitPreview.payload.evidence_ids.slice(0, 20).join(', ')}{currentSplitPreview.payload.evidence_ids.length > 20 ? ` · ${t('additionalItems', { count: currentSplitPreview.payload.evidence_ids.length - 20 })}` : ''}</p></div>{split.error && <div className="error" role="alert"><p>{t('correctionWriteFailed')} {formatError(split.error)}</p>{conflictDetails(split.error).map((line, index) => <p key={index}>{line}</p>)}</div>}<AlertDialogFooter><AlertDialogCancel disabled={split.isPending}>{t('cancel')}</AlertDialogCancel><Button disabled={split.isPending} onClick={confirmSplitForm}>{split.isPending ? t('saving') : t('confirmSplit')}</Button></AlertDialogFooter></AlertDialogContent></AlertDialog></div>}
     {splitPreview.data && !currentSplitPreview && <p className="error" role="status">{t('previewStale')}</p>}
-
-    <h2>{t('merge')}</h2><p className="muted">{t('mergeHelp')}</p>
+        </SettingsSection>
+        <SettingsSection title={t('merge')}><p className="muted m-0">{t('mergeHelp')}</p>
     <div className="field"><Label htmlFor="merge-target-search">{t('findMergeTarget')}</Label><Input id="merge-target-search" type="search" value={targetSearch} onChange={(event) => { setTargetSearch(event.target.value); setSelectedMergeTarget(null); correction.setValue('targetId', '', { shouldDirty: true }); correction.clearErrors('targetId'); mergePreview.reset(); }} /></div>
     {targetSearch.trim().length >= 2 && <div className="field"><Label htmlFor="merge-target">{t('mergeTarget')}</Label><Select value={selectedMergeTarget?.id ?? ''} onValueChange={(id) => { const chosen = targetItems.find((item) => item.id === id); if (!chosen) return; setSelectedMergeTarget(chosen); correction.setValue('targetId', chosen.id, { shouldDirty: true }); correction.clearErrors('targetId'); mergePreview.reset(); }}><SelectTrigger id="merge-target"><SelectValue placeholder={t('chooseMergeTarget')} /></SelectTrigger><SelectContent>{targetOptions.map((item) => <SelectItem key={item.id} value={item.id}>{item.name ?? t('unnamedEntity')} · {t(`type_${item.type}` as 'type_person')} · {t('revision')} {item.revision}</SelectItem>)}</SelectContent></Select>{selectedMergeTarget && <p className="muted">{t('selectedMergeTarget')}: {selectedMergeTarget.name ?? t('unnamedEntity')} · {t('revision')} {selectedMergeTarget.revision}</p>}{correction.formState.errors.targetId && <p className="error" role="alert">{t('mergeTargetRequired')}</p>}{targets.isError && <p className="error" role="alert">{targets.error.message} <Button type="button" className="secondary" onClick={() => targets.refetch()}>{t('retry')}</Button></p>}{targets.hasNextPage && <Button type="button" className="secondary" disabled={targets.isFetchingNextPage} onClick={() => targets.fetchNextPage()}>{t('loadMore')}</Button>}</div>}
     <div className="field"><Label htmlFor="correction-reason">{t('reason')}</Label><Input id="correction-reason" maxLength={300} aria-invalid={!!correction.formState.errors.reason} {...correction.register('reason')} />{correction.formState.errors.reason && <p className="error" role="alert">{t('correctionReasonRequired')}</p>}</div>
@@ -365,5 +392,17 @@ export function EntityDetail() {
     {currentMergePreview && <div className="card" role="status"><p>{t('mergeInto')} {currentMergePreview.targetName} · {t('revision')} {currentMergePreview.intoRevision}</p><p>{t('sourceRevision')}: {currentMergePreview.sourceRevision} · {t('reason')}: {currentMergePreview.reason}</p><p>{t('entitiesCount')}: {currentMergePreview.preview.entity_ids.length} · {t('memberships')}: {currentMergePreview.preview.membership_ids.length} · {t('relationshipCount')}: {currentMergePreview.preview.relationship_ids.length} · {t('evidenceReferences')}: {currentMergePreview.preview.evidence_ref_count}</p><p>{t('selectedMemberships')}: {currentMergePreview.preview.membership_ids.slice(0, 20).join(', ')}{currentMergePreview.preview.membership_ids.length > 20 ? ` · ${t('additionalItems', { count: currentMergePreview.preview.membership_ids.length - 20 })}` : ''}</p>{currentMergePreview.preview.conflicts.map((conflict) => <p className="error" key={conflict.code}>{conflict.code}: {conflict.message} · {conflict.entity_ids.slice(0, 5).join(', ')} · {conflict.membership_ids.slice(0, 5).join(', ')} · {conflict.relationship_ids.slice(0, 5).join(', ')}</p>)}<AlertDialog><AlertDialogTrigger asChild><Button type="button" disabled={merge.isPending || !!currentMergePreview.preview.conflicts.length}>{t('confirmMerge')}</Button></AlertDialogTrigger><AlertDialogContent onEscapeKeyDown={(event) => { if (merge.isPending) event.preventDefault(); }}><AlertDialogHeader><AlertDialogTitle>{t('confirmMerge')}</AlertDialogTitle><AlertDialogDescription>{t('mergeConfirmationDescription')}</AlertDialogDescription></AlertDialogHeader><div className="stack"><p>{t('mergeInto')} {currentMergePreview.targetName} · {t('revision')} {currentMergePreview.intoRevision}</p><p>{t('sourceRevision')}: {currentMergePreview.sourceRevision} · {t('reason')}: {currentMergePreview.reason}</p><p>{t('entitiesCount')}: {currentMergePreview.preview.entity_ids.length} · {t('memberships')}: {currentMergePreview.preview.membership_ids.length} · {t('relationshipCount')}: {currentMergePreview.preview.relationship_ids.length} · {t('evidenceReferences')}: {currentMergePreview.preview.evidence_ref_count}</p><p>{t('selectedMemberships')}: {currentMergePreview.preview.membership_ids.slice(0, 20).join(', ')}{currentMergePreview.preview.membership_ids.length > 20 ? ` · ${t('additionalItems', { count: currentMergePreview.preview.membership_ids.length - 20 })}` : ''}</p></div>{merge.error && <div className="error" role="alert"><p>{t('correctionWriteFailed')} {formatError(merge.error)}</p>{conflictDetails(merge.error).map((line, index) => <p key={index}>{line}</p>)}</div>}<AlertDialogFooter><AlertDialogCancel disabled={merge.isPending}>{t('cancel')}</AlertDialogCancel><Button disabled={merge.isPending} onClick={confirmMergeForm}>{merge.isPending ? t('saving') : t('confirmMerge')}</Button></AlertDialogFooter></AlertDialogContent></AlertDialog></div>}
     {mergePreview.data && !currentMergePreview && <p className="error" role="status">{t('previewStale')}</p>}
     {correctionErrors.map((error, index) => <div key={index} className="error" role="alert">{formatError(error!)}{conflictDetails(error).map((line, i) => <p key={i}>{line}</p>)}</div>)}
+        </SettingsSection>
+      </TabsContent>
+    </Tabs>
+    <div className="mt-5 flex flex-wrap items-start gap-2 border-t border-border pt-4"><FollowEntityButton entityId={value.id} name={value.name} /><Button type="button" variant="outline" onClick={correctIdentity}>{t('correctIdentity')}</Button><span className="flex-1" /><Button type="button" onClick={askAi}>{t('askAiAbout')}</Button></div>
+    <AlertDialog open={!!aliasRemovalSnapshot} onOpenChange={(open) => { if (!open && !removeAlias.isPending) { setAliasRemovalSnapshot(null); removeAlias.reset(); } }}>
+      <AlertDialogContent onEscapeKeyDown={(event) => { if (removeAlias.isPending) event.preventDefault(); }}>
+        <AlertDialogHeader><AlertDialogTitle>{t('removeAliasConfirmation')}</AlertDialogTitle><AlertDialogDescription>{t('aliasRemovalDescription')}</AlertDialogDescription></AlertDialogHeader>
+        {aliasRemovalSnapshot && <div className="stack"><p>{t('name')}: {aliasRemovalSnapshot.aliasName}</p><p>{t('reason')}: {aliasRemovalSnapshot.reason}</p></div>}
+        {removeAlias.error && <p className="error" role="alert">{t('aliasFailed')} {formatError(removeAlias.error)}</p>}
+        <AlertDialogFooter><AlertDialogCancel disabled={removeAlias.isPending}>{t('cancel')}</AlertDialogCancel><Button disabled={!aliasRemovalSnapshot || removeAlias.isPending} onClick={confirmAliasRemoval}>{removeAlias.isPending ? t('saving') : t('removeAlias')}</Button></AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   </section>;
 }

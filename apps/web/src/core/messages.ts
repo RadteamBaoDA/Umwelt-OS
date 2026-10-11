@@ -19,6 +19,7 @@ import { chatMessages } from './messages/chat';
 import { memoryMessages } from './messages/memory';
 import { memoryPrivacyMessages } from './messages/memory-privacy';
 import { aiSettingsMessages } from './messages/ai-settings';
+import { systemPromptsMessages } from './messages/system-prompts';
 import { dashboardMessages } from './messages/dashboard';
 import { gadgetSettingsMessages } from './messages/gadget-settings';
 import { taskGoalMessages } from './messages/task-goal';
@@ -50,6 +51,7 @@ export const messages = {
     memory: memoryMessages['en-us'],
     memoryPrivacy: memoryPrivacyMessages['en-us'],
     aiSettings: aiSettingsMessages['en-us'],
+    systemPrompts: systemPromptsMessages['en-us'],
     dashboard: dashboardMessages['en-us'],
     gadgetSettings: gadgetSettingsMessages['en-us'],
     taskGoal: taskGoalMessages['en-us'],
@@ -84,6 +86,7 @@ export const messages = {
     memory: memoryMessages['vi-vi'],
     memoryPrivacy: memoryPrivacyMessages['vi-vi'],
     aiSettings: aiSettingsMessages['vi-vi'],
+    systemPrompts: systemPromptsMessages['vi-vi'],
     dashboard: dashboardMessages['vi-vi'],
     gadgetSettings: gadgetSettingsMessages['vi-vi'],
     taskGoal: taskGoalMessages['vi-vi'],

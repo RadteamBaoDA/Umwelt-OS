@@ -1,6 +1,7 @@
 /** Bilingual `documents` messages for the document detail page. Add keys for this area here only. */
 export const documentsMessages = {
   'en-us': {
+      listTitle: 'Documents', listIntro: 'Your private source backed library. Semantic search and AI answers are not available yet.', uploadFile: 'Upload file', newDocument: 'New document', loadingDocuments: 'Loading documents', listLoadFailed: 'Could not load documents.', listEmpty: 'No documents yet. Create a manual source, add a document, or upload a file. Search and AI answers become available in later phases.', loadMore: 'Load more', versionUpdated: 'Version {version} · Updated {updated}',
     brand: 'Knowledge', back: '← Documents', loadingDocument: 'Loading document', unavailable: 'Document unavailable', loadFailed: 'Could not load document.', retry: 'Retry',
     sourceLine: 'Source: {source} · Version {version} · Updated {updated}', inspectOriginal: 'Inspect original file and provenance',
     parsedTextTruncated: 'This file was too large to index in full; only the first 10 MiB of text is searchable.',
@@ -14,6 +15,7 @@ export const documentsMessages = {
     unauthorized: 'Please sign in again to continue.', forbidden: 'This action is not allowed for this account.', conflict: 'The document changed elsewhere. Reload and try again.', serviceUnavailable: 'The local service is unavailable. Try again shortly.', requestFailed: 'The request could not be completed.',
   },
   'vi-vi': {
+      listTitle: 'Tài liệu', listIntro: 'Thư viện riêng có nguồn của bạn. Tìm kiếm ngữ nghĩa và câu trả lời AI chưa khả dụng.', uploadFile: 'Tải tệp lên', newDocument: 'Tài liệu mới', loadingDocuments: 'Đang tải tài liệu', listLoadFailed: 'Không thể tải tài liệu.', listEmpty: 'Chưa có tài liệu. Hãy tạo nguồn thủ công, thêm tài liệu hoặc tải tệp lên. Tìm kiếm và câu trả lời AI sẽ có ở các giai đoạn sau.', loadMore: 'Tải thêm', versionUpdated: 'Phiên bản {version} · Cập nhật {updated}',
     brand: 'Tri thức', back: '← Tài liệu', loadingDocument: 'Đang tải tài liệu', unavailable: 'Tài liệu không khả dụng', loadFailed: 'Không thể tải tài liệu.', retry: 'Thử lại',
     sourceLine: 'Nguồn: {source} · Phiên bản {version} · Cập nhật {updated}', inspectOriginal: 'Xem tệp gốc và nguồn gốc',
     parsedTextTruncated: 'Tệp quá lớn để lập chỉ mục đầy đủ; chỉ 10 MiB văn bản đầu tiên có thể tìm kiếm.',

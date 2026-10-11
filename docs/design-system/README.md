@@ -34,7 +34,7 @@ A private personal-intelligence workspace: calm, dense, honest about what it kno
 - Scale `space-1…space-6` (4/8/12/16/24/32px). Every control is at least `control-height` (44px).
 - Shell fills 100% width — no centred max-width. Desktop: `nav-width` (180px) column + `minmax(0, 1fr)` main, `space-5` gap. Under 720px the nav becomes a horizontal scroller and two-column detail grids stack.
 - Respect safe-area insets on shell padding and dialogs; content uses `min-height: 100dvh`, never fixed height with hidden overflow.
-- Main navigation is exactly **Dashboard / Chat / Settings**. Settings has three groups: Data sources, AI & Ommi Router, Dashboard & Gadget. Account, theme and language live only in the user menu.
+- Main navigation is exactly **Dashboard / Chat / Settings**. Settings has three groups: Data sources, Models, Dashboard & Gadget. Account, theme and language live only in the user menu.
 
 ### Shape and depth
 - Radii nest outward: `radius-sm` items inside `radius-md` controls inside `radius-lg` sub-panels inside `radius-panel` panels.

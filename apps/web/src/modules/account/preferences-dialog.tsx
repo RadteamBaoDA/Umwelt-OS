@@ -6,7 +6,6 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -45,6 +44,13 @@ function isValidTimezone(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** Lists IANA time zones from the platform, always including the current value so an unlisted saved zone stays selectable. */
+function timezoneOptions(current: string): string[] {
+  let zones: string[] = [];
+  try { zones = (Intl as unknown as { supportedValuesOf?: (key: string) => string[] }).supportedValuesOf?.('timeZone') ?? []; } catch { zones = []; }
+  return !current || zones.includes(current) ? zones : [current, ...zones];
 }
 
 /** Edits a draft preference pair, previews changes, and applies save, cancel, reload, and auth-generation behavior. */
@@ -242,7 +248,7 @@ export function PreferencesDialog({ open, preferences, csrfToken, loading = fals
   };
 
   return <Dialog open={open} onOpenChange={(nextOpen) => { if (nextOpen) onOpenChange(true); else dismiss(); }}>
-    <DialogContent showCloseButton={false} className="preferences-dialog" onCloseAutoFocus={onCloseAutoFocus}>
+    <DialogContent className="preferences-dialog" onCloseAutoFocus={onCloseAutoFocus}>
       <DialogHeader>
         <DialogTitle>{t('title')}</DialogTitle>
         <DialogDescription>{t('description')}</DialogDescription>
@@ -260,8 +266,11 @@ export function PreferencesDialog({ open, preferences, csrfToken, loading = fals
               setDraft({ ...draft, theme: next });
             }} className="theme-options">
               {(['light', 'dark', 'system'] as const).map((value) => <Label className="theme-option" key={value} htmlFor={`theme-${value}`}>
-                <RadioGroupItem id={`theme-${value}`} value={value} />
-                {value === 'light' ? <SunIcon aria-hidden="true" className="size-4" /> : value === 'dark' ? <MoonIcon aria-hidden="true" className="size-4" /> : <MonitorIcon aria-hidden="true" className="size-4" />}<span>{t(value)}</span>
+                <span className="theme-swatch" data-theme-preview={value} aria-hidden="true" />
+                <span className="inline-flex items-center gap-2">
+                  <RadioGroupItem id={`theme-${value}`} value={value} />
+                  {value === 'light' ? <SunIcon aria-hidden="true" className="size-4" /> : value === 'dark' ? <MoonIcon aria-hidden="true" className="size-4" /> : <MonitorIcon aria-hidden="true" className="size-4" />}<span>{t(value)}</span>
+                </span>
               </Label>)}
             </RadioGroup>
           </div>
@@ -281,10 +290,10 @@ export function PreferencesDialog({ open, preferences, csrfToken, loading = fals
           </div>
           <div className="field">
             <Label htmlFor="preference-timezone">{t('timezone')}</Label>
-            <Input id="preference-timezone" value={draft.timezone} maxLength={100} aria-describedby="preference-timezone-help" onChange={(event) => {
-              const next = event.target.value;
-              setDraft({ ...draft, timezone: next });
-            }} />
+            <Select value={draft.timezone} onValueChange={(next) => setDraft({ ...draft, timezone: next })}>
+              <SelectTrigger id="preference-timezone" aria-describedby="preference-timezone-help"><SelectValue /></SelectTrigger>
+              <SelectContent>{timezoneOptions(draft.timezone).map((zone) => <SelectItem key={zone} value={zone}>{zone}</SelectItem>)}</SelectContent>
+            </Select>
             <p id="preference-timezone-help" className="muted text-xs">{t('timezoneHelp')} {t('scheduleTimezoneNote')}</p>
           </div>
         </fieldset>

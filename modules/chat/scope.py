@@ -64,7 +64,8 @@ async def ensure_ai_config_unchanged(session_factory, settings, redis, scope, sn
     if (
         current.configuration_revision != snapshot.configuration_revision
         or current.gateway_identity != snapshot.gateway_identity
-        or current.endpoint_destination_id != snapshot.endpoint_destination_id
+        or settings_public.derive_for_alias(current, alias).endpoint_destination_id
+        != settings_public.derive_for_alias(snapshot, alias).endpoint_destination_id
         or current.aliases.get(alias) != mapping
     ):
         raise PrivacyPolicyDenied("Chat model configuration changed before send")

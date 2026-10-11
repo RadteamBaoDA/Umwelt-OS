@@ -69,11 +69,10 @@ async def probe_draft(
     if endpoint is None:
         raise HTTPException(status_code=422, detail="Gateway endpoint is required")
     mapping = ModelMapping(model=body.model, version=body.version, destination="remote")
-    credential = body.api_key
-    if not credential:
-        raise HTTPException(status_code=409, detail="Enter the draft gateway credential to probe")
-    destination = f"omniroute:{hashlib.sha256(endpoint.encode()).hexdigest()[:32]}"
     config = await ai_settings.get_ai_execution_config(session, settings, redis, scope=_owner)
+    credential, local, destination = ai_settings.resolve_draft_provider(config, endpoint, body.api_key, body.provider_id, body.kind)
+    if not credential and not local:
+        raise HTTPException(status_code=409, detail="Enter the draft gateway credential to probe")
     session_ref = authenticated_session_ref(request)
     identity = hashlib.sha256(json.dumps((config.gateway_identity, endpoint, hashlib.sha256(credential.encode()).hexdigest())).encode()).hexdigest()
     await session.rollback()
@@ -105,7 +104,7 @@ async def probe_draft(
 
     client = ModelGateway(redis, endpoint, credential, destination or "omniroute",
         timeout_seconds=15, scope=_owner, configuration_revision=0, gateway_identity=identity, before_send=recheck_send,
-        approved_endpoint_cidrs=tuple(settings.ai_allowed_endpoint_cidrs))
+        approved_endpoint_cidrs=tuple(settings.ai_allowed_endpoint_cidrs), allow_public_endpoints=settings.ai_allow_public_providers)
     message = [{"role": "user", "content": "Reply with the word ready."}]
     try:
         if body.capability == "embeddings":
@@ -160,7 +159,8 @@ async def probe_model(
     """Probe a configured alias under current privacy policy and persist its capability result."""
     settings: Settings = request.app.state.settings
     redis: Redis = request.app.state.redis
-    config = await ai_settings.get_ai_execution_config(session, settings, redis, scope=_owner)
+    config = ai_settings.derive_for_alias(
+        await ai_settings.get_ai_execution_config(session, settings, redis, scope=_owner), alias)
     mapping = config.aliases.get(alias)
     if mapping is None:
         raise HTTPException(status_code=409, detail="Configure this model alias first")
@@ -175,9 +175,10 @@ async def probe_model(
         embedding_destinations=frozenset(config.privacy.embedding_destinations),
         configuration_revision=config.configuration_revision,
     )
-    if body.capability in {"embeddings", "reranking"} and not policy.embeddings_allowed:
+    local = (destination or "").startswith("local:")  # local providers need no remote consent
+    if body.capability in {"embeddings", "reranking"} and not policy.embeddings_allowed and not local:
         raise HTTPException(status_code=403, detail="Probe denied by privacy policy")
-    if body.capability not in {"embeddings", "reranking"} and not policy.reasoning_allowed:
+    if body.capability not in {"embeddings", "reranking"} and not policy.reasoning_allowed and not local:
         raise HTTPException(status_code=403, detail="Probe denied by privacy policy")
     async def recheck_send() -> None:
         """Recheck exact session, workspace and complete privacy/config identity each attempt.
@@ -198,7 +199,8 @@ async def probe_model(
     client = ModelGateway(redis, config.omniroute_base_url, config.omniroute_api_key,
         destination or "omniroute", timeout_seconds=15, scope=_owner,
         configuration_revision=config.configuration_revision, gateway_identity=config.gateway_identity,
-        before_send=recheck_send, approved_endpoint_cidrs=config.endpoint_allowed_cidrs)
+        before_send=recheck_send, approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
+        allow_public_endpoints=config.allow_public_providers)
     message = [{"role": "user", "content": "Reply with the word ready."}]
     try:
         if body.capability == "embeddings":

@@ -26,6 +26,8 @@ from modules.settings.schemas import (
     OwnerPreferencesUpdate,
     RetentionSettingsRead,
     RetentionSettingsUpdate,
+    SystemPromptsRead,
+    SystemPromptsUpdate,
     TranslationSettingsRead,
     TranslationSettingsUpdate,
 )
@@ -140,10 +142,10 @@ async def discover_models(body: ConnectionDraft, request: Request, session: Sess
     endpoint = public.validate_endpoint(str(body.base_url), request.app.state.settings)
     if endpoint is None:
         raise HTTPException(status_code=422, detail="Gateway endpoint is required")
-    credential = body.api_key
-    if not credential:
-        raise HTTPException(status_code=409, detail="Configure a gateway credential first")
     config = await public.get_ai_execution_config(session, request.app.state.settings, request.app.state.redis, scope=_owner)
+    credential, local, destination = public.resolve_draft_provider(config, endpoint, body.api_key, body.provider_id, body.kind)
+    if not credential and not local:
+        raise HTTPException(status_code=409, detail="Configure a gateway credential first")
     session_ref = authenticated_session_ref(request)
     await session.rollback()
     async def recheck_send() -> None:
@@ -156,10 +158,11 @@ async def discover_models(body: ConnectionDraft, request: Request, session: Sess
             await session.rollback()
 
     gateway = ModelGateway(request.app.state.redis, endpoint, credential,
-        "omniroute", 20,
+        destination, 20,
         scope=_owner, configuration_revision=0,
         gateway_identity=hashlib.sha256((config.gateway_identity + endpoint + hashlib.sha256(credential.encode()).hexdigest()).encode()).hexdigest(), before_send=recheck_send,
-        approved_endpoint_cidrs=tuple(request.app.state.settings.ai_allowed_endpoint_cidrs))
+        approved_endpoint_cidrs=tuple(request.app.state.settings.ai_allowed_endpoint_cidrs),
+        allow_public_endpoints=request.app.state.settings.ai_allow_public_providers)
     try:
         model_ids = await gateway.discover_models()
         await recheck_send()
@@ -211,3 +214,18 @@ async def patch_privacy(value: PrivacySettings, session: Session, request: Reque
     saved = await public.save_ai_settings(session, update, request.app.state.settings, scope=_owner, auth_sessions=(authenticated_session_ref(request),))
     await session.commit()
     return saved.privacy
+
+
+@router.get("/prompts", response_model=SystemPromptsRead)
+async def read_prompts(session: Session, request: Request, _owner: OwnerRead) -> SystemPromptsRead:
+    """Return editable system prompts with their built-in defaults."""
+    return await public.read_system_prompts(session, request.app.state.settings, request.app.state.redis, scope=_owner)
+
+
+@router.put("/prompts", response_model=SystemPromptsRead)
+async def save_prompts(value: SystemPromptsUpdate, session: Session, request: Request, _owner: OwnerWrite) -> SystemPromptsRead:
+    """Save prompt overrides under the shared revision check; null/blank resets to default."""
+    saved = await public.save_system_prompts(session, value, request.app.state.settings, scope=_owner,
+                                             auth_sessions=(authenticated_session_ref(request),))
+    await session.commit()
+    return saved

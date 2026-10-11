@@ -213,6 +213,7 @@ class TestEndpointAndPrivacyValidation:
         """Create a mock settings instance with allowed hosts."""
         settings = MagicMock(spec=Settings)
         settings.ai_allowed_endpoint_hosts = set(allowed_hosts)
+        settings.ai_allow_public_providers = False
         return settings
 
     def test_validate_endpoint_valid(self) -> None:
@@ -253,7 +254,7 @@ class TestEndpointAndPrivacyValidation:
             "allow_remote_embeddings": True,
             "embedding_destinations": ["other_dest"],  # Mismatch!
         }
-        privacy = _privacy(raw_grants, destination=dest, web_destination=None)
+        privacy = _privacy(raw_grants, [dest], web_destination=None)
         assert privacy.allow_remote_reasoning is True
         assert privacy.reasoning_destinations == [dest]
         assert privacy.allow_remote_embeddings is False
@@ -263,12 +264,12 @@ class TestEndpointAndPrivacyValidation:
     def test_privacy_web_search_without_omniroute_destination_does_not_raise(self) -> None:
         """Web consent on with no OmniRoute destination must not build [None]."""
         raw = {"allow_remote_web_search": True, "web_search_destinations": ["web-search:x"]}
-        privacy = _privacy(raw, None, "web-search:x")
+        privacy = _privacy(raw, [], "web-search:x")
         assert privacy.allow_remote_web_search is True
         assert privacy.web_search_destinations == ["web-search:x"]
 
     def test_privacy_reports_web_destination_not_omniroute_destination(self) -> None:
         """web_search_destinations carries the web destination, not the OmniRoute one."""
         raw = {"allow_remote_web_search": True, "web_search_destinations": ["web-search:x"]}
-        privacy = _privacy(raw, "omniroute:abc", "web-search:x")
+        privacy = _privacy(raw, ["omniroute:abc"], "web-search:x")
         assert privacy.web_search_destinations == ["web-search:x"]

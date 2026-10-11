@@ -579,6 +579,18 @@ export function DashboardGrid({
           {t('mobileLayoutUnavailable')}
         </p>
       )}
+      {/* Column ruler (DashboardEdit artboard): numbers each unit track so sizes read in cells. */}
+      {isEditMode && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute -top-5 left-0 grid text-[10px] leading-none text-muted-foreground"
+          style={{ gridTemplateColumns: `repeat(${columnCount}, ${cellSize}px)`, gap: `${GRID_GAP_PX}px` }}
+        >
+          {Array.from({ length: columnCount }).map((_, i) => (
+            <span key={i} className="text-center tabular-nums">{i + 1}</span>
+          ))}
+        </div>
+      )}
       {/* Background grid guides in edit mode */}
       {isEditMode && (
         <div
@@ -676,7 +688,10 @@ export function DashboardGrid({
             {/* Live tooltip showing integer coordinates during gesture */}
             {isGestureTarget && (
               <div className={`absolute -top-7 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded text-[11px] shadow-md z-40 max-w-xs pointer-events-none ${overlapCount > 0 ? 'bg-destructive text-destructive-foreground' : 'bg-foreground text-background'}`}>
-                <span className="font-mono">{t('positionLabel', {
+                {gesture.type === 'resize' ? (
+                  <span className="font-mono font-semibold">{t('resizingLabel', { w: placement.w, h: placement.h })}</span>
+                ) : null}
+                <span className={gesture.type === 'resize' ? 'ml-2 font-mono' : 'font-mono'}>{t('positionLabel', {
                   x: placement.x + 1,
                   y: placement.y + 1,
                   w: placement.w,

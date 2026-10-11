@@ -3,7 +3,7 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
-import { AlertCircleIcon, BotIcon, CheckIcon, CopyIcon, Loader2Icon, PencilIcon, RefreshCwIcon, UserIcon } from 'lucide-react';
+import { AlertCircleIcon, BotIcon, CheckIcon, CopyIcon, Loader2Icon, PencilIcon, RefreshCwIcon } from 'lucide-react';
 import type { ChatMessage, Citation, WebSearchOutcome } from '@/modules/chat/api';
 import { Button } from '@/components/ui/button';
 import { CitationPanel, webHost } from './citation-panel';
@@ -186,33 +186,13 @@ export function ChatTranscript({
         return (
           <div
             key={msg.id}
-            className={`flex gap-3 max-w-[90%] sm:max-w-[85%] ${
-              isUser ? 'ml-auto flex-row-reverse' : 'mr-auto flex-row'
-            }`}
+            data-role={msg.role}
+            className={`flex flex-col gap-2.5 ${isUser ? 'ml-auto max-w-[80%] items-end' : 'mr-auto max-w-[88%]'}`}
           >
             <div
-              className={`size-8 rounded-full flex items-center justify-center shrink-0 text-xs font-semibold ${
-                isUser
-                  ? 'bg-primary text-primary-foreground'
-                  : 'bg-surface border border-border text-foreground'
-              }`}
+              className={isUser ? 'rounded-xl border border-border bg-background px-4 py-3 text-sm text-foreground' : 'text-sm text-foreground'}
             >
-              {isUser ? <UserIcon className="size-4" /> : <BotIcon className="size-4" />}
-            </div>
-
-            <div
-              className={`flex flex-col gap-1 p-3.5 rounded-2xl shadow-xs text-sm ${
-                isUser
-                  ? 'bg-primary/10 border border-primary/20 text-foreground rounded-tr-xs'
-                  : 'bg-surface border border-border text-foreground rounded-tl-xs'
-              }`}
-            >
-              <div className="flex items-center justify-between gap-4 text-xs text-muted-foreground mb-0.5">
-                <span className="font-semibold">
-                  {isUser ? t('userSpeaker') : msg.model_identity || t('assistantFallback')}
-                </span>
-                {formattedDate && <span>{formattedDate}</span>}
-              </div>
+              <span className="sr-only">{isUser ? t('userSpeaker') : msg.model_identity || t('assistantFallback')}</span>
 
               {relationshipLabel && (
                 <p className="text-xs text-muted-foreground" aria-label={relationshipLabel}>
@@ -220,60 +200,66 @@ export function ChatTranscript({
                 </p>
               )}
 
-              <ChatMarkdown content={msg.content} />
-
-              <div className="flex items-center gap-2">
-                {mode === 'full' && <button
-                  type="button"
-                  onClick={() => void copyMessage(msg.id, msg.content)}
-                  className="inline-flex min-h-8 items-center gap-1 rounded-md px-2 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  aria-label={t('copyMessage')}
-                >
-                  {copiedMessageId === msg.id ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
-                  <span>{copiedMessageId === msg.id ? t('copiedMessage') : t('copyMessage')}</span>
-                </button>}
-                {mode === 'full' && failedMessageId === msg.id && (
-                  <span role="status" className="text-xs text-destructive">{t('copyFailed')}</span>
-                )}
-                {canEdit && (
-                  <Button
-                    type="button"
-                    className="secondary inline-flex min-h-8 items-center gap-1 px-2 text-xs"
-                    onClick={() => onEditMessage?.(msg)}
-                    aria-label={t('editPrompt')}
-                  >
-                    <PencilIcon className="size-3.5" />
-                    <span>{t('editPrompt')}</span>
-                  </Button>
-                )}
-                {canRegenerate && (
-                  <Button
-                    type="button"
-                    className="secondary inline-flex min-h-8 items-center gap-1 px-2 text-xs"
-                    onClick={() => onRegenerateMessage?.(msg)}
-                    aria-label={t('regenerateAnswer')}
-                  >
-                    <RefreshCwIcon className="size-3.5" />
-                    <span>{t('regenerateAnswer')}</span>
-                  </Button>
-                )}
-              </div>
-
-              {mode === 'full' && !isUser && msg.citations && msg.citations.length > 0 && (
-                <CitationPanel citations={msg.citations} variant="inline" />
-              )}
-              {mode === 'drawer' && !isUser && msg.citations && msg.citations.length > 0 && (
-                <CitationChips citations={msg.citations} />
-              )}
-              {mode === 'full' && !isUser && <WebSearchNotice outcome={msg.web_search} />}
+              <ChatMarkdown content={msg.content} citations={isUser ? undefined : msg.citations} />
             </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {formattedDate && <span className="text-xs text-muted-foreground">{formattedDate}</span>}
+              {mode === 'full' && <button
+                type="button"
+                onClick={() => void copyMessage(msg.id, msg.content)}
+                className="inline-flex min-h-8 items-center gap-1 rounded-md px-2 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                aria-label={t('copyMessage')}
+              >
+                {copiedMessageId === msg.id ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
+                <span>{copiedMessageId === msg.id ? t('copiedMessage') : t('copyMessage')}</span>
+              </button>}
+              {mode === 'full' && failedMessageId === msg.id && (
+                <span role="status" className="text-xs text-destructive">{t('copyFailed')}</span>
+              )}
+              {canEdit && (
+                <Button
+                  type="button"
+                  className="secondary inline-flex min-h-8 items-center gap-1 px-2 text-xs"
+                  onClick={() => onEditMessage?.(msg)}
+                  aria-label={t('editPrompt')}
+                >
+                  <PencilIcon className="size-3.5" />
+                  <span>{t('editPrompt')}</span>
+                </Button>
+              )}
+              {canRegenerate && (
+                <Button
+                  type="button"
+                  className="secondary inline-flex min-h-8 items-center gap-1 px-2 text-xs"
+                  onClick={() => onRegenerateMessage?.(msg)}
+                  aria-label={t('regenerateAnswer')}
+                >
+                  <RefreshCwIcon className="size-3.5" />
+                  <span>{t('regenerateAnswer')}</span>
+                </Button>
+              )}
+            </div>
+
+            {mode === 'drawer' && !isUser && msg.model_identity && (
+              <span className="text-xs text-muted-foreground">
+                {t('modelLine', { model: msg.model_identity })}{msg.citations?.length ? ` · ${t('sourcesCount', { count: msg.citations.length })}` : ''}
+              </span>
+            )}
+            {mode === 'full' && !isUser && msg.citations && msg.citations.length > 0 && (
+              <CitationPanel citations={msg.citations} variant="inline" />
+            )}
+            {mode === 'drawer' && !isUser && msg.citations && msg.citations.length > 0 && (
+              <CitationChips citations={msg.citations} />
+            )}
+            {mode === 'full' && !isUser && <WebSearchNotice outcome={msg.web_search} />}
           </div>
         );
       })}
 
       {/* Pending status indicator */}
       {isPending && !streamingText && (
-        <div className="flex gap-3 max-w-[85%] mr-auto items-center text-xs text-muted-foreground p-3 rounded-xl bg-surface/50 border border-border">
+        <div className="mr-auto flex max-w-[88%] items-center gap-2 text-xs text-muted-foreground">
           <Loader2Icon className="size-4 animate-spin text-primary" />
           <span>{t('thinking')}</span>
         </div>
@@ -281,31 +267,26 @@ export function ChatTranscript({
 
       {/* Active streaming assistant bubble */}
       {(streamingText || isStreaming) && (
-        <div className="flex gap-3 max-w-[90%] sm:max-w-[85%] mr-auto flex-row">
-          <div className="size-8 rounded-full flex items-center justify-center shrink-0 bg-surface border border-border text-foreground text-xs font-semibold">
-            <BotIcon className="size-4 text-primary" />
-          </div>
-
-          <div className="flex flex-col gap-1 p-3.5 rounded-2xl shadow-xs bg-surface border border-border text-foreground rounded-tl-xs">
+        <div className="mr-auto flex max-w-[88%] flex-col gap-2.5">
+          <div className="text-sm text-foreground">
             <div className="flex items-center gap-2 text-xs text-muted-foreground mb-0.5">
-              <span className="font-semibold">{t('assistantFallback')}</span>
-              <span className="inline-flex items-center gap-1 text-xs text-primary">
-                <span className="size-1.5 rounded-full bg-primary animate-pulse" />
+              <span className="inline-flex items-center gap-1.5 text-xs text-primary">
+                <span className="size-2 rounded-full bg-primary animate-pulse" />
                 {t('streaming')}
               </span>
             </div>
 
-            <ChatMarkdown content={streamingText || ''} />
+            <ChatMarkdown content={streamingText || ''} citations={streamingCitations} />
 
             {/* Always-mounted live region so the notice text change is announced. */}
             <div role="status">{mode === 'full' && <WebSearchNotice outcome={streamingWebSearch} />}</div>
+          </div>
             {mode === 'full' && streamingCitations && streamingCitations.length > 0 && (
               <CitationPanel citations={streamingCitations} variant="inline" />
             )}
             {mode === 'drawer' && streamingCitations && streamingCitations.length > 0 && (
               <CitationChips citations={streamingCitations} />
             )}
-          </div>
         </div>
       )}
 

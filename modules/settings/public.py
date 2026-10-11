@@ -4,6 +4,7 @@ import hashlib
 import ipaddress
 import json
 from collections.abc import Awaitable, Callable
+from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
 
@@ -19,11 +20,16 @@ from core.auth.public import get_active_account, lock_account_admission
 from core.auth.schemas import AccountSessionRef
 from core.config import Settings
 from core.model_gateway.schemas import (
+    DEFAULT_PROVIDER_ID,
+    LOCAL_PROVIDER_KINDS,
+    MAX_PROVIDERS,
     AIExecutionConfig,
     AISettingsRead,
     AISettingsUpdate,
     ModelMapping,
     PrivacySettings,
+    ProviderConfig,
+    ProviderRead,
 )
 from core.workspaces.public import (
     lock_access_fence,
@@ -41,8 +47,12 @@ from modules.settings.schemas import (
     OwnerPreferencesRead,
     OwnerPreferencesUpdate,
     RetentionSettingsRead,
+    SystemPromptEntry,
+    SystemPromptsRead,
+    SystemPromptsUpdate,
     TranslationSettingsRead,
 )
+from modules.settings.prompts import DEFAULT_SYSTEM_PROMPTS, MAX_PROMPT_CHARS
 
 ALIASES = ("reasoning-large", "reasoning-small", "fast", "embedding", "reranker", "vision", "local-private")
 
@@ -70,11 +80,12 @@ def _endpoint(value: str | None, settings: Settings) -> str | None:
         raise HTTPException(status_code=422, detail="Invalid gateway endpoint") from exc
     if port == 0:
         raise HTTPException(status_code=422, detail="Gateway endpoint port must be between 1 and 65535")
+    is_ip = True
     try:
         parsed_address = ipaddress.ip_address(parts.hostname)
     except ValueError:
         normalized_host = parts.hostname.encode("idna").decode("ascii").lower()
-        is_ipv6 = False
+        is_ipv6 = is_ip = False
     else:
         if isinstance(parsed_address, ipaddress.IPv6Address) and parsed_address.scope_id is not None:
             raise HTTPException(status_code=422, detail="Scoped IPv6 gateway endpoints are not allowed")
@@ -85,8 +96,10 @@ def _endpoint(value: str | None, settings: Settings) -> str | None:
     effective_port = port if port is not None else default_port
     policy_authority = authority_host if effective_port == default_port else f"{authority_host}:{effective_port}"
     effective_authority = f"{authority_host}:{effective_port}"
+    # Cloud providers: https public hostnames pass when the operator opted in (transport still pins the checked IPs).
+    public_ok = settings.ai_allow_public_providers and parts.scheme.lower() == "https" and not is_ip
     if (policy_authority not in settings.ai_allowed_endpoint_hosts
-            and effective_authority not in settings.ai_allowed_endpoint_hosts):
+            and effective_authority not in settings.ai_allowed_endpoint_hosts and not public_ok):
         raise HTTPException(status_code=422, detail="Endpoint address is not allowed by deployment policy")
     return urlunsplit((parts.scheme.lower(), policy_authority, parts.path.rstrip("/"), "", ""))
 
@@ -185,17 +198,19 @@ def _defaults(settings: Settings) -> tuple[str | None, str, dict[str, ModelMappi
     return endpoint, settings.omniroute_api_key.get_secret_value(), aliases
 
 
-def _privacy(raw: dict[str, object] | None, destination: str | None, web_destination: str | None) -> PrivacySettings:
-    """Project explicit consent to each capability's actual validated destination.
+def _privacy(raw: dict[str, object] | None, destinations: list[str], web_destination: str | None) -> PrivacySettings:
+    """Project explicit consent onto each remote provider's validated destination.
 
-    Web search is independent of missing/denied OmniRoute; never emit its gateway
-    destination or None in the web-search allowlist.
+    ``destinations`` are the non-local provider destinations; a grant needs the flag and an exact list entry.
+    Web search is independent of missing/denied providers; never emit a gateway destination or None in its allowlist.
     """
     raw = raw or {}
-    def granted(key: str, enabled: str) -> bool:
-        """Check that a grant is enabled and includes this exact destination."""
+    def granted(key: str, enabled: str) -> list[str]:
+        """Destinations that are enabled and exactly listed in this grant."""
         values = raw.get(key)
-        return bool(destination and raw.get(enabled) and isinstance(values, list) and destination in values)
+        if not raw.get(enabled) or not isinstance(values, list):
+            return []
+        return [d for d in dict.fromkeys(destinations) if d in values]
 
     reasoning = granted("reasoning_destinations", "allow_remote_reasoning")
     embeddings = granted("embedding_destinations", "allow_remote_embeddings")
@@ -203,18 +218,90 @@ def _privacy(raw: dict[str, object] | None, destination: str | None, web_destina
     web_search = bool(web_destination and raw.get("allow_remote_web_search")
                       and isinstance(web_values, list) and web_destination in web_values)
     return PrivacySettings(
-        allow_remote_reasoning=reasoning, allow_remote_embeddings=embeddings,
+        allow_remote_reasoning=bool(reasoning), allow_remote_embeddings=bool(embeddings),
         allow_remote_web_search=web_search,
-        reasoning_destinations=[destination] if reasoning else [],
-        embedding_destinations=[destination] if embeddings else [],
+        reasoning_destinations=reasoning, embedding_destinations=embeddings,
         web_search_destinations=[web_destination] if web_search and web_destination else [],
     )
 
 
-def _identity(endpoint: str | None, credential: str) -> tuple[str, str | None]:
-    """Derive non-secret gateway and destination identifiers from configuration."""
-    destination = f"omniroute:{_fingerprint(endpoint or '')[:32]}" if endpoint else None
+def _identity(endpoint: str | None, credential: str, *, local: bool = False) -> tuple[str, str | None]:
+    """Derive non-secret gateway and destination identifiers from configuration.
+
+    Remote destinations keep the legacy ``omniroute:`` prefix so consent saved before multi-provider survives.
+    """
+    destination = f"{'local' if local else 'omniroute'}:{_fingerprint(endpoint or '')[:32]}" if endpoint else None
     return _fingerprint(json.dumps((endpoint, _fingerprint(credential)), separators=(",", ":"))), destination
+
+
+def _stored_providers(row: AISettingsRecord) -> dict[str, dict[str, Any]]:
+    """Stored provider records; synthesise ``default`` from the legacy columns while ``providers`` is empty."""
+    if row.providers:
+        return {pid: dict(rec) for pid, rec in row.providers.items()}
+    return {DEFAULT_PROVIDER_ID: {"kind": "omniroute", "label": "Default", "base_url": row.omniroute_base_url,
+                                  "key_ciphertext": row.omniroute_api_key_ciphertext, "local": False}}
+
+
+def _destination(record: dict[str, Any], settings: Settings) -> str | None:
+    """Destination id of a stored provider without decrypting its key; None when unset or denied by policy."""
+    try:
+        endpoint = _endpoint(record.get("base_url"), settings)
+    except HTTPException as exc:
+        if exc.status_code != 422:
+            raise
+        return None
+    return _identity(endpoint, "", local=record.get("kind") in LOCAL_PROVIDER_KINDS)[1]
+
+
+def _resolve_provider(record: dict[str, Any], settings: Settings) -> ProviderConfig:
+    """Validate one stored provider against deployment policy and decrypt its key; `local` comes from the kind."""
+    kind = record.get("kind", "custom")
+    local = kind in LOCAL_PROVIDER_KINDS
+    denied = False
+    try:
+        endpoint = _endpoint(record.get("base_url"), settings)
+    except HTTPException as exc:
+        if exc.status_code != 422:
+            raise
+        endpoint, denied = None, True
+    ciphertext = record.get("key_ciphertext")
+    return ProviderConfig(
+        kind=kind, label=record.get("label") or "", base_url=endpoint, policy_denied=denied, local=local,
+        api_key="" if denied else _decrypt(ciphertext, settings), credential_configured=bool(ciphertext),
+        destination_id=None if denied else _identity(endpoint, "", local=local)[1])
+
+
+def resolve_draft_provider(
+    config: AIExecutionConfig, endpoint: str, api_key: str, provider_id: str | None, kind: str | None,
+) -> tuple[str, bool, str]:
+    """Credential, locality and destination id for an unsaved connection draft.
+
+    An empty key falls back to the stored provider's key only for that provider's own endpoint, so a draft
+    cannot send a stored secret to another host.
+    """
+    stored = config.providers.get(provider_id or DEFAULT_PROVIDER_ID)
+    local = kind in LOCAL_PROVIDER_KINDS if kind else bool(stored and stored.local)
+    if not api_key and stored is not None and stored.base_url == endpoint:
+        api_key = stored.api_key
+    return api_key, local, _identity(endpoint, "", local=local)[1] or ""
+
+
+def derive_for_alias(config: AIExecutionConfig, alias: str) -> AIExecutionConfig:
+    """Return the config with the gateway-facing endpoint/key/destination of the alias's provider.
+
+    Pure. A missing or unknown provider resolves to an unconfigured endpoint, which never sends;
+    a config carrying no providers (hand-built snapshot) is returned as is.
+    """
+    if not config.providers:
+        return config
+    mapping = config.aliases.get(alias)
+    provider = config.providers.get((mapping.provider_id if mapping else None) or DEFAULT_PROVIDER_ID)
+    if provider is None:
+        provider = ProviderConfig(kind="custom", base_url=None, destination_id=None)
+    return config.model_copy(update={
+        "omniroute_base_url": provider.base_url, "omniroute_api_key": provider.api_key,
+        "endpoint_destination_id": provider.destination_id, "omniroute_credential_configured": provider.credential_configured,
+        "endpoint_policy_denied": provider.policy_denied})
 
 
 async def get_ai_execution_config(session: AsyncSession, settings: Settings, redis: Redis | None = None, *, scope: Scope) -> AIExecutionConfig:
@@ -222,6 +309,7 @@ async def get_ai_execution_config(session: AsyncSession, settings: Settings, red
 
     Enforces endpoint policy before returning credentials and scopes privacy
     consent to exact destinations. Explicit scope is mandatory; recheck snapshot under locks before send.
+    The top-level endpoint fields mirror provider ``default``; use ``derive_for_alias`` before building a gateway.
     """
     fence = await require_settings_scope(session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled)
     row = await _row(session, scope=scope)
@@ -237,25 +325,21 @@ async def get_ai_execution_config(session: AsyncSession, settings: Settings, red
         aliases = await legacy_aliases(redis, settings, scope=scope)
         if credential:
             _cipher(settings)
-        credential_configured = bool(settings.omniroute_api_key.get_secret_value())
-    if row is not None:
-        endpoint_policy_denied = False
-        try:
-            endpoint = _endpoint(row.omniroute_base_url, settings)
-        except HTTPException as exc:
-            if exc.status_code != 422:
-                raise
-            endpoint, endpoint_policy_denied = None, True
-        credential_configured = bool(row.omniroute_api_key_ciphertext)
-        credential = "" if endpoint_policy_denied else _decrypt(row.omniroute_api_key_ciphertext, settings)
+        providers = {DEFAULT_PROVIDER_ID: ProviderConfig(
+            kind="omniroute", label="Default", base_url=endpoint, api_key=credential, policy_denied=endpoint_policy_denied,
+            credential_configured=bool(settings.omniroute_api_key.get_secret_value()),
+            destination_id=_identity(endpoint, credential)[1])}
+        privacy = PrivacySettings()
+        revision, chat_alias, brief_alias, timeout = 1, "reasoning-large", "reasoning-small", 20
+        system_prompts: dict[str, str] = {}
+        web_provider, web_endpoint, web_credential, web_configured = "none", None, "", False
+    else:
+        providers = {pid: _resolve_provider(rec, settings) for pid, rec in _stored_providers(row).items()}
         aliases = {key: ModelMapping.model_validate(value) for key, value in row.aliases.items() if key in ALIASES}
         web_destination = f"web-search:{_fingerprint(row.web_search_endpoint or '')[:32]}" if row.web_search_endpoint else None
-        privacy = _privacy(
-            row.privacy,
-            None if endpoint_policy_denied else _identity(endpoint, credential)[1],
-            web_destination,
-        )
+        privacy = _privacy(row.privacy, [p.destination_id for p in providers.values() if p.destination_id and not p.local], web_destination)
         revision, chat_alias, brief_alias, timeout = row.configuration_revision, row.chat_alias, row.brief_alias, row.request_timeout_seconds
+        system_prompts = dict(row.system_prompts or {})
         web_provider, web_endpoint = row.web_search_provider, row.web_search_endpoint
         web_configured = bool(row.web_search_api_key_ciphertext)
         try:
@@ -266,11 +350,11 @@ async def get_ai_execution_config(session: AsyncSession, settings: Settings, red
             # Web search is an independent capability; a broken web-search key
             # must not block lexical or semantic retrieval.
             web_credential = ""
-    else:
-        privacy = PrivacySettings()
-        revision, chat_alias, brief_alias, timeout = 1, "reasoning-large", "reasoning-small", 20
-        web_provider, web_endpoint, web_credential, web_configured = "none", None, "", False
-    credential_identity, destination = _identity(endpoint, credential)
+    default = providers.get(DEFAULT_PROVIDER_ID) or ProviderConfig(kind="omniroute", base_url=None, destination_id=None)
+    # Labels are display-only and stay out of the identity; any kind/endpoint/key change rotates it.
+    credential_identity = _fingerprint(json.dumps(
+        {pid: (p.kind, p.base_url, _fingerprint(p.api_key), p.destination_id, p.policy_denied) for pid, p in sorted(providers.items())},
+        separators=(",", ":")))
     identity = _fingerprint(json.dumps((str(scope.workspace_id), scope_actor(scope), fence.membership_revision,
         fence.configuration_revision, revision, credential_identity, {key: value.model_dump() for key, value in aliases.items()},
         privacy.model_dump(), web_provider, web_endpoint, _fingerprint(web_credential), tuple(sorted(settings.ai_allowed_endpoint_hosts)),
@@ -279,13 +363,13 @@ async def get_ai_execution_config(session: AsyncSession, settings: Settings, red
     return AIExecutionConfig(
         workspace_id=scope.workspace_id, actor_user_id=scope_actor(scope), membership_revision=fence.membership_revision,
         access_configuration_revision=fence.configuration_revision,
-        configuration_revision=revision, gateway_identity=identity, endpoint_destination_id=destination,
-        endpoint_policy_denied=endpoint_policy_denied, omniroute_credential_configured=credential_configured,
-        endpoint_allowed_cidrs=tuple(settings.ai_allowed_endpoint_cidrs),
-        omniroute_base_url=endpoint, omniroute_api_key=credential, aliases=aliases, privacy=privacy,
+        configuration_revision=revision, gateway_identity=identity, endpoint_destination_id=default.destination_id,
+        endpoint_policy_denied=default.policy_denied, omniroute_credential_configured=default.credential_configured,
+        endpoint_allowed_cidrs=tuple(settings.ai_allowed_endpoint_cidrs), allow_public_providers=settings.ai_allow_public_providers,
+        omniroute_base_url=default.base_url, omniroute_api_key=default.api_key, aliases=aliases, privacy=privacy,
         chat_alias=chat_alias, brief_alias=brief_alias, request_timeout_seconds=timeout,
         web_search_provider=web_provider, web_search_endpoint=web_endpoint, web_search_api_key=web_credential,
-        web_search_credential_configured=web_configured,
+        web_search_credential_configured=web_configured, system_prompts=system_prompts, providers=providers,
     )
 
 
@@ -296,6 +380,9 @@ def _read(config: AIExecutionConfig) -> AISettingsRead:
         endpoint_destination_id=config.endpoint_destination_id,
         omniroute_credential_configured=config.omniroute_credential_configured,
         endpoint_policy_denied=config.endpoint_policy_denied,
+        providers=[ProviderRead(id=pid, kind=p.kind, label=p.label, base_url=p.base_url, destination_id=p.destination_id,
+                                credential_configured=p.credential_configured, local=p.local, policy_denied=p.policy_denied)
+                   for pid, p in config.providers.items()],
         web_search_provider=config.web_search_provider, web_search_endpoint=config.web_search_endpoint,
         web_search_destination_id=(f"web-search:{_fingerprint(config.web_search_endpoint or '')[:32]}" if config.web_search_endpoint else None),
         web_search_credential_configured=config.web_search_credential_configured, chat_alias=config.chat_alias,
@@ -345,6 +432,62 @@ async def read_ai_settings(session: AsyncSession, settings: Settings, redis: Red
     return _read(await get_ai_execution_config(session, settings, redis, scope=scope))
 
 
+def _prompts_read(revision: int, overrides: dict[str, str]) -> SystemPromptsRead:
+    """Project overrides over code defaults for the prompts page."""
+    return SystemPromptsRead(configuration_revision=revision, prompts=[
+        SystemPromptEntry(key=key, value=overrides.get(key) or default, default=default, customized=key in overrides)
+        for key, default in DEFAULT_SYSTEM_PROMPTS.items()])
+
+
+async def read_system_prompts(session: AsyncSession, settings: Settings, redis: Redis | None = None, *, scope: Scope) -> SystemPromptsRead:
+    """Return effective system prompts for the owner workspace."""
+    config = await get_ai_execution_config(session, settings, redis, scope=scope)
+    return _prompts_read(config.configuration_revision, config.system_prompts)
+
+
+async def save_system_prompts(session: AsyncSession, update: SystemPromptsUpdate, settings: Settings, *, scope: Scope,
+                              auth_sessions: tuple[AccountSessionRef, ...] = ()) -> SystemPromptsRead:
+    """Revision-checked merge of prompt overrides; blank/None/default text resets a key.
+
+    Bumps ``configuration_revision`` so in-flight runs holding an older snapshot fail their pre-send check.
+    """
+    if any(key not in DEFAULT_SYSTEM_PROMPTS for key in update.prompts):
+        raise HTTPException(status_code=422, detail="Unknown system prompt")
+    if any(value and len(value) > MAX_PROMPT_CHARS for value in update.prompts.values()):
+        raise HTTPException(status_code=422, detail="System prompt too long")
+    await require_settings_scope(session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
+                                 locked=True, auth_sessions=auth_sessions)
+    await session.execute(insert(AISettingsRecord).values(owner_id=scope_actor(scope), workspace_id=scope.workspace_id)
+                          .on_conflict_do_nothing(index_elements=["owner_id"]))
+    row = await _row(session, scope=scope, locked=True)
+    if row is None:
+        raise RuntimeError("AI settings singleton could not be initialized")
+    if row.configuration_revision != update.expected_revision:
+        raise HTTPException(status_code=409, detail="AI settings changed; reload before saving")
+    merged = dict(row.system_prompts or {})
+    for key, value in update.prompts.items():
+        text = (value or "").strip()
+        if text and text != DEFAULT_SYSTEM_PROMPTS[key]:
+            merged[key] = text
+        else:
+            merged.pop(key, None)
+    row.system_prompts = merged
+    row.configuration_revision += 1
+    await session.flush()
+    return _prompts_read(row.configuration_revision, merged)
+
+
+def _kept_ciphertext(previous: dict[str, Any] | None, endpoint: str | None, settings: Settings) -> str | None:
+    """Keep a stored key only while its provider endpoint is unchanged, so a saved key never reaches a new host."""
+    if not previous:
+        return None
+    try:
+        unchanged = _endpoint(previous.get("base_url"), settings) == endpoint
+    except HTTPException:
+        unchanged = False
+    return previous.get("key_ciphertext") if unchanged else None
+
+
 async def save_ai_settings(session: AsyncSession, update: AISettingsUpdate, settings: Settings, *, scope: Scope,
                            auth_sessions: tuple[AccountSessionRef, ...] = ()) -> AISettingsRead:
     """Validate and persist an optimistic, revision-checked AI settings update.
@@ -365,8 +508,6 @@ async def save_ai_settings(session: AsyncSession, update: AISettingsUpdate, sett
         raise HTTPException(status_code=409, detail="AI settings changed; reload before saving")
     if any(alias not in ALIASES for alias in update.aliases):
         raise HTTPException(status_code=422, detail="Unknown model alias")
-    endpoint = _endpoint(str(update.omniroute_base_url) if update.omniroute_base_url else None, settings)
-    old_endpoint = row.omniroute_base_url
     bootstrap = row.configuration_revision == 1
     default_endpoint, default_credential, _ = _defaults(settings)
     try:
@@ -376,41 +517,78 @@ async def save_ai_settings(session: AsyncSession, update: AISettingsUpdate, sett
             raise
         default_endpoint = None
     if bootstrap:
-        old_endpoint = old_endpoint or default_endpoint
-        row.omniroute_base_url = old_endpoint
+        row.omniroute_base_url = row.omniroute_base_url or default_endpoint
         if not row.aliases:
             row.aliases = {key: value.model_dump(mode="json") for key, value in (await legacy_aliases(None, settings, scope=scope)).items()}
         if not row.omniroute_api_key_ciphertext and default_credential:
             row.omniroute_api_key_ciphertext = _cipher(settings).encrypt(default_credential.encode()).decode()
-    if update.omniroute_credential_action == "replaced":
-        if not update.omniroute_api_key:
-            raise HTTPException(status_code=422, detail="Replacement gateway credential is required")
-        row.omniroute_api_key_ciphertext = _cipher(settings).encrypt(update.omniroute_api_key.encode()).decode()
-    elif update.omniroute_credential_action == "removed":
-        row.omniroute_api_key_ciphertext = None
-    row.omniroute_base_url = endpoint
-    credential = _decrypt(row.omniroute_api_key_ciphertext, settings) if row.omniroute_api_key_ciphertext else ""
-    _, destination = _identity(endpoint, credential)
+    stored = _stored_providers(row)
+    providers: dict[str, dict[str, Any]]
+    if update.providers is None:
+        # Legacy omniroute_* fields edit provider "default"; every other provider is untouched.
+        endpoint = _endpoint(str(update.omniroute_base_url) if update.omniroute_base_url else None, settings)
+        ciphertext = _kept_ciphertext(stored.get(DEFAULT_PROVIDER_ID), endpoint, settings)
+        if update.omniroute_credential_action == "replaced":
+            if not update.omniroute_api_key:
+                raise HTTPException(status_code=422, detail="Replacement gateway credential is required")
+            ciphertext = _cipher(settings).encrypt(update.omniroute_api_key.encode()).decode()
+        elif update.omniroute_credential_action == "removed":
+            ciphertext = None
+        providers = dict(stored)
+        if endpoint or ciphertext or DEFAULT_PROVIDER_ID in stored:
+            providers[DEFAULT_PROVIDER_ID] = {"kind": "omniroute", "label": "Default", **stored.get(DEFAULT_PROVIDER_ID, {}),
+                                              "base_url": endpoint, "key_ciphertext": ciphertext}
+    else:
+        if len(update.providers) > MAX_PROVIDERS:
+            raise HTTPException(status_code=422, detail="Too many providers")
+        if len({item.id for item in update.providers}) != len(update.providers):
+            raise HTTPException(status_code=422, detail="Duplicate provider id")
+        providers = {}
+        for item in update.providers:
+            endpoint = _endpoint(str(item.base_url) if item.base_url else None, settings)
+            if endpoint is None:
+                raise HTTPException(status_code=422, detail="Provider endpoint is required")
+            ciphertext = _kept_ciphertext(stored.get(item.id), endpoint, settings)
+            if item.credential_action == "replaced":
+                if not item.api_key:
+                    raise HTTPException(status_code=422, detail="Replacement provider credential is required")
+                ciphertext = _cipher(settings).encrypt(item.api_key.encode()).decode()
+            elif item.credential_action == "removed":
+                ciphertext = None
+            providers[item.id] = {"kind": item.kind, "label": item.label or item.id, "base_url": endpoint,
+                                  "key_ciphertext": ciphertext, "local": item.kind in LOCAL_PROVIDER_KINDS}
+    for mapping in update.aliases.values():
+        if mapping.provider_id is not None and mapping.provider_id not in providers:
+            raise HTTPException(status_code=422, detail="Unknown model provider")
+    for alias, mapping in update.aliases.items():
+        if alias == "local-private" and mapping.provider_id is not None and providers[mapping.provider_id]["kind"] not in LOCAL_PROVIDER_KINDS:
+            raise HTTPException(status_code=422, detail="Local-private models require a local provider")
     next_web_endpoint = _endpoint(str(update.web_search_endpoint) if update.web_search_endpoint else None, settings)
     current_web_destination = f"web-search:{_fingerprint(row.web_search_endpoint or '')[:32]}" if row.web_search_endpoint else None
     next_web_destination = f"web-search:{_fingerprint(next_web_endpoint or '')[:32]}" if next_web_endpoint else None
     privacy = update.privacy.model_dump(mode="json")
-    # Consent is bound to the endpoint selected in this same owner save.
-    try:
-        canonical_old_endpoint = _endpoint(old_endpoint, settings)
-    except HTTPException as exc:
-        if exc.status_code != 422:
-            raise
-        canonical_old_endpoint = None
-    endpoint_changed = canonical_old_endpoint != endpoint
-    web_endpoint_changed = current_web_destination != next_web_destination
+    # Consent is bound to each remote provider's destination: a new provider or a changed endpoint/kind never inherits it,
+    # and removed providers drop out. A legacy save (no providers) keeps the old toggle-grants-default behaviour.
+    grants: dict[str, list[str]] = {"reasoning_destinations": [], "embedding_destinations": []}
+    for pid, record in providers.items():
+        destination = _destination(record, settings)
+        unchanged = pid in stored and _destination(stored[pid], settings) == destination
+        if not destination or record["kind"] in LOCAL_PROVIDER_KINDS or not unchanged:
+            continue
+        for enabled, key in (("allow_remote_reasoning", "reasoning_destinations"), ("allow_remote_embeddings", "embedding_destinations")):
+            if privacy[enabled] and (destination in privacy[key] or (update.providers is None and pid == DEFAULT_PROVIDER_ID)):
+                grants[key].append(destination)
     for enabled, key in (("allow_remote_reasoning", "reasoning_destinations"), ("allow_remote_embeddings", "embedding_destinations")):
-        if endpoint_changed or not destination:
-            privacy[enabled] = False
-        privacy[key] = [destination] if privacy[enabled] and destination else []
+        privacy[key] = list(dict.fromkeys(grants[key]))
+        privacy[enabled] = bool(privacy[key])
+    web_endpoint_changed = current_web_destination != next_web_destination
     if web_endpoint_changed or not next_web_destination or update.web_search_provider == "none":
         privacy["allow_remote_web_search"] = False
     privacy["web_search_destinations"] = [next_web_destination] if privacy["allow_remote_web_search"] else []
+    row.providers = providers
+    # Legacy columns mirror provider "default" for old readers.
+    row.omniroute_base_url = (providers.get(DEFAULT_PROVIDER_ID) or {}).get("base_url")
+    row.omniroute_api_key_ciphertext = (providers.get(DEFAULT_PROVIDER_ID) or {}).get("key_ciphertext")
     row.privacy = privacy
     row.aliases = {key: value.model_dump(mode="json") for key, value in update.aliases.items() if key in ALIASES}
     row.chat_alias, row.brief_alias = update.chat_alias, update.brief_alias
@@ -577,12 +755,15 @@ async def read_ai_policy_fingerprint(
         session, workspace_id, multi_workspace_enabled=settings.multi_workspace_enabled)
     if owner is None:
         return None
-    config = await get_ai_execution_config(session, settings, redis, scope=owner)
+    config = derive_for_alias(await get_ai_execution_config(session, settings, redis, scope=owner), alias)
     mapping = config.aliases.get(alias)
-    if mapping is None or config.omniroute_base_url is None or config.endpoint_policy_denied or not config.omniroute_credential_configured:
+    if mapping is None or config.omniroute_base_url is None or config.endpoint_policy_denied:
         return None
     destination = config.endpoint_destination_id
-    if destination is None or not config.privacy.allow_remote_reasoning:
+    if destination is None:
+        return None
+    # Local providers need neither a credential nor remote consent.
+    if not destination.startswith("local:") and not (config.omniroute_credential_configured and config.privacy.allow_remote_reasoning):
         return None
     return hashlib.sha256(json.dumps(
         (destination, _fingerprint(config.omniroute_api_key), alias, mapping.model, mapping.version, mapping.destination,

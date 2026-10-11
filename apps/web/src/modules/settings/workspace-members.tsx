@@ -15,6 +15,7 @@ import { apiFailureKey } from '@/core/api-failure-key';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { workspaceKeys } from '@/core/query-keys';
 import { useWorkspace } from '@/core/workspace-context';
+import { SettingsPageHeader, SettingsSection } from './settings-layout';
 
 export type InvitationRead = {
   id: string; email: string; created_at: string; expires_at: string;
@@ -37,6 +38,7 @@ export function invitationStatus(row: InvitationRead, now = Date.now()): 'accept
 /** Owner-only invitation and member management for the selected workspace. */
 export function WorkspaceMembers() {
   const t = useTranslations('workspaceMembers');
+  const tShell = useTranslations('shell');
   const format = useFormatter();
   const { csrfToken } = useWorkspaceSession();
   const { selection, isOwner } = useWorkspace();
@@ -88,7 +90,7 @@ export function WorkspaceMembers() {
   });
 
   if (!selection) return <section className="content-panel skeleton" aria-label={t('loading')} />;
-  if (!isOwner) return <section className="content-panel"><h1>{t('title')}</h1><p className="muted">{t('ownerOnly')}</p></section>;
+  if (!isOwner) return <SettingsPageHeader eyebrow={tShell('settings')} title={t('title')} description={t('ownerOnly')} />;
 
   const error = create.error ?? revoke.error ?? remove.error;
   const errorKey = error ? failureText(error) : null;
@@ -117,14 +119,10 @@ export function WorkspaceMembers() {
   const memberRows = members.data?.pages.flatMap((p) => p.items) ?? [];
   const statusLabel = { pending: t('statusPending'), accepted: t('statusAccepted'), revoked: t('statusRevoked'), expired: t('statusExpired') };
 
-  return <section className="content-panel grid gap-8">
-    <div className="grid gap-1">
-      <h1>{t('title')}</h1>
-      <p className="muted">{t('intro')}</p>
-    </div>
+  return <div className="flex flex-col gap-5">
+    <SettingsPageHeader eyebrow={tShell('settings')} title={t('title')} description={t('intro')} />
 
-    <form className="grid gap-3" onSubmit={submit} noValidate>
-      <h2 className="text-lg font-semibold">{t('inviteHeading')}</h2>
+    <SettingsSection title={t('inviteHeading')}><form className="grid gap-3" onSubmit={submit} noValidate>
       <div className="field">
         <Label htmlFor="invite-email">{t('emailLabel')}</Label>
         <div className="flex flex-wrap gap-2">
@@ -134,7 +132,7 @@ export function WorkspaceMembers() {
         </div>
         {emailError && <span className="error" role="alert">{t('invalidEmail')}</span>}
       </div>
-    </form>
+    </form></SettingsSection>
 
     {link && <div className="grid gap-2 rounded-xl border border-border bg-secondary p-4" role="status">
       <h3 className="text-sm font-semibold">{t('linkHeading')}</h3>
@@ -149,8 +147,7 @@ export function WorkspaceMembers() {
 
     {errorKey && <p className="error" role="alert">{t(errorKey)}</p>}
 
-    <div className="grid gap-3">
-      <h2 className="text-lg font-semibold">{t('invitationsHeading')}</h2>
+    <SettingsSection title={t('invitationsHeading')}>
       {invitations.isError ? listError(() => void invitations.refetch()) : invitations.isPending ? <p className="muted">{t('loading')}</p>
         : invitationRows.length === 0 ? <p className="muted">{t('noInvitations')}</p>
           : <ul className="grid gap-2">{invitationRows.map((row) => {
@@ -162,10 +159,9 @@ export function WorkspaceMembers() {
             </li>;
           })}</ul>}
       {invitations.hasNextPage && <Button type="button" variant="outline" className="w-fit" disabled={invitations.isFetchingNextPage} onClick={() => void invitations.fetchNextPage()}>{invitations.isFetchingNextPage ? t('loading') : t('loadMore')}</Button>}
-    </div>
+    </SettingsSection>
 
-    <div className="grid gap-3">
-      <h2 className="text-lg font-semibold">{t('membersHeading')}</h2>
+    <SettingsSection title={t('membersHeading')}>
       {members.isError ? listError(() => void members.refetch()) : members.isPending ? <p className="muted">{t('loading')}</p>
         : memberRows.length === 0 ? <p className="muted">{t('noMembers')}</p>
           : <ul className="grid gap-2">{memberRows.map((row) => <li key={row.user_id} className="flex flex-wrap items-center gap-3 rounded-xl border border-border px-4 py-3">
@@ -174,7 +170,7 @@ export function WorkspaceMembers() {
             {row.role === 'member' && <Button type="button" variant="outline" size="sm" onClick={() => setPending({ kind: 'remove', id: row.user_id })}>{t('remove')}</Button>}
           </li>)}</ul>}
       {members.hasNextPage && <Button type="button" variant="outline" className="w-fit" disabled={members.isFetchingNextPage} onClick={() => void members.fetchNextPage()}>{members.isFetchingNextPage ? t('loading') : t('loadMore')}</Button>}
-    </div>
+    </SettingsSection>
 
     <AlertDialog open={pending !== null} onOpenChange={(open) => { if (!open) setPending(null); }}>
       <AlertDialogContent>
@@ -188,7 +184,7 @@ export function WorkspaceMembers() {
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
-  </section>;
+  </div>;
 
   function listError(onRetry: () => void) {
     return <div role="alert" className="flex items-center gap-3"><span className="error">{t('loadFailed')}</span><Button type="button" variant="outline" size="sm" onClick={onRetry}>{t('retry')}</Button></div>;

@@ -19,12 +19,12 @@ Read [the design system](../../../docs/DESIGN_SYSTEM.md) before UI work. It owns
 
 - All ordinary UI components compose shadcn primitives. Tokens are semantic CSS variables with paired foreground values, including portals, charts and dark mode. Do not introduce Material UI or parallel bespoke buttons/forms/dialogs.
 - Main navigation is Dashboard / Chat / Settings. User settings owns gadget definitions, connectors/MCP, rules and system preferences. Dashboard Edit only changes layout/instances; grid/handles are hidden in View and changes require Save or Cancel.
-- Quick chat is a large right **Sheet** containing New chat, user/assistant messages, composer/send-stop and close. History and advanced controls belong on the full Chat page. Share thread/draft state across both. Ported AnythingLLM UI must obey these component rules; AI uses server-side OpenAI SDK via Ommi Router, without local AI.
+- Quick chat is a large right **Sheet** containing New chat, user/assistant messages, composer/send-stop and close. History and advanced controls belong on the full Chat page. Share thread/draft state across both. Ported AnythingLLM UI must obey these component rules; AI uses the server-side OpenAI SDK against configured providers (cloud or local).
 - User preferences use **Dialog** with light/dark/system and the two locale choices. Preview is reversible; Save persists both settings, Cancel/close restores them. Reuse the existing preferences owner rather than creating disconnected theme/language stores.
 - Keep application language IDs `en-us` and `vi-vi`; normalize centrally to `en-US` and `vi-VN` for next-intl/Intl/HTML lang. Translate visible and accessible UI text through catalogs, not inline language branches. Locale must not change quote currency/timezone or translate source/user content implicitly.
 - Use next-themes root class behavior and next-intl App Router patterns; migrate legacy `body[data-theme]` callers coherently. Do not claim server/client/theme hydration works merely because a build passes.
 - Recharts through shadcn Chart owns financial graphs. Preserve units, precision, source timestamps, freshness and missing-data gaps. Provide readable theme-aware axes/tooltips and a non-color-only accessible summary. Never invent a Recharts CandlestickChart API.
-- Fill viewport width, allow dashboard document scrolling and mobile reflow, and preserve desktop layout when viewport changes. Keep shadcn focus management and portal semantics. Do not build duplicate modal traps.
+- Fill viewport width, keep the header, main nav and connection footer fixed (the shell is `100dvh` with `overflow: hidden`; the document never scrolls) so only the body content region (`.workspace-main`) scrolls, with mobile reflow, and preserve desktop layout when viewport changes. Keep shadcn focus management and portal semantics. Do not build duplicate modal traps.
 
 ## Delivery discipline
 

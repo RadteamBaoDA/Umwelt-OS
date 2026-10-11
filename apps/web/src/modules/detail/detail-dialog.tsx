@@ -46,14 +46,14 @@ export function DetailDialog({ target, onClose, onCloseAutoFocus }: DetailDialog
       <DialogContent
         closeLabel={t('close')}
         onCloseAutoFocus={onCloseAutoFocus}
-        className="grid-rows-[auto_minmax(0,1fr)] gap-0 h-[calc(100dvh-1rem)] max-h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] max-w-4xl overflow-hidden p-0 sm:h-[85dvh] sm:max-h-[85dvh] sm:w-[calc(100vw-2rem)] sm:max-w-4xl"
+        className="grid-rows-[auto_minmax(0,1fr)] gap-0 h-[calc(100dvh-1rem)] max-h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] overflow-hidden rounded-xl p-0 sm:h-[85dvh] sm:max-h-[85dvh] sm:w-[calc(100vw-2rem)] sm:max-w-[880px]"
       >
-        <DialogHeader className="border-b border-border px-4 py-3 text-left">
+        <DialogHeader className="border-b border-border py-4 pl-6 pr-16 text-left">
           <DialogTitle>{t(`title_${kind}`)}</DialogTitle>
           <DialogDescription>{t(`description_${kind}`)}</DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-hidden">
-          {current?.kind === 'story' && supported && <div className="h-full p-3 sm:p-4"><StoryDetail storyId={current.id} sourceIds={current.sourceIds ?? []} onBack={stack.length ? goBack : onClose} /></div>}
+          {current?.kind === 'story' && supported && <div className="h-full p-3 sm:p-4"><StoryDetail storyId={current.id} sourceIds={current.sourceIds ?? []} onBack={stack.length ? goBack : onClose} onClose={onClose} /></div>}
           {current?.kind === 'entity' && <EntityDialogBody key={current.id} entityId={current.id} canGoBack={stack.length > 0} onBack={goBack} onOpenEntity={openEntity} />}
           {current?.kind === 'document' && <DocumentDialogBody key={current.id} documentId={current.id} />}
         </div>

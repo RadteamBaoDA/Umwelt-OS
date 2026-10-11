@@ -196,3 +196,13 @@ def test_web_search_cidrs_reject_broad_ranges() -> None:
         with pytest.raises(ValidationError):
             Settings.model_validate({"WEB_SEARCH_ALLOWED_CIDRS": [bad]})
     assert Settings.model_validate({"WEB_SEARCH_ALLOWED_CIDRS": ["10.0.0.0/8", "fc00::/16"]})
+
+
+def test_http_client_allow_global_is_opt_in() -> None:
+    """AI_ALLOW_PUBLIC_PROVIDERS reaches the transport only when the caller asks for it."""
+    on = approved_http_client("https://api.example.com", (), allow_global=True)
+    assert on._transport._allow_global is True  # type: ignore[attr-defined]
+    off = approved_http_client("https://api.example.com", ("10.0.0.0/8",))
+    assert off._transport._allow_global is False  # type: ignore[attr-defined]
+    with pytest.raises(EndpointNetworkPolicyError):
+        approved_http_client("https://api.example.com", ())

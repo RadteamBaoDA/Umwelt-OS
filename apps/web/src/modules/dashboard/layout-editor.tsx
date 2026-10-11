@@ -4,10 +4,10 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import {
   AlertCircle,
   Check,
+  FolderPlus,
   LayoutTemplate,
   Plus,
   Redo2,
-  Sliders,
   Undo2,
   X,
 } from 'lucide-react';
@@ -77,6 +77,8 @@ export interface LayoutEditorProps {
   onUseReadableMobileSizes?: () => void;
   /** True only after a complete measured readable projection is available. */
   canUseReadableMobileSizes?: boolean;
+  /** Opens the Add group dialog owned by the dashboard page; the button is hidden when omitted. */
+  onAddGroup?: () => void;
   /** Callback fired when user opens the preset picker dialog. */
   onOpenPresetPicker: () => void;
   /** Callback fired when adding a selected definition or new gadget instance. */
@@ -131,6 +133,7 @@ export function LayoutEditor({
   onUseReadableMobileSizes,
   canUseReadableMobileSizes = false,
   onOpenPresetPicker,
+  onAddGroup,
   onAddGadgetInstance,
   onBeginAddGadgetInstance,
   onCancelPendingAdd,
@@ -233,122 +236,55 @@ export function LayoutEditor({
 
   return (
     <>
-      {/* Top Edit Toolbar */}
-      <div className="flex flex-wrap items-center justify-between gap-3 p-3 rounded-xl border border-primary/40 bg-primary/5 backdrop-blur-xs mb-4 shadow-xs">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <span className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
-            <Sliders className="w-4 h-4 text-primary" aria-hidden="true" />
-            <span>{t('editingTitle', { name: dashboardName })}</span>
-          </span>
-          {isDirty ? (
-            <span role="status" className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
-              <span className="w-2 h-2 rounded-full bg-primary" aria-hidden="true" />
-              <span>{t('unsavedChanges')}</span>
-            </span>
-          ) : null}
-          <span className="text-xs text-muted-foreground">{t('keyboardHelp')}</span>
-          <span className="text-xs text-muted-foreground">
+      {/* Top Edit Toolbar (DashboardEdit artboard): title + edit state left, explicit Cancel / Save right */}
+      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card px-4 py-3">
+        <div className="mr-auto flex min-w-0 flex-col">
+          <strong className="text-[15px] font-bold text-foreground">{t('editingTitle', { name: dashboardName })}</strong>
+          <span role="status" className="flex items-center text-xs text-muted-foreground">
+            <span className={`mr-1.5 inline-block size-2 rounded-full ${isDirty ? 'bg-primary' : 'bg-border'}`} aria-hidden="true" />
+            {isDirty ? <>{t('unsavedChanges')} {'·'} </> : null}
             {t('editCount', { count: editCount })}
             {baseRevision != null ? <> {'·'} {t('draftOf', { revision: baseRevision })}</> : null}
           </span>
         </div>
 
-        {/* Toolbar Buttons */}
-        <div className="flex items-center gap-1.5 flex-wrap">
-          {/* Undo */}
-          <button
-            type="button"
-            disabled={!canUndo || isSaving}
-            onClick={onUndo}
-            aria-label={t('undo')}
-            title={t('undo')}
-            className="p-1.5 rounded-lg border border-border bg-card text-foreground hover:bg-primary/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-          >
-            <Undo2 className="w-4 h-4" />
-          </button>
-
-          {/* Redo */}
-          <button
-            type="button"
-            disabled={!canRedo || isSaving}
-            onClick={onRedo}
-            aria-label={t('redo')}
-            title={t('redo')}
-            className="p-1.5 rounded-lg border border-border bg-card text-foreground hover:bg-primary/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-          >
-            <Redo2 className="w-4 h-4" />
-          </button>
-
-          <div className="w-px h-5 bg-border mx-1" />
-
-          {onUseReadableMobileSizes && (
-            <Button
-              type="button"
-              className="secondary min-h-11 text-xs px-3"
-              disabled={!canUseReadableMobileSizes || isSaving}
-              onClick={onUseReadableMobileSizes}
-            >
-              {t('useReadableMobileSizes')}
-            </Button>
-          )}
-
-          {/* Add Gadget */}
-          <Button
-            type="button"
-            disabled={isSaving}
-            className="secondary text-xs h-8 px-2.5 gap-1.5"
-            onClick={() => setAddDialogOpen(true)}
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span>{t('addGadget')}</span>
+        <Button type="button" variant="outline" className="min-h-11" disabled={!canUndo || isSaving} onClick={onUndo}>
+          <Undo2 className="size-4" aria-hidden="true" />{t('undo')}
+        </Button>
+        <Button type="button" variant="outline" className="min-h-11" disabled={!canRedo || isSaving} onClick={onRedo}>
+          <Redo2 className="size-4" aria-hidden="true" />{t('redo')}
+        </Button>
+        <span aria-hidden="true" className="mx-1 h-7 w-px bg-border" />
+        {onUseReadableMobileSizes && (
+          <Button type="button" variant="outline" className="min-h-11" disabled={!canUseReadableMobileSizes || isSaving} onClick={onUseReadableMobileSizes}>
+            {t('useReadableMobileSizes')}
           </Button>
-
-          {/* Presets */}
-          <Button
-            type="button"
-            disabled={isSaving}
-            className="secondary text-xs h-8 px-2.5 gap-1.5"
-            onClick={onOpenPresetPicker}
-          >
-            <LayoutTemplate className="w-3.5 h-3.5" />
-            <span>{t('presets')}</span>
+        )}
+        <Button type="button" variant="outline" className="min-h-11" disabled={isSaving} onClick={() => setAddDialogOpen(true)}>
+          <Plus className="size-4" aria-hidden="true" />{t('addGadget')}
+        </Button>
+        {onAddGroup && (
+          <Button type="button" variant="outline" className="min-h-11" disabled={isSaving} onClick={onAddGroup}>
+            <FolderPlus className="size-4" aria-hidden="true" />{t('addGroup')}
           </Button>
-
-          <div className="w-px h-5 bg-border mx-1" />
-
-          {/* Cancel */}
-          <Button
-            type="button"
-            disabled={isSaving}
-            onClick={onCancel}
-            className="secondary text-xs h-8 px-3"
-          >
-            {t('cancelEdit')}
-          </Button>
-
-          {/* Save */}
-          <Button
-            type="button"
-            disabled={isSaving || !isDirty}
-            onClick={onSave}
-            className="text-xs h-8 px-3.5 font-bold gap-1.5"
-          >
-            {isSaving ? (
-              t('saving')
-            ) : (
-              <>
-                <Check className="w-3.5 h-3.5" />
-                <span>{t('saveLayout')}</span>
-              </>
-            )}
-          </Button>
-        </div>
+        )}
+        <Button type="button" variant="outline" className="min-h-11" disabled={isSaving} onClick={onOpenPresetPicker}>
+          <LayoutTemplate className="size-4" aria-hidden="true" />{t('presets')}
+        </Button>
+        <span aria-hidden="true" className="mx-1 h-7 w-px bg-border" />
+        <Button type="button" variant="outline" className="min-h-11" disabled={isSaving} onClick={onCancel}>
+          {t('cancelEdit')}
+        </Button>
+        <Button type="button" className="min-h-11 font-semibold" disabled={isSaving || !isDirty} onClick={onSave}>
+          {isSaving ? t('saving') : <><Check className="size-4" aria-hidden="true" />{t('saveLayout')}</>}
+        </Button>
       </div>
 
-      <ul aria-label={t('gridLegend')} className="-mt-2 mb-4 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+      <ul aria-label={t('gridLegend')} className="m-0 flex list-none flex-wrap items-center gap-x-4 gap-y-1 p-0 text-xs text-muted-foreground">
         <li className="flex items-center gap-1.5"><span aria-hidden="true" className="h-3 w-3 rounded-sm border border-border" />{t('legendFree')}</li>
         <li className="flex items-center gap-1.5"><span aria-hidden="true" className="h-3 w-3 rounded-sm border border-primary bg-primary/15" />{t('legendDrop')}</li>
         <li className="flex items-center gap-1.5"><span aria-hidden="true" className="h-3 w-3 rounded-sm border border-destructive bg-destructive/15" />{t('legendOverlap')}</li>
+        <li>{t('keyboardHelp')}</li>
       </ul>
 
       {/* Save Error Alert Banner */}

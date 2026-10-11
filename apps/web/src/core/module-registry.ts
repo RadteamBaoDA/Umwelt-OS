@@ -4,6 +4,7 @@ export type ShellMessageKey =
   | 'settings'
   | 'dataSources'
   | 'aiRouter'
+  | 'systemPrompts'
   | 'dashboardGadgets'
   | 'workspaceMembers'
   | 'documents'
@@ -11,6 +12,7 @@ export type ShellMessageKey =
   | 'search'
   | 'news'
   | 'translationSettings'
+  | 'memorySettings'
   | 'systemStatus'
   | 'sourcesTab'
   | 'mcpTab'
@@ -52,9 +54,16 @@ export const mainNavigation: NavigationDestination[] = [
 export const settingsGroups: NavigationDestination[] = [
   { id: 'data-sources', href: '/settings/sources', messageKey: 'dataSources' },
   { id: 'ai-router', href: '/settings/ai', messageKey: 'aiRouter' },
+  { id: 'system-prompts', href: '/settings/prompts', messageKey: 'systemPrompts' },
   { id: 'dashboard-gadgets', href: '/settings/dashboard', messageKey: 'dashboardGadgets' },
   { id: 'workspace-members', href: '/settings/workspace', messageKey: 'workspaceMembers' },
   { id: 'translation-settings', href: '/settings/translation', messageKey: 'translationSettings', members: true },
+];
+
+/** Owner-only settings links shown after the three design groups and Members/Translation in the settings panel nav (not in the main Settings rail or palette). */
+export const settingsExtraLinks: NavigationDestination[] = [
+  { id: 'memory-settings', href: '/settings/memory', messageKey: 'memorySettings' },
+  { id: 'system-status', href: '/settings/system', messageKey: 'systemStatus' },
 ];
 
 /** Sub-tabs of the Data sources group (rendered by the shell above the page); exact tabs match only their own path. */

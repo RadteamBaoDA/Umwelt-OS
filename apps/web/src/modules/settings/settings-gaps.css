@@ -1,0 +1,5 @@
+/* Settings inner nav drift fixes against SettingsAI.dc.html: 2px item gap and 10px item padding. */
+@layer components {
+  .settings-panel .settings-nav { gap: 2px; }
+  .settings-panel .settings-nav a { padding: 0 10px; }
+}

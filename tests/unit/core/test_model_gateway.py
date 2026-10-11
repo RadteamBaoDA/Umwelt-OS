@@ -1005,3 +1005,49 @@ class TestG1GatewayTimeouts:
         with patch.object(tr, "DNS_TIMEOUT_SECONDS", 0.1), patch.object(loop, "getaddrinfo", hang),              pytest.raises(tr.EndpointNetworkPolicyError, match="resolution"):
             await t.handle_async_request(httpx.Request("GET", "http://gw.example:80/"))
         assert time.monotonic() - t0 < 2
+
+
+class TestLocalProviderPolicyAndUrls:
+    """Local (``local:``) destinations skip credential/consent; URL versions are not doubled."""
+
+    def test_local_destination_needs_no_key_marker_or_consent(self) -> None:
+        policy = _policy(permitted_destinations=frozenset({"local:abc"}))
+        assert may_send(policy, "fast", ModelMapping(model="llama3"), "local:abc", False, "chat") is True
+        assert may_send(policy, "embedding", ModelMapping(model="nomic"), "local:abc", False, "embeddings") is True
+        assert may_send(policy, "local-private", ModelMapping(model="llama3"), "local:abc", False, "chat") is True
+
+    def test_local_destination_still_must_be_permitted_and_never_serves_local_only(self) -> None:
+        mapping = ModelMapping(model="llama3")
+        assert may_send(_policy(), "fast", mapping, "local:abc", False, "chat") is False
+        policy = _policy(permitted_destinations=frozenset({"local:abc"}), local_only=True)
+        assert may_send(policy, "fast", mapping, "local:abc", False, "chat") is False
+
+    def test_remote_destination_still_needs_consent_and_key(self) -> None:
+        policy = _policy(permitted_destinations=frozenset({"omniroute:abc"}))
+        mapping = ModelMapping(model="gpt", destination="remote")
+        assert may_send(policy, "fast", mapping, "omniroute:abc", True, "chat") is False
+        assert may_send(policy.model_copy(update={"reasoning_allowed": True}), "local-private", mapping,
+                        "omniroute:abc", True, "chat") is False
+
+    @pytest.mark.parametrize(("url", "expected"), [
+        ("https://gw.example", "https://gw.example/v1"),
+        ("https://gw.example/v1", "https://gw.example/v1"),
+        ("https://generativelanguage.googleapis.com/v1beta/openai", "https://generativelanguage.googleapis.com/v1beta/openai"),
+        ("https://openrouter.ai/api/v1", "https://openrouter.ai/api/v1"),
+        ("https://api.groq.com/openai/v1", "https://api.groq.com/openai/v1"),
+        ("http://localhost:11434", "http://localhost:11434/v1"),
+        ("https://gw.example/v10x", "https://gw.example/v10x/v1"),
+    ])
+    def test_api_base_does_not_double_version(self, url: str, expected: str) -> None:
+        from core.model_gateway.client import _api_base
+
+        assert _api_base(url) == expected
+
+    @pytest.mark.asyncio
+    async def test_discover_models_requires_key_only_for_remote(self) -> None:
+        with pytest.raises(ModelGatewayError, match="not configured"):
+            await _gateway(AsyncMock(), api_key="", destination_id="omniroute:abc").discover_models()
+        # A local gateway passes the key check and reaches the (blocked) network layer instead.
+        with pytest.raises(ModelGatewayError) as exc:
+            await _gateway(AsyncMock(), api_key="", destination_id="local:abc", base_url="http://127.0.0.1:9").discover_models()
+        assert "not configured" not in str(exc.value)

@@ -111,6 +111,7 @@ async def _apply_configured_reranking(
         config = await settings_public.get_ai_execution_config(
             session, settings, redis, scope=scope_kw["scope"],
         )
+        config = settings_public.derive_for_alias(config, "reranker")
         rerank_mapping = config.aliases.get("reranker")
         if not rerank_mapping or not rerank_mapping.model.strip():
             return evidence_items, "unavailable", ["Configured reranker alias is not mapped"]
@@ -127,6 +128,7 @@ async def _apply_configured_reranking(
             local_only=False,
             permitted_destinations=frozenset(
                 config.privacy.reasoning_destinations + config.privacy.embedding_destinations
+                + ([config.endpoint_destination_id] if config.endpoint_destination_id else [])
             ),
             reasoning_destinations=frozenset(config.privacy.reasoning_destinations),
             embedding_destinations=frozenset(config.privacy.embedding_destinations),
@@ -194,6 +196,7 @@ async def _apply_configured_reranking(
             configuration_revision=config.configuration_revision,
             before_send=before_rerank_send,
             approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
+            allow_public_endpoints=config.allow_public_providers,
         )
 
         raw_result = await gateway.rerank(

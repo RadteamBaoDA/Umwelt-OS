@@ -2,6 +2,9 @@
 export const detailMessages = {
   'en-us': {
       close: 'Close',
+      timeline: 'Timeline',
+      createRule: 'Create rule',
+      askAiAboutThis: 'Ask AI about this',
       back: 'Back',
       loading: 'Loading…',
       retry: 'Retry',
@@ -62,6 +65,9 @@ export const detailMessages = {
   },
   'vi-vi': {
       close: 'Đóng',
+      timeline: 'Dòng thời gian',
+      createRule: 'Tạo quy tắc',
+      askAiAboutThis: 'Hỏi AI về nội dung này',
       back: 'Quay lại',
       loading: 'Đang tải…',
       retry: 'Thử lại',

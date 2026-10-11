@@ -1,5 +1,6 @@
 'use client';
 
+import { CheckboxField, FieldGrid, SettingsActions, SettingsSection } from '@/modules/settings/settings-layout';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -1033,7 +1034,7 @@ export function ConnectorEditor({
   const catalogStatus = (entry: ConnectorCatalogEntry) => entry.availability === 'available' || entry.availability === 'implemented'
     ? t('available') : entry.availability === 'requires_credentials' ? t('credentialsRequired') : entry.availability === 'planned' ? t('planned') : t('unavailable');
 
-  return <section className="sub-panel source-editor" aria-label={sourceId ? t('editTitle') : t('setupTitle')}>
+  return <section className="source-editor flex flex-col gap-4 rounded-lg border border-border bg-card p-5" aria-label={sourceId ? t('editTitle') : t('setupTitle')}>
     {!sourceId ? <>
       <header className="section-heading"><div><h2>{t('setupTitle')}</h2><p className="muted">{t('stepConnect')}</p></div></header>
       {catalogQuery.isPending && <p className="muted">{t('loading')}</p>}
@@ -1082,8 +1083,7 @@ export function ConnectorEditor({
         </ol>
         <fieldset className="source-editor-fields" disabled={locked}>
         <div className="form source-editor-form">
-          <section id="source-step-connect" aria-labelledby="source-step-connect-title" className="grid gap-3 rounded-lg border border-border p-4">
-            <h3 id="source-step-connect-title" className="text-base font-semibold">{t('stepConnect')}</h3>
+          <div id="source-step-connect" className="scroll-mt-4"><SettingsSection title={t('stepConnect')}>
             {!['telegram', 'alpha_vantage', 'coingecko', 'rest'].includes(provider) && currentEntry && (currentEntry.auth_methods.every((method) => method === 'none')
               ? <p className="muted">{t('connectNoCredential')}</p>
               : currentEntry.auth_methods.includes('oauth2') && <p className="muted">{t('connectOAuth')}</p>)}
@@ -1101,9 +1101,8 @@ export function ConnectorEditor({
           </>}
             <div className="form-actions"><Button className="secondary" disabled={locked} onClick={validateDraft}>{busyAction === 'validate' ? t('validating') : t('validateDraft')}</Button></div>
             {validation && <p className="status-panel" role="status">{t('validationPassed', { time: formatDate(validation.at, display.locale, display.timezone) })}{validation.verifiedBotId ? ` ${t('verifiedBot')}: ${validation.verifiedBotId}` : ''}{validation.scopeVerified ? ` · ${t('scopeVerified')}` : ''}</p>}
-          </section>
-          <section id="source-step-choose" aria-labelledby="source-step-choose-title" className="grid gap-3 rounded-lg border border-border p-4">
-            <h3 id="source-step-choose-title" className="text-base font-semibold">{t('stepChooseData')}</h3>
+          </SettingsSection></div>
+          <div id="source-step-choose" className="scroll-mt-4"><SettingsSection title={t('stepChooseData')}>
           {currentEntry && <ProviderGuide entry={currentEntry} source={source ? { ...source, status: sourceStatus } : null} onTest={sourceId ? validateDraft : undefined} testBusy={locked} testPassed={Boolean(validation)} />}
           {freeProviders.has(provider) && currentEntry && (sourceId
             ? <ProviderTerms sourceId={sourceId} entry={currentEntry} csrfToken={csrfToken} disabled={locked} />
@@ -1111,35 +1110,36 @@ export function ConnectorEditor({
           {freeProviders.has(provider) && provider !== 'google_news' ? <p className="muted">{t('fixedScope')}</p> : nativeProviders.has(provider)
             ? <ProviderScope key={`${sourceId}:${provider}:${revision}:${sourceGeneration}:${scopeResetEpoch}`} provider={provider as NativeProvider} configuration={configuration} disabled={locked} resetEpoch={scopeResetEpoch} onChange={changeConfiguration} />
             : provider === 'rss' ? <div className="field"><Label htmlFor="source-feed-url">{t('sourceUrl')}</Label><Input id="source-feed-url" type="url" value={configuration.feed_url ?? ''} onChange={(event) => changeConfiguration('feed_url', event.target.value)} /></div> : <div className="field"><Label htmlFor="source-config-url">{provider === 'rest' ? t('apiUrl') : t('pageUrl')}</Label><Input id="source-config-url" type="url" value={configuration.url ?? ''} onChange={(event) => changeConfiguration('url', event.target.value)} /></div>}
-          {provider === 'rest' && <>
+          {provider === 'rest' && <FieldGrid>
             <div className="field"><Label htmlFor="source-items-path">{t('itemsPath')}</Label><Input id="source-items-path" maxLength={256} value={configuration.items_path ?? ''} onChange={(event) => changeConfiguration('items_path', event.target.value)} /></div>
             <div className="field"><Label htmlFor="source-id-field">{t('idField')}</Label><Input id="source-id-field" maxLength={128} value={configuration.id_field ?? ''} onChange={(event) => changeConfiguration('id_field', event.target.value)} /></div>
             <div className="field"><Label htmlFor="source-title-field">{t('titleField')}</Label><Input id="source-title-field" maxLength={128} value={configuration.title_field ?? ''} onChange={(event) => changeConfiguration('title_field', event.target.value)} /></div>
             <div className="field"><Label htmlFor="source-content-field">{t('contentField')}</Label><Input id="source-content-field" maxLength={128} value={configuration.content_field ?? ''} onChange={(event) => changeConfiguration('content_field', event.target.value)} /></div>
             <div className="field"><Label htmlFor="source-updated-field">{t('updatedField')}</Label><Input id="source-updated-field" maxLength={128} value={configuration.updated_field ?? ''} onChange={(event) => changeConfiguration('updated_field', event.target.value)} /></div>
-          </>}
-          </section>
-          <section id="source-step-collect" aria-labelledby="source-step-collect-title" className="grid gap-3 rounded-lg border border-border p-4">
-            <h3 id="source-step-collect-title" className="text-base font-semibold">{t('stepCollect')}</h3>
+          </FieldGrid>}
+          </SettingsSection></div>
+          <div id="source-step-collect" className="scroll-mt-4"><SettingsSection title={t('stepCollect')}>
+          <FieldGrid>
           <div className="field"><Label htmlFor="source-schedule">{t('schedule')}</Label><Select value={String(configuration.schedule_interval_minutes)} onValueChange={(value) => changeConfiguration('schedule_interval_minutes', Number(value) as ConnectorConfig['schedule_interval_minutes'])}><SelectTrigger id="source-schedule"><SelectValue /></SelectTrigger><SelectContent>{(provider === 'alpha_vantage' ? [1440] : intervals).map((minutes) => <SelectItem key={minutes} value={String(minutes)}>{t('everyMinutes', { minutes })}</SelectItem>)}</SelectContent></Select></div>
           <div className="field"><Label htmlFor="source-timezone">{t('timezone')}</Label><Input id="source-timezone" value={configuration.timezone} onChange={(event) => changeConfiguration('timezone', event.target.value)} /></div>
+          </FieldGrid>
             {nativeProviders.has(provider) && <>
             <div className="field"><Label htmlFor="source-history-mode">{t('historyMode')}</Label><Input id="source-history-mode" readOnly aria-readonly="true" value={t(provider === 'telegram' ? 'pendingUpdatesOnly' : 'returnedSnapshot')} /></div>
             </>}
-          </section>
+          </SettingsSection></div>
           {(provider === 'web' || nativeProviders.has(provider)) && <details className="rounded-lg border border-border p-4">
             <summary className="cursor-pointer font-semibold">{t('advancedTitle')}</summary>
-            <div className="mt-3 grid gap-3">
+            <div className="mt-3"><FieldGrid>
               {provider === 'web' && <>
             <div className="field"><Label htmlFor="source-max-pages">{t('maxPages')}</Label><Input id="source-max-pages" type="number" min={1} max={10} value={configuration.max_pages} onChange={(event) => changeConfiguration('max_pages', Number(event.target.value))} /></div>
             <div className="field"><Label htmlFor="source-max-depth">{t('maxDepth')}</Label><Input id="source-max-depth" type="number" min={0} max={2} value={configuration.max_depth} onChange={(event) => changeConfiguration('max_depth', Number(event.target.value))} /></div>
             <div className="field"><Label htmlFor="source-timeout">{t('timeout')}</Label><Input id="source-timeout" type="number" min={1} max={60} value={configuration.timeout_seconds} onChange={(event) => changeConfiguration('timeout_seconds', Number(event.target.value))} /></div>
-            <div className="field field-inline"><Label htmlFor="source-js-render">{t('renderJavascript')}</Label><Checkbox id="source-js-render" checked={configuration.js_render} onCheckedChange={(checked) => changeConfiguration('js_render', checked === true)} /></div>
+            <CheckboxField><Checkbox id="source-js-render" checked={configuration.js_render} onCheckedChange={(checked) => changeConfiguration('js_render', checked === true)} /><Label htmlFor="source-js-render">{t('renderJavascript')}</Label></CheckboxField>
               </>}
               {nativeProviders.has(provider) && <>
             <div className="field"><Label htmlFor="source-native-timeout">{t('timeout')}</Label><Input id="source-native-timeout" type="number" min={1} max={30} value={configuration.timeout_seconds} onChange={(event) => changeConfiguration('timeout_seconds', Number(event.target.value))} /></div>
               </>}
-            </div>
+            </FieldGrid></div>
           </details>}
         </div>
         </fieldset>
@@ -1200,11 +1200,11 @@ export function ConnectorEditor({
           <Button className="secondary" disabled={locked} onClick={reloadServerConfiguration}>{t('reloadDiscard')}</Button>
         </div>}
         {(termsBlocked || visibleActivationError === 'terms_not_accepted') && <p className="error" role="status">{t('termsActivationBlocked')}</p>}
-        <div className="form-actions">
+        <SettingsActions>
           <Button className="secondary" onClick={closeEditor}>{t('cancel')}</Button>
           <Button className="secondary" disabled={locked || sourceStatus !== 'active'} onClick={() => saveConfiguration()}>{busyAction === 'save' ? t('saving') : t('save')}</Button>
           <Button disabled={locked || sourceStatus !== 'active' || termsBlocked} onClick={saveAndEnable}>{busyAction === 'activate' ? t('enabling') : t('saveEnable')}</Button>
-        </div>
+        </SettingsActions>
         <AlertDialog open={githubDisconnectOpen} onOpenChange={setGithubDisconnectOpen}>
           <AlertDialogContent>
             <AlertDialogHeader>

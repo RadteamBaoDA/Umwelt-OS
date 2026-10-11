@@ -57,6 +57,7 @@ from modules.knowledge.entities.resolution import candidate_match_fingerprint, r
 from modules.knowledge.entities.schemas import canonicalize_name
 from modules.knowledge.relationships import public as relationships
 from modules.settings import public as settings_public
+from modules.settings.prompts import resolve_prompt
 from modules.sources import public as sources
 
 logger = logging.getLogger(__name__)
@@ -431,9 +432,9 @@ async def recover_entity_extraction_work(ctx: dict[str, object]) -> int:
                     )
                     await session.commit()
                     continue
-                config = await settings_public.get_ai_execution_config(
+                config = settings_public.derive_for_alias(await settings_public.get_ai_execution_config(
                     session, cast(Settings, ctx["settings"]), cast(Redis, ctx["redis"]), scope=scope,
-                )
+                ), EXTRACTION_ALIAS)
                 fingerprint, capability_supported = await _dependency_snapshot(
                     config, cast(Redis, ctx["redis"]), scope=scope,
                 )
@@ -579,8 +580,9 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
                     scope=scope, multi_workspace_enabled=multi_workspace_enabled)
                 await session.commit()
                 return
-            config = await settings_public.get_ai_execution_config(session, settings, redis, scope=scope)
             alias = EXTRACTION_ALIAS
+            config = settings_public.derive_for_alias(
+                await settings_public.get_ai_execution_config(session, settings, redis, scope=scope), alias)
             mapping = config.aliases.get(alias)
             destination = config.endpoint_destination_id
             dependency_fingerprint, _ = await _dependency_snapshot(config, redis, scope=scope)
@@ -605,9 +607,9 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
             async def before_send() -> None:
                 """Recheck saved settings and privacy policy immediately before remote use."""
                 async with factory() as current_session:
-                    current = await settings_public.get_ai_execution_config(
+                    current = settings_public.derive_for_alias(await settings_public.get_ai_execution_config(
                         current_session, settings, redis, scope=scope,
-                    )
+                    ), alias)
                     current_mapping = current.aliases.get(alias)
                     current_destination = current.endpoint_destination_id
                     if (
@@ -647,10 +649,11 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
                 scope=scope, gateway_identity=config.gateway_identity,
                 configuration_revision=config.configuration_revision, before_send=before_send,
                 approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
+                allow_public_endpoints=config.allow_public_providers,
             )
             response = await gateway.structured(
                 alias, mapping, policy,
-                extraction_messages([(chunk.id, chunk.content) for chunk in data.chunks]),
+                extraction_messages([(chunk.id, chunk.content) for chunk in data.chunks], resolve_prompt(config.system_prompts, "entity_extraction")),
                 response_schema(), probe=False, before_send=before_send,
             )
             if not isinstance(response, dict):

@@ -105,17 +105,15 @@ export function OnboardingPage() {
             : <><h2>{t('completeTitle')}</h2><p>{t('completeText')}</p><p role="status">{t('finished')}</p><Button asChild><Link href="/app">{t('openDashboard')}</Link></Button></>;
 
   const done = Boolean(progress.data.completed_at);
-  return <section className="content-panel space-y-5" aria-labelledby="onboarding-title">
-    <header><span className="brand">{t('eyebrow')}</span><h1 id="onboarding-title">{t('title')}</h1><p className="muted">{t('description')}</p><p role="status" aria-live="polite" className="text-sm font-semibold">{save.isPending ? t('saving') : done ? t('finished') : t('progress', { current: currentIndex + 1, total: steps.length })}</p></header>
-    <div className="grid gap-6 md:grid-cols-[minmax(0,260px)_minmax(0,1fr)]">
-      <nav aria-label={t('currentStep')}>
+  return <div className="mx-auto flex w-full max-w-[1200px] flex-wrap items-start gap-6">
+      <nav aria-label={t('currentStep')} className="flex-[0_0_260px] max-[720px]:flex-[1_1_100%]">
         <ol className="grid gap-1">
           {steps.map((step, position) => {
             const complete = done || position < currentIndex;
             const current = !done && step.id === currentStep.id;
             return <li key={step.id}>
               <button type="button" aria-current={current ? 'step' : undefined} disabled={save.isPending || done || position > currentIndex} onClick={() => move(step.id)}
-                className={`flex min-h-11 w-full items-start gap-3 rounded-[9px] border px-3 py-2.5 text-left text-sm disabled:cursor-default ${current ? 'border-border bg-secondary' : 'border-transparent hover:bg-secondary'}`}>
+                className={`flex min-h-11 w-full items-start gap-3 rounded-[9px] border px-3 py-2.5 text-left text-sm disabled:cursor-default ${current ? 'border-border bg-card' : 'border-transparent hover:bg-secondary'}`}>
                 <span aria-hidden="true" className={`inline-flex size-6 shrink-0 items-center justify-center rounded-full border text-xs font-bold ${complete ? 'border-primary bg-primary text-primary-foreground' : current ? 'border-primary text-primary' : 'border-border text-muted-foreground'}`}>{complete ? <CheckIcon className="size-3.5" /> : position + 1}</span>
                 <span className="grid"><strong className={current ? 'font-semibold' : 'font-medium'}>{t(step.label)}</strong><span className="muted text-xs">{t(complete ? 'stepDone' : current ? 'stepCurrent' : 'stepUpcoming')}</span></span>
               </button>
@@ -124,16 +122,16 @@ export function OnboardingPage() {
         </ol>
         <p className="muted mt-3 text-xs">{t('personalSourcesNote')}</p>
       </nav>
-      <div className="grid content-start gap-5">
-        <div className="sub-panel space-y-4" aria-live="polite">{stepContent}</div>
+      <section className="flex min-w-0 flex-[999_1_560px] flex-col gap-6 rounded-[18px] border border-border bg-card p-8 max-[720px]:p-5" aria-labelledby="onboarding-title">
+        <header><span className="brand">{t('eyebrow')}</span><h1 id="onboarding-title" className="mt-1 mb-1 text-[30px] font-bold leading-tight tracking-[-0.04em]">{t('title')}</h1><p className="muted m-0">{t('description')}</p><p role="status" aria-live="polite" className="mt-2 mb-0 text-sm font-semibold">{save.isPending ? t('saving') : done ? t('finished') : t('progress', { current: currentIndex + 1, total: steps.length })}</p></header>
+        <div className="grid gap-4" aria-live="polite">{stepContent}</div>
         {save.error && <p className="error" role="alert">{t('saveFailed')}</p>}
-        {!done && <div className="form-actions">
+        {!done && <div className="flex flex-wrap justify-end gap-2 border-t border-border pt-5">
           <Button type="button" className="secondary" disabled={save.isPending || currentIndex <= 0} onClick={() => move(steps[currentIndex - 1].id)}>{t('previous')}</Button>
           <Button type="button" disabled={save.isPending || (currentStep.id === 'sample_or_import' && progress.data.data_choice === null)} onClick={() => move(steps[Math.min(steps.length - 1, currentIndex + 1)].id)}>
             {currentStep.id === 'indexing' ? t('finish') : t('next')}
           </Button>
         </div>}
-      </div>
-    </div>
-  </section>;
+      </section>
+  </div>;
 }

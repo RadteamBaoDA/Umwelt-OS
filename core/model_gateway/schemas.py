@@ -1,9 +1,14 @@
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field
 
 Capability = Literal["chat", "streaming", "embeddings", "structured", "tools", "reranking"]
+ProviderKind = Literal["openai", "openrouter", "groq", "gemini", "anthropic", "ollama", "lmstudio", "omniroute", "custom"]
+LOCAL_PROVIDER_KINDS = frozenset({"ollama", "lmstudio"})
+MAX_PROVIDERS = 8
+DEFAULT_PROVIDER_ID = "default"
+ProviderId = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]{0,31}$")]
 
 
 class RequestPolicy(BaseModel):
@@ -34,6 +39,7 @@ class ModelMapping(BaseModel):
     model: str = Field(default="", max_length=200)
     version: str | None = Field(default=None, max_length=200)
     destination: Literal["unknown", "remote"] = "unknown"
+    provider_id: ProviderId | None = None  # None resolves to the "default" provider
 
 
 class PrivacySettings(BaseModel):
@@ -47,12 +53,50 @@ class PrivacySettings(BaseModel):
     web_search_destinations: list[str] = Field(default_factory=list, max_length=8)
 
 
+class ProviderUpdate(BaseModel):
+    """One provider in a full-replace provider list; the key is write-only."""
+    model_config = ConfigDict(extra="forbid")
+    id: ProviderId
+    kind: ProviderKind
+    label: str = Field(default="", max_length=80)
+    base_url: AnyHttpUrl | None = None
+    credential_action: Literal["unchanged", "replaced", "removed"] = "unchanged"
+    api_key: str | None = Field(default=None, max_length=4096, repr=False)
+
+
+class ProviderRead(BaseModel):
+    """Safe provider projection: credential presence only, never the key."""
+    id: str
+    kind: ProviderKind
+    label: str
+    base_url: str | None = None
+    destination_id: str | None = None
+    credential_configured: bool = False
+    local: bool = False
+    policy_denied: bool = False
+
+
+class ProviderConfig(BaseModel):
+    """Resolved provider inside an execution snapshot; the plaintext key is excluded from repr/serialization."""
+    model_config = ConfigDict(frozen=True)
+    kind: ProviderKind
+    label: str = ""
+    base_url: str | None
+    api_key: str = Field(default="", repr=False, exclude=True)
+    destination_id: str | None
+    credential_configured: bool = False
+    local: bool = False
+    policy_denied: bool = False
+
+
 class AISettingsUpdate(BaseModel):
     """Validated update payload with expected revision, provider credentials/actions, aliases, privacy, and timeout bounds."""
     model_config = ConfigDict(extra="forbid")
     omniroute_base_url: AnyHttpUrl | None = None
     omniroute_credential_action: Literal["unchanged", "replaced", "removed"] = "unchanged"
     omniroute_api_key: str | None = Field(default=None, max_length=4096, repr=False)
+    # None keeps the stored providers (legacy omniroute_* fields then edit "default"); a list replaces them all.
+    providers: list[ProviderUpdate] | None = None
     web_search_provider: Literal["none", "tavily", "brave"] = "none"
     web_search_endpoint: AnyHttpUrl | None = None
     web_search_credential_action: Literal["unchanged", "replaced", "removed"] = "unchanged"
@@ -70,6 +114,8 @@ class ConnectionDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
     base_url: AnyHttpUrl
     api_key: str = Field(default="", max_length=4096, repr=False)
+    provider_id: ProviderId | None = None  # empty api_key falls back to this stored provider's key
+    kind: ProviderKind | None = None  # lets an unsaved local provider (no key) be tried
 
 
 class DraftProbeRequest(BaseModel):
@@ -80,6 +126,8 @@ class DraftProbeRequest(BaseModel):
     model: str = Field(min_length=1, max_length=200)
     version: str | None = Field(default=None, max_length=200)
     capability: Capability
+    provider_id: ProviderId | None = None
+    kind: ProviderKind | None = None
 
 
 class ConnectionCheck(BaseModel):
@@ -105,6 +153,7 @@ class AIExecutionConfig(BaseModel):
     endpoint_destination_id: str | None
     endpoint_policy_denied: bool = False
     endpoint_allowed_cidrs: tuple[str, ...] = ()
+    allow_public_providers: bool = False
     omniroute_base_url: str | None
     omniroute_api_key: str = Field(repr=False, exclude=True)
     omniroute_credential_configured: bool = False
@@ -117,6 +166,8 @@ class AIExecutionConfig(BaseModel):
     web_search_endpoint: str | None
     web_search_api_key: str = Field(repr=False, exclude=True)
     web_search_credential_configured: bool = False
+    system_prompts: dict[str, str] = Field(default_factory=dict)
+    providers: dict[str, ProviderConfig] = Field(default_factory=dict)
 
 
 class CapabilityResult(BaseModel):
@@ -142,6 +193,7 @@ class AISettingsRead(BaseModel):
     endpoint_destination_id: str | None = None
     endpoint_policy_denied: bool = False
     omniroute_credential_configured: bool
+    providers: list[ProviderRead] = Field(default_factory=list)
     web_search_provider: Literal["none", "tavily", "brave"]
     web_search_endpoint: AnyHttpUrl | None = None
     web_search_destination_id: str | None = None

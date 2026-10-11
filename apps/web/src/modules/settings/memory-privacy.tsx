@@ -1,5 +1,6 @@
 'use client';
 
+import { SettingsPageHeader } from './settings-layout';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslations } from 'next-intl';
@@ -24,6 +25,7 @@ import {
  */
 export function MemoryPrivacySettings() {
   const t = useTranslations('memoryPrivacy');
+  const tShell = useTranslations('shell');
   const { csrfToken } = useWorkspaceSession();
   const queryClient = useQueryClient();
 
@@ -70,7 +72,7 @@ export function MemoryPrivacySettings() {
 
   if (query.isError) {
     return (
-      <section className="content-panel space-y-4">
+      <section className="space-y-4">
         <h1 className="text-xl font-bold">{t('title')}</h1>
         <p className="text-destructive text-sm" role="alert">
           {query.error instanceof ApiError ? query.error.message : t('saveFailed')}
@@ -111,14 +113,8 @@ export function MemoryPrivacySettings() {
   };
 
   return (
-    <section className="content-panel space-y-8 max-w-3xl">
-      <div className="section-heading">
-        <div>
-          <span className="brand">Local first</span>
-          <h1 className="text-2xl font-bold tracking-tight">{t('title')}</h1>
-          <p className="muted text-sm text-muted-foreground mt-1">{t('subtitle')}</p>
-        </div>
-      </div>
+    <div className="flex flex-col gap-5">
+      <SettingsPageHeader eyebrow={tShell('settings')} title={t('title')} description={t('subtitle')} />
 
       {/* Privacy Toggles */}
       <form
@@ -311,6 +307,6 @@ export function MemoryPrivacySettings() {
           {purgeMutation.isPending ? t('saving') : t('purgeButton')}
         </Button>
       </div>
-    </section>
+    </div>
   );
 }

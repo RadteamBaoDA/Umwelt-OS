@@ -314,7 +314,7 @@ async def _translate(run: _Run, source: TranslationInput) -> dict[str, str]:
         destination_id=destination, timeout_seconds=min(config.request_timeout_seconds, ATTEMPT_TIMEOUT_SECONDS),
         scope=run.gateway_scope, gateway_identity=config.gateway_identity,
         configuration_revision=config.configuration_revision, before_send=before_send,
-        approved_endpoint_cidrs=config.endpoint_allowed_cidrs)
+        approved_endpoint_cidrs=config.endpoint_allowed_cidrs, allow_public_endpoints=config.allow_public_providers)
     return await translate_input(
         gateway, config, policy, source, cast(Any, run.claim.target_language), before_send,
         deadline=time.monotonic() + DEADLINE_SECONDS)
@@ -324,8 +324,8 @@ async def _execute(run: _Run) -> None:
     """Resolve the owner config, verify, translate, publish (all inside the held slot)."""
     async with run.factory() as session:
         try:
-            run.config = await settings_public.get_ai_execution_config(
-                session, run.settings, run.redis, scope=run.gateway_scope)
+            run.config = settings_public.derive_for_alias(await settings_public.get_ai_execution_config(
+                session, run.settings, run.redis, scope=run.gateway_scope), ALIAS)
         finally:
             await session.rollback()
     source = await _checked(run)

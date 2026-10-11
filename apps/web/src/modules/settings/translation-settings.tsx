@@ -1,5 +1,6 @@
 'use client';
 
+import { CheckboxField, FieldGrid, SettingsActions, SettingsPageHeader, SettingsSection } from './settings-layout';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslations } from 'next-intl';
@@ -17,6 +18,7 @@ export function TranslationSettings() {
   const t = useTranslations('translations');
   const { csrfToken } = useWorkspaceSession();
   const { isOwner, selection } = useWorkspace();
+  const tShell = useTranslations('shell');
   const client = useQueryClient();
   const key = ['translation-settings', selection?.id ?? null];
   const query = useQuery({ queryKey: key, queryFn: ({ signal }) => fetchTranslationSettings(signal) });
@@ -35,31 +37,34 @@ export function TranslationSettings() {
   const readOnly = !isOwner;
   const failure = save.error instanceof ApiError && save.error.status === 409 ? t('stale') : save.error ? t('saveFailed') : null;
   return (
-    <section className="space-y-3 rounded-md border border-border p-3" aria-labelledby="translation-settings-title">
-      <h3 id="translation-settings-title" className="font-semibold">{t('settingsTitle')}</h3>
-      <p className="text-sm text-muted-foreground">{t('settingsHelp')}</p>
-      {query.isError ? <p role="alert" className="text-sm text-destructive">{t('loadFailed')}</p> : null}
-      <label className="flex min-h-11 items-center gap-2 text-sm">
-        <Checkbox checked={enabled} disabled={readOnly || !query.data} onCheckedChange={(checked) => setEnabled(checked === true)} />
-        {t('enable')}
-      </label>
-      <label className="flex flex-col gap-1 text-sm">
-        <span>{t('targetLanguage')}</span>
-        <Select value={language} disabled={readOnly || !query.data} onValueChange={(value) => setLanguage(value as TranslationLanguage)}>
-          <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="vi">{t('languageVi')}</SelectItem>
-            <SelectItem value="en">{t('languageEn')}</SelectItem>
-          </SelectContent>
-        </Select>
-      </label>
-      {readOnly ? <p className="text-xs text-muted-foreground">{t('ownerOnly')}</p> : (
-        <div className="flex items-center gap-3">
-          <Button type="button" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>{t('save')}</Button>
-          {save.isSuccess && !dirty ? <p role="status" className="text-xs text-muted-foreground">{t('saved')}</p> : null}
-        </div>
-      )}
-      {failure ? <p role="alert" className="text-sm text-destructive">{failure}</p> : null}
-    </section>
+    <div className="flex flex-col gap-5">
+      <SettingsPageHeader eyebrow={tShell('settings')} title={t('settingsTitle')} description={t('settingsHelp')} />
+      <SettingsSection title={t('settingsTitle')}>
+        {query.isError ? <p role="alert" className="error m-0">{t('loadFailed')}</p> : null}
+        <CheckboxField>
+          <Checkbox id="translation-enable" checked={enabled} disabled={readOnly || !query.data} onCheckedChange={(checked) => setEnabled(checked === true)} />
+          <label htmlFor="translation-enable">{t('enable')}</label>
+        </CheckboxField>
+        <FieldGrid>
+          <label className="field">
+            <span className="label">{t('targetLanguage')}</span>
+            <Select value={language} disabled={readOnly || !query.data} onValueChange={(value) => setLanguage(value as TranslationLanguage)}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="vi">{t('languageVi')}</SelectItem>
+                <SelectItem value="en">{t('languageEn')}</SelectItem>
+              </SelectContent>
+            </Select>
+          </label>
+        </FieldGrid>
+        {failure ? <p role="alert" className="error m-0">{failure}</p> : null}
+        {readOnly ? <p className="muted m-0 text-xs">{t('ownerOnly')}</p> : (
+          <SettingsActions>
+            {save.isSuccess && !dirty ? <p role="status" className="muted me-auto self-center text-xs">{t('saved')}</p> : null}
+            <Button type="button" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>{t('save')}</Button>
+          </SettingsActions>
+        )}
+      </SettingsSection>
+    </div>
   );
 }

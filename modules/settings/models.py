@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 from redis.asyncio import Redis
+from redis.exceptions import RedisError
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
@@ -54,6 +55,9 @@ class AISettingsRecord(Base):
     omniroute_api_key_ciphertext: Mapped[str | None] = mapped_column(Text)
     aliases: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
     privacy: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    system_prompts: Mapped[dict[str, str]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    # {provider_id: {kind, label, base_url, key_ciphertext, local}}; empty means "synthesise default from legacy columns".
+    providers: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
     chat_alias: Mapped[str] = mapped_column(String(32), nullable=False, server_default="reasoning-large")
     brief_alias: Mapped[str] = mapped_column(String(32), nullable=False, server_default="reasoning-small")
     web_search_provider: Mapped[str] = mapped_column(String(32), nullable=False, server_default="none")
@@ -206,7 +210,11 @@ async def legacy_aliases(redis: Redis | None, settings: Settings, *, scope: Scop
         raise ValueError("Multi-workspace execution is disabled")
     configured = {name: ModelMapping(model=model, destination="remote") for name, model in settings.omniroute_models.items() if name in ALIASES}
     if redis is not None and actor == 1:
-        for alias, value in (await cast("Awaitable[dict[Any, Any]]", redis.hgetall(_MAPPINGS))).items():
+        try:
+            legacy = await cast("Awaitable[dict[Any, Any]]", redis.hgetall(_MAPPINGS))
+        except RedisError:
+            legacy = {}  # cache is non-authoritative; fall back to server defaults
+        for alias, value in legacy.items():
             alias = alias.decode() if isinstance(alias, bytes) else alias
             try:
                 if alias in ALIASES:
@@ -256,6 +264,8 @@ async def list_capabilities(redis: Redis, *, config: AIExecutionConfig, scope: S
                     continue
             except (ValueError, TypeError):
                 continue
+            except RedisError:
+                return results  # cached evidence is optional; report none when Redis is down
             if (value.workspace_id == config.workspace_id and value.actor_user_id == config.actor_user_id
                     and value.membership_revision == config.membership_revision
                     and value.gateway_identity == config.gateway_identity

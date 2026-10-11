@@ -9,6 +9,7 @@ import { SendIcon, SquareIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
+import { Badge } from '@/components/ui/badge';
 
 export interface ChatComposerProps {
   /** Current in-memory draft string. */
@@ -35,6 +36,10 @@ export interface ChatComposerProps {
   webSearch?: { available: boolean; profileBlocked?: boolean; provider?: string; enabled: boolean; onChange: (enabled: boolean) => void };
   /** Attachment controls rendered above the input (full Chat page only). */
   attachments?: React.ReactNode;
+  /** Surface mode: `full` renders the page composer (context badges + toolbar); `drawer` the quick-chat textarea/button pair. */
+  mode?: 'drawer' | 'full';
+  /** Context badges row rendered above the textarea (full Chat page). */
+  contextBar?: React.ReactNode;
   /** Element id explaining why Send is blocked (e.g. attachments still processing); blocks Send when set. */
   sendBlockedBy?: string | null;
 }
@@ -60,6 +65,8 @@ export function ChatComposer({
   webSearch,
   attachments,
   sendBlockedBy = null,
+  mode = 'drawer',
+  contextBar,
 }: ChatComposerProps) {
   const t = useTranslations('chat');
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
@@ -108,57 +115,68 @@ export function ChatComposer({
 
   const canSend = value.trim().length > 0 && !isStreaming && !disabled && !sendBlockedBy;
 
-  return (
-    <div className="relative flex flex-col gap-2 border-t border-border bg-background p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-      {attachments}
-      <div className="relative flex items-end gap-2 rounded-xl border border-border bg-surface p-2 shadow-sm focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-1">
-        <textarea
-          ref={textareaRef}
-          value={value}
-          onChange={handleChange}
-          onKeyDown={handleKeyDown}
-          placeholder={placeholder ?? t('composerPlaceholder')}
-          disabled={disabled}
-          rows={1}
-          className="flex-1 max-h-40 min-h-[44px] resize-none bg-transparent p-2 text-sm text-foreground placeholder:text-muted-foreground outline-none disabled:opacity-50"
-          aria-label={t('composerPlaceholder')}
-        />
+  const isFull = mode === 'full';
+  const textarea = (
+    <textarea
+      ref={textareaRef}
+      value={value}
+      onChange={handleChange}
+      onKeyDown={handleKeyDown}
+      placeholder={placeholder ?? t('composerPlaceholder')}
+      disabled={disabled}
+      rows={2}
+      className="block max-h-40 min-h-14 w-full resize-none rounded-lg border border-border bg-background p-3 text-base text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 sm:text-[15px]"
+      aria-label={t('composerPlaceholder')}
+    />
+  );
+  const stopButton = (
+    <Button
+      type="button"
+      variant="outline"
+      onClick={onStop}
+      className="min-h-11 border-destructive text-destructive hover:text-destructive"
+      aria-label={t('stopGenerating')}
+    >
+      <SquareIcon className="size-3.5 fill-current" />
+      <span>{t('stop')}</span>
+    </Button>
+  );
+  const sendButton = (
+    <Button
+      type="button"
+      onClick={handleSend}
+      // aria-disabled (not disabled) keeps Send focusable so its blocked reason stays reachable;
+      // handleSend is the click guard.
+      aria-disabled={!canSend}
+      className="min-h-11 aria-disabled:cursor-not-allowed aria-disabled:opacity-40"
+      aria-label={t('send')}
+      aria-describedby={sendBlockedBy ?? undefined}
+    >
+      <SendIcon className="size-4" />
+      <span>{t('send')}</span>
+    </Button>
+  );
 
-        <div className="flex items-center gap-1 shrink-0 pb-1 pr-1">
-          {isStreaming ? (
-            <Button
-              type="button"
-              onClick={onStop}
-              className="flex items-center gap-1.5 px-3 py-1.5 h-9 rounded-lg bg-destructive text-destructive-foreground hover:opacity-90 font-medium text-xs shadow-sm transition-opacity"
-              aria-label={t('stopGenerating')}
-            >
-              <SquareIcon className="size-3.5 fill-current" />
-              <span>{t('stop')}</span>
-            </Button>
-          ) : (
-            <Button
-              type="button"
-              onClick={handleSend}
-              // aria-disabled (not disabled) keeps Send focusable so its blocked reason stays reachable;
-              // handleSend is the click guard.
-              aria-disabled={!canSend}
-              className="flex items-center gap-1.5 px-3 py-1.5 h-9 rounded-lg bg-primary text-primary-foreground aria-disabled:opacity-40 aria-disabled:cursor-not-allowed font-medium text-xs shadow-sm transition-opacity"
-              aria-label={t('send')}
-              aria-describedby={sendBlockedBy ?? undefined}
-            >
-              <SendIcon className="size-3.5" />
-              <span>{t('send')}</span>
-            </Button>
-          )}
-        </div>
+  if (!isFull) {
+    return (
+      <div className="relative flex items-end gap-2 border-t border-border bg-surface p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+        <div className="min-w-0 flex-1">{textarea}</div>
+        {isStreaming ? stopButton : sendButton}
       </div>
-      <div className="flex flex-wrap items-center justify-between gap-x-3 px-1 text-xs text-muted-foreground">
-        <span>{modelLabel ? t('modelLine', { model: modelLabel }) : t('modelNotReported')}{sourcesCount > 0 ? ` · ${t('sourcesCount', { count: sourcesCount })}` : ''}</span>
-        <span className="hidden sm:inline">Enter ↵ · Shift+Enter</span>
-      </div>
-      {webSearch && (
-        <div className="flex flex-col gap-0.5 px-1">
-          <div className="flex items-center gap-2">
+    );
+  }
+
+  return (
+    <div className="relative flex flex-col gap-2.5 border-t border-border bg-surface px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+      {contextBar}
+      {textarea}
+      {attachments}
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge variant="outline" className="min-h-11 px-3 text-sm font-semibold">
+          {modelLabel ? t('modelLine', { model: modelLabel }) : t('modelNotReported')}{sourcesCount > 0 ? ` · ${t('sourcesCount', { count: sourcesCount })}` : ''}
+        </Badge>
+        {webSearch && (
+          <div className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-border px-3">
             <Checkbox
               id="chat-web-search"
               checked={webSearch.available && !webSearch.profileBlocked && webSearch.enabled}
@@ -166,12 +184,16 @@ export function ChatComposer({
               onCheckedChange={(checked) => webSearch.onChange(checked === true)}
               aria-describedby="chat-web-search-help"
             />
-            <Label htmlFor="chat-web-search" className="text-xs text-foreground">{t('webSearchToggle')}</Label>
+            <Label htmlFor="chat-web-search" className="text-sm font-semibold text-foreground">{t('webSearchToggle')}</Label>
           </div>
-          <p id="chat-web-search-help" className="text-xs text-muted-foreground">
-            {!webSearch.available ? t('webSearchDisabledHelp') : webSearch.profileBlocked ? t('webSearchProfileHelp') : webSearch.enabled ? t('webSearchEnabledHelp', { provider: webSearch.provider ?? '' }) : t('webSearchIdleHelp')}
-          </p>
-        </div>
+        )}
+        {webSearch && <span className="text-xs text-muted-foreground sm:ml-auto">{t('webSearchPersonalNote')}</span>}
+        <div className={webSearch ? '' : 'ml-auto'}>{isStreaming ? stopButton : sendButton}</div>
+      </div>
+      {webSearch && (
+        <p id="chat-web-search-help" className="px-1 text-xs text-muted-foreground">
+          {!webSearch.available ? t('webSearchDisabledHelp') : webSearch.profileBlocked ? t('webSearchProfileHelp') : webSearch.enabled ? t('webSearchEnabledHelp', { provider: webSearch.provider ?? '' }) : t('webSearchIdleHelp')}
+        </p>
       )}
       {showCapabilityNote && <p className="px-1 text-xs text-muted-foreground">{t('composerNote')}</p>}
     </div>

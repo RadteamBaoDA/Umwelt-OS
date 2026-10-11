@@ -2,6 +2,7 @@
 export const gadgetSettingsMessages = {
   'en-us': {
     title: 'Dashboard & Gadget',
+    eyebrow: 'Settings',
     intro: 'Manage dashboards, reusable gadgets and highlight rules.',
     tabsLabel: 'Dashboard and gadget sections',
     tabPresets: 'Dashboards & presets', tabLibrary: 'Gadget library', tabRules: 'Highlight rules',
@@ -43,6 +44,7 @@ export const gadgetSettingsMessages = {
   },
   'vi-vi': {
     title: 'Bảng điều khiển & Tiện ích',
+    eyebrow: 'Cài đặt',
     intro: 'Quản lý bảng điều khiển, tiện ích dùng lại và quy tắc làm nổi bật.',
     tabsLabel: 'Các mục bảng điều khiển và tiện ích',
     tabPresets: 'Bảng điều khiển & mẫu', tabLibrary: 'Thư viện tiện ích', tabRules: 'Quy tắc làm nổi bật',

@@ -3,6 +3,9 @@
 import * as React from 'react';
 import MarkdownIt, { type MarkdownIt as MarkdownItInstance } from 'markdown-it';
 import DOMPurify from 'dompurify';
+import type { Citation } from '@/modules/chat/api';
+import { safeHttpUrl } from '@/core/safe-url';
+import './chat-gaps.css';
 
 // The markdown-it renderer and safe link/code boundaries adapt AnythingLLM's
 // frontend/src/utils/chat/markdown.js; the source slices and local repairs are recorded in docs/anythingllm-port.md.
@@ -59,14 +62,35 @@ function createMarkdownRenderer(): MarkdownItInstance {
 
 const markdownRenderer = createMarkdownRenderer();
 
-/** Renders adapted AnythingLLM markdown only after the browser sanitizer can initialize safely. */
-export function ChatMarkdown({ content }: { content: string }) {
+/**
+ * Turns `[n]` markers in rendered HTML text into `.cite` chips that link to the n-th citation's exact item.
+ * Code blocks and tags are left untouched; markers without a matching citation stay as plain text.
+ */
+function linkCitations(html: string, citations?: Citation[]): string {
+  if (!citations?.length) return html;
+  return html.split(/(<pre[\s\S]*?<\/pre>|<[^>]+>)/).map((part, index) => {
+    if (index % 2) return part;
+    return part.replace(/\[(\d{1,2})\]/g, (marker, num: string) => {
+      const citation = citations[Number(num) - 1];
+      if (!citation) return marker;
+      if (citation.sourceType === 'web') {
+        const href = safeHttpUrl(citation.url);
+        return href ? `<a class="cite" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer nofollow">${num}</a>` : marker;
+      }
+      const query = new URLSearchParams({ versionId: citation.documentVersionId, chunkId: citation.chunkId });
+      return `<a class="cite" href="${escapeHtml(`/knowledge/documents/${encodeURIComponent(citation.documentId)}?${query}#cited-chunk`)}">${num}</a>`;
+    });
+  }).join('');
+}
+
+/** Renders adapted AnythingLLM markdown only after the browser sanitizer can initialize safely; optional `citations` turn `[n]` markers into linked cite chips. */
+export function ChatMarkdown({ content, citations }: { content: string; citations?: Citation[] }) {
   const [safeHtml, setSafeHtml] = React.useState('');
 
   React.useEffect(() => {
     // DOMPurify needs the live browser window; keeping creation here avoids touching it during SSR.
     const purifier = DOMPurify(window);
-    const rendered = markdownRenderer.render(content);
+    const rendered = linkCitations(markdownRenderer.render(content), citations);
     // eslint-disable-next-line react-hooks/set-state-in-effect -- sanitizer needs the live window, so state is set after mount
     setSafeHtml(purifier.sanitize(rendered, {
       ALLOWED_TAGS: MARKDOWN_TAGS,
@@ -75,11 +99,11 @@ export function ChatMarkdown({ content }: { content: string }) {
       ALLOW_ARIA_ATTR: false,
       FORBID_TAGS: ['img', 'iframe', 'object', 'script', 'style', 'svg', 'math'],
     }));
-  }, [content]);
+  }, [content, citations]);
 
   return (
     <div
-      className="chat-markdown min-w-0 break-words text-sm leading-relaxed text-foreground [&_p]:my-1.5 [&_h1]:my-2 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:my-2 [&_h2]:text-base [&_h2]:font-semibold [&_h3]:my-2 [&_h3]:font-semibold [&_a]:text-primary [&_a]:underline [&_table]:my-2 [&_table]:border-collapse [&_td]:border [&_td]:border-border [&_td]:p-1 [&_th]:border [&_th]:border-border [&_th]:p-1 [&_th]:font-semibold"
+      className="chat-markdown min-w-0 break-words text-sm leading-relaxed text-foreground [&_p]:my-1.5 [&_h1]:my-2 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:my-2 [&_h2]:text-base [&_h2]:font-semibold [&_h3]:my-2 [&_h3]:font-semibold [&_a]:text-primary [&_a:not(.cite)]:underline [&_table]:my-2 [&_table]:border-collapse [&_table]:text-sm [&_td]:border-b [&_td]:border-border [&_td]:px-2.5 [&_td]:py-1.5 [&_tr:last-child_td]:border-b-0 [&_th]:border-b [&_th]:border-border [&_th]:px-2.5 [&_th]:py-1.5 [&_th]:text-left [&_th]:font-semibold [&_th]:text-muted-foreground"
       dangerouslySetInnerHTML={{ __html: safeHtml }}
     />
   );

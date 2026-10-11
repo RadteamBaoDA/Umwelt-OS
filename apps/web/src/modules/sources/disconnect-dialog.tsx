@@ -53,16 +53,22 @@ export function DisconnectDialog({ sourceId, name, archived, disabled, trigger, 
         <AlertDialogDescription>{t('disconnectIntro')}</AlertDialogDescription>
       </AlertDialogHeader>
       <RadioGroup value={choice} onValueChange={(value) => setChoice(value === 'delete' ? 'delete' : 'keep')} aria-label={t('disconnectChoice')} className="grid gap-3">
-        {!archived && <div className="flex items-start gap-3 rounded-md border border-border p-3">
+        {!archived && <div className="flex items-start gap-3 rounded-lg border border-border p-3 has-[[data-state=checked]]:border-primary has-[[data-state=checked]]:bg-accent">
           <RadioGroupItem id="disconnect-keep" value="keep" />
           <Label htmlFor="disconnect-keep" className="grid gap-1"><strong>{t('disconnectKeep')}</strong><span className="muted">{t('disconnectKeepConsequence')}</span></Label>
         </div>}
-        <div className="flex items-start gap-3 rounded-md border border-border p-3">
+        <div className="flex items-start gap-3 rounded-lg border border-border p-3 has-[[data-state=checked]]:border-primary has-[[data-state=checked]]:bg-accent">
           <RadioGroupItem id="disconnect-delete" value="delete" />
           <Label htmlFor="disconnect-delete" className="grid gap-1"><strong>{t('disconnectDelete')}</strong><span className="muted">{t('disconnectDeleteConsequence')}</span></Label>
         </div>
       </RadioGroup>
-      <p className="muted" role="status">{impact.data ? t('disconnectImpact', { documents: shown(impact.data.document_count), gadgets: shown(impact.data.gadget_definition_count), placements: shown(impact.data.gadget_placement_count), chats: shown(impact.data.conversation_count) }) : impact.isFetching ? t('disconnectImpactLoading') : t('disconnectImpactUnknown')}</p>
+      <div role="status">{impact.data
+        ? <ul className="m-0 flex list-disc flex-col gap-1 rounded-lg bg-muted py-3 pe-4 ps-8 text-sm">
+          <li>{t('impactItems', { count: shown(impact.data.document_count) })}</li>
+          <li>{t('impactGadgets', { gadgets: shown(impact.data.gadget_definition_count), placements: shown(impact.data.gadget_placement_count) })}</li>
+          <li>{t('impactChats', { count: shown(impact.data.conversation_count) })}</li>
+        </ul>
+        : <p className="muted m-0">{impact.isFetching ? t('disconnectImpactLoading') : t('disconnectImpactUnknown')}</p>}</div>
       <AlertDialogFooter>
         <AlertDialogCancel>{t('cancel')}</AlertDialogCancel>
         <AlertDialogAction variant={deleting ? 'destructive' : undefined} onClick={() => onConfirm(deleting)}>

@@ -1,5 +1,7 @@
 from core.model_gateway.schemas import ModelMapping, RequestPolicy
 
+LOCAL_DESTINATION_PREFIX = "local:"
+
 
 def may_send(
     policy: RequestPolicy,
@@ -9,15 +11,21 @@ def may_send(
     credential_configured: bool,
     capability: str,
 ) -> bool:
-    """Decide whether a configured remote capability may be sent under destination, credential, and privacy policy."""
+    """Decide whether a configured capability may be sent under destination, credential, and privacy policy.
+
+    ``local:`` destinations (Ollama/LM Studio) stay on the owner's network: no credential, remote marker or
+    consent is required, but they must still be permitted and never serve ``local_only`` sources.
+    """
     if mapping is None or not mapping.model.strip():
         return False
+    if policy.local_only or destination_id not in policy.permitted_destinations:
+        return False
+    if destination_id.startswith(LOCAL_DESTINATION_PREFIX):
+        return capability not in {"web_search", "search"}
     if (
         not credential_configured
-        or policy.local_only
         or alias == "local-private"
         or mapping.destination != "remote"
-        or destination_id not in policy.permitted_destinations
     ):
         return False
     if capability in {"embeddings", "reranking"}:

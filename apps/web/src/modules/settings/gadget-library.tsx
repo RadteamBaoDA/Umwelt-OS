@@ -14,6 +14,7 @@ import {
   createGadgetDefinition, dashboardKeys, deleteGadgetDefinition, evaluateGadgetHighlights, highlightRuleErrorKey, listGadgetDefinitions,
   listGadgetRenderers, patchGadgetDefinition, type GadgetDefinition,
 } from '@/modules/dashboard/api';
+import { SettingsActions } from './settings-layout';
 import { MULTI_SOURCE_RENDERERS, SOURCE_BACKED_RENDERERS, SourceMultiPicker, SourcePicker } from '@/modules/dashboard/source-picker';
 
 /** Splits comma-separated text into unique, trimmed, non-empty entries. */
@@ -94,8 +95,8 @@ function GadgetForm({ def, onDone, onEditRules }: { def: GadgetDefinition | null
     mutationFn: () => deleteGadgetDefinition(def!.id, def!.revision, session.csrfToken),
     onSuccess: () => { setConfirmDelete(false); void client.invalidateQueries({ queryKey: dashboardKeys.definitions }); onDone(null); },
   });
-  return <form className="space-y-5" onSubmit={(event) => { event.preventDefault(); setTouched(true); if (valid) save.mutate(); }}>
-    <fieldset disabled={save.isPending} className="space-y-5">
+  return <form className="flex flex-col gap-5 rounded-lg border border-border bg-card p-5" onSubmit={(event) => { event.preventDefault(); setTouched(true); if (valid) save.mutate(); }}>
+    <fieldset disabled={save.isPending} className="m-0 min-w-0 space-y-5 border-0 p-0">
       <label className="field"><span className="label">{t('name')}</span><Input value={draft.name} maxLength={120} aria-invalid={touched && !draft.name.trim()} onChange={(event) => set({ name: event.target.value })} />{touched && !draft.name.trim() && <span className="error" role="alert">{t('nameRequired')}</span>}</label>
       <section aria-labelledby="gl-step1" className="space-y-2">
         <h3 id="gl-step1" className="font-semibold">1. {t('step1')}</h3>
@@ -141,12 +142,12 @@ function GadgetForm({ def, onDone, onEditRules }: { def: GadgetDefinition | null
     </fieldset>
     {save.error && <p className="error" role="alert">{t((highlightRuleErrorKey(save.error) ?? apiFailureKey(save.error) ?? 'saveFailed') as 'saveFailed')}</p>}
     {remove.error && <p className="error" role="alert">{t(remove.error instanceof ApiError && remove.error.code === 'definition_in_use' ? 'inUse' : apiFailureKey(remove.error) === 'conflict' ? 'conflict' : 'deleteFailed')}</p>}
-    <div className="form-actions sticky bottom-0 z-10 flex-wrap items-center gap-2 border-t border-border bg-background py-3">
-      <p className="muted me-auto text-xs" role="status">{dirty ? t('unsaved') : def ? t('saveRevision', { revision: def.revision + 1 }) : t('saveNew')}</p>
+    <SettingsActions>
+      <p className="muted me-auto self-center text-xs" role="status">{dirty ? t('unsaved') : def ? t('saveRevision', { revision: def.revision + 1 }) : t('saveNew')}</p>
       {def && <Button type="button" variant="destructive" disabled={save.isPending || remove.isPending} onClick={() => setConfirmDelete(true)}>{t('delete')}</Button>}
       <Button type="button" className="secondary" disabled={save.isPending} onClick={() => { setDraft(makeDraft(def)); setTouched(false); if (!def) onDone(null); }}>{t('cancel')}</Button>
       <Button type="submit" disabled={save.isPending || (Boolean(def) && !dirty)}>{save.isPending ? t('saving') : t('save')}</Button>
-    </div>
+    </SettingsActions>
     <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
       <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{t('deleteTitle')}</AlertDialogTitle><AlertDialogDescription>{t('deleteBody')}</AlertDialogDescription></AlertDialogHeader>
         <AlertDialogFooter><AlertDialogCancel>{t('cancel')}</AlertDialogCancel><AlertDialogAction onClick={() => remove.mutate()}>{t('deleteConfirm')}</AlertDialogAction></AlertDialogFooter>

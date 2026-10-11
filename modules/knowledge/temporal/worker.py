@@ -590,7 +590,10 @@ async def _context(factory: async_sessionmaker[AsyncSession], adm: _Admission, s
                                       item.document_version_id, item.chunk_id) for item in live_support)
     settings = cast(Settings, ctx["settings"])
     redis = cast(Redis, ctx["redis"])
-    config = await settings_public.get_ai_execution_config(session, settings, redis, scope=adm.scope)
+    # ponytail: the graph pipeline shares one gateway, so every alias resolves through the reasoning-large provider;
+    # split per-alias gateways if graph aliases ever need different providers.
+    config = settings_public.derive_for_alias(
+        await settings_public.get_ai_execution_config(session, settings, redis, scope=adm.scope), "reasoning-large")
     embedding = config.aliases.get("embedding")
     if not cleanup:
         if embedding is None or settings.graph_embedding_dimensions is None:
@@ -648,7 +651,8 @@ async def _context(factory: async_sessionmaker[AsyncSession], adm: _Admission, s
         await validate_partition("upsert", str(mapping.episode_id))
         async with factory() as check:
             await _admit(check, adm)
-            current = await settings_public.get_ai_execution_config(check, settings, redis, scope=adm.scope)
+            current = settings_public.derive_for_alias(
+                await settings_public.get_ai_execution_config(check, settings, redis, scope=adm.scope), "reasoning-large")
         fingerprint = public.digest([current.configuration_revision, current.gateway_identity,
                                      {alias: value.model_dump(mode="json") for alias, value in current.aliases.items()},
                                      current.privacy.model_dump(mode="json"), current.endpoint_destination_id])
@@ -937,7 +941,7 @@ async def _context(factory: async_sessionmaker[AsyncSession], adm: _Admission, s
                            config.endpoint_destination_id or "", timeout_seconds=min(config.request_timeout_seconds, 30),
                            scope=adm.scope, gateway_identity=config.gateway_identity,
                            configuration_revision=config.configuration_revision, before_send=fence_check,
-                           approved_endpoint_cidrs=config.endpoint_allowed_cidrs)
+                           approved_endpoint_cidrs=config.endpoint_allowed_cidrs, allow_public_endpoints=config.allow_public_providers)
     return context, gateway, rows
 
 
@@ -1060,7 +1064,8 @@ async def _fresh_fact_action(factory: async_sessionmaker[AsyncSession], adm: _Ad
         raise GraphOperationError("graph_embedding_identity_changed_requires_rebuild")
     settings = cast(Settings, ctx["settings"])
     redis = cast(Redis, ctx["redis"])
-    config = await settings_public.get_ai_execution_config(session, settings, redis, scope=adm.scope)
+    config = settings_public.derive_for_alias(
+        await settings_public.get_ai_execution_config(session, settings, redis, scope=adm.scope), "embedding")
     async def before_send() -> None:
         """Fence a fresh surviving-fact embedding against policy/model drift and deleted canonical evidence."""
         await _lease(factory, adm, operation.id, token)
@@ -1082,7 +1087,8 @@ async def _fresh_fact_action(factory: async_sessionmaker[AsyncSession], adm: _Ad
     gateway = ModelGateway(redis, config.omniroute_base_url, config.omniroute_api_key,
         config.endpoint_destination_id or "", timeout_seconds=min(config.request_timeout_seconds, 30),
         scope=adm.scope, gateway_identity=config.gateway_identity,
-        configuration_revision=config.configuration_revision, before_send=before_send, approved_endpoint_cidrs=config.endpoint_allowed_cidrs)
+        configuration_revision=config.configuration_revision, before_send=before_send,
+        approved_endpoint_cidrs=config.endpoint_allowed_cidrs, allow_public_endpoints=config.allow_public_providers)
 
     raw = await gateway.embed(model.alias, model.mapping, model.policy, [value], before_send=before_send)
     data = raw.get("data") if isinstance(raw, dict) else None

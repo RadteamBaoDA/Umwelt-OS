@@ -80,6 +80,8 @@ export interface ChatSessionProps {
   onConversationCreated?: (id: string) => void;
   /** Mode indicating whether ChatSession is hosted inside the quick drawer or full /chat route. */
   mode?: 'drawer' | 'full';
+  /** Optional actions rendered in the header of the full conversation (e.g. Rename and Delete). */
+  headerActions?: React.ReactNode;
   /** Optional callback to close the drawer presentation when hosted inside ChatDrawer. */
   onCloseDrawer?: () => void;
 }
@@ -103,6 +105,7 @@ export function ChatSession({
   conversationId,
   onConversationCreated,
   mode = 'drawer',
+  headerActions,
 }: ChatSessionProps) {
   const t = useTranslations('chat');
   const tAgents = useTranslations('aiSettings');
@@ -719,14 +722,15 @@ export function ChatSession({
   return (
     <div className="flex flex-col h-full bg-background relative overflow-hidden">
       {/* Session header if inside drawer or full mode */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-surface shrink-0">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="font-semibold text-sm truncate text-foreground">
+      <div className={`flex items-center justify-between gap-2 border-b border-border bg-surface shrink-0 ${mode === 'drawer' ? 'px-4 py-3 pr-14' : 'px-5 py-3'}`}>
+        {mode === 'full' ? (
+          <h1 className="min-w-0 flex-1 truncate text-lg font-semibold text-foreground">
             {conversationDetail?.title || t('title')}
-          </span>
-        </div>
+          </h1>
+        ) : null}
 
-        <div className="flex items-center gap-1.5 shrink-0">
+        <div className={`flex items-center gap-2 shrink-0 ${mode === 'drawer' ? 'order-first' : ''}`}>
+          {mode === 'full' && headerActions}
           {mode === 'full' && (
             <Select value={pendingProfileRun?.profileId ?? selectedProfileId} onValueChange={setSelectedProfileId}>
               <SelectTrigger aria-label={tAgents('agentSelect')} className="w-40" disabled={Boolean(pendingProfileRun)}><SelectValue placeholder={tAgents('agentSelect')} /></SelectTrigger>
@@ -743,11 +747,11 @@ export function ChatSession({
           <Button
             type="button"
             onClick={handleNewChat}
-            className="secondary inline-flex h-auto items-center gap-1 px-2.5 py-1.5 text-xs font-medium transition-colors"
+            className={`secondary inline-flex min-h-11 items-center gap-2 px-4 text-sm font-semibold transition-colors ${mode === 'full' ? 'hidden' : ''}`}
             title={t('newChat')}
           >
-            <PlusIcon className="size-3.5" />
-            <span className="hidden sm:inline">{t('newChat')}</span>
+            <PlusIcon className="size-4" />
+            <span>{t('newChat')}</span>
           </Button>
         </div>
       </div>
@@ -773,7 +777,7 @@ export function ChatSession({
         </details>
       ) : null}
 
-      <ChatContextBar context={chatCtrl.context} onRemove={() => chatCtrl.setContext(null)} onChange={mode === 'full' ? chatCtrl.setContext : undefined} />
+      {mode === 'drawer' && <ChatContextBar variant="bar" context={chatCtrl.context} onRemove={() => chatCtrl.setContext(null)} />}
 
       {mode === 'full' && pendingMessageMutation && (
         <div role="status" className="flex items-center justify-between gap-3 border-b border-border bg-secondary px-4 py-2 text-xs">
@@ -832,6 +836,8 @@ export function ChatSession({
 
       {/* Bottom composer */}
       <ChatComposer
+        mode={mode}
+        contextBar={mode === 'full' ? <ChatContextBar variant="badges" context={chatCtrl.context} onRemove={() => chatCtrl.setContext(null)} onChange={mode === 'full' ? chatCtrl.setContext : undefined} /> : undefined}
         value={pendingProfileRun?.prompt ?? chatCtrl.draft}
         onChange={pendingProfileRun ? () => undefined : chatCtrl.setDraft}
         onSend={handleSend}

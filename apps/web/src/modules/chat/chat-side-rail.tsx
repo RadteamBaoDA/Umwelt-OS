@@ -12,7 +12,7 @@ export function ChatSideRail({ citations, context }: { citations: Citation[]; co
   const t = useTranslations('chat');
   const contextLabel = useContextLabel(context);
   return (
-    <aside aria-label={t('railLabel')} className="hidden w-80 shrink-0 flex-col overflow-y-auto border-l border-border bg-surface p-3 lg:flex">
+    <aside aria-label={t('railLabel')} className="hidden w-[300px] shrink-0 flex-col overflow-y-auto border-l border-border bg-surface p-3 lg:flex">
       <Tabs defaultValue="sources">
         <TabsList aria-label={t('railLabel')}>
           <TabsTrigger value="sources">{t('railSources')}{citations.length > 0 ? ` (${citations.length})` : ''}</TabsTrigger>

@@ -107,7 +107,32 @@ class TranslationSettingsUpdate(BaseModel):
     expected_revision: int = Field(ge=1)
 
 
+class SystemPromptEntry(BaseModel):
+    """One editable prompt: effective text, built-in default and whether it is customized."""
+    key: str
+    value: str
+    default: str
+    customized: bool
+
+
+class SystemPromptsRead(BaseModel):
+    """All editable system prompts with the revision used for optimistic updates."""
+    configuration_revision: int = Field(ge=1)
+    prompts: list[SystemPromptEntry]
+
+
+class SystemPromptsUpdate(BaseModel):
+    """Partial update; ``None`` or blank resets a key to its default."""
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: int = Field(ge=1)
+    prompts: dict[str, str | None] = Field(min_length=1)
+
+
 __all__ = [
+    "SystemPromptEntry",
+    "SystemPromptsRead",
+    "SystemPromptsUpdate",
     "MaintenanceSummaryRead",
     "ModelMapping",
     "ModuleLifecycleEntry",

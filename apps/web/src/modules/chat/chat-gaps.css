@@ -1,0 +1,18 @@
+/* Chat design-gap styles (Chat.dc.html): in-message citation chip. */
+@layer components {
+  .chat-markdown .cite {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 5px;
+    margin: 0 2px;
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--accent) 9%, transparent);
+    font-size: 12px;
+    font-weight: 650;
+    text-decoration: none;
+    vertical-align: 1px;
+  }
+}

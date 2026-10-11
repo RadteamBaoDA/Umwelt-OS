@@ -5,6 +5,7 @@ import { ArrowLeftIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { useTranslations } from 'next-intl';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -23,6 +24,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ApiError } from '@/core/api';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { formatDateTime } from '@/core/i18n';
@@ -271,7 +273,7 @@ export function MemoryList() {
       <div className="section-heading flex flex-wrap items-start justify-between gap-4">
         <div className="grid gap-1">
           <Link href="/chat" className="inline-flex min-h-11 w-fit items-center gap-1 text-sm font-semibold text-primary underline-offset-4 hover:underline"><ArrowLeftIcon aria-hidden="true" className="size-4" />{t('backToChat')}</Link>
-          <h1 id="memory-title" className="text-2xl font-bold tracking-tight">{t('title')}</h1>
+          <h1 id="memory-title" className="m-0 text-[30px] font-bold tracking-[-.04em]">{t('title')}</h1>
           <p className="muted text-sm text-muted-foreground">{t('subtitle')} {t('memoryNote')}</p>
         </div>
         <div className="form-actions">
@@ -282,33 +284,29 @@ export function MemoryList() {
 
       {/* Filter and search toolbar */}
       <div className="flex flex-wrap items-center gap-3">
-        <div role="group" aria-label={t('filterByType')} className="flex flex-wrap gap-1 rounded-md border border-input bg-background p-1">
-          {(['all', 'fact', 'preference', 'instruction'] as const).map((typeKey) => {
-            const n = countFor(typeKey);
-            return (
-            <Button
-              key={typeKey}
-              type="button"
-              size="sm"
-              variant={filterType === typeKey ? 'default' : 'ghost'}
-              aria-pressed={filterType === typeKey}
-              onClick={() => setFilterType(typeKey)}
-            >
-              {typeKey === 'all' ? t('filterAll') : t(typeKey)}
-              {n !== null && (
-                <>
-                  <span className="tabular-nums" aria-hidden="true">{n}</span>
-                  <span className="sr-only">{t('kindCount', { count: n })}</span>
-                </>
-              )}
-            </Button>
-            );
-          })}
-        </div>
+        <Tabs value={filterType} onValueChange={(next) => setFilterType(next as MemoryFilterType)}>
+          <TabsList aria-label={t('filterByType')} className="h-auto gap-0.5 rounded-lg p-0.5">
+            {(['all', 'fact', 'preference', 'instruction'] as const).map((typeKey) => {
+              const n = countFor(typeKey);
+              return (
+                <TabsTrigger key={typeKey} value={typeKey} className="min-h-10 gap-1.5 px-3 text-[13px] font-semibold">
+                  {typeKey === 'all' ? t('filterAll') : t(typeKey)}
+                  {n !== null && (
+                    <>
+                      <span className="tabular-nums" aria-hidden="true">{n}</span>
+                      <span className="sr-only">{t('kindCount', { count: n })}</span>
+                    </>
+                  )}
+                </TabsTrigger>
+              );
+            })}
+          </TabsList>
+        </Tabs>
 
-        <div className="min-w-[200px] flex-1">
+        <div className="ms-auto w-full min-[720px]:w-[280px]">
           <Input
             type="search"
+            className="min-h-11"
             aria-label={t('searchMemories')}
             placeholder={t('searchMemories')}
             value={searchQuery}
@@ -336,7 +334,7 @@ export function MemoryList() {
         )}
 
         {memoriesQuery.isSuccess && items.length === 0 && (
-          <div className="empty-state rounded-lg border border-dashed border-border p-8 text-center">
+          <div className="empty-state rounded-lg border border-dashed border-border bg-card p-8 text-center">
             <h3 className="mb-1 text-base font-semibold">{t('emptyTitle')}</h3>
             <p className="mx-auto mb-4 max-w-md text-sm text-muted-foreground">
               {t('emptyDescription')}
@@ -348,7 +346,7 @@ export function MemoryList() {
         )}
 
         {items.length > 0 && (
-          <ul className="record-list divide-y divide-border overflow-hidden rounded-lg border bg-background">
+          <ul className="record-list m-0 divide-y divide-border overflow-hidden rounded-lg border bg-card">
             {items.map((item: MemoryItem) => (
               <li
                 key={item.id}
@@ -356,9 +354,7 @@ export function MemoryList() {
               >
                 <div className="min-w-0 flex-1 space-y-1.5">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="inline-flex items-center rounded bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground">
-                      {t(item.type as 'fact' | 'preference' | 'instruction')}
-                    </span>
+                    <Badge variant="outline">{t(item.type as 'fact' | 'preference' | 'instruction')}</Badge>
                     {item.confidence < 1.0 && (
                       <span className="text-xs text-muted-foreground">
                         {Math.round(item.confidence * 100)}% {t('confidence')}
@@ -408,9 +404,7 @@ export function MemoryList() {
               >
                 <div className="min-w-0 flex-1 space-y-1.5">
                   <div className="flex items-center gap-2">
-                    <span className="inline-flex items-center rounded bg-secondary px-2 py-0.5 text-xs font-medium text-primary">
-                      {t(cand.type as 'fact' | 'preference' | 'instruction')}
-                    </span>
+                    <Badge variant="outline">{t(cand.type as 'fact' | 'preference' | 'instruction')}</Badge>
                     <span className="text-xs text-muted-foreground">
                       {Math.round(cand.confidence * 100)}% {t('confidence')}
                     </span>

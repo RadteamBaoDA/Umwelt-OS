@@ -63,6 +63,7 @@ from modules.chat.scope import (
 from modules.chat.stream import make_event_id
 from modules.memory.public import lock_export_privacy, read_export_privacy
 from modules.settings import public as settings_public
+from modules.settings.prompts import resolve_prompt
 from modules.sources import public as sources_public
 
 logger = logging.getLogger(__name__)
@@ -823,6 +824,7 @@ async def run_response_generation(
                 session, settings, redis, scope=owner_scope,
             )
             alias = ai_config.chat_alias or "reasoning-large"
+            ai_config = settings_public.derive_for_alias(ai_config, alias)
             mapping = ai_config.aliases.get(alias)
 
             policy = RequestPolicy(
@@ -832,7 +834,7 @@ async def run_response_generation(
                 reasoning_allowed=ai_config.privacy.allow_remote_reasoning,
                 embeddings_allowed=ai_config.privacy.allow_remote_embeddings,
                 web_search_allowed=ai_config.privacy.allow_remote_web_search,
-                permitted_destinations=frozenset(ai_config.privacy.reasoning_destinations),
+                permitted_destinations=frozenset({ai_config.endpoint_destination_id} if ai_config.endpoint_destination_id else ()),
                 reasoning_destinations=frozenset(ai_config.privacy.reasoning_destinations),
                 configuration_revision=ai_config.configuration_revision,
             )
@@ -903,13 +905,13 @@ async def run_response_generation(
                 configuration_revision=ai_config.configuration_revision,
                 before_send=before_send_attempt,
                 approved_endpoint_cidrs=tuple(settings.ai_allowed_endpoint_cidrs),
+                allow_public_endpoints=ai_config.allow_public_providers,
             )
 
             # Stream request construction is lazy; this generator is consumed below. Its gateway
             # callbacks fence every actual request/retry rather than claiming these locks span it.
             system_text = (
-                "You are BBD-OS Assistant, a personal intelligence assistant. "
-                "Answer the user's inquiry accurately and factually based on the retrieved context below. "
+                resolve_prompt(ai_config.system_prompts, "chat") + " "
                 "Cite the evidence that supports each claim inline using its bracketed number from "
                 "<retrieved_evidence>, e.g. [1] or [1][3]. Cite only evidence you actually use; "
                 "do not invent numbers. If the evidence does not answer the question, say you do not "

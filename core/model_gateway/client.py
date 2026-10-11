@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import random
+import re
 import secrets
 import time
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
@@ -9,6 +10,7 @@ from contextlib import AbstractAsyncContextManager, aclosing, asynccontextmanage
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, cast
+from urllib.parse import urlsplit
 
 import httpx
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI
@@ -38,6 +40,11 @@ _REFRESH = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('pex
 _ACQUIRE = "for i, k in ipairs(KEYS) do if redis.call('set', k, ARGV[1], 'NX', 'PX', ARGV[2]) then return i - 1 end end return -1"
 # Token-checked; one key (normal release) or all slots (sweep after an acquire cut short mid-flight).
 _RELEASE = "local n = 0 for _, k in ipairs(KEYS) do if redis.call('get', k) == ARGV[1] then n = n + redis.call('del', k) end end return n"
+
+
+def _api_base(url: str) -> str:
+    """Append /v1 unless the path already carries a version segment (Gemini /v1beta/openai, Groq /openai/v1)."""
+    return url if re.search(r"/v1(beta\d*)?(/|$)", urlsplit(url).path) else f"{url}/v1"
 
 
 def _raise_if_policy_denied(exc: BaseException) -> None:
@@ -71,6 +78,7 @@ class ModelGateway:
     configuration_revision: int = field(kw_only=True)
     before_send: Callable[[], Awaitable[None]] = field(kw_only=True, repr=False)
     approved_endpoint_cidrs: tuple[str, ...] = ()
+    allow_public_endpoints: bool = False
 
     def __post_init__(self) -> None:
         """Freeze resolved identity/credentials for one request; reject missing scope or fence.
@@ -123,7 +131,7 @@ class ModelGateway:
     def _http_client(self, base_url: str) -> httpx.AsyncClient:
         """Create a redirect-disabled HTTP client pinned to an endpoint approved by network policy."""
         try:
-            return approved_http_client(base_url, self.approved_endpoint_cidrs)
+            return approved_http_client(base_url, self.approved_endpoint_cidrs, allow_global=self.allow_public_endpoints)
         except EndpointNetworkPolicyError as exc:
             raise ModelGatewayError("Model gateway network policy is unavailable") from exc
 
@@ -217,7 +225,7 @@ class ModelGateway:
         if not probe and not await self._capability_supported(alias, mapping, policy, capability):
             raise ModelGatewayError("Model capability is not supported")
         body = {**payload, "model": mapping.model}
-        base_url = self.base_url if self.base_url.endswith("/v1") else f"{self.base_url}/v1"
+        base_url = _api_base(self.base_url)
 
         async def send() -> Any:
             """Execute a chat, embedding, or rerank SDK call with bounded retries and normalize its response."""
@@ -287,9 +295,9 @@ class ModelGateway:
 
     async def discover_models(self) -> list[str]:
         """List model IDs from the configured gateway while holding capacity and enforcing endpoint policy."""
-        if self.base_url is None or not self.api_key:
+        if self.base_url is None or not (self.api_key or self.destination_id.startswith("local:")):
             raise ModelGatewayError("Model gateway is not configured")
-        base_url = self.base_url if self.base_url.endswith("/v1") else f"{self.base_url}/v1"
+        base_url = _api_base(self.base_url)
 
         async def send() -> list[str]:
             """Call the configured model-list endpoint and return valid model IDs; map SDK and network failures to the gateway error."""
@@ -379,7 +387,7 @@ class ModelGateway:
         if not probe and not await self._capability_supported(alias, mapping, policy, "streaming"):
             raise ModelGatewayError("Streaming capability has not been verified")
         async with self._lease(_STREAM_LEASE_WAIT_SECONDS):
-            base_url = self.base_url if self.base_url.endswith("/v1") else f"{self.base_url}/v1"
+            base_url = _api_base(self.base_url)
             async with AsyncOpenAI(
                 base_url=base_url,
                 api_key=self.api_key or "not-configured",

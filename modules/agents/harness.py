@@ -455,13 +455,17 @@ class HarnessContext:
         except Exception:  # noqa: BLE001  # fail-closed boundary: any failure denies/degrades
             return False
 
-    async def read_gateway_config(self) -> AIExecutionConfig:
-        """Resolve current gateway settings in a short transaction after the run fences pass."""
+    async def read_gateway_config(self, alias: str | None = None) -> AIExecutionConfig:
+        """Resolve current gateway settings in a short transaction after the run fences pass.
+
+        With ``alias`` the endpoint/key/destination are those of that alias's provider.
+        """
         await self._run_snapshot()
         async with self.session_factory() as session:
-            return await settings_public.get_ai_execution_config(
+            config = await settings_public.get_ai_execution_config(
                 session, self.settings, self.redis, scope=self.scope,
             )
+        return settings_public.derive_for_alias(config, alias) if alias else config
 
     async def authorize_remote_send(
         self,
@@ -487,6 +491,7 @@ class HarnessContext:
             str(self.profile_snapshot.get("model_alias"))
             if self.profile_snapshot is not None else config.chat_alias or "reasoning-large"
         )
+        config = settings_public.derive_for_alias(config, alias)
         mapping = config.aliases.get(alias)
         destination = config.endpoint_destination_id or ""
         if self.profile_snapshot is not None:
@@ -511,7 +516,7 @@ class HarnessContext:
             gateway_identity=config.gateway_identity,
             reasoning_allowed=config.privacy.allow_remote_reasoning,
             local_only=False,
-            permitted_destinations=frozenset(config.privacy.reasoning_destinations),
+            permitted_destinations=frozenset({destination} if destination else ()),
             reasoning_destinations=frozenset(config.privacy.reasoning_destinations),
             configuration_revision=config.configuration_revision,
         )
@@ -545,7 +550,7 @@ class HarnessContext:
                    for source_id, generation in source_generations.items())
         ):
             raise RunCancelled("Search source snapshot is invalid")
-        current = await self.read_gateway_config()
+        current = await self.read_gateway_config("embedding")
         destination = current.endpoint_destination_id or "omniroute"
         principal = self.owner_principal(state, destination)
         fence = {"source_generations": source_generations, "records": []}
@@ -988,6 +993,7 @@ def build_workflow(context: HarnessContext, checkpointer: Any) -> Any:
             scope=context.scope, gateway_identity=config.gateway_identity,
             configuration_revision=config.configuration_revision, before_send=before_send,
             approved_endpoint_cidrs=tuple(context.settings.ai_allowed_endpoint_cidrs),
+            allow_public_endpoints=config.allow_public_providers,
         )
         messages = [
             {"role": "system", "content": (

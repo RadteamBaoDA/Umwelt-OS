@@ -234,9 +234,12 @@ def approved_transport(
     return ApprovedEndpointTransport(origin, approved_cidrs, delegate, allow_global=allow_global)
 
 
-def approved_http_client(base_url: str, approved_cidrs: Sequence[str]) -> httpx.AsyncClient:
-    """Create a no-proxy, no-redirect HTTP client using the approved-address transport."""
-    transport = approved_transport(base_url, approved_cidrs)
+def approved_http_client(base_url: str, approved_cidrs: Sequence[str], *, allow_global: bool = False) -> httpx.AsyncClient:
+    """Create a no-proxy, no-redirect HTTP client using the approved-address transport.
+
+    ``allow_global`` (``AI_ALLOW_PUBLIC_PROVIDERS``) additionally admits public addresses.
+    """
+    transport = approved_transport(base_url, approved_cidrs, allow_global=allow_global)
     return httpx.AsyncClient(transport=transport, trust_env=False, follow_redirects=False)
 
 

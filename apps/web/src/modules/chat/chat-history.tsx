@@ -3,7 +3,7 @@
 import * as React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
-import { MessageSquareIcon, PencilIcon, PlusIcon, SearchIcon, Trash2Icon } from 'lucide-react';
+import { PencilIcon, PlusIcon, SearchIcon, Trash2Icon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -45,6 +45,16 @@ export interface ChatHistoryProps {
   onNewConversation: () => void;
   /** Optional custom CSS classes. */
   className?: string;
+  /** Optional handle filled with rename/delete openers so the conversation header can reuse this component's dialogs. */
+  actionsRef?: React.MutableRefObject<ChatHistoryActions | null>;
+}
+
+/** Imperative openers for the rename and delete dialogs owned by ChatHistory. */
+export interface ChatHistoryActions {
+  /** Opens the rename dialog for a conversation. */
+  rename: (conversation: { id: string; title: string }) => void;
+  /** Opens the delete confirmation for a conversation id. */
+  remove: (id: string) => void;
 }
 
 /**
@@ -59,6 +69,7 @@ export function ChatHistory({
   onSelectConversation,
   onNewConversation,
   className = '',
+  actionsRef,
 }: ChatHistoryProps) {
   const t = useTranslations('chat');
   const session = useWorkspaceSession();
@@ -68,13 +79,22 @@ export function ChatHistory({
   const locale = display.confirmedPreferences?.locale || 'en-us';
   const [searchQuery, setSearchQuery] = React.useState('');
   const [pendingDeleteId, setPendingDeleteId] = React.useState<string | null>(null);
-  const [pendingRename, setPendingRename] = React.useState<Conversation | null>(null);
+  const [pendingRename, setPendingRename] = React.useState<{ id: string; title: string } | null>(null);
   const [renameValue, setRenameValue] = React.useState('');
 
   const { data: conversations = [], isLoading } = useQuery({
     queryKey: chatKeys.conversations(),
     queryFn: () => listConversations(),
   });
+
+  React.useEffect(() => {
+    if (!actionsRef) return;
+    actionsRef.current = {
+      rename: (conversation) => { setRenameValue(conversation.title); setPendingRename(conversation); },
+      remove: setPendingDeleteId,
+    };
+    return () => { actionsRef.current = null; };
+  }, [actionsRef]);
 
   const { unbindConversation } = useChatController();
   const deleteMutation = useMutation({
@@ -120,27 +140,27 @@ export function ChatHistory({
 
   return (
     <aside
-      className={`flex flex-col h-full bg-surface border-r border-border shrink-0 ${className}`}
+      className={`flex flex-col h-full bg-surface shrink-0 ${className}`}
       aria-label={t('history')}
     >
       <div className="p-3 border-b border-border flex flex-col gap-2">
         <Button
           type="button"
           onClick={onNewConversation}
-          className="flex h-10 w-full items-center justify-center gap-2 rounded-xl text-xs font-semibold shadow-xs"
+          className="flex min-h-11 w-full items-center justify-center gap-2 text-sm font-semibold"
         >
           <PlusIcon className="size-4" aria-hidden="true" />
           <span>{t('newChat')}</span>
         </Button>
 
         <div className="relative">
-          <SearchIcon className="absolute left-2.5 top-2.5 size-3.5 text-muted-foreground pointer-events-none" aria-hidden="true" />
+          <SearchIcon className="absolute left-2.5 top-3.5 size-4 text-muted-foreground pointer-events-none" aria-hidden="true" />
           <Input
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder={t('searchConversations')}
             aria-label={t('searchConversations')}
-            className="pl-8 h-8 text-xs bg-background"
+            className="pl-8 min-h-11 text-sm bg-background"
           />
         </div>
       </div>
@@ -160,7 +180,7 @@ export function ChatHistory({
 
         {groupedConversations.map(({ key, items }) => (
           <section key={key} aria-label={key === 'today' ? t('historyToday') : t('historyEarlier')} className="flex flex-col gap-1">
-            <h3 className="px-2 pt-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <h3 className="px-2 pb-1 pt-2 text-xs font-semibold text-muted-foreground">
               {key === 'today' ? t('historyToday') : t('historyEarlier')}
             </h3>
             {items.map((conv: Conversation) => {
@@ -168,7 +188,7 @@ export function ChatHistory({
               return (
                 <div
                   key={conv.id}
-                  className={`group flex items-center gap-1 rounded-lg border text-xs ${isActive ? 'border-border bg-secondary font-semibold text-foreground' : 'border-transparent text-foreground hover:bg-secondary'}`}
+                  className={`group flex items-center gap-1 rounded-lg border text-sm ${isActive ? 'border-border bg-background font-semibold text-foreground' : 'border-transparent text-foreground hover:bg-background'}`}
                 >
                   <button
                     type="button"
@@ -176,7 +196,6 @@ export function ChatHistory({
                     aria-current={isActive ? 'true' : undefined}
                     className="flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-lg p-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
-                    <MessageSquareIcon className="size-3.5 shrink-0 opacity-70" aria-hidden="true" />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate">{conv.title || t('untitledConversation')}</span>
                       <span className="block text-[11px] font-normal text-muted-foreground">{formatDateTime(conv.updated_at, locale, timezone)}</span>
@@ -184,7 +203,7 @@ export function ChatHistory({
                   </button>
                   <button
                     type="button"
-                    onClick={() => { setRenameValue(conv.title); setPendingRename(conv); }}
+                    onClick={() => { setRenameValue(conv.title); setPendingRename({ id: conv.id, title: conv.title }); }}
                     className="inline-flex size-9 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-background hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:opacity-0 md:group-hover:opacity-100"
                     title={t('renameConversation')}
                     aria-label={t('renameConversation')}

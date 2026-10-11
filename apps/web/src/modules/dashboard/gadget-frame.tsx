@@ -8,12 +8,16 @@ import {
   MoreVertical,
   Settings,
   Trash2,
-  X,
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import React, { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import { useDisplayPreferences } from '@/core/query-provider';
+import { formatDateTime } from '@/core/i18n';
+import { GadgetFreshnessProvider } from './gadget-freshness';
 import {
   Dialog,
   DialogContent,
@@ -74,6 +78,21 @@ export interface GadgetFrameProps {
 }
 
 /**
+ * Formats an elapsed time as a localized relative phrase (minutes, hours or days).
+ *
+ * @param ms Epoch milliseconds of the event.
+ * @param locale Display locale id.
+ * @returns Relative phrase such as "2 minutes ago".
+ */
+function formatAgo(ms: number, locale: string): string {
+  const minutes = Math.round((Date.now() - ms) / 60_000);
+  const rtf = new Intl.RelativeTimeFormat(locale === 'vi-vi' ? 'vi' : 'en', { numeric: 'auto' });
+  if (Math.abs(minutes) < 60) return rtf.format(-Math.max(0, minutes), 'minute');
+  if (Math.abs(minutes) < 1440) return rtf.format(-Math.round(minutes / 60), 'hour');
+  return rtf.format(-Math.round(minutes / 1440), 'day');
+}
+
+/**
  * Standard container card wrapping each dashboard gadget. Keeps fixed header/status geometry,
  * scrolls compact cards at the outer labelled region, and reparents one renderer portal host for
  * Expand so filters, scroll position, and component state survive without layout mutation.
@@ -99,6 +118,8 @@ export function GadgetFrame({
   children,
 }: GadgetFrameProps) {
   const t = useTranslations('dashboard');
+  const display = useDisplayPreferences();
+  const [collectedAt, setCollectedAt] = useState<string | null>(null);
   const [isExpanded, setIsExpanded] = useState<boolean>(false);
   const [rendererHost, setRendererHost] = useState<HTMLDivElement | null>(null);
   const rendererHostRef = useRef<HTMLDivElement | null>(null);
@@ -123,7 +144,7 @@ export function GadgetFrame({
     }
   }, []);
 
-  /** Reports header border-box height; its fixed two-row structure excludes streamed queue counts. */
+  /** Reports header border-box height; its fixed single-row structure excludes streamed queue counts. */
   useEffect(() => {
     const node = headerRef.current;
     if (!node || !onHeaderMeasured) return;
@@ -160,6 +181,10 @@ export function GadgetFrame({
   }, [isExpanded, moveRendererHost]);
 
   const definition = instance.definition;
+  // Freshness comes only from data the renderer actually loaded; absent means no badge.
+  const collectedMs = collectedAt ? Date.parse(collectedAt) : NaN;
+  const freshnessLabel = Number.isFinite(collectedMs) ? t('freshnessUpdated', { time: formatAgo(collectedMs, display.locale) }) : null;
+  const freshnessTitle = collectedAt ? formatDateTime(collectedAt, display.locale, display.timezone) : undefined;
   const displayTitle = instance.title || definition.name || definition.renderer;
 
   // Derive most severe highlight rule or rule match
@@ -221,33 +246,41 @@ export function GadgetFrame({
 
   return (
     <>
-      <div
+      <Card
         role="region"
         aria-labelledby={titleId}
         tabIndex={0}
         aria-label={t('gadgetScrollRegionLabel', { title: displayTitle })}
         onClick={isEditMode ? onSelect : undefined}
-        className={`group relative flex flex-col h-full w-full rounded-xl border bg-card text-card-foreground shadow-xs transition-shadow overflow-x-hidden overflow-y-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+        className={`dashboard-gadget group relative h-full w-full gap-0 rounded-lg py-0 shadow-xs transition-shadow overflow-x-hidden overflow-y-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
           isSelected ? 'ring-2 ring-primary border-primary' : 'border-border'
         } ${isDragging ? 'opacity-40 shadow-lg scale-[0.99]' : ''} ${
           isResizing ? 'ring-1 ring-primary/60' : ''
         }`}
       >
-        {/* Gadget Header */}
-        <header ref={headerRef} className={`flex shrink-0 flex-col items-stretch gap-1 px-3.5 py-2.5 border-b border-border select-none ${isEditMode ? 'bg-muted/20' : 'bg-card'}`}>
-          <div className="flex min-h-11 items-center justify-between gap-2">
-            <div
-              className={`flex min-w-0 flex-1 items-center gap-2 ${isEditMode ? 'cursor-grab active:cursor-grabbing hover:bg-muted/30' : ''}`}
-              onPointerDown={isEditMode ? onDragHandlePointerDown : undefined}
-            >
-              {isEditMode && <GripHorizontal className="w-4 h-4 text-muted-foreground shrink-0 opacity-70 group-hover:opacity-100" />}
-              <h3 id={titleId} className="min-w-0 truncate font-semibold text-sm text-foreground leading-tight" title={displayTitle}>
-                {displayTitle}
-              </h3>
-            </div>
+        {/* Gadget Header (artboard): one row with title, status badges and actions. */}
+        <header ref={headerRef} className={`flex shrink-0 items-center gap-2 px-3.5 py-1.5 border-b border-border select-none ${isEditMode ? 'bg-muted/20' : 'bg-card'}`}>
+          <div
+            className={`flex min-w-0 max-w-[65%] shrink-0 items-center gap-2 ${isEditMode ? 'cursor-grab active:cursor-grabbing hover:bg-muted/30' : ''}`}
+            onPointerDown={isEditMode ? onDragHandlePointerDown : undefined}
+          >
+            {isEditMode && <GripHorizontal className="w-4 h-4 text-muted-foreground shrink-0 opacity-70 group-hover:opacity-100" />}
+            <h3 id={titleId} className="min-w-0 truncate font-semibold text-sm text-foreground leading-tight" title={displayTitle}>
+              {displayTitle}
+            </h3>
+          </div>
 
-            {/* Action controls occupy a fixed row and cannot start title dragging. */}
-            <div className="flex shrink-0 flex-nowrap items-center gap-1 overflow-x-auto" onPointerDown={(event) => event.stopPropagation()}>
+          {/* Status badges share the row; overflow is clipped so streaming counts never change grid height. */}
+          <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden whitespace-nowrap">
+            {freshnessLabel && <Badge variant="outline" className="shrink-0 text-[11px] text-muted-foreground" title={freshnessTitle}>{freshnessLabel}</Badge>}
+            {unreadCount > 0 && <Badge className="shrink-0 px-1.5 text-[11px]" title={`${unreadCount} unread items`}>{t('unreadBadge', { count: unreadCount })}</Badge>}
+            {ruleMatch?.matched && <Badge variant="outline" className="shrink-0 gap-1 border-primary/30 bg-primary/10 text-[11px] text-foreground" title={ruleMatch.reason || t('ruleMatchFallback')}><AlertTriangle className="w-3 h-3" /><span>{t('ruleMatchBadge')}</span></Badge>}
+            {effectiveSeverity && <Badge variant={effectiveSeverity === 'critical' ? 'destructive' : 'outline'} className={`shrink-0 text-[10px] font-bold uppercase tracking-wider ${effectiveSeverity === 'info' ? 'text-muted-foreground' : ''}`}>{effectiveSeverity === 'critical' ? t('severityCritical') : effectiveSeverity === 'warning' ? t('severityWarning') : t('severityInfo')}</Badge>}
+            {definition.warnings && definition.warnings.length > 0 && <Badge variant="secondary" className="shrink-0 gap-0.5 text-[10px]" title="Setup required for this renderer"><Info className="w-3 h-3" /><span>{t('setupRequired')}</span></Badge>}
+          </div>
+
+          {/* Action controls cannot start title dragging. */}
+          <div className="flex shrink-0 flex-nowrap items-center gap-1" onPointerDown={(event) => event.stopPropagation()}>
             {/* Expand / Maximize modal trigger */}
             <Button
               type="button"
@@ -293,15 +326,6 @@ export function GadgetFrame({
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
-            </div>
-          </div>
-
-          {/* One fixed status row prevents streaming counts and badges from changing grid height. */}
-          <div className="flex h-5 min-w-0 items-center gap-1.5 overflow-x-auto whitespace-nowrap">
-            {unreadCount > 0 && <span className="inline-flex shrink-0 items-center rounded-full bg-primary px-1.5 text-[11px] font-semibold tracking-tight text-primary-foreground" title={`${unreadCount} unread items`}>{t('unreadBadge', { count: unreadCount })}</span>}
-            {ruleMatch?.matched && <span className="inline-flex shrink-0 items-center gap-1 rounded border border-primary/30 bg-primary/10 px-1.5 text-[11px] font-medium text-foreground" title={ruleMatch.reason || t('ruleMatchFallback')}><AlertTriangle className="w-3 h-3" /><span>{t('ruleMatchBadge')}</span></span>}
-            {effectiveSeverity && <span className={`inline-flex shrink-0 items-center rounded border px-1.5 text-[10px] font-bold uppercase tracking-wider ${effectiveSeverity === 'critical' ? 'bg-destructive/15 text-destructive border-destructive/30' : effectiveSeverity === 'warning' ? 'bg-background text-foreground border-border' : 'bg-background text-muted-foreground border-border'}`}>{effectiveSeverity === 'critical' ? t('severityCritical') : effectiveSeverity === 'warning' ? t('severityWarning') : t('severityInfo')}</span>}
-            {definition.warnings && definition.warnings.length > 0 && <span className="inline-flex shrink-0 items-center gap-0.5 rounded border border-border bg-muted/40 px-1.5 text-[10px] font-medium text-muted-foreground" title="Setup required for this renderer"><Info className="w-3 h-3" /><span>{t('setupRequired')}</span></span>}
           </div>
         </header>
 
@@ -324,29 +348,21 @@ export function GadgetFrame({
 
         <div ref={inlineHostRef} className="min-h-full min-w-0 overflow-x-auto" />
         </div>
-      </div>
+      </Card>
 
       {/* Expanded Modal View (preserves filters, scroll position and local state) */}
       <Dialog open={isExpanded} onOpenChange={setIsExpanded}>
-        <DialogContent onCloseAutoFocus={(event) => { event.preventDefault(); expandTriggerRef.current?.focus(); }} className="max-w-5xl w-[calc(100vw-2rem)] h-[calc(100dvh-2rem)] max-h-[calc(100dvh-2rem)] flex flex-col p-0 gap-0 overflow-hidden" style={{ marginTop: 'env(safe-area-inset-top)', marginBottom: 'env(safe-area-inset-bottom)', marginLeft: 'env(safe-area-inset-left)', marginRight: 'env(safe-area-inset-right)' }}>
-          <DialogHeader className="shrink-0 p-4 border-b border-border flex flex-row items-center justify-between">
-            <div className="flex items-center gap-2">
-              <DialogTitle className="text-lg font-bold">{displayTitle}</DialogTitle>
-              <span className="text-xs px-2 py-0.5 rounded bg-muted/40 font-mono text-muted-foreground">
-                {definition.renderer}
-              </span>
-            </div>
-            <DialogDescription className="sr-only">
-              {t('gadgetExpandedDescription', { title: displayTitle })}
+        <DialogContent closeLabel={t('close')} onCloseAutoFocus={(event) => { event.preventDefault(); expandTriggerRef.current?.focus(); }} className="flex h-[calc(100dvh-4rem)] max-h-[calc(100dvh-4rem)] w-[calc(100vw-2rem)] flex-col gap-0 overflow-hidden rounded-2xl p-0 sm:max-w-[1240px]">
+          <DialogHeader className="shrink-0 gap-0 border-b border-border py-4 pl-6 pr-16 text-left">
+            <DialogTitle className="text-lg font-semibold leading-snug">{displayTitle}</DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">
+              {definition.renderer} {'·'} {t('gadgetExpandedDescription', { title: displayTitle })}
             </DialogDescription>
-            <Button type="button" className="min-h-11 min-w-11" aria-label={t('close')} onClick={() => setIsExpanded(false)}>
-              <X className="h-4 w-4" />
-            </Button>
           </DialogHeader>
-          <div ref={attachExpandedHost} className="min-h-0 flex-1 overflow-auto overscroll-contain p-4" />
+          <div ref={attachExpandedHost} className="min-h-0 flex-1 overflow-auto overscroll-contain p-6" />
         </DialogContent>
       </Dialog>
-      {rendererHost && createPortal(renderGadgetContent(), rendererHost)}
+      {rendererHost && createPortal(<GadgetFreshnessProvider report={setCollectedAt}>{renderGadgetContent()}</GadgetFreshnessProvider>, rendererHost)}
     </>
   );
 }

@@ -14,7 +14,7 @@ Status: UI technology and experience decisions selected by the owner. This docum
 
 ## 2. Product navigation and component mapping
 
-Main navigation contains exactly **Dashboard / Chat / Settings**. Settings has exactly three local groups: **Data sources**, **AI & Ommi Router**, **Dashboard & Gadget**. Account, theme and language belong only in the user menu. Reading a story, entity or feed can open a detail view without adding a main navigation entry. Canonical approved requirements are specification section 165.
+Main navigation contains exactly **Dashboard / Chat / Settings**. Settings has exactly three local groups: **Data sources**, **Models**, **Dashboard & Gadget**. Account, theme and language belong only in the user menu. Reading a story, entity or feed can open a detail view without adding a main navigation entry. Canonical approved requirements are specification section 165.
 
 | Product element | shadcn component/composition | Required behavior |
 | --- | --- | --- |
@@ -41,7 +41,7 @@ Use shadcn primitives rather than hand-built substitutes. Business components su
 - Only New chat, user/assistant messages, composer with send/stop, and close are visible. An accessible Sheet title/description may be visually hidden.
 - History, thread selector, model/context controls, attachment management and web-search controls belong on the full Chat page. Main Chat navigation opens the current thread without clearing its draft or restarting generation.
 - Body scrolls independently; composer stays at the bottom. Preserve focus trapping, Escape/close, accessible naming and return focus from Sheet primitives. Do not disable these behaviors to imitate a screenshot.
-- Port the requested AnythingLLM chat source into this repository while adapting it to these components and the existing Umwelt-OS thread/permissions/API contracts. AI calls use server-side OpenAI SDK via **Ommi Router**. There is no local-AI/Ollama requirement.
+- Port the requested AnythingLLM chat source into this repository while adapting it to these components and the existing Umwelt-OS thread/permissions/API contracts. AI calls use the server-side OpenAI SDK against the configured per-alias providers (cloud or local such as Ollama/LM Studio).
 
 ## 3. Semantic tokens and visual rules
 
@@ -125,7 +125,7 @@ Changes are previewed until saved.
 
 ## 8. Viewport, layout and overlays
 
-The application owns 100% width with no centered max-width around the entire shell. The workspace shell fills the dynamic viewport; its header, navigation, and connection footer stay visible while only the main content region scrolls. Within Dashboard, the title/actions and dashboard controls stay visible while status, editor tools, and gadget content scroll in the remaining area. Preserve a `100vh` fallback, safe-area padding, and a mobile content inset for bottom navigation. Give nested flex/grid scroll regions `min-height: 0`; dashboard and chat content must size from the shell rather than viewport subtraction. Login and onboarding screens keep their own scrollable content. Main columns use `minmax(0, 1fr)`/`min-width: 0` to prevent chart and table overflow.
+The application owns 100% width with no centered max-width around the entire shell. The document never scrolls: `.shell` is `height: 100dvh` (with a `100vh` fallback) and `overflow: hidden`, so the header, the main nav and the connection footer stay fixed and only the body content region scrolls. The header is a fixed 64px bar with `surface` background, a bottom `line` border and 24px side padding. Below it `.workspace` is a `flex: 1 1 0; min-height: 0; overflow: hidden` row with 24px padding and 24px gap: a 180px main nav (the active item is a `surface` pill with a `line` border) and `.workspace-main` (`flex: 1 1 0; min-width: 0; min-height: 0; overflow-y: auto`), the only scroll container of the shell. Under 840px the workspace becomes a column with the nav as a horizontal strip above the scrolling content. The connection footer is a fixed `flex: 0 0 auto` bar at the bottom. Settings pages render inside one `surface` panel (18px radius, `line` border, `overflow: hidden`) whose 230px inner nav column and 32px-padded content column replace any per-page outer panel; under 720px the inner nav becomes the Settings section Select. Preserve a `100vh` fallback, safe-area padding, and a mobile content inset for bottom navigation (fixed at 720px and below). Pages must not add their own full-height scroll or sticky offsets for the shell; they scroll inside `.workspace-main`. Avoid further nested scroll regions; where one is unavoidable, give flex/grid children `min-height: 0`. Login, setup and onboarding use the same 64px header and footer with a centered 420px card (18px radius, 32px padding). Main columns use `minmax(0, 1fr)`/`min-width: 0` to prevent chart and table overflow.
 
 Every dashboard content block is a gadget, including the globe/map, highlights, watch rules and personal context. They share the same grid, add/remove, move, resize and Save/Cancel lifecycle. App header/footer, navigation and layout controls remain shell elements. Map filters belong inside the map gadget.
 

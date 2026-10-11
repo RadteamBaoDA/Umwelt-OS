@@ -1,0 +1,33 @@
+/** Bilingual `systemPrompts` messages. Add keys for this area here only. */
+export const systemPromptsMessages = {
+  'en-us': {
+    eyebrow: 'AI', title: 'System prompts', description: 'Edit the instructions sent to the model for each AI feature. Reset restores the built-in default.',
+    note: 'Safety and output-format rules (untrusted-content guard, citations, JSON schema, translation markers) are appended automatically and cannot be edited.',
+    loading: 'Loading system prompts', unavailable: 'System prompts unavailable', loadFailed: 'Could not load system prompts.', retry: 'Retry',
+    unauthorized: 'Please sign in again to continue.', forbidden: 'This action is not allowed for this account.',
+    conflict: 'Prompts changed elsewhere. Reload and try again.', serviceUnavailable: 'The service is unavailable. Try again shortly.',
+    requestFailed: 'The request failed.', saveFailed: 'Could not save system prompts.',
+    saving: 'Saving changes…', unsaved: 'Unsaved changes', saved: 'Saved', customized: 'Customized', reset: 'Reset to default',
+    cancelChanges: 'Cancel', saveButton: 'Save', characters: '{count} / {max}',
+    label_chat: 'Chat assistant', hint_chat: 'Persona and answering style for grounded chat replies.',
+    label_brief: 'Daily brief', hint_brief: 'How the daily brief is written.',
+    label_entity_extraction: 'Entity extraction', hint_entity_extraction: 'What to extract from documents into the knowledge graph.',
+    label_timeline_extraction: 'Timeline extraction', hint_timeline_extraction: 'How events are extracted from documents.',
+    label_translation: 'Translation', hint_translation: 'Tone and style for translated content.',
+  },
+  'vi-vi': {
+    eyebrow: 'AI', title: 'System prompt', description: 'Chỉnh chỉ dẫn gửi tới mô hình cho từng tính năng AI. Khôi phục sẽ dùng lại mặc định có sẵn.',
+    note: 'Các quy tắc an toàn và định dạng đầu ra (chống nội dung không tin cậy, trích dẫn, JSON schema, marker dịch) được tự động nối thêm và không thể sửa.',
+    loading: 'Đang tải system prompt', unavailable: 'System prompt không khả dụng', loadFailed: 'Không thể tải system prompt.', retry: 'Thử lại',
+    unauthorized: 'Hãy đăng nhập lại để tiếp tục.', forbidden: 'Tài khoản này không được phép thực hiện thao tác này.',
+    conflict: 'Prompt đã thay đổi ở nơi khác. Hãy tải lại và thử lại.', serviceUnavailable: 'Dịch vụ không khả dụng. Hãy thử lại sau.',
+    requestFailed: 'Yêu cầu thất bại.', saveFailed: 'Không thể lưu system prompt.',
+    saving: 'Đang lưu thay đổi…', unsaved: 'Có thay đổi chưa lưu', saved: 'Đã lưu', customized: 'Đã tùy chỉnh', reset: 'Khôi phục mặc định',
+    cancelChanges: 'Hủy', saveButton: 'Lưu', characters: '{count} / {max}',
+    label_chat: 'Trợ lý chat', hint_chat: 'Vai trò và phong cách trả lời cho các câu trả lời dựa trên dữ liệu.',
+    label_brief: 'Bản tin hằng ngày', hint_brief: 'Cách viết bản tin hằng ngày.',
+    label_entity_extraction: 'Trích xuất thực thể', hint_entity_extraction: 'Nội dung cần trích xuất từ tài liệu vào đồ thị tri thức.',
+    label_timeline_extraction: 'Trích xuất dòng thời gian', hint_timeline_extraction: 'Cách trích xuất sự kiện từ tài liệu.',
+    label_translation: 'Dịch thuật', hint_translation: 'Giọng điệu và phong cách cho nội dung được dịch.',
+  },
+} as const;

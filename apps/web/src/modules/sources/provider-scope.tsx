@@ -5,6 +5,7 @@ import { useTranslations } from 'next-intl';
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { CheckboxField } from '@/modules/settings/settings-layout';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -86,10 +87,10 @@ export function ProviderScope({
     {field('github_owner', t('githubOwner'), configuration.github_owner ?? '', (value) => onChange('github_owner', value), { maxLength: 39, pattern: '[A-Za-z0-9][A-Za-z0-9-]{0,38}' })}
     {field('github_repository', t('githubRepository'), configuration.github_repository ?? '', (value) => onChange('github_repository', value), { maxLength: 100, pattern: '[A-Za-z0-9_.-]{1,100}' })}
     {provider === 'github' && <>
-      {(['include_issues', 'include_pulls', 'include_commits', 'include_releases'] as const).map((key) => <div className="field field-inline" key={key}>
-        <Label htmlFor={`source-scope-${key}`}>{t(({ include_issues: 'githubIssues', include_pulls: 'githubPulls', include_commits: 'githubCommits', include_releases: 'githubReleases' } as const)[key])}</Label>
+      {(['include_issues', 'include_pulls', 'include_commits', 'include_releases'] as const).map((key) => <CheckboxField key={key}>
         <Checkbox id={`source-scope-${key}`} disabled={disabled} checked={configuration[key] ?? (key === 'include_commits' || key === 'include_releases')} onCheckedChange={(checked) => onChange(key, checked === true)} />
-      </div>)}
+        <Label htmlFor={`source-scope-${key}`}>{t(({ include_issues: 'githubIssues', include_pulls: 'githubPulls', include_commits: 'githubCommits', include_releases: 'githubReleases' } as const)[key])}</Label>
+      </CheckboxField>)}
       <div className="field">
         <Label htmlFor="source-scope-github_history_days">{t('githubHistoryDays')}</Label>
         <Input id="source-scope-github_history_days" type="number" min={1} max={365} value={configuration.github_history_days ?? 90} disabled={disabled} onChange={(event) => onChange('github_history_days', Number(event.target.value))} />
@@ -199,7 +200,7 @@ export function ProviderTerms({ sourceId, entry, csrfToken, disabled }: { source
           <SelectItem value="commercial">{t('termsUseCommercial')}</SelectItem><SelectItem value="unknown">{t('termsUseUnknown')}</SelectItem>
         </SelectContent>
       </Select></div>
-    <div className="field field-inline"><Checkbox id="terms-read" checked={read} disabled={disabled} onCheckedChange={(checked) => setRead(checked === true)} /><Label htmlFor="terms-read">{t('termsAcknowledge')}</Label></div>
+    <div className="flex items-center gap-3"><Checkbox id="terms-read" checked={read} disabled={disabled} onCheckedChange={(checked) => setRead(checked === true)} /><Label htmlFor="terms-read">{t('termsAcknowledge')}</Label></div>
     <div className="flex items-center gap-2">
       <Button type="button" disabled={disabled || save.isPending || !declared || !read || !version} onClick={() => save.mutate()}>{save.isPending ? t('termsSaving') : t('termsSave')}</Button>
       {save.isSuccess && <small role="status">{t('termsSaved')}</small>}

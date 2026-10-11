@@ -13,10 +13,10 @@ import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
 import { CommandPalette } from '@/core/command-palette';
 import { ConnectionFooter } from '@/core/app-shell/connection-footer';
 import { useChatController } from '@/core/app-shell/chat-controller';
-import { SettingsNav, SourcesSubNav, groupActive } from '@/core/app-shell/settings-nav';
+import { SettingsPanel, SourcesSubNav, groupActive } from '@/core/app-shell/settings-nav';
 import { WorkspaceSwitcher } from '@/core/app-shell/workspace-switcher';
 import { useWorkspace } from '@/core/workspace-context';
-import { destinationEnabled, destinationForRole, mainNavigation, settingsGroups, type ModuleAvailability } from '@/core/module-registry';
+import { destinationEnabled, destinationForRole, mainNavigation, settingsExtraLinks, settingsGroups, type ModuleAvailability } from '@/core/module-registry';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { useRealtime } from '@/core/realtime-provider';
 import { ChangePasswordDialog } from '@/modules/account/change-password-dialog';
@@ -24,6 +24,7 @@ import { GoogleLink } from '@/modules/account/google-link';
 import { UserMenu } from '@/modules/account/user-menu';
 import { OwnerPreferences, PreferencesDialog } from '@/modules/account/preferences-dialog';
 import { ChatDrawer } from '@/modules/chat/chat-drawer';
+import { NotificationBell } from '@/modules/notifications/notification-bell';
 
 type Session = { authenticated: true; csrfToken: string };
 
@@ -79,7 +80,7 @@ function ChatTriggerButton() {
   );
 }
 
-/** Owns session state and the viewport-bounded app shell; route content scrolls in its main region while shell chrome stays visible. */
+/** Owns session state and the app shell: the viewport is fixed (64px header, 180px main nav and connection footer never scroll) and only `.workspace-main` scrolls. */
 export function WorkspaceShell({ children }: { children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -213,9 +214,10 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
         <header className="topbar">
           <Link href="/app" className="brand-name" aria-label="Umwelt-OS"><UmweltLogo /></Link>
           <div className="top-actions">
-            <WorkspaceSwitcher />
             {visibleMainNavigation.some((item) => item.id === 'chat') && <ChatTriggerButton />}
             <CommandPalette />
+            <NotificationBell />
+            <WorkspaceSwitcher />
             <UserMenu triggerRef={menuTriggerRef} onOpenPreferences={() => setPreferencesOpen(true)} onOpenAccount={() => setAccountOpen(true)} onOpenChangePassword={() => setPasswordOpen(true)} onSignOut={() => logout.mutate()} signOutPending={logout.isPending} />
           </div>
         </header>
@@ -223,8 +225,9 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
           <nav className="workspace-nav" aria-label={t('mainNavigation')}>
             {visibleMainNavigation.map((item) => <Link key={item.id} href={item.id === 'settings' && role === 'member' ? visibleSettingsGroups[0].href : item.href} aria-current={active === item.id ? 'page' : undefined}>{t(item.messageKey)}</Link>)}
           </nav>
-          {settingsActive && <SettingsNav groups={visibleSettingsGroups} pathname={pathname} />}
-          <main id="main-content" tabIndex={-1} className="workspace-main">{memberSettingsRedirect ? null : <>{pathname.startsWith('/settings/sources') && <SourcesSubNav pathname={pathname} />}{children}</>}</main>
+          <main id="main-content" tabIndex={-1} className="workspace-main">{memberSettingsRedirect ? null : settingsActive
+            ? <SettingsPanel links={[...visibleSettingsGroups, ...settingsExtraLinks.filter((item) => destinationForRole(item, role))]} pathname={pathname}>{pathname.startsWith('/settings/sources') && <SourcesSubNav pathname={pathname} />}{children}</SettingsPanel>
+            : children}</main>
         </div>
         <ConnectionFooter
           apiStatus={!online ? 'clientOffline' : apiHealth.isFetching && apiHealth.isError ? 'reconnecting' : apiHealth.isPending ? 'connecting' : apiHealth.isError ? 'unavailable' : 'connected'}

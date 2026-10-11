@@ -8,6 +8,7 @@ import { listWorldObservationWindow, type WorldObservation } from '@/modules/obs
 import { getConnectorConfiguration } from '@/modules/sources/api';
 import { isStale, periodKind } from '@/modules/sources/freshness';
 import type { GadgetInstance } from '../api';
+import { useReportGadgetFreshness } from '../gadget-freshness';
 
 /** Per-provider presentation: display name and attribution link shown next to the value. */
 export const PROVIDER_PRESENTATION: Record<string, { name: string; href: string }> = {
@@ -56,6 +57,7 @@ export function ProviderObservationGadget({ instance }: { instance: GadgetInstan
   });
   const sourceQuery = useQuery({ queryKey: ['connector-configuration', sourceId], queryFn: ({ signal }) => getConnectorConfiguration(sourceId, signal), enabled: Boolean(sourceId), staleTime: 300_000 });
   const items = latestPerSeries((query.data?.items ?? []).filter((item) => item.source_id === sourceId));
+  useReportGadgetFreshness(items.reduce<string | null>((max, item) => (!max || item.collected_at > max ? item.collected_at : max), null));
   const fmt = (value: string) => formatDateTime(value, display.locale, display.timezone);
 
   if (!sourceId) return <p role="status" className="p-3 text-sm text-muted-foreground">{t('providerObsSourceRequired')}</p>;

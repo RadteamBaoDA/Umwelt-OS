@@ -86,7 +86,7 @@ export default function LoginPage() {
       <section aria-labelledby="login-title" className="auth-panel flex flex-col gap-6">
         <div className="grid gap-1">
           <span className="brand">{t('eyebrow')}</span>
-          <h1 id="login-title" className="text-3xl font-bold leading-tight tracking-tight">{t('welcome')}</h1>
+          <h1 id="login-title" className="m-0 text-[30px] font-bold leading-[1.15] tracking-[-0.04em]">{t('welcome')}</h1>
           <p className="muted">{t('privateWorkspace')}</p>
         </div>
         {expired && !invalid && !unavailable && <div role="status" className="grid gap-0.5 rounded-xl border border-border bg-secondary px-4 py-3 text-sm">

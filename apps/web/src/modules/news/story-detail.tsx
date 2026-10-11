@@ -3,8 +3,10 @@
 import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, CopyIcon, ExternalLink } from 'lucide-react';
 import { useTranslations } from 'next-intl';
+import Link from 'next/link';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { useChatController } from '@/core/app-shell/chat-controller';
 import { formatDateTime } from '@/core/i18n';
 import { safeHttpUrl } from '@/core/safe-url';
 import { useDisplayPreferences } from '@/core/query-provider';
@@ -19,6 +21,8 @@ export type StoryDetailProps = {
   storyId: string;
   sourceIds: string[];
   onBack: () => void;
+  /** Closes the hosting dialog; called before Ask AI so the chat drawer is not behind a modal trap. */
+  onClose?: () => void;
 };
 
 const badgeClass = 'inline-flex h-6 items-center rounded-full border border-border bg-background px-2 text-xs font-semibold text-muted-foreground';
@@ -30,12 +34,13 @@ type SignalKey = (typeof signalKeys)[number];
  * Ordinary title-free support pages retain their cursor; an authority-change
  * omission suppresses every cached page until the owner explicitly restarts.
  */
-export function StoryDetail({ storyId, sourceIds, onBack }: StoryDetailProps) {
+export function StoryDetail({ storyId, sourceIds, onBack, onClose }: StoryDetailProps) {
   const t = useTranslations('news');
   const d = useTranslations('detail');
   const display = useDisplayPreferences();
   const incompleteLabel = useNewsIncompleteLabel();
   const queryClient = useQueryClient();
+  const { openDrawer } = useChatController();
   const [snapshotGeneration, setSnapshotGeneration] = useState(0);
   const [copied, setCopied] = useState<'ok' | 'failed' | null>(null);
   const detail = useInfiniteQuery({
@@ -72,6 +77,20 @@ export function StoryDetail({ storyId, sourceIds, onBack }: StoryDetailProps) {
   const firstUrl = evidence.map((item) => safeHttpUrl(item.url)).find(Boolean) ?? null;
   const reasons = story?.relevance_state === 'unavailable' ? [] : (story?.why_relevant ?? []).filter((name): name is SignalKey => (signalKeys as readonly string[]).includes(name));
 
+  // Timeline = real evidence events (first collected per source document), oldest first.
+  const timeline = [...evidence]
+    .map((item) => ({ key: `${item.document_version_id}:${item.chunk_id}`, at: item.published_at ?? item.observed_at, source: item.source_name, title: item.title }))
+    .sort((a, b) => a.at.localeCompare(b.at))
+    .slice(0, 8);
+
+  /** Closes the dialog, then opens the quick-chat drawer grounded in this story's evidence chunks. */
+  function askAi(): void {
+    onClose?.();
+    openDrawer({ context: { kind: 'selection', items: evidence.slice(0, 8).map((item) => ({
+      sourceId: item.source_id, documentId: item.document_id, documentVersionId: item.document_version_id, chunkId: item.chunk_id, title: item.title,
+    })) } });
+  }
+
   /** Copies a plain-text citation (title, source, time, link) for the first evidence rows. */
   async function copyCitation(): Promise<void> {
     if (!story) return;
@@ -96,6 +115,8 @@ export function StoryDetail({ storyId, sourceIds, onBack }: StoryDetailProps) {
           <Button variant="outline" size="sm" onClick={restartSnapshot}>{t('restartSnapshot')}</Button>
         </div>
       ) : null}
+      <div className="grid gap-6 md:grid-cols-[minmax(0,1fr)_16rem]">
+      <div className="min-w-0 space-y-4">
       {story ? (
         <article className="space-y-3" aria-labelledby="story-detail-title">
           <div className="flex flex-wrap items-center gap-2">
@@ -121,12 +142,6 @@ export function StoryDetail({ storyId, sourceIds, onBack }: StoryDetailProps) {
             </div>
           ) : null}
           {story.relevance_signals.project?.available === false ? <p className="text-xs text-muted-foreground">{t('unavailable')}</p> : null}
-          {reasons.length ? (
-            <div className="space-y-1">
-              <h3 className="text-sm font-semibold">{d('whySeeThis')}</h3>
-              <ul className="flex flex-wrap gap-2">{reasons.map((name) => <li key={name} className={badgeClass}>{d(`signal_${name}`)}</li>)}</ul>
-            </div>
-          ) : null}
         </article>
       ) : null}
       {contentAvailable && omissionReasons.length ? (
@@ -157,6 +172,38 @@ export function StoryDetail({ storyId, sourceIds, onBack }: StoryDetailProps) {
         <Button variant="outline" onClick={() => { void detail.fetchNextPage(); }} disabled={detail.isFetchingNextPage}>
           {detail.isFetchingNextPage ? t('loading') : t('loadMore')}
         </Button>
+      ) : null}
+      </div>
+      {story ? (
+        <aside className="min-w-0 space-y-5">
+          {reasons.length ? (
+            <div className="space-y-2">
+              <h3 className="text-sm font-semibold">{d('whySeeThis')}</h3>
+              <ul className="flex flex-wrap gap-2">{reasons.map((name) => <li key={name} className={badgeClass}>{d(`signal_${name}`)}</li>)}</ul>
+            </div>
+          ) : null}
+          {timeline.length ? (
+            <div className="space-y-2">
+              <h3 className="text-sm font-semibold">{d('timeline')}</h3>
+              <ol className="space-y-2 border-l border-border pl-3">
+                {timeline.map((entry) => (
+                  <li key={entry.key} className="text-sm">
+                    <span className="block text-xs text-muted-foreground">{formatDateTime(entry.at, display.locale, display.timezone)}</span>
+                    <span>{entry.source}</span>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          ) : null}
+        </aside>
+      ) : null}
+      </div>
+      {story ? (
+        <footer className="mt-auto flex flex-wrap items-center gap-2 border-t border-border pt-3">
+          <Button asChild variant="outline" className="min-h-11"><Link href="/settings/dashboard" onClick={onClose}>{d('createRule')}</Link></Button>
+          <span className="flex-1" />
+          <Button type="button" className="min-h-11" disabled={!evidence.length} onClick={askAi}>{d('askAiAboutThis')}</Button>
+        </footer>
       ) : null}
     </section>
   );

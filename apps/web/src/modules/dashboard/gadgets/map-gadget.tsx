@@ -14,7 +14,7 @@ import { buildMapLayers, projectMapFeatures } from '../map-layers';
 const FlatMap = lazy(() => import('./flat-map').then((module) => ({ default: module.FlatMap })));
 const GlobeMap = lazy(() => import('./globe-map').then((module) => ({ default: module.GlobeMap })));
 
-const PHONE_QUERY = '(max-width: 768px)';
+const PHONE_QUERY = '(max-width: 720px)';
 /** Subscribes to the phone-width media query. */
 function subscribePhone(onChange: () => void): () => void {
   const media = window.matchMedia(PHONE_QUERY);

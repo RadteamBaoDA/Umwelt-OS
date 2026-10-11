@@ -3,6 +3,7 @@
 import { useInfiniteQuery, useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { useDisplayPreferences } from '@/core/query-provider';
@@ -188,7 +189,7 @@ function SourceEntry({
         {(source.collection_error_code || source.processing_error_code) && <p className="error">{t('collectionError')}: {source.collection_error_code ?? t('noError')} · {t('processingError')}: {source.processing_error_code ?? t('noError')}</p>}
       </th>
       <td className={cell}>
-        <span className="badge">{t(chipKey[rowState])}</span>
+        <Badge variant="outline" className={rowState === 'active' ? 'border-primary text-primary' : rowState === 'error' || rowState === 'savedNotActive' ? 'border-destructive text-destructive' : undefined}>{t(chipKey[rowState])}</Badge>
         {connector && activation.data?.error_code && <p className="muted">{activation.data.error_code}</p>}
         {connector && activation.data && <p className="muted">{t('activationState')}: {t(({ queued: 'stateQueued', provisioning: 'stateProvisioning', active: 'active', saved_not_active: 'stateSavedNotActive', reconciliation_required: 'stateReconciliationRequired', disabled: 'stateDisabled' } as Record<string, string>)[activation.data.state] ?? 'stateUnknown')}</p>}
       </td>
@@ -197,6 +198,7 @@ function SourceEntry({
       <td className={cell}>{mobileLabel('colIndexed')}{formatDate(source.indexed_at, display.locale, display.timezone, t('never'))}</td>
       <td className={cell}>
         <div className="flex flex-wrap gap-2" role="group" aria-label={t('sourceActions', { name: source.name })}>
+          {connector && rowState === 'savedNotActive' && source.status !== 'archived' && <Button disabled={busy} onClick={() => onEdit(source)}>{t('retryActivation')}</Button>}
           {connector && source.status !== 'archived' && <Button className="secondary" onClick={() => onEdit(source)}>{t('configure')}</Button>}
           {connector && source.status === 'active' && activation.data?.state === 'active' && <Button className="secondary" disabled={collect.isPending || busy} onClick={() => collect.mutate()}>{collect.isPending ? t('collecting') : t('collectNow')}</Button>}
           {!editedHere && source.status !== 'archived' && <Button className="secondary" disabled={busy} onClick={toggleStatus}>{busy ? t(source.status === 'paused' ? 'resuming' : 'pausing') : t(source.status === 'paused' ? 'resume' : 'pause')}</Button>}
@@ -285,7 +287,7 @@ export function SourceList() {
   }, [items, purged, sources.isSuccess, sources.isFetching]);
 
   return <div className="sources-list">
-    <section className="sub-panel" aria-labelledby="github-webhook-heading">
+    <section className="flex flex-col gap-3 rounded-lg border border-border bg-card p-5" aria-labelledby="github-webhook-heading">
       <h2 id="github-webhook-heading">{t('githubWebhookStatus')}</h2>
       {githubWebhook.isPending && <p className="muted">{t('loading')}</p>}
       {githubWebhook.isError && <p className="error" role="alert">{t('githubWebhookUnavailable')} <Button className="secondary" onClick={() => githubWebhook.refetch()}>{t('retry')}</Button></p>}
@@ -300,7 +302,7 @@ export function SourceList() {
       <Button onClick={() => transition(null)}>{t('addConnector')}</Button>
       <Button className="secondary" onClick={() => transition(undefined, !adding)}>{t('addManual')}</Button>
     </div>
-    {adding && <section className="sub-panel"><h2>{t('manualTitle')}</h2><SourceForm onSaved={() => { setAdding(false); void refresh(); }} /></section>}
+    {adding && <section className="flex flex-col gap-3 rounded-lg border border-border bg-card p-5"><h2 className="m-0 text-lg font-bold">{t('manualTitle')}</h2><SourceForm onSaved={() => { setAdding(false); void refresh(); }} /></section>}
     {editing !== undefined && <nav aria-label={t('backToSources')}><Button type="button" variant="ghost" onClick={() => transition(undefined)}>← {t('backToSources')}</Button></nav>}
     {editing !== undefined && <ConnectorEditor key={`${editing?.id ?? 'new'}:${editSession}`} source={editing} registerTransitionGuard={(guard) => { transitionGuard.current = guard; }} onChanged={() => { void refresh(); }} onPurgeStarted={(id) => editing && setOperations((current) => ({ ...current, [editing.id]: id }))} onClose={() => transition(undefined)} />}
     {sources.isPending && <div className="skeleton" aria-label={t('loading')} />}

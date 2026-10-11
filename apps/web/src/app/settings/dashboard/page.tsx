@@ -2,6 +2,7 @@
 
 import { useTranslations } from 'next-intl';
 import { WorkspaceShell } from '@/core/app-shell/workspace-shell';
+import { SettingsPageHeader } from '@/modules/settings/settings-layout';
 import { GadgetEditor } from '@/modules/settings/gadget-editor';
 
 /** Renders dashboard and gadget settings within the workspace shell. */
@@ -9,14 +10,10 @@ export default function DashboardSettingsPage() {
   const t = useTranslations('gadgetSettings');
   return (
     <WorkspaceShell>
-      <section className="content-panel space-y-6">
-        <div>
-          <span className="brand">{t('title')}</span>
-          <h1>{t('title')}</h1>
-          <p className="muted">{t('intro')}</p>
-        </div>
+      <div className="flex flex-col gap-5">
+        <SettingsPageHeader eyebrow={t('eyebrow')} title={t('title')} description={t('intro')} />
         <GadgetEditor />
-      </section>
+      </div>
     </WorkspaceShell>
   );
 }

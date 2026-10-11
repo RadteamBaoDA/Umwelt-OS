@@ -4,7 +4,8 @@ import * as React from 'react';
 import { useTranslations } from 'next-intl';
 import { WorkspaceShell } from '@/core/app-shell/workspace-shell';
 import { ChatSession } from '@/modules/chat/chat-session';
-import { ChatHistory } from '@/modules/chat/chat-history';
+import { ChatHistory, type ChatHistoryActions } from '@/modules/chat/chat-history';
+import { Button } from '@/components/ui/button';
 import { useChatController } from '@/core/app-shell/chat-controller';
 import { ChatSideRail } from '@/modules/chat/chat-side-rail';
 import { chatKeys, getConversation, type Citation } from '@/modules/chat/api';
@@ -18,6 +19,7 @@ import { useQuery } from '@tanstack/react-query';
 function ChatPageContent() {
   const t = useTranslations('chat');
   const chatCtrl = useChatController();
+  const historyActions = React.useRef<ChatHistoryActions | null>(null);
   const [mobileView, setMobileView] = React.useState<'history' | 'chat'>('chat');
 
   const handleSelectConversation = React.useCallback(
@@ -50,11 +52,11 @@ function ChatPageContent() {
   }, [detail?.messages]);
 
   return (
-    <div className="flex min-h-0 flex-1 w-full rounded-2xl border border-border bg-surface shadow-xs overflow-hidden">
+    <div className="flex min-h-[760px] flex-1 w-full rounded-[18px] border border-border bg-surface overflow-hidden">
       {/* Sidebar history on desktop; toggleable on mobile */}
       <div
         className={`${
-          mobileView === 'history' ? 'flex w-full' : 'hidden md:flex md:w-64 lg:w-72'
+          mobileView === 'history' ? 'flex w-full' : 'hidden md:flex md:w-[260px]'
         } shrink-0 border-r border-border h-full`}
       >
         <ChatHistory
@@ -62,6 +64,7 @@ function ChatPageContent() {
           onSelectConversation={handleSelectConversation}
           onNewConversation={handleNewConversation}
           className="w-full"
+          actionsRef={historyActions}
         />
       </div>
 
@@ -90,6 +93,12 @@ function ChatPageContent() {
             conversationId={chatCtrl.activeConversationId}
             onConversationCreated={(id) => chatCtrl.setActiveConversationId(id)}
             mode="full"
+            headerActions={chatCtrl.activeConversationId ? (
+              <>
+                <Button type="button" variant="outline" className="min-h-11" onClick={() => historyActions.current?.rename({ id: chatCtrl.activeConversationId!, title: detail?.title ?? '' })}>{t('renameConversation')}</Button>
+                <Button type="button" variant="outline" className="min-h-11 text-destructive" onClick={() => historyActions.current?.remove(chatCtrl.activeConversationId!)}>{t('delete')}</Button>
+              </>
+            ) : null}
           />
         </div>
       </div>

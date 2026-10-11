@@ -78,6 +78,25 @@ export function CitationPanel({
 
       <div className="flex flex-col gap-2.5">
         {itemsToRender.map((citation, idx) => {
+          if (variant === 'card') {
+            // Sources rail (Chat.dc.html): numbered chip, title, meta, then the exact-item link.
+            const isWeb = citation.sourceType === 'web';
+            const href = isWeb ? safeHttpUrl(citation.url) : `/knowledge/documents/${citation.documentId}?${new URLSearchParams({ versionId: citation.documentVersionId, chunkId: citation.chunkId })}#cited-chunk`;
+            const when = !isWeb && citation.observedAt ? formatDateTime(citation.observedAt, locale, timezone) : null;
+            const linkClass = 'inline-flex min-h-11 items-center gap-1 text-[13px] font-semibold text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
+            return (
+              <div key={`${isWeb ? 'web' : citation.chunkId}-${idx}`} className="flex flex-col gap-1 rounded-[10px] border border-border bg-background p-3 text-xs">
+                <span className="flex items-center gap-2">
+                  <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-md bg-primary/10 px-[5px] text-xs font-semibold text-primary">{idx + 1}</span>
+                  <strong className="line-clamp-2 text-sm font-semibold text-foreground">{citation.title}</strong>
+                </span>
+                <span className="text-xs text-muted-foreground">{isWeb ? webHost(citation.url) : [t('document'), when].filter(Boolean).join(' · ')}</span>
+                {href && (isWeb
+                  ? <a href={href} target="_blank" rel="noopener noreferrer nofollow" className={linkClass} aria-label={t('openWebResultFor', { host: webHost(citation.url) })}>{t('openWebResult')}<ExternalLinkIcon className="size-3" aria-hidden="true" /></a>
+                  : <Link href={href} className={linkClass}>{t('openExactItem')}</Link>)}
+              </div>
+            );
+          }
           if (citation.sourceType === 'web') {
             const href = safeHttpUrl(citation.url);
             // Title and snippet are untrusted third-party text: plain React text only, never markdown or HTML.

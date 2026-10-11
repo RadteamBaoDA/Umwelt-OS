@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { useQuery } from '@tanstack/react-query';
-import { BotIcon, CalendarIcon, FileTextIcon, MessageSquareIcon, NavigationIcon, PlayIcon, SearchIcon, ShapesIcon, SparklesIcon } from 'lucide-react';
+import { SearchIcon } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { commandDestinations, destinationEnabled, destinationForRole, type ModuleAvailability } from '@/core/module-registry';
@@ -27,8 +28,9 @@ interface PaletteOption {
   group: 'actions' | 'goTo' | 'documents' | 'entities' | 'events' | 'conversations';
   label: string;
   meta?: string;
+  /** Entity type shown as a pill instead of plain meta text. */
+  badge?: string;
   disabledReason?: string;
-  icon: typeof SearchIcon;
   run: () => void;
 }
 
@@ -114,25 +116,25 @@ export function CommandPalette() {
     const lower = query.toLocaleLowerCase();
     if (scope === 'all' && query) {
       list.push(
-        { id: 'ask-ai', group: 'actions', label: tc('paletteAskAi', { query }), icon: BotIcon, run: () => { setDraft(query); openDrawer(); close(); } },
-        { id: 'create-rule', group: 'actions', label: tc('paletteCreateRule'), meta: tc('paletteCreateRuleHint'), icon: SparklesIcon, run: () => go('/settings/dashboard') },
-        { id: 'collect-now', group: 'actions', label: tc('paletteCollectNow'), disabledReason: tc('paletteCollectUnavailable'), icon: PlayIcon, run: () => undefined },
+        { id: 'ask-ai', group: 'actions', label: tc('paletteAskAi', { query }), run: () => { setDraft(query); openDrawer(); close(); } },
+        { id: 'create-rule', group: 'actions', label: tc('paletteCreateRule'), meta: tc('paletteCreateRuleHint'), run: () => go('/settings/dashboard') },
+        { id: 'collect-now', group: 'actions', label: tc('paletteCollectNow'), disabledReason: tc('paletteCollectUnavailable'), run: () => undefined },
       );
     }
     if (scope === 'all') {
       for (const dest of commandDestinations) {
         const label = t(dest.messageKey);
         if (destinationEnabled(dest, moduleAvailability.data) && destinationForRole(dest, selection?.role) && label.toLocaleLowerCase().includes(lower)) {
-          list.push({ id: `go-${dest.id}`, group: 'goTo', label, icon: NavigationIcon, run: () => go(dest.href) });
+          list.push({ id: `go-${dest.id}`, group: 'goTo', label, run: () => go(dest.href) });
         }
       }
     }
-    if (wantsDocs) for (const hit of docs.data?.items ?? []) list.push({ id: `doc-${hit.chunk_id}`, group: 'documents', label: hit.title, meta: `${hit.source.name} · v${hit.version_number}`, icon: FileTextIcon, run: () => go(`/knowledge/documents/${hit.document_id}?versionId=${hit.document_version_id}&chunkId=${hit.chunk_id}#cited-chunk`) });
-    if (wantsEntities) for (const hit of entities.data?.items ?? []) list.push({ id: `ent-${hit.id}`, group: 'entities', label: hit.name ?? hit.id, meta: hit.type, icon: ShapesIcon, run: () => go(`/knowledge/entities/${hit.id}`) });
-    if (wantsEvents) for (const hit of events.data?.items ?? []) list.push({ id: `evt-${hit.id}`, group: 'events', label: hit.title, meta: hit.type, icon: CalendarIcon, run: () => go(`/timeline?event_id=${encodeURIComponent(hit.id)}`) });
+    if (wantsDocs) for (const hit of docs.data?.items ?? []) list.push({ id: `doc-${hit.chunk_id}`, group: 'documents', label: hit.title, meta: `${hit.source.name} · v${hit.version_number}`, run: () => go(`/knowledge/documents/${hit.document_id}?versionId=${hit.document_version_id}&chunkId=${hit.chunk_id}#cited-chunk`) });
+    if (wantsEntities) for (const hit of entities.data?.items ?? []) list.push({ id: `ent-${hit.id}`, group: 'entities', label: hit.name ?? hit.id, badge: hit.type, run: () => go(`/knowledge/entities/${hit.id}`) });
+    if (wantsEvents) for (const hit of events.data?.items ?? []) list.push({ id: `evt-${hit.id}`, group: 'events', label: hit.title, meta: hit.type, run: () => go(`/timeline?event_id=${encodeURIComponent(hit.id)}`) });
     if (wantsConversations) {
       for (const conv of conversations.data ?? []) {
-        list.push({ id: `conv-${conv.id}`, group: 'conversations', label: conv.title || tc('untitledConversation'), icon: MessageSquareIcon, run: () => { selectConversation(conv.id); go('/chat'); } });
+        list.push({ id: `conv-${conv.id}`, group: 'conversations', label: conv.title || tc('untitledConversation'), run: () => { selectConversation(conv.id); go('/chat'); } });
       }
     }
     return list;
@@ -166,11 +168,11 @@ export function CommandPalette() {
   return <>
     <Button type="button" variant="outline" className="search-trigger" onClick={() => setOpen(true)} aria-label={t('searchOrRun')} aria-keyshortcuts="Control+K Meta+K"><SearchIcon className="size-4" aria-hidden="true" /><span className="search-label">{t('searchOrRun')}</span><kbd>Ctrl K</kbd></Button>
     <Dialog open={open} onOpenChange={(next) => { if (next) setOpen(true); else { setOpen(false); setFilter(''); setScope('all'); setActiveIndex(0); } }}>
-      <DialogContent className="top-[12%] translate-y-0 gap-0 p-0 sm:max-w-xl" closeLabel={t('close')} onOpenAutoFocus={(event) => { event.preventDefault(); inputRef.current?.focus(); }}>
+      <DialogContent className="top-24 translate-y-0 gap-0 overflow-hidden rounded-2xl bg-surface p-0 sm:max-w-[680px]" closeLabel={t('close')} onOpenAutoFocus={(event) => { event.preventDefault(); inputRef.current?.focus(); }}>
         <DialogTitle className="sr-only">{tc('paletteTitle')}</DialogTitle>
         <DialogDescription className="sr-only">{t('workspaceCommands')}</DialogDescription>
-        <div className="flex items-center gap-2 border-b border-border px-4 py-3 pr-12">
-          <SearchIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <div className="flex items-center gap-3 border-b border-border px-4 pr-12">
+          <SearchIcon className="size-[18px] shrink-0 text-muted-foreground" aria-hidden="true" />
           <input
             ref={inputRef}
             role="combobox"
@@ -179,29 +181,31 @@ export function CommandPalette() {
             aria-controls="palette-listbox"
             aria-autocomplete="list"
             aria-activedescendant={active >= 0 ? optionId(active) : undefined}
-            className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
+            className="min-h-14 min-w-0 flex-1 bg-transparent text-[17px] text-foreground outline-none placeholder:text-muted-foreground"
             placeholder={t('searchOrRun')}
             value={filter}
             onChange={(event) => { setFilter(event.target.value); setActiveIndex(0); }}
             onKeyDown={onInputKeyDown}
           />
         </div>
-        <div role="tablist" aria-label={tc('paletteScopes')} className="flex flex-wrap gap-1 border-b border-border px-3 py-2">
+        <div role="tablist" aria-label={tc('paletteScopes')} className="flex flex-wrap items-center gap-1.5 border-b border-border px-4 py-2.5">
           {scopes.map((item) => (
-            <button key={item} type="button" role="tab" aria-selected={scope === item} className={`min-h-8 rounded-md px-2.5 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${scope === item ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-secondary hover:text-foreground'}`} onClick={() => { setScope(item); setActiveIndex(0); inputRef.current?.focus(); }}>{tc(scopeKeys[item])}</button>
+            <button key={item} type="button" role="tab" aria-selected={scope === item} className={`inline-flex h-[22px] items-center rounded-full border px-2 text-xs font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${scope === item ? 'border-primary text-primary' : 'border-border text-muted-foreground hover:text-foreground'}`} onClick={() => { setScope(item); setActiveIndex(0); inputRef.current?.focus(); }}>{tc(scopeKeys[item])}</button>
           ))}
+          {mode && <span className="ml-auto text-xs text-muted-foreground">{mode === 'lexical' ? tc('paletteLexical') : tc('paletteHybrid')}</span>}
         </div>
-        <div className="max-h-[50vh] overflow-y-auto p-2">
+        <div className="max-h-[520px] overflow-y-auto px-2 pb-2 pt-1">
           <div role="listbox" id="palette-listbox" aria-label={tc('paletteTitle')}>
             {groups.map(({ group, items }) => (
               <div key={group} role="group" aria-label={groupLabel(group)}>
-                <div className="px-2 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground" aria-hidden="true">{groupLabel(group)}</div>
+                <div className="px-3 pb-1 pt-2.5 text-xs font-semibold text-muted-foreground" aria-hidden="true">{groupLabel(group)}</div>
                 {items.map(({ option, index }) => {
-                  const Icon = option.icon;
                   return (
-                    <div key={option.id} id={optionId(index)} role="option" aria-selected={index === active} aria-disabled={option.disabledReason ? true : undefined} className={`flex min-h-11 items-center gap-3 rounded-md px-2 py-1.5 text-sm text-foreground ${index === active ? 'bg-secondary' : ''} ${option.disabledReason ? 'cursor-not-allowed opacity-70' : 'cursor-pointer'}`} onMouseMove={() => setActiveIndex(index)} onClick={() => { if (!option.disabledReason) option.run(); }}>
-                      <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-                      <span className="min-w-0 flex-1"><span className="block truncate">{option.label}</span>{(option.disabledReason || option.meta) && <span className="block truncate text-xs text-muted-foreground">{option.disabledReason ?? option.meta}</span>}</span>
+                    <div key={option.id} id={optionId(index)} role="option" aria-selected={index === active} aria-disabled={option.disabledReason ? true : undefined} className={`flex min-h-11 items-center gap-3 rounded-md px-3 py-1.5 text-sm text-foreground ${index === active ? 'bg-background' : ''} ${option.disabledReason ? 'cursor-not-allowed opacity-70' : 'cursor-pointer'}`} onMouseMove={() => setActiveIndex(index)} onClick={() => { if (!option.disabledReason) option.run(); }}>
+                      <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                      {option.badge && !option.disabledReason && <Badge variant="outline" className="shrink-0 text-muted-foreground">{option.badge}</Badge>}
+                      {(option.disabledReason || option.meta) && <span className="max-w-[45%] shrink-0 truncate text-xs text-muted-foreground">{option.disabledReason ?? option.meta}</span>}
+                      {index === active && !option.disabledReason && <kbd className="palette-kbd">Enter</kbd>}
                     </div>
                   );
                 })}
@@ -217,13 +221,14 @@ export function CommandPalette() {
             {(scope === 'all' || scope === 'conversations') && query.length >= MIN_QUERY && <p>{tc('paletteConversationsNote')}</p>}
             {!online && <p>{tc('paletteOffline')}</p>}
             {failed && <p role="alert" className="text-destructive">{tc('paletteError')}</p>}
-            {mode && <p>{mode === 'lexical' ? tc('paletteLexical') : tc('paletteHybrid')}</p>}
           </div>
         </div>
-        <div className="flex flex-wrap gap-x-4 gap-y-1 border-t border-border px-4 py-2 text-[11px] text-muted-foreground">
-          <span><kbd>↑</kbd> <kbd>↓</kbd> {tc('paletteHintMove')}</span>
-          <span><kbd>Enter</kbd> {tc('paletteHintOpen')}</span>
-          <span><kbd>Esc</kbd> {tc('paletteHintClose')}</span>
+        <div className="flex flex-wrap gap-x-4 gap-y-1 border-t border-border px-4 py-2.5 text-xs text-muted-foreground">
+          <span><kbd className="palette-kbd">↑</kbd> <kbd className="palette-kbd">↓</kbd> {tc('paletteHintMove')}</span>
+          <span><kbd className="palette-kbd">Enter</kbd> {tc('paletteHintOpen')}</span>
+          <span><kbd className="palette-kbd">Esc</kbd> {tc('paletteHintClose')}</span>
+          <span><kbd className="palette-kbd">Ctrl K</kbd> {tc('paletteHintCommands')}</span>
+          <span><kbd className="palette-kbd">/</kbd> {tc('paletteHintSearch')}</span>
         </div>
       </DialogContent>
     </Dialog>

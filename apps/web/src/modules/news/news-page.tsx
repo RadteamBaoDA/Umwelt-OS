@@ -23,8 +23,8 @@ export function NewsPage() {
   const sourceIds = isOwner ? (sources.data?.items ?? []).filter((s) => s.status === 'active').slice(0, 32).map((s) => s.id) : [];
   const ready = !isOwner || sources.isSuccess;
   return (
-    <section className="space-y-3" aria-labelledby="news-page-title">
-      <h1 id="news-page-title" className="text-xl font-semibold">{t('news')}</h1>
+    <section className="content-panel space-y-3" aria-labelledby="news-page-title">
+      <h1 id="news-page-title">{t('news')}</h1>
       {ready && <StoryList sourceIds={sourceIds} showTrends={isOwner} onSelectStory={(id, el) => { trigger.current = el; setStoryId(id); }} />}
       <Dialog open={storyId !== null} onOpenChange={(open) => { if (!open) setStoryId(null); }}>
         <DialogContent closeLabel={d('close')} onCloseAutoFocus={(e) => { e.preventDefault(); if (trigger.current?.isConnected) trigger.current.focus(); }}

@@ -153,18 +153,20 @@ def gateway(
     config: AIExecutionConfig, redis: Redis, before_send: Callable[[], Awaitable[None]], *, scope: Scope,
 ) -> ModelGateway:
     """Construct the model gateway bound to one scope, config revision, identity and fresh send check."""
+    config = ai_settings.derive_for_alias(config, "embedding")  # embedding is this module's only alias
     return ModelGateway(redis, config.omniroute_base_url, config.omniroute_api_key,
         config.endpoint_destination_id or "omniroute", config.request_timeout_seconds,
         scope=scope, gateway_identity=config.gateway_identity,
         configuration_revision=config.configuration_revision, before_send=before_send,
-        approved_endpoint_cidrs=config.endpoint_allowed_cidrs)
+        approved_endpoint_cidrs=config.endpoint_allowed_cidrs, allow_public_endpoints=config.allow_public_providers)
 
 
 async def configured_embedding(
     session: AsyncSession, settings: Settings, redis: Redis, *, scope: Scope,
 ) -> tuple[AIExecutionConfig, ModelMapping | None, RequestPolicy]:
     """Return scoped gateway config, embedding alias and privacy-constrained policy."""
-    config = await ai_settings.get_ai_execution_config(session, settings, redis, scope=scope)
+    config = ai_settings.derive_for_alias(
+        await ai_settings.get_ai_execution_config(session, settings, redis, scope=scope), "embedding")
     destination = config.endpoint_destination_id
     privacy = config.privacy
     policy = RequestPolicy(

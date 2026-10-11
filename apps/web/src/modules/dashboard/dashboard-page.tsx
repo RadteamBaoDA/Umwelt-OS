@@ -5,9 +5,6 @@ import {
   ChevronDown,
   Edit3,
   Eye,
-  FolderPlus,
-  Layout,
-  LayoutTemplate,
   Pencil,
   Plus,
   Sparkles,
@@ -43,7 +40,6 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { useChatController } from '@/core/app-shell/chat-controller';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { useGuardedNavigation, type GuardedNavigationIntent } from '@/core/guarded-navigation';
 import {
@@ -73,7 +69,6 @@ import { GadgetSettings } from './gadget-settings';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { formatDateTime } from '@/core/i18n';
 import { listSources, sourceKeys } from '@/modules/sources/api';
-import { NotificationBell } from '@/modules/notifications/notification-bell';
 
 /**
  * Finds the first free non-overlapping integer rectangle on the 20-column grid.
@@ -108,7 +103,7 @@ function findFreeCoordinates(
 
 const MAX_LAYOUT_ROWS = 100_000;
 
-const MOBILE_QUERY = '(max-width: 768px)';
+const MOBILE_QUERY = '(max-width: 720px)';
 /** Subscribes to the phone-width media query. */
 function subscribeMobileMedia(onChange: () => void): () => void {
   const media = window.matchMedia(MOBILE_QUERY);
@@ -286,7 +281,6 @@ export function DashboardPage() {
   const session = useWorkspaceSession();
   const queryClient = useQueryClient();
   const guardedNavigation = useGuardedNavigation();
-  const { openDrawer } = useChatController();
   const display = useDisplayPreferences();
 
   // Active dashboard selection
@@ -974,47 +968,23 @@ export function DashboardPage() {
   }, []);
 
   return (
-    <section className="flex min-h-0 flex-1 flex-col w-full gap-4">
-      {/* Page header: dashboard name, saved layout revision and primary actions */}
-      <div className="flex shrink-0 flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h1 className="truncate text-2xl font-bold text-foreground">{activeDashboard?.name ?? t('title')}</h1>
-          <p className="text-sm text-muted-foreground">
-            {t('pageSubtitle')}
-            {activeDashboard ? <> {'·'} {t('layoutRevision', { revision: activeDashboard.revision })}</> : null}
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button type="button" variant="outline" className="min-h-11" onClick={() => openDrawer({ context: { kind: 'general' } })}>
-            <Sparkles className="w-4 h-4" aria-hidden="true" />
-            <span>{t('askAi')}</span>
-          </Button>
-          <Button
-            type="button"
-            className="min-h-11 font-semibold"
-            disabled={layoutOperationPending || (!canEditLayout && !isEditMode)}
-            onClick={() => { if (isEditMode) requestExitEdit(); else setIsEditMode(true); }}
-          >
-            {isEditMode ? <Eye className="w-4 h-4" aria-hidden="true" /> : <Edit3 className="w-4 h-4" aria-hidden="true" />}
-            <span>{isEditMode ? t('finishEditing') : t('toggleEdit')}</span>
-          </Button>
-        </div>
-      </div>
-      {/* Dashboard Top Header Bar */}
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-4 pb-2 border-b border-border">
-        {/* Left: Switcher, Active Title, Group Tabs */}
-        <div className="flex flex-wrap items-center gap-3">
-          {/* Dashboard Switcher Dropdown */}
+    <section className="flex w-full flex-col gap-6">
+      {/* Page header (Dashboard artboard): eyebrow, switcher-as-title, meta and actions */}
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="mr-auto flex min-w-0 flex-col gap-0.5">
+          <span className="text-[13px] font-bold uppercase tracking-[0.12em] text-primary">{t('title')}</span>
+          <h1 className="m-0 min-w-0 text-[30px] font-bold leading-tight tracking-[-0.04em] text-foreground">
+          
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
                 type="button"
                 disabled={layoutOperationPending}
-                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-border bg-card text-foreground font-semibold text-sm min-h-11 hover:bg-primary/10 transition-colors"
+                aria-label={t('switchDashboard')}
+                className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-transparent bg-transparent py-0 pl-0 pr-2 text-left text-[30px] font-bold leading-tight tracking-[-0.04em] text-foreground hover:bg-primary/10"
               >
-                <Layout className="w-4 h-4 text-primary" />
-                <span className="text-sm">{t('switchDashboard')}</span>
-                <ChevronDown className="w-4 h-4 text-muted-foreground ml-1" />
+                <span className="truncate">{activeDashboard?.name ?? t('title')}</span>
+                <ChevronDown className="size-5 text-muted-foreground" aria-hidden="true" />
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-56">
@@ -1082,9 +1052,23 @@ export function DashboardPage() {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-
-          {/* Group Tabs */}
-          {activeDashboard && activeDashboard.groups.length > 0 && (
+          </h1>
+        </div>
+        <Button
+          type="button"
+          variant={isEditMode ? 'default' : 'outline'}
+          className="min-h-11 font-semibold"
+          disabled={layoutOperationPending || (!canEditLayout && !isEditMode)}
+          onClick={() => { if (isEditMode) requestExitEdit(); else setIsEditMode(true); }}
+        >
+          {isEditMode ? <Eye className="w-4 h-4" aria-hidden="true" /> : <Edit3 className="w-4 h-4" aria-hidden="true" />}
+          <span>{isEditMode ? t('finishEditing') : t('toggleEdit')}</span>
+        </Button>
+      </div>
+      {/* Group tabs: rendered only when the dashboard has groups */}
+      {activeDashboard && activeDashboard.groups.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3 border-b border-border pb-2">
+          {(
             <Tabs value={activeGroupId} onValueChange={setActiveGroupId} className="h-8">
               <TabsList className="h-8 p-0.5 bg-muted/30">
                 <TabsTrigger value="all" className="text-xs px-2.5 h-7">
@@ -1098,26 +1082,10 @@ export function DashboardPage() {
               </TabsList>
             </Tabs>
           )}
-
-          {/* Add Group button in edit mode */}
-          {editMode && activeDashboard && (
-            <button
-              type="button"
-              disabled={layoutOperationPending}
-              onClick={() => setAddGroupOpen(true)}
-              aria-label={t('addGroup')}
-              title={t('addGroup')}
-              className="p-1.5 rounded-md border border-dashed border-border text-muted-foreground hover:text-foreground hover:bg-primary/10 transition-colors"
-            >
-              <FolderPlus className="w-4 h-4" />
-            </button>
-          )}
         </div>
+      )}
 
-        <NotificationBell />
-      </div>
-
-      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto overscroll-y-contain">
+      <div className="flex flex-col gap-6">
       {editOrigin && editOrigin.dashboardId === selectedDashboardId && requestedBreakpoint !== editOrigin.breakpoint && (
         <p role="status" className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm text-muted-foreground">
           {t('mobileEditOrigin', {
@@ -1158,6 +1126,7 @@ export function DashboardPage() {
           }}
           canUseReadableMobileSizes={currentBreakpoint === 'mobile' && readablePlacements !== null}
           onOpenPresetPicker={() => setPresetPickerOpen(true)}
+          onAddGroup={() => setAddGroupOpen(true)}
           onAddGadgetInstance={handleAddGadgetInstance}
           onBeginAddGadgetInstance={beginAddGadgetInstance}
           onCancelPendingAdd={releaseAddReservation}
@@ -1176,53 +1145,37 @@ export function DashboardPage() {
 
       {/* Main Grid Canvas or Empty State */}
       {!activeDashboard ? (
-        <div className="flex-1 flex flex-col items-center justify-center p-12 text-center border border-dashed border-border rounded-2xl bg-card">
-          <LayoutTemplate className="w-12 h-12 text-muted-foreground/60 mb-3" />
-          <h2 className="text-lg font-bold text-foreground mb-1">{t('noDashboardsYet')}</h2>
-          <p className="text-sm text-muted-foreground max-w-sm mb-4">{t('noDashboardsDesc')}</p>
-          <div className="flex gap-2">
-            <Button
-              type="button"
-              className="font-bold text-xs"
-              onClick={() => setCreateDashboardOpen(true)}
-            >
-              <Plus className="w-3.5 h-3.5 mr-1" />
-              {t('createFirstDashboard')}
-            </Button>
-            <Button
-              type="button"
-              className="secondary text-xs"
-              onClick={() => setPresetPickerOpen(true)}
-            >
-              <Sparkles className="w-3.5 h-3.5 mr-1" />
+        <section className="dashboard-empty flex flex-wrap items-center gap-6 rounded-xl border border-dashed border-border bg-card p-8">
+          <div className="min-w-0 flex-[1_1_360px]">
+            <h2 className="m-0 mb-1 text-xl font-bold leading-snug text-foreground">{t('noDashboardsYet')}</h2>
+            <p className="m-0 text-sm text-muted-foreground">{t('noDashboardsDesc')}</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="outline" className="min-h-11" onClick={() => setPresetPickerOpen(true)}>
+              <Sparkles className="size-4" aria-hidden="true" />
               {t('presets')}
             </Button>
+            <Button type="button" className="min-h-11 font-semibold" onClick={() => setCreateDashboardOpen(true)}>
+              <Plus className="size-4" aria-hidden="true" />
+              {t('createFirstDashboard')}
+            </Button>
           </div>
-        </div>
+        </section>
       ) : visibleInstances.length === 0 ? (
-        <div className="flex-1 flex flex-col items-center justify-center p-12 text-center border border-dashed border-border rounded-2xl bg-card">
-          <Layout className="w-10 h-10 text-muted-foreground mb-2" aria-hidden="true" />
-          <h2 className="text-lg font-bold text-foreground mb-1">{t('emptyTitle')}</h2>
-          <p className="text-sm text-muted-foreground max-w-md mb-4">{t('emptyDesc')}</p>
-          <div className="flex flex-wrap justify-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              className="min-h-11"
-              disabled={!canEditLayout}
-              onClick={() => {
-                setIsEditMode(true);
-              }}
-            >
-              <Plus className="w-4 h-4" aria-hidden="true" />
+        <section className="dashboard-empty flex flex-wrap items-center gap-6 rounded-xl border border-dashed border-border bg-card p-8">
+          <div className="min-w-0 flex-[1_1_360px]">
+            <h2 className="m-0 mb-1 text-xl font-bold leading-snug text-foreground">{t('emptyTitle')}</h2>
+            <p className="m-0 text-sm text-muted-foreground">{t('emptyDesc')}</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="outline" className="min-h-11" disabled={!canEditLayout} onClick={() => { setIsEditMode(true); }}>
               {t('startEmpty')}
             </Button>
-            <Button type="button" className="min-h-11" onClick={() => setPresetPickerOpen(true)}>
-              <Sparkles className="w-4 h-4" aria-hidden="true" />
+            <Button type="button" className="min-h-11 font-semibold" onClick={() => setPresetPickerOpen(true)}>
               {t('choosePreset')}
             </Button>
           </div>
-        </div>
+        </section>
       ) : (
         <DashboardGrid
           instances={activeDashboard.instances}

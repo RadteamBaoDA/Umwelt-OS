@@ -13,6 +13,7 @@ import {
 import Link from 'next/link';
 import { useLocale, useTranslations } from 'next-intl';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useReportGadgetFreshness } from '../gadget-freshness';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -289,6 +290,7 @@ function FeedStream({
   }, [initialItems, docsQuery.data, defaultSourceType, isTelegram]);
 
   const unreadCount = feedItems.filter((i) => !i.read).length;
+  useReportGadgetFreshness(feedItems.reduce<string | null>((max, i) => (i.collectedAt && (!max || i.collectedAt > max) ? i.collectedAt : max), null));
   const selectedTelegramItems = Object.values(selectedTelegram);
   const currentTelegramItems = new Map(feedItems.map((item) => [item.id, item]));
   const staleTelegramSelections = selectedTelegramItems.filter((item) =>

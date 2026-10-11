@@ -1,14 +1,15 @@
 'use client';
 
 import * as React from 'react';
-import Link from 'next/link';
 import { useTranslations } from 'next-intl';
-import { Maximize2Icon } from 'lucide-react';
+import { XIcon } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import {
   Sheet,
   SheetContent,
   SheetDescription,
   SheetHeader,
+  SheetClose,
   SheetTitle,
 } from '@/components/ui/sheet';
 import { ChatSession } from './chat-session';
@@ -42,26 +43,21 @@ export function ChatDrawer() {
     <Sheet open={chatCtrl.isDrawerOpen} onOpenChange={handleOpenChange}>
       <SheetContent
         side="right"
-        closeLabel={t('closeDrawer')}
-        className="p-0 flex flex-col h-full bg-background border-l border-border shadow-2xl focus:outline-none"
+        showCloseButton={false}
+        className="p-0 flex flex-col h-full w-full sm:w-[65vw] sm:max-w-[56rem] md:max-w-[56rem] lg:max-w-[56rem] xl:max-w-[56rem] bg-surface border-l border-border shadow-2xl focus:outline-none"
       >
         <SheetHeader className="sr-only">
           <SheetTitle>{t('quickChat')}</SheetTitle>
           <SheetDescription>{t('emptyStateDescription')}</SheetDescription>
         </SheetHeader>
 
-        {/* Top bar with Open in full page link */}
-        <div className="absolute top-3.5 right-12 z-20 flex items-center gap-1">
-          <Link
-            href="/chat"
-            onClick={() => chatCtrl.closeDrawer()}
-            className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-            title={t('openInFullPage')}
-            aria-label={t('openInFullPage')}
-          >
-            <Maximize2Icon className="size-4" />
-          </Link>
-        </div>
+        {/* 44px ghost close (QuickChat.dc.html); SheetClose keeps Radix focus return and Escape handling. */}
+        <SheetClose asChild>
+          <Button type="button" variant="ghost" size="icon" className="absolute right-3 top-2 z-10 size-11" aria-label={t('closeDrawer')}>
+            <XIcon className="size-5" aria-hidden="true" />
+            <span className="sr-only">{t('closeDrawer')}</span>
+          </Button>
+        </SheetClose>
 
         <div className="flex-1 min-h-0 flex flex-col">
           <ChatSession
