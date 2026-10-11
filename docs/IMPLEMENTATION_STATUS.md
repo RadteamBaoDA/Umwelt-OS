@@ -1,7 +1,7 @@
 <!-- production-readiness-status:start -->
-## Production readiness / free data / translation — live status (2026-10-08 11:20)
+## Production readiness / free data / translation — resumed status (2026-10-08)
 
-Plan `docs/superpowers/plans/2026-10-07-production-readiness-master.md`; ledger `D:/Project/Umwelt-OS-free-data-pilot/.superpowers/sdd/2026-10-07-production-readiness-master/progress.md`. Opus 5.5 review/plan, Sonnet 5.5 implementation. Code/build stage only — no tests/validation run yet.
+Plan `docs/superpowers/plans/2026-10-07-production-readiness-master.md`; ledger `D:/Project/Umwelt-OS-free-data-pilot/.superpowers/sdd/2026-10-07-production-readiness-master/progress.md`. Current policy: gpt-6-luna implements/fixes/commits/merges; gpt-6.1-sol reviews/plans. Root coordinates and documents. Develop verified at `68eaa74f259f9db43f47da935d3f4d0e09694c24`; unrelated dirty user files preserved. Code/build stage — this plan's validation has not run.
 
 | Task | State |
 | --- | --- |
@@ -12,13 +12,17 @@ Plan `docs/superpowers/plans/2026-10-07-production-readiness-master.md`; ledger 
 | W2 D1 | accepted (Opus Spec/Quality PASS) |
 | W2 D3 backfill | **merged** (`25a688f`, fix `31d3efe`) — search backfill scoped per version; Opus clean after 1 fix round |
 | develop import fix | `BigInteger` import in documents/models.py — app import was broken at `466d8ff` |
-| W2 domain conversion | **open** — Opus ruling `W2-domain-conversion-ruling.md`: 402 static bad call sites / 48 files + ~96 ORM inserts missing `workspace_id`; 7 parallel slices (S-callers, D-readers, K-graph, N-news/dashboard, P-private, T-tools, O-operator) ready to dispatch |
+| W2 domain conversion | **in progress, unmerged** — D-core SPEC FAIL / QUALITY FAIL (six P1, one P2; original-fence addendum); original Luna fixes Documents/Observations and freezes new two-file package. Search/Temporal still pending. N initial14file package hash/AST verified, independent Sol SPEC FAIL / QUALITY HOLD (3P1+8P2); original Luna fixes N-F1–F11. K Luna finishes Entities worker/review/corrections/routes family before Relationships/Timeline. S/P/T/O queued. Necessary two-file facade/Workspace identity composition transfer queued; News ready-workspace identity helper assigned only to D. Main source audit remains402/94; frozen-contract supplement catches five real N omissions overlooked by actual-signature audit and is separate from runtime evidence. |
+| Automatic indexing | User requires automatic indexing of ready workspace data. Initial D code exists but review found send-lock, configuration-comparison and discovery/job fairness defects; fix/review/build still required. Manual indexing cannot be a prerequisite. |
+| MCP collect | User chose to retain and scope `connectors/mcp.py::collect`; S conversion queued, C4 production wiring remains required. |
 | W2 D2 | pending (ruling ready); document delete/cleanup + Source purge stay broken until D2a/D2b |
-| C3, P1 | dispatched then killed by API session limit (no edits); re-dispatch pending |
+| Schema follow-on | D2 authority model/migration parity and P1 terms/quota tables still incomplete; serialized additive revisions required, no live migration run. |
+| C3, P1 | Earlier attempts ended without edits; queued with whole-file serialization against S/D and each other. |
 | W3–W5, C4–C5, P2–P4, T1–T4 | pending |
 | V1–V5 | pending (no validation run) |
+| Q1–Q3 | Required Chat dispatch/history/send repairs pending after P-private; full goal retains these additional release gates. |
 
-Known: develop runtime still TypeErrors on unconverted W2 caller paths (dashboard, entities, timeline, news, automations, chat, …) until the domain slices land. P14/P15 integration branches are not part of develop.
+Known: develop still has source-proven runtime TypeError risks on unconverted W2 paths; no new runtime execution proves their repair. GitNexus index is current at develop68eaa74, but name-based impact can resolve duplicate symbols incorrectly and some graph caller edges are missing. Exact-file context/Cypher plus source inventory supplement mandatory impact; HIGH/CRITICAL findings are relayed before affected repair edits. N's recorded initial pre-edit-impact violations remain visible, not retrospectively satisfied. No new W2 snapshot has passed independent review/composed build or merged. User's updated direction is approved plan only, then develop merge: phase composition/checks stay isolated and final develop integration follows completed approved source and required checks. P14/P15 integration branches remain outside develop. Full plan completion is not claimed.
 <!-- production-readiness-status:end -->
 
 <!-- current-implementation-snapshot:start -->
@@ -1101,3 +1105,17 @@ Agent R1 `5c2e184` exact prescribed build is verified PASS (four images, clean u
 ## Owner-requested stopped checkpoint — 2026-10-06
 
 All three remaining agents completed and execution stopped. Final materialization owner R1 HEAD `73b7b7fa796479fa86ec46ada816b1ca621fb8d4` and clean tracked tree independently confirmed; its repairs have not been independently reviewed or built. Agent R1 `5c2e184` build passed, re-review pending. Saved-brief R0 retains four P2 findings. Develop remains `84c25df`; no unmerged task is accepted. Preserve the document-cleanup, backup/materialization and owner-contracts worktrees for a future explicit resume. No tests/runtime/migrations executed, no merge/push/deploy, and no report-only commit.
+
+## Verified continuation checkpoint — 2026-10-08
+
+Actual checkout D:/Project/Umwelt-OS; stale injected D:/Project/BBD-OS does not exist. Fresh Git confirms develop68eaa74f259f9db43f47da935d3f4d0e09694c24 with preserved user AGENTS/CLAUDE edits and UX-document deletions. No new source commit or merge in this continuation. Goal remains ONLY the approved W/C/P/T/validation plan followed by develop integration; no new product scope, main merge, push, deployment or live migration.
+
+User decisions are binding: ready workspace data must be indexed automatically; retain/scoped connectors/mcp.py::collect and wire its production caller in C4. They are recorded in the exact central scratch rulings, not pending questions.
+
+D Documents/Observations fix1 two-file snapshot/live hashes verified; independent Sol re-review active. Parent D still needs Search original-authority/config/lock/fairness repair and Temporal continuation. Author-supplied core-delta patch contained abbreviated elisions and omitted Documents; root preserved it and regenerated exact verified two-file core/baseline patches from immutable bytes. No source acceptance from the broken package.
+
+K Entities five-file snapshot/live hashes and AST verified, diff-check passed; source review pending. Fresh frozen-contract audit found two remaining missing scope/flag calls in entities/worker.py and a real unsupported access_fence keyword on Documents lock in corrections.py, contradicting the earlier author zero-frozen claim. Root notified the original Luna author; K Tasks/Goals/Relationships/Timeline remain partial and unaccepted.
+
+N original Luna resumed its existing fix1 with exact central artifact paths. Required fixes include restoring frozen scope/flag instead of adapting to old local D signatures, using the actual scoped Settings signature, and completing News recovery/default Brief bootstrap. N source acceptance and new immutable fix1 report are pending. Separate Luna composition owner now implements only KnowledgeService scope propagation and one bounded Workspace candidate-ID helper in the providers worktree. HIGH facade/story/topic scope/cursor risks relayed; missing graph edges/new-symbol index misses are not low-risk proof.
+
+Three child seats currently assigned to N fixes, composition coding and D re-review. S/P/T/O, C3/P1 and downstream tasks stay queued under explicit whole-file/schema/build serialization. No tests/lint/typecheck/services/provider probes/runtime/SQL/migrations ran. Source-only checks do not establish runtime, security, release or whole-plan acceptance. Final develop merge remains pending completed approved source and required checks.

@@ -79,7 +79,7 @@ function ChatTriggerButton() {
   );
 }
 
-/** Owns workspace session loading, sign-out, preference reload, and the shared navigation shell for child routes. */
+/** Owns session state and the viewport-bounded app shell; route content scrolls in its main region while shell chrome stays visible. */
 export function WorkspaceShell({ children }: { children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -177,14 +177,22 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
   const memberSettingsRedirect = role === 'member' && pathname.startsWith('/settings') && !visibleSettingsGroups.some((g) => groupActive(pathname, g.href)) ? visibleSettingsGroups[0]?.href : undefined;
   useEffect(() => { if (memberSettingsRedirect) router.replace(memberSettingsRedirect); }, [memberSettingsRedirect, router]);
 
-  if (session.isPending) return <main className="shell"><div className="status-panel skeleton" aria-label={t('loadingWorkspace')} /></main>;
+  if (session.isPending) return <div className="shell">
+    <header className="topbar"><Link href="/login" className="brand-name" aria-label="Umwelt-OS"><UmweltLogo /></Link></header>
+    <main id="main-content" tabIndex={-1} className="page"><div className="status-panel skeleton" aria-label={t('loadingWorkspace')} /></main>
+    <ConnectionFooter apiStatus="connecting" realtimeStatus={realtime.status} onRetry={() => apiHealth.refetch()} retrying={apiHealth.isFetching} />
+  </div>;
   if (session.isError || !session.data) {
     const expired = session.error instanceof ApiError && session.error.status === 401;
-    return <><main id="main-content" className="page"><section className="status-panel">
+    return <div className="shell">
+      <header className="topbar"><Link href="/login" className="brand-name" aria-label="Umwelt-OS"><UmweltLogo /></Link></header>
+      <main id="main-content" tabIndex={-1} className="page"><section className="status-panel">
       <h1>{expired ? t('expiredTitle') : t('workspaceUnavailable')}</h1>
       <p className="muted">{expired ? t('expiredHelp') : t('workspaceUnavailableHelp')}</p>
       <Button className="secondary" onClick={() => session.refetch()}>{t('retry')}</Button>
-    </section></main><ConnectionFooter apiStatus={expired ? 'expired' : online ? 'unavailable' : 'clientOffline'} realtimeStatus={realtime.status} onRetry={() => apiHealth.refetch()} retrying={apiHealth.isFetching} /></>;
+      </section></main>
+      <ConnectionFooter apiStatus={expired ? 'expired' : online ? 'unavailable' : 'clientOffline'} realtimeStatus={realtime.status} onRetry={() => apiHealth.refetch()} retrying={apiHealth.isFetching} />
+    </div>;
   }
 
   const savedPreferences = preferences.data ?? display.confirmedPreferences ?? null;

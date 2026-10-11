@@ -1,3 +1,11 @@
+## 2026-10-08 current task report pointer
+
+Develop freshly verified `68eaa74`; no new source integration. D two-file fix1 active after executor diagnostic corrected; K continues Entities family; N original Luna fixes Sol review3P1+8P2 following immutable14file hash/AST verification. Source-only frozen-contract supplement independently confirmed five N missing scope/flag calls; actual-signature own-callee zero was insufficient. Exact scope/bootstrap owner amendments preserve existing News recovery/default Brief behavior; facade/Workspace two-file composition handoff queued. Search/Temporal, S/P/T/O and later cleanup/collector/provider/translation/required validation remain pending. Latest user direction approved plan only then develop merge; intermediate source/build composition isolated. Luna implementation/integration and Sol6.1 review/planning policy unchanged. Historical report below does not prove this plan's acceptance.
+
+## Frontend viewport shell fix — 2026-10-11
+
+App shell/header/footer and content-only scrolling implemented for desktop and mobile; Dashboard title/actions and controls remain visible while dashboard status, editor tools, and gadgets scroll in the bounded area. Chat fills the bounded region. Local Next production build passed. Prescribed build script exited 1 in the Docker web image because `@vitejs/plugin-react` was unavailable to the typecheck of `vitest.config.ts`. No browser validation, tests, lint, or standalone typecheck run.
+
 <!-- current-implementation-snapshot:start -->
 ## Current implementation snapshot — 2026-10-07 10:50 — P12 CODE + P13 UI + TEST STAGE COMPLETE (live/capacity gates blocked)
 
@@ -588,3 +596,17 @@ Agent R1 `5c2e184` exact prescribed build is verified PASS (four images, clean u
 ## Owner-requested stopped checkpoint — 2026-10-06
 
 All three remaining agents completed and execution stopped. Final materialization owner R1 HEAD `73b7b7fa796479fa86ec46ada816b1ca621fb8d4` and clean tracked tree independently confirmed; its repairs have not been independently reviewed or built. Agent R1 `5c2e184` build passed, re-review pending. Saved-brief R0 retains four P2 findings. Develop remains `84c25df`; no unmerged task is accepted. Preserve the document-cleanup, backup/materialization and owner-contracts worktrees for a future explicit resume. No tests/runtime/migrations executed, no merge/push/deploy, and no report-only commit.
+
+## Verified continuation checkpoint — 2026-10-08
+
+Actual checkout D:/Project/Umwelt-OS; stale injected D:/Project/BBD-OS does not exist. Fresh Git confirms develop68eaa74f259f9db43f47da935d3f4d0e09694c24 with preserved user AGENTS/CLAUDE edits and UX-document deletions. No new source commit or merge in this continuation. Goal remains ONLY the approved W/C/P/T/validation plan followed by develop integration; no new product scope, main merge, push, deployment or live migration.
+
+User decisions are binding: ready workspace data must be indexed automatically; retain/scoped connectors/mcp.py::collect and wire its production caller in C4. They are recorded in the exact central scratch rulings, not pending questions.
+
+D Documents/Observations fix1 two-file snapshot/live hashes verified; independent Sol re-review active. Parent D still needs Search original-authority/config/lock/fairness repair and Temporal continuation. Author-supplied core-delta patch contained abbreviated elisions and omitted Documents; root preserved it and regenerated exact verified two-file core/baseline patches from immutable bytes. No source acceptance from the broken package.
+
+K Entities five-file snapshot/live hashes and AST verified, diff-check passed; source review pending. Fresh frozen-contract audit found two remaining missing scope/flag calls in entities/worker.py and a real unsupported access_fence keyword on Documents lock in corrections.py, contradicting the earlier author zero-frozen claim. Root notified the original Luna author; K Tasks/Goals/Relationships/Timeline remain partial and unaccepted.
+
+N original Luna resumed its existing fix1 with exact central artifact paths. Required fixes include restoring frozen scope/flag instead of adapting to old local D signatures, using the actual scoped Settings signature, and completing News recovery/default Brief bootstrap. N source acceptance and new immutable fix1 report are pending. Separate Luna composition owner now implements only KnowledgeService scope propagation and one bounded Workspace candidate-ID helper in the providers worktree. HIGH facade/story/topic scope/cursor risks relayed; missing graph edges/new-symbol index misses are not low-risk proof.
+
+Three child seats currently assigned to N fixes, composition coding and D re-review. S/P/T/O, C3/P1 and downstream tasks stay queued under explicit whole-file/schema/build serialization. No tests/lint/typecheck/services/provider probes/runtime/SQL/migrations ran. Source-only checks do not establish runtime, security, release or whole-plan acceptance. Final develop merge remains pending completed approved source and required checks.

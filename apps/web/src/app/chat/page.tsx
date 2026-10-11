@@ -11,7 +11,7 @@ import { chatKeys, getConversation, type Citation } from '@/modules/chat/api';
 import { useQuery } from '@tanstack/react-query';
 
 /**
- * Inner Chat page content consuming ChatController from within the WorkspaceShell tree.
+ * Inner Chat page content consuming ChatController and filling the WorkspaceShell's scrollable main region.
  *
  * @returns Responsive two-column chat workspace.
  */
@@ -50,7 +50,7 @@ function ChatPageContent() {
   }, [detail?.messages]);
 
   return (
-    <div className="flex h-[calc(100dvh-140px)] min-h-[500px] w-full rounded-2xl border border-border bg-surface shadow-xs overflow-hidden max-md:h-[calc(100dvh-180px)]">
+    <div className="flex min-h-0 flex-1 w-full rounded-2xl border border-border bg-surface shadow-xs overflow-hidden">
       {/* Sidebar history on desktop; toggleable on mobile */}
       <div
         className={`${

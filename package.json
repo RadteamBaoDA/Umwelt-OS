@@ -1,15 +1,28 @@
 {
   "name": "bbd-os",
   "private": true,
-  "workspaces": ["apps/web"],
+  "workspaces": [
+    "apps/web"
+  ],
   "overrides": {
     "postcss": "^8.5.28",
-    "next": { "postcss": "^8.5.28" }
+    "next": {
+      "postcss": "^8.5.28"
+    }
   },
   "scripts": {
+    "dev": "concurrently -k -n be,worker,chat,fe -c blue,magenta,cyan,green \"npm:dev:be\" \"npm:dev:worker\" \"npm:dev:chat\" \"npm:dev:fe\"",
+    "dev:be": "uv run --env-file .env.local python -m uvicorn apps.api.main:create_app --factory --host 127.0.0.1 --port 8000 --reload --reload-dir apps --reload-dir core --reload-dir modules",
+    "dev:worker": "uv run --env-file .env.local python -m watchfiles --filter python \"uv run --env-file .env.local python -m arq apps.worker.main.WorkerSettings\" apps core modules",
+    "dev:chat": "uv run --env-file .env.local python -m watchfiles --filter python \"uv run --env-file .env.local python -m arq apps.worker.main.ChatWorkerSettings\" apps core modules",
+    "dev:fe": "npm run dev --workspace apps/web",
+    "dev:migrate": "uv run --env-file .env.local python -m alembic upgrade head",
     "lint": "npm run lint --workspace apps/web",
     "typecheck": "npm run typecheck --workspace apps/web",
     "build": "npm run build --workspace apps/web",
     "test:e2e": "npm run test:e2e --workspace apps/web"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.5"
   }
 }

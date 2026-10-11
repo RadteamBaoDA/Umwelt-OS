@@ -275,7 +275,7 @@ function projectMobilePlacements(
 }
 
 /**
- * Main dashboard container view for BBD-OS.
+ * Main dashboard container view for BBD-OS, keeping dashboard controls visible while its content scrolls.
  * Supports owner-scoped desktop/mobile drafts, local mobile reading projection/adoption, complete
  * group-independent geometry history, dashboard switching, and dirty navigation guarding.
  *
@@ -974,9 +974,9 @@ export function DashboardPage() {
   }, []);
 
   return (
-    <section className="flex flex-col w-full min-h-[calc(100vh-140px)] gap-4">
+    <section className="flex min-h-0 flex-1 flex-col w-full gap-4">
       {/* Page header: dashboard name, saved layout revision and primary actions */}
-      <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="flex shrink-0 flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <h1 className="truncate text-2xl font-bold text-foreground">{activeDashboard?.name ?? t('title')}</h1>
           <p className="text-sm text-muted-foreground">
@@ -1001,7 +1001,7 @@ export function DashboardPage() {
         </div>
       </div>
       {/* Dashboard Top Header Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-4 pb-2 border-b border-border">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-4 pb-2 border-b border-border">
         {/* Left: Switcher, Active Title, Group Tabs */}
         <div className="flex flex-wrap items-center gap-3">
           {/* Dashboard Switcher Dropdown */}
@@ -1069,6 +1069,17 @@ export function DashboardPage() {
                   </DropdownMenuItem>
                 </>
               )}
+
+              <DropdownMenuSeparator />
+
+              <DropdownMenuItem
+                disabled={layoutOperationPending}
+                onClick={() => setPresetPickerOpen(true)}
+                className="text-xs gap-2"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-primary" />
+                <span>{t('presets')}</span>
+              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
 
@@ -1103,22 +1114,10 @@ export function DashboardPage() {
           )}
         </div>
 
-        {/* Right: Presets Trigger & Edit Mode Toggle */}
-        <div className="flex items-center gap-2">
-          <NotificationBell />
-          {/* Preset Picker Trigger */}
-          <Button
-            type="button"
-            disabled={layoutOperationPending}
-            className="secondary text-xs h-8 px-2.5 gap-1.5"
-            onClick={() => setPresetPickerOpen(true)}
-          >
-            <Sparkles className="w-3.5 h-3.5 text-primary" />
-            <span>{t('presets')}</span>
-          </Button>
-        </div>
+        <NotificationBell />
       </div>
 
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto overscroll-y-contain">
       {editOrigin && editOrigin.dashboardId === selectedDashboardId && requestedBreakpoint !== editOrigin.breakpoint && (
         <p role="status" className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm text-muted-foreground">
           {t('mobileEditOrigin', {
@@ -1278,6 +1277,7 @@ export function DashboardPage() {
           </Link>
         </p>
       )}
+      </div>
 
       {/* Preset Picker Modal */}
       <PresetPicker

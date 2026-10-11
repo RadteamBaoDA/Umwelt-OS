@@ -475,7 +475,7 @@ def _copy_configuration(root: Path, stage: Path) -> None:
     directory = stage / "configuration"
     shutil.copyfile(source_env, directory / "runtime.env")
     for relative in (
-        "docker-compose.yml", "docker-compose.connectors.yml",
+        "docker-compose.yml", "docker-compose.base.yml", "docker-compose.connectors.yml",
         "infrastructure/graph/compose.yml", "infrastructure/backup/compose.yml",
         "infrastructure/docker/api.Dockerfile",
         "infrastructure/docker/n8n-connectors.Dockerfile",

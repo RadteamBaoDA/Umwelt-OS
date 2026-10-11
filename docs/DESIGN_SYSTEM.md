@@ -125,7 +125,7 @@ Changes are previewed until saved.
 
 ## 8. Viewport, layout and overlays
 
-The application owns 100% width with no centered max-width around the entire shell. `html/body/app root` fill at least the viewport; dashboard content can extend vertically and scroll the document. Use `min-height: 100dvh` with fallback where needed, not a fixed height plus hidden overflow that clips the dashboard. Main columns use `minmax(0, 1fr)`/`min-width: 0` to prevent chart and table overflow.
+The application owns 100% width with no centered max-width around the entire shell. The workspace shell fills the dynamic viewport; its header, navigation, and connection footer stay visible while only the main content region scrolls. Within Dashboard, the title/actions and dashboard controls stay visible while status, editor tools, and gadget content scroll in the remaining area. Preserve a `100vh` fallback, safe-area padding, and a mobile content inset for bottom navigation. Give nested flex/grid scroll regions `min-height: 0`; dashboard and chat content must size from the shell rather than viewport subtraction. Login and onboarding screens keep their own scrollable content. Main columns use `minmax(0, 1fr)`/`min-width: 0` to prevent chart and table overflow.
 
 Every dashboard content block is a gadget, including the globe/map, highlights, watch rules and personal context. They share the same grid, add/remove, move, resize and Save/Cancel lifecycle. App header/footer, navigation and layout controls remain shell elements. Map filters belong inside the map gadget.
 

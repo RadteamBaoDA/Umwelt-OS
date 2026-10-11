@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections.abc import Callable
 from functools import wraps
 from typing import Any, ClassVar, cast
@@ -161,12 +162,18 @@ def _arq_options(name: str) -> dict[str, Any]:
     return options
 
 
+def _silence_cron_logs() -> None:
+    """Show arq job lifecycle logs only for warnings/errors (cron jobs fire a dozen times every 5 s)."""
+    logging.getLogger("arq.worker").setLevel(logging.WARNING)
+
+
 async def startup(ctx: dict[str, object]) -> None:
     """Load the bounded database pool and compose the worker-owned native/MCP agent registry.
 
     Keep one nested checkpoint and bounded-discovery lock shared across ARQ's copied
     invocation contexts; neither is authority or durable, and both reset on restart.
     """
+    _silence_cron_logs()
     settings = Settings()
     ctx["settings"] = settings
     ctx["ingestion_dispatch_scan_state"] = {"cursor": None, "lock": asyncio.Lock()}
@@ -201,6 +208,7 @@ CHAT_DB_POOL = (10, 10)  # fixed (pool_size, max_overflow); counted as 20 in doc
 
 async def chat_startup(ctx: dict[str, object]) -> None:
     """Minimal chat-worker startup: bounded DB pool only (no agent registry, no worker-generation key)."""
+    _silence_cron_logs()
     settings = Settings()
     ctx["settings"] = settings
     install_log_redaction()

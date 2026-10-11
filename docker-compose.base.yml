@@ -1,0 +1,61 @@
+# Shared infrastructure. docker-compose.yml extends these services.
+# Standalone (native `npm run dev`): docker compose -f docker-compose.base.yml up -d
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.6-pg16-bookworm
+    environment:
+      POSTGRES_DB: bbd
+      POSTGRES_USER: bbd
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run setup to create .env}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bbd -d bbd"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    command:
+      - postgres
+      - -c
+      - max_connections=100
+      - -c
+      - shared_buffers=1GB
+      - -c
+      - effective_cache_size=2GB
+      - -c
+      - work_mem=16MB
+      - -c
+      - maintenance_work_mem=256MB
+    shm_size: 1gb
+    cpu_shares: 768
+    deploy:
+      resources:
+        limits: {memory: 2560M}
+        reservations: {memory: 1024M}
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4.11-alpine
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1000", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    cpu_shares: 128
+    deploy:
+      resources:
+        limits: {memory: 384M}
+        reservations: {memory: 64M}
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:
