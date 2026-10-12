@@ -2,7 +2,7 @@
 
 Install Python 3.12, uv, Node.js 24/npm, and Docker Compose v2.24 or newer. Run `./scripts/dev.ps1 setup` in Windows PowerShell or `make setup` on macOS/Linux. Setup creates `.env` only when missing, then installs locked Python and npm dependencies.
 
-Run the hot-reload stack with `./scripts/dev.ps1 dev` or `make dev`. The frontend is at `http://localhost:3000`. Only its loopback port is published; API, PostgreSQL, and Redis stay on the Compose network. To stop services without deleting data, use the matching `stop` command.
+Run the hot-reload stack with `./scripts/dev.ps1 dev` or `make dev`. The frontend is at `http://localhost:3000`. Only its loopback port is published; API, PostgreSQL, and Redis stay on the Compose network. To stop services without deleting data, use the matching `stop` command. Full guideline (modes, LAN access, native run, troubleshooting): `docs/local-development.md`.
 
 For fictional Phase 1, 8, 10 and 12 data, run `./scripts/dev.ps1 seed` or `make seed` after setup. Seeding is explicit and never runs at startup. Stable per-phase owner receipts preserve edits/deletions and ensure the existing `bbd-os.demo.phase-1` source sentinel cannot suppress newer P12 fixtures. P12 adds a project entity, linked person, relationship, manual timeline event, normalized fictional article, and an example conversation only when the owner's durable-history setting permits it. Tasks/goals/topics and disabled automation examples reuse their existing owner seed helpers. A receipt prevents deleted fixtures from being recreated by later seed runs.
 

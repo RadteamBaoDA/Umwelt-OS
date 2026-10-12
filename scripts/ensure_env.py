@@ -49,6 +49,7 @@ def ensure(env_path: Path) -> list[str]:
             current[key] = updates[key]
         return current[key]
 
+    want("BBD_ENVIRONMENT", "auto")  # auto: development for a local/LAN PUBLIC_ORIGIN, production for a public domain
     want("PUBLIC_ORIGIN", "http://localhost:3000")
     want("SECURE_COOKIES", "false")  # set true behind HTTPS (see docs/deployment.md)
     want("SETUP_TOKEN", _token)

@@ -9,14 +9,30 @@ from core.mcp_endpoint import normalize_mcp_url
 
 _PLACEHOLDER_PREFIXES = ("replace-with-", "replace-this-")
 _DEFAULT_DB_CREDENTIALS = "//bbd:bbd@"
+_LOCAL_SUFFIXES = (".localhost", ".local", ".lan", ".internal", ".home.arpa")
+
+
+def is_local_host(host: str) -> bool:
+    """Return True for hosts that never face the public internet: loopback/private/link-local IPs, localhost, mDNS/LAN suffixes and single-label names (container service names).
+
+    Used only to decide whether production-grade transport rules (HTTPS, Secure cookies) are required; it is a
+    configuration heuristic, not an access-control check.
+    """
+    name = host.strip("[]").lower().rstrip(".")
+    try:
+        ip = ipaddress.ip_address(name)
+    except ValueError:
+        return name == "localhost" or "." not in name or name.endswith(_LOCAL_SUFFIXES)
+    return ip.is_loopback or ip.is_private or ip.is_link_local
 
 
 class Settings(BaseSettings):
     """Validated application configuration loaded from environment and the optional .env file; secret fields are masked in representations."""
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", hide_input_in_errors=True)
 
-    # Hardening: anything other than dev/development/test is treated as production (fail closed).
-    environment: str = Field(default="production", validation_alias="BBD_ENVIRONMENT")
+    # Mode: "development"/"dev"/"test" relax production checks; "production" enforces them; "auto" (default) picks
+    # development when PUBLIC_ORIGIN is a local/LAN host and production otherwise. Unknown values fail closed to production.
+    environment: str = Field(default="auto", validation_alias="BBD_ENVIRONMENT")
     database_url: str = Field(default="postgresql+asyncpg://bbd:bbd@postgres:5432/bbd", repr=False)
     redis_url: str = Field(default="redis://redis:6379/0", repr=False)
     graph_enabled: bool = Field(default=False, validation_alias="GRAPH_ENABLED")
@@ -239,18 +255,42 @@ class Settings(BaseSettings):
         return value
 
     @property
+    def origin_is_local(self) -> bool:
+        """Return True when PUBLIC_ORIGIN points at a loopback, LAN or single-label host (see is_local_host)."""
+        return is_local_host(self.public_origin.host or "")
+
+    @property
+    def mode(self) -> str:
+        """Resolve BBD_ENVIRONMENT to "development", "test" or "production".
+
+        "auto" (default) is development for a local/LAN PUBLIC_ORIGIN and production for any public domain; an
+        explicit value always wins, and unrecognised values fail closed to production.
+        """
+        value = self.environment.strip().lower()
+        if value in {"dev", "development"}:
+            return "development"
+        if value == "test":
+            return "test"
+        if value == "auto":
+            return "development" if self.origin_is_local else "production"
+        return "production"
+
+    @property
     def is_dev(self) -> bool:
-        """Return True only for explicit local development or test environments."""
-        return self.environment.strip().lower() in {"dev", "development", "test"}
+        """Return True in development or test mode (relaxed secrets/cookie rules, API docs enabled)."""
+        return self.mode != "production"
 
     @model_validator(mode="after")
     def reject_insecure_production_config(self) -> "Settings":
-        """Refuse startup outside dev/test when cookies are insecure on an https origin, secrets are template placeholders, or the default database credentials remain.
+        """Refuse startup in production mode when a public origin is not HTTPS, cookies are insecure on an https origin, secrets are template placeholders, or the default database credentials remain.
 
+        Local/LAN origins (see is_local_host) may use plain http with non-Secure cookies even in production mode.
         Raises ValueError (surfaced as ValidationError) naming the offending field, never its value.
         """
         if self.is_dev:
             return self
+        if self.public_origin.scheme != "https" and not self.origin_is_local:
+            raise ValueError("PUBLIC_ORIGIN must be https for a non-local host")
         if self.public_origin.scheme == "https" and not self.secure_cookies:
             raise ValueError("SECURE_COOKIES must be true when PUBLIC_ORIGIN is https")
         for name in type(self).model_fields:

@@ -37,6 +37,16 @@ async def test_liveness_endpoint_does_not_require_services() -> None:
     assert response.json() == {"status": "ok"}
 
 
+@pytest.fixture(autouse=True)
+def _no_placeholder_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Drop template-placeholder variables leaked into os.environ (e.g. from a developer .env) so mode tests are hermetic."""
+    import os
+
+    for key, value in list(os.environ.items()):
+        if value.startswith(("replace-with-", "replace-this-")):
+            monkeypatch.delenv(key)
+
+
 def _prod(**kw: object) -> Settings:
     base = {
         "BBD_ENVIRONMENT": "production",
@@ -44,7 +54,7 @@ def _prod(**kw: object) -> Settings:
         "public_origin": "https://example.com",
         "secure_cookies": True,
     }
-    return Settings(**{**base, **kw})  # type: ignore[arg-type]
+    return Settings(_env_file=None, **{**base, **kw})  # type: ignore[arg-type]
 
 
 def test_production_accepts_hardened_config() -> None:
@@ -69,7 +79,38 @@ def test_production_rejects_insecure_config(override: dict[str, object]) -> None
 def test_dev_allows_defaults_and_serves_docs() -> None:
     from apps.api.main import create_app
 
-    dev = Settings(BBD_ENVIRONMENT="development", setup_token="replace-with-x")
+    dev = Settings(_env_file=None, BBD_ENVIRONMENT="development", setup_token="replace-with-x")
     assert dev.is_dev
     assert create_app(dev).docs_url == "/docs"
     assert create_app(_prod()).docs_url is None
+
+
+@pytest.mark.parametrize(
+    "origin",
+    ["http://localhost:3000", "http://127.0.0.1:3000", "http://192.168.1.20:3000", "http://10.0.0.5", "http://[::1]:3000", "http://nas.local:3000", "http://web:3000"],
+)
+def test_auto_mode_is_development_for_local_origin(origin: str) -> None:
+    # Default "auto" + local/LAN origin: http, non-Secure cookies and template secrets are all accepted.
+    settings = Settings(_env_file=None, BBD_ENVIRONMENT="auto", public_origin=origin, setup_token="replace-with-x")  # type: ignore[arg-type]
+    assert settings.mode == "development" and settings.is_dev
+
+
+def test_auto_mode_is_production_for_public_domain() -> None:
+    assert Settings(_env_file=None, BBD_ENVIRONMENT="auto", public_origin="https://example.com", secure_cookies=True,  # type: ignore[arg-type]
+                    database_url="postgresql+asyncpg://bbd:real-pw@db:5432/bbd").mode == "production"
+    with pytest.raises(ValidationError):  # http on a public domain
+        Settings(_env_file=None, BBD_ENVIRONMENT="auto", public_origin="http://example.com", database_url="postgresql+asyncpg://bbd:real-pw@db:5432/bbd")  # type: ignore[arg-type]
+    with pytest.raises(ValidationError):  # https without Secure cookies
+        Settings(_env_file=None, BBD_ENVIRONMENT="auto", public_origin="https://example.com", database_url="postgresql+asyncpg://bbd:real-pw@db:5432/bbd")  # type: ignore[arg-type]
+
+
+def test_explicit_production_on_lan_keeps_secret_checks_but_allows_http() -> None:
+    ok = {"BBD_ENVIRONMENT": "production", "public_origin": "http://192.168.1.20:3000", "database_url": "postgresql+asyncpg://bbd:real-pw@db:5432/bbd"}
+    assert Settings(_env_file=None, **ok).mode == "production"  # type: ignore[arg-type]
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, **{**ok, "setup_token": "replace-with-x"})  # type: ignore[arg-type]
+
+
+def test_explicit_development_wins_over_public_domain() -> None:
+    assert Settings(_env_file=None, BBD_ENVIRONMENT="development", public_origin="https://example.com").mode == "development"  # type: ignore[arg-type]
+    assert Settings(_env_file=None, BBD_ENVIRONMENT="bogus", public_origin="http://localhost:3000", database_url="postgresql+asyncpg://bbd:real-pw@db:5432/bbd").mode == "production"  # type: ignore[arg-type]
