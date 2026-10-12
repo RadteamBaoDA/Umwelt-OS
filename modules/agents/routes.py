@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.auth.dependencies import require_account, require_account_write
 from core.auth.models import AuthSession
 from core.database import get_session
+from core.rate_limit import require_budget
 from core.realtime import commit_with_replay
 from core.workspaces.dependencies import (
     require_default_workspace_read,
@@ -52,7 +53,8 @@ def _flag(request: Request) -> bool:
     return flag
 
 
-@router.post("/api/v1/agents/{agent_id}/runs", response_model=AgentRunRead, status_code=202)
+@router.post("/api/v1/agents/{agent_id}/runs", response_model=AgentRunRead, status_code=202,
+             dependencies=[Depends(require_budget("agent_run", 20, 60))])
 async def start_run(
     agent_id: str, payload: AgentRunStart | ProfileRunStart, request: Request, session: Session, owner: OwnerWrite,
     scope: WorkspaceWrite,

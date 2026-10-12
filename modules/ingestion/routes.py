@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.public import authenticated_session_ref
 from core.database import get_session
+from core.rate_limit import require_budget
 from core.storage import save_upload, storage_path
 from core.workspaces.dependencies import (
     require_default_workspace_read,
@@ -253,7 +254,8 @@ async def _intake_upload(
     return run, document_id
 
 
-@documents_router.post("/upload", response_model=Receipt, status_code=202)
+@documents_router.post("/upload", response_model=Receipt, status_code=202,
+                      dependencies=[Depends(require_budget("ingest_upload", 20, 60))])
 async def upload_document(
     request: Request,
     source_id: Annotated[UUID, Form()],
@@ -302,7 +304,8 @@ async def _chat_attachment_read(
     )
 
 
-@documents_router.post("/chat-attachments", response_model=ChatAttachmentRead, status_code=202)
+@documents_router.post("/chat-attachments", response_model=ChatAttachmentRead, status_code=202,
+                      dependencies=[Depends(require_budget("ingest_upload", 20, 60))])
 async def upload_chat_attachment(
     request: Request,
     upload: Annotated[UploadFile, File(alias="file")],

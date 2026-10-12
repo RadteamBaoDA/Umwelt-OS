@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from core.auth.dependencies import SESSION_COOKIE, require_account, require_account_write
 from core.auth.models import AuthSession
 from core.database import get_session
+from core.rate_limit import require_budget
 from core.realtime_routes import _PermitResponse
 from core.workspaces.dependencies import (
     require_default_workspace_read,
@@ -683,6 +684,7 @@ async def delete_conversation(
     "/api/v1/conversations/{conversation_id}/messages",
     response_model=SendMessageResponse,
     status_code=202,
+    dependencies=[Depends(require_budget("chat_send", 30, 60))],
 )
 async def send_message(
     conversation_id: UUID,
@@ -788,6 +790,7 @@ async def send_message(
     "/api/v1/conversations/{conversation_id}/messages/{message_id}/mutations",
     response_model=SendMessageResponse,
     status_code=202,
+    dependencies=[Depends(require_budget("chat_send", 30, 60))],
 )
 async def mutate_message(
     conversation_id: UUID,
