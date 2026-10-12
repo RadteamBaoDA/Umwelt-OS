@@ -20,4 +20,5 @@ ip6tables -A OUTPUT -o lo -j ACCEPT
 ip6tables -A OUTPUT -d ::ffff:127.0.0.11 -p udp --dport 53 -j ACCEPT
 ip6tables -A OUTPUT -d ::ffff:127.0.0.11 -p tcp --dport 53 -j ACCEPT
 
-exec /docker-entrypoint.sh "$@"
+# Drop root (and NET_ADMIN) before n8n starts so workflow code cannot rewrite the firewall.
+exec su-exec node /docker-entrypoint.sh "$@"

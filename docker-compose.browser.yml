@@ -1,6 +1,12 @@
 # Browser collection overlay (needs Compose >= 2.20 when pulled in via include).
 # Usage: docker compose -f docker-compose.yml -f docker-compose.browser.yml up -d --build
 # Owns the browser sidecar, the private connectors_internal network and the API/worker attachments to it.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   browser:
     build:
@@ -9,7 +15,11 @@ services:
     environment:
       BROWSER_SHARED_TOKEN: ${BROWSER_SHARED_TOKEN:-}
     expose: ["8001"]
-    cap_add: ["NET_ADMIN"]
+    # NET_ADMIN for the entrypoint iptables rules; SETUID/SETGID for gosu (app runs as `bbd`, capability-free).
+    cap_drop: [ALL]
+    cap_add: ["NET_ADMIN", "SETUID", "SETGID"]
+    security_opt: ["no-new-privileges:true"]
+    logging: *default-logging
     mem_limit: 1536m
     cpus: 1.5
     pids_limit: 128

@@ -28,7 +28,7 @@ Known: develop still has source-proven runtime TypeError risks on unconverted W2
 <!-- current-implementation-snapshot:start -->
 ## Current implementation snapshot — 2026-10-07 10:50 — P12 CODE + P13 UI + TEST STAGE COMPLETE (live/capacity gates blocked)
 
-Controller Claude Opus 5.5; implementers Sonnet 5.5; reviewers Opus 5.5. SDD ledger: `.superpowers/sdd/2026-09-25-umwelt-os-phase-12-hardening-release-acceptance/progress.md`. Alembic head `p12_evidence_version_index`.
+Controller Claude Opus 5.5; implementers Sonnet 5.5; reviewers Opus 5.5. SDD ledger: `.superpowers/sdd/2026-09-25-umwelt-os-phase-12-hardening-release-acceptance/progress.md`. Alembic head `r17_ai_providers`.
 
 | State | Tasks |
 | --- | --- |
