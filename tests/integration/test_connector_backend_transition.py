@@ -26,7 +26,7 @@ from modules.connectors.models import ConnectorProvisioning, ConnectorSchedule
 from modules.sources import public as sources
 
 pytestmark = pytest.mark.skipif(
-    os.getenv("BBD_INTEGRATION") != "1", reason="requires disposable Compose test services"
+    os.getenv("INTEGRATION") != "1", reason="requires disposable Compose test services"
 )
 FLAG = False  # the disposable stack runs the default single-workspace rollout
 

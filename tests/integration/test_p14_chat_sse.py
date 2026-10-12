@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from core.auth.dependencies import SESSION_COOKIE
 
 pytestmark = pytest.mark.skipif(
-    os.getenv("BBD_INTEGRATION") != "1", reason="requires disposable Compose test services"
+    os.getenv("INTEGRATION") != "1", reason="requires disposable Compose test services"
 )
 
 SLOW_EVENTS = 400

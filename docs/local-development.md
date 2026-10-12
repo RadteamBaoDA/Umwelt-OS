@@ -2,7 +2,7 @@
 
 How to run Umwelt-OS on your own machine or LAN **without HTTPS**, and how that differs from a public deployment. For public hosting see `docs/deployment.md`.
 
-## 1. Modes (`BBD_ENVIRONMENT`)
+## 1. Modes (`ENVIRONMENT`)
 
 | Value | When | Effect |
 |---|---|---|
@@ -45,7 +45,7 @@ The web port binds to `127.0.0.1`, so a phone or second PC cannot connect until 
 
 1. Edit `docker-compose.yml` web ports from `"127.0.0.1:${WEB_PORT:-3000}:3000"` to `"0.0.0.0:${WEB_PORT:-3000}:3000"` (or your LAN IP), or put a reverse proxy in front.
 2. Set `PUBLIC_ORIGIN` to the **exact** URL you type in the browser, for example `PUBLIC_ORIGIN=http://192.168.1.20:3000`. The API checks the `Origin` header of every write against it (CSRF defence); a mismatch returns 403, which looks like "login does nothing".
-3. Keep `SECURE_COOKIES=false`. With `BBD_ENVIRONMENT=auto` a `192.168.x.x` origin stays in development mode.
+3. Keep `SECURE_COOKIES=false`. With `ENVIRONMENT=auto` a `192.168.x.x` origin stays in development mode.
 4. Restart: `make stop && make dev`.
 
 Do this only on a trusted network; plain http exposes the session cookie to anyone on the LAN. Use section 6 instead for anything beyond your home or lab.
@@ -80,18 +80,18 @@ npm run dev             # be + worker + chat + fe, hot reload
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| API exits: `PUBLIC_ORIGIN must be https for a non-local host` | Origin is a public domain over http | Use https (section 6) or set `BBD_ENVIRONMENT=development` only if you really are local |
+| API exits: `PUBLIC_ORIGIN must be https for a non-local host` | Origin is a public domain over http | Use https (section 6) or set `ENVIRONMENT=development` only if you really are local |
 | API exits: `SECURE_COOKIES must be true when PUBLIC_ORIGIN is https` | https origin, insecure cookies | Set `SECURE_COOKIES=true` |
 | API exits: `<field> uses a placeholder or default credential` | Production mode with `replace-with-*` or `bbd:bbd` | Run `make setup` (fills real values) or use development mode locally |
 | Login or any POST returns 403 | `PUBLIC_ORIGIN` differs from the browser URL (`localhost` vs `127.0.0.1` vs LAN IP) | Make them identical, restart the API |
 | Logged in but bounced to `/login` | Cookie not stored: `SECURE_COOKIES=true` on an http origin | Set `SECURE_COOKIES=false` for local http |
-| `/docs` returns 404 | Production mode | Set `BBD_ENVIRONMENT=development` |
+| `/docs` returns 404 | Production mode | Set `ENVIRONMENT=development` |
 | Google sign-in fails locally | Google OAuth requires `localhost` or https redirect URIs | Use `http://localhost:3000` (not a LAN IP) or https |
 | Browser keeps forcing https on `localhost` | An earlier HSTS entry was cached | `chrome://net-internals/#hsts` → delete domain |
 
 ## 6. When you want HTTPS (public or semi-public)
 
-Follow `docs/deployment.md` (Cloudflare Tunnel + Access, or the optional Caddy overlay). Switch these in `.env`, keeping `BBD_ENVIRONMENT=auto`:
+Follow `docs/deployment.md` (Cloudflare Tunnel + Access, or the optional Caddy overlay). Switch these in `.env`, keeping `ENVIRONMENT=auto`:
 
 ```
 PUBLIC_ORIGIN=https://umwelt.example.com
@@ -104,5 +104,5 @@ The domain makes `auto` resolve to production, so the API then also rejects plac
 ## 7. Safety notes for development mode
 
 - Development mode only relaxes transport and secret-format checks. Authentication, CSRF, rate limits, SSRF guards and workspace scoping stay on.
-- Explicit `BBD_ENVIRONMENT=development` is the only setting that tolerates template secrets; use it only on your own machine. Never expose a development-mode instance to the internet: its API docs are public and weak secrets are tolerated. Setting `BBD_ENVIRONMENT=production` explicitly on a server removes the dependence on the `auto` heuristic (and its local-origin transport relaxation).
+- Explicit `ENVIRONMENT=development` is the only setting that tolerates template secrets; use it only on your own machine. Never expose a development-mode instance to the internet: its API docs are public and weak secrets are tolerated. Setting `ENVIRONMENT=production` explicitly on a server removes the dependence on the `auto` heuristic (and its local-origin transport relaxation).
 - Do not commit `.env`; only `.env.example` is tracked.

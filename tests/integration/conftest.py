@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engin
 
 @pytest.fixture
 async def anonymous_client() -> AsyncIterator[AsyncClient]:
-    base_url = os.getenv("BBD_API_URL", "http://localhost:38000")
+    base_url = os.getenv("API_URL", "http://localhost:38000")
     origin = os.getenv("TEST_PUBLIC_ORIGIN", "http://localhost:3300")
     async with AsyncClient(base_url=base_url, headers={"Origin": origin}) as client:
         yield client
@@ -21,7 +21,7 @@ async def anonymous_client() -> AsyncIterator[AsyncClient]:
 
 @pytest.fixture
 async def owner_client() -> AsyncIterator[AsyncClient]:
-    base_url = os.getenv("BBD_API_URL", "http://localhost:38000")
+    base_url = os.getenv("API_URL", "http://localhost:38000")
     origin = os.getenv("TEST_PUBLIC_ORIGIN", "http://localhost:3300")
     async with AsyncClient(base_url=base_url) as client:
         csrf_response = await client.get("/api/v1/auth/csrf")
@@ -153,7 +153,7 @@ def post_throttled() -> Callable[..., Awaitable[Response]]:
 @pytest.fixture
 async def ready_owner_client() -> AsyncIterator[AsyncClient]:
     """Return a logged-in owner client, running the real first-run setup first when no owner exists."""
-    base_url = os.getenv("BBD_API_URL", "http://localhost:38000")
+    base_url = os.getenv("API_URL", "http://localhost:38000")
     origin = os.getenv("TEST_PUBLIC_ORIGIN", "http://localhost:3300")
     async with AsyncClient(base_url=base_url, timeout=30) as client:
         status = (await client.get("/api/v1/auth/setup-status")).json()

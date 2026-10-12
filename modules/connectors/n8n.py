@@ -146,7 +146,7 @@ def build_workflow(
         """Recursively replace packaged placeholders with this source's identifiers."""
         if isinstance(value, str):
             return (
-                value.replace("{{$env.BBD_SOURCE_ID}}", source_id)
+                value.replace("{{$env.SOURCE_ID}}", source_id)
                 .replace("__BBD_SOURCE_ID__", source_id)
                 .replace("__BBD_SOURCE_GENERATION__", str(source.generation))
                 .replace("__BBD_CONNECTOR_REVISION__", str(desired_revision))

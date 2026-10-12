@@ -28,7 +28,7 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://bbd_test:bbd-os-test-db-only@postgres:5432/bbd_test
       REDIS_URL: redis://redis:6379/0
-      BBD_ENVIRONMENT: test
+      ENVIRONMENT: test
       SETUP_TOKEN: bbd-os-disposable-test-token
       CSRF_SIGNING_SECRET: bbd-os-disposable-test-csrf-secret
       POSTGRES_PASSWORD: bbd-os-test-db-only
@@ -41,7 +41,7 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://bbd_test:bbd-os-test-db-only@postgres:5432/bbd_test
       REDIS_URL: redis://redis:6379/0
-      BBD_ENVIRONMENT: test
+      ENVIRONMENT: test
       PUBLIC_ORIGIN: ${TEST_PUBLIC_ORIGIN:-http://localhost:3300}
       SETUP_TOKEN: bbd-os-disposable-test-token
       CSRF_SIGNING_SECRET: bbd-os-disposable-test-csrf-secret
@@ -57,7 +57,7 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://bbd_test:bbd-os-test-db-only@postgres:5432/bbd_test
       REDIS_URL: redis://redis:6379/0
-      BBD_ENVIRONMENT: test
+      ENVIRONMENT: test
       SETUP_TOKEN: bbd-os-disposable-test-token
       CSRF_SIGNING_SECRET: bbd-os-disposable-test-csrf-secret
       POSTGRES_PASSWORD: bbd-os-test-db-only
@@ -72,7 +72,7 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://bbd_test:bbd-os-test-db-only@postgres:5432/bbd_test
       REDIS_URL: redis://redis:6379/0
-      BBD_ENVIRONMENT: test
+      ENVIRONMENT: test
       SETUP_TOKEN: bbd-os-disposable-test-token
       CSRF_SIGNING_SECRET: bbd-os-disposable-test-csrf-secret
       POSTGRES_PASSWORD: bbd-os-test-db-only

@@ -17,7 +17,7 @@ from core.config import Settings
 from core.database import make_session_factory
 
 pytestmark = pytest.mark.skipif(
-    os.getenv("BBD_INTEGRATION") != "1", reason="requires disposable Compose test services"
+    os.getenv("INTEGRATION") != "1", reason="requires disposable Compose test services"
 )
 
 THIRTY_MIB = 30 * 1024 * 1024

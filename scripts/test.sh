@@ -34,8 +34,8 @@ trap cleanup EXIT
 "${compose[@]}" run --rm migrate
 "${compose[@]}" run --rm --no-deps api python -c 'import apps.api.main, core.auth.dependencies, modules'
 
-export BBD_INTEGRATION=1
-export BBD_API_URL="http://localhost:${API_TEST_PORT}"
+export INTEGRATION=1
+export API_URL="http://localhost:${API_TEST_PORT}"
 "${compose[@]}" exec -T postgres psql -U bbd_test -d bbd_test -At -c "SELECT current_database() || '|' || current_user" | grep -Fx 'bbd_test|bbd_test' >/dev/null
 uv run pytest tests/integration/test_auth_race.py -q
 if [[ -n "$pytest_target" ]]; then

@@ -8,13 +8,13 @@ from httpx import AsyncClient
 from tests.integration.conftest import post_after_throttle
 
 pytestmark = pytest.mark.skipif(
-    os.getenv("BBD_INTEGRATION") != "1", reason="requires disposable Compose test services"
+    os.getenv("INTEGRATION") != "1", reason="requires disposable Compose test services"
 )
 
 
 @pytest.mark.asyncio
 async def test_simultaneous_setup_requests_create_exactly_one_owner() -> None:
-    base_url = os.getenv("BBD_API_URL", "http://localhost:38000")
+    base_url = os.getenv("API_URL", "http://localhost:38000")
     origin = os.getenv("TEST_PUBLIC_ORIGIN", "http://localhost:3300")
 
     async with (
@@ -43,7 +43,7 @@ async def test_simultaneous_setup_requests_create_exactly_one_owner() -> None:
 
 @pytest.mark.asyncio
 async def test_password_change_revokes_other_session_and_old_password() -> None:
-    base_url = os.getenv("BBD_API_URL", "http://localhost:38000")
+    base_url = os.getenv("API_URL", "http://localhost:38000")
     origin = os.getenv("TEST_PUBLIC_ORIGIN", "http://localhost:3300")
     old, new = "test-owner-password-42", "rotated-owner-password-43"
 
@@ -87,7 +87,7 @@ async def test_password_change_revokes_other_session_and_old_password() -> None:
 
 @pytest.mark.asyncio
 async def test_password_change_concurrent_with_login_leaves_consistent_state() -> None:
-    base_url = os.getenv("BBD_API_URL", "http://localhost:38000")
+    base_url = os.getenv("API_URL", "http://localhost:38000")
     origin = os.getenv("TEST_PUBLIC_ORIGIN", "http://localhost:3300")
     old, new = "test-owner-password-42", "raced-owner-password-44"
 

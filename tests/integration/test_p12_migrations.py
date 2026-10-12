@@ -14,7 +14,7 @@ from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, create_async_engine
 
 pytestmark = pytest.mark.skipif(
-    os.getenv("BBD_INTEGRATION") != "1", reason="requires disposable Compose test services"
+    os.getenv("INTEGRATION") != "1", reason="requires disposable Compose test services"
 )
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]

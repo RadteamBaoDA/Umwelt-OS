@@ -32,7 +32,7 @@ jobs:
       - run: uv sync --frozen
       - run: uv run ruff check core apps modules tests infrastructure/postgres/migrations
       - run: uv run mypy core apps modules
-      # Non-docker unit tests: integration tests are gated by BBD_INTEGRATION (unset here).
+      # Non-docker unit tests: integration tests are gated by INTEGRATION (unset here).
       - run: uv run pytest -q
 
   frontend:

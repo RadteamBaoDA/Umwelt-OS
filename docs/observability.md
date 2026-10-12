@@ -15,16 +15,16 @@ No-change maintenance and polling cycles are silent. Maintenance writes a durabl
 
 ## Optional remote Langfuse profile
 
-Langfuse export is off by default and is not part of the base Compose stack. The base `api` and `worker` services explicitly set `BBD_LANGFUSE_ENABLED=false`, which overrides any opt-in value retained in `.env`; adding the optional overlay restores the owner-selected value. It sends only OpenTelemetry generation spans for model calls: fixed service/capability names, model identity when safe, outcome, nullable input/output token counts, and UUID request/run correlation IDs. Prompt, message, document, input, output, completion, source, user, and exception content are not exported. There is no content-capture option. The API and worker use a bounded process-local queue; when it is full, the total send-and-cleanup deadline expires, or Langfuse rejects a request, that telemetry is dropped and the knowledge write or agent result continues. The sender has a cooperative two-second overall deadline plus HTTPX per-I/O timeouts and checks only the streamed response status without buffering its body. Export health is not included in application readiness; verify receipt in Langfuse itself.
+Langfuse export is off by default and is not part of the base Compose stack. The base `api` and `worker` services explicitly set `LANGFUSE_ENABLED=false`, which overrides any opt-in value retained in `.env`; adding the optional overlay restores the owner-selected value. It sends only OpenTelemetry generation spans for model calls: fixed service/capability names, model identity when safe, outcome, nullable input/output token counts, and UUID request/run correlation IDs. Prompt, message, document, input, output, completion, source, user, and exception content are not exported. There is no content-capture option. The API and worker use a bounded process-local queue; when it is full, the total send-and-cleanup deadline expires, or Langfuse rejects a request, that telemetry is dropped and the knowledge write or agent result continues. The sender has a cooperative two-second overall deadline plus HTTPX per-I/O timeouts and checks only the streamed response status without buffering its body. Export health is not included in application readiness; verify receipt in Langfuse itself.
 
 To opt in, place the endpoint and Langfuse project keys in the protected server `.env`, then explicitly enable both flags:
 
 ```dotenv
-BBD_LANGFUSE_ENABLED=true
-BBD_TELEMETRY_EGRESS_APPROVED=true
-BBD_LANGFUSE_BASE_URL=https://cloud.langfuse.com
-BBD_LANGFUSE_PUBLIC_KEY=pk-lf-...
-BBD_LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_ENABLED=true
+TELEMETRY_EGRESS_APPROVED=true
+LANGFUSE_BASE_URL=https://cloud.langfuse.com
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
 ```
 
 Use the correct regional Langfuse host or the HTTPS origin of the owner-selected self-hosted service. Credentials are passed only to API and worker containers and are never sent to the browser. The exporter requires an HTTPS origin without userinfo, path, query, or fragment, does not follow redirects, and does not use environment proxy variables. The owner must explicitly approve the destination and protect `.env`; do not put keys in Compose files, command arguments, screenshots, or logs.

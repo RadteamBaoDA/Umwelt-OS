@@ -32,7 +32,7 @@ class Settings(BaseSettings):
 
     # Mode: "development"/"dev"/"test" relax production checks; "production" enforces them; "auto" (default) picks
     # development when PUBLIC_ORIGIN is a local/LAN host and production otherwise. Unknown values fail closed to production.
-    environment: str = Field(default="auto", validation_alias="BBD_ENVIRONMENT")
+    environment: str = Field(default="auto", validation_alias="ENVIRONMENT")
     database_url: str = Field(default="postgresql+asyncpg://bbd:bbd@postgres:5432/bbd", repr=False)
     redis_url: str = Field(default="redis://redis:6379/0", repr=False)
     graph_enabled: bool = Field(default=False, validation_alias="GRAPH_ENABLED")
@@ -88,7 +88,7 @@ class Settings(BaseSettings):
     session_idle_hours: int = Field(default=8, gt=0, le=720, validation_alias="SESSION_IDLE_HOURS")
     # --- end auth hardening ---
     # Enable only after W4 scope review and V1 security validation; legacy/operator access stays bootstrap-only.
-    multi_workspace_enabled: bool = Field(default=False, validation_alias="BBD_MULTI_WORKSPACE_ENABLED")
+    multi_workspace_enabled: bool = Field(default=False, validation_alias="MULTI_WORKSPACE_ENABLED")
     google_client_id: str = ""
     google_client_secret: SecretStr = SecretStr("")
     github_app_client_id: str = ""
@@ -261,7 +261,7 @@ class Settings(BaseSettings):
 
     @property
     def mode(self) -> str:
-        """Resolve BBD_ENVIRONMENT to "development", "test" or "production".
+        """Resolve ENVIRONMENT to "development", "test" or "production".
 
         "auto" (default) is development for a local/LAN PUBLIC_ORIGIN and production for any public domain; an
         explicit value always wins, and unrecognised values fail closed to production.
@@ -282,7 +282,7 @@ class Settings(BaseSettings):
 
     @property
     def secrets_relaxed(self) -> bool:
-        """Return True only when BBD_ENVIRONMENT is explicitly dev/development/test.
+        """Return True only when ENVIRONMENT is explicitly dev/development/test.
 
         "auto" never relaxes the placeholder-secret and default-database checks: a mis-set local-looking PUBLIC_ORIGIN
         on a real server must not silently accept template credentials. "auto" relaxes transport rules only.

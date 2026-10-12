@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.fake_model import fake_text
 
 pytestmark = pytest.mark.skipif(
-    os.getenv("BBD_INTEGRATION") != "1", reason="requires disposable Compose test services"
+    os.getenv("INTEGRATION") != "1", reason="requires disposable Compose test services"
 )
 requires_docker = pytest.mark.skipif(shutil.which("docker") is None, reason="requires the docker CLI")
 
@@ -47,7 +47,7 @@ def _start_after_exit(container: str) -> None:
 
 def _service_container(service: str) -> str:
     """Resolve a service container inside the same disposable project that publishes the API port."""
-    port = urlsplit(os.getenv("BBD_API_URL", "http://localhost:38000")).port
+    port = urlsplit(os.getenv("API_URL", "http://localhost:38000")).port
     api_id = _docker("ps", "--filter", f"publish={port}", "-q").split()
     assert len(api_id) == 1, f"expected exactly one container publishing {port}"
     project = _docker("inspect", "-f", '{{index .Config.Labels "com.docker.compose.project"}}', api_id[0])

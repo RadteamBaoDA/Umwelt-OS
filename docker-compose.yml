@@ -32,7 +32,7 @@ services:
     env_file: .env
     environment:
       # env_file can retain owner opt-in values; base deployment must force remote export off.
-      BBD_LANGFUSE_ENABLED: "false"
+      LANGFUSE_ENABLED: "false"
     init: true
     volumes:
       - app-data:/data
@@ -67,7 +67,7 @@ services:
     env_file: .env
     environment:
       # Keep API and worker disabled unless the explicit observability overlay is included.
-      BBD_LANGFUSE_ENABLED: "false"
+      LANGFUSE_ENABLED: "false"
     healthcheck:
       test: ["CMD", "arq", "--check", "apps.worker.main.WorkerSettings"]
       interval: 30s

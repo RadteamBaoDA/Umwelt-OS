@@ -40,7 +40,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import fake_model
 
 pytestmark = pytest.mark.skipif(
-    os.getenv("BBD_INTEGRATION") != "1", reason="requires disposable Compose test services"
+    os.getenv("INTEGRATION") != "1", reason="requires disposable Compose test services"
 )
 
 ENDPOINT = "https://search.test"

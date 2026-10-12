@@ -13,10 +13,10 @@ from tests.integration.test_p14_chat_worker import _docker, _service_container
 
 requires_docker = pytest.mark.skipif(shutil.which("docker") is None, reason="requires the docker CLI")
 pytestmark = pytest.mark.skipif(
-    os.getenv("BBD_INTEGRATION") != "1", reason="requires disposable Compose test services"
+    os.getenv("INTEGRATION") != "1", reason="requires disposable Compose test services"
 )
 
-BASE_URL = os.getenv("BBD_API_URL", "http://localhost:38000")
+BASE_URL = os.getenv("API_URL", "http://localhost:38000")
 ORIGIN = os.getenv("TEST_PUBLIC_ORIGIN", "http://localhost:3300")
 
 

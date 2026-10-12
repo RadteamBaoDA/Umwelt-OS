@@ -6,7 +6,7 @@ from httpx import AsyncClient
 from core.auth.dependencies import require_owner, require_owner_write
 
 pytestmark = pytest.mark.skipif(
-    os.getenv("BBD_INTEGRATION") != "1", reason="requires disposable Compose test services"
+    os.getenv("INTEGRATION") != "1", reason="requires disposable Compose test services"
 )
 
 

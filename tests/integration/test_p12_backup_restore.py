@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 from modules.backup.host import pg_dump_command, pg_restore_command
 
 pytestmark = pytest.mark.skipif(
-    os.getenv("BBD_INTEGRATION") != "1", reason="requires disposable Compose test services"
+    os.getenv("INTEGRATION") != "1", reason="requires disposable Compose test services"
 )
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]

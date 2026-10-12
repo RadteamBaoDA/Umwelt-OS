@@ -17,7 +17,7 @@ OWNER_PASSWORD = "test-owner-password-42"
 SETUP_TOKEN = "bbd-os-disposable-test-token"
 
 pytestmark = pytest.mark.skipif(
-    os.getenv("BBD_INTEGRATION") != "1", reason="requires disposable Compose test services"
+    os.getenv("INTEGRATION") != "1", reason="requires disposable Compose test services"
 )
 
 
@@ -48,7 +48,7 @@ async def test_fresh_setup_requires_token_creates_one_owner_and_rejects_a_second
     fresh_instance: None, committed_engine: AsyncEngine,
     post_throttled: Callable[..., Awaitable[Response]],
 ) -> None:
-    base_url = os.getenv("BBD_API_URL", "http://localhost:38000")
+    base_url = os.getenv("API_URL", "http://localhost:38000")
     async with AsyncClient(base_url=base_url, timeout=30) as client:
         assert (await client.get("/api/v1/auth/setup-status")).json() == {"setupRequired": True}
 
@@ -112,7 +112,7 @@ async def test_onboarding_progress_is_ordered_revisioned_and_resumable(
     revision = choice.json()["configuration_revision"]
 
     # Resume: a separate login (new session) reads the persisted server-side progress.
-    base_url = os.getenv("BBD_API_URL", "http://localhost:38000")
+    base_url = os.getenv("API_URL", "http://localhost:38000")
     origin = os.getenv("TEST_PUBLIC_ORIGIN", "http://localhost:3300")
     async with AsyncClient(base_url=base_url, timeout=30) as resumed:
         csrf = (await resumed.get("/api/v1/auth/csrf")).json()["csrfToken"]

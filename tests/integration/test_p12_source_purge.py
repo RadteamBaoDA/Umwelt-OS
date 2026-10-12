@@ -24,7 +24,7 @@ from modules.ingestion.dispatcher import WORKER_BY_EVENT
 from modules.memory.models import Memory, MemoryCandidate
 
 pytestmark = pytest.mark.skipif(
-    os.getenv("BBD_INTEGRATION") != "1", reason="requires disposable Compose test services"
+    os.getenv("INTEGRATION") != "1", reason="requires disposable Compose test services"
 )
 
 PURGE_TIMEOUT_SECONDS = 360

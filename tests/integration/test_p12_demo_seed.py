@@ -16,7 +16,7 @@ from modules.goals.seed import GOAL_SEEDS, _ws_id
 from modules.knowledge.documents.seed import SOURCE_ID
 
 pytestmark = pytest.mark.skipif(
-    os.getenv("BBD_INTEGRATION") != "1", reason="requires disposable Compose test services"
+    os.getenv("INTEGRATION") != "1", reason="requires disposable Compose test services"
 )
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]

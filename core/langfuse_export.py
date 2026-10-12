@@ -26,14 +26,14 @@ _worker: asyncio.Task[None] | None = None
 
 def _configuration() -> tuple[str, str, str] | None:
     """Return a validated HTTPS endpoint and backend credentials only after explicit egress approval."""
-    if os.getenv("BBD_LANGFUSE_ENABLED", "false").casefold() != "true":
+    if os.getenv("LANGFUSE_ENABLED", "false").casefold() != "true":
         return None
-    if os.getenv("BBD_TELEMETRY_EGRESS_APPROVED", "false").casefold() != "true":
+    if os.getenv("TELEMETRY_EGRESS_APPROVED", "false").casefold() != "true":
         return None
 
-    base_url = os.getenv("BBD_LANGFUSE_BASE_URL", "").strip()
-    public_key = os.getenv("BBD_LANGFUSE_PUBLIC_KEY", "").strip()
-    secret_key = os.getenv("BBD_LANGFUSE_SECRET_KEY", "").strip()
+    base_url = os.getenv("LANGFUSE_BASE_URL", "").strip()
+    public_key = os.getenv("LANGFUSE_PUBLIC_KEY", "").strip()
+    secret_key = os.getenv("LANGFUSE_SECRET_KEY", "").strip()
     try:
         parsed = urlsplit(base_url)
         if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password \

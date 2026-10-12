@@ -168,8 +168,8 @@ BACKUP_AGE_IDENTITY_PATH=
       $previousApiTestPort = $env:API_TEST_PORT
       $previousTestPostgresPort = $env:TEST_POSTGRES_PORT
       $previousTestDatabaseUrl = $env:TEST_DATABASE_URL
-      $previousIntegration = $env:BBD_INTEGRATION
-      $previousApiUrl = $env:BBD_API_URL
+      $previousIntegration = $env:INTEGRATION
+      $previousApiUrl = $env:API_URL
       $previousTestOrigin = $env:TEST_PUBLIC_ORIGIN
       $previousE2eToken = $env:E2E_SETUP_TOKEN
       $previousPlaywrightUrl = $env:PLAYWRIGHT_BASE_URL
@@ -191,8 +191,8 @@ BACKUP_AGE_IDENTITY_PATH=
         # `up` waits for migration completion; this second run proves the revision is idempotent.
         Invoke-Checked 'docker' ($compose + @('run', '--rm', 'migrate'))
         Invoke-Checked 'docker' ($compose + @('run', '--rm', '--no-deps', 'api', 'python', '-c', 'import apps.api.main, core.auth.dependencies, modules'))
-        $env:BBD_INTEGRATION = '1'
-        $env:BBD_API_URL = "http://localhost:$apiPort"
+        $env:INTEGRATION = '1'
+        $env:API_URL = "http://localhost:$apiPort"
         $identity = & docker @($compose + @('exec', '-T', 'postgres', 'psql', '-U', 'bbd_test', '-d', 'bbd_test', '-At', '-c', "SELECT current_database() || '|' || current_user"))
         if ($LASTEXITCODE -ne 0) { throw 'Could not verify disposable PostgreSQL identity' }
         if (($identity -join '').Trim() -ne 'bbd_test|bbd_test') { throw 'Refusing integration tests against a non-test database' }
@@ -224,10 +224,10 @@ BACKUP_AGE_IDENTITY_PATH=
         else { $env:TEST_POSTGRES_PORT = $previousTestPostgresPort }
         if ($null -eq $previousTestDatabaseUrl) { Remove-Item Env:TEST_DATABASE_URL -ErrorAction SilentlyContinue }
         else { $env:TEST_DATABASE_URL = $previousTestDatabaseUrl }
-        if ($null -eq $previousIntegration) { Remove-Item Env:BBD_INTEGRATION -ErrorAction SilentlyContinue }
-        else { $env:BBD_INTEGRATION = $previousIntegration }
-        if ($null -eq $previousApiUrl) { Remove-Item Env:BBD_API_URL -ErrorAction SilentlyContinue }
-        else { $env:BBD_API_URL = $previousApiUrl }
+        if ($null -eq $previousIntegration) { Remove-Item Env:INTEGRATION -ErrorAction SilentlyContinue }
+        else { $env:INTEGRATION = $previousIntegration }
+        if ($null -eq $previousApiUrl) { Remove-Item Env:API_URL -ErrorAction SilentlyContinue }
+        else { $env:API_URL = $previousApiUrl }
         if ($null -eq $previousTestOrigin) { Remove-Item Env:TEST_PUBLIC_ORIGIN -ErrorAction SilentlyContinue }
         else { $env:TEST_PUBLIC_ORIGIN = $previousTestOrigin }
         if ($null -eq $previousE2eToken) { Remove-Item Env:E2E_SETUP_TOKEN -ErrorAction SilentlyContinue }

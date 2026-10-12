@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.test_p14_chat_worker import FAKE_BASE_URL, _docker, _service_container
 
 pytestmark = pytest.mark.skipif(
-    os.getenv("BBD_INTEGRATION") != "1", reason="requires disposable Compose test services"
+    os.getenv("INTEGRATION") != "1", reason="requires disposable Compose test services"
 )
 requires_docker = pytest.mark.skipif(shutil.which("docker") is None, reason="requires the docker CLI")
 
