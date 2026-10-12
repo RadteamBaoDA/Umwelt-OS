@@ -7,7 +7,7 @@ import { ChatSession } from '@/modules/chat/chat-session';
 import { ChatHistory, type ChatHistoryActions } from '@/modules/chat/chat-history';
 import { Button } from '@/components/ui/button';
 import { useChatController } from '@/core/app-shell/chat-controller';
-import { ChatSideRail } from '@/modules/chat/chat-side-rail';
+import { ChatSideRail, ChatSourcesSheet } from '@/modules/chat/chat-side-rail';
 import { chatKeys, getConversation, type Citation } from '@/modules/chat/api';
 import { useQuery } from '@tanstack/react-query';
 
@@ -52,7 +52,7 @@ function ChatPageContent() {
   }, [detail?.messages]);
 
   return (
-    <div className="flex min-h-[760px] flex-1 w-full rounded-[18px] border border-border bg-surface overflow-hidden">
+    <div className="flex min-h-0 flex-1 shrink! basis-0 w-full min-w-0 rounded-[18px] border border-border bg-surface overflow-hidden">
       {/* Sidebar history on desktop; toggleable on mobile */}
       <div
         className={`${
@@ -75,17 +75,18 @@ function ChatPageContent() {
         } flex-1 min-w-0 flex-col h-full`}
       >
         {/* Mobile view switch header */}
-        <div className="md:hidden flex items-center justify-between p-2 border-b border-border bg-background">
+        <div className="lg:hidden flex items-center justify-between gap-2 p-2 border-b border-border bg-background">
           <button
             type="button"
             onClick={() => setMobileView('history')}
-            className="min-h-11 rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-semibold text-foreground"
+            className="md:hidden min-h-11 rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-semibold text-foreground"
           >
             ← {t('history')}
           </button>
-          <span className="text-xs font-semibold text-muted-foreground truncate max-w-[200px]">
+          <span className="min-w-0 flex-1 text-xs font-semibold text-muted-foreground truncate">
             {chatCtrl.activeConversationId ? t('activeConversation') : t('newChat')}
           </span>
+          <ChatSourcesSheet citations={citations} context={chatCtrl.context} />
         </div>
 
         <div className="flex-1 min-h-0 flex flex-col">

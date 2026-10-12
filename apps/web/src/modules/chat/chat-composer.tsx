@@ -159,7 +159,7 @@ export function ChatComposer({
 
   if (!isFull) {
     return (
-      <div className="relative flex items-end gap-2 border-t border-border bg-surface p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+      <div className="relative flex items-end gap-2 border-t border-border bg-surface p-4 shrink-0 pb-[max(1rem,env(safe-area-inset-bottom))]">
         <div className="min-w-0 flex-1">{textarea}</div>
         {isStreaming ? stopButton : sendButton}
       </div>
@@ -167,7 +167,7 @@ export function ChatComposer({
   }
 
   return (
-    <div className="relative flex flex-col gap-2.5 border-t border-border bg-surface px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+    <div className="relative flex flex-col gap-2.5 border-t border-border bg-surface px-3 py-3 sm:px-5 sm:py-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] shrink-0">
       {contextBar}
       {textarea}
       {attachments}
