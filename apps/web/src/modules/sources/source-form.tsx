@@ -23,8 +23,8 @@ export function SourceForm({ onSaved }: { onSaved: () => void }) {
   const create = useMutation({ mutationFn: (values: Values) => createManualSource(values.name, csrfToken), onSuccess: () => { queryClient.invalidateQueries({ queryKey: sourceKeys.all }); onSaved(); } });
   return <form className="form" onSubmit={form.handleSubmit((values) => create.mutate(values))}>
     <div className="field"><Label htmlFor="source-name">{t('sourceName')}</Label><Input id="source-name" autoFocus maxLength={200} {...form.register('name')} />{form.formState.errors.name && <span className="error">{t('sourceNameRequired')}</span>}</div>
-    <p className="muted">{t('manualDescription')}</p>
+    <p className="text-muted-foreground">{t('manualDescription')}</p>
     {create.error && <p className="error" role="alert">{t('actionFailed')}</p>}
-    <div className="form-actions"><Button type="submit" disabled={create.isPending}>{t('saveSource')}</Button><Button type="button" className="secondary" onClick={onSaved}>{t('cancel')}</Button></div>
+    <div className="form-actions"><Button type="submit" disabled={create.isPending}>{t('saveSource')}</Button><Button type="button" variant="outline" onClick={onSaved}>{t('cancel')}</Button></div>
   </form>;
 }

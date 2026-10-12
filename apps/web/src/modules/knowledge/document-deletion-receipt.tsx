@@ -115,7 +115,7 @@ export function DocumentDeletionReceiptPanel({ operationId }: { operationId: str
       </dl>
     </>}
     <div className="mt-4 flex flex-wrap gap-3">
-      <Button type="button" className="secondary" disabled={operation.isFetching} onClick={() => void operation.refetch()}>
+      <Button type="button" variant="outline" disabled={operation.isFetching} onClick={() => void operation.refetch()}>
         {operation.isFetching ? t('documentDeletionRefreshing') : t('documentDeletionRefresh')}
       </Button>
       <Link className="inline-flex min-h-11 items-center rounded-md px-3 text-sm underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" href="/knowledge/documents">{t('documentDeletionBackToList')}</Link>

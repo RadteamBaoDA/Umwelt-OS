@@ -31,7 +31,7 @@ export function AgentRunDetail({ run, onCancel, cancelling = false }: AgentRunDe
           <p className="font-medium text-foreground">{t('agentRunStatus')}: {t(statusKey)}</p>
           <p className="text-xs text-muted-foreground">{t('agentRunCounters', { steps: run.steps, tools: run.tool_calls, seconds: run.active_seconds })}</p>
         </div>
-        {active && onCancel && <Button type="button" className="secondary" disabled={cancelling} onClick={onCancel}>{t('agentCancelRun')}</Button>}
+        {active && onCancel && <Button type="button" variant="outline" disabled={cancelling} onClick={onCancel}>{t('agentCancelRun')}</Button>}
       </div>
       {toolActivities.length > 0 && (
         <ul className="space-y-1 text-xs text-muted-foreground" aria-label={t('agentToolActivity')}>

@@ -42,7 +42,7 @@ export function SyncHistory({ source, intervalMinutes }: { source: Source; inter
       void queryClient.invalidateQueries({ queryKey: sourceKeys.detail(source.id) });
     },
   });
-  if (history.isPending) return <p className="muted">{t('loading')}</p>;
+  if (history.isPending) return <p className="text-muted-foreground">{t('loading')}</p>;
   if (history.isError) return <p className="error" role="alert">{t('actionFailed')}</p>;
   const pages = history.data.pages;
   const current = pages[0]?.current_run ?? null;
@@ -58,25 +58,25 @@ export function SyncHistory({ source, intervalMinutes }: { source: Source; inter
         <span>{t(statusKey(stage.status))}{stage.error_code ? ` · ${stage.error_code}` : ''}</span>
         {stage.result_count !== null && <small>{t(stage.stage_key === 'normalize' || stage.stage_key === 'parse_file' ? 'chunkCount' : 'resultCount')}: {stage.result_count}</small>}
         {stage.stage_key === 'normalize' && <small>{t('normalizedCount')}: {stage.normalized_count} · {t('selectedCurrentCount')}: {stage.selected_current_count} · {t('duplicateCount')}: {stage.duplicate_count} · {t('skippedCount')}: {stage.skipped_count} · {t('failedCount')}: {stage.failed_count} · {t('pendingCount')}: {stage.pending_count}</small>}
-        {stage.status === 'failed' && run.status === 'failed' && source.status === 'active' && !hasActiveStage && <Button className="secondary" disabled={retry.isPending} onClick={() => retry.mutate({ runId: run.run_id, stageKey: stage.stage_key })}>{t('retryRun')}</Button>}
+        {stage.status === 'failed' && run.status === 'failed' && source.status === 'active' && !hasActiveStage && <Button variant="outline" disabled={retry.isPending} onClick={() => retry.mutate({ runId: run.run_id, stageKey: stage.stage_key })}>{t('retryRun')}</Button>}
       </p>)}
     </article>;
   };
   return <section className="source-history" aria-label={t('recentRuns')}>
     <h3>{t('recentRuns')}</h3>
-    <p className="muted">{t('lastSuccess')}: {source.last_success_at ? formatDate(source.last_success_at, display.locale, display.timezone) : t('never')}</p>
-    {source.collected_at && <p className="muted">{t('collectedAt')}: {formatDate(source.collected_at, display.locale, display.timezone)}</p>}
-    {source.indexed_at && <p className="muted">{t('indexedAt')}: {formatDate(source.indexed_at, display.locale, display.timezone)}</p>}
-    {source.next_due_at && <p className="muted">{t('nextDueAt')}: {formatDate(source.next_due_at, display.locale, display.timezone)}</p>}
-    {source.retry_at && <p className="muted">{t('retryAt')}: {formatDate(source.retry_at, display.locale, display.timezone)}</p>}
-    {isStale(source.last_success_at, intervalMinutes) && <p className="muted" role="status">{t('stale')}</p>}
+    <p className="text-muted-foreground">{t('lastSuccess')}: {source.last_success_at ? formatDate(source.last_success_at, display.locale, display.timezone) : t('never')}</p>
+    {source.collected_at && <p className="text-muted-foreground">{t('collectedAt')}: {formatDate(source.collected_at, display.locale, display.timezone)}</p>}
+    {source.indexed_at && <p className="text-muted-foreground">{t('indexedAt')}: {formatDate(source.indexed_at, display.locale, display.timezone)}</p>}
+    {source.next_due_at && <p className="text-muted-foreground">{t('nextDueAt')}: {formatDate(source.next_due_at, display.locale, display.timezone)}</p>}
+    {source.retry_at && <p className="text-muted-foreground">{t('retryAt')}: {formatDate(source.retry_at, display.locale, display.timezone)}</p>}
+    {isStale(source.last_success_at, intervalMinutes) && <p className="text-muted-foreground" role="status">{t('stale')}</p>}
     {source.collection_error_code && <p className="error" role="alert">{t('collectionError')}: {source.collection_error_code}</p>}
     {current && renderRun(current, true)}
     {runs.map((run) => renderRun(run, false))}
-    {!current && runs.length === 0 && <p className="muted">{t('noRuns')}</p>}
-    {['youtube', 'arxiv', 'huggingface', 'github_releases', 'telegram'].includes(source.provider ?? '') && <p className="muted">{t('providerHistoryCaveat')}</p>}
-    <p className="muted">{t('embeddedStatus')}</p>
-    {history.hasNextPage && <Button className="secondary" disabled={history.isFetchingNextPage} onClick={() => history.fetchNextPage()}>{t('loadMore')}</Button>}
+    {!current && runs.length === 0 && <p className="text-muted-foreground">{t('noRuns')}</p>}
+    {['youtube', 'arxiv', 'huggingface', 'github_releases', 'telegram'].includes(source.provider ?? '') && <p className="text-muted-foreground">{t('providerHistoryCaveat')}</p>}
+    <p className="text-muted-foreground">{t('embeddedStatus')}</p>
+    {history.hasNextPage && <Button variant="outline" disabled={history.isFetchingNextPage} onClick={() => history.fetchNextPage()}>{t('loadMore')}</Button>}
     {(retry.error || history.isFetchNextPageError) && <p className="error" role="alert">{t('actionFailed')}</p>}
   </section>;
 }

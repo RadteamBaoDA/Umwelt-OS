@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
+import { formatDateTime } from '@/core/i18n';
+import { useDisplayPreferences } from '@/core/query-provider';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -82,6 +84,7 @@ function initialDraft(rule?: Automation): Draft {
 /** Schema-backed Trigger / Conditions / Actions form with scope estimate, preview and validation errors. */
 export function RuleEditor({ rule, csrfToken, onDone }: { rule?: Automation; csrfToken: string; onDone: () => void }) {
   const t = useTranslations('automations');
+  const display = useDisplayPreferences();
   const client = useQueryClient();
   const caps = useQuery({ queryKey: ['automation-capabilities'], queryFn: getCapabilities });
   const [draft, setDraft] = useState<Draft>(() => initialDraft(rule));
@@ -197,7 +200,7 @@ export function RuleEditor({ rule, csrfToken, onDone }: { rule?: Automation; csr
         {webhookCredential && <p role="status" className="break-all text-xs text-muted-foreground">
           {t('webhookCredentialOnce')} <code>{webhookCredential.token}</code><br />
           {t('webhookEndpoint')} <code>{webhookCredential.endpoint}</code><br />
-          {t('webhookCredentialExpires')} {new Date(webhookCredential.expires_at).toLocaleString()}
+          {t('webhookCredentialExpires')} {formatDateTime(webhookCredential.expires_at, display.locale, display.timezone)}
         </p>}
       </div>}
     </fieldset>

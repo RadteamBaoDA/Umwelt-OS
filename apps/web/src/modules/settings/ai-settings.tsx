@@ -143,8 +143,8 @@ export function AISettingsWorkspace() {
   });
   const draftProbe = useMutation({ mutationFn: ({ alias, mapping, capability, provider }: { alias: string; mapping: Mapping; capability: string; provider: ProviderRead | undefined }) => apiRequest<Capability>(`/api/v1/settings/models/${alias}/draft-test`, { method: 'POST', headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' }, body: JSON.stringify({ provider_id: provider && savedIds.includes(provider.id) ? provider.id : undefined, base_url: provider?.base_url, kind: provider?.kind, api_key: provider ? secrets[provider.id]?.key ?? '' : '', model: mapping.model, version: mapping.version, capability }) }) });
   const probe = useMutation({ mutationFn: ({ alias, capability }: { alias: string; capability: string }) => apiRequest<Capability>(`/api/v1/settings/models/${alias}/test`, { method: 'POST', headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' }, body: JSON.stringify({ capability }) }), onSuccess: () => client.invalidateQueries({ queryKey: ['ai-settings'] }) });
-  if (query.isPending) return <section className="content-panel skeleton" aria-label={t('loading')} />;
-  if (query.isError || !saved) return <section className="content-panel"><h1>{t('unavailable')}</h1><p className="error">{describeError(query.error, t, 'loadFailed')}</p><Button className="secondary" onClick={() => query.refetch()}>{t('retry')}</Button></section>;
+  if (query.isPending) return <section className="rounded-xl border bg-card p-6 skeleton" aria-label={t('loading')} />;
+  if (query.isError || !saved) return <section className="rounded-xl border bg-card p-6"><h1>{t('unavailable')}</h1><p className="error">{describeError(query.error, t, 'loadFailed')}</p><Button variant="outline" onClick={() => query.refetch()}>{t('retry')}</Button></section>;
   /** Applies a partial update to the AI settings draft. */
   const set = (patch: Partial<AISettings>) => setDraft({ ...saved, ...patch });
   /** Merges a partial privacy update into the current AI settings draft. */
@@ -180,7 +180,7 @@ export function AISettingsWorkspace() {
       <label className="field"><span className="label">{t('destination')}</span><Select value={value.destination} onValueChange={(destination) => set({ aliases: { ...saved.aliases, [alias]: { ...value, destination: destination as Mapping['destination'] } } })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="unknown">{t('unknownDenied')}</SelectItem><SelectItem value="remote">{t('remote')}</SelectItem></SelectContent></Select></label>
       <label className="field"><span className="label">{t('probeCapability', { alias })}</span><Select value={probeTypes[alias] ?? 'chat'} onValueChange={(next) => setProbeTypes({ ...probeTypes, [alias]: next })}><SelectTrigger aria-label={t('probeCapability', { alias })}><SelectValue /></SelectTrigger><SelectContent>{capabilityTypes.map((kind) => <SelectItem key={kind} value={kind}>{capabilityLabel(kind)}</SelectItem>)}</SelectContent></Select></label>
     </FieldGrid>
-    <div className="mt-3 flex flex-wrap gap-2"><Button type="button" className="secondary" disabled={!value.model || (value.destination !== 'remote' && !provider?.local) || probe.isPending || JSON.stringify(value) !== JSON.stringify(query.data?.aliases[alias])} onClick={() => probe.mutate({ alias, capability: probeTypes[alias] ?? 'chat' })}>{t('probeSaved')}</Button><Button type="button" className="secondary" disabled={!provider?.base_url || !value.model || (value.destination !== 'remote' && !provider.local) || draftProbe.isPending} onClick={() => draftProbe.mutate({ alias, mapping: value, capability: probeTypes[alias] ?? 'chat', provider })}>{t('probeDraft')}</Button></div>
+    <div className="mt-3 flex flex-wrap gap-2"><Button type="button" variant="outline" disabled={!value.model || (value.destination !== 'remote' && !provider?.local) || probe.isPending || JSON.stringify(value) !== JSON.stringify(query.data?.aliases[alias])} onClick={() => probe.mutate({ alias, capability: probeTypes[alias] ?? 'chat' })}>{t('probeSaved')}</Button><Button type="button" variant="outline" disabled={!provider?.base_url || !value.model || (value.destination !== 'remote' && !provider.local) || draftProbe.isPending} onClick={() => draftProbe.mutate({ alias, mapping: value, capability: probeTypes[alias] ?? 'chat', provider })}>{t('probeDraft')}</Button></div>
   </div>;
   };
   const advancedClass = 'rounded-lg border border-border bg-card';
@@ -189,7 +189,7 @@ export function AISettingsWorkspace() {
     <SettingsPageHeader eyebrow={t('eyebrow')} title={t('title')} description={t('description')} status={<p className="m-0 text-sm text-muted-foreground" role="status">{save.isPending ? t('saving') : dirty ? t('unsaved') : t('saved')}</p>} />
     <form className="flex flex-col gap-5" onSubmit={(event) => { event.preventDefault(); save.mutate(saved); }}>
       <SettingsSection title={t('providersSection')}>
-        <p className="muted m-0 text-xs">{t('providersHelp')}</p>
+        <p className="text-muted-foreground m-0 text-xs">{t('providersHelp')}</p>
         <ProviderEditor providers={saved.providers} savedIds={savedIds} secrets={secrets} disabled={save.isPending} discoveringId={discoveringId} discoverError={discoverError} t={t as never}
           onChange={(providers) => set({ providers })} onSecret={(id, secret) => setSecrets({ ...secrets, [id]: secret })} onDiscover={(provider) => discover.mutate(provider)} />
       </SettingsSection>
@@ -198,7 +198,7 @@ export function AISettingsWorkspace() {
           <label className="field"><span className="label">{t('chatModel')}</span><Select disabled={save.isPending} value={saved.chat_alias} onValueChange={(value) => set({ chat_alias: value as AISettings['chat_alias'] })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{chatAliases.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}</SelectContent></Select></label>
           <label className="field"><span className="label">{t('briefModel')}</span><Select disabled={save.isPending} value={saved.brief_alias} onValueChange={(value) => set({ brief_alias: value as AISettings['brief_alias'] })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{chatAliases.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}</SelectContent></Select></label>
         </FieldGrid>
-        <p className="muted m-0 text-xs">{t('modelNotListed')}</p>
+        <p className="text-muted-foreground m-0 text-xs">{t('modelNotListed')}</p>
         <Table aria-label={t('capabilityTable')}>
           <TableHeader><TableRow><TableHead>{t('aliasColumn')}</TableHead>{capabilityTypes.map((kind) => <TableHead key={kind}>{capabilityLabel(kind)}</TableHead>)}</TableRow></TableHeader>
           <TableBody>{aliases.map((alias) => <TableRow key={alias}><TableCell className="font-semibold">{alias}</TableCell>{capabilityTypes.map((kind) => <TableCell key={kind}><CapabilityChip status={capabilityStatus(alias, kind)} label="" t={t} /></TableCell>)}</TableRow>)}</TableBody>
@@ -210,27 +210,27 @@ export function AISettingsWorkspace() {
       <details className={advancedClass}><summary className={summaryClass}>{t('embeddingsTitle')}</summary>
         <div className="flex flex-col gap-3 px-5 pb-5">{embeddingsAvailable
           ? <ul className="m-0 flex flex-wrap gap-2 p-0"><li className="list-none"><CapabilityChip status={capabilityStatus('embedding', 'embeddings')} label={capabilityLabel('embeddings')} t={t} /></li></ul>
-          : <><p className="label m-0">{t('embeddingsUnavailable')}</p><p className="muted m-0">{t('embeddingsUnavailableHelp')}</p></>}</div>
+          : <><p className="label m-0">{t('embeddingsUnavailable')}</p><p className="text-muted-foreground m-0">{t('embeddingsUnavailableHelp')}</p></>}</div>
       </details>
       <details className={advancedClass}><summary className={summaryClass}>{t('budgetsTitle')}</summary>
         <div className="flex flex-col gap-3 px-5 pb-5">
           <label className="field max-w-xs"><span className="label">{t('timeout')}</span><Input type="number" disabled={save.isPending} min={5} max={180} value={saved.request_timeout_seconds} onChange={(event) => set({ request_timeout_seconds: Number(event.target.value) })} /></label>
-          <p className="muted m-0">{t('budgetsUnavailable')}</p>
+          <p className="text-muted-foreground m-0">{t('budgetsUnavailable')}</p>
         </div>
       </details>
       <details className={advancedClass}><summary className={summaryClass}>{t('privacyTitle')}</summary>
         <div className="flex flex-col gap-3 px-5 pb-5">
-          <p className="muted m-0">{t('endpointGrantHelp')}</p>
-          <p className="muted m-0">{t('localProvidersNote')}</p>
+          <p className="text-muted-foreground m-0">{t('endpointGrantHelp')}</p>
+          <p className="text-muted-foreground m-0">{t('localProvidersNote')}</p>
           <CheckboxField><Checkbox id="ai-remote-reasoning" disabled={save.isPending} checked={saved.privacy.allow_remote_reasoning} onCheckedChange={(checked) => setPrivacy({ allow_remote_reasoning: checked === true })} /><label htmlFor="ai-remote-reasoning">{t('allowRemoteReasoning')}</label></CheckboxField>
           <CheckboxField><Checkbox id="ai-remote-embeddings" disabled={save.isPending} checked={saved.privacy.allow_remote_embeddings} onCheckedChange={(checked) => setPrivacy({ allow_remote_embeddings: checked === true })} /><label htmlFor="ai-remote-embeddings">{t('allowRemoteEmbeddings')}</label></CheckboxField>
-          <p className="muted m-0">{t('historyStorage')} <a href="/settings/memory">{t('memoryPrivacyLink')}</a></p>
+          <p className="text-muted-foreground m-0">{t('historyStorage')} <a href="/settings/memory">{t('memoryPrivacyLink')}</a></p>
         </div>
       </details>
       {restoredSecret && <p className="error m-0" role="status">{t('restoredDraft')}</p>}
-      {save.error && <p className="error m-0" role="alert">{describeError(save.error, t, 'saveFailed')}</p>}{probe.error && <p className="error m-0" role="alert">{describeError(probe.error, t, 'probeFailed')}</p>}{draftProbe.data && <p className="muted m-0" role="status">{t('draftProbe')} {draftProbe.data.capability} {draftProbe.data.result}; {t('draftProbeUnstored')}</p>}{draftProbe.error && <p className="error m-0" role="alert">{describeError(draftProbe.error, t, 'draftProbeFailed')}</p>}
+      {save.error && <p className="error m-0" role="alert">{describeError(save.error, t, 'saveFailed')}</p>}{probe.error && <p className="error m-0" role="alert">{describeError(probe.error, t, 'probeFailed')}</p>}{draftProbe.data && <p className="text-muted-foreground m-0" role="status">{t('draftProbe')} {draftProbe.data.capability} {draftProbe.data.result}; {t('draftProbeUnstored')}</p>}{draftProbe.error && <p className="error m-0" role="alert">{describeError(draftProbe.error, t, 'draftProbeFailed')}</p>}
       <SettingsActions>
-        <Button type="button" className="secondary" disabled={save.isPending || !dirty} onClick={cancelChanges}>{t('cancelChanges')}</Button><Button type="submit" disabled={save.isPending || !dirty}>{t('saveButton')}</Button>
+        <Button type="button" variant="outline" disabled={save.isPending || !dirty} onClick={cancelChanges}>{t('cancelChanges')}</Button><Button type="submit" disabled={save.isPending || !dirty}>{t('saveButton')}</Button>
       </SettingsActions>
     </form>
     <details className={advancedClass}><summary className={summaryClass}>{t('agentsAutomations')}</summary><div className="px-5 pb-5"><AgentSettingsWorkspace /><AutomationSettings /></div></details>

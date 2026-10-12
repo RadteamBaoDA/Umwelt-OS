@@ -47,7 +47,7 @@ export function SearchResults({ items }: { items: SearchHit[] }) {
       return <li className="record-row border border-border bg-card text-card-foreground rounded-md p-4" key={hit.chunk_id}>
         <div className="record-content">
           <Link href={revisionHref}><strong>{hit.title}</strong></Link>
-          <p className="muted">{hit.source.name} · {hit.source.type} · {date}{hit.content_type ? ` · ${hit.content_type}` : ''}</p>
+          <p className="text-muted-foreground">{hit.source.name} · {hit.source.type} · {date}{hit.content_type ? ` · ${hit.content_type}` : ''}</p>
           <p className="search-excerpt">{hit.excerpt}</p>
           <Link href={revisionHref}>{t('openCitedRevision')} {hit.version_number}</Link>
         </div>
@@ -65,7 +65,7 @@ export function TaskSearchResults({ items }: { items: TaskSearchHit[] }) {
     {items.map((item) => <li className="record-row border border-border bg-card text-card-foreground rounded-md p-4" key={item.id}>
       <strong>{item.title}</strong>
       {item.description && <p className="search-excerpt">{item.description}</p>}
-      <p className="muted">{t(taskStatusKeys[item.status])} · {t('revision')} {item.revision}
+      <p className="text-muted-foreground">{t(taskStatusKeys[item.status])} · {t('revision')} {item.revision}
         {item.due_date ? ` · ${t('taskDueDate')}: ${formatSearchDate(item.due_date, formattingLocale, timezone, true)}` : ''}
         {item.due_at ? ` · ${t('taskDueAt')}: ${formatSearchDate(item.due_at, formattingLocale, timezone)}` : ''}
       </p>
@@ -83,8 +83,8 @@ export function GoalSearchResults({ items }: { items: GoalSearchHit[] }) {
     {items.map((item) => <li className="record-row border border-border bg-card text-card-foreground rounded-md p-4" key={item.id}>
       <strong>{item.title}</strong>
       {item.description && <p className="search-excerpt">{item.description}</p>}
-      {item.desired_outcome && <p className="muted">{item.desired_outcome}</p>}
-      <p className="muted">{t(goalStatusKeys[item.status])} · {t('revision')} {item.revision} · {t('goalProgress', { progress: numberFormat.format(item.progress) })}
+      {item.desired_outcome && <p className="text-muted-foreground">{item.desired_outcome}</p>}
+      <p className="text-muted-foreground">{t(goalStatusKeys[item.status])} · {t('revision')} {item.revision} · {t('goalProgress', { progress: numberFormat.format(item.progress) })}
         {item.deadline ? ` · ${t('goalDeadline')}: ${formatSearchDate(item.deadline, formattingLocale, timezone, true)}` : ''}
       </p>
     </li>)}

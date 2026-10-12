@@ -51,7 +51,7 @@ export function AppearanceControl() {
             <SelectItem value="vi-vi">{t('vietnamese')}</SelectItem>
           </SelectContent>
         </Select>
-        <p className="muted text-xs">{t('languageHelp')}</p>
+        <p className="text-muted-foreground text-xs">{t('languageHelp')}</p>
       </div>
     </DialogContent>
   </Dialog>;

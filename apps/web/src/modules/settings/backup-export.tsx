@@ -60,11 +60,11 @@ export function BackupExportSettings() {
   return <section className="mt-8 space-y-6 border-t border-border pt-6" aria-labelledby="backup-export-title">
     <div>
       <h2 id="backup-export-title" className="text-lg font-semibold">{t('title')}</h2>
-      <p className="muted mt-1 text-sm">{t('description')}</p>
+      <p className="text-muted-foreground mt-1 text-sm">{t('description')}</p>
     </div>
     <div className="space-y-3">
       <h3 className="font-semibold">{t('portableTitle')}</h3>
-      <p className="muted text-sm">{t('portableDescription')}</p>
+      <p className="text-muted-foreground text-sm">{t('portableDescription')}</p>
       <div className="flex flex-wrap gap-3">
         {(['json', 'markdown', 'csv'] as const).map((format) => <Button
           key={format}
@@ -78,18 +78,18 @@ export function BackupExportSettings() {
     </div>
     <div className="space-y-2 border-t border-border pt-5">
       <h3 className="font-semibold">{t('backupStatus')}</h3>
-      <p className="muted text-sm">{t('backupDescription')}</p>
-      {control.isPending ? <p role="status" className="muted text-sm">{t('downloading')}</p> : control.isError ? <div>
+      <p className="text-muted-foreground text-sm">{t('backupDescription')}</p>
+      {control.isPending ? <p role="status" className="text-muted-foreground text-sm">{t('downloading')}</p> : control.isError ? <div>
         <p role="alert" className="text-sm text-destructive">{t('statusUnavailable')}</p>
         <Button className="mt-2" type="button" variant="outline" onClick={() => void control.refetch()}>{t('retry')}</Button>
       </div> : <dl className="grid gap-2 text-sm sm:grid-cols-3">
-        <div><dt className="muted">{t('phase')}</dt><dd>{t(phaseLabels[control.data.phase])}</dd></div>
-        <div><dt className="muted">{t('activeActivities')}</dt><dd>{control.data.active_activities}</dd></div>
-        <div><dt className="muted">{t('uncertainActivities')}</dt><dd>{control.data.uncertain_activities}</dd></div>
+        <div><dt className="text-muted-foreground">{t('phase')}</dt><dd>{t(phaseLabels[control.data.phase])}</dd></div>
+        <div><dt className="text-muted-foreground">{t('activeActivities')}</dt><dd>{control.data.active_activities}</dd></div>
+        <div><dt className="text-muted-foreground">{t('uncertainActivities')}</dt><dd>{control.data.uncertain_activities}</dd></div>
         {control.data.unresolved_owner_effects.length > 0 && <div className="sm:col-span-3">
-          <dt className="muted">{t('unresolvedOwnerEffects')}</dt>
+          <dt className="text-muted-foreground">{t('unresolvedOwnerEffects')}</dt>
           <dd>
-            <p className="muted mb-1">{t('ownerEffectDescription')}</p>
+            <p className="text-muted-foreground mb-1">{t('ownerEffectDescription')}</p>
             <ul className="list-inside list-disc">
               {control.data.unresolved_owner_effects.map((effect) => <li key={`${effect.owner}:${effect.reason}`}>
                 {effect.owner}: {effect.reason} ({effect.count})

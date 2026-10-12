@@ -253,9 +253,9 @@ export function PreferencesDialog({ open, preferences, csrfToken, loading = fals
         <DialogTitle>{t('title')}</DialogTitle>
         <DialogDescription>{t('description')}</DialogDescription>
       </DialogHeader>
-      {loading && <><p role="status" className="muted">{t('loading')}</p><DialogFooter><Button type="button" className="secondary" onClick={dismiss}>{t('cancel')}</Button></DialogFooter></>}
-      {loadError && <div className="status-panel" role="alert"><p>{reloadError ? t('reloadFailed') : t('loadFailed')}</p><DialogFooter><Button type="button" className="secondary" onClick={dismiss}>{t('cancel')}</Button><Button type="button" disabled={reloadPending || retrying} onClick={retryLoad}>{reloadPending ? t('loading') : t('retry')}</Button></DialogFooter></div>}
-      {hasConflict && <div className="status-panel" role="alert"><p>{t('conflict')}</p>{reloadError && <p>{t('conflictReloadFailed')}</p>}<DialogFooter><Button type="button" className="secondary" disabled={save.isPending} onClick={dismiss}>{t('cancel')}</Button><Button type="button" disabled={reloadPending || retrying} onClick={discardAndReload}>{reloadPending ? t('loading') : reloadError ? t('retry') : t('reloadDiscard')}</Button></DialogFooter></div>}
+      {loading && <><p role="status" className="text-muted-foreground">{t('loading')}</p><DialogFooter><Button type="button" variant="outline" onClick={dismiss}>{t('cancel')}</Button></DialogFooter></>}
+      {loadError && <div className="status-panel" role="alert"><p>{reloadError ? t('reloadFailed') : t('loadFailed')}</p><DialogFooter><Button type="button" variant="outline" onClick={dismiss}>{t('cancel')}</Button><Button type="button" disabled={reloadPending || retrying} onClick={retryLoad}>{reloadPending ? t('loading') : t('retry')}</Button></DialogFooter></div>}
+      {hasConflict && <div className="status-panel" role="alert"><p>{t('conflict')}</p>{reloadError && <p>{t('conflictReloadFailed')}</p>}<DialogFooter><Button type="button" variant="outline" disabled={save.isPending} onClick={dismiss}>{t('cancel')}</Button><Button type="button" disabled={reloadPending || retrying} onClick={discardAndReload}>{reloadPending ? t('loading') : reloadError ? t('retry') : t('reloadDiscard')}</Button></DialogFooter></div>}
       {draft && !hasConflict && <form className="preferences-form" onSubmit={(event) => { event.preventDefault(); save.mutate(draft); }}>
         <fieldset disabled={save.isPending || savingDisabled} className="preferences-fields">
           <legend>{t('appearance')}</legend>
@@ -286,7 +286,7 @@ export function PreferencesDialog({ open, preferences, csrfToken, loading = fals
                 <SelectItem value="vi-vi">{t('vietnamese')}</SelectItem>
               </SelectContent>
             </Select>
-            <p id="preference-locale-help" className="muted text-xs">{t('languageHelp')}</p>
+            <p id="preference-locale-help" className="text-muted-foreground text-xs">{t('languageHelp')}</p>
           </div>
           <div className="field">
             <Label htmlFor="preference-timezone">{t('timezone')}</Label>
@@ -294,13 +294,13 @@ export function PreferencesDialog({ open, preferences, csrfToken, loading = fals
               <SelectTrigger id="preference-timezone" aria-describedby="preference-timezone-help"><SelectValue /></SelectTrigger>
               <SelectContent>{timezoneOptions(draft.timezone).map((zone) => <SelectItem key={zone} value={zone}>{zone}</SelectItem>)}</SelectContent>
             </Select>
-            <p id="preference-timezone-help" className="muted text-xs">{t('timezoneHelp')} {t('scheduleTimezoneNote')}</p>
+            <p id="preference-timezone-help" className="text-muted-foreground text-xs">{t('timezoneHelp')} {t('scheduleTimezoneNote')}</p>
           </div>
         </fieldset>
-        <p className="muted" role="status">{save.isPending ? t('saving') : dirty ? t('unsaved') : t('saved')}</p>
+        <p className="text-muted-foreground" role="status">{save.isPending ? t('saving') : dirty ? t('unsaved') : t('saved')}</p>
         {save.error && <p className="error" role="alert">{save.error instanceof ApiError && save.error.status === 409 ? t('conflict') : t('saveFailed')}</p>}
         <DialogFooter>
-          <Button type="button" className="secondary" disabled={save.isPending} onClick={dismiss}>{t('cancel')}</Button>
+          <Button type="button" variant="outline" disabled={save.isPending} onClick={dismiss}>{t('cancel')}</Button>
           <Button type="submit" disabled={savingDisabled || save.isPending || !dirty || !isValidTimezone(draft.timezone)}>{save.isPending ? t('saving') : t('save')}</Button>
         </DialogFooter>
       </form>}

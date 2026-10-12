@@ -89,7 +89,7 @@ export function WorkspaceMembers() {
     onSettled: refresh,
   });
 
-  if (!selection) return <section className="content-panel skeleton" aria-label={t('loading')} />;
+  if (!selection) return <section className="rounded-xl border bg-card p-6 skeleton" aria-label={t('loading')} />;
   if (!isOwner) return <SettingsPageHeader eyebrow={tShell('settings')} title={t('title')} description={t('ownerOnly')} />;
 
   const error = create.error ?? revoke.error ?? remove.error;
@@ -136,7 +136,7 @@ export function WorkspaceMembers() {
 
     {link && <div className="grid gap-2 rounded-xl border border-border bg-secondary p-4" role="status">
       <h3 className="text-sm font-semibold">{t('linkHeading')}</h3>
-      <p className="muted text-xs">{t('linkHelp')}</p>
+      <p className="text-muted-foreground text-xs">{t('linkHelp')}</p>
       <div className="flex flex-wrap gap-2">
         <Input readOnly value={link} aria-label={t('linkHeading')} className="min-w-0 flex-1" onFocus={(e) => e.currentTarget.select()} />
         <Button type="button" variant="outline" onClick={() => void copy()}>{copied === 'ok' ? t('copied') : t('copy')}</Button>
@@ -148,13 +148,13 @@ export function WorkspaceMembers() {
     {errorKey && <p className="error" role="alert">{t(errorKey)}</p>}
 
     <SettingsSection title={t('invitationsHeading')}>
-      {invitations.isError ? listError(() => void invitations.refetch()) : invitations.isPending ? <p className="muted">{t('loading')}</p>
-        : invitationRows.length === 0 ? <p className="muted">{t('noInvitations')}</p>
+      {invitations.isError ? listError(() => void invitations.refetch()) : invitations.isPending ? <p className="text-muted-foreground">{t('loading')}</p>
+        : invitationRows.length === 0 ? <p className="text-muted-foreground">{t('noInvitations')}</p>
           : <ul className="grid gap-2">{invitationRows.map((row) => {
             const status = invitationStatus(row);
             return <li key={row.id} className="flex flex-wrap items-center gap-3 rounded-xl border border-border px-4 py-3">
               <span className="min-w-0 flex-1 break-all text-sm font-medium">{row.email}</span>
-              <span className="muted text-xs">{statusLabel[status]}{status === 'pending' ? ` · ${t('expiresOn', { date: format.dateTime(new Date(row.expires_at), { dateStyle: 'medium' }) })}` : ''}</span>
+              <span className="text-muted-foreground text-xs">{statusLabel[status]}{status === 'pending' ? ` · ${t('expiresOn', { date: format.dateTime(new Date(row.expires_at), { dateStyle: 'medium' }) })}` : ''}</span>
               {status === 'pending' && <Button type="button" variant="outline" size="sm" onClick={() => setPending({ kind: 'revoke', id: row.id })}>{t('revoke')}</Button>}
             </li>;
           })}</ul>}
@@ -162,11 +162,11 @@ export function WorkspaceMembers() {
     </SettingsSection>
 
     <SettingsSection title={t('membersHeading')}>
-      {members.isError ? listError(() => void members.refetch()) : members.isPending ? <p className="muted">{t('loading')}</p>
-        : memberRows.length === 0 ? <p className="muted">{t('noMembers')}</p>
+      {members.isError ? listError(() => void members.refetch()) : members.isPending ? <p className="text-muted-foreground">{t('loading')}</p>
+        : memberRows.length === 0 ? <p className="text-muted-foreground">{t('noMembers')}</p>
           : <ul className="grid gap-2">{memberRows.map((row) => <li key={row.user_id} className="flex flex-wrap items-center gap-3 rounded-xl border border-border px-4 py-3">
             <span className="min-w-0 flex-1 break-all text-sm font-medium">{row.email ?? t('unknownEmail')}</span>
-            <span className="muted text-xs">{row.role === 'owner' ? t('roleOwner') : t('roleMember')}</span>
+            <span className="text-muted-foreground text-xs">{row.role === 'owner' ? t('roleOwner') : t('roleMember')}</span>
             {row.role === 'member' && <Button type="button" variant="outline" size="sm" onClick={() => setPending({ kind: 'remove', id: row.user_id })}>{t('remove')}</Button>}
           </li>)}</ul>}
       {members.hasNextPage && <Button type="button" variant="outline" className="w-fit" disabled={members.isFetchingNextPage} onClick={() => void members.fetchNextPage()}>{members.isFetchingNextPage ? t('loading') : t('loadMore')}</Button>}

@@ -43,8 +43,8 @@ export function OnboardingTopics() {
   });
   return <div className="space-y-2">
     <h3 className="text-sm font-semibold">{t('topicsTitle')}</h3>
-    <p className="muted text-sm">{t('topicsText')}</p>
-    {topics.isPending ? <p role="status" className="muted text-sm">{t('topicsLoading')}</p> : null}
+    <p className="text-muted-foreground text-sm">{t('topicsText')}</p>
+    {topics.isPending ? <p role="status" className="text-muted-foreground text-sm">{t('topicsLoading')}</p> : null}
     {topics.isError ? <p role="alert" className="error">{t('topicsLoadFailed')} <Button type="button" variant="outline" size="sm" onClick={() => { void topics.refetch(); }}>{t('retry')}</Button></p> : null}
     {topics.data ? <div className="flex flex-wrap gap-2" role="group" aria-label={t('topicsTitle')}>
       {PRESETS.map((preset) => {

@@ -23,7 +23,7 @@ export function GadgetEditor() {
         <TabsTrigger value="rules" className="min-h-11">{t('tabRules')}</TabsTrigger>
       </TabsList>
       <TabsContent value="presets" className="space-y-4">
-        <div><h2 className="text-base font-semibold">{t('presetsTitle')}</h2><p className="muted">{t('presetsIntro')}</p><Link className="underline" href="/app">{t('openDashboard')}</Link></div>
+        <div><h2 className="text-base font-semibold">{t('presetsTitle')}</h2><p className="text-muted-foreground">{t('presetsIntro')}</p><Link className="underline" href="/app">{t('openDashboard')}</Link></div>
         <TopicSettings csrfToken={session.csrfToken} />
       </TabsContent>
       <TabsContent value="library"><GadgetLibrary onEditRules={(id) => { setRuleTarget(id); setTab('rules'); }} /></TabsContent>

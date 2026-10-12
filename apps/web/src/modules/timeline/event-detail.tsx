@@ -44,8 +44,8 @@ export function EventDetail({ event, locale, timezone, entityNames }: {
     if (event.end_date) occurred += ` – ${formatCalendarDate(event.end_date)}`;
   }
 
-  return <article className="card stack" aria-labelledby={`event-${event.id}-title`}>
-    <div><p className="muted">{event.type}{event.subtype ? ` · ${event.subtype}` : ''} · {event.origin === 'derived' ? t('derived') : t('manual')}</p>
+  return <article className="rounded-xl border bg-card p-4 text-card-foreground flex flex-col gap-3" aria-labelledby={`event-${event.id}-title`}>
+    <div><p className="text-muted-foreground">{event.type}{event.subtype ? ` · ${event.subtype}` : ''} · {event.origin === 'derived' ? t('derived') : t('manual')}</p>
       <h2 id={`event-${event.id}-title`}>{event.title}</h2>{event.summary && <p>{event.summary}</p>}</div>
     <dl className="timeline-times">
       <div><dt>{t('occurred')}</dt><dd>{occurred}</dd></div>
@@ -53,13 +53,13 @@ export function EventDetail({ event, locale, timezone, entityNames }: {
       <div><dt>{t('recorded')}</dt><dd>{formatDateTime(event.created_at, locale, timezone)}</dd></div>
       <div><dt>{t('validity')}</dt><dd>{event.valid_from ? formatDateTime(event.valid_from, locale, timezone) : t('openStart')} – {event.valid_to ? formatDateTime(event.valid_to, locale, timezone) : t('openEnd')}</dd></div>
     </dl>
-    {isLateArrival() && <p className="muted" role="status">{t('lateArrival')}</p>}
-    {!!event.participants.length && <section aria-label={t('participants')}><h3>{t('participants')}</h3><ul className="stack">{event.participants.map((participant) => <li key={`${participant.entity_id}:${participant.role}`}><Link href={`/knowledge/entities/${participant.entity_id}`}>{entityNames.get(participant.entity_id) ?? participant.entity_id}</Link> · {participant.role}</li>)}</ul></section>}
-    {!!event.evidence.length && <section aria-label={t('evidence')}><h3>{t('evidence')}</h3><ul className="stack">{event.evidence.map((evidence) => <li key={`${evidence.document_version_id}:${evidence.chunk_id}`}>
+    {isLateArrival() && <p className="text-muted-foreground" role="status">{t('lateArrival')}</p>}
+    {!!event.participants.length && <section aria-label={t('participants')}><h3>{t('participants')}</h3><ul className="flex flex-col gap-3">{event.participants.map((participant) => <li key={`${participant.entity_id}:${participant.role}`}><Link href={`/knowledge/entities/${participant.entity_id}`}>{entityNames.get(participant.entity_id) ?? participant.entity_id}</Link> · {participant.role}</li>)}</ul></section>}
+    {!!event.evidence.length && <section aria-label={t('evidence')}><h3>{t('evidence')}</h3><ul className="flex flex-col gap-3">{event.evidence.map((evidence) => <li key={`${evidence.document_version_id}:${evidence.chunk_id}`}>
       <Link href={`/knowledge/documents/${evidence.document_id}?version=${evidence.version_number}#cited-revision`}>{evidence.title}</Link>
       {event.type.startsWith('github_') && evidence.canonical_url?.startsWith('https://github.com/') && <> · <a href={evidence.canonical_url} target="_blank" rel="noopener noreferrer">{gh('openOnGithub')}</a></>}
-      <small className="muted">{evidence.metadata_is_version_snapshot ? t('metadataVersionSnapshot') : t('metadataCurrentFallback')}</small>
-      <p className="muted">{t('evidenceObserved')} {formatDateTime(evidence.observed_at, locale, timezone)} · {t('sourceId')} {evidence.source_id}</p><blockquote>{evidence.excerpt}</blockquote>
+      <small className="text-muted-foreground">{evidence.metadata_is_version_snapshot ? t('metadataVersionSnapshot') : t('metadataCurrentFallback')}</small>
+      <p className="text-muted-foreground">{t('evidenceObserved')} {formatDateTime(evidence.observed_at, locale, timezone)} · {t('sourceId')} {evidence.source_id}</p><blockquote>{evidence.excerpt}</blockquote>
     </li>)}</ul></section>}
   </article>;
 }

@@ -139,18 +139,18 @@ export function InviteAccept() {
       <section aria-labelledby="invite-title" className="auth-panel flex flex-col gap-6">
         <div className="grid gap-1">
           <h1 id="invite-title" className="text-3xl font-bold leading-tight tracking-tight">{t('inviteTitle')}</h1>
-          <p className="muted">{t('inviteIntro')}</p>
+          <p className="text-muted-foreground">{t('inviteIntro')}</p>
         </div>
         {state.checked && !state.present && <p role="alert" className="rounded-xl border border-destructive px-4 py-3 text-sm text-destructive">{t('inviteMissing')}</p>}
         {state.present && !probing && <form className="grid gap-4" onSubmit={submit} noValidate>
-          {signedIn && <p role="status" className="muted text-sm">{t('inviteSignedIn')}</p>}
-          {state.google && <p role="status" className="muted text-sm">{t('inviteGoogleReady')}</p>}
+          {signedIn && <p role="status" className="text-muted-foreground text-sm">{t('inviteSignedIn')}</p>}
+          {state.google && <p role="status" className="text-muted-foreground text-sm">{t('inviteGoogleReady')}</p>}
           {needsPassword && <>
             <div className="field">
               <Label htmlFor="invite-password">{t('invitePassword')}</Label>
               <Input id="invite-password" type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)}
                 aria-invalid={touched && tooShort ? true : undefined} aria-describedby="invite-password-help" />
-              <p id="invite-password-help" className="muted text-xs">{t('invitePasswordHelp')}</p>
+              <p id="invite-password-help" className="text-muted-foreground text-xs">{t('invitePasswordHelp')}</p>
               {touched && tooShort && <span className="error" role="alert">{t('invitePasswordShort')}</span>}
             </div>
             <div className="field">

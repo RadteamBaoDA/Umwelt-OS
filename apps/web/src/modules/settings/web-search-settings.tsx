@@ -44,8 +44,8 @@ export function WebSearchSettingsWorkspace() {
   const test = useMutation({
     mutationFn: (value: WebSearch & Draft) => apiRequest<TestResult>('/api/v1/settings/web-search/test', { ...post, body: JSON.stringify({ provider: value.provider, endpoint: value.endpoint || null, api_key: key }) }),
   });
-  if (query.isPending) return <section className="content-panel skeleton" aria-label={t('loading')} />;
-  if (query.isError || !saved || !view) return <section className="content-panel"><h1>{t('unavailable')}</h1><p className="error">{t(apiFailureKey(query.error) ?? 'loadFailed')}</p><Button className="secondary" onClick={() => query.refetch()}>{t('retry')}</Button></section>;
+  if (query.isPending) return <section className="rounded-xl border bg-card p-6 skeleton" aria-label={t('loading')} />;
+  if (query.isError || !saved || !view) return <section className="rounded-xl border bg-card p-6"><h1>{t('unavailable')}</h1><p className="error">{t(apiFailureKey(query.error) ?? 'loadFailed')}</p><Button variant="outline" onClick={() => query.refetch()}>{t('retry')}</Button></section>;
   const dirty = Object.keys(draft).length > 0 || Boolean(key) || removed;
   const keyReady = !needsKey || key !== '' || (saved.credential_configured && !removed);
   const valid = view.provider === 'none' || (Boolean(view.endpoint) && keyReady);
@@ -63,14 +63,14 @@ export function WebSearchSettingsWorkspace() {
         <CheckboxField><Checkbox id="web-search-allow" disabled={save.isPending} checked={view.allow_remote_web_search} onCheckedChange={(checked) => set({ allow_remote_web_search: checked === true })} /><label htmlFor="web-search-allow">{t('allowRemote')}</label></CheckboxField>
         <p className="m-0 text-xs text-muted-foreground">{t('envNote')}</p>
         {view.provider !== 'none' ? <div className="flex flex-wrap items-center gap-3">
-          <Button type="button" className="secondary" disabled={test.isPending || !view.endpoint} onClick={() => test.mutate(view)}>{test.isPending ? t('testing') : t('test')}</Button>
+          <Button type="button" variant="outline" disabled={test.isPending || !view.endpoint} onClick={() => test.mutate(view)}>{test.isPending ? t('testing') : t('test')}</Button>
           {result ? <p className={result.ok ? 'm-0 text-sm text-muted-foreground' : 'error m-0'} role="status">{result.ok ? (result.detail == null ? t('testOkNoCount') : t('testOk', { count: result.detail })) : t(`testError_${result.error ?? 'unknown'}` as 'testError_unknown')}</p> : null}
           {test.isError ? <p className="error m-0" role="alert">{t(apiFailureKey(test.error) ?? 'requestFailed')}</p> : null}
         </div> : null}
       </SettingsSection>
       {save.isError ? <p className="error" role="alert">{t(apiFailureKey(save.error) ?? 'saveFailed')}</p> : null}
       <SettingsActions>
-        <Button type="button" className="secondary" disabled={save.isPending || !dirty} onClick={() => { reset(); save.reset(); test.reset(); }}>{t('cancelChanges')}</Button>
+        <Button type="button" variant="outline" disabled={save.isPending || !dirty} onClick={() => { reset(); save.reset(); test.reset(); }}>{t('cancelChanges')}</Button>
         <Button type="submit" disabled={save.isPending || !dirty || !valid}>{t('saveButton')}</Button>
       </SettingsActions>
     </form>
