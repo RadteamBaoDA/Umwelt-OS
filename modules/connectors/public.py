@@ -310,6 +310,10 @@ class ConnectorConfig(BaseModel):
     news_query: str | None = Field(default=None, min_length=1, max_length=200)
     news_site: Literal["any", "reuters.com", "apnews.com", "bbc.com", "vnexpress.net"] | None = None
     news_locale: Literal["vi-VN", "en-US"] | None = None
+    sec_cik: str | None = Field(default=None, pattern=r"^[0-9]{10}$")
+    sec_contact_email: str | None = Field(
+        default=None, max_length=254, pattern=r"^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}$")
+    scholarly_query: str | None = Field(default=None, min_length=1, max_length=200)
     history_mode: Literal["returned_snapshot", "pending_updates"] | None = None
 
     @field_validator("news_query", mode="before")
@@ -322,6 +326,14 @@ class ConnectorConfig(BaseModel):
         if re.search(r"(?i)\bsite\s*:", cleaned):
             raise ValueError("Use the site selector instead of a site: operator")
         return cleaned
+
+    @field_validator("scholarly_query", mode="before")
+    @classmethod
+    def clean_scholarly_query(cls, value: object) -> object:
+        """Strip control characters and fold whitespace so the stored OpenAlex query matches what is sent."""
+        if not isinstance(value, str):
+            return value
+        return " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", value).split())
 
     @field_validator("timezone")
     @classmethod

@@ -52,7 +52,8 @@ from modules.sources.schemas import ConnectorSource, SourceFence
 RENEW_EVERY_SECONDS = 20
 PAYLOAD_RATE_LIMIT_BACKOFF = timedelta(minutes=15)  # body-level throttling carries no Retry-After; coarse until observed
 PURE_MAX_BYTES = {"ecb": 256 * 1024}  # every other P3 body is capped at macro.MAX_BODY_BYTES
-PURE_PROVIDERS = ("world_bank", "frankfurter", "ecb", "binance", "alternative_me", "usgs", "coinpaprika")  # coingecko needs a key slot
+PURE_MAX_BYTES = {"ecb": 256 * 1024, "cisa_kev": 4 * 1024 * 1024}  # every other P3 body is capped at macro.MAX_BODY_BYTES
+PURE_PROVIDERS = ("world_bank", "frankfurter", "ecb", "binance", "alternative_me", "usgs", "coinpaprika", "nasa_eonet", "cisa_kev")  # coingecko needs a key slot
 KEYED_PROVIDERS = {"coingecko": "x-cg-demo-api-key"}  # provider -> fixed header; key in connector_rest_credentials
 SIMPLE_NATIVE = frozenset({"youtube", "arxiv", "huggingface", "github_releases", "alpha_vantage", "open_meteo"})
 REFUSED_HERE: frozenset[str] = frozenset()  # providers that must never run here (GitHub/Telegram are native now)
@@ -843,10 +844,37 @@ async def _run_gdelt(run: Run) -> None:
     await _accept_native(run, lease, records, _coverage(records), collected_at)
 
 
+async def _run_sec_edgar(run: Run) -> None:
+    """SEC EDGAR recent filings: one gated send with the owner-declared User-Agent; missing scope fails closed."""
+    from modules.connectors.providers import filings
+    from modules.connectors.providers.macro import MAX_BODY_BYTES, decode_json
+
+    cfg = run.attempt.source.configuration or {}
+    request = _payload(filings.sec_edgar_request, cfg.get("sec_cik"), cfg.get("sec_contact_email"))
+    collected_at = datetime.now(UTC)
+    lease = await _lease(run)
+    fetched = await _get_body(run, request, max_bytes=MAX_BODY_BYTES)
+    payload = _payload(decode_json, _require_body(fetched))
+    records = _payload(filings.map_sec_edgar, payload, collected_at, cfg["sec_cik"])
+    await _accept_native(run, lease, records, _coverage(records), collected_at)
+
+
+async def _run_openalex(run: Run) -> None:
+    """OpenAlex works search: one gated send to a server-built URL; no validators, first page only."""
+    from modules.connectors.providers import scholarly
+
+    collected_at = datetime.now(UTC)
+    request = _payload(scholarly.openalex_request, (run.attempt.source.configuration or {}).get("scholarly_query"))
+    lease = await _lease(run)
+    fetched = await _get_body(run, request, max_bytes=scholarly.OPENALEX_MAX_BODY)
+    records = _payload(scholarly.map_openalex, _require_body(fetched), collected_at)
+    await _accept_native(run, lease, records, _coverage(records), collected_at)
+
+
 ADAPTERS.update({
     **dict.fromkeys(PURE_PROVIDERS, _run_pure),
     "coingecko": _run_coingecko,
-    "bbc_world": _run_feed, "vnexpress_business": _run_feed, "google_news": _run_feed, "hn_top": _run_hn, "gdelt_economy": _run_gdelt,
+    "bbc_world": _run_feed, "vnexpress_business": _run_feed, "dantri_news": _run_feed, "thanhnien_news": _run_feed, "tuoitre_news": _run_feed, "google_news": _run_feed, "openalex": _run_openalex, "sec_edgar": _run_sec_edgar, "hn_top": _run_hn, "gdelt_economy": _run_gdelt,
 })
 
 

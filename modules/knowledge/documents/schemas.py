@@ -15,10 +15,10 @@ from pydantic import (
 
 MAX_CONTENT_BYTES = 1_048_576
 MAX_METADATA_BYTES = 65_536
-NEWS_PROVIDER_IDS = ("bbc_world", "vnexpress_business", "hn_top", "gdelt_economy", "google_news")
+NEWS_PROVIDER_IDS = ("bbc_world", "vnexpress_business", "dantri_news", "thanhnien_news", "tuoitre_news", "hn_top", "gdelt_economy", "google_news", "openalex", "sec_edgar")
 MEASUREMENT_PROVIDER_IDS = (
     "alpha_vantage", "open_meteo", "world_bank", "frankfurter", "ecb", "binance",
-    "alternative_me", "usgs", "coinpaprika", "coingecko",
+    "alternative_me", "usgs", "coinpaprika", "coingecko", "cisa_kev", "nasa_eonet",
 )
 PROVIDER_IDS = (
     "youtube", "arxiv", "huggingface", "github_releases", "github", "telegram",
@@ -34,8 +34,10 @@ MEASUREMENT_PROVIDER_FIELDS = {
     "binance": {"symbol", "base", "quote", "decimal_value"},
     "alternative_me": {"timestamp", "value_classification", "decimal_value"},
     "usgs": {"place", "type", "status", "magType", "depth_km", "latitude", "longitude", "decimal_mag", "event_time", "updated"},
+    "cisa_kev": {"cveID", "vendorProject", "product", "dateAdded", "dueDate", "knownRansomwareCampaignUse"},
     "coinpaprika": {"id", "symbol", "last_updated", "quote", "decimal_value"},
     "coingecko": {"coin_id", "quote", "decimal_value", "last_updated_at"},
+    "nasa_eonet": {"categories", "closed", "latitude", "longitude", "event_time", "magnitude_unit", "decimal_value"},
 }
 
 
@@ -47,7 +49,7 @@ class WorldDataMeasurement(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     provider: Literal[
         "alpha_vantage", "open_meteo", "world_bank", "frankfurter", "ecb", "binance",
-        "alternative_me", "usgs", "coinpaprika", "coingecko",
+        "alternative_me", "usgs", "coinpaprika", "coingecko", "cisa_kev", "nasa_eonet",
     ]
     metric: str = Field(min_length=1, max_length=80)
     value: float | None
@@ -158,8 +160,8 @@ class ProviderRecordMetadata(BaseModel):
     provider: Literal[
         "youtube", "arxiv", "huggingface", "github_releases", "github", "telegram",
         "alpha_vantage", "open_meteo", "world_bank", "frankfurter", "ecb", "binance",
-        "alternative_me", "usgs", "coinpaprika", "coingecko",
-        "bbc_world", "vnexpress_business", "hn_top", "gdelt_economy", "google_news",
+        "alternative_me", "usgs", "coinpaprika", "coingecko", "cisa_kev", "nasa_eonet",
+        "bbc_world", "vnexpress_business", "dantri_news", "thanhnien_news", "tuoitre_news", "hn_top", "gdelt_economy", "google_news", "openalex", "sec_edgar",
     ]
     identity: str = Field(min_length=1, max_length=512)
     provider_version: str | None = Field(default=None, max_length=255)
@@ -200,7 +202,9 @@ class ProviderRecordMetadata(BaseModel):
             "github": {"record_type", "node_id", "html_url"},
             "telegram": set(),
             **{provider: set() for provider in MEASUREMENT_PROVIDER_IDS},
-            "bbc_world": _FEED_FIELDS, "vnexpress_business": _FEED_FIELDS, "google_news": _FEED_FIELDS,
+            "bbc_world": _FEED_FIELDS, "vnexpress_business": _FEED_FIELDS, "tuoitre_news": _FEED_FIELDS, "thanhnien_news": _FEED_FIELDS, "dantri_news": _FEED_FIELDS, "google_news": _FEED_FIELDS,
+            "sec_edgar": _FEED_FIELDS | {"form", "cik"},
+            "openalex": {"title", "summary", "canonical_url", "published_at", "authors", "doi", "source", "cited_by_count"},
             "hn_top": {"title", "text", "url", "by", "time", "id", "type", "deleted", "dead"},
             "gdelt_economy": {"title", "url", "seendate", "domain", "language", "sourcecountry"},
         }[self.provider]
@@ -212,7 +216,7 @@ class ProviderRecordMetadata(BaseModel):
             "tag_name": 255, "record_type": 16, "last_modified": 64, "created_at": 64,
             "published_at": 64, "provider_updated_at": 64,
             "canonical_url": 2048, "guid": 512, "publisher": 200, "text": 4000, "url": 2048, "by": 128,
-            "type": 32, "seendate": 32, "domain": 255, "language": 64, "sourcecountry": 64,
+            "type": 32, "form": 32, "cik": 10, "doi": 255, "source": 255, "seendate": 32, "domain": 255, "language": 64, "sourcecountry": 64,
         }
         for key, value in self.source_fields.items():
             if key in {"tags", "categories", "authors"}:
@@ -223,7 +227,7 @@ class ProviderRecordMetadata(BaseModel):
             elif key in {"draft", "prerelease", "deleted", "dead"}:
                 if not isinstance(value, bool):
                     raise ValueError(f"Provider {key} must be boolean")
-            elif key in {"time", "id"}:
+            elif key in {"time", "id", "cited_by_count"}:
                 if type(value) is not int or value < 0:
                     raise ValueError(f"Provider {key} must be a non-negative integer")
             elif key in {"canonical_url", "url"}:

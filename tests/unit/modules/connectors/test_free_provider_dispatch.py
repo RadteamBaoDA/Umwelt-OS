@@ -60,6 +60,7 @@ def test_every_dispatchable_provider_has_an_adapter_and_spec():
     ("world_bank", "world_bank_vn_gdp.json", 2 * 1024 * 1024),
     ("ecb", "ecb_eurofxref_daily.xml", 256 * 1024),
     ("alternative_me", "fear_greed.json", 2 * 1024 * 1024),
+    ("cisa_kev", "cisa_kev.json", 4 * 1024 * 1024),
 ])
 async def test_pure_provider_one_gated_send_then_typed_measurements(monkeypatch, provider, name, max_bytes):
     gate = Gate({"*": rest.Fetched(fixture(name))})
@@ -156,7 +157,11 @@ def test_registration_agrees_across_registry_sources_and_scope_validators(provid
 
     source_type = PROVIDER_SOURCE_TYPES[provider]
     SourceCreate(type=source_type, name="n", provider=provider)  # sources schema map agrees
-    scope = {"news_query": "economy", "news_site": "any", "news_locale": "en-US"} if provider == "google_news" else {}
+    scope = {
+        "google_news": {"news_query": "economy", "news_site": "any", "news_locale": "en-US"},
+        "sec_edgar": {"sec_cik": "0000320193", "sec_contact_email": "owner@example.com"},
+        "openalex": {"scholarly_query": "economy"},
+    }.get(provider, {})
     assert native_dispatch_supported(source_type, provider) and PROVIDER_SCOPE_FIELDS[provider] == frozenset(scope)
     source = SimpleNamespace(
         id=uuid4(), status="active", type=source_type, provider=provider, generation=1,

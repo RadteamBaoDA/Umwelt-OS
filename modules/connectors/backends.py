@@ -10,17 +10,20 @@ PROVIDER_SOURCE_TYPES = MappingProxyType({
     "github_releases": "api", "github": "api", "telegram": "api",
     "alpha_vantage": "api", "open_meteo": "api",
     # P2/P3 fixed-endpoint providers: no owner-supplied scope, one catalog request per run.
-    "bbc_world": "rss", "vnexpress_business": "rss", "hn_top": "api", "gdelt_economy": "api",
+    "bbc_world": "rss", "vnexpress_business": "rss", "dantri_news": "rss", "thanhnien_news": "rss", "tuoitre_news": "rss", "hn_top": "api", "gdelt_economy": "api",
     "world_bank": "api", "frankfurter": "api", "ecb": "api", "binance": "api",
-    "alternative_me": "api", "usgs": "api", "coinpaprika": "api",
+    "alternative_me": "api", "usgs": "api", "coinpaprika": "api", "nasa_eonet": "api", "cisa_kev": "api",
     "coingecko": "api",  # fixed endpoint; owner-supplied API key lives in connector_rest_credentials
     "google_news": "rss",  # scoped free preset: URL is built server-side from validated query/site/locale
+    "sec_edgar": "api",  # scoped free preset: URL is built server-side from a validated 10-digit CIK
+    "openalex": "api",  # scoped free preset: URL is built server-side from a validated scholarly_query
 })
 FIXED_SCOPE_PROVIDERS = frozenset(PROVIDER_SOURCE_TYPES) - frozenset({
-    "youtube", "arxiv", "huggingface", "github_releases", "github", "telegram", "alpha_vantage", "open_meteo", "google_news",
+    "youtube", "arxiv", "huggingface", "github_releases", "github", "telegram", "alpha_vantage", "open_meteo", "google_news", "sec_edgar",
+    "openalex",
 })
 # Free presets collected only by the gated shared executor (fixed-endpoint presets plus the scoped Google News preset).
-GATED_EXECUTOR_PROVIDERS = FIXED_SCOPE_PROVIDERS | {"google_news"}
+GATED_EXECUTOR_PROVIDERS = FIXED_SCOPE_PROVIDERS | {"google_news", "sec_edgar", "openalex"}
 PROVIDER_SCOPE_FIELDS = MappingProxyType({
     "youtube": frozenset({"youtube_channel_id"}), "arxiv": frozenset({"arxiv_category"}),
     "huggingface": frozenset({"huggingface_author"}),
@@ -33,6 +36,8 @@ PROVIDER_SCOPE_FIELDS = MappingProxyType({
     "alpha_vantage": frozenset({"market_symbols", "market_currency", "market_exchange_timezone"}),
     "open_meteo": frozenset({"weather_latitude", "weather_longitude", "weather_timezone", "weather_metrics"}),
     "google_news": frozenset({"news_query", "news_site", "news_locale"}),
+    "sec_edgar": frozenset({"sec_cik", "sec_contact_email"}),
+    "openalex": frozenset({"scholarly_query"}),
     **dict.fromkeys(FIXED_SCOPE_PROVIDERS, frozenset[str]()),
 })
 NATIVE_PROVIDERS = frozenset(PROVIDER_SOURCE_TYPES)

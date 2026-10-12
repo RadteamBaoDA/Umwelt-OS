@@ -19,15 +19,16 @@ from modules.knowledge.documents.schemas import (
 )
 
 MEASUREMENT_IDS = {"world_bank", "frankfurter", "ecb", "binance", "alternative_me", "usgs", "coinpaprika", "coingecko"}
-NEWS_IDS = {"bbc_world", "vnexpress_business", "hn_top", "gdelt_economy", "google_news"}
+NEWS_IDS = {"bbc_world", "vnexpress_business", "tuoitre_news", "thanhnien_news", "dantri_news", "hn_top", "gdelt_economy", "google_news"}
 
 
-def test_fourteen_frozen_ids_with_expected_eligibility() -> None:
+def test_frozen_ids_with_expected_eligibility() -> None:
     eligibility = {spec.id: spec.eligibility for spec in FREE_PROVIDER_SPECS}
-    assert len(eligibility) == 14
-    for open_id in ("world_bank", "frankfurter", "ecb", "usgs", "alternative_me"):
+    assert len(eligibility) == 21
+    for open_id in ("world_bank", "frankfurter", "ecb", "usgs", "alternative_me", "cisa_kev", "sec_edgar", "openalex"):
         assert eligibility[open_id] == "open"
-    assert eligibility["vnexpress_business"] == "noncommercial"
+    assert eligibility["vnexpress_business"] == eligibility["tuoitre_news"] == "noncommercial"
+    assert eligibility["thanhnien_news"] == eligibility["dantri_news"] == "noncommercial"
     assert eligibility["alpha_vantage"] == eligibility["coinpaprika"] == "personal"
     for review_id in ("bbc_world", "binance", "coingecko", "hn_top", "gdelt_economy", "google_news"):
         assert eligibility[review_id] == "review"

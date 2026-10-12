@@ -1,6 +1,6 @@
 # Free data sources
 
-Catalog facts for the 14 free-provider presets, taken from `modules/connectors/provider_specs.py` (checked on 2026-10-07; policy revision 1). `Code` shows whether a collection adapter is registered in the shared executor: `registered` means present in code only, `existing adapter` is the earlier Alpha Vantage collector, and `not registered` means no adapter exists. 
+Catalog facts for the 21 free-provider presets, taken from `modules/connectors/provider_specs.py` (checked on 2026-10-07; policy revision 1). `Code` shows whether a collection adapter is registered in the shared executor: `registered` means present in code only, `existing adapter` is the earlier Alpha Vantage collector, and `not registered` means no adapter exists. 
 Endpoint availability, implemented code, legal eligibility and live acceptance are separate facts: a row here is **not** a license grant and **no** provider is runtime-verified. Evidence and quotes live in `docs/free-data-provider-policy.md`.
 
 ## Rules
@@ -17,7 +17,11 @@ Endpoint availability, implemented code, legal eligibility and live acceptance a
 |---|---|---|---|---|---|---|---|---|
 | `bbc_world` | feeds.bbci.co.uk | news | 30 | review | none | supported | registered | [terms](https://www.bbc.co.uk/usingthebbc/terms/) |
 | `vnexpress_business` | vnexpress.net | news | 30 | noncommercial | none | supported | registered | [terms](https://vnexpress.net/rss) |
+| `tuoitre_news` | tuoitre.vn | news | 30 | noncommercial | none | supported | registered | [terms](https://tuoitre.vn/rss.htm) |
+| `thanhnien_news` | thanhnien.vn | news | 30 | noncommercial | none | supported | registered | [terms](https://thanhnien.vn/rss.html) |
+| `dantri_news` | dantri.com.vn | news | 30 | noncommercial | none | supported | registered | [terms](https://dantri.com.vn/rss.htm) |
 | `google_news` | news.google.com | news | 30 | review | none | supported | registered | [terms](https://policies.google.com/terms) |
+| `openalex` | api.openalex.org | event | 1440 | open | none | supported | registered | [terms](https://help.openalex.org/how-to-use-the-api/api-overview) |
 | `hn_top` | hacker-news.firebaseio.com | news | 60 | review | none | supported | registered | [terms](https://github.com/HackerNews/API) |
 | `gdelt_economy` | api.gdeltproject.org | news | 60 | review | none | experimental | registered | [terms](https://gdeltproject.org/about.html) |
 | `world_bank` | api.worldbank.org | measurement | 1440 | open | none | supported | registered | [terms](https://datacatalog.worldbank.org/public-licenses) |
@@ -26,15 +30,22 @@ Endpoint availability, implemented code, legal eligibility and live acceptance a
 | `binance` | data-api.binance.vision | measurement | 15 | review | none | supported | registered | [terms](https://developers.binance.com/en/docs/products/spot/rest-api) |
 | `alternative_me` | api.alternative.me | measurement | 1440 | open | none | supported | registered | [terms](https://alternative.me/crypto/fear-and-greed-index/) |
 | `usgs` | earthquake.usgs.gov | event | 60 | open | none | supported | registered | [terms](https://www.usgs.gov/information-policies-and-instructions/copyrights-and-credits) |
+| `nasa_eonet` | eonet.gsfc.nasa.gov | event | 60 | review | none | supported | registered | [terms](https://eonet.gsfc.nasa.gov/what-is-eonet#disclaimer) |
+| `cisa_kev` | raw.githubusercontent.com | event | 1440 | open | none | supported | registered | [terms](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) |
 | `coinpaprika` | api.coinpaprika.com | measurement | 15 | personal | none | supported | registered | [terms](https://docs.coinpaprika.com/api-plans) |
 | `coingecko` | api.coingecko.com | measurement | 15 | review | required | supported | registered (requires API key) | [terms](https://www.coingecko.com/en/api_terms) |
 | `alpha_vantage` | www.alphavantage.co | measurement | 1440 | personal | required | supported | existing adapter | [terms](https://www.alphavantage.co/terms_of_service/) |
+| `sec_edgar` | data.sec.gov | event | 360 | open | none | supported | registered | [terms](https://www.sec.gov/privacy.htm#security) |
 
 ## Attribution
 
 - `bbc_world`: Display BBC as publisher with a link to the original article; feed-only title, summary and link.
 - `vnexpress_business`: Identify VnExpress clearly and link the original article; feed-only scope.
+- `tuoitre_news`: Display Tuổi Trẻ clearly as source and link the original article; feed-only scope. Free for individuals and non-profits, must credit the source; the publisher may revoke at any time and retains copyright.
+- `thanhnien_news`: Credit "Báo Thanh Niên" or "Theo Báo Thanh Niên" and link the original article; feed-only scope. Terms require credit and prohibit copying without written consent.
+- `dantri_news`: Credit Dân trí as the source and link the original article; feed-only scope.
 - `google_news`: Google News RSS / publisher: show the item's publisher (from its `<source>` element) and link to the original article; feed-only title, summary and link.
+- `openalex`: Credit OpenAlex; data is CC0. Link the work's OpenAlex id and DOI; abstracts are rebuilt from the inverted index.
 - `hn_top`: Attribute Hacker News plus the item and publisher URL; the API license does not license linked articles.
 - `gdelt_economy`: Cite the GDELT Project and the publisher URL; article metadata is not republication permission.
 - `world_bank`: Credit the World Bank and the original indicator; retain the dataset license and changed notice.
@@ -43,9 +54,12 @@ Endpoint availability, implemented code, legal eligibility and live acceptance a
 - `binance`: Credit Binance; BTCUSDT market, USDT quote. No trading endpoints or keys.
 - `alternative_me`: Display Alternative.me with a link adjacent to the index, including translated output.
 - `usgs`: Credit the U.S. Geological Survey with the event citation; do not fetch detail URLs automatically.
+- `nasa_eonet`: Credit NASA EONET and the listed event sources; EONET states its data is for visualization and general information only and its extents are approximations. Source and event links are stored as text and never fetched.
+- `cisa_kev`: Credit CISA Known Exploited Vulnerabilities Catalog (CC0 data repository `cisagov/kev-data`).
 - `coinpaprika`: Credit CoinPaprika; free use is personal with no redistribution.
 - `coingecko`: Show Powered by CoinGecko with a link per the API terms and brand guide.
 - `alpha_vantage`: Credit Alpha Vantage with symbol and day; no free realtime entitlement.
+- `sec_edgar`: Source: U.S. SEC EDGAR
 
 ## Quota windows
 
@@ -54,9 +68,17 @@ Endpoint availability, implemented code, legal eligibility and live acceptance a
 | `bbc_world` | `pilot_calls_utc_day` | provider | day | http_calls | 96 | 1 | pilot_local |
 | `bbc_world` | `official_unknown_calls_utc_day` | provider | day | http_calls | counted, no cap | 1 | official_unknown |
 | `vnexpress_business` | `pilot_calls_utc_day` | provider | day | http_calls | 96 | 1 | pilot_local |
+| `thanhnien_news` | `pilot_calls_utc_day` | provider | day | http_calls | 96 | 1 | pilot_local |
+| `thanhnien_news` | `official_unknown_calls_utc_day` | provider | day | http_calls | counted, no cap | 1 | official_unknown |
 | `vnexpress_business` | `official_unknown_calls_utc_day` | provider | day | http_calls | counted, no cap | 1 | official_unknown |
+| `tuoitre_news` | `pilot_calls_utc_day` | provider | day | http_calls | 96 | 1 | pilot_local |
+| `dantri_news` | `pilot_calls_utc_day` | provider | day | http_calls | 96 | 1 | pilot_local |
+| `tuoitre_news` | `official_unknown_calls_utc_day` | provider | day | http_calls | counted, no cap | 1 | official_unknown |
+| `dantri_news` | `official_unknown_calls_utc_day` | provider | day | http_calls | counted, no cap | 1 | official_unknown |
 | `google_news` | `pilot_calls_utc_day` | provider | day | http_calls | 96 | 1 | pilot_local |
 | `google_news` | `official_unknown_calls_utc_day` | provider | day | http_calls | counted, no cap | 1 | official_unknown |
+| `openalex` | `pilot_calls_utc_day` | provider | day | http_calls | 8 | 1 | pilot_local |
+| `openalex` | `official_unknown_calls_utc_day` | provider | day | http_calls | counted, no cap | 1 | official_unknown |
 | `hn_top` | `pilot_calls_utc_day` | provider | day | http_calls | 528 | 1 | pilot_local |
 | `hn_top` | `pilot_calls_utc_minute` | provider | minute | http_calls | 12 | 1 | pilot_local |
 | `gdelt_economy` | `pilot_calls_utc_day` | provider | day | http_calls | 48 | 1 | pilot_local |
@@ -74,6 +96,10 @@ Endpoint availability, implemented code, legal eligibility and live acceptance a
 | `alternative_me` | `official_unknown_calls_utc_day` | provider | day | http_calls | counted, no cap | 1 | official_unknown |
 | `usgs` | `pilot_calls_utc_day` | provider | day | http_calls | 48 | 1 | pilot_local |
 | `usgs` | `official_unknown_calls_utc_day` | provider | day | http_calls | counted, no cap | 1 | official_unknown |
+| `nasa_eonet` | `pilot_calls_utc_day` | provider | day | http_calls | 48 | 1 | pilot_local |
+| `cisa_kev` | `pilot_calls_utc_day` | provider | day | http_calls | 8 | 1 | pilot_local |
+| `nasa_eonet` | `official_unknown_calls_utc_day` | provider | day | http_calls | counted, no cap | 1 | official_unknown |
+| `cisa_kev` | `official_unknown_calls_utc_day` | provider | day | http_calls | counted, no cap | 1 | official_unknown |
 | `coinpaprika` | `pilot_calls_utc_day` | provider | day | http_calls | 192 | 1 | pilot_local |
 | `coinpaprika` | `pilot_calls_utc_second` | provider | second | http_calls | 1 | 1 | pilot_local |
 | `coinpaprika` | `official_calls_per_second` | ip | second | http_calls | 10 | 1 | official_documented |
@@ -85,6 +111,8 @@ Endpoint availability, implemented code, legal eligibility and live acceptance a
 | `alpha_vantage` | `pilot_calls_utc_day` | credential | day | http_calls | 12 | 1 | pilot_local |
 | `alpha_vantage` | `pilot_calls_utc_minute` | credential | minute | http_calls | 1 | 1 | pilot_local |
 | `alpha_vantage` | `official_calls_per_day` | credential | day | http_calls | 25 | 1 | official_documented |
+| `sec_edgar` | `pilot_calls_utc_day` | provider | day | http_calls | 96 | 1 | pilot_local |
+| `sec_edgar` | `official_unknown_calls_utc_day` | provider | day | http_calls | counted, no cap | 1 | official_unknown |
 
 Alpha Vantage enforces 12 sends per UTC day locally (official 25/day is recorded separately) until the provider reset anchor is evidenced.
 
@@ -102,7 +130,10 @@ Each entry gives what the source collects, prerequisites, cadence, quota and att
 
 - **`bbc_world`**: BBC World News RSS feed (`/news/world/rss.xml`). Title, summary and link only. No key. Cadence 30 min. Attribution: show BBC as publisher with a link to the original article. Needs operator terms review.
 - **`vnexpress_business`**: VnExpress business RSS feed (`/rss/kinh-doanh.rss`). Title, summary and link only. No key. Cadence 30 min. Attribution: identify VnExpress and link the original article. Noncommercial use only.
+- **`thanhnien_news`**: Báo Thanh Niên home RSS feed (`/rss/home.rss`). Title, summary and link only. No key. Cadence 30 min. Attribution: credit "Báo Thanh Niên" or "Theo Báo Thanh Niên" and link the original article. Noncommercial use only; copying is prohibited without written consent.
+- **`dantri_news`**: Dân trí news RSS feed (`/rss/home.rss`). Title, summary and link only. No key. Cadence 30 min. Attribution: credit Dân trí as the source and link the original article. Noncommercial use only: free for individuals and non-profits, must credit, the publisher may revoke at any time, and copying is prohibited without written consent.
 - **`google_news`**: Google News RSS search feed (`news.google.com/rss/search`). Implemented, requires terms acknowledgement (class `review`: an operator must record approval first) and is **not runtime verified**. This is an unofficial RSS endpoint: Google publishes no API contract, quota or stability guarantee for it, and the feed can change or stop without notice. The owner never supplies a URL. The server builds it from validated scope only: `news_query` (1-200 characters, control characters stripped, no `site:` operator), `news_site` (`any`, `reuters.com`, `apnews.com`, `bbc.com`, `vnexpress.net`) and `news_locale` (`en-US` or `vi-VN`, mapped to `hl`/`gl`/`ceid`). Title, summary and link only; each item carries `publisher` from its `<source>` element and the licence label "Google News RSS / publisher". The item link is Google's article link; the original publisher article is not fetched. Cadence 30 min and the 96/day pilot ceiling are the same local choices as the other news feeds (see the quota table in `docs/free-data-provider-policy.md`); no official quota is claimed.
+- **`openalex`**: OpenAlex works search (`api.openalex.org/works`, newest first, first page of 25). Implemented, **not runtime verified**. Data is CC0 (stated at help.openalex.org), so the class is `open`; terms acknowledgement is still required. No key is needed for basic use (a free key only raises the daily budget and is not used). The owner never supplies a URL: the server builds it from `scholarly_query` (1-200 characters, control characters stripped). One record per work: title plus the abstract rebuilt from `abstract_inverted_index` (bounded), with `doi`, `authors` (first 10), `source` and `cited_by_count` in the provider fields; `observed_at` is the `publication_date`. Cadence 1440 min with an 8/day pilot ceiling; OpenAlex documents no per-day number for keyless use, so no official quota is claimed.
 - **`hn_top`**: Hacker News top stories. One list call plus at most 10 item calls per run (11 sends). No key. Cadence 60 min. Attribution: Hacker News with the item and publisher URL. Needs operator terms review.
 - **`gdelt_economy`**: GDELT DOC 2.0 economy article list, 5 records, 24-hour window. Experimental. No key. Cadence 60 min. Attribution: cite the GDELT Project and the publisher URL. Needs operator terms review.
 - **`world_bank`**: Annual GDP (current US$) for Vietnam, `NY.GDP.MKTP.CD`, up to 3 rows per response. No key. Cadence 1440 min. Attribution: credit the World Bank and the indicator; keep the dataset licence. Coverage is marked `truncated` when the response spans more than one page.
@@ -111,8 +142,11 @@ Each entry gives what the source collects, prerequisites, cadence, quota and att
 - **`binance`**: BTCUSDT last price from `data-api.binance.vision`. No key and no trading endpoints. Cadence 15 min. The quote is USDT, not USD. Attribution: credit Binance. Needs operator terms review.
 - **`alternative_me`**: Fear and Greed index, last 2 points. No key. Cadence 1440 min. Attribution: show Alternative.me with a link next to the index, including translated output.
 - **`usgs`**: USGS M4.5+ earthquakes, past day, GeoJSON summary. No key. Cadence 60 min. Detail URLs are never fetched. Attribution: credit the U.S. Geological Survey and cite the event.
+- **`nasa_eonet`**: NASA EONET v3 open natural events (`/api/v3/events?status=open&limit=50`), at most 50 events, one record per event id. No key. Cadence 60 min. Classed `review` because EONET publishes only a disclaimer (visualization and general information only; extents are approximate), with no license, rate-limit or attribution terms. An operator must record terms approval first. Attribution: credit NASA EONET and the event's listed sources.
+- **`cisa_kev`**: CISA Known Exploited Vulnerabilities catalog (CC0 JSON file in `cisagov/kev-data`, updated on US business days). No key. Cadence 1440 min. One record per CVE; only the 200 most recently added CVEs are kept and the run is marked truncated. Not runtime verified. Attribution: credit the CISA Known Exploited Vulnerabilities Catalog.
 - **`coinpaprika`**: BTC ticker, `btc-bitcoin`. No key. Cadence 15 min. Personal use only, with no redistribution. Attribution: credit CoinPaprika.
 - **`alpha_vantage`**: Daily equity OHLCV (raw, as traded), `TIME_SERIES_DAILY`. Key required. Cadence 1440 min. Quota: 12 sends per UTC day locally, with the official 25/day recorded separately. Personal use only under the catalog class. Example configuration (confirm symbols and exchange before activation):
+- **`sec_edgar`**: SEC EDGAR recent filings for one company (`data.sec.gov/submissions/CIK##########.json`). Implemented, **not runtime verified**. The owner supplies a validated 10-digit CIK (`sec_cik`) and a contact email (`sec_contact_email`); the server builds the URL and sends `User-Agent: Umwelt-OS <email>` as the SEC requires a declared contact. A missing or invalid CIK or email fails closed before any request. SEC fair access allows at most 10 requests per second; this preset sends one request per run. One record per recent filing (newest 100): identity is the accession number, content is the form plus `primaryDocDescription`, `observed_at` is the filing date, and the filing document URL (`www.sec.gov/Archives/edgar/data/...`) is kept as a citation and never fetched. No key. Cadence 360 min. Attribution: Source: U.S. SEC EDGAR.
 
   ```json
   {
@@ -132,7 +166,7 @@ Recovery: error payloads, including ones returned with HTTP 200, are rejected by
 
 ## Data caveats
 
-- **Feed-only news.** `bbc_world`, `vnexpress_business`, `google_news`, `hn_top` and `gdelt_economy` store title, summary, link and publisher. Linked article full text is not fetched and is not available. Summary text is capped at 4,000 characters and marked truncated when longer.
+- **Feed-only news.** `bbc_world`, `vnexpress_business`, `dantri_news`, `google_news`, `hn_top` and `gdelt_economy` store title, summary, link and publisher. Linked article full text is not fetched and is not available. Summary text is capped at 4,000 characters and marked truncated when longer.
 - **Publisher and licence label.** Each news record carries `publisher` (for example "BBC News") and `license_label`, which is the catalog attribution text. Both are meant to be shown beside the data. Whether the UI shows them is a P4-web item and is not verified here.
 - **Frankfurter.** The rate date is the rate period, not a release instant. The v2 shape (`rate` field) is an unverified assumption until a live response is checked.
 - **World Bank coverage.** Annual data with up to 3 rows. Coverage is `truncated` when more than one page is returned; exact continuation paging is not implemented.

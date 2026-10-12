@@ -60,10 +60,10 @@ import {
 
 const intervals = [15, 30, 60, 360, 1440] as const;
 const sourceTypes = { rss: 'rss', web: 'web', rest: 'api', mcp: 'mcp', youtube: 'rss', arxiv: 'rss', huggingface: 'api', github: 'api', github_releases: 'api', telegram: 'api', alpha_vantage: 'api', open_meteo: 'api', coingecko: 'api',
-  bbc_world: 'rss', vnexpress_business: 'rss', hn_top: 'api', gdelt_economy: 'api', world_bank: 'api', frankfurter: 'api', ecb: 'api', binance: 'api', alternative_me: 'api', usgs: 'api', coinpaprika: 'api', google_news: 'rss' } as const;
+  bbc_world: 'rss', vnexpress_business: 'rss', dantri_news: 'rss', thanhnien_news: 'rss', tuoitre_news: 'rss', hn_top: 'api', gdelt_economy: 'api', world_bank: 'api', frankfurter: 'api', ecb: 'api', binance: 'api', alternative_me: 'api', usgs: 'api', coinpaprika: 'api', google_news: 'rss', openalex: 'api', sec_edgar: 'api', cisa_kev: 'api', nasa_eonet: 'api' } as const;
 type Provider = keyof typeof sourceTypes;
 /** Fixed-endpoint catalog providers: no owner scope, terms-gated, collected only by the scheduler. */
-const freeProviders = new Set<Provider>(['bbc_world', 'vnexpress_business', 'hn_top', 'gdelt_economy', 'world_bank', 'frankfurter', 'ecb', 'binance', 'alternative_me', 'usgs', 'coinpaprika', 'google_news']);
+const freeProviders = new Set<Provider>(['bbc_world', 'vnexpress_business', 'dantri_news', 'thanhnien_news', 'tuoitre_news', 'hn_top', 'gdelt_economy', 'world_bank', 'frankfurter', 'ecb', 'binance', 'alternative_me', 'usgs', 'coinpaprika', 'google_news', 'openalex', 'sec_edgar', 'cisa_kev', 'nasa_eonet']);
 const nativeProviders = new Set<Provider>(['youtube', 'arxiv', 'huggingface', 'github', 'github_releases', 'telegram', 'alpha_vantage', 'open_meteo', 'coingecko', ...freeProviders]);
 
 /** True when the schedule/activation gate asks the owner to (re)enter a provider key. */
@@ -82,15 +82,16 @@ function providerKey(providerId: string): string {
     rss: 'providerRss', web: 'providerWeb', rest: 'providerRest', mcp: 'providerMcp', github: 'providerGithub',
     google_mail: 'providerGoogleMail', google_calendar: 'providerGoogleCalendar', google_drive: 'providerGoogleDrive',
     youtube: 'providerYoutube', arxiv: 'providerArxiv', huggingface: 'providerHuggingface', github_releases: 'providerGithubReleases',
-    telegram: 'providerTelegram', alpha_vantage: 'providerAlphaVantage', coingecko: 'providerCoinGecko', open_meteo: 'providerOpenMeteo', google_news: 'providerGoogleNews', reddit: 'providerReddit', hacker_news: 'providerHackerNews',
+    telegram: 'providerTelegram', alpha_vantage: 'providerAlphaVantage', coingecko: 'providerCoinGecko', open_meteo: 'providerOpenMeteo', google_news: 'providerGoogleNews', openalex: 'providerOpenAlex', reddit: 'providerReddit', hacker_news: 'providerHackerNews',
     mastodon: 'providerMastodon', bluesky: 'providerBluesky', x: 'providerX', vietnamese_press: 'providerVietnamesePress',
     gdelt_government: 'providerGdelt', finance: 'providerFinance', weather_disaster_climate: 'providerWeather', cyber_cve: 'providerCyber',
     map_osint: 'providerMapOsint', browser: 'providerBrowser', notes: 'providerNotes', health: 'providerHealth',
     personal_finance: 'providerPersonalFinance', iot: 'providerIot', notion: 'providerNotion', slack: 'providerSlack',
     home_assistant: 'providerHomeAssistant',
-    bbc_world: 'providerBbcWorld', vnexpress_business: 'providerVnexpressBusiness', hn_top: 'providerHnTop', gdelt_economy: 'providerGdeltEconomy',
+    bbc_world: 'providerBbcWorld', vnexpress_business: 'providerVnexpressBusiness', dantri_news: 'providerDantriNews', thanhnien_news: 'providerThanhnienNews', tuoitre_news: 'providerTuoitreNews', hn_top: 'providerHnTop', gdelt_economy: 'providerGdeltEconomy',
     world_bank: 'providerWorldBank', frankfurter: 'providerFrankfurter', ecb: 'providerEcb', binance: 'providerBinance',
-    alternative_me: 'providerAlternativeMe', usgs: 'providerUsgs', coinpaprika: 'providerCoinpaprika',
+    alternative_me: 'providerAlternativeMe', usgs: 'providerUsgs', coinpaprika: 'providerCoinpaprika', nasa_eonet: 'providerNasaEonet',
+    cisa_kev: 'providerCisaKev', sec_edgar: 'providerSecEdgar',
   } as Record<string, string>)[providerId] ?? 'provider';
 }
 
@@ -99,6 +100,9 @@ function defaultConfiguration(provider: Provider, entry?: ConnectorCatalogEntry)
   // Free providers are preset from the catalog's static example so the saved shape matches the backend contract.
   // google_news is scoped: the owner types the query, so the example query is not preselected.
   if (provider === 'google_news' && entry?.example_config) return { ...(entry.example_config as ConnectorConfig), news_query: '' };
+  // sec_edgar is scoped: the owner supplies their own CIK and contact email, so the example values are not preselected.
+  if (provider === 'sec_edgar' && entry?.example_config) return { ...(entry.example_config as ConnectorConfig), sec_cik: '', sec_contact_email: '' };
+  if (provider === 'openalex' && entry?.example_config) return { ...(entry.example_config as ConnectorConfig), scholarly_query: '' };
   if (freeProviders.has(provider) && entry?.example_config) return entry.example_config as ConnectorConfig;
   if (nativeProviders.has(provider)) return {
     timeout_seconds: 30,
@@ -1107,7 +1111,7 @@ export function ConnectorEditor({
           {freeProviders.has(provider) && currentEntry && (sourceId
             ? <ProviderTerms sourceId={sourceId} entry={currentEntry} csrfToken={csrfToken} disabled={locked} />
             : <p className="muted" role="status">{t('termsRequired')}</p>)}
-          {freeProviders.has(provider) && provider !== 'google_news' ? <p className="muted">{t('fixedScope')}</p> : nativeProviders.has(provider)
+          {freeProviders.has(provider) && provider !== 'google_news' && provider !== 'sec_edgar' && provider !== 'openalex' ? <p className="muted">{t('fixedScope')}</p> : nativeProviders.has(provider)
             ? <ProviderScope key={`${sourceId}:${provider}:${revision}:${sourceGeneration}:${scopeResetEpoch}`} provider={provider as NativeProvider} configuration={configuration} disabled={locked} resetEpoch={scopeResetEpoch} onChange={changeConfiguration} />
             : provider === 'rss' ? <div className="field"><Label htmlFor="source-feed-url">{t('sourceUrl')}</Label><Input id="source-feed-url" type="url" value={configuration.feed_url ?? ''} onChange={(event) => changeConfiguration('feed_url', event.target.value)} /></div> : <div className="field"><Label htmlFor="source-config-url">{provider === 'rest' ? t('apiUrl') : t('pageUrl')}</Label><Input id="source-config-url" type="url" value={configuration.url ?? ''} onChange={(event) => changeConfiguration('url', event.target.value)} /></div>}
           {provider === 'rest' && <FieldGrid>

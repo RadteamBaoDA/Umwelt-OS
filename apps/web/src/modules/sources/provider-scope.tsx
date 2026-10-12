@@ -14,7 +14,7 @@ import { useDisplayPreferences } from '@/core/query-provider';
 import { acknowledgeProviderTerms, connectorKeys, getProviderTerms, type ConnectorCatalogEntry, type ConnectorConfig, type DeclaredUse, type Source } from './api';
 import { isStale, periodKind } from './freshness';
 
-export type NativeProvider = 'youtube' | 'arxiv' | 'huggingface' | 'github' | 'github_releases' | 'telegram' | 'alpha_vantage' | 'open_meteo' | 'google_news';
+export type NativeProvider = 'youtube' | 'arxiv' | 'huggingface' | 'github' | 'github_releases' | 'telegram' | 'alpha_vantage' | 'open_meteo' | 'google_news' | 'sec_edgar' | 'openalex';
 
 /** Renders fixed native-provider scope controls; GitHub resource flags and bounded history horizon remain in the owning revision-fenced draft. */
 export function ProviderScope({
@@ -56,6 +56,11 @@ export function ProviderScope({
     </div>
   );
 
+  if (provider === 'sec_edgar') return <>
+    {field('sec_cik', t('secCik'), configuration.sec_cik ?? '', (value) => onChange('sec_cik', value), { maxLength: 10, pattern: '[0-9]{10}' })}
+    {field('sec_contact_email', t('secContactEmail'), configuration.sec_contact_email ?? '', (value) => onChange('sec_contact_email', value), { maxLength: 254 })}
+    <small className="muted">{t('secHelp')}</small>
+  </>;
   if (provider === 'google_news') return <>
     {field('news_query', t('newsQuery'), configuration.news_query ?? '', (value) => onChange('news_query', value), { maxLength: 200 })}
     <div className="field">
@@ -79,6 +84,10 @@ export function ProviderScope({
       </Select>
     </div>
     <small className="muted">{t('newsHelp')}</small>
+  </>;
+  if (provider === 'openalex') return <>
+    {field('scholarly_query', t('scholarlyQuery'), configuration.scholarly_query ?? '', (value) => onChange('scholarly_query', value), { maxLength: 200 })}
+    <small className="muted">{t('scholarlyHelp')}</small>
   </>;
   if (provider === 'youtube') return <>{field('youtube_channel_id', t('youtubeChannelId'), configuration.youtube_channel_id ?? '', (value) => onChange('youtube_channel_id', value), { maxLength: 24, pattern: 'UC[A-Za-z0-9_-]{22}' })}</>;
   if (provider === 'arxiv') return <>{field('arxiv_category', t('arxivCategory'), configuration.arxiv_category ?? '', (value) => onChange('arxiv_category', value), { maxLength: 64, pattern: '[A-Za-z][A-Za-z0-9.-]{0,63}' })}</>;

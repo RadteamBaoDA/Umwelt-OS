@@ -34,6 +34,9 @@ class SourceCreate(BaseModel):
             "open_meteo": "api",
             "bbc_world": "rss",
             "vnexpress_business": "rss",
+            "tuoitre_news": "rss",
+            "thanhnien_news": "rss",
+            "dantri_news": "rss",
             "hn_top": "api",
             "gdelt_economy": "api",
             "world_bank": "api",
@@ -42,9 +45,13 @@ class SourceCreate(BaseModel):
             "binance": "api",
             "alternative_me": "api",
             "usgs": "api",
+            "cisa_kev": "api",
             "coinpaprika": "api",
             "coingecko": "api",
+            "nasa_eonet": "api",
             "google_news": "rss",
+            "sec_edgar": "api",
+            "openalex": "api",
         }.get(self.provider or "")
         if self.provider is not None and expected is None:
             raise ValueError("Provider is not registered")

@@ -150,7 +150,7 @@ def test_body_dispatch_and_urls_match_catalog():
 
     assert map_pure_provider_body("binance", fixture("binance_btcusdt.json"), NOW)[0].provider_id == "binance:BTCUSDT:price"
     assert BINANCE_URL.startswith("https://data-api.binance.vision/")
-    assert set(PURE_ADAPTERS) == {"world_bank", "frankfurter", "ecb", "binance", "alternative_me", "usgs", "coinpaprika", "coingecko"}
+    assert set(PURE_ADAPTERS) == {"world_bank", "frankfurter", "ecb", "binance", "alternative_me", "usgs", "coinpaprika", "coingecko", "nasa_eonet", "cisa_kev"}
     for provider, adapter in PURE_ADAPTERS.items():
         spec = get_provider_spec(provider)
         request = adapter.request("key") if provider == "coingecko" else adapter.request()

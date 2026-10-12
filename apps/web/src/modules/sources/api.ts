@@ -65,8 +65,11 @@ export type ConnectorConfig = {
   weather_timezone?: string;
   weather_metrics?: string[];
   news_query?: string;
+  scholarly_query?: string;
   news_site?: 'any' | 'reuters.com' | 'apnews.com' | 'bbc.com' | 'vnexpress.net';
   news_locale?: 'vi-VN' | 'en-US';
+  sec_cik?: string;
+  sec_contact_email?: string;
   history_mode?: 'returned_snapshot' | 'pending_updates';
   connection_id?: string;
   calls?: { grant_id: string; arguments: Record<string, unknown> }[];

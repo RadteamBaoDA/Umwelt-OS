@@ -4,7 +4,7 @@ This catalog distinguishes implemented mapper scope from provider ideas that sti
 permitted endpoint, source scope, authentication contract, licensing review, or adapter work.
 Public access alone does not imply permission to redistribute provider content.
 
-Free presets (BBC, VnExpress, Google News RSS search, Hacker News top stories, GDELT, World Bank, Frankfurter, ECB, Binance, Alternative.me, USGS, CoinPaprika, CoinGecko, Alpha Vantage) also have terms, quota and setup facts in [free-sources.md](free-sources.md). Their live behaviour is not yet verified; see [provider-research-2026-10-07.md](provider-research-2026-10-07.md).
+Free presets (BBC, VnExpress, Google News RSS search, Hacker News top stories, GDELT, World Bank, Frankfurter, ECB, Binance, Alternative.me, USGS, NASA EONET, CoinPaprika, CoinGecko, Alpha Vantage) also have terms, quota and setup facts in [free-sources.md](free-sources.md). Their live behaviour is not yet verified; see [provider-research-2026-10-07.md](provider-research-2026-10-07.md).
 
 ## Inventory
 
@@ -15,12 +15,14 @@ Generated from `modules/connectors/catalog.py` and `modules/connectors/provider_
 - **Runtime verified** is `no` for every row. No provider has live verification yet; endpoint shapes and quotas are plan-documented, not observed.
 - **Eligibility** is the catalog class (`open`, `personal`, `noncommercial`, `review`) or `unknown` for providers without a free preset. It is never a grant for a workspace; see `free-sources.md`.
 
-The 12 registered fixed-endpoint native providers (plus the scoped `google_news` preset) are `bbc_world`, `vnexpress_business`, `hn_top`, `gdelt_economy`, `world_bank`, `frankfurter`, `ecb`, `binance`, `alternative_me`, `usgs`, `coinpaprika` and `coingecko` (requires an owner API key). `gdelt_economy` is `experimental`. The native registry also holds the earlier providers (`youtube`, `arxiv`, `huggingface`, `github_releases`, `github`, `telegram`, `alpha_vantage`, `open_meteo`), which are listed below with their own availability.
+The 17 registered fixed-endpoint native providers (plus the scoped `google_news`, `sec_edgar` and `openalex` presets) are `bbc_world`, `vnexpress_business`, `tuoitre_news`, `thanhnien_news`, `dantri_news`, `hn_top`, `gdelt_economy`, `world_bank`, `frankfurter`, `ecb`, `binance`, `alternative_me`, `usgs`, `nasa_eonet`, `cisa_kev`, `coinpaprika` and `coingecko` (requires an owner API key). `gdelt_economy` is `experimental`. The native registry also holds the earlier providers (`youtube`, `arxiv`, `huggingface`, `github_releases`, `github`, `telegram`, `alpha_vantage`, `open_meteo`), which are listed below with their own availability.
 
 Notes on specific rows:
 
 - `google_news` is implemented as a scoped preset (query, site allowlist, `vi-VN`/`en-US`; the owner never supplies a URL). It uses an unofficial Google News RSS endpoint with no official API contract, requires terms acknowledgement plus operator review, and is not runtime verified.
+- `openalex` is implemented as a scoped preset (`scholarly_query`; the owner never supplies a URL). OpenAlex data is CC0 and basic use needs no key. It is not runtime verified.
 - `hn_top` (implemented top-stories preset) and `hacker_news` (planned, broader catalog entry) are separate rows. Only `hn_top` has an adapter.
+- `sec_edgar` is implemented as a scoped preset (owner CIK plus contact email for the SEC-required User-Agent; the owner never supplies a URL). It is not runtime verified.
 - `coingecko` is registered (requires API key). The owner supplies a Demo key through the native REST credential slot; it is stored encrypted and never returned. Without a key it fails closed with `credential_missing`. Its availability is `implemented`, not runtime verified.
 - `finance` is `planned` in the catalog, while the prose below lists crypto, commodity and macro families as unavailable. Only `alpha_vantage` has an adapter in that family.
 - `alpha_vantage` is `requires_credentials`: an owner-supplied key is required, stored encrypted, and activation is gated.
@@ -63,8 +65,13 @@ Notes on specific rows:
 | `home_assistant` | `planned` | unknown | - | no | no | - | - |
 | `bbc_world` | `implemented` | review | supported | yes | no | 30 | 2026-10-07 |
 | `vnexpress_business` | `implemented` | noncommercial | supported | yes | no | 30 | 2026-10-07 |
+| `tuoitre_news` | `implemented` | noncommercial | supported | yes | no | 30 | 2026-10-07 |
+| `thanhnien_news` | `implemented` | noncommercial | supported | yes | no | 30 | 2026-10-07 |
+| `dantri_news` | `implemented` | noncommercial | supported | yes | no | 30 | 2026-10-07 |
 | `google_news` | `implemented` | review | supported | yes | no | 30 | 2026-10-07 |
+| `openalex` | `implemented` | open | supported | yes | no | 1440 | 2026-10-07 |
 | `hn_top` | `implemented` | review | supported | yes | no | 60 | 2026-10-07 |
+| `sec_edgar` | `implemented` | open | supported | yes | no | 360 | 2026-10-07 |
 | `gdelt_economy` | `implemented` | review | experimental | yes | no | 60 | 2026-10-07 |
 | `world_bank` | `implemented` | open | supported | yes | no | 1440 | 2026-10-07 |
 | `frankfurter` | `implemented` | open | supported | yes | no | 1440 | 2026-10-07 |
@@ -72,6 +79,8 @@ Notes on specific rows:
 | `binance` | `implemented` | review | supported | yes | no | 15 | 2026-10-07 |
 | `alternative_me` | `implemented` | open | supported | yes | no | 1440 | 2026-10-07 |
 | `usgs` | `implemented` | open | supported | yes | no | 60 | 2026-10-07 |
+| `nasa_eonet` | `implemented` | review | supported | yes | no | 60 | 2026-10-07 |
+| `cisa_kev` | `implemented` | open | supported | yes | no | 1440 | 2026-10-07 |
 | `coinpaprika` | `implemented` | personal | supported | yes | no | 15 | 2026-10-07 |
 | `coingecko` | `implemented` | review | supported | yes | no | 15 | 2026-10-07 |
 

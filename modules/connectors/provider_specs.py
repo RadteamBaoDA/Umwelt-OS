@@ -59,9 +59,9 @@ class FreeProviderSpec:
 # owner-entered API key (connector_rest_credentials) and fails closed without one. Code presence only;
 # runtime_verified stays False.
 DISPATCHABLE = frozenset({
-    "bbc_world", "vnexpress_business", "hn_top", "gdelt_economy",
+    "bbc_world", "vnexpress_business", "dantri_news", "thanhnien_news", "tuoitre_news", "hn_top", "gdelt_economy",
     "world_bank", "frankfurter", "ecb", "binance", "alternative_me", "usgs", "coinpaprika",
-    "coingecko", "google_news",
+    "coingecko", "google_news", "nasa_eonet", "cisa_kev", "sec_edgar", "openalex",
 })
 
 
@@ -97,12 +97,34 @@ FREE_PROVIDER_SPECS: tuple[FreeProviderSpec, ...] = (
           "https://vnexpress.net/rss", "noncommercial",
           "Identify VnExpress clearly and link the original article; feed-only scope.",
           ("/rss/kinh-doanh.rss",), (_day(96), _unknown())),
+    _spec("tuoitre_news", "Tuổi Trẻ News", ("tuoitre.vn",), "news", 30,
+          "https://tuoitre.vn/rss.htm", "noncommercial",
+          "Display Tuổi Trẻ clearly as source and link the original article",
+          ("/home.rss",), (_day(96), _unknown())),
+    _spec("thanhnien_news", "Báo Thanh Niên", ("thanhnien.vn",), "news", 30,
+          "https://thanhnien.vn/rss.html", "noncommercial",
+          'Credit "Báo Thanh Niên" or "Theo Báo Thanh Niên" and link the original article',
+          ("/rss/home.rss",), (_day(96), _unknown())),
+    _spec("dantri_news", "Dân trí News", ("dantri.com.vn",), "news", 30,
+          "https://dantri.com.vn/rss.htm", "noncommercial",
+          "Credit Dân trí as the source and link the original article; feed-only title, summary and link.",
+          ("/rss/home.rss",), (_day(96), _unknown())),
     # Unofficial RSS search endpoint: Google publishes no API contract for it. Interval and pilot cap
     # mirror the other 30-minute news feeds (docs/free-data-provider-policy.md quota table); no official quota is claimed.
     _spec("google_news", "Google News RSS", ("news.google.com",), "news", 30,
           "https://policies.google.com/terms", "review",
           "Google News RSS / publisher: show the item's publisher and link to the original article; feed-only title, summary and link.",
           ("/rss/search",), (_day(96), _unknown())),
+    # SEC fair access: max 10 requests/second and a declared User-Agent with contact details (owner email in scope).
+    _spec("sec_edgar", "SEC EDGAR filings", ("data.sec.gov",), "event", 360,
+          "https://www.sec.gov/privacy.htm#security", "open", "Source: U.S. SEC EDGAR",
+          ("/submissions/CIK##########.json",), (_day(96), _unknown())),
+    # OpenAlex works search: data is CC0 (help.openalex.org); basic use needs no key (a free key only raises the
+    # daily budget). The 100 req/s cap is far above the one daily send; the local pilot cap stays small.
+    _spec("openalex", "OpenAlex works search", ("api.openalex.org",), "event", 1440,
+          "https://help.openalex.org/how-to-use-the-api/api-overview", "open",
+          "Credit OpenAlex; data is CC0. Link the work's OpenAlex id and DOI; abstracts are rebuilt from the inverted index.",
+          ("/works",), (_day(8), _unknown())),
     _spec("hn_top", "Hacker News top stories", ("hacker-news.firebaseio.com",), "news", 60,
           "https://github.com/HackerNews/API", "review",
           "Attribute Hacker News plus the item and publisher URL; the API license does not license linked articles.",
@@ -141,6 +163,15 @@ FREE_PROVIDER_SPECS: tuple[FreeProviderSpec, ...] = (
           "https://www.usgs.gov/information-policies-and-instructions/copyrights-and-credits", "open",
           "Credit the U.S. Geological Survey with the event citation; do not fetch detail URLs automatically.",
           ("/earthquakes/feed/v1.0/summary/4.5_day.geojson",), (_day(48), _unknown())),
+    # EONET publishes only a visualization/general-information disclaimer, no license or key/rate-limit terms.
+    _spec("nasa_eonet", "NASA EONET open natural events", ("eonet.gsfc.nasa.gov",), "event", 60,
+          "https://eonet.gsfc.nasa.gov/what-is-eonet#disclaimer", "review",
+          "Credit NASA EONET and the event's listed sources; data is for visualization and general information only, not official extents.",
+          ("/api/v3/events?status=open&limit=50",), (_day(48), _unknown())),
+    _spec("cisa_kev", "CISA Known Exploited Vulnerabilities", ("raw.githubusercontent.com",), "event", 1440,
+          "https://www.cisa.gov/known-exploited-vulnerabilities-catalog", "open",
+          "Credit CISA Known Exploited Vulnerabilities Catalog (CC0 data repository cisagov/kev-data).",
+          ("/cisagov/kev-data/develop/known_exploited_vulnerabilities.json",), (_day(8), _unknown())),
     _spec("coinpaprika", "CoinPaprika BTC ticker", ("api.coinpaprika.com",), "measurement", 15,
           "https://docs.coinpaprika.com/api-plans", "personal",
           "Credit CoinPaprika; free use is personal with no redistribution.",

@@ -45,8 +45,12 @@ _CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 FEED_URLS: dict[str, str] = {
     "bbc_world": "https://feeds.bbci.co.uk/news/world/rss.xml",
     "vnexpress_business": "https://vnexpress.net/rss/kinh-doanh.rss",
+    "tuoitre_news": "https://tuoitre.vn/home.rss",
+    "thanhnien_news": "https://thanhnien.vn/rss/home.rss",
+    "dantri_news": "https://dantri.com.vn/rss/home.rss",
 }
-PUBLISHERS: dict[str, str] = {"bbc_world": "BBC News", "vnexpress_business": "VnExpress"}
+PUBLISHERS: dict[str, str] = {"bbc_world": "BBC News", "vnexpress_business": "VnExpress", "tuoitre_news": "Tuổi Trẻ",
+                              "thanhnien_news": "Báo Thanh Niên", "dantri_news": "Dân trí"}
 
 # Google News RSS search: unofficial endpoint, no API contract. The URL is built here from validated scope only.
 GOOGLE_NEWS_URL = "https://news.google.com/rss/search"

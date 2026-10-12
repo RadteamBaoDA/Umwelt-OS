@@ -81,6 +81,13 @@ def test_atom_dates_and_modified():
     assert pr(rec)["source_fields"]["summary"] == "Tom tat"
 
 
+def test_dantri_news_feed_maps_with_publisher_and_pinned_url():
+    """The dantri_news preset reuses the RSS mapper, pinned feed URL and Dân trí publisher label."""
+    rec = map_feed("dantri_news", fixture("bbc_world_rss.xml"), NOW)[0]
+    assert pr(rec)["source_fields"]["publisher"] == "Dân trí"
+    assert feed_request("dantri_news", None, "r1").url == "https://dantri.com.vn/rss/home.rss"
+
+
 def test_hostile_xml_rejected():
     with pytest.raises(ProviderPayloadError, match="forbidden_xml"):
         map_feed("bbc_world", fixture("news_hostile_doctype.xml"), NOW)
@@ -121,6 +128,7 @@ def test_conditional_get_and_304():
     assert feed_request("bbc_world", stored, "r1").headers["If-None-Match"] == '"abc"'
     assert "If-None-Match" not in feed_request("bbc_world", stored, "r2").headers  # config revision changed
     assert "If-None-Match" not in feed_request("vnexpress_business", stored, "r1").headers  # other URL
+    assert "If-None-Match" not in feed_request("tuoitre_news", stored, "r1").headers  # other URL
     bad = FeedValidators(stored.url, "r1", "bad\r\nX: y")
     assert "If-None-Match" not in feed_request("bbc_world", bad, "r1").headers
     assert capture_validators("bbc_world", {}) is None
@@ -133,6 +141,7 @@ def test_conditional_get_and_304():
 
 def test_feed_request_fixed_hosts():
     assert feed_request("bbc_world").url == "https://feeds.bbci.co.uk/news/world/rss.xml"
+    assert feed_request("tuoitre_news").url == "https://tuoitre.vn/home.rss"
     with pytest.raises(ProviderPayloadError):
         feed_request("hn_top")
 
@@ -210,3 +219,9 @@ def test_gdelt_empty_list_is_valid_and_registry_dispatch():
     assert len(map_news_body("bbc_world", fixture("bbc_world_rss.xml"), NOW)) == 4
     with pytest.raises(ProviderPayloadError):
         map_news_body("hn_top", b"[]", NOW)
+
+
+def test_thanhnien_feed_mapping_and_url():
+    rec = map_feed("thanhnien_news", fixture("vnexpress_atom.xml"), NOW)[0]
+    assert rec.provider_id == "vne-1"
+    assert feed_request("thanhnien_news", None, "r1").url == "https://thanhnien.vn/rss/home.rss"
