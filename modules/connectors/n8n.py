@@ -20,7 +20,6 @@ from modules.connectors.public import (
 )
 from modules.sources.schemas import ConnectorSource
 
-
 # Fixed in-network address packaged workflows call back to (every infrastructure/n8n/workflows/*.json URL).
 # Not owner-configurable: a different value would desynchronize the shipped templates.
 CALLBACK_BASE = "http://api:8000"
@@ -64,7 +63,7 @@ def build_workflow(
     use provider-fetch with the same revision and credential binding as feeds.
     """
     native = is_native_provider(source.provider)
-    if native and source.type != PROVIDER_SOURCE_TYPES[source.provider]:
+    if native and source.type != PROVIDER_SOURCE_TYPES[str(source.provider)]:
         raise ValueError("Source type does not match the registered provider")
     filename = (
         "mcp.json" if source.type == "mcp" else

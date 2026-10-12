@@ -3,15 +3,15 @@ import copy
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from uuid import UUID, uuid4
 
+from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.realtime import ReplayDraft, commit_with_replay, make_source_change
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope
-from fastapi import HTTPException
 from modules.connectors.backends import CURRENT_TEMPLATE_REVISION, backend_admits
 from modules.connectors.models import (
     ConnectorCollectionRequest,
@@ -23,8 +23,11 @@ from modules.connectors.models import (
     GithubOAuthGrant,
 )
 from modules.connectors.public import (
-    NativeCredentialRevocationSnapshot, NativeCredentialSnapshot,
-    _connector_access, _connector_actor, _read_scoped_source,
+    NativeCredentialRevocationSnapshot,
+    NativeCredentialSnapshot,
+    _connector_access,
+    _connector_actor,
+    _read_scoped_source,
 )
 from modules.sources import public as sources
 from modules.sources.schemas import ConnectorSource, SourceFence
@@ -146,9 +149,9 @@ def _retained_operation_matches(
            or original_operation.get(key) != value for key, value in identity.items()):
         return False
     if (type(original_operation.get("source_generation")) is not int
-            or original_operation["source_generation"] <= 0
+            or cast(int, original_operation["source_generation"]) <= 0
             or type(original_operation.get("revision")) is not int
-            or original_operation["revision"] <= 0
+            or cast(int, original_operation["revision"]) <= 0
             or not isinstance(original_operation.get("id"), str)):
         return False
     step = original_operation.get("step")
@@ -184,7 +187,7 @@ async def _read_retained_connector_rows(
     ) or original_operation.get("retained_effect_result"):
         return None, None, {}
     source = await sources.get_connector_retained_effect_anchor_in_uow(
-        session, source_id, source_generation=original_operation["source_generation"],
+        session, source_id, source_generation=cast(int, original_operation["source_generation"]),
         scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
     )
     if source is None:
@@ -216,7 +219,7 @@ async def lock_retained_connector_effect(
         return None
     try:
         source = await sources.lock_connector_retained_effect_anchor(
-            session, source_id, source_generation=original_operation["source_generation"],
+            session, source_id, source_generation=cast(int, original_operation["source_generation"]),
             scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
         )
     except HTTPException as exc:
@@ -250,14 +253,14 @@ async def commit_retained_connector_effect(
     if before is None or before.access_fence != access_fence:
         raise HTTPException(status_code=409, detail="Retained Connector observation unavailable")
     source = await sources.get_connector_retained_effect_anchor_in_uow(
-        session, source_id, source_generation=original_operation["source_generation"],
+        session, source_id, source_generation=cast(int, original_operation["source_generation"]),
         scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
     )
     if source != before.fence:
         raise HTTPException(status_code=409, detail="Retained Connector Source changed")
     if source.generation == original_operation["source_generation"]:
         await commit_connector_observation(
-            session, before, operation_id=UUID(original_operation["id"]),
+            session, before, operation_id=UUID(cast(str, original_operation["id"])),
             scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
     else:
@@ -544,7 +547,7 @@ async def _settle_retained_workflow_after_io(
         denied.journal_disposition = disposition
         raise
     operation_id = UUID(str(original_operation["id"]))
-    step = original_operation["step"]
+    step = cast(dict[str, Any], original_operation["step"])
     step_id = str(step["id"])
     if outcome == "known_success" and step.get("kind") == "lookup":
         changed = await prepare_workflow_step(
@@ -602,7 +605,7 @@ async def _credential_send_allowed(
         current = credential.operation_envelope if credential is not None else None
         cleanup = envelope.get("kind") == "delete"
         return bool(
-            source is not None and row is not None and credential is not None
+            source is not None and row is not None and credential is not None and current is not None
             and _retained_operation_matches(current, envelope, source_id=source_id, scope=scope, access_fence=access_fence)
             and not current.get("retained_effect_result")
             and current == envelope and envelope.get("state") == "dispatched"
@@ -662,7 +665,7 @@ async def _workflow_send_allowed(
         step = operation.get("step")
         cleanup = isinstance(step, dict) and step.get("kind") == "deactivate"
         return bool(
-            source is not None and row is not None and isinstance(step, dict)
+            source is not None and row is not None and isinstance(step, dict) and current is not None
             and step.get("state") == "dispatched"
             and _retained_operation_matches(current, operation, source_id=source_id, scope=scope, access_fence=access_fence)
             and not current.get("retained_effect_result")
@@ -905,7 +908,7 @@ async def revoke_native_credential(
     Caller supplies the retained AccessFence/native operation; enter before domain locks.
     Clear ciphertext and optional live reservation while preserving historical bot binding.
     """
-    source, row, _slots = await lock_connector(session, source_id, _ALL_CREDENTIAL_SLOTS, scope=scope, multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=access_fence)
+    _source, _row, _slots = await lock_connector(session, source_id, _ALL_CREDENTIAL_SLOTS, scope=scope, multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=access_fence)
     return await revoke_native_credential_in_uow(
         session, source_id, source_generation=source_generation, connector_revision=connector_revision,
         release_bot_reservation=release_bot_reservation, scope=scope,
@@ -1408,7 +1411,7 @@ async def begin_enable(
     Enter before domain locks; caller retains ordered parents until final commit.
     """
     access_fence = await _connector_access(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    source, row, slots = await lock_connector(
+    _source, _row, _slots = await lock_connector(
         session, source_id, tuple((required_credentials or {}).keys()),
         scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
@@ -1490,7 +1493,7 @@ async def begin_activation_bundle(
     """
     slots_to_lock = tuple(sorted(set(required_credentials) | set(credential_intents)))
     access_fence = await _connector_access(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    source, row, slots = await lock_connector(session, source_id, slots_to_lock, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    _source, _row, _slots = await lock_connector(session, source_id, slots_to_lock, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     return await begin_activation_bundle_in_uow(
         session, source_id, source_generation, revision, configuration, activation_id,
         required_credentials, credential_intents,
@@ -2353,7 +2356,7 @@ async def create_delete_intent(
     Enter before domain locks; caller retains ordered parents until final commit.
     """
     access_fence = await _connector_access(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    source, desired, slots = await lock_connector(session, source_id, (slot,), scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    _source, _desired, _slots = await lock_connector(session, source_id, (slot,), scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     return await create_delete_intent_in_uow(
         session, source_id, slot, expected_revision,
         scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,

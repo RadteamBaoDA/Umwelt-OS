@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Literal, TypeGuard
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
+from fastapi import HTTPException
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -27,12 +28,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
-from fastapi import HTTPException
-
 from modules.connectors.backends import (
     NATIVE_PROVIDERS,
     PROVIDER_SCOPE_FIELDS,
     native_dispatch_supported,
+)
+from modules.connectors.backends import (
     is_native_provider as _is_native_provider,
 )
 from modules.connectors.models import (
@@ -56,7 +57,12 @@ from modules.sources.schemas import ConnectorSource, SourceFence
 
 if TYPE_CHECKING:
     from core.config import Settings
-    from modules.connectors.collection_schemas import CollectionAdmissionRead, CollectionAdmissionRequest, CollectionRequestRead, CollectionRequestRef
+    from modules.connectors.collection_schemas import (
+        CollectionAdmissionRead,
+        CollectionAdmissionRequest,
+        CollectionRequestRead,
+        CollectionRequestRef,
+    )
     from modules.connectors.github.schemas import GitHubBindingFence, GitHubSegmentProof
     from modules.connectors.github.sync import GitHubValidatedSegment
     from modules.connectors.github.webhooks import (
@@ -1563,10 +1569,9 @@ async def reset_github_collection_cursor(
 
     from fastapi import HTTPException
 
+    from modules.connectors import provisioning
     from modules.connectors.models import GithubSyncReset
     from modules.ingestion import public as ingestion
-    from modules.sources import public as sources
-    from modules.connectors import provisioning
 
     if re.fullmatch(r"[0-9a-f]{64}", expected_scope_sha256) is None:
         raise HTTPException(status_code=422, detail="GitHub scope review is invalid")
@@ -2274,7 +2279,6 @@ async def claim_github_hint(
     collection lease first; receipt acceptance independently verifies that exact lease.
     Lock order is Source, provisioning, grant, then hint.
     """
-    from modules.sources import public as sources
 
     now = (now or datetime.now(UTC)).astimezone(UTC)
     from modules.connectors import provisioning

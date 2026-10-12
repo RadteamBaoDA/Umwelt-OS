@@ -163,7 +163,7 @@ async def save_world_provider_credential(
     """
     scope = _owner
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
-    access_fence = await _owner_access(session, request, scope)
+    await _owner_access(session, request, scope)
     source = await sources.lock_source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
     if source is None:
         raise HTTPException(status_code=404, detail="Source not found")
@@ -263,7 +263,7 @@ async def collect_mcp_scheduled(
     actual rollout flag; members have no Source/configuration/credential access. Service bearer capability remains distinct from principal scope.
     """
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
-    token, scope, access_fence = await _mcp_collector(
+    _token, scope, _access_fence = await _mcp_collector(
         session, source_id, authorization, multi_workspace_enabled=multi_workspace_enabled,
     )
     source = await _source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
@@ -300,11 +300,11 @@ async def read_agent_browser_grant(
     """
     scope = _owner
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
-    access_fence = await _owner_access(session, request, scope)
-    scope = await resolve_agent_browser_scope(session, _owner.user_id, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
-    if scope is None:
+    await _owner_access(session, request, scope)
+    grant = await resolve_agent_browser_scope(session, _owner.user_id, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    if grant is None:
         return {"available": False, "enabled": False}
-    return {"available": True, **scope.__dict__}
+    return {"available": True, **grant.__dict__}
 
 
 @router.put("/{source_id}/agent-browser-grant", dependencies=[Depends(module_dependency("connectors"))])
@@ -322,9 +322,9 @@ async def update_agent_browser_grant(
     """
     scope = _owner
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
-    access_fence = await _owner_access(session, request, scope)
+    await _owner_access(session, request, scope)
     try:
-        scope = await update_agent_browser_grant_in_uow(
+        grant = await update_agent_browser_grant_in_uow(
             session, _owner.user_id, source_id, expected_revision, payload,
             multi_workspace_enabled=multi_workspace_enabled, scope=scope,
         )
@@ -335,7 +335,7 @@ async def update_agent_browser_grant(
     except ValueError as exc:
         await session.rollback()
         raise HTTPException(status_code=409, detail="Browser grant revision is stale") from exc
-    return {"available": True, **scope.__dict__}
+    return {"available": True, **grant.__dict__}
 
 
 class ProviderFetchRequest(BaseModel):
@@ -1171,7 +1171,7 @@ async def _collect_telegram_page(
                 token, offset=offset,
                 remaining_bytes=min(10 * 1024 * 1024, remaining_bytes),
                 before_request=lambda: _native_send_fence(
-                    session, source, lease, collector_token, request_ref=request_ref, scope=scope,
+                    session, source, lease, collector_token, request_ref=request_ref, scope=scope,  # noqa: B023 - invoked within this iteration before `lease` rebinds
                     multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
                     source_fence=source_fence, native_snapshot=snapshot,
                 ),
@@ -1395,7 +1395,6 @@ async def trigger_collection(
             )
         ):
             raise HTTPException(status_code=409, detail="Enable this MCP source before collecting")
-        expected_revision = provisioned.desired_revision
         # Exact saved identity is retained for the future scoped MCP driver.
         # The current callee has no accepted ToolPrincipal contract.
         runtime = getattr(request.app.state, "mcp_runtime", None)

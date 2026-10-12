@@ -679,7 +679,7 @@ async def github_retirement_peer_projection_in_uow(
     multi_workspace_enabled: bool,
     access_fence: AccessFence,
     source_fence: SourceFence,
-) -> Select[tuple[UUID]]:
+) -> Select[UUID]:
     """Return sibling IDs solely for exact archived GitHub provider-revoke safety.
 
     Internal retirement caller holds ordered account/workspace/membership, anchor Source,
@@ -1648,7 +1648,10 @@ async def _fence_connector_source(
     """
     from modules.connectors import public as connectors
     from modules.ingestion import public as ingestion
-    from modules.tools.public import lock_source_browser_results_in_uow, purge_source_browser_results_in_uow
+    from modules.tools.public import (
+        lock_source_browser_results_in_uow,
+        purge_source_browser_results_in_uow,
+    )
 
     scope = _transitioned_source_scope(scope, source)
     await session.flush()

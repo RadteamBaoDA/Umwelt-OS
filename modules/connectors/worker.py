@@ -549,7 +549,7 @@ async def _resume_activation(
     before ``drive_activation`` reacquires its own ordered locks and does all provider I/O.
     """
     from modules.connectors.activation import drive_activation
-    from modules.settings.public import module_is_enabled, resolve_n8n
+    from modules.settings.public import module_is_enabled
 
     flag = settings.multi_workspace_enabled
     intent = await session.scalar(select(ConnectorProvisioning.activation_intent).where(
@@ -1261,7 +1261,7 @@ async def process_collection_request(ctx: dict[str, object], request_id: str) ->
         return "deferred"
     try:
         await cast(Any, executor)(ctx, admission)
-    except Exception:
+    except Exception:  # noqa: BLE001 - any executor failure must settle the admission as failed
         async with factory() as session:
             await scheduler.settle_admission(
                 session, admission.request_id, admission.admission_token,

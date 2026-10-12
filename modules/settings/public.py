@@ -10,8 +10,8 @@ from uuid import UUID
 
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import HTTPException
-from redis.asyncio import Redis
 from pydantic import BaseModel, Field
+from redis.asyncio import Redis
 from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,9 +43,16 @@ from core.workspaces.public import (
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
 from modules.backup.schemas import ActivityReceipt, AdmissionReceipt
 from modules.settings.models import AISettingsRecord, OwnerPreferencesRecord, legacy_aliases
-from modules.settings.models import list_capabilities as list_capabilities
-from modules.settings.models import new_capability_result as new_capability_result
-from modules.settings.models import save_capability as save_capability
+from modules.settings.models import (
+    list_capabilities as list_capabilities,  # noqa: PLC0414 - explicit re-export
+)
+from modules.settings.models import (
+    new_capability_result as new_capability_result,  # noqa: PLC0414 - explicit re-export
+)
+from modules.settings.models import (
+    save_capability as save_capability,  # noqa: PLC0414 - explicit re-export
+)
+from modules.settings.prompts import DEFAULT_SYSTEM_PROMPTS, MAX_PROMPT_CHARS
 from modules.settings.schemas import (
     ModuleLifecycleRead,
     N8nRead,
@@ -60,7 +67,6 @@ from modules.settings.schemas import (
     WebSearchRead,
     WebSearchUpdate,
 )
-from modules.settings.prompts import DEFAULT_SYSTEM_PROMPTS, MAX_PROMPT_CHARS
 
 ALIASES = ("reasoning-large", "reasoning-small", "fast", "embedding", "reranker", "vision", "local-private")
 

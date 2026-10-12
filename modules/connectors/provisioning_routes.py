@@ -10,14 +10,25 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.public import authenticated_session_ref
-from core.workspaces.dependencies import require_workspace_read, require_workspace_write
-from core.workspaces.public import lock_access_fence, read_access_fence
-from core.workspaces.schemas import AccessFence, Scope, WorkspaceContext
 from core.database import get_session
 from core.realtime import commit_with_replay, make_source_change
-from modules.connectors import catalog, collection, provider_terms, provisioning, registry, scheduler
+from core.workspaces.dependencies import require_workspace_read, require_workspace_write
+from core.workspaces.public import lock_access_fence
+from core.workspaces.schemas import AccessFence, Scope, WorkspaceContext
+from modules.connectors import (
+    catalog,
+    collection,
+    provider_terms,
+    provisioning,
+    registry,
+    scheduler,
+)
 from modules.connectors import public as connector_owner
-from modules.connectors.activation import drive_activation, prepare_credential_assignment
+from modules.connectors.activation import (
+    activate_native_in_uow,
+    drive_activation,
+    prepare_credential_assignment,
+)
 from modules.connectors.credentials import (
     CredentialEncryptionUnavailable,
     N8nCredentials,
@@ -26,8 +37,6 @@ from modules.connectors.credentials import (
     encrypt_rest_secret,
     secret_fingerprint,
 )
-from modules.connectors.activation import activate_native_in_uow
-from modules.connectors.provider_specs import TERMS_INELIGIBLE
 from modules.connectors.models import (
     ConnectorNativeCredential,
     ConnectorProvisioning,
@@ -35,10 +44,11 @@ from modules.connectors.models import (
     ConnectorSchedule,
 )
 from modules.connectors.n8n import N8nApi
+from modules.connectors.provider_specs import TERMS_INELIGIBLE
 from modules.connectors.public import (
     ConnectorConfig,
-    ProviderRateLimited,
     NativeCredentialSnapshot,
+    ProviderRateLimited,
     serialize_source_configuration,
     validate_public_url,
 )
@@ -261,7 +271,7 @@ async def get_configuration(
     """
     scope = _owner
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
-    access_fence = await _owner_access(session, request, scope)
+    await _owner_access(session, request, scope)
     source = await sources.get_connector_source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
     if source is None:
         raise HTTPException(status_code=404, detail="Source not found")
@@ -448,8 +458,7 @@ async def get_catalog(session: Session, request: Request, _owner: OwnerRead) -> 
     actual rollout flag; members have no Source/configuration/credential access. Browser write admission retains CSRF/backup checks and original session/access lineage.
     """
     scope = _owner
-    multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
-    access_fence = await _owner_access(session, request, scope)
+    await _owner_access(session, request, scope)
     return list(catalog.list_catalog())
 
 
@@ -591,7 +600,7 @@ async def validate_configuration(
     """
     scope = _owner
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
-    access_fence = await _owner_access(session, request, scope)
+    await _owner_access(session, request, scope)
     source = await _source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
     try:
         data = registry.validate(source)
@@ -617,7 +626,7 @@ async def get_activation(
     """
     scope = _owner
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
-    access_fence = await _owner_access(session, request, scope)
+    await _owner_access(session, request, scope)
     await _source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
     row = await provisioning.activation_status(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
     if row is None:
@@ -777,7 +786,7 @@ async def activate_source(
     else:
         await session.rollback()
     access_fence = await _owner_access(session, request, scope, expected=access_fence)
-    source_fence, row, slots = await provisioning.lock_connector(
+    source_fence, row, _slots = await provisioning.lock_connector(
         session, source_id, provisioning._ALL_CREDENTIAL_SLOTS, scope=scope,
         multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=access_fence,
     )
@@ -794,7 +803,7 @@ async def activate_source(
         collector = await provisioning.get_managed_credential(session, source_id, "collector", multi_workspace_enabled=multi_workspace_enabled, scope=scope)
         collector_token: str | None = None
         collector_binding = collector.resolved_binding if collector is not None else None
-        collector_scope = "mcp:collect" if source.type == "mcp" else "ingestion:write"
+        collector_scope: Literal["mcp:collect", "ingestion:write"] = "mcp:collect" if source.type == "mcp" else "ingestion:write"
         if not (
             collector is not None and collector.state == "ready" and collector.credential_id
             and isinstance(collector_binding, dict)
