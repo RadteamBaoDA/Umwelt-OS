@@ -1,8 +1,10 @@
 """Pure NASA EONET v3 natural-event adapter (open events, fixed endpoint, no key). Event/source URLs are never fetched."""
 
+import logging
 import re
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 
 from modules.connectors.providers.macro import (
     ProviderPayloadError,
@@ -18,6 +20,7 @@ from modules.ingestion.schemas import IngestionRecord
 NASA_EONET_URL = "https://eonet.gsfc.nasa.gov/api/v3/events?status=open&limit=50"
 _MAX_EVENTS = 50  # equals the request limit; more is reported incomplete rather than truncated silently
 _MAX_SOURCES = 5
+_LOG = logging.getLogger(__name__)
 _ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 
 
@@ -34,11 +37,75 @@ def _clean(value: object, limit: int) -> str | None:
     return cleaned[:limit] or None
 
 
+def _truncated(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Return metadata with the provider envelope coverage downgraded to ``truncated``."""
+    out = dict(metadata)
+    out["provider_record"] = {**out["provider_record"], "coverage": "truncated"}
+    return out
+
+
+def _map_event(
+    event_id: str, title: str, event: dict[str, object], collected_at: datetime,
+) -> IngestionRecord:
+    """Map one event with a valid id/title to a record; malformed geometry/magnitude raises ``ProviderPayloadError``."""
+    geometry = event.get("geometry")
+    if not isinstance(geometry, list) or not geometry or not all(isinstance(g, dict) for g in geometry):
+        raise ProviderPayloadError("nasa_eonet_geometry_invalid")
+    dated = [(provider_instant(g.get("date"), collected_at, unit="iso"), g) for g in geometry]
+    observed, latest = max(dated, key=lambda pair: pair[0])
+    lat = lon = None
+    if latest.get("type") == "Point":
+        coords = latest.get("coordinates")
+        try:
+            if not isinstance(coords, list) or len(coords) != 2:
+                raise ValueError("coordinates")
+            lon_d, lat_d = (finite_decimal(c) for c in coords)
+        except ValueError as exc:
+            raise ProviderPayloadError("nasa_eonet_coordinates_invalid") from exc
+        if not (-180 <= lon_d <= 180 and -90 <= lat_d <= 90):
+            raise ProviderPayloadError("nasa_eonet_coordinates_invalid")
+        lat, lon = float(lat_d), float(lon_d)
+    value: Decimal | None = None
+    unit = _clean(latest.get("magnitudeUnit"), 32)
+    if latest.get("magnitudeValue") is not None:
+        try:
+            value = finite_decimal(latest["magnitudeValue"])
+        except ValueError as exc:
+            raise ProviderPayloadError("nasa_eonet_magnitude_invalid") from exc
+    categories_raw = event.get("categories")
+    categories = [
+        c for c in (_clean(cat.get("title"), 60) for cat in categories_raw if isinstance(cat, dict)) if c
+    ] if isinstance(categories_raw, list) else []
+    sources_raw = event.get("sources")
+    links = [
+        u for u in (_clean(s.get("url"), 300) for s in sources_raw if isinstance(s, dict))
+        if u and u.startswith(("http://", "https://"))
+    ][:_MAX_SOURCES] if isinstance(sources_raw, list) else []
+    closed = _clean(event.get("closed"), 40)
+    category_text = ", ".join(categories)
+    content = f"{title} [{category_text or 'uncategorized'}]" + (f" Sources: {' '.join(links)}" if links else "")
+    event_ms = int(observed.timestamp() * 1000)
+    fields: dict[str, str | float | int | None] = {
+        "categories": category_text or None, "closed": closed, "latitude": lat, "longitude": lon,
+        "event_time": event_ms, "magnitude_unit": unit,
+    }
+    return build_record(
+        provider="nasa_eonet", identity=event_id, content=content, title=title[:500],
+        observed_at=observed, collected_at=collected_at,
+        version=content_version("nasa_eonet", event_id, event_ms, closed, value),
+        metric="natural_event", value=value, unit=unit or "event", symbol=None,
+        region=_clean(event.get("description"), 80), latitude=lat, longitude=lon,
+        quality="provider_reported", timestamp_basis="provider_modified", modified_at=observed,
+        provider_fields=fields,
+    )
+
+
 def map_nasa_eonet(payload: object, collected_at: datetime) -> list[IngestionRecord]:
     """Map each open event to one record keyed by event id; observed_at is the latest geometry date.
 
     Raises ProviderPayloadError for malformed shapes, duplicate ids, bad times/coordinates or more
-    events than the requested limit. Only http(s) source links are kept, as text, never fetched.
+    events than the requested limit. Individually malformed events are skipped and counted; a full page
+    (limit reached) or any skip yields ``truncated`` coverage. Only http(s) source links are kept, as text, never fetched.
     """
     events = payload.get("events") if isinstance(payload, dict) else None
     if not isinstance(events, list):
@@ -46,64 +113,35 @@ def map_nasa_eonet(payload: object, collected_at: datetime) -> list[IngestionRec
     if len(events) > _MAX_EVENTS:
         raise ProviderPayloadError("nasa_eonet_event_limit_exceeded", "incomplete")
     seen: set[str] = set()
-    records = []
+    valid: list[tuple[str, str, dict[str, object]]] = []
+    skipped = 0
     for event in events:
-        if not isinstance(event, dict):
-            raise ProviderPayloadError("nasa_eonet_event_invalid")
-        event_id, title = event.get("id"), _clean(event.get("title"), 300)
-        if not isinstance(event_id, str) or not _ID_RE.fullmatch(event_id) or event_id in seen or not title:
-            raise ProviderPayloadError("nasa_eonet_event_invalid")
+        event_id = event.get("id") if isinstance(event, dict) else None
+        if not isinstance(event_id, str) or not _ID_RE.fullmatch(event_id):
+            skipped += 1  # no stable identity: one bad event must not fail the batch
+            continue
+        if event_id in seen:
+            raise ProviderPayloadError("nasa_eonet_event_invalid")  # duplicate ids break snapshot integrity
         seen.add(event_id)
-        geometry = event.get("geometry")
-        if not isinstance(geometry, list) or not geometry or not all(isinstance(g, dict) for g in geometry):
-            raise ProviderPayloadError("nasa_eonet_geometry_invalid")
-        dated = [(provider_instant(g.get("date"), collected_at, unit="iso"), g) for g in geometry]
-        observed, latest = max(dated, key=lambda pair: pair[0])
-        lat = lon = None
-        if latest.get("type") == "Point":
-            coords = latest.get("coordinates")
-            try:
-                if not isinstance(coords, list) or len(coords) != 2:
-                    raise ValueError("coordinates")
-                lon_d, lat_d = (finite_decimal(c) for c in coords)
-            except ValueError as exc:
-                raise ProviderPayloadError("nasa_eonet_coordinates_invalid") from exc
-            if not (-180 <= lon_d <= 180 and -90 <= lat_d <= 90):
-                raise ProviderPayloadError("nasa_eonet_coordinates_invalid")
-            lat, lon = float(lat_d), float(lon_d)
-        value: Decimal | None = None
-        unit = _clean(latest.get("magnitudeUnit"), 32)
-        if latest.get("magnitudeValue") is not None:
-            try:
-                value = finite_decimal(latest["magnitudeValue"])
-            except ValueError as exc:
-                raise ProviderPayloadError("nasa_eonet_magnitude_invalid") from exc
-        categories_raw = event.get("categories")
-        categories = [
-            c for c in (_clean(cat.get("title"), 60) for cat in categories_raw if isinstance(cat, dict)) if c
-        ] if isinstance(categories_raw, list) else []
-        sources_raw = event.get("sources")
-        links = [
-            u for u in (_clean(s.get("url"), 300) for s in sources_raw if isinstance(s, dict))
-            if u and u.startswith(("http://", "https://"))
-        ][:_MAX_SOURCES] if isinstance(sources_raw, list) else []
-        closed = _clean(event.get("closed"), 40)
-        category_text = ", ".join(categories)
-        content = f"{title} [{category_text or 'uncategorized'}]" + (f" Sources: {' '.join(links)}" if links else "")
-        event_ms = int(observed.timestamp() * 1000)
-        fields: dict[str, str | float | int | None] = {
-            "categories": category_text or None, "closed": closed, "latitude": lat, "longitude": lon,
-            "event_time": event_ms, "magnitude_unit": unit,
-        }
-        records.append(build_record(
-            provider="nasa_eonet", identity=event_id, content=content, title=title[:500],
-            observed_at=observed, collected_at=collected_at,
-            version=content_version("nasa_eonet", event_id, event_ms, closed, value),
-            metric="natural_event", value=value, unit=unit or "event", symbol=None,
-            region=_clean(event.get("description"), 80), latitude=lat, longitude=lon,
-            quality="provider_reported", timestamp_basis="provider_modified", modified_at=observed,
-            provider_fields=fields,
-        ))
+        title = _clean(event.get("title"), 300)
+        if not title:
+            skipped += 1
+            continue
+        valid.append((event_id, title, event))
+    records = []
+    for event_id, title, event in valid:
+        try:
+            records.append(_map_event(event_id, title, event, collected_at))
+        except ProviderPayloadError:
+            skipped += 1
+    if events and not records:
+        raise ProviderPayloadError("nasa_eonet_event_invalid")
+    if skipped:
+        _LOG.warning("nasa_eonet skipped %d malformed event(s) of %d", skipped, len(events))
+    # EONET v3 has no pagination for this query: a full page may hide more events and skipped events are
+    # missing, so either way the batch is not a complete snapshot.
+    if skipped or len(events) >= _MAX_EVENTS:
+        records = [r.model_copy(update={"metadata": _truncated(r.metadata)}) for r in records]
     return records
 
 

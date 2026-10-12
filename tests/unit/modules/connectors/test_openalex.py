@@ -90,3 +90,10 @@ def test_catalog_marks_cc0_open_unverified_and_dispatchable():
     assert spec is not None and entry is not None
     assert spec.eligibility == "open" and not spec.key_required and not spec.runtime_verified
     assert "openalex" in DISPATCHABLE and entry.scope_fields == ("scholarly_query",)
+
+
+def test_malformed_works_are_skipped_and_oversized_body_refused():
+    (rec,) = map_openalex(body(WORK, "junk", {"id": "http://insecure", "title": "x"}, {"id": "https://openalex.org/W9"}), NOW)
+    assert rec.provider_id == "https://openalex.org/W1"
+    with pytest.raises(ProviderPayloadError, match="too_large"):
+        map_openalex(b"x" * (2 * 1024 * 1024 + 1), NOW)

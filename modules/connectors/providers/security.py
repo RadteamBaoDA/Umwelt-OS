@@ -15,7 +15,7 @@ from modules.connectors.providers.macro import (
 )
 from modules.ingestion.schemas import IngestionRecord
 
-KEV_URL = "https://raw.githubusercontent.com/cisagov/kev-data/develop/known_exploited_vulnerabilities.json"
+KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
 KEV_MAX_BYTES = 4 * 1024 * 1024  # full catalog is ~1.8 MB and grows; collection.PURE_MAX_BYTES uses the same bound
 _MAX_RECORDS = 200  # newest dateAdded first; the older tail is reported as truncated, never silently dropped
 _MAX_ROWS = 20_000  # sanity bound on the decoded catalog
@@ -23,7 +23,7 @@ _CVE_RE = re.compile(r"^CVE-[0-9]{4}-[0-9]{4,10}$")
 
 
 def cisa_kev_request() -> ProviderRequest:
-    """Fixed approved endpoint (CC0 GitHub raw file); no parameters, no key."""
+    """Fixed official CISA feed (www.cisa.gov); no parameters, no key."""
     return ProviderRequest("GET", KEV_URL)
 
 

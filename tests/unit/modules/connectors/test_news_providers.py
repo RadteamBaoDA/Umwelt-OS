@@ -225,3 +225,13 @@ def test_thanhnien_feed_mapping_and_url():
     rec = map_feed("thanhnien_news", fixture("vnexpress_atom.xml"), NOW)[0]
     assert rec.provider_id == "vne-1"
     assert feed_request("thanhnien_news", None, "r1").url == "https://thanhnien.vn/rss/home.rss"
+
+
+@pytest.mark.parametrize("provider", ["tuoitre_news", "thanhnien_news", "dantri_news"])
+def test_vietnamese_feeds_empty_malformed_and_oversized(provider):
+    with pytest.raises(ProviderPayloadError):
+        map_feed(provider, b"<rss><channel></channel></rss>", NOW)  # empty feed is incomplete, not a snapshot
+    mixed = b"<rss><channel><item><description>no id or title</description></item><item><title>ok</title><guid>g1</guid></item></channel></rss>"
+    assert [r.metadata["title"] for r in map_feed(provider, mixed, NOW)] == ["ok"]
+    with pytest.raises(ProviderPayloadError, match="too_large"):
+        map_feed(provider, b"<rss>" + b"x" * (1024 * 1024) + b"</rss>", NOW)
