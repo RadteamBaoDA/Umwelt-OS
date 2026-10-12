@@ -15,6 +15,7 @@ from core.auth.dependencies import is_instance_operator, require_owner_write
 from core.auth.models import AuthSession
 from core.auth.public import authenticated_session_ref
 from core.database import get_session
+from core.rate_limit import require_budget
 from core.realtime import commit_with_replay, make_source_change
 from core.workspaces.dependencies import require_workspace_read, require_workspace_write
 from core.workspaces.public import lock_access_fence, read_access_fence
@@ -1361,7 +1362,7 @@ async def review_provider_terms(
 
 
 @router.post("/{source_id}/collect", response_model=ManualSyncResult, status_code=202,
-             dependencies=[Depends(module_dependency("connectors"))])
+             dependencies=[Depends(module_dependency("connectors")), Depends(require_budget("connector_run", 10, 60))])
 async def trigger_collection(
     source_id: UUID,
     session: Session,
@@ -1724,7 +1725,8 @@ async def acknowledge_no_changes(
     return ManualSyncResult(status="no_changes")
 
 
-@router.post("/{source_id}/crawl", response_model=CrawlResult, status_code=202)
+@router.post("/{source_id}/crawl", response_model=CrawlResult, status_code=202,
+             dependencies=[Depends(require_budget("crawl", 10, 60))])
 async def submit_crawl(
     source_id: UUID,
     payload: ManagedCrawlRequest,

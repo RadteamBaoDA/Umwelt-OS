@@ -9,6 +9,7 @@ from core.auth.public import authenticated_session_ref
 from core.config import Settings
 from core.database import get_session
 from core.publication import require_publication_gate
+from core.rate_limit import require_budget
 from core.workspaces import public as workspaces
 from core.workspaces.dependencies import require_workspace_read, require_workspace_write
 from core.workspaces.schemas import AccessFence, PublicationFence, WorkspaceContext
@@ -122,7 +123,7 @@ async def global_search(
     )
 
 
-@router.post("", response_model=SearchResponse)
+@router.post("", response_model=SearchResponse, dependencies=[Depends(require_budget("search", 60, 60))])
 async def search(
     payload: SearchRequest, request: Request, session: Session, workspace: WorkspaceRead,
 ) -> SearchResponse:
