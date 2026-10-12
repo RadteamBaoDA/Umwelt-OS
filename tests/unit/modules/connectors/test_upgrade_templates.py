@@ -44,7 +44,7 @@ def _settings(key=""):
 
 
 async def _no_n8n(_session, _settings, **_kw):
-    return SimpleNamespace(service_url="http://n8n", api_key="")
+    return SimpleNamespace(service_url="http://n8n", api_key="", enabled=True)
 
 
 @pytest.mark.asyncio
@@ -70,6 +70,20 @@ async def test_run_with_nothing_stale_is_empty(monkeypatch):
     monkeypatch.setattr(ut, "resolve_n8n", _no_n8n)
     summary = await ut.run(lambda: _Session(), _settings(), apply=True)
     assert summary["examined"] == 0 and summary["last_source_id"] is None and summary["more"] is False
+
+
+@pytest.mark.asyncio
+async def test_run_is_noop_when_n8n_disabled(monkeypatch):
+    async def disabled(_session, _settings, **_kw):
+        return SimpleNamespace(service_url="http://n8n", api_key="k", enabled=False)
+
+    async def boom(*_a, **_k):
+        raise AssertionError("must not examine or upgrade while disabled")
+
+    monkeypatch.setattr(ut, "resolve_n8n", disabled)
+    monkeypatch.setattr(ut, "_upgrade_one", boom)
+    summary = await ut.run(lambda: _Session([uuid4()]), _settings(), apply=True)
+    assert summary["disabled"] is True and summary["examined"] == 0 and summary["upgraded"] == 0
 
 
 def _wire(monkeypatch, *, phase="deactivating_old", source_status="active", terms=None):

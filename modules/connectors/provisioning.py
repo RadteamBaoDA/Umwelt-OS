@@ -1934,12 +1934,17 @@ async def require_collection_fence(
     )
 
 
-async def require_n8n_backend(session: AsyncSession, source_id: UUID) -> None:
+async def require_n8n_backend(session: AsyncSession, source_id: UUID, *, n8n_enabled: bool = True) -> None:
     """Reject packaged-workflow (bearer) calls unless the row is an idle n8n source.
+
+    ``n8n_enabled`` False (owner kill switch, resolved once by the caller) rejects every call with
+    409 ``n8n_disabled`` before any row check, so late or in-flight workflow callbacks stop at ingress.
 
     A native source, or any source mid-transition, never accepts a late or stale n8n webhook.
     Nonlocking read under the caller-held Source lock; a missing row is left to later fences.
     """
+    if not n8n_enabled:
+        raise HTTPException(status_code=409, detail="n8n_disabled")
     row = await session.scalar(
         select(ConnectorProvisioning).where(ConnectorProvisioning.source_id == source_id)
         .execution_options(populate_existing=True))

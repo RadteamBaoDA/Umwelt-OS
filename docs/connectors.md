@@ -32,6 +32,10 @@ OAuth is not enabled for RSS, web or REST. GitHub collection uses the OAuth-back
 
 The existing source setup panel still issues a scoped token and validates a source, but does not yet call the managed activation API. Its editor integration is pending R04; it no longer directs owners to configure global n8n source IDs or credentials by hand.
 
+## n8n enable flag
+
+`GET/PUT /api/v1/settings/n8n` carries `enabled` (absent means enabled) and a read-only `callback_base_url` (`http://api:8000`). Disabled n8n blocks ingress only: activation returns 503 `n8n_disabled`, collector callbacks return 409 `n8n_disabled`, wakes are skipped, and existing workflows are not bulk-deactivated; worker cleanup (deactivate/delete) still completes. Umwelt-OS wakes n8n via webhook with `X-BBD-Webhook-Token`; n8n calls back with the per-source collector Bearer credential (no global token). `GET /api/v1/connectors/n8n/workflows` lists n8n-backed sources. See `docs/connectors/native-and-n8n.md`.
+
 ## Collection and network boundaries
 
 Configure RSS/Atom sources with `feed_url`, web sources with `url` and optional `js_render`, and REST sources with `url`, `items_path`, `id_field`, `title_field`, `content_field`, and optional `updated_field`. Unknown fields, non-public hosts and invalid IANA timezones are rejected. New and unconfigured sources use `Asia/Ho_Chi_Minh`. RSS/Atom reads at most 10 pages, catches up from the last accepted cursor with a one-day overlap, and caps aggregate response data at 25 MiB. Provider record identity, versions, timestamps and provenance are preserved through receipt and ingestion.

@@ -274,6 +274,17 @@ export function SourceList() {
   const configurationBySourceId = new Map(connectors.map((source, index) => [source.id, configurations[index]]));
   /** Invalidates the source list query after a source mutation. */
   const refresh = () => queryClient.invalidateQueries({ queryKey: sourceKeys.all });
+  // Deep link: /settings/sources?source=<id> opens that source's editor once, when it appears in the loaded list.
+  const deepLinkHandled = useRef(false);
+  useEffect(() => {
+    if (deepLinkHandled.current || !sources.isSuccess) return;
+    const id = new URLSearchParams(window.location.search).get('source');
+    if (!id) { deepLinkHandled.current = true; return; }
+    const target = items.find((source) => source.id === id);
+    if (!target) return;
+    deepLinkHandled.current = true;
+    transition(target);
+  }, [items, sources.isSuccess, transition]);
   // Prune finished-purge entries only after the row has left the list.
   useEffect(() => {
     if (!sources.isSuccess || sources.isFetching) return;

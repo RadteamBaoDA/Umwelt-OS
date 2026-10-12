@@ -705,7 +705,7 @@ async def _advance_transitions(
     from sqlalchemy import text
 
     from core.workspaces.models import WorkspaceMembership
-    from modules.settings.public import module_is_enabled
+    from modules.settings.public import module_is_enabled, resolve_n8n
 
     flag = settings.multi_workspace_enabled
     async with factory() as session:
@@ -764,6 +764,8 @@ async def reconcile_connectors(ctx: dict[str, object]) -> int:
     cursor) and every durable operation is then driven under the principal and access fence
     recorded in its own envelope. A denied or legacy subject is skipped, never rebased, and
     cannot starve later subjects because the cursor advances past every discovered page.
+    When the owner disabled n8n, create/update/activate/lookup work is skipped (left durable for
+    re-enable) while credential deletes and workflow deactivations still run so cleanup finishes.
     """
     from modules.settings.public import resolve_n8n
 
@@ -779,6 +781,8 @@ async def reconcile_connectors(ctx: dict[str, object]) -> int:
     api_key = n8n.api_key
     if not api_key:
         return completed
+    # Kill switch: only cleanup (deactivate workflows, delete credentials) keeps running.
+    cleanup_only = not n8n.enabled
     credentials = N8nCredentials(n8n.service_url, api_key)
     api = N8nApi(n8n.service_url, api_key)
     credential_after = _read_slot_cursor(state, "connectors_credentials")
@@ -797,14 +801,15 @@ async def reconcile_connectors(ctx: dict[str, object]) -> int:
             select(ConnectorProvisioning.source_id), ConnectorProvisioning.source_id,
             await _read_cursor(state, "connectors_workflows"),
             ConnectorProvisioning.workflow_operation["step"]["state"].astext == "prepared",
+            *((ConnectorProvisioning.workflow_operation["kind"].astext == "deactivate",) if cleanup_only else ()),
         ))).all())
-        unknown_create_ids = list((await session.scalars(_page(
+        unknown_create_ids = [] if cleanup_only else list((await session.scalars(_page(
             select(ConnectorProvisioning.source_id), ConnectorProvisioning.source_id,
             await _read_cursor(state, "connectors_unknown_create"),
             ConnectorProvisioning.workflow_operation["step"]["state"].astext == "unknown",
             ConnectorProvisioning.workflow_operation["step"]["kind"].astext == "create",
         ))).all())
-        activation_ids = list((await session.scalars(_page(
+        activation_ids = [] if cleanup_only else list((await session.scalars(_page(
             select(ConnectorProvisioning.source_id), ConnectorProvisioning.source_id,
             await _read_cursor(state, "connectors_activation"),
             ConnectorProvisioning.desired_enabled.is_(True),

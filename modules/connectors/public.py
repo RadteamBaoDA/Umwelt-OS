@@ -2565,6 +2565,13 @@ async def acknowledge_github_hint_in_uow(
     )
 
 
+def n8n_callback_base() -> str:
+    """Return the fixed base URL packaged n8n workflows call back to (read-only, for Settings display)."""
+    from modules.connectors.n8n import CALLBACK_BASE
+
+    return CALLBACK_BASE
+
+
 async def wake_packaged_collection(
     session: AsyncSession,
     *,
@@ -2576,6 +2583,8 @@ async def wake_packaged_collection(
     scope: Scope, multi_workspace_enabled: bool,
 ) -> PackagedCollectionWakeResult:
     """Wake only an active, fully applied packaged n8n collection through its real webhook token.
+
+    Returns ``unavailable`` when n8n is disabled by the owner kill switch or has no webhook token.
 
     Source and provisioning locks are released before network I/O. The wake carries only source
     fences; n8n continues through its actual provider-fetch route and collector credential. A
@@ -2616,7 +2625,8 @@ async def wake_packaged_collection(
     n8n = await resolve_n8n(session, settings, workspace_id=scope.workspace_id)
     await session.rollback()
     token = n8n.webhook_token
-    if not token:
+    # Kill switch: a disabled n8n is never woken; the durable hint stays pending until re-enabled.
+    if not token or not n8n.enabled:
         return PackagedCollectionWakeResult(workspace_id=scope.workspace_id, source_id=source_id, outcome="unavailable")
     try:
         async with httpx.AsyncClient(timeout=timeout_seconds, trust_env=False) as client:

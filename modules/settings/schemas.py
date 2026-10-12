@@ -179,6 +179,8 @@ class N8nRead(BaseModel):
     service_url_source: Literal["database", "environment"]
     api_key_source: Literal["database", "environment", "none"]
     webhook_token_source: Literal["database", "environment", "none"]
+    enabled: bool = True
+    callback_base_url: str = ""
 
 
 class N8nUpdate(BaseModel):
@@ -191,6 +193,7 @@ class N8nUpdate(BaseModel):
     api_key: str | None = Field(default=None, max_length=4096, repr=False)
     webhook_token_action: CredentialAction = "unchanged"
     webhook_token: str | None = Field(default=None, max_length=4096, repr=False)
+    enabled: bool | None = None  # None leaves the stored kill switch unchanged
 
 
 class N8nTest(BaseModel):

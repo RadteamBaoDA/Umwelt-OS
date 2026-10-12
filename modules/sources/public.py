@@ -53,6 +53,40 @@ from modules.sources.schemas import (
 )
 
 
+@dataclass(frozen=True)
+class ConnectorStatusRead:
+    """Detached read-only source identity and collection-health fields for connector status listings."""
+    id: UUID
+    name: str
+    type: str
+    provider: str | None
+    last_success_at: datetime | None
+    last_error_at: datetime | None
+    last_error_code: str | None
+    collected_at: datetime | None
+
+
+async def list_connector_status(
+    session: AsyncSession, source_ids: Sequence[UUID], *, scope: Scope, multi_workspace_enabled: bool,
+) -> dict[UUID, ConnectorStatusRead]:
+    """Read-only name/type/health projection for at most 200 workspace Sources, keyed by id.
+
+    Owner admission and workspace scoping are enforced here; ids outside the scope are simply absent.
+    No configuration, content or write authority is exposed. No locks.
+    """
+    await _admit_source_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if not source_ids:
+        return {}
+    if len(source_ids) > 200:
+        raise ValueError("Connector status listing is limited to 200 sources")
+    rows = (await session.execute(
+        select(Source.id, Source.name, Source.type, Source.provider, Source.last_success_at,
+               Source.last_error_at, Source.last_error_code, Source.collected_at)
+        .where(Source.id.in_(list(source_ids)), *_source_scope(scope))
+    )).all()
+    return {row.id: ConnectorStatusRead(*row) for row in rows}
+
+
 def _require_source_owner(scope: Scope) -> None:
     """Reject member metadata access; detached scope construction still requires admission."""
     if not isinstance(scope, (WorkspaceContext, InternalJobScope)):

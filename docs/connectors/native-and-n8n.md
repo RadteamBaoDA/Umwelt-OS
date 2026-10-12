@@ -27,6 +27,12 @@ Native RSS, API and provider collection needs only API, worker, PostgreSQL and R
 
 `COLLECTOR_SCHEDULER_ENABLED=false` stops the scheduler from dispatching due collections; manual collect is unaffected.
 
+## Enable flag and callback direction
+
+Settings > n8n has an `enabled` kill switch (stored with the n8n settings, revision-checked; absent means enabled). Disabling blocks ingress only and does not deactivate or delete n8n workflows: new activation returns 503 `n8n_disabled`, packaged-workflow callbacks (`/sync` and the other collector routes) return 409 `n8n_disabled`, Umwelt-OS stops waking n8n, the worker skips create/update/activate work but still finishes workflow deactivation and credential deletion, and the template upgrader is a no-op. Re-enabling resumes normal operation. `GET /api/v1/connectors/n8n/workflows` lists the workspace's n8n-backed sources (owner only, at most 200).
+
+Direction: Umwelt-OS wakes n8n through its webhook with `X-BBD-Webhook-Token`; n8n calls back to the fixed base `http://api:8000` with the per-source collector Bearer credential. There is no global callback token, and the callback base is not configurable (a test asserts every packaged workflow uses it).
+
 ## Validate, migrate, roll back
 
 - Dry-run the merged model without starting anything: `docker compose -f docker-compose.yml -f docker-compose.connectors.yml config -q`.

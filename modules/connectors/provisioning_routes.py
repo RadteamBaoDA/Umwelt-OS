@@ -28,7 +28,12 @@ from modules.connectors.credentials import (
 )
 from modules.connectors.activation import activate_native_in_uow
 from modules.connectors.provider_specs import TERMS_INELIGIBLE
-from modules.connectors.models import ConnectorNativeCredential, ConnectorProvisioning, ConnectorRestCredential
+from modules.connectors.models import (
+    ConnectorNativeCredential,
+    ConnectorProvisioning,
+    ConnectorRestCredential,
+    ConnectorSchedule,
+)
 from modules.connectors.n8n import N8nApi
 from modules.connectors.public import (
     ConnectorConfig,
@@ -38,7 +43,7 @@ from modules.connectors.public import (
     validate_public_url,
 )
 from modules.ingestion import public as ingestion
-from modules.settings.public import resolve_n8n
+from modules.settings.public import module_dependency, resolve_n8n
 from modules.sources import public as sources
 from modules.sources.schemas import ConnectorSource
 
@@ -448,6 +453,62 @@ async def get_catalog(session: Session, request: Request, _owner: OwnerRead) -> 
     return list(catalog.list_catalog())
 
 
+class N8nWorkflowRead(BaseModel):
+    """One n8n-backed source with its workflow binding, provisioning state and collection health."""
+    source_id: UUID
+    source_name: str
+    source_type: str
+    provider: str | None
+    workflow_id: str | None
+    state: str
+    error_code: str | None
+    transition_phase: str | None
+    last_success_at: datetime | None
+    last_error_at: datetime | None
+    last_error_code: str | None
+    collected_at: datetime | None
+    next_due_at: datetime | None
+
+
+@router.get("/n8n/workflows", response_model=list[N8nWorkflowRead],
+            dependencies=[Depends(module_dependency("connectors"))])
+async def list_n8n_workflows(session: Session, request: Request, _owner: OwnerRead) -> list[N8nWorkflowRead]:
+    """List up to 200 of the owner workspace's sources whose execution backend is n8n.
+
+    Owner-only (members get 403) and workspace-scoped: provisioning rows are restricted to Source ids
+    the Sources owner projects for this workspace, and names/health come from the Sources public read
+    projection. Read-only; no n8n API call, no locks. Ordered by source id for a stable page.
+    """
+    scope = _owner
+    if scope.role != "owner":
+        raise HTTPException(status_code=403, detail="Workspace owner required")
+    flag = request.app.state.settings.multi_workspace_enabled
+    in_scope = sources.ingestion_lifecycle_projection(scope=scope).subquery()
+    rows = list((await session.scalars(
+        select(ConnectorProvisioning).where(
+            ConnectorProvisioning.execution_backend == "n8n",
+            ConnectorProvisioning.source_id.in_(select(in_scope.c.id)),
+        ).order_by(ConnectorProvisioning.source_id).limit(200)
+    )).all())
+    status = await sources.list_connector_status(
+        session, [row.source_id for row in rows], scope=scope, multi_workspace_enabled=flag)
+    due = dict((await session.execute(
+        select(ConnectorSchedule.source_id, ConnectorSchedule.next_due_at)
+        .where(ConnectorSchedule.source_id.in_(list(status)), ConnectorSchedule.workspace_id == scope.workspace_id)
+    )).tuples().all()) if status else {}
+    return [
+        N8nWorkflowRead(
+            source_id=row.source_id, source_name=status[row.source_id].name, source_type=status[row.source_id].type,
+            provider=status[row.source_id].provider, workflow_id=row.workflow_id, state=row.state,
+            error_code=row.error_code, transition_phase=row.transition_phase,
+            last_success_at=status[row.source_id].last_success_at, last_error_at=status[row.source_id].last_error_at,
+            last_error_code=status[row.source_id].last_error_code, collected_at=status[row.source_id].collected_at,
+            next_due_at=due.get(row.source_id),
+        )
+        for row in rows if row.source_id in status
+    ]
+
+
 @router.put("/{source_id}/configuration", response_model=ActivationRead)
 async def put_configuration(
     source_id: UUID,
@@ -616,6 +677,9 @@ async def activate_source(
         raise HTTPException(status_code=409, detail="Use backend-transition to change the backend")
     settings = request.app.state.settings
     n8n = await resolve_n8n(session, settings, workspace_id=scope.workspace_id)
+    if not n8n.enabled:
+        # Owner kill switch: no new n8n activation; existing workflows are left as they are.
+        raise HTTPException(status_code=503, detail="n8n_disabled")
     api_key = n8n.api_key
     if not api_key:
         if connector_owner.is_native_provider(source.provider):

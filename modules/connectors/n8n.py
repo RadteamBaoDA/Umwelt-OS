@@ -21,6 +21,11 @@ from modules.connectors.public import (
 from modules.sources.schemas import ConnectorSource
 
 
+# Fixed in-network address packaged workflows call back to (every infrastructure/n8n/workflows/*.json URL).
+# Not owner-configurable: a different value would desynchronize the shipped templates.
+CALLBACK_BASE = "http://api:8000"
+
+
 def workflow_state(cursor: str | None) -> dict[str, str | None]:
     """Return the prior cursor and overlap floor used for bounded catch-up."""
     floor = overlap_floor(cursor)

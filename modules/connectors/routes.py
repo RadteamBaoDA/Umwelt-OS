@@ -69,7 +69,7 @@ from modules.ingestion.schemas import (
     ReceiveBatch,
     classify_telegram_probe,
 )
-from modules.settings.public import module_dependency, module_is_enabled, resolve_n8n
+from modules.settings.public import module_dependency, module_is_enabled, n8n_enabled, resolve_n8n
 from modules.sources import public as sources
 from modules.sources.schemas import ConnectorSource, SourceFence
 
@@ -497,7 +497,8 @@ async def _collector(
 
     Only this entrypoint derives an internal principal. Subsequent checks retain that
     subject and its original AccessFence; a regrant cannot renew a running request.
-    The actual rollout flag and scoped module gates remain required.
+    The actual rollout flag and scoped module gates remain required. A disabled n8n (owner kill
+    switch) rejects with 409 ``n8n_disabled`` via ``require_n8n_backend``.
     """
     scheme, _, token = (authorization or "").partition(" ")
     if scheme.lower() != "bearer" or not token:
@@ -522,7 +523,9 @@ async def _collector(
     if source_fence is None:
         raise HTTPException(status_code=401, detail="Source collector authentication required")
     # Bearer routes belong to the packaged n8n workflow: a native or transitioning source rejects them.
-    await provisioning.require_n8n_backend(session, source_id)
+    # Resolve the owner kill switch once per collector call (workspace known only after the bearer resolves).
+    n8n_on = await n8n_enabled(session, workspace_id=scope.workspace_id)
+    await provisioning.require_n8n_backend(session, source_id, n8n_enabled=n8n_on)
     return token, scope, access_fence
 
 

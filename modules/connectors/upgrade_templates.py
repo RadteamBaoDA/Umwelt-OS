@@ -94,10 +94,17 @@ async def run(
     factory: async_sessionmaker[AsyncSession], settings: Settings, *, apply: bool = False, limit: int = 50,
     after: UUID | None = None,
 ) -> dict[str, Any]:
-    """Process at most ``limit`` stale sources after ``after``; idempotent, safe to re-run with ``last_source_id``."""
+    """Process at most ``limit`` stale sources after ``after``; idempotent, safe to re-run with ``last_source_id``.
+
+    No-op (nothing examined or changed, ``disabled`` True) while the owner kill switch has n8n disabled.
+    """
     async with factory() as session:
         n8n = await resolve_n8n(session, settings)
         await session.rollback()
+    if not n8n.enabled:
+        return {"dry_run": not apply, "examined": 0, "upgraded": 0, "would_upgrade": 0,
+                "reconciliation_required": 0, "skipped": 0, "last_source_id": None, "more": False,
+                "disabled": True}
     api = N8nApi(n8n.service_url, n8n.api_key) if n8n.api_key else None
     statement = select(ConnectorProvisioning.source_id).where(*_STALE).order_by(ConnectorProvisioning.source_id).limit(limit)
     if after is not None:

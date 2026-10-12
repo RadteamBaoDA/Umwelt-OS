@@ -650,14 +650,13 @@ class N8nResolved(BaseModel):
     service_url_source: str = "environment"
     api_key_source: str = "none"
     webhook_token_source: str = "none"
+    enabled: bool = True
 
 
-async def resolve_n8n(session: AsyncSession, settings: Settings, *, workspace_id: UUID | None = None) -> N8nResolved:
-    """Resolve n8n URL, API key and webhook token: owner-saved settings, then environment.
+async def _n8n_stored(session: AsyncSession, workspace_id: UUID | None) -> dict[str, Any]:
+    """Read the stored n8n JSON: the workspace row, or for host workers the first owner row with n8n settings.
 
-    Each field falls back independently. Request paths pass their ``workspace_id``; host-level workers
-    (no workspace) read the first owner row that has n8n settings. A ciphertext that cannot be decrypted
-    counts as unset. Plain read: no admission, no lock.
+    Plain read, no admission and no lock; an absent row yields ``{}``.
     """
     query = select(AISettingsRecord.n8n)
     if workspace_id is not None:
@@ -670,6 +669,26 @@ async def resolve_n8n(session: AsyncSession, settings: Settings, *, workspace_id
                  .order_by((AISettingsRecord.workspace_id == Owner.default_workspace_id).desc(),
                            AISettingsRecord.workspace_id, AISettingsRecord.owner_id))
     stored: dict[str, Any] = await session.scalar(query.limit(1)) or {}
+    return stored
+
+
+async def n8n_enabled(session: AsyncSession, *, workspace_id: UUID | None = None) -> bool:
+    """Return the n8n kill switch (absent flag means enabled) without decrypting any secret.
+
+    Plain read for ingress guards that have no ``Settings`` at hand; ``workspace_id`` None follows the
+    worker pick used by ``resolve_n8n``.
+    """
+    return bool((await _n8n_stored(session, workspace_id)).get("enabled", True))
+
+
+async def resolve_n8n(session: AsyncSession, settings: Settings, *, workspace_id: UUID | None = None) -> N8nResolved:
+    """Resolve n8n URL, API key and webhook token: owner-saved settings, then environment.
+
+    Each field falls back independently. Request paths pass their ``workspace_id``; host-level workers
+    (no workspace) read the first owner row that has n8n settings. A ciphertext that cannot be decrypted
+    counts as unset. Plain read: no admission, no lock.
+    """
+    stored = await _n8n_stored(session, workspace_id)
 
     url = stored.get("service_url")
     # Env secrets belong to the env URL only; never send them to an owner-chosen host.
@@ -688,7 +707,8 @@ async def resolve_n8n(session: AsyncSession, settings: Settings, *, workspace_id
     token, token_source = pick("webhook_token", settings.n8n_webhook_token.get_secret_value())
     return N8nResolved(
         service_url=url or str(settings.n8n_service_url), service_url_source="database" if url else "environment",
-        api_key=key, api_key_source=key_source, webhook_token=token, webhook_token_source=token_source)
+        api_key=key, api_key_source=key_source, webhook_token=token, webhook_token_source=token_source,
+        enabled=bool(stored.get("enabled", True)))
 
 
 def _n8n_revision(row: Any) -> int:
@@ -710,19 +730,24 @@ async def read_n8n(session: AsyncSession, settings: Settings, *, scope: Scope) -
     """Return n8n settings for the owner workspace: configured flags and sources, never secrets."""
     await require_settings_scope(session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled)
     row = await _row(session, scope=scope)
+    from modules.connectors.public import n8n_callback_base
+
     resolved = await resolve_n8n(session, settings, workspace_id=scope.workspace_id)
     return N8nRead(
         configuration_revision=_n8n_revision(row), service_url=resolved.service_url,
         api_key_configured=bool(resolved.api_key), webhook_token_configured=bool(resolved.webhook_token),
         service_url_source=resolved.service_url_source, api_key_source=resolved.api_key_source,
-        webhook_token_source=resolved.webhook_token_source)
+        webhook_token_source=resolved.webhook_token_source, enabled=resolved.enabled,
+        callback_base_url=n8n_callback_base())
 
 
 async def save_n8n(session: AsyncSession, update: N8nUpdate, settings: Settings, *, scope: Scope,
                    auth_sessions: tuple[AccountSessionRef, ...] = ()) -> N8nRead:
     """Revision-checked replace of the stored n8n URL; secrets change only by their ``*_action``.
 
-    ``service_url`` None clears the stored URL. Secrets are Fernet-encrypted like AI credentials.
+    ``service_url`` None clears the stored URL. ``enabled`` None keeps the stored kill switch (absent =
+    enabled); it changes under the same revision check and never touches n8n workflows. Secrets are
+    Fernet-encrypted like AI credentials.
     Uses its own ``revision`` inside the n8n JSON and never bumps ``configuration_revision``
     (that would fail in-flight AI runs).
     """
@@ -748,6 +773,8 @@ async def save_n8n(session: AsyncSession, update: N8nUpdate, settings: Settings,
             stored[f"{name}_ciphertext"] = _cipher(settings).encrypt(value.encode()).decode()
         elif action == "removed":
             stored.pop(f"{name}_ciphertext", None)
+    if update.enabled is not None:
+        stored["enabled"] = update.enabled
     stored["revision"] = _n8n_revision(row) + 1
     row.n8n = stored
     await session.flush()
