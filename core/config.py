@@ -56,6 +56,12 @@ class Settings(BaseSettings):
     # OVERWRITES the header with the real client address; otherwise clients can spoof it and dodge the per-IP limit.
     auth_trust_forwarded_for: bool = Field(default=False, validation_alias="AUTH_TRUST_FORWARDED_FOR")
     session_lifetime_hours: int = Field(default=24, gt=0, le=720)
+    # --- auth hardening (S2) ---
+    # Header carrying the real client IP from a trusted front proxy (e.g. CF-Connecting-IP, X-Real-IP). Unset keeps
+    # the peer / AUTH_TRUST_FORWARDED_FOR behaviour. Set only when the proxy overwrites it; clients could spoof it.
+    auth_client_ip_header: str = Field(default="", validation_alias="AUTH_CLIENT_IP_HEADER")
+    session_idle_hours: int = Field(default=8, gt=0, le=720, validation_alias="SESSION_IDLE_HOURS")
+    # --- end auth hardening ---
     # Enable only after W4 scope review and V1 security validation; legacy/operator access stays bootstrap-only.
     multi_workspace_enabled: bool = Field(default=False, validation_alias="BBD_MULTI_WORKSPACE_ENABLED")
     google_client_id: str = ""

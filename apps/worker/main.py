@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from collections.abc import Callable
+from datetime import timedelta
 from functools import wraps
 from typing import Any, ClassVar, cast
 from uuid import uuid4
@@ -9,7 +10,7 @@ from arq.connections import RedisSettings
 from arq.cron import cron as _cron
 from arq.worker import func as _arq_func
 from redis.asyncio import Redis
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -235,12 +236,18 @@ async def shutdown(ctx: dict[str, object]) -> None:
 
 
 async def purge_expired_sessions(ctx: dict[str, object]) -> int:
-    """Delete at most 1000 expired auth sessions per run and commit the cleanup transaction."""
+    """Delete at most 1000 absolute-expired or idle-expired auth sessions per run and commit the cleanup transaction."""
+    settings = ctx.get("settings")
+    idle_hours = getattr(settings, "session_idle_hours", 8)
+    idle_cutoff = func.now() - timedelta(hours=idle_hours if isinstance(idle_hours, int) else 8)
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     async with factory() as session:
         expired = (
             select(AuthSession.token_hash)
-            .where(AuthSession.expires_at <= func.now())
+            .where(or_(
+                AuthSession.expires_at <= func.now(),
+                func.coalesce(AuthSession.last_seen_at, AuthSession.created_at) <= idle_cutoff,
+            ))
             .order_by(AuthSession.expires_at)
             .limit(1000)
         )
