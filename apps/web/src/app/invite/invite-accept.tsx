@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
+import { assignAuthorizationUrl } from '@/core/safe-url';
 
 const GOOGLE_RETURN_KEY = 'umwelt:invite-google';
 const MIN_PASSWORD = 12;
@@ -115,7 +116,7 @@ export function InviteAccept() {
       try { if (heldToken) window.sessionStorage.setItem(GOOGLE_RETURN_KEY, heldToken); } catch { /* no storage: Google enrollment cannot resume */ }
       return started;
     },
-    onSuccess: ({ authorization_url }) => window.location.assign(authorization_url),
+    onSuccess: ({ authorization_url }) => assignAuthorizationUrl(authorization_url),
   });
 
   const needsPassword = !signedIn && !state.google;

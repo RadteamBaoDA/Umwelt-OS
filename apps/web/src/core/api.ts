@@ -105,7 +105,15 @@ export async function apiRequest<T>(
   }
   if (response.status === 204) return undefined as T;
 
-  const body = (await response.json()) as { error?: { message?: string; code?: string; details?: unknown; [key: string]: unknown }; detail?: string | { message?: string; code?: string; details?: unknown; [key: string]: unknown } } & T;
+  // Gateway failures (502/504) return HTML; surface them as ApiError with the status instead of a SyntaxError.
+  let parsed: unknown;
+  try {
+    parsed = await response.json();
+  } catch {
+    if (isStale()) throw new StaleWorkspaceError();
+    throw new ApiError(response.status, response.ok ? 'Invalid response' : 'Request failed');
+  }
+  const body = parsed as { error?: { message?: string; code?: string; details?: unknown; [key: string]: unknown }; detail?: string | { message?: string; code?: string; details?: unknown; [key: string]: unknown } } & T;
   if (isStale()) throw new StaleWorkspaceError();
   if (!response.ok) {
     if (scoped && typeof window !== 'undefined' && response.status === 404 && body.detail === 'Workspace not found') {

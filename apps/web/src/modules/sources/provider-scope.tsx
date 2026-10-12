@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { formatDateTime } from '@/core/i18n';
+import { safeHttpUrl } from '@/core/safe-url';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { acknowledgeProviderTerms, connectorKeys, getProviderTerms, type ConnectorCatalogEntry, type ConnectorConfig, type DeclaredUse, type Source } from './api';
 import { isStale, periodKind } from './freshness';
@@ -155,7 +156,7 @@ export function ProviderGuide({ entry, source, now, onTest, testBusy, testPassed
       {row(t('guideKey'), keyed ? t('guideKeyRequired') : t('guideKeyNone'))}
       {interval !== null && row(t('guideCadence'), t('everyMinutes', { minutes: interval }))}
       {quotas.length > 0 && row(t('guideQuotaLabel'), quotas.join('; '))}
-      {entry.attribution && row(t('guideAttribution'), <>{entry.attribution}{entry.terms_url ? <> <a className="text-accent underline" href={entry.terms_url} target="_blank" rel="noopener noreferrer">{t('providerTerms')}</a></> : null}</>)}
+      {entry.attribution && row(t('guideAttribution'), <>{entry.attribution}{entry.terms_url ? <> <a className="text-accent underline" href={safeHttpUrl(entry.terms_url)} target="_blank" rel="noopener noreferrer">{t('providerTerms')}</a></> : null}</>)}
       {row(t('guideVerified'), entry.runtime_verified ? t('guideVerifiedYes') : t('guideVerifiedNo'))}
       {source && row(t('guideLastSuccess'), source.last_success_at ? <>{fmt(source.last_success_at)}{stale && <span role="status" className="ml-2 rounded-md border border-border px-1.5 py-0.5 text-xs text-danger">{t('stale')}</span>}</> : t('never'))}
       {source?.collection_error_code && row(t('guideLastError'), <span role="alert" className="text-danger">{source.collection_error_code}{source.last_success_at ? ` · ${t('guideShowingLastGood')}` : ''}</span>)}
@@ -200,7 +201,7 @@ export function ProviderTerms({ sourceId, entry, csrfToken, disabled }: { source
     <h4 className="font-semibold">{t('termsTitle')}</h4>
     {!current?.eligible && <p role="status" className="text-danger">{t('termsRequired')}</p>}
     {termsQuery.isError ? <p role="alert" className="text-danger">{t('termsLoadFailed')}</p> : <p>{t(decision)}</p>}
-    <p className="text-muted-foreground">{t('termsVersion')}: {version || t('guideNone')} · <a className="text-accent underline" href={entry.terms_url ?? undefined} target="_blank" rel="noopener noreferrer">{t('providerTerms')}</a></p>
+    <p className="text-muted-foreground">{t('termsVersion')}: {version || t('guideNone')} · <a className="text-accent underline" href={safeHttpUrl(entry.terms_url)} target="_blank" rel="noopener noreferrer">{t('providerTerms')}</a></p>
     <div className="field"><Label htmlFor="terms-declared-use">{t('termsDeclaredUse')}</Label>
       <Select value={declared} onValueChange={(value) => setUse(value as DeclaredUse)} disabled={disabled}>
         <SelectTrigger id="terms-declared-use"><SelectValue /></SelectTrigger>
