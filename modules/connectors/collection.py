@@ -51,7 +51,6 @@ from modules.sources.schemas import ConnectorSource, SourceFence
 
 RENEW_EVERY_SECONDS = 20
 PAYLOAD_RATE_LIMIT_BACKOFF = timedelta(minutes=15)  # body-level throttling carries no Retry-After; coarse until observed
-PURE_MAX_BYTES = {"ecb": 256 * 1024}  # every other P3 body is capped at macro.MAX_BODY_BYTES
 PURE_MAX_BYTES = {"ecb": 256 * 1024, "cisa_kev": 4 * 1024 * 1024}  # every other P3 body is capped at macro.MAX_BODY_BYTES
 PURE_PROVIDERS = ("world_bank", "frankfurter", "ecb", "binance", "alternative_me", "usgs", "coinpaprika", "nasa_eonet", "cisa_kev")  # coingecko needs a key slot
 KEYED_PROVIDERS = {"coingecko": "x-cg-demo-api-key"}  # provider -> fixed header; key in connector_rest_credentials

@@ -91,3 +91,18 @@ async def test_executor_sends_once_with_user_agent_and_never_without_contact(mon
     await collection._run_sec_edgar(run({"sec_cik": CIK, "sec_contact_email": "me@example.com"}))
     assert len(sent) == 1 and sent[0][1]["headers"]["User-Agent"] == "Umwelt-OS me@example.com"
     assert len(accepted[0][0]) == 2 and accepted[0][1] == "returned_snapshot"
+
+
+def test_malformed_row_is_skipped_and_batch_truncated():
+    payload = json.loads(json.dumps(PAYLOAD))
+    payload["filings"]["recent"]["filingDate"][1] = "not-a-date"
+    records = map_sec_edgar(payload, NOW, CIK)
+    assert [r.provider_id for r in records] == ["0000320193-26-000010"]
+    assert records[0].metadata["provider_record"]["coverage"] == "truncated"
+
+
+def test_empty_recent_filings_is_incomplete():
+    payload = {"cik": "320193", "filings": {"recent": {k: [] for k in PAYLOAD["filings"]["recent"]}}}
+    with pytest.raises(ProviderPayloadError) as err:
+        map_sec_edgar(payload, NOW, CIK)
+    assert err.value.kind == "incomplete"

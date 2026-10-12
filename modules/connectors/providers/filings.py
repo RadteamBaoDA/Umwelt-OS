@@ -51,8 +51,17 @@ def _column(recent: dict[str, Any], name: str, size: int | None) -> list[Any]:
     return values
 
 
+def _truncated(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Return metadata with the provider envelope coverage downgraded to ``truncated``."""
+    out = dict(metadata)
+    out["provider_record"] = {**out["provider_record"], "coverage": "truncated"}
+    return out
+
+
 def map_sec_edgar(payload: object, collected_at: datetime, cik: str) -> list[IngestionRecord]:
-    """Map ``filings.recent`` (columnar arrays) for the requested CIK; the payload CIK must match the scope."""
+    """Map ``filings.recent`` (columnar arrays) for the requested CIK; the payload CIK must match the scope.
+
+    Malformed rows are skipped (batch marked ``truncated``); no usable row raises ``incomplete``."""
     if not isinstance(payload, dict) or not CIK_RE.fullmatch(cik):
         raise ProviderPayloadError("sec_edgar_response_invalid")
     payload_cik = payload.get("cik")
@@ -71,16 +80,24 @@ def map_sec_edgar(payload: object, collected_at: datetime, cik: str) -> list[Ing
     coverage: Literal["returned_snapshot", "truncated"] = "truncated" if size > MAX_FILINGS else "returned_snapshot"
     cik_number = str(int(cik))  # Archives paths use the CIK without leading zeros
     records: dict[str, IngestionRecord] = {}
+    skipped = 0
     for accession, form, filed, document, description in list(zip(
         accessions, forms, dates, documents, descriptions, strict=True,
     ))[:MAX_FILINGS]:
-        if not isinstance(accession, str) or not _ACCESSION_RE.fullmatch(accession) or accession in records:
-            raise ProviderPayloadError("sec_edgar_accession_invalid")
-        if not isinstance(form, str) or not _FORM_RE.fullmatch(form):
-            raise ProviderPayloadError("sec_edgar_form_invalid")
-        filed_on = day_start(parse_iso_date(filed))
+        if (
+            not isinstance(accession, str) or not _ACCESSION_RE.fullmatch(accession) or accession in records
+            or not isinstance(form, str) or not _FORM_RE.fullmatch(form)
+        ):
+            skipped += 1  # one malformed row must not discard the other filings
+            continue
+        try:
+            filed_on = day_start(parse_iso_date(filed))
+        except ProviderPayloadError:
+            skipped += 1
+            continue
         if filed_on > collected_at:
-            raise ProviderPayloadError("sec_edgar_date_invalid")
+            skipped += 1
+            continue
         summary = plain_text(description if isinstance(description, str) else None, 500)
         url = ARCHIVES_URL.format(
             cik=cik_number, accession=accession.replace("-", ""), document=document,
@@ -99,4 +116,8 @@ def map_sec_edgar(payload: object, collected_at: datetime, cik: str) -> list[Ing
             basis="provider_published", modified_at=None, coverage=coverage, source_fields=fields,
             canonical_url=url, published_at=filed_iso,
         )
+    if not records:
+        raise ProviderPayloadError("sec_edgar_no_filings", "incomplete")
+    if skipped:  # skipped rows are missing from the batch, so it is not a complete snapshot
+        return [r.model_copy(update={"metadata": _truncated(r.metadata)}) for r in records.values()]
     return list(records.values())
