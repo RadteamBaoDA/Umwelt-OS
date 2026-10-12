@@ -381,7 +381,7 @@ def test_packaged_templates_carry_the_backend_revision(name, source_type):
         source, desired_revision=3, backend_revision=7, workflow_operation_id=uuid4(),
         collector_credential_id="c", manual_credential_id="m", provider_credential_id=None)
     text = json.dumps(body)
-    assert "__BBD_BACKEND_REVISION__" not in text and "__BBD_CONNECTOR_REVISION__" not in text
+    assert "__BACKEND_REVISION__" not in text and "__CONNECTOR_REVISION__" not in text
     assert "backend_revision:7" in text.replace(" ", "")
 
 
@@ -389,7 +389,7 @@ def test_every_packaged_template_has_a_backend_placeholder():
     from pathlib import Path
 
     for path in Path("infrastructure/n8n/workflows").glob("*.json"):
-        assert "__BBD_BACKEND_REVISION__" in path.read_text(encoding="utf-8"), path.name
+        assert "__BACKEND_REVISION__" in path.read_text(encoding="utf-8"), path.name
 
 
 # --------------------------------------------------------------------------- fences and routes

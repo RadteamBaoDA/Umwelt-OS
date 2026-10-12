@@ -52,7 +52,7 @@ async def invited_member_client(owner_client):
     assert issued.status_code == 201
     token = parse_qs(urlparse(issued.json()["invitation_url"]).query)["token"][0]
     async with AsyncClient(
-        base_url=os.environ["BBD_API_URL"],
+        base_url=os.environ["API_URL"],
         headers={"Origin": os.environ["TEST_PUBLIC_ORIGIN"]},
     ) as client:
         accepted = await client.post(

@@ -147,11 +147,11 @@ def build_workflow(
         if isinstance(value, str):
             return (
                 value.replace("{{$env.SOURCE_ID}}", source_id)
-                .replace("__BBD_SOURCE_ID__", source_id)
-                .replace("__BBD_SOURCE_GENERATION__", str(source.generation))
-                .replace("__BBD_CONNECTOR_REVISION__", str(desired_revision))
-                .replace("__BBD_BACKEND_REVISION__", str(backend_revision))
-                .replace("__BBD_MCP_CONNECTION_ID__", str(source.configuration.get("connection_id", "")))
+                .replace("__SOURCE_ID__", source_id)
+                .replace("__SOURCE_GENERATION__", str(source.generation))
+                .replace("__CONNECTOR_REVISION__", str(desired_revision))
+                .replace("__BACKEND_REVISION__", str(backend_revision))
+                .replace("__MCP_CONNECTION_ID__", str(source.configuration.get("connection_id", "")))
             )
         if isinstance(value, list):
             return [bind_source_id(item) for item in value]

@@ -54,7 +54,7 @@ def new_invitation_secret() -> tuple[str, str]:
 ```
 - [ ] **Step 4 — accept atomically.** Lock invitation; reject expired/replayed with 410, revoked with 410, wrong signed-in email 403. New account creation + default workspace + membership + consume invitation one transaction. Unique email races load winning account only after authenticating it; do not join existing account by email alone. Public invite acceptance requires same-origin, one-time token, rate-limit; authenticated acceptance retains CSRF. Never log token/password.
 - [ ] **Step 5 — API/auth.** Create scoped routes above, add rate limits to invite accept/login through existing policy if available; otherwise bounded Redis limiter keyed by hashed IP+token prefix, no raw secrets. Google signup only from valid invitation; Google sign-in itself grants no data-source access.
-- [ ] **Step 6 — review/build.** Explain invalidation timing and error mapping; run prescribed build. V1 will prove races/replay; keep feature flag `BBD_MULTI_WORKSPACE_ENABLED=false` until W4 scope gate.
+- [ ] **Step 6 — review/build.** Explain invalidation timing and error mapping; run prescribed build. V1 will prove races/replay; keep feature flag `MULTI_WORKSPACE_ENABLED=false` until W4 scope gate.
 
 **Deferred validation example**
 ```python
