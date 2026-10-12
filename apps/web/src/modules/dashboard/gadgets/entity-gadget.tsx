@@ -62,6 +62,7 @@ export function getEntityIcon(type: string): React.ReactElement {
  */
 export function EntityGadget({ instance, initialEntities }: EntityGadgetProps) {
   const t = useTranslations('dashboard');
+  const ts = useTranslations('uiSweep');
   const display = useDisplayPreferences();
 
   const definition = instance.definition;
@@ -98,7 +99,7 @@ export function EntityGadget({ instance, initialEntities }: EntityGadgetProps) {
             type="search"
             value={filterQuery}
             onChange={(e) => setFilterQuery(e.target.value)}
-            placeholder="Filter entities..."
+            placeholder={ts('entFilterPlaceholder')}
             className="h-7 text-xs pl-7 bg-muted/20"
           />
         </div>
@@ -107,15 +108,15 @@ export function EntityGadget({ instance, initialEntities }: EntityGadgetProps) {
           onClick={() => entitiesQuery.refetch()}
           disabled={entitiesQuery.isFetching}
           className="p-1 rounded text-muted-foreground hover:text-foreground transition-colors"
-          title="Refresh entities"
-          aria-label="Refresh entities"
+          title={ts('entRefresh')}
+          aria-label={ts('entRefresh')}
         >
           <RotateCw className={`w-3.5 h-3.5 ${entitiesQuery.isFetching ? 'animate-spin' : ''}`} />
         </button>
         <Link
           href="/knowledge/entities"
           className="p-1 text-muted-foreground hover:text-foreground"
-          title="Browse all entities"
+          title={ts('entBrowse')}
         >
           <ExternalLink className="w-3.5 h-3.5" />
         </Link>
@@ -133,9 +134,9 @@ export function EntityGadget({ instance, initialEntities }: EntityGadgetProps) {
       {!entitiesQuery.isLoading && entities.length === 0 && (
         <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-muted-foreground">
           <Users className="w-8 h-8 mb-2 opacity-50" />
-          <p className="text-xs font-semibold text-foreground mb-1">No entities found</p>
+          <p className="text-xs font-semibold text-foreground mb-1">{ts('entNone')}</p>
           <p className="text-[11px] max-w-xs text-muted-foreground">
-            Extracted people, companies, and projects will be spotlit here as documents are ingested.
+            {ts('entNoneHint')}
           </p>
         </div>
       )}

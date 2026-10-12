@@ -278,6 +278,7 @@ function projectMobilePlacements(
  */
 export function DashboardPage() {
   const t = useTranslations('dashboard');
+  const ts = useTranslations('uiSweep');
   const session = useWorkspaceSession();
   const queryClient = useQueryClient();
   const guardedNavigation = useGuardedNavigation();
@@ -1264,7 +1265,7 @@ export function DashboardPage() {
               id="create-name"
               value={newDashboardName}
               onChange={(e) => setNewDashboardName(e.target.value)}
-              placeholder="Overview"
+              placeholder={ts('dpOverview')}
               className="h-8 text-xs"
             />
           </div>
@@ -1377,7 +1378,7 @@ export function DashboardPage() {
               id="new-group-name"
               value={newGroupName}
               onChange={(e) => setNewGroupName(e.target.value)}
-              placeholder="Market Focus"
+              placeholder={ts('dpMarketFocus')}
               className="h-8 text-xs"
             />
           </div>

@@ -3,6 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { useTranslations } from 'next-intl';
 import { apiRequest } from '@/core/api';
 
 type SetupStatus = { setupRequired: boolean };
@@ -10,6 +11,7 @@ type Session = { authenticated: true; csrfToken: string };
 
 /** Routes the initial visit to setup, the application, or sign-in from live status checks. */
 export default function HomePage() {
+  const ts = useTranslations('uiSweep');
   const router = useRouter();
   const setup = useQuery({ queryKey: ['setup-status'], queryFn: () => apiRequest<SetupStatus>('/api/v1/auth/setup-status') });
   const session = useQuery({
@@ -24,6 +26,6 @@ export default function HomePage() {
     else if (setup.data && session.isError) router.replace('/login');
   }, [router, setup.data, session.data, session.isError]);
 
-  if (setup.isError) return <main className="page"><section className="auth-panel"><span className="brand">Umwelt-OS</span><h1>Can’t reach the local service</h1><p className="text-muted-foreground">Check that the API is running, then reload this page.</p></section></main>;
-  return <main className="page"><div className="skeleton" style={{ width: 'min(100%, 480px)' }} aria-label="Loading" /></main>;
+  if (setup.isError) return <main className="page"><section className="auth-panel"><span className="brand">Umwelt-OS</span><h1>{ts('apiUnreachable')}</h1><p className="text-muted-foreground">{ts('apiUnreachableHint')}</p></section></main>;
+  return <main className="page"><div className="skeleton" style={{ width: 'min(100%, 480px)' }} aria-label={ts('loading')} /></main>;
 }

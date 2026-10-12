@@ -60,6 +60,7 @@ export function PresetPicker({
   onPresetApplied,
 }: PresetPickerProps) {
   const t = useTranslations('dashboard');
+  const ts = useTranslations('uiSweep');
   const session = useWorkspaceSession();
   const queryClient = useQueryClient();
 
@@ -183,7 +184,7 @@ export function PresetPicker({
           <div className="space-y-3">
             <h3 className="text-sm font-semibold text-foreground flex items-center justify-between">
               <span>{t('selectPreset')}</span>
-              {presetsQuery.isLoading && <span className="text-xs text-muted-foreground animate-pulse">Loading…</span>}
+              {presetsQuery.isLoading && <span className="text-xs text-muted-foreground animate-pulse">{ts('ppLoading')}</span>}
             </h3>
 
             <div className="space-y-2 max-h-[380px] overflow-y-auto pr-1">
@@ -257,7 +258,7 @@ export function PresetPicker({
                     <div className="p-3 rounded-md bg-muted/30 border border-border text-xs space-y-1.5">
                       <div className="font-semibold text-foreground flex items-center gap-1.5">
                         <Eye className="w-3.5 h-3.5" />
-                        <span>Preview Summary</span>
+                        <span>{ts('ppPreview')}</span>
                       </div>
                       <div className="text-muted-foreground font-mono text-[11px] truncate">
                         {t('fingerprint', { fingerprint: previewMutation.data.preview_fingerprint.slice(0, 16) + '…' })}
@@ -304,7 +305,7 @@ export function PresetPicker({
                         <ul className="list-disc list-inside space-y-0.5 text-[11px] pl-1">
                           {allWarnings.slice(0, 5).map((warning, idx) => (
                             <li key={idx}>
-                              {warning.capability ? `Capability "${warning.capability}"` : warning.code}
+                              {warning.capability ? ts('ppCapability', { capability: warning.capability }) : warning.code}
                               {warning.setup_group ? ` (group: ${warning.setup_group})` : ''}
                             </li>
                           ))}

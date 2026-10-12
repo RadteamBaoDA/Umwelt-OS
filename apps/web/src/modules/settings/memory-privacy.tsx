@@ -26,6 +26,7 @@ import {
 export function MemoryPrivacySettings() {
   const t = useTranslations('memoryPrivacy');
   const tShell = useTranslations('shell');
+  const ts = useTranslations('uiSweep');
   const { csrfToken } = useWorkspaceSession();
   const queryClient = useQueryClient();
 
@@ -65,7 +66,7 @@ export function MemoryPrivacySettings() {
     return (
       <section
         className="rounded-xl border bg-card p-6 skeleton h-48 rounded-lg"
-        aria-label="Loading memory privacy settings"
+        aria-label={ts('loadingMemoryPrivacy')}
       />
     );
   }

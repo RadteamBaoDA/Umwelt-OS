@@ -146,6 +146,7 @@ export function LayoutEditor({
   onDismissSaveError,
 }: LayoutEditorProps) {
   const t = useTranslations('dashboard');
+  const ts = useTranslations('uiSweep');
   const session = useWorkspaceSession();
   const [addDialogOpen, setAddDialogOpen] = useState<boolean>(false);
   const [isAdding, setIsAdding] = useState<boolean>(false);
@@ -368,7 +369,7 @@ export function LayoutEditor({
                 id="inst-title"
                 value={instanceTitle}
                 onChange={(e) => setInstanceTitle(e.target.value)}
-                placeholder="My News Feed"
+                placeholder={ts('leInstancePlaceholder')}
                 className="h-8 text-xs"
               />
             </div>
@@ -408,7 +409,7 @@ export function LayoutEditor({
                   onValueChange={setSelectedDefinitionId}
                 >
                   <SelectTrigger id="inst-def" className="h-8 text-xs">
-                    <SelectValue placeholder="Choose existing definition" />
+                    <SelectValue placeholder={ts('leChooseDef')} />
                   </SelectTrigger>
                   <SelectContent>
                     {definitions.map((def) => (
@@ -433,13 +434,13 @@ export function LayoutEditor({
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor="new-def-name" className="text-xs">
-                    Definition Name
+                    {ts('leDefName')}
                   </Label>
                   <Input
                     id="new-def-name"
                     value={newDefName}
                     onChange={(e) => setNewDefName(e.target.value)}
-                    placeholder="New gadget"
+                    placeholder={ts('leNewGadget')}
                     className="h-8 text-xs"
                   />
                 </div>

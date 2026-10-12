@@ -118,6 +118,7 @@ export function GadgetFrame({
   children,
 }: GadgetFrameProps) {
   const t = useTranslations('dashboard');
+  const ts = useTranslations('uiSweep');
   const display = useDisplayPreferences();
   const [collectedAt, setCollectedAt] = useState<string | null>(null);
   const [isExpanded, setIsExpanded] = useState<boolean>(false);
@@ -212,7 +213,7 @@ export function GadgetFrame({
 
           {definition.filters?.keywords && definition.filters.keywords.length > 0 && (
             <div className="text-xs">
-              <span className="text-muted-foreground">Filters: </span>
+              <span className="text-muted-foreground">{ts('frameFilters')}</span>
               <span className="font-medium text-foreground">
                 {definition.filters.keywords.join(', ')}
               </span>
@@ -237,7 +238,7 @@ export function GadgetFrame({
         </div>
 
         <div className="pt-3 border-t border-border mt-3 text-xs text-muted-foreground flex items-center justify-between">
-          <span className="italic">Ready for live streaming</span>
+          <span className="italic">{ts('frameLive')}</span>
           <span className="font-mono text-[10px]">rev.{definition.revision}</span>
         </div>
       </div>
@@ -273,10 +274,10 @@ export function GadgetFrame({
           {/* Status badges share the row; overflow is clipped so streaming counts never change grid height. */}
           <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden whitespace-nowrap">
             {freshnessLabel && <Badge variant="outline" className="shrink-0 text-[11px] text-muted-foreground" title={freshnessTitle}>{freshnessLabel}</Badge>}
-            {unreadCount > 0 && <Badge className="shrink-0 px-1.5 text-[11px]" title={`${unreadCount} unread items`}>{t('unreadBadge', { count: unreadCount })}</Badge>}
+            {unreadCount > 0 && <Badge className="shrink-0 px-1.5 text-[11px]" title={ts('frameUnread', { count: unreadCount })}>{t('unreadBadge', { count: unreadCount })}</Badge>}
             {ruleMatch?.matched && <Badge variant="outline" className="shrink-0 gap-1 border-primary/30 bg-primary/10 text-[11px] text-foreground" title={ruleMatch.reason || t('ruleMatchFallback')}><AlertTriangle className="w-3 h-3" /><span>{t('ruleMatchBadge')}</span></Badge>}
             {effectiveSeverity && <Badge variant={effectiveSeverity === 'critical' ? 'destructive' : 'outline'} className={`shrink-0 text-[10px] font-bold uppercase tracking-wider ${effectiveSeverity === 'info' ? 'text-muted-foreground' : ''}`}>{effectiveSeverity === 'critical' ? t('severityCritical') : effectiveSeverity === 'warning' ? t('severityWarning') : t('severityInfo')}</Badge>}
-            {definition.warnings && definition.warnings.length > 0 && <Badge variant="secondary" className="shrink-0 gap-0.5 text-[10px]" title="Setup required for this renderer"><Info className="w-3 h-3" /><span>{t('setupRequired')}</span></Badge>}
+            {definition.warnings && definition.warnings.length > 0 && <Badge variant="secondary" className="shrink-0 gap-0.5 text-[10px]" title={ts('frameSetupTitle')}><Info className="w-3 h-3" /><span>{t('setupRequired')}</span></Badge>}
           </div>
 
           {/* Action controls cannot start title dragging. */}

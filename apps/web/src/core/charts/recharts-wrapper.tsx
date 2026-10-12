@@ -1,6 +1,7 @@
 'use client';
 
 import { useTheme } from 'next-themes';
+import { useTranslations } from 'next-intl';
 import React, { useEffect, useId, useMemo, useState } from 'react';
 import {
   Area,
@@ -200,10 +201,13 @@ export function formatChartTimestamp(
  * @returns Accessible empty state container.
  */
 export function ChartEmptyState({
-  title = 'No data available',
-  message = 'There is no observation or time-series data for the selected range.',
+  title,
+  message,
   className = '',
 }: ChartEmptyStateProps) {
+  const ts = useTranslations('uiSweep');
+  title ??= ts('chNoData');
+  message ??= ts('chNoDataMsg');
   return (
     <div
       role="status"
@@ -245,6 +249,7 @@ export function ChartCustomTooltip({
   locale?: AppLocaleId;
   timezone?: string;
 }) {
+  const ts = useTranslations('uiSweep');
   if (!active || !payload || payload.length === 0) return null;
 
   return (
@@ -274,7 +279,7 @@ export function ChartCustomTooltip({
       </div>
       {providerDelay && (
         <div className="mt-2 pt-1.5 border-t border-border/60 text-[10px] text-muted-foreground flex items-center justify-between">
-          <span>Provider freshness</span>
+          <span>{ts('chFreshness')}</span>
           <span className="font-mono">{providerDelay}</span>
         </div>
       )}
@@ -298,17 +303,18 @@ export function ChartAccessibleTable({
   series: ChartSeries[];
   title?: string;
 }) {
+  const ts = useTranslations('uiSweep');
   return (
     <div className="sr-only">
-      <h4>{title || 'Chart data summary'}</h4>
+      <h4>{title || ts('chSummary')}</h4>
       <table>
-        <caption>Accessible data table representing chart values</caption>
+        <caption>{ts('chTable')}</caption>
         <thead>
           <tr>
-            <th scope="col">Timestamp</th>
+            <th scope="col">{ts('chTimestamp')}</th>
             {series.map((s) => (
               <th key={s.dataKey} scope="col">
-                {s.name} ({s.currency || s.unit || 'value'})
+                {s.name} ({s.currency || s.unit || ts('chValue')})
               </th>
             ))}
           </tr>
@@ -341,6 +347,7 @@ export function RechartsContainer({
   className = '',
   children,
 }: RechartsContainerProps) {
+  const ts = useTranslations('uiSweep');
   const [isMounted, setIsMounted] = useState<boolean>(false);
 
   useEffect(() => {
@@ -354,7 +361,7 @@ export function RechartsContainer({
         className={`w-full flex items-center justify-center bg-card/50 animate-pulse rounded-lg ${className}`}
         style={{ height, minHeight }}
       >
-        <span className="sr-only">Loading chart visualization...</span>
+        <span className="sr-only">{ts('chLoading')}</span>
       </div>
     );
   }
