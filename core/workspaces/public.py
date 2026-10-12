@@ -12,10 +12,10 @@ from sqlalchemy import Select, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.workspaces.access import (
-    authorize_internal_job as authorize_internal_job,
+    authorize_internal_job as authorize_internal_job,  # noqa: PLC0414  # deliberate public re-export for mypy/ruff
 )
 from core.workspaces.access import (
-    lock_access_fence as lock_access_fence,
+    lock_access_fence as lock_access_fence,  # noqa: PLC0414  # deliberate public re-export for mypy/ruff
 )
 from core.workspaces.access import (
     lock_owner_management,
@@ -23,7 +23,7 @@ from core.workspaces.access import (
     lock_workspace_memberships,
 )
 from core.workspaces.access import (
-    read_access_fence as read_access_fence,
+    read_access_fence as read_access_fence,  # noqa: PLC0414  # deliberate public re-export for mypy/ruff
 )
 from core.workspaces.models import (
     Workspace,

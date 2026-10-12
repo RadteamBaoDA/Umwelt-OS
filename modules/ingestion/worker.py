@@ -723,7 +723,7 @@ async def _collect_web_job(
         cursor_after = max(record.observed_at.astimezone(UTC) for record in records).isoformat()
         if work.state.cursor:
             try:
-                previous = datetime.fromisoformat(work.state.cursor.replace("Z", "+00:00"))
+                previous = datetime.fromisoformat(work.state.cursor)
                 if previous.tzinfo is not None and previous > datetime.fromisoformat(cursor_after):
                     cursor_after = work.state.cursor
             except ValueError:
@@ -862,7 +862,7 @@ async def process_ingestion_event(ctx: dict[str, object], event_id: str) -> None
             await _commit_ingestion_change(session, work.run, work.stage, scope=work.scope,
                 multi_workspace_enabled=enabled, access_fence=work.access_fence)
         raise Retry(defer=delay) from exc
-    except Exception:
+    except Exception:  # noqa: BLE001  # last-resort handler: any unexpected error must settle the stage as failed
         await _fail_ingestion_stage(factory, identifier, run_id, stage_id, "stage_failed",
                                    claim=claim, multi_workspace_enabled=enabled)
         return
@@ -941,7 +941,6 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
             claim = _capture_worker_claim(work)
             source, source_projection = work.source, work.projection
             run, stage, event = work.run, work.stage, work.event
-            run_id, stage_id = run.id, stage.id
             generation = source.generation
             document_preparation = work.document_preparation
             observation_preparation = work.observation_preparation
@@ -1494,7 +1493,7 @@ async def process_uploaded_file(ctx: dict[str, object], event_id: str) -> None:
             await _commit_ingestion_change(session, work.run, work.stage, tuple(extras), scope=work.scope,
                 multi_workspace_enabled=enabled, access_fence=work.access_fence)
             count("ingestion_documents_total", outcome="processed")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001  # extraction failure of any kind must be recorded as a failed stage
         async with factory() as session:
             work = await _lock_worker_event(session, identifier, multi_workspace_enabled=enabled,
                                            event_types=("document.file.uploaded",), expected=claim)

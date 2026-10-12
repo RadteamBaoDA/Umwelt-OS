@@ -89,3 +89,49 @@ async def test_stale_admission_denied_before_any_query(reader, admission) -> Non
 
 async def test_opaque_sweep_cursor_builder_is_gone() -> None:
     assert not hasattr(public, "encode_ingestion_cursor")
+
+
+class _Run:
+    def __init__(self) -> None:
+        self.id, self.batch_id, self.source_id = uuid4(), uuid4(), uuid4()
+        self.status, self.updated_at = "succeeded", POSITION[0]
+
+
+class _RunSession(_Session):
+    """First query returns one run; the grouped count query returns its observation count."""
+
+    def __init__(self, run: _Run) -> None:
+        super().__init__()
+        self.run = run
+
+    async def scalars(self, statement):
+        self.statements.append(statement)
+        run = self.run
+
+        class _Result:
+            def all(self) -> list:
+                return [run]
+
+        return _Result()
+
+    async def execute(self, statement):
+        self.statements.append(statement)
+        run = self.run
+
+        class _Result:
+            def all(self) -> list:
+                return [(run.batch_id, 4)]
+
+        return _Result()
+
+
+async def test_terminal_run_payload_matches_declared_trigger_fields() -> None:
+    from modules.automations import conditions
+
+    run = _Run()
+    session = _RunSession(run)
+    [(_, _, _, payload)] = await public.list_terminal_runs_after(
+        session, None, scope=SCOPE, multi_workspace_enabled=False)
+    assert payload == {"source_id": str(run.source_id), "status": "succeeded", "new_items": 4}
+    conditions.validate_sample("connector_sync_result", payload)
+    assert "source_generation >= " in _sql(session.statements[0])

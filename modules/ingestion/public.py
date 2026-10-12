@@ -433,7 +433,6 @@ async def lock_news_document_ready_event(
     ).with_for_update())
     if event is None:
         return None
-    payload = event.payload
     validated = _ready_document_payload(event)
     valid = validated is not None
     detached = validated if validated is not None else {}
@@ -1654,7 +1653,7 @@ async def read_telegram_collection_state(
     row lock before the connector performs network I/O.
     """
     _lease_scope(lease, scope)
-    source, source_fence, access_fence = await _lock_source_projection(session, lease.source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=AccessFence(lease.workspace_id, lease.actor_user_id, lease.membership_revision, lease.configuration_revision))
+    source, _source_fence, _access_fence = await _lock_source_projection(session, lease.source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=AccessFence(lease.workspace_id, lease.actor_user_id, lease.membership_revision, lease.configuration_revision))
     from modules.connectors import public as connectors
 
     if (
@@ -2932,7 +2931,7 @@ async def retry_run(
     # Source lock serializes retry against reservation acquisition and source purge.
     locked = await sources.lock_source_set(session, (run_hint.source_id,), scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     source = locked.fences[0]
-    source_fence, access_fence = source, locked.access_fence
+    access_fence = locked.access_fence
     if source is None or source.status != "active":
         raise HTTPException(status_code=409, detail="Source is not active")
     state = await session.get(SourceIngestionState, run_hint.source_id, with_for_update=True)
@@ -3115,12 +3114,11 @@ async def resolve_ready_event_provenance(
     event_source = UUID(payload["source_id"])
     event_document = UUID(payload["document_id"])
     version_id = UUID(payload["document_version_id"])
-    if document_id is not None:
-        if (
-            event_document != document_id or event_source != source_id
-            or version_id not in accepted_version_ids
-        ):
-            return None
+    if document_id is not None and (
+        event_document != document_id or event_source != source_id
+        or version_id not in accepted_version_ids
+    ):
+        return None
     locator = await documents.review_version_locator(
         session, version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
@@ -3146,14 +3144,16 @@ async def resolve_ready_event_provenance(
 async def list_terminal_runs_after(
     session: AsyncSession, position: tuple[datetime, UUID] | None, limit: int = 100,
     *, scope: Scope, multi_workspace_enabled: bool,
-) -> list[tuple[datetime, UUID, str, dict[str, str | int | None]]]:
+) -> list[tuple[datetime, UUID, str, dict[str, str | int]]]:
     """Read-only keyset page of ingestion runs in a terminal state for connector sync results.
 
     Ordered by ``(updated_at, id)`` after the caller's ``(updated_at, id)`` tuple ``position``;
     the key combines run id and status so a later status change is a new event. The workspace
     predicate (``_run_scope``) precedes ordering and LIMIT, owner admission precedes any query, and
     the tuple position is the sweep's own workspace-keyed cursor, never an opaque token.
-    Payload carries original principal/source identity, status and the observation count.
+    Payload carries the declared connector_sync_result condition fields only (``TRIGGER_FIELDS``:
+    source_id, status, new_items); undeclared keys make trigger validation drop the event. Workspace
+    scope comes from the sweep's own admission, not the payload.
     """
     await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if not 1 <= limit <= 100:
@@ -3161,6 +3161,7 @@ async def list_terminal_runs_after(
     stmt = select(IngestionRun).join(IngestionBatch, and_(
         IngestionBatch.id == IngestionRun.batch_id, IngestionBatch.source_id == IngestionRun.source_id,
     )).where(IngestionRun.status.in_(("succeeded", "failed", "needs_ocr")),
+             # Pre-0007 batches with NULL generation are excluded on purpose.
              IngestionBatch.source_generation >= 1, *_run_scope(scope))
     if position is not None:
         stmt = stmt.where(tuple_(IngestionRun.updated_at, IngestionRun.id) > tuple_(*position))
@@ -3173,16 +3174,9 @@ async def list_terminal_runs_after(
         )).where(SourceObservation.batch_id.in_([r.batch_id for r in rows]), *_run_scope(scope))
         .group_by(SourceObservation.batch_id)
     )).all()) if rows else {}
-    generations = dict((await session.execute(
-        select(IngestionBatch.id, IngestionBatch.source_generation).join(IngestionRun, and_(
-            IngestionRun.batch_id == IngestionBatch.id, IngestionRun.source_id == IngestionBatch.source_id,
-        )).where(IngestionRun.id.in_([r.id for r in rows]), *_run_scope(scope))
-    )).all()) if rows else {}
     return [(r.updated_at, r.id, f"{r.id}:{r.status}",
-             {"source_id": str(r.source_id), "source_generation": generations[r.batch_id],
-              "workspace_id": str(r.workspace_id), "actor_user_id": r.actor_user_id,
-              "membership_revision": r.membership_revision,
-              "status": r.status, "new_items": int(counts.get(r.batch_id, 0))})
+             {"source_id": str(r.source_id), "status": r.status,
+              "new_items": int(counts.get(r.batch_id, 0))})
             for r in rows]
 
 

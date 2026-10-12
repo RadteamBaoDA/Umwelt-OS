@@ -256,7 +256,7 @@ async def _stale_reason(
     ):
         return "source_inactive"
     if not (
-        getattr(source, "generation") == request.source_generation
+        getattr(source, "generation") == request.source_generation  # noqa: B009  # source is typed object; attribute access fails mypy
         and row.source_generation == request.source_generation
         and row.applied_revision == row.desired_revision == request.connector_revision
         and row.execution_backend == request.captured_backend
@@ -712,7 +712,7 @@ async def _enqueue_queued(ctx: dict[str, object], factory: async_sessionmaker[As
         try:
             job = await redis.enqueue_job(  # type: ignore[attr-defined]
                 "process_collection_request", str(request_id), _job_id=f"collection:{claim}:{request_id}")
-        except Exception:
+        except Exception:  # noqa: BLE001, S112  # best-effort enqueue: a failed id stays claimed and is retried after the claim expires
             continue
         enqueued += job is not None
     return enqueued
