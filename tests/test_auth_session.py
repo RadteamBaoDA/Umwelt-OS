@@ -73,7 +73,7 @@ class MemorySession:
 
     async def execute(self, _statement, _params=None):
         # resolve_workspace_context reads the (workspace, membership) row via .one_or_none()
-        return SimpleNamespace(one_or_none=lambda: self.store.workspace_row)
+        return SimpleNamespace(one_or_none=lambda: self.store.workspace_row, first=lambda: None)
 
     async def delete(self, value) -> None:
         self.store.sessions.pop(value.token_hash, None)
@@ -95,6 +95,15 @@ class MemoryRedis:
 
     async def get(self, _key):
         return None
+
+    async def ttl(self, _key):
+        return -2
+
+    async def set(self, *_a, **_k):
+        return True
+
+    async def delete(self, *_keys):
+        return 0
 
     async def info(self, _section):
         return {"used_memory": 1024, "maxmemory": 268435456}

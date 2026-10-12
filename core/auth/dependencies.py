@@ -1,7 +1,9 @@
+import base64
 import hashlib
 import hmac
+import secrets
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from hmac import compare_digest
 from typing import Annotated
 
@@ -16,6 +18,25 @@ from core.database import get_session
 SESSION_COOKIE = "bbd_session"
 CSRF_COOKIE = "bbd_csrf"
 CSRF_MAX_AGE_SECONDS = 600
+# Sliding-window writes of last_seen_at are throttled so plain reads do not become a write per request.
+_LAST_SEEN_TOUCH_SECONDS = 300
+
+
+def derive_key(secret: str, purpose: str) -> bytes:
+    """Derive a 32-byte purpose-bound key from the single configured secret (RFC 5869 HKDF-SHA256).
+
+    Distinct ``purpose`` labels give independent keys, so a leak or misuse of the cookie-signing key
+    never yields the CSRF HMAC key. Deterministic across processes, which multi-worker deployments need.
+    """
+    prk = hmac.new(b"umwelt-os/auth/v1", secret.encode(), hashlib.sha256).digest()  # extract
+    return hmac.new(prk, purpose.encode() + b"", hashlib.sha256).digest()  # expand: one block is 32 bytes
+
+
+def session_middleware_secret(secret: str) -> str:
+    """Return the Starlette SessionMiddleware key: HKDF-derived when a secret is set, else random per process."""
+    if not secret:
+        return secrets.token_urlsafe(32)
+    return base64.urlsafe_b64encode(derive_key(secret, "session-cookie")).decode()
 
 
 def _hash(value: str) -> str:
@@ -34,7 +55,7 @@ def _csrf_signature(token: str, expires_at: int, settings: Settings) -> str:
     if not secret:
         raise HTTPException(status_code=503, detail="CSRF protection is not configured")
     signed = f"{token}.{expires_at}"
-    return hmac.new(secret.encode(), signed.encode(), hashlib.sha256).hexdigest()
+    return hmac.new(derive_key(secret, "csrf-hmac"), signed.encode(), hashlib.sha256).hexdigest()
 
 
 def _valid_csrf(cookie: str | None, submitted: str | None, settings: Settings) -> bool:
@@ -84,8 +105,20 @@ async def _account_session(request: Request, session: AsyncSession, token: str |
     if not token:
         raise HTTPException(status_code=401, detail="Authentication required")
     row = await session.get(AuthSession, _hash(token))
-    if row is None or row.expires_at <= datetime.now(UTC):
+    now = datetime.now(UTC)
+    if row is None or row.expires_at <= now:
         raise HTTPException(status_code=401, detail="Authentication required")
+    settings: Settings = request.app.state.settings
+    idle_hours = getattr(settings, "session_idle_hours", None)
+    if isinstance(idle_hours, int) and not isinstance(idle_hours, bool):
+        seen = row.last_seen_at or row.created_at
+        # Rows predating last_seen_at (or in-memory fixtures) have no reference time and are not idle-checked.
+        if seen is not None:
+            if now - seen > timedelta(hours=idle_hours):
+                raise HTTPException(status_code=401, detail="Authentication required")
+            if now - seen > timedelta(seconds=_LAST_SEEN_TOUCH_SECONDS):
+                row.last_seen_at = now
+                await session.commit()
     account = await get_active_account(
         session, row.owner_id, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
     )

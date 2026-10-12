@@ -1,6 +1,5 @@
 import asyncio
 import os
-import secrets
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 
@@ -8,6 +7,7 @@ from arq.connections import ArqRedis
 from fastapi import FastAPI
 from starlette.middleware.sessions import SessionMiddleware
 
+from core.auth.dependencies import session_middleware_secret
 from core.auth.routes import router as auth_router
 from core.body_limit import BodyLimitMiddleware
 from core.config import Settings
@@ -152,7 +152,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.redis = redis
     app.add_middleware(
         SessionMiddleware,
-        secret_key=csrf_secret or secrets.token_urlsafe(32),
+        secret_key=session_middleware_secret(csrf_secret),
         https_only=app_settings.secure_cookies,
         same_site="lax",
     )

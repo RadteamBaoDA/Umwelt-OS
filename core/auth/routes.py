@@ -27,6 +27,7 @@ from core.auth.dependencies import (
     _origin_allowed,
     _valid_csrf,
     admit_identity_write,
+    require_account,
     require_account_write,
 )
 from core.auth.google import GOOGLE_CALLBACK_PATH, GOOGLE_ISSUER, google_client
@@ -47,6 +48,8 @@ from core.auth.schemas import (
     ChangePasswordRequest,
     CsrfResponse,
     LoginRequest,
+    RevokeOthersResponse,
+    SessionInfo,
     SetupRequest,
     SetupResponse,
     SetupStatus,
@@ -54,6 +57,7 @@ from core.auth.schemas import (
 from core.auth.service import hash_password, verify_login_password, verify_password
 from core.config import Settings
 from core.database import get_session
+from core.telemetry import log_event
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 logger = logging.getLogger("bbd.auth")
@@ -100,13 +104,43 @@ def _set_csrf_cookie(request: Request, response: Response, value: str) -> None:
     )
 
 
-async def _allow_attempt(request: Request, redis: Redis, action: str) -> None:
-    """Atomically increment per-address and global minute counters; reject Redis outages or exceeded limits."""
-    minute = int(time.time() // 60)
-    address = request.client.host if request.client else "unknown"
+def _client_ip(request: Request) -> str:
+    """Resolve the throttling/audit client address.
+
+    Order: the configured trusted header (AUTH_CLIENT_IP_HEADER, last comma entry), then the legacy
+    rightmost X-Forwarded-For when AUTH_TRUST_FORWARDED_FOR is on, else the TCP peer (the proxy/web container).
+    """
+    settings = request.app.state.settings
+    header = getattr(settings, "auth_client_ip_header", "")
+    if isinstance(header, str) and header.strip():
+        value = request.headers.get(header.strip(), "").rsplit(",", 1)[-1].strip()
+        if value:
+            return value
     forwarded = request.headers.get("x-forwarded-for", "")
-    if getattr(request.app.state.settings, "auth_trust_forwarded_for", False) is True and forwarded.strip():
-        address = forwarded.rsplit(",", 1)[-1].strip()  # rightmost hop: the one our trusted proxy wrote
+    if getattr(settings, "auth_trust_forwarded_for", False) is True and forwarded.strip():
+        return forwarded.rsplit(",", 1)[-1].strip()  # rightmost hop: the one our trusted proxy wrote
+    return request.client.host if request.client else "unknown"
+
+
+def _audit(request: Request, event: str, account_id: int | None = None, **fields: object) -> None:
+    """Emit one structured, redacted auth audit event: event name, account id and a hashed client IP.
+
+    Raw IPs, tokens and passwords are never logged; log_event applies telemetry redaction and isolates failures.
+    """
+    log_event(
+        logger, logging.INFO, f"auth.{event}",
+        account_id=account_id, ip_hash=_hash(_client_ip(request))[:16], **fields,
+    )
+
+
+async def _allow_attempt(request: Request, redis: Redis, action: str) -> None:
+    """Atomically increment per-address (and, except for login, global) minute counters; fail closed on Redis outage.
+
+    Login drops the global cap because one attacker could exhaust it and lock the owner out; login is instead
+    protected by per-account backoff (see _login_precheck).
+    """
+    minute = int(time.time() // 60)
+    address = _client_ip(request)
     keys = (f"auth:{action}:ip:{_hash(address)}:{minute}", f"auth:{action}:all:{minute}")
     try:
         pipeline = redis.pipeline(transaction=True)
@@ -117,12 +151,62 @@ async def _allow_attempt(request: Request, redis: Redis, action: str) -> None:
     except RedisError as exc:
         raise HTTPException(status_code=503, detail="Authentication is temporarily unavailable") from exc
     per_address, _, global_count, _ = counts
-    if per_address > 5 or global_count > 20:
+    if per_address > 5 or (action != "login" and global_count > 20):
         raise HTTPException(
             status_code=429,
             detail="Too many authentication attempts",
             headers={"Retry-After": str(60 - int(time.time()) % 60)},
         )
+
+
+_LOGIN_FREE_FAILURES = 3
+_LOGIN_MAX_BACKOFF_SECONDS = 900
+_LOGIN_FAILURE_WINDOW_SECONDS = 3600
+
+
+def _login_keys(request: Request, identifier: str | None) -> tuple[str, str]:
+    """Return (failure-counter, lock) Redis keys scoped to account identifier plus a client-IP bucket.
+
+    Scoping by IP means an attacker elsewhere cannot lock the real owner out of their own address.
+    """
+    account = _hash((identifier or "").strip().lower())[:24]
+    bucket = _hash(_client_ip(request))[:16]
+    return f"auth:login:fails:{account}:{bucket}", f"auth:login:lock:{account}:{bucket}"
+
+
+async def _login_precheck(request: Request, redis: Redis, identifier: str | None) -> None:
+    """Reject with 429 + Retry-After while this account/IP bucket is inside its backoff; 503 if Redis is down."""
+    _, lock_key = _login_keys(request, identifier)
+    try:
+        remaining = await redis.ttl(lock_key)
+    except RedisError as exc:
+        raise HTTPException(status_code=503, detail="Authentication is temporarily unavailable") from exc
+    if isinstance(remaining, int) and remaining > 0:
+        raise HTTPException(
+            status_code=429, detail="Too many authentication attempts", headers={"Retry-After": str(remaining)},
+        )
+
+
+async def _login_record(request: Request, redis: Redis, identifier: str | None, *, success: bool) -> None:
+    """Clear counters on success; on failure bump the counter and set an exponential lock.
+
+    Lock is 2^(n-3) seconds after 3 free failures, capped at 15 minutes. Redis errors raise 503
+    (fail closed) so a Redis outage cannot be used to skip throttling.
+    """
+    fails_key, lock_key = _login_keys(request, identifier)
+    try:
+        if success:
+            await redis.delete(fails_key, lock_key)
+            return
+        pipeline = redis.pipeline(transaction=True)
+        pipeline.incr(fails_key)
+        pipeline.expire(fails_key, _LOGIN_FAILURE_WINDOW_SECONDS)
+        failures = int((await pipeline.execute())[0])
+        if failures >= _LOGIN_FREE_FAILURES:
+            delay = min(2 ** (failures - _LOGIN_FREE_FAILURES), _LOGIN_MAX_BACKOFF_SECONDS)
+            await redis.set(lock_key, "1", ex=delay)
+    except RedisError as exc:
+        raise HTTPException(status_code=503, detail="Authentication is temporarily unavailable") from exc
 
 
 @router.get("/setup-status", response_model=SetupStatus)
@@ -199,9 +283,33 @@ async def login(
     settings: Settings = request.app.state.settings
     if not _origin_allowed(origin, settings):
         raise HTTPException(status_code=403, detail="Origin is not allowed")
-    await _allow_attempt(request, redis, "login")
+    try:
+        await _allow_attempt(request, redis, "login")
+        await _login_precheck(request, redis, body.identifier)
+    except HTTPException as exc:
+        _audit(request, "login_rate_limited" if exc.status_code == 429 else "login_unavailable")
+        raise
     if not _valid_csrf(request.cookies.get(CSRF_COOKIE), csrf_token, settings):
         raise HTTPException(status_code=403, detail="CSRF token is invalid")
+    try:
+        state, owner_id = await _login_verify(request, response, body, session, settings)
+    except HTTPException as exc:
+        if exc.status_code == 401:
+            await _login_record(request, redis, body.identifier, success=False)
+            _audit(request, "login_failure")
+        raise
+    await _login_record(request, redis, body.identifier, success=True)
+    _audit(request, "login_success", owner_id)
+    return state
+
+
+async def _login_verify(
+    request: Request, response: Response, body: LoginRequest, session: AsyncSession, settings: Settings,
+) -> tuple[AuthState, int]:
+    """Verify credentials under the owner lock and issue the session; raises generic 401 on any mismatch.
+
+    Returns the CSRF state and the authenticated account id (for audit).
+    """
     await admit_identity_write(request, session, "auth_password_login")
     account_id: int | None
     if body.identifier is None:
@@ -234,11 +342,12 @@ async def login(
         csrf_hash=_hash(next_csrf),
         reauthenticated_at=datetime.now(UTC),
         expires_at=datetime.now(UTC) + timedelta(hours=settings.session_lifetime_hours),
+        last_seen_at=datetime.now(UTC),
     )
     session.add(auth_session)
     await session.commit()
     _issue_auth_session(settings, response, request, session_token, csrf_cookie)
-    return AuthState(csrfToken=next_csrf)
+    return AuthState(csrfToken=next_csrf), owner.id
 
 
 def _google_configured(settings: Settings) -> bool:
@@ -469,6 +578,7 @@ async def change_password(
     await session.commit()
     _issue_auth_session(settings, response, request, session_token, csrf_cookie)
     logger.info("owner password changed; sessions rotated, revoked: %s", getattr(revoked, "rowcount", 0))
+    _audit(request, "password_change", owner.id, revoked=getattr(revoked, "rowcount", 0))
     return AuthState(csrfToken=next_csrf)
 
 
@@ -740,6 +850,7 @@ async def google_callback(
         response.headers["location"] = "/knowledge/documents?google=error" if purpose == "link" else "/login?google=error"
         return response
     _issue_auth_session(settings, response, request, session_token, csrf_cookie)
+    _audit(request, "google_link" if purpose == "link" else "google_login", owner.id)
     return response
 
 
@@ -762,6 +873,7 @@ async def google_unlink(
         raise HTTPException(status_code=409, detail="Cannot remove the last sign-in method")
     await session.delete(identity)
     await session.commit()
+    _audit(request, "google_unlink", owner.id)
 
 
 @router.get("/session", response_model=AuthState)
@@ -822,5 +934,69 @@ async def logout(
     )
     await session.delete(auth_session)
     await session.commit()
+    _audit(request, "logout", _owner.id)
     response.delete_cookie(SESSION_COOKIE, path="/")
     response.delete_cookie(CSRF_COOKIE, path="/")
+
+
+def _session_id(token_hash: str) -> str:
+    """Opaque public id for a session: a prefix of its stored hash (not usable as the cookie token)."""
+    return token_hash[:16]
+
+
+@router.get("/sessions", response_model=list[SessionInfo])
+async def list_sessions(
+    auth_session: Annotated[AuthSession, Depends(require_account)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> list[SessionInfo]:
+    """List the caller's own unexpired sessions (newest first), flagging the one making this request."""
+    rows = (await session.scalars(
+        select(AuthSession)
+        .where(AuthSession.owner_id == auth_session.owner_id, AuthSession.expires_at > datetime.now(UTC))
+        .order_by(AuthSession.created_at.desc())
+        .limit(100)
+    )).all()
+    return [
+        SessionInfo(
+            id=_session_id(row.token_hash), createdAt=row.created_at, lastSeenAt=row.last_seen_at,
+            expiresAt=row.expires_at, current=row.token_hash == auth_session.token_hash,
+        )
+        for row in rows
+    ]
+
+
+@router.post("/sessions/revoke-others", response_model=RevokeOthersResponse)
+async def revoke_other_sessions(
+    request: Request,
+    auth_session: Annotated[AuthSession, Depends(require_account_write)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> RevokeOthersResponse:
+    """Delete every session of the caller's account except the current one (origin + CSRF enforced by dependency)."""
+    result = await session.execute(delete(AuthSession).where(
+        AuthSession.owner_id == auth_session.owner_id, AuthSession.token_hash != auth_session.token_hash,
+    ))
+    await session.commit()
+    revoked = getattr(result, "rowcount", 0) or 0
+    _audit(request, "sessions_revoke_others", auth_session.owner_id, revoked=revoked)
+    return RevokeOthersResponse(revoked=revoked)
+
+
+@router.delete("/sessions/{session_id}", status_code=204)
+async def revoke_session(
+    request: Request,
+    session_id: str,
+    auth_session: Annotated[AuthSession, Depends(require_account_write)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> None:
+    """Revoke one other session of the caller's account by its opaque id; 404 if absent, 409 for the current one."""
+    if len(session_id) != 16:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if auth_session.token_hash.startswith(session_id):
+        raise HTTPException(status_code=409, detail="Use logout to end the current session")
+    result = await session.execute(delete(AuthSession).where(
+        AuthSession.owner_id == auth_session.owner_id, AuthSession.token_hash.startswith(session_id),
+    ))
+    await session.commit()
+    if not (getattr(result, "rowcount", 0) or 0):
+        raise HTTPException(status_code=404, detail="Session not found")
+    _audit(request, "session_revoke", auth_session.owner_id)

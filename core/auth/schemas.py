@@ -1,5 +1,5 @@
-from datetime import datetime
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
@@ -79,3 +79,17 @@ class ChangePasswordRequest(BaseModel):
     """Current password plus a replacement validated with the same policy as first-run setup."""
     currentPassword: str = Field(min_length=1, max_length=128)
     newPassword: str = Field(min_length=12, max_length=128)
+
+
+class SessionInfo(BaseModel):
+    """One live session of the caller: opaque id, timestamps, and whether it is the requesting session."""
+    id: str
+    createdAt: datetime
+    lastSeenAt: datetime | None
+    expiresAt: datetime
+    current: bool
+
+
+class RevokeOthersResponse(BaseModel):
+    """Count of sessions deleted by revoke-others."""
+    revoked: int
