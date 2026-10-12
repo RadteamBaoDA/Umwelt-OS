@@ -1,0 +1,10 @@
+title = "Umwelt-OS gitleaks"
+
+[extend]
+useDefault = true
+
+# Fictional demo/test credentials used by CI and fixtures.
+[allowlist]
+description = "Disposable test and example values"
+regexes = ['''bbd-os-(disposable|ci|test)[a-z-]*''']
+paths = ['''\.env\.example$''', '''^tests/fixtures/''']
