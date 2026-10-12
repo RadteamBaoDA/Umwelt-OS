@@ -58,7 +58,6 @@ services:
   # Optional temporal-knowledge graph (Graphiti). Start with: docker compose --profile graph up -d
   # Community edition = one database ("neo4j"); partitions are separated by group_id, not by database.
   graph:
-    profiles: ["graph"]
     image: neo4j:5.26.2-community
     env_file: .env
     ports:
