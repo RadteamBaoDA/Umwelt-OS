@@ -280,19 +280,30 @@ class Settings(BaseSettings):
         """Return True in development or test mode (relaxed secrets/cookie rules, API docs enabled)."""
         return self.mode != "production"
 
+    @property
+    def secrets_relaxed(self) -> bool:
+        """Return True only when BBD_ENVIRONMENT is explicitly dev/development/test.
+
+        "auto" never relaxes the placeholder-secret and default-database checks: a mis-set local-looking PUBLIC_ORIGIN
+        on a real server must not silently accept template credentials. "auto" relaxes transport rules only.
+        """
+        return self.environment.strip().lower() in {"dev", "development", "test"}
+
     @model_validator(mode="after")
     def reject_insecure_production_config(self) -> "Settings":
         """Refuse startup in production mode when a public origin is not HTTPS, cookies are insecure on an https origin, secrets are template placeholders, or the default database credentials remain.
 
-        Local/LAN origins (see is_local_host) may use plain http with non-Secure cookies even in production mode.
+        Local/LAN origins (see is_local_host) may use plain http with non-Secure cookies, including under "auto".
+        Placeholder/default credentials are rejected unless the environment is explicitly dev/test (secrets_relaxed).
         Raises ValueError (surfaced as ValidationError) naming the offending field, never its value.
         """
-        if self.is_dev:
+        if self.secrets_relaxed:
             return self
-        if self.public_origin.scheme != "https" and not self.origin_is_local:
-            raise ValueError("PUBLIC_ORIGIN must be https for a non-local host")
-        if self.public_origin.scheme == "https" and not self.secure_cookies:
-            raise ValueError("SECURE_COOKIES must be true when PUBLIC_ORIGIN is https")
+        if not self.is_dev:  # transport rules: skipped for a local origin under "auto"
+            if self.public_origin.scheme != "https" and not self.origin_is_local:
+                raise ValueError("PUBLIC_ORIGIN must be https for a non-local host")
+            if self.public_origin.scheme == "https" and not self.secure_cookies:
+                raise ValueError("SECURE_COOKIES must be true when PUBLIC_ORIGIN is https")
         for name in type(self).model_fields:
             value = getattr(self, name)
             if isinstance(value, SecretStr):

@@ -6,8 +6,8 @@ How to run Umwelt-OS on your own machine or LAN **without HTTPS**, and how that 
 
 | Value | When | Effect |
 |---|---|---|
-| `auto` (default) | Always safe to leave | `development` if `PUBLIC_ORIGIN` host is local, otherwise `production` |
-| `development` (`dev`) | Force relaxed local mode | Plain http and non-Secure cookies allowed, template/placeholder secrets and `bbd:bbd` database accepted, API docs at `/docs` |
+| `auto` (default when unset) | Local machine with real secrets, or any server | `development` transport rules if `PUBLIC_ORIGIN` host is local (http and non-Secure cookies allowed, `/docs` on), otherwise `production`. **Placeholder secrets and `bbd:bbd` are still rejected** |
+| `development` (`dev`) | Explicit local-only opt-in (what `.env.example` ships) | Everything `auto` relaxes, plus template/placeholder secrets and the default `bbd:bbd` database are accepted |
 | `test` | pytest / disposable test stack | Same relaxations as development |
 | `production` | Force strict mode | See table below |
 
@@ -21,6 +21,8 @@ Any other value fails closed to `production`.
 | `SECURE_COOKIES=true` when origin is https | no | yes | **yes** |
 | No `replace-with-*` / `replace-this-*` secrets | no | yes | **yes** |
 | No default `bbd:bbd` database credentials | no | yes | **yes** |
+
+(Columns 2-4 above apply to explicit `development`/`test`, then to `production` or `auto` with a local origin, then to `production` or `auto` with a public domain. `auto` with a local origin therefore rejects placeholders even though it allows http.)
 | `/docs`, `/redoc`, `/openapi.json` served | yes | no | no |
 
 The frontend follows `NODE_ENV`: `npm run dev` (development) skips `Strict-Transport-Security` and allows the dev-only `unsafe-eval` and websocket CSP sources; `next build`/`next start` (production) sends HSTS. Browsers ignore HSTS over plain http, so a LAN http address keeps working.
@@ -33,7 +35,7 @@ make dev        # hot-reload stack; Windows: ./scripts/dev.ps1 dev
 make migrate    # applies Alembic migrations (head: r18_auth_session_last_seen)
 ```
 
-`make setup` writes a working `.env` for local use: `BBD_ENVIRONMENT=auto`, `PUBLIC_ORIGIN=http://localhost:3000`, `SECURE_COOKIES=false`, plus every generated secret (database, Redis, graph, browser, n8n, both Fernet keys, `SETUP_TOKEN`, `CSRF_SIGNING_SECRET`). It never overwrites values you already set. Open `http://localhost:3000`, complete owner setup with the `SETUP_TOKEN` from `.env`.
+`make setup` writes a working `.env` for local use: `PUBLIC_ORIGIN=http://localhost:3000`, `SECURE_COOKIES=false`, plus every generated secret (real values, so the default `auto` mode accepts them) (database, Redis, graph, browser, n8n, both Fernet keys, `SETUP_TOKEN`, `CSRF_SIGNING_SECRET`). It never overwrites values you already set. Open `http://localhost:3000`, complete owner setup with the `SETUP_TOKEN` from `.env`.
 
 Only loopback ports are published (`127.0.0.1`): web `3000`, Postgres `5432`, Redis `6379`, graph `7687`, n8n `5678`. Nothing is reachable from other machines by default.
 
@@ -102,5 +104,5 @@ The domain makes `auto` resolve to production, so the API then also rejects plac
 ## 7. Safety notes for development mode
 
 - Development mode only relaxes transport and secret-format checks. Authentication, CSRF, rate limits, SSRF guards and workspace scoping stay on.
-- Never expose a development-mode instance to the internet: its API docs are public and weak secrets are tolerated. Setting `BBD_ENVIRONMENT=production` explicitly on a server removes the dependence on the `auto` heuristic.
+- Explicit `BBD_ENVIRONMENT=development` is the only setting that tolerates template secrets; use it only on your own machine. Never expose a development-mode instance to the internet: its API docs are public and weak secrets are tolerated. Setting `BBD_ENVIRONMENT=production` explicitly on a server removes the dependence on the `auto` heuristic (and its local-origin transport relaxation).
 - Do not commit `.env`; only `.env.example` is tracked.

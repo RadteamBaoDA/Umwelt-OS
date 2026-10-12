@@ -90,9 +90,19 @@ def test_dev_allows_defaults_and_serves_docs() -> None:
     ["http://localhost:3000", "http://127.0.0.1:3000", "http://192.168.1.20:3000", "http://10.0.0.5", "http://[::1]:3000", "http://nas.local:3000", "http://web:3000"],
 )
 def test_auto_mode_is_development_for_local_origin(origin: str) -> None:
-    # Default "auto" + local/LAN origin: http, non-Secure cookies and template secrets are all accepted.
-    settings = Settings(_env_file=None, BBD_ENVIRONMENT="auto", public_origin=origin, setup_token="replace-with-x")  # type: ignore[arg-type]
+    # Default "auto" + local/LAN origin relaxes transport only: http and non-Secure cookies pass with real secrets.
+    settings = Settings(_env_file=None, BBD_ENVIRONMENT="auto", public_origin=origin,  # type: ignore[arg-type]
+                        database_url="postgresql+asyncpg://bbd:real-pw@db:5432/bbd")
     assert settings.mode == "development" and settings.is_dev
+
+
+def test_auto_mode_never_accepts_placeholder_secrets() -> None:
+    # A real server with a mis-set local-looking origin must not start on template credentials.
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, BBD_ENVIRONMENT="auto", public_origin="http://localhost:3000", setup_token="replace-with-x")  # type: ignore[arg-type]
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, BBD_ENVIRONMENT="auto", public_origin="http://localhost:3000",  # type: ignore[arg-type]
+                 database_url="postgresql+asyncpg://bbd:bbd@postgres:5432/bbd")
 
 
 def test_auto_mode_is_production_for_public_domain() -> None:

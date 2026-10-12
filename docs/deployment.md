@@ -4,7 +4,7 @@ The production Compose stack contains PostgreSQL with pgvector installed, Redis,
 
 The web port binds to loopback by default. For remote access, terminate HTTPS at a trusted reverse proxy and set `PUBLIC_ORIGIN` to the exact browser origin and `SECURE_COOKIES=true` in `.env`. Keep the API, Redis, PostgreSQL, and Docker socket private. Do not deploy with the example placeholder values.
 
-**Modes (`BBD_ENVIRONMENT`):** `auto` (default) runs in *development* when `PUBLIC_ORIGIN` is `localhost`, a loopback/LAN IP (10.x, 172.16-31.x, 192.168.x), `*.local` or a single-label host, and in *production* for any public domain. Development accepts plain http, non-Secure cookies and template secrets, and serves `/docs`. Production requires an `https://` origin with `SECURE_COOKIES=true` for non-local hosts, rejects `replace-with-*` placeholders and `bbd:bbd` database credentials, and disables `/docs`. Set `development` or `production` explicitly to override `auto`.
+**Modes (`BBD_ENVIRONMENT`):** `auto` (default) runs in *development* when `PUBLIC_ORIGIN` is `localhost`, a loopback/LAN IP (10.x, 172.16-31.x, 192.168.x), `*.local` or a single-label host, and in *production* for any public domain. Local `auto` accepts plain http and non-Secure cookies and serves `/docs`; placeholder secrets and `bbd:bbd` are rejected unless `BBD_ENVIRONMENT=development` is set explicitly. Production requires an `https://` origin with `SECURE_COOKIES=true` for non-local hosts, rejects `replace-with-*` placeholders and `bbd:bbd` database credentials, and disables `/docs`. Set `development` or `production` explicitly to override `auto`.
 
 ## Resource bounds
 
