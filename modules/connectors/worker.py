@@ -711,7 +711,7 @@ async def _advance_transitions(
     async with factory() as session:
         n8n = await resolve_n8n(session, settings)
         await session.rollback()
-    api = N8nApi(n8n.service_url, n8n.api_key) if n8n.api_key else None
+    api = N8nApi(n8n.service_url, n8n.api_key, settings) if n8n.api_key else None
     async with factory() as session:
         ids = list((await session.scalars(_page(
             select(ConnectorProvisioning.source_id), ConnectorProvisioning.source_id,
@@ -784,7 +784,7 @@ async def reconcile_connectors(ctx: dict[str, object]) -> int:
     # Kill switch: only cleanup (deactivate workflows, delete credentials) keeps running.
     cleanup_only = not n8n.enabled
     credentials = N8nCredentials(n8n.service_url, api_key)
-    api = N8nApi(n8n.service_url, api_key)
+    api = N8nApi(n8n.service_url, api_key, settings)
     credential_after = _read_slot_cursor(state, "connectors_credentials")
     async with factory() as session:
         credential_rows: list[Any] = list((await session.execute(_page(

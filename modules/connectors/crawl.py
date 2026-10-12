@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hmac
 from contextlib import aclosing
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -59,6 +60,8 @@ async def _dns_safe(url: str) -> None:
 
     This resolves and validates at check time; it does not pin the result to the
     later socket connection, so it is not a complete DNS-rebinding defense.
+    ponytail: IP pinning skipped here - the legacy loop shares one client across redirect hops/origins and
+    pinning needs a per-hop client (approved_transport(allow_global=True)); do that when this path is reworked.
     """
     await validate_public_url(url)
 
@@ -486,7 +489,6 @@ async def _execute_static_agent_read(
 
 def _job_tokens_match(payload: AgentReadRequest | AgentReadCancel, header_token: str | None) -> bool:
     """Require the per-operation secret both in the validated body and control header."""
-    import hmac
 
     return bool(
         header_token and hmac.compare_digest(payload.job_token, header_token)
@@ -499,7 +501,7 @@ async def agent_read_instance(authorization: str | None = Header(default=None)) 
     settings = Settings()
     scheme, _, token = (authorization or "").partition(" ")
     expected = settings.browser_shared_token.get_secret_value()
-    if not expected or scheme.lower() != "bearer" or token != expected:
+    if not expected or scheme.lower() != "bearer" or not hmac.compare_digest(token.encode(), expected.encode()):
         raise HTTPException(status_code=401, detail="Browser service authentication required")
     return {"service_instance_id": _SERVICE_INSTANCE_ID}
 
@@ -515,7 +517,7 @@ async def agent_read(
     scheme, _, token = (authorization or "").partition(" ")
     expected = settings.browser_shared_token.get_secret_value()
     if (
-        not expected or scheme.lower() != "bearer" or token != expected
+        not expected or scheme.lower() != "bearer" or not hmac.compare_digest(token.encode(), expected.encode())
         or not _job_tokens_match(payload, job_token)
     ):
         raise HTTPException(status_code=401, detail="Browser operation authentication required")
@@ -577,7 +579,7 @@ async def agent_read_status(
     expected = settings.browser_shared_token.get_secret_value()
     task_item = _agent_read_tasks.get(job_id)
     if (
-        not expected or scheme.lower() != "bearer" or token != expected
+        not expected or scheme.lower() != "bearer" or not hmac.compare_digest(token.encode(), expected.encode())
         or task_item is None or not _job_tokens_match(task_item[0], job_token)
     ):
         raise HTTPException(status_code=404, detail="Browser job status unavailable")
@@ -600,7 +602,7 @@ async def cancel_agent_read(
     expected = settings.browser_shared_token.get_secret_value()
     item = _agent_read_tasks.get(job_id)
     if (
-        not expected or scheme.lower() != "bearer" or token != expected
+        not expected or scheme.lower() != "bearer" or not hmac.compare_digest(token.encode(), expected.encode())
         or payload.job_id != job_id or payload.operation_id != (item[0].operation_id if item else None)
         or payload.claim_generation != (item[0].claim_generation if item else None)
         or payload.service_instance_id != _SERVICE_INSTANCE_ID
@@ -631,7 +633,7 @@ async def collect(
     settings = Settings()
     scheme, _, token = (authorization or "").partition(" ")
     expected = settings.browser_shared_token.get_secret_value()
-    if not expected or scheme.lower() != "bearer" or token != expected:
+    if not expected or scheme.lower() != "bearer" or not hmac.compare_digest(token.encode(), expected.encode()):
         raise HTTPException(status_code=401, detail="Browser service authentication required")
     try:
         return await crawl(payload)
@@ -649,7 +651,7 @@ async def collect_rss(
     settings = Settings()
     scheme, _, token = (authorization or "").partition(" ")
     expected = settings.browser_shared_token.get_secret_value()
-    if not expected or scheme.lower() != "bearer" or token != expected:
+    if not expected or scheme.lower() != "bearer" or not hmac.compare_digest(token.encode(), expected.encode()):
         raise HTTPException(status_code=401, detail="Browser service authentication required")
     try:
         return await preview_rss(payload)

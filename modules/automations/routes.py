@@ -1,8 +1,11 @@
 """Protected REST routes for automation rules and dry preview."""
 
 import asyncio
+import hashlib
+import hmac
 import json
 import re
+import time
 from collections.abc import Awaitable
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
@@ -198,16 +201,46 @@ async def revoke_webhook_credential(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+WEBHOOK_SIGNATURE_WINDOW_SECONDS = 300
+
+
+def _verify_webhook_signature(
+    secrets: dict[str, Any], alias: str, body: bytes, timestamp: str | None, signature: str | None,
+) -> None:
+    """Enforce the optional HMAC-SHA256 signature when ``alias`` has a signing secret; no secret means bearer only.
+
+    The signed message is ``"<timestamp>.<raw body>"`` and the header is ``sha256=<hex>``. The timestamp
+    (unix seconds) must be within ``WEBHOOK_SIGNATURE_WINDOW_SECONDS`` of now to bound replay; the digest is
+    compared in constant time. Raises HTTP 401 with one generic detail so failures do not reveal which check failed.
+    """
+    secret = secrets.get(alias)
+    if secret is None:
+        return
+    key = secret.get_secret_value() if hasattr(secret, "get_secret_value") else str(secret)
+    if not key:
+        return
+    try:
+        fresh = abs(time.time() - int(timestamp or "")) <= WEBHOOK_SIGNATURE_WINDOW_SECONDS
+    except ValueError:
+        fresh = False
+    expected = "sha256=" + hmac.new(key.encode(), f"{timestamp}.".encode() + body, hashlib.sha256).hexdigest()
+    if not fresh or not signature or not hmac.compare_digest(signature.encode(), expected.encode()):
+        raise HTTPException(status_code=401, detail="Webhook credentials are invalid or expired")
+
+
 @webhook_router.post("/inbound/{alias}", status_code=status.HTTP_202_ACCEPTED)
 async def receive_inbound_webhook(
     alias: Annotated[str, Path(pattern=r"^[a-z][a-z0-9_-]{0,39}$")],
     request: Request, session: Session, response: Response,
     token: Annotated[str | None, Header(alias="X-Umwelt-Webhook-Token")] = None,
     event_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    timestamp: Annotated[str | None, Header(alias="X-Umwelt-Timestamp")] = None,
+    signature: Annotated[str | None, Header(alias="X-Umwelt-Signature")] = None,
 ) -> dict[str, object]:
     """Authenticate a configured alias, validate bounded metadata, then commit its durable dedupe inbox row.
 
-    This endpoint uses only the independent per-alias bearer, never the owner's browser session.
+    This endpoint uses only the independent per-alias bearer, never the owner's browser session. When
+    ``AUTOMATION_WEBHOOK_SIGNING_SECRETS`` names the alias, a fresh HMAC-SHA256 body signature is also required.
     It reads persisted automation availability only after bearer validation. The durable inbox
     unique key absorbs provider retries; request bodies and tokens are not logged.
     """
@@ -255,6 +288,8 @@ async def receive_inbound_webhook(
                 body.extend(chunk)
     except TimeoutError as exc:
         raise HTTPException(status_code=503, detail="Webhook ingress timed out") from exc
+    _verify_webhook_signature(
+        request.app.state.settings.automation_webhook_signing_secrets, alias, bytes(body), timestamp, signature)
     try:
         payload = InboundEvent.model_validate(json.loads(body))
     except (json.JSONDecodeError, UnicodeDecodeError, ValidationError) as exc:

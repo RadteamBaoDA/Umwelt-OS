@@ -70,6 +70,10 @@ class Settings(BaseSettings):
     ai_credential_encryption_key: SecretStr = Field(
         default=SecretStr(""), validation_alias="AI_CREDENTIAL_ENCRYPTION_KEY", repr=False
     )
+    # Key rotation: decrypt-only fallback key; new ciphertext always uses the primary key above.
+    ai_credential_encryption_key_secondary: SecretStr = Field(
+        default=SecretStr(""), validation_alias="AI_CREDENTIAL_ENCRYPTION_KEY_SECONDARY", repr=False
+    )
     ai_allowed_endpoint_hosts: set[str] = Field(
         default_factory=set, validation_alias="AI_ALLOWED_ENDPOINT_HOSTS", repr=False
     )
@@ -89,6 +93,10 @@ class Settings(BaseSettings):
     # Extra CIDRs for web search egress only (test compose); never the gateway CIDRs (review P3-8).
     web_search_allowed_cidrs: list[str] = Field(
         default_factory=list, validation_alias="WEB_SEARCH_ALLOWED_CIDRS", repr=False
+    )
+    # Optional per-alias HMAC signing secrets for inbound automation webhooks (JSON object alias -> secret).
+    automation_webhook_signing_secrets: dict[str, SecretStr] = Field(
+        default_factory=dict, validation_alias="AUTOMATION_WEBHOOK_SIGNING_SECRETS", repr=False
     )
     web_search_daily_limit: int = Field(default=50, ge=0, le=1000, validation_alias="WEB_SEARCH_DAILY_LIMIT")
     approval_expiry_hours: int = Field(default=24, ge=1, le=72, validation_alias="APPROVAL_EXPIRY_HOURS")
