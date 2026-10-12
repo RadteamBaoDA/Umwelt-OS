@@ -38,6 +38,8 @@ export interface TimelineGadgetProps {
  */
 export function TimelineGadget({ instance, initialEvents }: TimelineGadgetProps) {
   const t = useTranslations('dashboard');
+  const ts = useTranslations('uiSweep');
+  const tc = useTranslations('common');
   const display = useDisplayPreferences();
 
   const definition = instance.definition;
@@ -84,8 +86,8 @@ export function TimelineGadget({ instance, initialEvents }: TimelineGadgetProps)
             onClick={() => timelineQuery.refetch()}
             disabled={timelineQuery.isFetching}
             className="p-1 rounded text-muted-foreground hover:text-foreground transition-colors"
-            title="Refresh timeline slice"
-            aria-label="Refresh timeline slice"
+            title={ts('tlRefresh')}
+            aria-label={ts('tlRefresh')}
           >
             <RotateCw
               className={`w-3.5 h-3.5 ${timelineQuery.isFetching ? 'animate-spin' : ''}`}
@@ -95,7 +97,7 @@ export function TimelineGadget({ instance, initialEvents }: TimelineGadgetProps)
             href="/timeline"
             className="inline-flex items-center gap-1 text-[11px] font-semibold text-primary hover:underline"
           >
-            <span>Full timeline</span>
+            <span>{ts('tlFull')}</span>
             <ExternalLink className="w-3 h-3" />
           </Link>
         </div>
@@ -113,12 +115,12 @@ export function TimelineGadget({ instance, initialEvents }: TimelineGadgetProps)
       {/* Error state */}
       {timelineQuery.isError && events.length === 0 && (
         <div className="flex-1 flex flex-col items-center justify-center p-4 text-center text-xs text-muted-foreground">
-          <p className="text-destructive mb-2">Failed to load temporal events</p>
+          <p className="text-destructive mb-2">{ts('tlFailed')}</p>
           <Button
             onClick={() => timelineQuery.refetch()}
             className="secondary text-xs h-7"
           >
-            Retry
+            {tc('retry')}
           </Button>
         </div>
       )}
@@ -127,9 +129,9 @@ export function TimelineGadget({ instance, initialEvents }: TimelineGadgetProps)
       {!timelineQuery.isLoading && events.length === 0 && (
         <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-muted-foreground">
           <History className="w-8 h-8 mb-2 opacity-50" />
-          <p className="text-xs font-semibold text-foreground mb-1">No temporal events recorded</p>
+          <p className="text-xs font-semibold text-foreground mb-1">{ts('tlNone')}</p>
           <p className="text-[11px] max-w-xs text-muted-foreground">
-            Events extracted from ingested documents and sources will appear in this timeline slice.
+            {ts('tlNoneHint')}
           </p>
         </div>
       )}
@@ -158,7 +160,7 @@ export function TimelineGadget({ instance, initialEvents }: TimelineGadgetProps)
                         {evt.origin === 'derived' && (
                           <span
                             className="px-1 py-0.2 rounded bg-primary/15 text-primary font-sans"
-                            title="Derived from source evidence"
+                            title={ts('tlDerived')}
                           >
                             Derived
                           </span>

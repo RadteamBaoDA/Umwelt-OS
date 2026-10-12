@@ -74,6 +74,7 @@ export function GadgetSettings({
   onSaved,
 }: GadgetSettingsProps) {
   const t = useTranslations('dashboard');
+  const ts = useTranslations('uiSweep');
   const session = useWorkspaceSession();
   const queryClient = useQueryClient();
 
@@ -214,7 +215,7 @@ export function GadgetSettings({
       onSaved?.();
     },
     onError: (err) => {
-      setSaveError(err instanceof Error ? err.message : 'Failed to save gadget configuration');
+      setSaveError(err instanceof Error ? err.message : ts('gsSaveFailed'));
     },
   });
 
@@ -355,7 +356,7 @@ export function GadgetSettings({
             {instance.definition.renderer === 'finance_chart' && <>
               <div className="space-y-1.5">
                 <Label htmlFor="gadget-limit" className="text-xs font-semibold">
-                  Max items limit
+                  {ts('gsMaxItems')}
                 </Label>
                 <Input
                   id="gadget-limit"
@@ -405,7 +406,7 @@ export function GadgetSettings({
           {/* Exclude keywords */}
           <div className="space-y-1.5">
             <Label htmlFor="gadget-exclude-keywords" className="text-xs font-semibold">
-              Exclude keywords
+              {ts('gsExclude')}
             </Label>
             <Input
               id="gadget-exclude-keywords"
@@ -420,10 +421,10 @@ export function GadgetSettings({
           <div className="space-y-2.5 pt-2 border-t border-border">
             <div className="flex items-center justify-between">
               <Label className="text-xs font-bold text-foreground">
-                Highlight Rules ({highlightRules.length})
+                {ts('gsRules', { count: highlightRules.length })}
               </Label>
               <span className="text-[10px] text-muted-foreground font-mono">
-                Explainable trigger conditions
+                {ts('gsRulesHint')}
               </span>
             </div>
 
@@ -459,7 +460,7 @@ export function GadgetSettings({
                       type="button"
                       onClick={() => handleRemoveHighlightRule(rule.id)}
                       className="p-1 rounded text-muted-foreground hover:text-destructive transition-colors"
-                      title="Remove highlight rule"
+                      title={ts('gsRemoveRule')}
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
@@ -471,13 +472,13 @@ export function GadgetSettings({
             {/* Add rule form */}
             <div className="p-2.5 rounded-lg border border-border/80 bg-muted/15 space-y-2">
               <span className="text-[11px] font-semibold text-muted-foreground">
-                Add new highlight rule
+                {ts('gsAddRule')}
               </span>
               <div className="flex items-center gap-2">
                 <Input
                   value={newRuleKeywords}
                   onChange={(e) => setNewRuleKeywords(e.target.value)}
-                  placeholder="Keywords (e.g. breach, outage)"
+                  placeholder={ts('gsRuleKeywords')}
                   className="h-7 text-xs flex-1 bg-background"
                 />
 
@@ -491,9 +492,9 @@ export function GadgetSettings({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="info">Info</SelectItem>
-                    <SelectItem value="warning">Warning</SelectItem>
-                    <SelectItem value="critical">Critical</SelectItem>
+                    <SelectItem value="info">{ts('gsInfo')}</SelectItem>
+                    <SelectItem value="warning">{ts('gsWarning')}</SelectItem>
+                    <SelectItem value="critical">{ts('gsCritical')}</SelectItem>
                   </SelectContent>
                 </Select>
 
@@ -504,7 +505,7 @@ export function GadgetSettings({
                   className="h-7 px-2 text-xs font-semibold shrink-0"
                 >
                   <Plus className="w-3 h-3 mr-0.5" />
-                  <span>Add</span>
+                  <span>{ts('gsAdd')}</span>
                 </Button>
               </div>
 
@@ -515,7 +516,7 @@ export function GadgetSettings({
                   onCheckedChange={(c) => setNewRuleNotify(!!c)}
                 />
                 <Label htmlFor="notify-rule" className="text-[11px] font-normal cursor-pointer">
-                  Notify on rule match
+                  {ts('gsNotify')}
                 </Label>
               </div>
             </div>

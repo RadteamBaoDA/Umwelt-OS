@@ -62,6 +62,7 @@ export function MetricsChart({
   providerDelay,
 }: MetricsChartProps) {
   const t = useTranslations('dashboard');
+  const ts = useTranslations('uiSweep');
   const daily = useTranslations('daily');
   const display = useDisplayPreferences();
 
@@ -69,7 +70,7 @@ export function MetricsChart({
   const targetSymbol =
     definition.scope?.symbols?.[0] ||
     definition.filters?.keywords?.[0] ||
-    'Market data';
+    ts('marketData');
 
   const [timeRange, setTimeRange] = useState<ChartTimeRange>('7d');
   const [chartKind, setChartKind] = useState<ChartKind>('area');
@@ -166,8 +167,8 @@ export function MetricsChart({
                 ? 'bg-card text-primary font-bold shadow-xs'
                 : 'text-muted-foreground hover:text-foreground'
             }`}
-            title="Area chart"
-            aria-label="Switch to area chart view"
+            title={ts('chartArea')}
+            aria-label={ts('chartAreaAria')}
           >
             <Activity className="w-3.5 h-3.5" />
           </button>
@@ -179,8 +180,8 @@ export function MetricsChart({
                 ? 'bg-card text-primary font-bold shadow-xs'
                 : 'text-muted-foreground hover:text-foreground'
             }`}
-            title="Line chart"
-            aria-label="Switch to line chart view"
+            title={ts('chartLine')}
+            aria-label={ts('chartLineAria')}
           >
             <LineChartIcon className="w-3.5 h-3.5" />
           </button>
@@ -192,8 +193,8 @@ export function MetricsChart({
                 ? 'bg-card text-primary font-bold shadow-xs'
                 : 'text-muted-foreground hover:text-foreground'
             }`}
-            title="Bar chart"
-            aria-label="Switch to bar chart view"
+            title={ts('chartBar')}
+            aria-label={ts('chartBarAria')}
           >
             <BarChart2 className="w-3.5 h-3.5" />
           </button>
