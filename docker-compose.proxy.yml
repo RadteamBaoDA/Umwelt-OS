@@ -1,0 +1,35 @@
+# Optional public HTTPS reverse proxy. Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.proxy.yml up -d
+# Requires PUBLIC_HOST in .env (and PUBLIC_ORIGIN=https://$PUBLIC_HOST, SECURE_COOKIES=true).
+# Caddy reaches web:3000 over the compose network; the web loopback port stays closed to the network.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  proxy:
+    image: caddy:2.8.4-alpine
+    environment:
+      PUBLIC_HOST: ${PUBLIC_HOST:?Set PUBLIC_HOST to the public hostname}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infrastructure/proxy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      web:
+        condition: service_healthy
+    cap_drop: [ALL]
+    cap_add: ["NET_BIND_SERVICE"]
+    security_opt: ["no-new-privileges:true"]
+    logging: *default-logging
+    mem_limit: 256m
+    restart: unless-stopped
+
+volumes:
+  caddy-data:
+  caddy-config:

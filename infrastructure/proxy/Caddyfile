@@ -1,0 +1,30 @@
+# Public HTTPS front for the web container. Caddy obtains/renews certificates automatically
+# for {$PUBLIC_HOST} (ports 80/443 must be reachable from the internet for ACME).
+# Behind Cloudflare Tunnel or Cloudflare Access you do not need this file; see docs/deployment.md.
+{$PUBLIC_HOST} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "same-origin"
+		-Server
+	}
+
+	# Uploads are capped at UPLOAD_MAX_BYTES (25 MiB default); the API enforces the real per-route limits.
+	request_body {
+		max_size 30MB
+	}
+
+	reverse_proxy web:3000 {
+		# Overwrite (never append) the client address: AUTH_TRUST_FORWARDED_FOR=true relies on this.
+		# Behind Cloudflare (proxied DNS) use {header.CF-Connecting-IP} instead and restrict the origin to Cloudflare ranges.
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Real-IP {remote_host}
+		# Long-lived SSE: no buffering, flush every write; a 75 s+ read timeout (server heartbeat is 15 s).
+		flush_interval -1
+		transport http {
+			read_timeout 10m
+		}
+	}
+}

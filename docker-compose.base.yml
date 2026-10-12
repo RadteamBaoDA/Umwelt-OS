@@ -1,9 +1,19 @@
 # Shared infrastructure. docker-compose.yml extends these services.
 # Standalone (native `npm run dev`): docker compose -f docker-compose.base.yml up -d
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   postgres:
     image: pgvector/pgvector:0.8.6-pg16-bookworm
-    env_file: .env
+    # Minimal environment: the database container must not see application secrets.
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-bbd}
+      POSTGRES_DB: ${POSTGRES_DB:-bbd}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
     ports:
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
@@ -33,10 +43,13 @@ services:
         reservations: {memory: 1024M}
     stop_grace_period: 30s
     restart: unless-stopped
+    logging: *default-logging
+    security_opt: ["no-new-privileges:true"]
 
   redis:
     image: redis:7.4.11-alpine
-    env_file: .env
+    environment:
+      REDISCLI_AUTH: ${REDISCLI_AUTH:-}
     # Password comes from REDISCLI_AUTH in .env; redis-cli (healthcheck, backup exec) reads the same variable.
     command: ["sh", "-c", "exec redis-server --appendonly yes --save 60 1000 --maxmemory 256mb --maxmemory-policy noeviction --requirepass \"$$REDISCLI_AUTH\""]
     ports:
@@ -54,12 +67,22 @@ services:
         limits: {memory: 384M}
         reservations: {memory: 64M}
     restart: unless-stopped
+    logging: *default-logging
+    security_opt: ["no-new-privileges:true"]
 
   # Optional temporal-knowledge graph (Graphiti). Start with: docker compose --profile graph up -d
   # Community edition = one database ("neo4j"); partitions are separated by group_id, not by database.
   graph:
     image: neo4j:5.26.2-community
-    env_file: .env
+    profiles: ["graph"]
+    environment:
+      NEO4J_AUTH: ${NEO4J_AUTH:-}
+      GRAPH_USERNAME: ${GRAPH_USERNAME:-neo4j}
+      GRAPH_PASSWORD: ${GRAPH_PASSWORD:-}
+      NEO4J_server_memory_heap_initial__size: ${NEO4J_server_memory_heap_initial__size:-512m}
+      NEO4J_server_memory_heap_max__size: ${NEO4J_server_memory_heap_max__size:-1g}
+      NEO4J_server_memory_pagecache_size: ${NEO4J_server_memory_pagecache_size:-256m}
+      NEO4J_db_transaction_timeout: ${NEO4J_db_transaction_timeout:-5s}
     ports:
       - "127.0.0.1:${GRAPH_PORT:-7687}:7687"
     volumes:
@@ -72,6 +95,8 @@ services:
     cpus: 1.0
     mem_limit: 1792m
     restart: unless-stopped
+    logging: *default-logging
+    security_opt: ["no-new-privileges:true"]
 
 volumes:
   postgres-data:

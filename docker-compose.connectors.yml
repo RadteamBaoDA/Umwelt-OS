@@ -4,6 +4,12 @@
 include:
   - docker-compose.browser.yml
 
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   n8n:
     build:
@@ -12,15 +18,26 @@ services:
     environment:
       GENERIC_TIMEZONE: Asia/Ho_Chi_Minh
       TZ: Asia/Ho_Chi_Minh
-      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?Set N8N_ENCRYPTION_KEY (make setup generates it)}
       N8N_DIAGNOSTICS_ENABLED: "false"
       N8N_PERSONALIZATION_ENABLED: "false"
       CONNECTOR_API_IP: 172.29.250.10
+      # Code nodes must not read container env (encryption key etc.).
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "true"
+      # Set these when n8n is served from a hostname; defaults suit loopback-only use.
+      N8N_HOST: ${N8N_HOST:-localhost}
+      N8N_PROTOCOL: ${N8N_PROTOCOL:-http}
+      WEBHOOK_URL: ${N8N_WEBHOOK_URL:-http://localhost:5678/}
     ports:
       - "127.0.0.1:${N8N_PORT:-5678}:5678"
     volumes:
       - n8n-data:/home/node/.n8n
-    cap_add: ["NET_ADMIN"]
+    # NET_ADMIN only for the entrypoint's iptables rules; SETUID/SETGID for su-exec. The n8n process runs as
+    # `node` with no capabilities. Never publish 5678 beyond loopback (see docs/deployment.md).
+    cap_drop: [ALL]
+    cap_add: ["NET_ADMIN", "SETUID", "SETGID"]
+    security_opt: ["no-new-privileges:true"]
+    logging: *default-logging
     mem_limit: 768m
     cpus: 1.0
     pids_limit: 128
