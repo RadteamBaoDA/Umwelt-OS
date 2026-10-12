@@ -170,11 +170,13 @@ async def test_auth_hashing_runs_off_loop(monkeypatch: pytest.MonkeyPatch) -> No
         return None
 
     monkeypatch.setattr(auth_routes, "_allow_attempt", allow)
+    monkeypatch.setattr(auth_routes, "_login_precheck", allow)
+    monkeypatch.setattr(auth_routes, "_login_record", allow)
     monkeypatch.setattr(auth_routes, "admit_identity_write", allow)
     monkeypatch.setattr(auth_routes, "provision_bootstrap_account_in_uow", provision)
     monkeypatch.setattr(auth_routes, "_lock_owner", lock)
     settings = SimpleNamespace(setup_token=SecretStr("tok"))
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(settings=settings)), cookies={})
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(settings=settings)), cookies={}, headers={}, client=None)
 
     async def login() -> None:
         with pytest.raises(HTTPException):

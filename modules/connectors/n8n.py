@@ -14,12 +14,12 @@ import httpx
 
 from core.config import Settings
 from modules.connectors.backends import PROVIDER_SOURCE_TYPES, is_native_provider
+from modules.connectors.providers.news import safe_xml_root
 from modules.connectors.public import (
     default_schedule_interval_minutes,
     overlap_floor,
     validate_public_url,
 )
-from modules.connectors.providers.news import safe_xml_root
 from modules.sources.schemas import ConnectorSource
 
 # Fixed in-network address packaged workflows call back to (every infrastructure/n8n/workflows/*.json URL).
@@ -201,7 +201,7 @@ class N8nApi:
             payload = response.json()
             workflows = payload.get("data", [])
             if not isinstance(workflows, list):
-                raise ValueError("n8n workflow lookup returned an invalid list")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+                raise ValueError("n8n workflow lookup returned an invalid list")  # ValueError is part of the contract; TypeError would change behavior
             matches.extend(
                 workflow for workflow in workflows
                 if isinstance(workflow, dict) and workflow.get("name") == name
@@ -223,7 +223,7 @@ class N8nApi:
             response.raise_for_status()
         payload = response.json()
         if not isinstance(payload, dict):
-            raise ValueError("n8n workflow response is invalid")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+            raise ValueError("n8n workflow response is invalid")  # ValueError is part of the contract; TypeError would change behavior
         return payload
 
     async def create_workflow(self, workflow: dict[str, Any]) -> str:
@@ -369,7 +369,7 @@ async def read_rss(
                     if not raw_value:
                         return None
                     try:
-                        parsed = datetime.fromisoformat(raw_value.replace("Z", "+00:00"))  # noqa: FURB162  # keeps exact parsing of 'Z' suffix; fromisoformat(Z) is not strictly equivalent
+                        parsed = datetime.fromisoformat(raw_value.replace("Z", "+00:00"))  # keeps exact parsing of 'Z' suffix; fromisoformat(Z) is not strictly equivalent
                     except ValueError:
                         try:
                             parsed = parsedate_to_datetime(raw_value)

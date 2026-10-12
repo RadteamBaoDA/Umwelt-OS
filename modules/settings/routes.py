@@ -7,11 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.dependencies import require_account, require_account_write
 from core.auth.public import authenticated_session_ref
-from core.workspaces.dependencies import require_workspace_read, require_workspace_write
-from core.workspaces.schemas import WorkspaceContext
 from core.database import get_session
 from core.model_gateway.client import ModelGateway, ModelGatewayError
-from core.model_gateway.transport import EndpointNetworkPolicyError, approved_web_search_transport
 from core.model_gateway.schemas import (
     AISettingsRead,
     AISettingsUpdate,
@@ -20,15 +17,18 @@ from core.model_gateway.schemas import (
     ModelSettingsRead,
     PrivacySettings,
 )
+from core.model_gateway.transport import EndpointNetworkPolicyError, approved_web_search_transport
+from core.workspaces.dependencies import require_workspace_read, require_workspace_write
+from core.workspaces.schemas import WorkspaceContext
 from modules.chat import web_search as web
 from modules.settings import lifecycle, models, public
 from modules.settings.schemas import (
     ConnectionTestResult,
+    ModuleLifecycleRead,
+    ModuleLifecycleUpdate,
     N8nRead,
     N8nTest,
     N8nUpdate,
-    ModuleLifecycleRead,
-    ModuleLifecycleUpdate,
     OwnerPreferencesRead,
     OwnerPreferencesUpdate,
     RetentionSettingsRead,

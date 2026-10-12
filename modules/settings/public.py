@@ -22,7 +22,6 @@ from core.auth.models import Owner
 from core.auth.public import get_active_account, lock_account_admission
 from core.auth.schemas import AccountSessionRef
 from core.config import Settings
-from core.model_gateway.transport import approved_transport
 from core.model_gateway.schemas import (
     ALIAS_MODEL_TYPE,
     DEFAULT_PROVIDER_ID,
@@ -37,6 +36,7 @@ from core.model_gateway.schemas import (
     ProviderModel,
     ProviderRead,
 )
+from core.model_gateway.transport import approved_transport
 from core.workspaces.public import (
     lock_access_fence,
     read_access_fence,
@@ -46,13 +46,13 @@ from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, Worksp
 from modules.backup.schemas import ActivityReceipt, AdmissionReceipt
 from modules.settings.models import AISettingsRecord, OwnerPreferencesRecord, legacy_aliases
 from modules.settings.models import (
-    list_capabilities as list_capabilities,  # noqa: PLC0414 - explicit re-export
+    list_capabilities as list_capabilities,
 )
 from modules.settings.models import (
-    new_capability_result as new_capability_result,  # noqa: PLC0414 - explicit re-export
+    new_capability_result as new_capability_result,
 )
 from modules.settings.models import (
-    save_capability as save_capability,  # noqa: PLC0414 - explicit re-export
+    save_capability as save_capability,
 )
 from modules.settings.prompts import DEFAULT_SYSTEM_PROMPTS, MAX_PROMPT_CHARS
 from modules.settings.schemas import (

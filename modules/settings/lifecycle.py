@@ -8,18 +8,25 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.auth.dependencies import require_account, require_account_write, require_owner, require_owner_write
+from core.auth.dependencies import (
+    require_account,
+    require_account_write,
+    require_owner,
+    require_owner_write,
+)
 from core.auth.schemas import AccountSessionRef
 from core.database import get_session
 from core.modules import effective_modules, register_modules
 from core.workspaces.dependencies import (
-    require_default_workspace_read, require_default_workspace_write,
-    require_workspace_read, require_workspace_write,
+    require_default_workspace_read,
+    require_default_workspace_write,
+    require_workspace_read,
+    require_workspace_write,
 )
 from core.workspaces.public import read_access_fence
 from core.workspaces.schemas import Scope, WorkspaceContext
-from modules.settings.public import require_settings_scope, scope_actor
 from modules.settings.models import ModuleLifecycleRecord, RetentionSettingsRecord
+from modules.settings.public import require_settings_scope, scope_actor
 from modules.settings.schemas import (
     ModuleLifecycleEntry,
     ModuleLifecycleRead,

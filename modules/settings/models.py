@@ -1,7 +1,7 @@
-from uuid import UUID
 from collections.abc import Awaitable
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
+from uuid import UUID
 
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
@@ -18,8 +18,8 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.types import Uuid
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.types import Uuid
 
 from core.config import Settings
 from core.database import Base

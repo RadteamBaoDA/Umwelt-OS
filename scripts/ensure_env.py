@@ -1,8 +1,8 @@
-from collections.abc import Callable
-from pathlib import Path
 import base64
 import re
 import secrets
+from collections.abc import Callable
+from pathlib import Path
 
 # A value is "unset" when absent, empty, or still an .env.example placeholder.
 _PLACEHOLDER = re.compile(r"replace-(with|this)-")

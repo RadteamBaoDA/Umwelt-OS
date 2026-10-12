@@ -7,10 +7,10 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.auth.schemas import AccountSessionRef
 from modules.settings.models import OnboardingStateRecord
 from modules.settings.onboarding_schemas import OnboardingStateRead, OnboardingStateUpdate
 from modules.settings.public import require_preferences_account
-from core.auth.schemas import AccountSessionRef
 
 
 def _read(row: OnboardingStateRecord | None) -> OnboardingStateRead:

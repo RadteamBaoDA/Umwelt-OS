@@ -16,8 +16,8 @@ import httpx
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from modules.connectors.public import ConnectorConfig, ProviderCollectionPage, ProviderRateLimited
 from modules.connectors.providers.news import safe_xml_root
+from modules.connectors.public import ConnectorConfig, ProviderCollectionPage, ProviderRateLimited
 from modules.ingestion.schemas import IngestionRecord
 from modules.knowledge.documents.public import ProviderRecordMetadata
 from modules.sources.schemas import ConnectorSource
@@ -107,7 +107,7 @@ def _parse_time(value: str | None) -> datetime | None:
     if not value:
         return None
     try:
-        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))  # noqa: FURB162  # keeps exact parsing of 'Z' suffix; fromisoformat(Z) is not strictly equivalent
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))  # keeps exact parsing of 'Z' suffix; fromisoformat(Z) is not strictly equivalent
     except ValueError:
         try:
             parsed = parsedate_to_datetime(value)
@@ -134,7 +134,7 @@ async def _read_feed(url: str, before_request: Callable[[], Awaitable[None]]) ->
     """
     try:
         async with asyncio.timeout(30):
-            async with httpx.AsyncClient(  # noqa: SIM117  # style-only rewrite skipped to avoid touching control flow
+            async with httpx.AsyncClient(  # style-only rewrite skipped to avoid touching control flow
                 timeout=httpx.Timeout(30), trust_env=False, follow_redirects=False, verify=True
             ) as client:
                 await before_request()
@@ -451,7 +451,7 @@ async def collect_provider_feed(
     if source.provider != "arxiv":
         raise ValueError("provider_scope_invalid")
     async with asyncio.timeout(60):
-        async with session_factory() as session:  # noqa: SIM117  # style-only rewrite skipped to avoid touching control flow
+        async with session_factory() as session:  # style-only rewrite skipped to avoid touching control flow
             async with session.begin():
                 locked = await session.scalar(
                     text("SELECT pg_try_advisory_xact_lock(:provider_key)"),
