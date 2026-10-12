@@ -156,7 +156,7 @@ def install_error_handling(app: FastAPI) -> None:
     async def internal_error(request: Request, exc: Exception) -> JSONResponse:
         """Log unexpected request failures by request ID and return a generic 500 response without exception details."""
         request_id_value = getattr(request.state, "request_id", "")
-        logger.error("Unhandled request failure; request_id=%s", request_id_value)
+        logger.error("Unhandled request failure; request_id=%s", request_id_value, exc_info=exc)
         return JSONResponse(
             status_code=500,
             content={

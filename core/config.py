@@ -2,16 +2,21 @@ import ipaddress
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from pydantic import AnyHttpUrl, Field, SecretStr, field_validator
+from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from core.mcp_endpoint import normalize_mcp_url
+
+_PLACEHOLDER_PREFIXES = ("replace-with-", "replace-this-")
+_DEFAULT_DB_CREDENTIALS = "//bbd:bbd@"
 
 
 class Settings(BaseSettings):
     """Validated application configuration loaded from environment and the optional .env file; secret fields are masked in representations."""
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", hide_input_in_errors=True)
 
+    # Hardening: anything other than dev/development/test is treated as production (fail closed).
+    environment: str = Field(default="production", validation_alias="BBD_ENVIRONMENT")
     database_url: str = Field(default="postgresql+asyncpg://bbd:bbd@postgres:5432/bbd", repr=False)
     redis_url: str = Field(default="redis://redis:6379/0", repr=False)
     graph_enabled: bool = Field(default=False, validation_alias="GRAPH_ENABLED")
@@ -214,3 +219,34 @@ class Settings(BaseSettings):
         if value and (not value.isdecimal() or value.startswith("0") or int(value) > 2**63 - 1):
             raise ValueError("GITHUB_APP_ID must be a positive decimal ID")
         return value
+
+    @property
+    def is_dev(self) -> bool:
+        """Return True only for explicit local development or test environments."""
+        return self.environment.strip().lower() in {"dev", "development", "test"}
+
+    @model_validator(mode="after")
+    def reject_insecure_production_config(self) -> "Settings":
+        """Refuse startup outside dev/test when cookies are insecure on an https origin, secrets are template placeholders, or the default database credentials remain.
+
+        Raises ValueError (surfaced as ValidationError) naming the offending field, never its value.
+        """
+        if self.is_dev:
+            return self
+        if self.public_origin.scheme == "https" and not self.secure_cookies:
+            raise ValueError("SECURE_COOKIES must be true when PUBLIC_ORIGIN is https")
+        for name in type(self).model_fields:
+            value = getattr(self, name)
+            if isinstance(value, SecretStr):
+                text = value.get_secret_value()
+                bad = text.startswith(_PLACEHOLDER_PREFIXES)
+            elif name in {"database_url", "redis_url"}:
+                text = str(value)
+                bad = any(prefix in text for prefix in _PLACEHOLDER_PREFIXES) or (
+                    name == "database_url" and _DEFAULT_DB_CREDENTIALS in text
+                )
+            else:
+                continue
+            if bad:
+                raise ValueError(f"{name} uses a placeholder or default credential; set a real value")
+        return self

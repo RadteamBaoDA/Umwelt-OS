@@ -137,7 +137,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             finally:
                 await engine.dispose()
 
-    app = FastAPI(title="BBD-OS", lifespan=lifespan)
+    # Hardening: interactive API docs expose the full schema; serve them only in dev/test.
+    app = FastAPI(
+        title="BBD-OS",
+        lifespan=lifespan,
+        docs_url="/docs" if app_settings.is_dev else None,
+        redoc_url="/redoc" if app_settings.is_dev else None,
+        openapi_url="/openapi.json" if app_settings.is_dev else None,
+    )
     app.state.settings = app_settings
     app.state.session_factory = session_factory
     app.state.realtime_connections = asyncio.Semaphore(MAX_STREAMS_PER_API_PROCESS)
