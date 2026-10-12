@@ -290,12 +290,12 @@ async def drive_activation(
         session, source_id, provisioning._ALL_CREDENTIAL_SLOTS, expected_access_fence=access_fence,
         multi_workspace_enabled=multi_workspace_enabled, scope=scope,
     )
-    original_operation = copy.deepcopy(row.workflow_operation) if row is not None else None
+    original_operation_late = copy.deepcopy(row.workflow_operation) if row is not None and row.workflow_operation is not None else None
     await session.rollback()
-    if not isinstance(original_operation, dict):
+    if not isinstance(original_operation_late, dict):
         return False
     return await provisioning.drive_workflow_operation(
-        session, source_id, api, original_operation=original_operation, access_fence=access_fence,
+        session, source_id, api, original_operation=original_operation_late, access_fence=access_fence,
         multi_workspace_enabled=multi_workspace_enabled, scope=scope,
     )
 

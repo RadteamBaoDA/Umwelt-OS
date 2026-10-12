@@ -21,13 +21,13 @@ from core.auth.dependencies import (
     CSRF_COOKIE,
     CSRF_MAX_AGE_SECONDS,
     SESSION_COOKIE,
-    _csrf_signature,
     _account_session,
+    _csrf_signature,
     _hash,
     _origin_allowed,
     _valid_csrf,
-    require_account_write,
     admit_identity_write,
+    require_account_write,
 )
 from core.auth.google import GOOGLE_CALLBACK_PATH, GOOGLE_ISSUER, google_client
 from core.auth.google_schemas import (
@@ -37,7 +37,11 @@ from core.auth.google_schemas import (
     ReauthenticateRequest,
 )
 from core.auth.models import AuthSession, GoogleIdentity, Owner
-from core.auth.public import provision_bootstrap_account_in_uow, get_active_account, normalize_account_email
+from core.auth.public import (
+    get_active_account,
+    normalize_account_email,
+    provision_bootstrap_account_in_uow,
+)
 from core.auth.schemas import (
     AuthState,
     ChangePasswordRequest,
@@ -47,7 +51,7 @@ from core.auth.schemas import (
     SetupResponse,
     SetupStatus,
 )
-from core.auth.service import hash_password, verify_password, verify_login_password
+from core.auth.service import hash_password, verify_login_password, verify_password
 from core.config import Settings
 from core.database import get_session
 
@@ -199,6 +203,7 @@ async def login(
     if not _valid_csrf(request.cookies.get(CSRF_COOKIE), csrf_token, settings):
         raise HTTPException(status_code=403, detail="CSRF token is invalid")
     await admit_identity_write(request, session, "auth_password_login")
+    account_id: int | None
     if body.identifier is None:
         account_id = 1
     else:

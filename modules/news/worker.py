@@ -157,7 +157,7 @@ async def process_news_document_ready(ctx: dict[str, object], event_id: str) -> 
                 and source_fence.generation == provenance.source_generation
                 and document_locked
             )
-            if prepared_match:
+            if prepared_match and provenance is not None:  # second clause narrows for mypy
                 await cluster_observation(
                     session, document_id=provenance.document_id,
                     expected_source_generation=provenance.source_generation,
@@ -191,7 +191,7 @@ async def process_news_document_ready(ctx: dict[str, object], event_id: str) -> 
                 return
 
             event_matches = (
-                prepared_match
+                prepared_match and provenance is not None  # narrows for mypy; implied by prepared_match
                 and event.workspace_id == provenance.workspace_id
                 and event.actor_user_id == provenance.actor_user_id
                 and event.membership_revision == provenance.membership_revision

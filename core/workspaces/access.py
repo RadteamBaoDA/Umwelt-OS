@@ -169,7 +169,7 @@ async def _prepare_access(
         select(Workspace.owner_user_id).where(Workspace.id == scope.workspace_id)
     )
     if locked:
-        ids = (actor_user_id,) if discovered_owner_id is None else (actor_user_id, discovered_owner_id)
+        ids: tuple[int, ...] = (actor_user_id,) if discovered_owner_id is None else (actor_user_id, discovered_owner_id)
         accounts = await lock_account_admission(
             session, ids, actor_user_id=actor_user_id, multi_workspace_enabled=multi_workspace_enabled,
             auth_sessions=auth_sessions,
@@ -191,12 +191,13 @@ async def _prepare_access(
     if locked:
         workspace, memberships = await lock_workspace_memberships(session, scope.workspace_id, ids)
     else:
-        workspace = await session.scalar(
+        found_workspace = await session.scalar(
             select(Workspace).where(Workspace.id == scope.workspace_id)
             .execution_options(populate_existing=True)
         )
-        if workspace is None:
+        if found_workspace is None:
             raise HTTPException(status_code=404, detail="Workspace not found")
+        workspace = found_workspace
         memberships = {row.user_id: row for row in await session.scalars(
             select(WorkspaceMembership).where(
                 WorkspaceMembership.workspace_id == scope.workspace_id,

@@ -71,7 +71,7 @@ def next_due_after(now: datetime, due: datetime, interval_minutes: int) -> datet
 def _read(request: ConnectorCollectionRequest) -> CollectionRequestRead:
     """Project a request row to its public DTO."""
     return CollectionRequestRead(
-        request_id=request.id, source_id=request.source_id, status=request.status,  # type: ignore[arg-type]
+        request_id=request.id, source_id=request.source_id, status=request.status,
         ingestion_run_id=request.ingestion_run_id, error_code=request.error_code,
     )
 
@@ -554,7 +554,8 @@ async def clear_collection_block(
     }
     for dimension in schedule.blocked_dimensions or ():
         current = now_revision[dimension]
-        if current is None or (failed_at[dimension] is not None and current <= failed_at[dimension]):
+        failed = failed_at[dimension]
+        if current is None or (failed is not None and current <= failed):
             return False
     schedule.blocked_error_code = None
     schedule.blocked_dimensions = None
@@ -610,7 +611,7 @@ async def _recover_expired_slots(factory: async_sessionmaker[AsyncSession], now:
     for slot_id, request_id, token in expired:
         async with factory() as session:
             if not await settle_admission_in_uow(
-                session, request_id, token, outcome="failed", error_code="admission_expired", retryable=True,
+                session, cast(UUID, request_id), cast(UUID, token), outcome="failed", error_code="admission_expired", retryable=True,
             ):
                 await session.execute(
                     update(ConnectorAdmissionSlot)
@@ -652,7 +653,7 @@ async def _create_due_requests(factory: async_sessionmaker[AsyncSession], now: d
                 index_elements=["workspace_id"], set_={"last_considered_at": now}))
         await session.commit()
     created = 0
-    for source_id, workspace_id in picked:
+    for source_id, workspace_id in cast("list[tuple[UUID, UUID]]", picked):
         async with factory() as session:
             owner = await session.scalar(
                 select(WorkspaceMembership).where(

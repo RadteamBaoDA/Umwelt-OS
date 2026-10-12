@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.demo_seed import p12_demo_seed_id
-from core.workspaces.schemas import Scope
+from core.workspaces.schemas import InternalJobScope, Scope
 from modules.chat.models import Conversation
 
 
@@ -29,7 +29,7 @@ async def ensure_demo_conversation(
     session.add(Conversation(
         id=conversation_id,
         workspace_id=scope.workspace_id,
-        actor_user_id=getattr(scope, "actor_user_id", None) or scope.user_id,
+        actor_user_id=scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id,
         title="Demo: plan the orchard lantern catalogue",
         metadata_json={"demo_namespace": "bbd-os.demo.phase-12"},
         ephemeral=False,

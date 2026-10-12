@@ -217,8 +217,8 @@ async def evaluate_gadget_highlights(
             progress_snapshot[0] == definition_revision
             and progress_snapshot[1] == rules_fingerprint
         )
-        initial_cursor_created_at = progress_snapshot[2] if progress_is_current else None
-        initial_cursor_version_id = progress_snapshot[3] if progress_is_current else None
+        initial_cursor_created_at = progress_snapshot[2] if progress_snapshot and progress_is_current else None
+        initial_cursor_version_id = progress_snapshot[3] if progress_snapshot and progress_is_current else None
         page = await documents.list_gadget_highlight_projection_page(
             session, source_ids=scan_source_ids, limit=HIGHLIGHT_SCAN_PAGE_LIMIT,
             cursor_created_at=initial_cursor_created_at,

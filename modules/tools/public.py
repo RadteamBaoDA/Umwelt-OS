@@ -230,7 +230,7 @@ async def _assert_source_browser_cleanup_in_uow(
 
 def _source_browser_job_ids(
     source_id: UUID, *, workspace_id: UUID, actor_user_id: int,
-) -> Select[tuple[UUID]]:
+) -> Select[UUID]:
     """Build the complete identity-only relation for an already-proven Source cleanup.
 
     Private callers supply the actor/workspace from fresh owner admission, never selector

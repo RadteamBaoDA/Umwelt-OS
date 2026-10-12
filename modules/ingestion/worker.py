@@ -261,7 +261,7 @@ async def _lock_normalization_retry_event(
     if await ingestion_api.resolve_ingestion_run_scope(session, expected.run_id,
         multi_workspace_enabled=multi_workspace_enabled) != scope:
         return None
-    locked = await sources.lock_source_set(session, (scope.source_id,), scope=scope,
+    locked = await sources.lock_source_set(session, (cast(UUID, scope.source_id),), scope=scope,
         multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=expected.access_fence)
     source = locked.fences[0]
     if (source is None or source != expected.source_fence or source.status != "active"
@@ -361,7 +361,7 @@ async def _lock_worker_event(
         multi_workspace_enabled=multi_workspace_enabled)
     if run_scope != scope:
         return None
-    locked = await sources.lock_source_set(session, (scope.source_id,), scope=scope,
+    locked = await sources.lock_source_set(session, (cast(UUID, scope.source_id),), scope=scope,
         multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=access_fence)
     source = locked.fences[0]
     if source is None or source.status != "active" or source.generation != scope.source_generation:
@@ -407,8 +407,8 @@ async def _lock_worker_event(
                 return None
         document_preparation = None
         observation_preparation = None
-        normalization_rows = ()
-        candidates = ()
+        normalization_rows: tuple[tuple[ObservationNormalization, SourceObservation], ...] = ()
+        candidates: tuple[NormalizationCandidate, ...] = ()
         candidate_query = None
         discovered_batch_id = None
         if normalization_claim is not None:
@@ -432,7 +432,7 @@ async def _lock_worker_event(
                 SourceObservation.source_id == source.id,
                 SourceObservation.batch_id == discovered_batch_id,
             ).order_by(SourceObservation.provider_id, SourceObservation.id).limit(NORMALIZATION_BATCH_RECORDS))
-            candidates = tuple(NormalizationCandidate(*row) for row in (await session.execute(candidate_query)).all())
+            candidates = tuple(NormalizationCandidate(*tuple(row)) for row in (await session.execute(candidate_query)).all())
             document_preparation = await documents.prepare_normalized_document_keys(
                 session, source.id, tuple(sorted({item.external_id for item in candidates})),
                 scope=scope, multi_workspace_enabled=multi_workspace_enabled,
@@ -460,8 +460,10 @@ async def _lock_worker_event(
         if batch is None or stage is None:
             return None
         if candidate_query is not None:
+            # A candidate query exists only when the normalization claim was captured above.
+            conflict_claim = cast(WorkerClaim, normalization_claim)
             if run.batch_id != discovered_batch_id:
-                raise NormalizationPreparationConflict("normalization_batch_changed", normalization_claim)
+                raise NormalizationPreparationConflict("normalization_batch_changed", conflict_claim)
             # Prepare the complete discovered owner sets, including the O insert's accepted FK parents.
             await session.execute(select(ObservationNormalization).where(
                 ObservationNormalization.id.in_(tuple(item.journal_id for item in candidates)),
@@ -475,10 +477,10 @@ async def _lock_worker_event(
                 SourceObservation.id.in_(tuple(item.observation_id for item in candidates)),
                 SourceObservation.source_id == source.id, SourceObservation.batch_id == batch.id,
             ).order_by(SourceObservation.id).with_for_update().execution_options(populate_existing=True))
-            refreshed_candidates = tuple(NormalizationCandidate(*row)
+            refreshed_candidates = tuple(NormalizationCandidate(*tuple(row))
                 for row in (await session.execute(candidate_query)).all())
             if refreshed_candidates != candidates:
-                raise NormalizationPreparationConflict("normalization_candidate_set_changed", normalization_claim)
+                raise NormalizationPreparationConflict("normalization_candidate_set_changed", conflict_claim)
             normalization_rows = tuple((progress, observation) for progress, observation in
                 (await session.execute(candidate_query.with_only_columns(
                     ObservationNormalization, SourceObservation,
@@ -489,7 +491,7 @@ async def _lock_worker_event(
                 progress.workspace_id, progress.source_id, progress.source_generation, progress.run_id,
                 observation.batch_id, progress.stage_id, progress.normalization_version, observation.source_id,
             ) for progress, observation in normalization_rows) != candidates:
-                raise NormalizationPreparationConflict("normalization_candidate_lineage_changed", normalization_claim)
+                raise NormalizationPreparationConflict("normalization_candidate_lineage_changed", conflict_claim)
             if projection.provider in MEASUREMENT_PROVIDER_IDS:
                 observation_preparation = await observations.prepare_ingestion_observation_keys(
                     session, source.id, tuple(sorted({(item.external_id, item.observation_id)
@@ -1486,7 +1488,7 @@ async def process_uploaded_file(ctx: dict[str, object], event_id: str) -> None:
             changed = await sources.record_processing_result_in_uow(session, source_id, work.source.generation,
                 datetime.now(UTC), None, scope=work.scope, multi_workspace_enabled=enabled,
                 access_fence=work.access_fence, source_fence=work.source)
-            extras = [make_knowledge_change(source_id, document_id, scope=work.scope)]
+            extras: list[ReplayDraft] = [make_knowledge_change(source_id, document_id, scope=work.scope)]
             if changed:
                 extras.append(make_source_change(source_id, work.source.generation, work.source.status, scope=work.scope))
             await _commit_ingestion_change(session, work.run, work.stage, tuple(extras), scope=work.scope,

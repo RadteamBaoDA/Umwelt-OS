@@ -292,12 +292,14 @@ async def dispatch_pending_work(ctx: dict[str, object]) -> int:
                     if current_scope != scope:
                         continue
                     from core.workspaces.public import lock_access_fence
-                    await lock_access_fence(session, scope=scope, expected=access_fence,
+                    # claimed_at is set only after scope resolved, so scope is non-None here.
+                    owner_scope = cast(InternalJobScope, scope)
+                    await lock_access_fence(session, scope=owner_scope, expected=access_fence,
                                             multi_workspace_enabled=enabled)
                     await session.execute(update(EventOutbox).where(
-                        EventOutbox.id == identifier, EventOutbox.workspace_id == scope.workspace_id,
-                        EventOutbox.actor_user_id == scope.actor_user_id,
-                        EventOutbox.membership_revision == scope.membership_revision,
+                        EventOutbox.id == identifier, EventOutbox.workspace_id == owner_scope.workspace_id,
+                        EventOutbox.actor_user_id == owner_scope.actor_user_id,
+                        EventOutbox.membership_revision == owner_scope.membership_revision,
                         EventOutbox.status == "queued", EventOutbox.dispatched_at == claimed_at,
                     ).values(status="pending", next_attempt_at=datetime.now(UTC) + DISPATCH_STALE_AFTER))
                     await session.commit()

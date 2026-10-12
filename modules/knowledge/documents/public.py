@@ -3145,7 +3145,7 @@ async def _apply_normalized_document(
             NormalizedVersionProvenance.normalization_version == payload.normalization_version,
         )
     ) if document is not None else None
-    if prior is not None:
+    if prior is not None and document is not None:  # document is non-None whenever prior was queried
         version = await session.scalar(select(DocumentVersion).where(
             DocumentVersion.id == prior.document_version_id,
             DocumentVersion.document_id == document.id,
@@ -3594,7 +3594,7 @@ async def add_uploaded_document(
 async def _extraction_document(
     session: AsyncSession, document_id: UUID, source_id: UUID, *,
     scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
-    expected_raw_uri: str, expected_mime_type: str,
+    expected_raw_uri: str | None, expected_mime_type: str | None,
 ) -> Document | None:
     """Read one exact parser parent, comparing original URI/MIME and full fences.
 

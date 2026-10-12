@@ -12,7 +12,7 @@ from collections.abc import Iterable
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from typing import cast as typing_cast
 from uuid import UUID, uuid4, uuid5
 
@@ -72,6 +72,9 @@ from modules.knowledge.documents import public as documents
 from modules.knowledge.documents.schemas import DocumentCleanupPreparationLimitError
 from modules.sources import public as sources
 from modules.sources.schemas import ConnectorSource, SourceFence
+
+if TYPE_CHECKING:
+    from modules.connectors.github.schemas import GitHubBindingFence
 
 _RUN_RETRY_ORDER = {"receive": 0, "collect_web": 1, "normalize": 2, "parse_file": 3}
 _SOURCE_PURGE_PRODUCERS = {
@@ -1374,7 +1377,7 @@ def _decode_telegram_cursor(value: str | None) -> TelegramCursor | None:
 
 
 async def _lock_source_projection(session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool, expected_access_fence: AccessFence | None = None,
-) -> tuple[ConnectorSource | None, SourceFence | None, AccessFence]:
+) -> tuple[ConnectorSource | None, SourceFence, AccessFence]:
     """Hold the narrow source fence while reading the detached connector projection.
 
     Entry holds no domain locks. Source set admission captures AccessFence before the
@@ -2044,7 +2047,7 @@ async def accept_native_collection(
     if github_proof is not None:
         github_segment = await connectors.validate_github_collection_segment_in_uow(
             session, source=source, reserved_cursor_before=state.cursor,
-            proof=github_proof, binding_fence=github_fence, access_fence=access_fence,
+            proof=github_proof, binding_fence=typing_cast("GitHubBindingFence", github_fence), access_fence=access_fence,
             source_fence=source_fence, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         supplied_records = [record.model_dump(mode="json", exclude={"collected_at"}) for record in payload.records]
         validated_records = [record.model_dump(mode="json", exclude={"collected_at"}) for record in github_segment.records]
@@ -2234,7 +2237,7 @@ async def accept_native_collection(
             # Lock the claim plus every pause-eligible hint before capacity; apply/ack
             # may only freshly read these prepared rows and mutate, never reacquire.
             await connectors.lock_github_hints_for_visibility_pause_in_uow(
-                session, claim=hint_claim, binding_fence=github_fence,
+                session, claim=hint_claim, binding_fence=typing_cast("GitHubBindingFence", github_fence),
                 scope=scope, multi_workspace_enabled=multi_workspace_enabled,
                 access_fence=access_fence, source_fence=source_fence,
             )
@@ -3143,7 +3146,7 @@ async def resolve_ready_event_provenance(
 async def list_terminal_runs_after(
     session: AsyncSession, position: tuple[datetime, UUID] | None, limit: int = 100,
     *, scope: Scope, multi_workspace_enabled: bool,
-) -> list[tuple[datetime, UUID, str, dict[str, str | int]]]:
+) -> list[tuple[datetime, UUID, str, dict[str, str | int | None]]]:
     """Read-only keyset page of ingestion runs in a terminal state for connector sync results.
 
     Ordered by ``(updated_at, id)`` after the caller's ``(updated_at, id)`` tuple ``position``;

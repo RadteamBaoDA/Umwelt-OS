@@ -511,7 +511,7 @@ async def _owner_visible_projection(
         )
     if projection is None or not projection.available or projection.workspace_id != scope.workspace_id:
         raise HTTPException(status_code=404, detail="Resource not found")
-    return cast(ResourceAccessProjection, projection)
+    return projection
 
 
 async def list_resource_shares(

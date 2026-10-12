@@ -3,7 +3,8 @@
 import asyncio
 import json
 import time
-from typing import Annotated
+from collections.abc import Awaitable
+from typing import Annotated, Any, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
@@ -108,8 +109,11 @@ async def _allow_invitation_attempt(request: Request, redis: Redis, digest: str)
     """
     try:
         async with asyncio.timeout(2):
-            allowed = await redis.eval(script, 3, f"invite:ip:{key}:{minute}", f"invite:all:{minute}",
-                                       f"invite:pair:{_hash(key + digest[:16])}:{minute}")
+            allowed = await cast(
+                "Awaitable[Any]",
+                redis.eval(script, 3, f"invite:ip:{key}:{minute}", f"invite:all:{minute}",
+                           f"invite:pair:{_hash(key + digest[:16])}:{minute}"),
+            )
     except (RedisError, TimeoutError):
         raise HTTPException(status_code=503, detail="Invitation acceptance is temporarily unavailable") from None
     if not allowed:
