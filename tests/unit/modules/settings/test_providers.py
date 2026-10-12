@@ -39,6 +39,7 @@ def _settings(public_ok: bool = False) -> MagicMock:
     settings.ai_allowed_endpoint_cidrs = []
     settings.ai_allow_public_providers = public_ok
     settings.ai_credential_encryption_key = SecretStr(KEY)
+    settings.ai_credential_encryption_key_secondary = SecretStr("")
     settings.multi_workspace_enabled = False
     return settings
 

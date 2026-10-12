@@ -17,6 +17,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from modules.connectors.public import ConnectorConfig, ProviderCollectionPage, ProviderRateLimited
+from modules.connectors.providers.news import safe_xml_root
 from modules.ingestion.schemas import IngestionRecord
 from modules.knowledge.documents.public import ProviderRecordMetadata
 from modules.sources.schemas import ConnectorSource
@@ -270,10 +271,8 @@ def _records_from_feed(
 ) -> ProviderCollectionPage:
     """Map actual scoped YouTube/arXiv Atom entries, limiting output and preserving source clocks."""
     config = ConnectorConfig.model_validate(source.configuration)
-    try:
-        root = ElementTree.fromstring(body)
-    except ElementTree.ParseError:
-        raise ValueError("provider_feed_invalid") from None
+    # DOCTYPE/ENTITY refused (billion-laughs / XXE class); size bound is the shared feed limit.
+    root = safe_xml_root(body)
     records: list[IngestionRecord] = []
     mapped_bytes = 0
     entries = root.findall(f"{{{_ATOM}}}entry")

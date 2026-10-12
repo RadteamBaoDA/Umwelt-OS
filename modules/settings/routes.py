@@ -302,9 +302,9 @@ async def test_n8n(body: N8nTest, session: Session, request: Request, _owner: Ow
     if not key:
         return ConnectionTestResult(ok=False, error="credential_required")
     try:
-        async with httpx.AsyncClient(timeout=10, trust_env=False, follow_redirects=False) as client:
+        async with public.n8n_http_client(url, settings, timeout=10) as client:
             response = await client.get(f"{url}/api/v1/workflows", params={"limit": 1}, headers={"X-N8N-API-KEY": key})
-    except httpx.HTTPError:
+    except (httpx.HTTPError, EndpointNetworkPolicyError):
         return ConnectionTestResult(ok=False, error="unreachable")
     if response.is_success:
         return ConnectionTestResult(ok=True, detail=response.status_code)

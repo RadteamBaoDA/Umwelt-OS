@@ -8,7 +8,8 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
 
-from cryptography.fernet import Fernet, InvalidToken
+import httpx
+from cryptography.fernet import Fernet, InvalidToken, MultiFernet
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
 from redis.asyncio import Redis
@@ -21,6 +22,7 @@ from core.auth.models import Owner
 from core.auth.public import get_active_account, lock_account_admission
 from core.auth.schemas import AccountSessionRef
 from core.config import Settings
+from core.model_gateway.transport import approved_transport
 from core.model_gateway.schemas import (
     ALIAS_MODEL_TYPE,
     DEFAULT_PROVIDER_ID,
@@ -123,11 +125,20 @@ def validate_endpoint(value: str | None, settings: Settings) -> str | None:
     return _endpoint(value, settings)
 
 
-def _cipher(settings: Settings) -> Fernet:
-    """Create the configured credential cipher or raise HTTP 503 if unavailable."""
-    key = settings.ai_credential_encryption_key.get_secret_value()
+def credential_cipher(primary: str, secondary: str = "") -> MultiFernet:
+    """Build a rotation-capable cipher: encrypt with ``primary``, decrypt with ``primary`` or ``secondary``.
+
+    Raises ValueError/TypeError for a malformed key so callers can map it to their own failure.
+    """
+    keys = [primary, *([secondary] if secondary else [])]
+    return MultiFernet([Fernet(key.encode()) for key in keys])
+
+
+def _cipher(settings: Settings) -> MultiFernet:
+    """Create the configured credential cipher (rotation key honoured for decrypt) or raise HTTP 503."""
     try:
-        return Fernet(key.encode())
+        return credential_cipher(settings.ai_credential_encryption_key.get_secret_value(),
+                                 settings.ai_credential_encryption_key_secondary.get_secret_value())
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=503, detail="AI credential encryption is unavailable") from exc
 
@@ -730,6 +741,20 @@ def n8n_service_url(value: Any, settings: Settings) -> str | None:
     if urlsplit(url).netloc.lower() == urlsplit(str(settings.n8n_service_url)).netloc.lower():
         return url
     return _endpoint(url, settings)
+
+
+def n8n_http_client(url: str, settings: Settings, *, timeout: float) -> httpx.AsyncClient:
+    """HTTP client for n8n: DNS-pinned to approved addresses unless ``url`` is the operator's ``N8N_SERVICE_URL`` host.
+
+    Owner-chosen hosts (allowlisted or public-provider https) are resolved once per request, every answer is checked
+    against ``AI_ALLOWED_ENDPOINT_CIDRS`` (or public when opted in) and the checked IP is dialled, so DNS rebinding
+    cannot reach internal hosts. No proxies and no redirects. Raises EndpointNetworkPolicyError (fail closed) when
+    no address policy is configured.
+    """
+    if urlsplit(url).netloc.lower() == urlsplit(str(settings.n8n_service_url)).netloc.lower():
+        return httpx.AsyncClient(timeout=timeout, trust_env=False, follow_redirects=False)
+    transport = approved_transport(url, settings.ai_allowed_endpoint_cidrs, allow_global=settings.ai_allow_public_providers)
+    return httpx.AsyncClient(transport=transport, timeout=timeout, trust_env=False, follow_redirects=False)
 
 
 async def read_n8n(session: AsyncSession, settings: Settings, *, scope: Scope) -> N8nRead:

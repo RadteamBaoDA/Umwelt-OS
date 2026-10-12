@@ -12,12 +12,14 @@ from xml.etree import ElementTree
 
 import httpx
 
+from core.config import Settings
 from modules.connectors.backends import PROVIDER_SOURCE_TYPES, is_native_provider
 from modules.connectors.public import (
     default_schedule_interval_minutes,
     overlap_floor,
     validate_public_url,
 )
+from modules.connectors.providers.news import safe_xml_root
 from modules.sources.schemas import ConnectorSource
 
 # Fixed in-network address packaged workflows call back to (every infrastructure/n8n/workflows/*.json URL).
@@ -168,10 +170,18 @@ def build_workflow(
 class N8nApi:
     """Access bounded n8n workflow management endpoints without ambient proxies."""
 
-    def __init__(self, service_url: str, api_key: str) -> None:
-        """Store the n8n service root and API key header."""
+    def __init__(self, service_url: str, api_key: str, settings: Settings | None = None) -> None:
+        """Store the n8n service root and API key header; ``settings`` enables DNS-pinned egress for owner-chosen hosts."""
         self._base_url = service_url.rstrip("/")
         self._headers = {"X-N8N-API-KEY": api_key}
+        self._settings = settings
+
+    def _client(self, timeout: float) -> httpx.AsyncClient:
+        """Return the HTTP client: pinned to approved addresses when settings are known, plain otherwise."""
+        if self._settings is None:
+            return httpx.AsyncClient(timeout=timeout, trust_env=False)
+        from modules.settings.public import n8n_http_client
+        return n8n_http_client(self._base_url, self._settings, timeout=timeout)
 
     async def find_workflows(self, name: str) -> list[dict[str, Any]]:
         """Find exact-name workflows through at most twenty paginated API pages."""
@@ -181,7 +191,7 @@ class N8nApi:
             params: dict[str, str | int] = {"name": name, "limit": 250}
             if cursor is not None:
                 params["cursor"] = cursor
-            async with httpx.AsyncClient(timeout=20, trust_env=False) as client:
+            async with self._client(20) as client:
                 response = await client.get(
                     f"{self._base_url}/api/v1/workflows",
                     headers=self._headers,
@@ -205,7 +215,7 @@ class N8nApi:
 
     async def get_workflow(self, workflow_id: str) -> dict[str, Any]:
         """Fetch one workflow and require an object response."""
-        async with httpx.AsyncClient(timeout=20, trust_env=False) as client:
+        async with self._client(20) as client:
             response = await client.get(
                 f"{self._base_url}/api/v1/workflows/{workflow_id}",
                 headers=self._headers,
@@ -218,7 +228,7 @@ class N8nApi:
 
     async def create_workflow(self, workflow: dict[str, Any]) -> str:
         """Create a workflow and return its nonempty n8n identifier."""
-        async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
+        async with self._client(30) as client:
             response = await client.post(
                 f"{self._base_url}/api/v1/workflows",
                 headers=self._headers,
@@ -232,7 +242,7 @@ class N8nApi:
 
     async def update_workflow(self, workflow_id: str, workflow: dict[str, Any]) -> None:
         """Replace a known workflow from the supplied packaged definition."""
-        async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
+        async with self._client(30) as client:
             response = await client.put(
                 f"{self._base_url}/api/v1/workflows/{workflow_id}",
                 headers=self._headers,
@@ -243,7 +253,7 @@ class N8nApi:
     async def set_active(self, workflow_id: str, active: bool) -> None:
         """Activate or deactivate a workflow by its n8n identifier."""
         action = "activate" if active else "deactivate"
-        async with httpx.AsyncClient(timeout=20, trust_env=False) as client:
+        async with self._client(20) as client:
             response = await client.post(
                 f"{self._base_url}/api/v1/workflows/{workflow_id}/{action}",
                 headers=self._headers,
@@ -338,7 +348,7 @@ async def read_rss(
                     if total_bytes > 25 * 1024 * 1024:
                         raise ValueError("RSS pagination exceeded the 25 MiB limit")
                     body.extend(chunk)
-            root = ElementTree.fromstring(bytes(body))
+            root = safe_xml_root(bytes(body), max_bytes=25 * 1024 * 1024)  # DOCTYPE/ENTITY refused
             def text(element: ElementTree.Element, names: set[str]) -> str:
                 """Return descendant text for the first matching local XML tag name."""
                 for child in element.iter():

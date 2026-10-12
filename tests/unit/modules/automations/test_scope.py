@@ -291,7 +291,7 @@ async def test_first_seen_cursor_is_inserted_with_workspace() -> None:
 def _request() -> MagicMock:
     request = MagicMock()
     request.headers = {"content-type": "application/json", "content-length": "10"}
-    request.app.state.settings = SimpleNamespace(multi_workspace_enabled=FLAG)
+    request.app.state.settings = SimpleNamespace(multi_workspace_enabled=FLAG, automation_webhook_signing_secrets={})
     return request
 
 

@@ -105,7 +105,7 @@ async def run(
         return {"dry_run": not apply, "examined": 0, "upgraded": 0, "would_upgrade": 0,
                 "reconciliation_required": 0, "skipped": 0, "last_source_id": None, "more": False,
                 "disabled": True}
-    api = N8nApi(n8n.service_url, n8n.api_key) if n8n.api_key else None
+    api = N8nApi(n8n.service_url, n8n.api_key, settings) if n8n.api_key else None
     statement = select(ConnectorProvisioning.source_id).where(*_STALE).order_by(ConnectorProvisioning.source_id).limit(limit)
     if after is not None:
         statement = statement.where(ConnectorProvisioning.source_id > after)

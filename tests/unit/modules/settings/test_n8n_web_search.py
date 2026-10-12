@@ -23,6 +23,7 @@ KEY = Fernet.generate_key().decode()
 def _settings() -> MagicMock:
     settings = MagicMock()
     settings.ai_credential_encryption_key = SecretStr(KEY)
+    settings.ai_credential_encryption_key_secondary = SecretStr("")
     settings.n8n_service_url = "http://n8n:5678/"
     settings.n8n_api_key = SecretStr("env-key")
     settings.n8n_webhook_token = SecretStr("")

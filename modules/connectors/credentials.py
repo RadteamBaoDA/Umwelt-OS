@@ -5,9 +5,18 @@ import json
 from uuid import UUID
 
 import httpx
-from cryptography.fernet import Fernet, InvalidToken
+from cryptography.fernet import Fernet, InvalidToken, MultiFernet
 
 from modules.connectors.public import NativeCredentialSnapshot
+
+
+def key_ring(key: str) -> MultiFernet:
+    """Build a cipher from ``primary`` or ``primary,secondary`` (rotation): encrypt with the first key, decrypt with any.
+
+    Fernet keys are urlsafe base64 and never contain a comma, so the deployment key can carry the retiring key
+    without a new setting. Raises ValueError/UnicodeEncodeError for malformed keys.
+    """
+    return MultiFernet([Fernet(part.strip().encode("ascii")) for part in key.split(",")])
 
 
 class CredentialEncryptionUnavailable(RuntimeError):
@@ -17,7 +26,7 @@ class CredentialEncryptionUnavailable(RuntimeError):
 def secret_fingerprint(key: str, secret: str) -> str:
     """Return a keyed SHA-256 fingerprint without persisting the plaintext secret."""
     try:
-        raw_key = base64.urlsafe_b64decode(key.encode("ascii"))
+        raw_key = base64.urlsafe_b64decode(key.split(",")[0].strip().encode("ascii"))
         if len(raw_key) != 32:
             raise ValueError
     except (ValueError, UnicodeEncodeError) as exc:
@@ -36,7 +45,7 @@ def encrypt_credential_input(
 ) -> str:
     """Encrypt credential request and binding data scoped to source, slot, and operation."""
     try:
-        cipher = Fernet(key.encode("ascii"))
+        cipher = key_ring(key)
     except (ValueError, UnicodeEncodeError) as exc:
         raise CredentialEncryptionUnavailable("Connector credential encryption is unavailable") from exc
     payload = json.dumps(
@@ -63,7 +72,7 @@ def decrypt_credential_input(
 ) -> tuple[dict[str, object], dict[str, object]]:
     """Decrypt stored input only when its source, slot, operation, and payload shapes match."""
     try:
-        plaintext = Fernet(key.encode("ascii")).decrypt(ciphertext.encode("ascii"))
+        plaintext = key_ring(key).decrypt(ciphertext.encode("ascii"))
         payload = json.loads(plaintext)
     except (ValueError, UnicodeEncodeError, InvalidToken, json.JSONDecodeError) as exc:
         raise CredentialEncryptionUnavailable("Stored connector credential input is unavailable") from exc

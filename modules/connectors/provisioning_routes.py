@@ -902,7 +902,7 @@ async def activate_source(
     ], access_fence=access_fence, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
 
     credentials = N8nCredentials(n8n.service_url, api_key)
-    api = N8nApi(n8n.service_url, api_key)
+    api = N8nApi(n8n.service_url, api_key, settings)
     await drive_activation(
         session,
         source_id,
@@ -1157,7 +1157,7 @@ async def _drive_transition(
     settings = request.app.state.settings
     gate = settings.multi_workspace_enabled
     n8n = await resolve_n8n(session, settings, workspace_id=scope.workspace_id)
-    api = N8nApi(n8n.service_url, n8n.api_key) if n8n.api_key else None
+    api = N8nApi(n8n.service_url, n8n.api_key, settings) if n8n.api_key else None
     await provisioning.advance_backend_transition(
         session, source_id, api, scope=scope, multi_workspace_enabled=gate, access_fence=access_fence)
     row = await provisioning.activation_status(session, source_id, multi_workspace_enabled=gate, scope=scope)

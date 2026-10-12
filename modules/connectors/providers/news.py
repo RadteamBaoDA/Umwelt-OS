@@ -198,11 +198,11 @@ def _record(
 
 # --------------------------------------------------------------------------- RSS / Atom
 
-def safe_xml_root(body: object) -> ET.Element:
-    """Parse bounded, strictly UTF-8 XML; DOCTYPE/ENTITY (and other encodings that could hide them) are refused."""
+def safe_xml_root(body: object, max_bytes: int = MAX_FEED_BYTES) -> ET.Element:
+    """Parse bounded (``max_bytes``), strictly UTF-8 XML; DOCTYPE/ENTITY (and other encodings that could hide them) are refused."""
     if not isinstance(body, (bytes, bytearray)) or not body:
         raise ProviderPayloadError("news_feed_invalid")
-    if len(body) > MAX_FEED_BYTES:
+    if len(body) > max_bytes:
         raise ProviderPayloadError("news_feed_too_large")
     try:
         text = bytes(body).decode("utf-8-sig")
