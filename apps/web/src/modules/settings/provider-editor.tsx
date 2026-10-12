@@ -100,7 +100,7 @@ type Props = {
 export function ProviderEditor({ providers, savedIds, secrets, disabled, discoveringId, discoverError, onChange, onSecret, onDiscover, t }: Props) {
   const patch = (id: string, change: Partial<ProviderRead>) => onChange(providers.map((item) => (item.id === id ? { ...item, ...change } : item)));
   return <div className="flex flex-col gap-4">
-    {providers.length === 0 && <p className="muted m-0">{t('providersEmpty')}</p>}
+    {providers.length === 0 && <p className="text-muted-foreground m-0">{t('providersEmpty')}</p>}
     {providers.map((provider) => {
       const secret = secrets[provider.id] ?? { key: '', action: 'unchanged' as const };
       const found = provider.models ?? [];
@@ -111,7 +111,7 @@ export function ProviderEditor({ providers, savedIds, secrets, disabled, discove
           <h3 className="m-0 mr-auto text-base font-bold">{provider.label || provider.id}</h3>
           {provider.local && <Badge variant="outline">{t('providerLocal')}</Badge>}
           {provider.policy_denied && <Badge variant="destructive">{t('providerPolicyDenied')}</Badge>}
-          <Button type="button" className="secondary" disabled={disabled} aria-label={t('providerDelete', { label: provider.label || provider.id })} onClick={() => onChange(providers.filter((item) => item.id !== provider.id))}><Trash2 className="size-4" aria-hidden="true" /></Button>
+          <Button type="button" variant="outline" disabled={disabled} aria-label={t('providerDelete', { label: provider.label || provider.id })} onClick={() => onChange(providers.filter((item) => item.id !== provider.id))}><Trash2 className="size-4" aria-hidden="true" /></Button>
         </div>
         <FieldGrid>
           <label className="field"><span className="label">{t('providerKind')}</span>
@@ -125,25 +125,25 @@ export function ProviderEditor({ providers, savedIds, secrets, disabled, discove
           <label className="field"><span className="label">{t('providerBaseUrl')}</span><Input type="url" disabled={disabled} value={provider.base_url ?? ''} onChange={(event) => patch(provider.id, { base_url: event.target.value || null })} placeholder={providerPresets[provider.kind].baseUrl || 'https://gateway.example/v1'} /></label>
           <label className="field"><span className="label">{t('providerKey')}</span><Input type="password" disabled={disabled || secret.action === 'removed'} autoComplete="new-password" value={secret.key} onChange={(event) => onSecret(provider.id, { key: event.target.value, action: event.target.value ? 'replaced' : 'unchanged' })} placeholder={provider.local ? t('providerKeyOptional') : t('gatewayCredentialHelp')} /></label>
         </FieldGrid>
-        {hostHint && <p className="muted m-0 text-xs">{t('providerDockerHint')}</p>}
-        <p className="muted m-0 text-xs">{t('credential')} {secret.action === 'removed' ? t('providerKeyWillRemove') : provider.credential_configured ? t('configured') : t('notConfigured')}{provider.destination_id ? ` · ${provider.destination_id}` : ''}. {t('credentialNeverShown')}</p>
+        {hostHint && <p className="text-muted-foreground m-0 text-xs">{t('providerDockerHint')}</p>}
+        <p className="text-muted-foreground m-0 text-xs">{t('credential')} {secret.action === 'removed' ? t('providerKeyWillRemove') : provider.credential_configured ? t('configured') : t('notConfigured')}{provider.destination_id ? ` · ${provider.destination_id}` : ''}. {t('credentialNeverShown')}</p>
         {provider.policy_denied && <p className="error m-0" role="alert">{t('blockedEndpoint')}</p>}
         <div className="flex flex-wrap gap-2">
-          <Button type="button" className="secondary" disabled={disabled || discoveringId === provider.id || !provider.base_url || (isNew && !provider.local && !secret.key)} onClick={() => onDiscover(provider)}>{discoveringId === provider.id ? t('checkingConnection') : t('providerDiscover')}</Button>
-          {provider.credential_configured && <Button type="button" className="secondary" disabled={disabled} onClick={() => onSecret(provider.id, secret.action === 'removed' ? { key: '', action: 'unchanged' } : { key: '', action: 'removed' })}>{secret.action === 'removed' ? t('providerKeyKeep') : t('removeGatewayCredential')}</Button>}
+          <Button type="button" variant="outline" disabled={disabled || discoveringId === provider.id || !provider.base_url || (isNew && !provider.local && !secret.key)} onClick={() => onDiscover(provider)}>{discoveringId === provider.id ? t('checkingConnection') : t('providerDiscover')}</Button>
+          {provider.credential_configured && <Button type="button" variant="outline" disabled={disabled} onClick={() => onSecret(provider.id, secret.action === 'removed' ? { key: '', action: 'unchanged' } : { key: '', action: 'removed' })}>{secret.action === 'removed' ? t('providerKeyKeep') : t('removeGatewayCredential')}</Button>}
         </div>
         <div role="status" aria-live="polite">{found.length > 0 && <div className="flex flex-col gap-2">
-          <p className="muted m-0"><Check className="inline size-4" aria-hidden="true" /> {t('providerModelsFound', { count: found.length })}</p>
-          <p className="muted m-0 text-xs">{t('modelTypeHelp')}</p>
+          <p className="text-muted-foreground m-0"><Check className="inline size-4" aria-hidden="true" /> {t('providerModelsFound', { count: found.length })}</p>
+          <p className="text-muted-foreground m-0 text-xs">{t('modelTypeHelp')}</p>
           <ul className="m-0 flex flex-col gap-2 p-0">{found.map((model) => <li key={model.id} className="flex list-none flex-wrap items-center gap-2">
             <span className="min-w-0 flex-1 break-all text-sm">{model.id}</span>
             <Select disabled={disabled} value={model.type} onValueChange={(type) => patch(provider.id, { models: found.map((item) => (item.id === model.id ? { ...item, type: type as ModelType } : item)) })}><SelectTrigger className="w-48" aria-label={t('modelType', { id: model.id })}><SelectValue /></SelectTrigger><SelectContent>{modelTypes.map((type) => <SelectItem key={type} value={type}>{t(`type_${type}`)}</SelectItem>)}</SelectContent></Select>
-            <Button type="button" className="secondary" disabled={disabled} aria-label={t('modelRemove', { id: model.id })} onClick={() => patch(provider.id, { models: found.filter((item) => item.id !== model.id) })}><Trash2 className="size-4" aria-hidden="true" /></Button>
+            <Button type="button" variant="outline" disabled={disabled} aria-label={t('modelRemove', { id: model.id })} onClick={() => patch(provider.id, { models: found.filter((item) => item.id !== model.id) })}><Trash2 className="size-4" aria-hidden="true" /></Button>
           </li>)}</ul></div>}</div>
         {discoverError?.id === provider.id && <p className="error m-0" role="alert"><X className="inline size-4" aria-hidden="true" /> {discoverError.text}</p>}
       </div>;
     })}
-    <div><Button type="button" className="secondary" disabled={disabled || providers.length >= maxProviders} onClick={() => onChange([...providers, newProvider('openai', providers)])}><Plus className="size-4" aria-hidden="true" /> {t('providerAdd')}</Button>
-      {providers.length >= maxProviders && <p className="muted m-0 mt-2 text-xs">{t('providerMax', { max: maxProviders })}</p>}</div>
+    <div><Button type="button" variant="outline" disabled={disabled || providers.length >= maxProviders} onClick={() => onChange([...providers, newProvider('openai', providers)])}><Plus className="size-4" aria-hidden="true" /> {t('providerAdd')}</Button>
+      {providers.length >= maxProviders && <p className="text-muted-foreground m-0 mt-2 text-xs">{t('providerMax', { max: maxProviders })}</p>}</div>
   </div>;
 }

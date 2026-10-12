@@ -189,8 +189,8 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
       <header className="topbar"><Link href="/login" className="brand-name" aria-label="Umwelt-OS"><UmweltLogo /></Link></header>
       <main id="main-content" tabIndex={-1} className="page"><section className="status-panel">
       <h1>{expired ? t('expiredTitle') : t('workspaceUnavailable')}</h1>
-      <p className="muted">{expired ? t('expiredHelp') : t('workspaceUnavailableHelp')}</p>
-      <Button className="secondary" onClick={() => session.refetch()}>{t('retry')}</Button>
+      <p className="text-muted-foreground">{expired ? t('expiredHelp') : t('workspaceUnavailableHelp')}</p>
+      <Button variant="outline" onClick={() => session.refetch()}>{t('retry')}</Button>
       </section></main>
       <ConnectionFooter apiStatus={expired ? 'expired' : online ? 'unavailable' : 'clientOffline'} realtimeStatus={realtime.status} onRetry={() => apiHealth.refetch()} retrying={apiHealth.isFetching} />
     </div>;

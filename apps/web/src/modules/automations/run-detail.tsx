@@ -3,6 +3,8 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
+import { formatDateTime } from '@/core/i18n';
+import { useDisplayPreferences } from '@/core/query-provider';
 import { Button } from '@/components/ui/button';
 import { ApiError } from '@/core/api';
 import { useChatController } from '@/core/app-shell/chat-controller';
@@ -15,6 +17,7 @@ function ActionRow({ rule, run, action, csrfToken, onOpenChat }: {
   rule: Automation; run: Run; action: RunAction; csrfToken: string; onOpenChat: () => void;
 }) {
   const t = useTranslations('automations');
+  const display = useDisplayPreferences();
   const client = useQueryClient();
   const decide = useMutation({
     mutationFn: (decision: 'approve' | 'deny') => decideAction(run.id, action.ordinal, decision, csrfToken),
@@ -39,7 +42,7 @@ function ActionRow({ rule, run, action, csrfToken, onOpenChat }: {
       {spec?.type === 'call_webhook' && <p>{t('approvalWebhook', { alias: spec.alias ?? '', event: spec.event ?? '' })}</p>}
       {spec?.type === 'run_agent' && <p>{t('approvalAgent', { profile: spec.profile_id ?? '', instruction: spec.instruction ?? '' })}</p>}
       {!spec && <p className="text-destructive">{t('approvalRevisionChanged')}</p>}
-      {action.approval_expires_at && <p className="text-xs text-muted-foreground">{t('approvalExpires', { time: new Date(action.approval_expires_at).toLocaleString() })}</p>}
+      {action.approval_expires_at && <p className="text-xs text-muted-foreground">{t('approvalExpires', { time: formatDateTime(action.approval_expires_at, display.locale, display.timezone) })}</p>}
       <div className="flex flex-wrap gap-2">
         <Button type="button" disabled={decide.isPending || expired || !spec} onClick={() => decide.mutate('approve')}>{t('approve')}</Button>
         <Button type="button" variant="outline" disabled={decide.isPending} onClick={() => decide.mutate('deny')}>{t('deny')}</Button>
@@ -53,6 +56,7 @@ function ActionRow({ rule, run, action, csrfToken, onOpenChat }: {
 /** Run history for one rule: status, trigger, per-action outcomes, decidable approvals and Chat links. */
 export function RunDetail({ rule, csrfToken, onBack }: { rule: Automation; csrfToken: string; onBack: () => void }) {
   const t = useTranslations('automations');
+  const display = useDisplayPreferences();
   const chat = useChatController();
   const runs = useQuery({
     queryKey: ['automation-runs', rule.id], queryFn: () => listRuns(rule.id),
@@ -82,7 +86,7 @@ export function RunDetail({ rule, csrfToken, onBack }: { rule: Automation; csrfT
     {runs.data && runs.data.items.length === 0 && <p className="text-sm text-muted-foreground">{t('noRuns')}</p>}
     <ul className="space-y-3">{runs.data?.items.map((run) => <li key={run.id} className="space-y-2 rounded-lg border border-border bg-surface p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <strong className="text-sm">{t(`trigger_${run.trigger_type}`)} · {new Date(run.created_at).toLocaleString()}</strong>
+        <strong className="text-sm">{t(`trigger_${run.trigger_type}`)} · {formatDateTime(run.created_at, display.locale, display.timezone)}</strong>
         <span className="rounded-full bg-muted px-2 py-1 text-xs">{t(`runStatus_${run.status}`)}</span>
       </div>
       <p className="text-xs text-muted-foreground">{t('runMeta', { revision: run.revision, depth: run.depth, attempts: run.attempts })}{run.reason ? ` · ${t('reason', { code: run.reason })}` : ''}</p>

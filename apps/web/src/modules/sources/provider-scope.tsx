@@ -59,7 +59,7 @@ export function ProviderScope({
   if (provider === 'sec_edgar') return <>
     {field('sec_cik', t('secCik'), configuration.sec_cik ?? '', (value) => onChange('sec_cik', value), { maxLength: 10, pattern: '[0-9]{10}' })}
     {field('sec_contact_email', t('secContactEmail'), configuration.sec_contact_email ?? '', (value) => onChange('sec_contact_email', value), { maxLength: 254 })}
-    <small className="muted">{t('secHelp')}</small>
+    <small className="text-muted-foreground">{t('secHelp')}</small>
   </>;
   if (provider === 'google_news') return <>
     {field('news_query', t('newsQuery'), configuration.news_query ?? '', (value) => onChange('news_query', value), { maxLength: 200 })}
@@ -83,11 +83,11 @@ export function ProviderScope({
         </SelectContent>
       </Select>
     </div>
-    <small className="muted">{t('newsHelp')}</small>
+    <small className="text-muted-foreground">{t('newsHelp')}</small>
   </>;
   if (provider === 'openalex') return <>
     {field('scholarly_query', t('scholarlyQuery'), configuration.scholarly_query ?? '', (value) => onChange('scholarly_query', value), { maxLength: 200 })}
-    <small className="muted">{t('scholarlyHelp')}</small>
+    <small className="text-muted-foreground">{t('scholarlyHelp')}</small>
   </>;
   if (provider === 'youtube') return <>{field('youtube_channel_id', t('youtubeChannelId'), configuration.youtube_channel_id ?? '', (value) => onChange('youtube_channel_id', value), { maxLength: 24, pattern: 'UC[A-Za-z0-9_-]{22}' })}</>;
   if (provider === 'arxiv') return <>{field('arxiv_category', t('arxivCategory'), configuration.arxiv_category ?? '', (value) => onChange('arxiv_category', value), { maxLength: 64, pattern: '[A-Za-z][A-Za-z0-9.-]{0,63}' })}</>;
@@ -127,7 +127,7 @@ export function ProviderScope({
       lastEmittedSignature.current = JSON.stringify(values);
       onChange('telegram_chat_ids', values);
     }} />
-    <small id="source-scope-telegram-help" className="muted">{t('telegramChannelHelp')}</small>
+    <small id="source-scope-telegram-help" className="text-muted-foreground">{t('telegramChannelHelp')}</small>
   </div>;
 }
 
@@ -167,7 +167,7 @@ export function ProviderGuide({ entry, source, now, onTest, testBusy, testPassed
       <pre className="overflow-x-auto rounded-md border border-border bg-bg p-2 text-xs" data-testid="guide-sample-output">{JSON.stringify(entry.sample_output, null, 2)}</pre></div>}
     {(entry.example_config || entry.sample_output) && <small className="text-muted-foreground">{t('guideExampleNote')}</small>}
     <div className="flex flex-wrap items-center gap-2">
-      <Button type="button" className="secondary" disabled={!onTest || testBusy} onClick={onTest}>{t('guideTest')}</Button>
+      <Button type="button" variant="outline" disabled={!onTest || testBusy} onClick={onTest}>{t('guideTest')}</Button>
       <small className="text-muted-foreground">{onTest ? t('guideTestNote') : t('guideTestNeedsSource')}</small>
       {testPassed && <small role="status">{t('guideTestPassed')}</small>}
     </div>

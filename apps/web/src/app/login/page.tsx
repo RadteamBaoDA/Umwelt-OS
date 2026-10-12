@@ -87,14 +87,14 @@ export default function LoginPage() {
         <div className="grid gap-1">
           <span className="brand">{t('eyebrow')}</span>
           <h1 id="login-title" className="m-0 text-[30px] font-bold leading-[1.15] tracking-[-0.04em]">{t('welcome')}</h1>
-          <p className="muted">{t('privateWorkspace')}</p>
+          <p className="text-muted-foreground">{t('privateWorkspace')}</p>
         </div>
         {expired && !invalid && !unavailable && <div role="status" className="grid gap-0.5 rounded-xl border border-border bg-secondary px-4 py-3 text-sm">
-          <strong>{t('sessionExpired')}</strong><span className="muted">{t('sessionExpiredHelp')}</span>
+          <strong>{t('sessionExpired')}</strong><span className="text-muted-foreground">{t('sessionExpiredHelp')}</span>
         </div>}
         {unavailable && <div role="alert" className="grid gap-0.5 rounded-xl border border-destructive px-4 py-3 text-sm">
           <strong className="flex items-center gap-2 text-destructive"><AlertTriangleIcon aria-hidden="true" className="size-4" />{t('serviceUnavailable')}</strong>
-          <span className="muted">{t('checkApi')}</span>
+          <span className="text-muted-foreground">{t('checkApi')}</span>
           <Button type="button" variant="outline" size="sm" className="mt-2 w-fit" onClick={() => { void googleStatus.refetch(); login.reset(); }}>{t('retry')}</Button>
         </div>}
         {invalid && !unavailable && <div role="alert" id="login-error" className="flex items-start gap-3 rounded-xl border border-destructive px-4 py-3 text-sm text-destructive">
@@ -110,7 +110,7 @@ export default function LoginPage() {
             <span className="text-[13px] font-semibold">{t('localAccount')}</span>
             <div className="flex min-h-[52px] items-center gap-3 rounded-[9px] border border-border px-3">
               <span aria-hidden="true" className="inline-flex size-8 items-center justify-center rounded-full bg-secondary text-primary"><UserIcon className="size-4" /></span>
-              <span className="grid"><strong className="text-sm font-semibold leading-tight">{t('ownerAccount')}</strong><span className="muted text-xs">{t('passwordOnly')}</span></span>
+              <span className="grid"><strong className="text-sm font-semibold leading-tight">{t('ownerAccount')}</strong><span className="text-muted-foreground text-xs">{t('passwordOnly')}</span></span>
             </div>
             <Button type="button" variant="link" size="sm" className="w-fit px-0" onClick={() => setEmailToggled(true)}>{t('useEmail')}</Button>
           </div>}
@@ -119,15 +119,15 @@ export default function LoginPage() {
             <Input id="password" type="password" autoComplete="current-password" autoFocus={!emailMode} placeholder={t('passwordPlaceholder')}
               aria-invalid={passwordError || undefined} aria-describedby={`password-help${login.error ? ' login-error' : ''}`} {...form.register('password')} />
             {form.formState.errors.password && <span className="error" role="alert">{t('enterPassword')}</span>}
-            <p id="password-help" className="muted text-xs">{t('passwordHelp')}</p>
+            <p id="password-help" className="text-muted-foreground text-xs">{t('passwordHelp')}</p>
           </div>
           <Button type="submit" className="w-full" disabled={login.isPending || unavailable}>{login.isPending ? t('signingIn') : t('signIn')}</Button>
         </form>
-        <div className="muted flex items-center gap-3 text-[13px]" aria-hidden="true"><span className="h-px flex-1 bg-border" /><span>{t('orUseGoogle')}</span><span className="h-px flex-1 bg-border" /></div>
+        <div className="text-muted-foreground flex items-center gap-3 text-[13px]" aria-hidden="true"><span className="h-px flex-1 bg-border" /><span>{t('orUseGoogle')}</span><span className="h-px flex-1 bg-border" /></div>
         <div className="grid gap-2">
           {googleError && <p className="error" role="alert">{t('googleFailed')}</p>}
           <Button type="button" variant="outline" className="w-full" aria-describedby="google-help" disabled={googleOff || googleLogin.isPending} onClick={() => googleLogin.mutate()}>{googleLogin.isPending ? t('openingGoogle') : t('continueGoogle')}</Button>
-          <p id="google-help" className="muted text-xs leading-snug" role="status">{googleHelp}</p>
+          <p id="google-help" className="text-muted-foreground text-xs leading-snug" role="status">{googleHelp}</p>
           {googleLogin.error && <p className="error" role="alert">{t(apiFailureKey(googleLogin.error) ?? 'googleStartFailed')}</p>}
         </div>
       </section>

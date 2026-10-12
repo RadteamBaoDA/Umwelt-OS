@@ -53,16 +53,16 @@ export function GoogleLink() {
 
   return <section className="status-panel">
     <h2>{t('googleSignIn')}</h2>
-    {status.isPending && <p className="muted" role="status">{t('checkingGoogle')}</p>}
+    {status.isPending && <p className="text-muted-foreground" role="status">{t('checkingGoogle')}</p>}
     {status.isError && <p className="error" role="alert">{t('unavailable')}</p>}
-    {status.isSuccess && !status.data.configured && <p className="muted">{t('unconfigured')}</p>}
+    {status.isSuccess && !status.data.configured && <p className="text-muted-foreground">{t('unconfigured')}</p>}
     {status.isSuccess && status.data.configured && <>
-      <p className="muted">{status.data.linked ? t('linked') : t('unlinked')}</p>
+      <p className="text-muted-foreground">{status.data.linked ? t('linked') : t('unlinked')}</p>
       {providerError && <p className="error" role="alert">{t('linkFailed')}</p>}
-      <p className="muted">{t('scopeHelp')}</p>
+      <p className="text-muted-foreground">{t('scopeHelp')}</p>
       <div className="field"><Label htmlFor="google-password">{t('confirmPassword')}</Label><Input id="google-password" type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} /></div>
       {status.data.linked
-        ? <Button type="button" className="secondary" disabled={!password || unlink.isPending} onClick={() => unlink.mutate()}>{unlink.isPending ? t('unlinking') : t('unlinkGoogle')}</Button>
+        ? <Button type="button" variant="outline" disabled={!password || unlink.isPending} onClick={() => unlink.mutate()}>{unlink.isPending ? t('unlinking') : t('unlinkGoogle')}</Button>
         : <Button type="button" disabled={!password || link.isPending} onClick={() => link.mutate()}>{link.isPending ? t('linking') : t('linkGoogle')}</Button>}
       {error && <p className="error" role="alert">{t(error instanceof ApiError && error.code === 'password_incorrect' ? 'passwordIncorrect' : apiFailureKey(error) ?? 'changeFailed')}</p>}
     </>}

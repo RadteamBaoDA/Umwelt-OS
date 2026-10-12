@@ -87,7 +87,7 @@ function PurgeProgress({ operationId, onSucceeded }: { operationId: string; onSu
   });
   const succeeded = operation.data?.status === 'succeeded';
   useEffect(() => { if (succeeded) onSucceeded(); }, [succeeded, onSucceeded]);
-  const refreshButton = <Button type="button" className="secondary" disabled={operation.isFetching} onClick={() => void operation.refetch()}>
+  const refreshButton = <Button type="button" variant="outline" disabled={operation.isFetching} onClick={() => void operation.refetch()}>
     {operation.isFetching ? t('cleanupRefreshingProgress') : t('cleanupRefreshProgress')}
   </Button>;
   if (!operation.data) return <div><p className={operation.isError ? 'error' : 'muted'} role={operation.isError ? 'alert' : 'status'}>{operation.isError ? t('actionFailed') : t('loading')}</p>{refreshButton}</div>;
@@ -107,7 +107,7 @@ function PurgeProgress({ operationId, onSucceeded }: { operationId: string; onSu
     <p role="status">{succeeded ? t('cleanupComplete') : operation.data.status}{operation.data.error_code ? ` · ${operation.data.error_code}` : ''}</p>
     {operation.data.memory_status === 'failed' && (operation.data.memory_error_code === 'legacy_provenance_unresolved' || operation.data.memory_error_code === 'evidence_identity_unavailable')
       && <p className="error" role="alert">{t('cleanupMemoryUnavailable')}</p>}
-    {pendingOwners.length > 0 && <p className="muted">{t('cleanupPendingOwnerStages', { owners: pendingOwners.join(', ') })}</p>}
+    {pendingOwners.length > 0 && <p className="text-muted-foreground">{t('cleanupPendingOwnerStages', { owners: pendingOwners.join(', ') })}</p>}
     {refreshButton}
   </div>;
 }
@@ -180,18 +180,18 @@ function SourceEntry({
   };
   const hasDetail = Boolean(collectResult || operationId || (historyOpen && connector) || error || collect.error || activation.isError);
   const cell = 'px-3 py-3 align-top text-sm max-[720px]:block max-[720px]:px-0 max-[720px]:py-1';
-  const mobileLabel = (key: 'colSchedule' | 'colCollected' | 'colIndexed') => <span className="muted mr-1 min-[721px]:hidden">{t(key)}:</span>;
+  const mobileLabel = (key: 'colSchedule' | 'colCollected' | 'colIndexed') => <span className="text-muted-foreground mr-1 min-[721px]:hidden">{t(key)}:</span>;
   return <>
     <tr className="border-b border-border max-[720px]:mb-3 max-[720px]:block max-[720px]:rounded-lg max-[720px]:border max-[720px]:p-3">
       <th scope="row" ref={nameCellRef} tabIndex={-1} className={`${cell} font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}>
         <strong>{source.name}</strong>
-        <p className="muted">{providerLabel(source.provider, t) ?? source.type}</p>
+        <p className="text-muted-foreground">{providerLabel(source.provider, t) ?? source.type}</p>
         {(source.collection_error_code || source.processing_error_code) && <p className="error">{t('collectionError')}: {source.collection_error_code ?? t('noError')} · {t('processingError')}: {source.processing_error_code ?? t('noError')}</p>}
       </th>
       <td className={cell}>
         <Badge variant="outline" className={rowState === 'active' ? 'border-primary text-primary' : rowState === 'error' || rowState === 'savedNotActive' ? 'border-destructive text-destructive' : undefined}>{t(chipKey[rowState])}</Badge>
-        {connector && activation.data?.error_code && <p className="muted">{activation.data.error_code}</p>}
-        {connector && activation.data && <p className="muted">{t('activationState')}: {t(({ queued: 'stateQueued', provisioning: 'stateProvisioning', active: 'active', saved_not_active: 'stateSavedNotActive', reconciliation_required: 'stateReconciliationRequired', disabled: 'stateDisabled' } as Record<string, string>)[activation.data.state] ?? 'stateUnknown')}</p>}
+        {connector && activation.data?.error_code && <p className="text-muted-foreground">{activation.data.error_code}</p>}
+        {connector && activation.data && <p className="text-muted-foreground">{t('activationState')}: {t(({ queued: 'stateQueued', provisioning: 'stateProvisioning', active: 'active', saved_not_active: 'stateSavedNotActive', reconciliation_required: 'stateReconciliationRequired', disabled: 'stateDisabled' } as Record<string, string>)[activation.data.state] ?? 'stateUnknown')}</p>}
       </td>
       <td className={cell}>{mobileLabel('colSchedule')}{connector ? `${schedule}${timezone ? ` · ${timezone}` : ''}` : '—'}</td>
       <td className={cell}>{mobileLabel('colCollected')}{formatDate(source.collected_at, display.locale, display.timezone, t('never'))}</td>
@@ -199,18 +199,18 @@ function SourceEntry({
       <td className={cell}>
         <div className="flex flex-wrap gap-2" role="group" aria-label={t('sourceActions', { name: source.name })}>
           {connector && rowState === 'savedNotActive' && source.status !== 'archived' && <Button disabled={busy} onClick={() => onEdit(source)}>{t('retryActivation')}</Button>}
-          {connector && source.status !== 'archived' && <Button className="secondary" onClick={() => onEdit(source)}>{t('configure')}</Button>}
-          {connector && source.status === 'active' && activation.data?.state === 'active' && <Button className="secondary" disabled={collect.isPending || busy} onClick={() => collect.mutate()}>{collect.isPending ? t('collecting') : t('collectNow')}</Button>}
-          {!editedHere && source.status !== 'archived' && <Button className="secondary" disabled={busy} onClick={toggleStatus}>{busy ? t(source.status === 'paused' ? 'resuming' : 'pausing') : t(source.status === 'paused' ? 'resume' : 'pause')}</Button>}
+          {connector && source.status !== 'archived' && <Button variant="outline" onClick={() => onEdit(source)}>{t('configure')}</Button>}
+          {connector && source.status === 'active' && activation.data?.state === 'active' && <Button variant="outline" disabled={collect.isPending || busy} onClick={() => collect.mutate()}>{collect.isPending ? t('collecting') : t('collectNow')}</Button>}
+          {!editedHere && source.status !== 'archived' && <Button variant="outline" disabled={busy} onClick={toggleStatus}>{busy ? t(source.status === 'paused' ? 'resuming' : 'pausing') : t(source.status === 'paused' ? 'resume' : 'pause')}</Button>}
           {!editedHere && !purged && <DisconnectDialog sourceId={source.id} name={source.name} archived={source.status === 'archived'} disabled={busy} onConfirm={(deleteData) => { confirmedRef.current = true; everConfirmedRef.current = true; void disconnect(deleteData); }}
             onCloseAutoFocus={(event) => { if (!confirmedRef.current) return; confirmedRef.current = false; event.preventDefault(); nameCellRef.current?.focus(); }}
-            trigger={<Button className="secondary" aria-disabled={busy}>{busy ? t('disconnecting') : t(source.status === 'archived' ? 'disconnectDelete' : 'disconnectAction')}</Button>} />}
-          {connector && <Button className="secondary" aria-expanded={historyOpen} onClick={() => setHistoryOpen((open) => !open)}>{t(historyOpen ? 'hideHistory' : 'showHistory')}</Button>}
+            trigger={<Button variant="outline" aria-disabled={busy}>{busy ? t('disconnecting') : t(source.status === 'archived' ? 'disconnectDelete' : 'disconnectAction')}</Button>} />}
+          {connector && <Button variant="outline" aria-expanded={historyOpen} onClick={() => setHistoryOpen((open) => !open)}>{t(historyOpen ? 'hideHistory' : 'showHistory')}</Button>}
         </div>
       </td>
     </tr>
     {hasDetail && <tr className="max-[720px]:block"><td colSpan={6} className="px-3 pb-4 max-[720px]:block max-[720px]:px-0">
-      {collectResult && <p className="muted" role="status">{t('collectResult', { status: collectResult.status })}{!collectResult.hasRun ? ` ${t('noRunId')}` : ''}</p>}
+      {collectResult && <p className="text-muted-foreground" role="status">{t('collectResult', { status: collectResult.status })}{!collectResult.hasRun ? ` ${t('noRunId')}` : ''}</p>}
       {operationId && <PurgeProgress operationId={operationId} onSucceeded={onPurgeFinished} />}
       {historyOpen && connector && <SyncHistory source={source} />}
       {(error || collect.error || activation.isError) && <p className="error" role="alert">{t('actionFailed')}{activation.isError && ` · ${t('stateUnknown')}`}</p>}
@@ -300,24 +300,24 @@ export function SourceList() {
   return <div className="sources-list">
     <section className="flex flex-col gap-3 rounded-lg border border-border bg-card p-5" aria-labelledby="github-webhook-heading">
       <h2 id="github-webhook-heading">{t('githubWebhookStatus')}</h2>
-      {githubWebhook.isPending && <p className="muted">{t('loading')}</p>}
-      {githubWebhook.isError && <p className="error" role="alert">{t('githubWebhookUnavailable')} <Button className="secondary" onClick={() => githubWebhook.refetch()}>{t('retry')}</Button></p>}
+      {githubWebhook.isPending && <p className="text-muted-foreground">{t('loading')}</p>}
+      {githubWebhook.isError && <p className="error" role="alert">{t('githubWebhookUnavailable')} <Button variant="outline" onClick={() => githubWebhook.refetch()}>{t('retry')}</Button></p>}
       {githubWebhook.data && <>
         <p role="status">{t(githubWebhook.data.receiver_configured ? 'githubWebhookReady' : 'githubWebhookNotConfigured')} · {t('githubWebhookRevision', { revision: githubWebhook.data.receiver_revision })}</p>
-        <p className="muted">{t('githubWebhookBacklog', { pending: githubWebhook.data.pending_count, deliveries: githubWebhook.data.pending_deliveries, hints: githubWebhook.data.pending_hints, capacity: 100000 })}</p>
-        <p className="muted">{t('githubWebhookAttention', { count: githubWebhook.data.needs_attention })}</p>
-        {githubWebhook.data.oldest_pending_at && <p className="muted">{t('githubWebhookOldest', { time: formatDate(githubWebhook.data.oldest_pending_at, display.locale, display.timezone, t('never')) })}</p>}
+        <p className="text-muted-foreground">{t('githubWebhookBacklog', { pending: githubWebhook.data.pending_count, deliveries: githubWebhook.data.pending_deliveries, hints: githubWebhook.data.pending_hints, capacity: 100000 })}</p>
+        <p className="text-muted-foreground">{t('githubWebhookAttention', { count: githubWebhook.data.needs_attention })}</p>
+        {githubWebhook.data.oldest_pending_at && <p className="text-muted-foreground">{t('githubWebhookOldest', { time: formatDate(githubWebhook.data.oldest_pending_at, display.locale, display.timezone, t('never')) })}</p>}
       </>}
     </section>
     <div className="form-actions source-list-actions">
       <Button onClick={() => transition(null)}>{t('addConnector')}</Button>
-      <Button className="secondary" onClick={() => transition(undefined, !adding)}>{t('addManual')}</Button>
+      <Button variant="outline" onClick={() => transition(undefined, !adding)}>{t('addManual')}</Button>
     </div>
     {adding && <section className="flex flex-col gap-3 rounded-lg border border-border bg-card p-5"><h2 className="m-0 text-lg font-bold">{t('manualTitle')}</h2><SourceForm onSaved={() => { setAdding(false); void refresh(); }} /></section>}
     {editing !== undefined && <nav aria-label={t('backToSources')}><Button type="button" variant="ghost" onClick={() => transition(undefined)}>← {t('backToSources')}</Button></nav>}
     {editing !== undefined && <ConnectorEditor key={`${editing?.id ?? 'new'}:${editSession}`} source={editing} registerTransitionGuard={(guard) => { transitionGuard.current = guard; }} onChanged={() => { void refresh(); }} onPurgeStarted={(id) => editing && setOperations((current) => ({ ...current, [editing.id]: id }))} onClose={() => transition(undefined)} />}
     {sources.isPending && <div className="skeleton" aria-label={t('loading')} />}
-    {sources.isError && <p className="error" role="alert">{t('loadFailed')} <Button className="secondary" onClick={() => sources.refetch()}>{t('retry')}</Button></p>}
+    {sources.isError && <p className="error" role="alert">{t('loadFailed')} <Button variant="outline" onClick={() => sources.refetch()}>{t('retry')}</Button></p>}
     {sources.isSuccess && items.length === 0 && <p className="empty-state">{t('empty')}</p>}
     {items.length > 0 && <h2 ref={headingRef} tabIndex={-1} className="text-base font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring">{t('tableCaption')}</h2>}
     {items.length > 0 && <SourcesTable filter={filter} counts={counts} onFilterChange={setFilter}>
@@ -327,6 +327,6 @@ export function SourceList() {
       })}
     </SourcesTable>}
     {items.length > 0 && visible.length === 0 && <p className="empty-state">{t('emptyFiltered')}</p>}
-    {sources.hasNextPage && <Button className="secondary" disabled={sources.isFetchingNextPage} onClick={() => sources.fetchNextPage()}>{t('loadMore')}</Button>}
+    {sources.hasNextPage && <Button variant="outline" disabled={sources.isFetchingNextPage} onClick={() => sources.fetchNextPage()}>{t('loadMore')}</Button>}
   </div>;
 }

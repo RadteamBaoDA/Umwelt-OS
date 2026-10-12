@@ -49,11 +49,11 @@ export function SourcesTable({ filter, counts, onFilterChange, children }: {
       <caption className="sr-only">{t('tableCaption')}</caption>
       <thead className="max-[720px]:sr-only">
         <tr className="border-b border-border">
-          {(['colSource', 'colState', 'colSchedule', 'colCollected', 'colIndexed', 'colActions'] as const).map((key) => <th key={key} scope="col" className="muted px-3 py-2 text-xs font-semibold">{t(key)}</th>)}
+          {(['colSource', 'colState', 'colSchedule', 'colCollected', 'colIndexed', 'colActions'] as const).map((key) => <th key={key} scope="col" className="text-muted-foreground px-3 py-2 text-xs font-semibold">{t(key)}</th>)}
         </tr>
       </thead>
       <tbody className="max-[720px]:block">{children}</tbody>
     </table>
-    <p className="muted text-sm">{t('neverHelp')}</p>
+    <p className="text-muted-foreground text-sm">{t('neverHelp')}</p>
   </div>;
 }

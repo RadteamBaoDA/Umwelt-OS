@@ -58,9 +58,9 @@ export function TranslationSettings() {
           </label>
         </FieldGrid>
         {failure ? <p role="alert" className="error m-0">{failure}</p> : null}
-        {readOnly ? <p className="muted m-0 text-xs">{t('ownerOnly')}</p> : (
+        {readOnly ? <p className="text-muted-foreground m-0 text-xs">{t('ownerOnly')}</p> : (
           <SettingsActions>
-            {save.isSuccess && !dirty ? <p role="status" className="muted me-auto self-center text-xs">{t('saved')}</p> : null}
+            {save.isSuccess && !dirty ? <p role="status" className="text-muted-foreground me-auto self-center text-xs">{t('saved')}</p> : null}
             <Button type="button" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>{t('save')}</Button>
           </SettingsActions>
         )}

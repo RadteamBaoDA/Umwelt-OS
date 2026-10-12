@@ -144,7 +144,7 @@ export function CreateMemoryDialog({
           <DialogFooter className="pt-2">
             <Button
               type="button"
-              className="secondary"
+              variant="outline"
               onClick={() => onOpenChange(false)}
               disabled={create.isPending}
             >
@@ -188,7 +188,7 @@ function EditMemoryDialog({ item, onOpenChange, csrfToken }: { item: MemoryItem 
           </div>
           {save.error && <p className="text-destructive text-sm" role="alert">{save.error instanceof ApiError ? save.error.message : t('saveFailed')}</p>}
           <DialogFooter className="pt-2">
-            <Button type="button" className="secondary" onClick={() => onOpenChange(false)} disabled={save.isPending}>{t('cancel')}</Button>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={save.isPending}>{t('cancel')}</Button>
             <Button type="submit" disabled={save.isPending || !text.trim() || text.trim() === item?.content}>{save.isPending ? t('loading') : t('save')}</Button>
           </DialogFooter>
         </form>
@@ -269,12 +269,12 @@ export function MemoryList() {
     kindCounts ? (key === 'all' ? Object.values(kindCounts).reduce((a, b) => a + b, 0) : (kindCounts[key] ?? 0)) : null;
 
   return (
-    <section className="content-panel space-y-6" aria-labelledby="memory-title">
+    <section className="rounded-xl border bg-card p-6 space-y-6" aria-labelledby="memory-title">
       <div className="section-heading flex flex-wrap items-start justify-between gap-4">
         <div className="grid gap-1">
           <Link href="/chat" className="inline-flex min-h-11 w-fit items-center gap-1 text-sm font-semibold text-primary underline-offset-4 hover:underline"><ArrowLeftIcon aria-hidden="true" className="size-4" />{t('backToChat')}</Link>
           <h1 id="memory-title" className="m-0 text-[30px] font-bold tracking-[-.04em]">{t('title')}</h1>
-          <p className="muted text-sm text-muted-foreground">{t('subtitle')} {t('memoryNote')}</p>
+          <p className="text-muted-foreground text-sm text-muted-foreground">{t('subtitle')} {t('memoryNote')}</p>
         </div>
         <div className="form-actions">
           <Button asChild variant="outline"><Link href="/settings/memory">{t('memorySettings')}</Link></Button>
@@ -325,7 +325,7 @@ export function MemoryList() {
           <div className="flex items-center justify-between rounded-md border border-destructive/20 bg-destructive/10 p-4 text-sm text-destructive" role="alert">
             <span>{t('errorLoading')}</span>
             <Button
-              className="secondary"
+              variant="outline"
               onClick={() => memoriesQuery.refetch()}
             >
               {t('retry')}
@@ -423,7 +423,7 @@ export function MemoryList() {
                     {t('accept')}
                   </Button>
                   <Button
-                    className="secondary"
+                    variant="outline"
                     disabled={rejectCandidateMutation.isPending}
                     onClick={() => rejectCandidateMutation.mutate(cand.id)}
                   >
@@ -452,7 +452,7 @@ export function MemoryList() {
           {forgetItem && <p className="break-words rounded-md border border-border p-3 text-sm">{forgetItem.content}</p>}
           {forgetMutation.error && <p className="text-destructive text-sm" role="alert">{forgetMutation.error instanceof ApiError ? forgetMutation.error.message : t('forgetFailed')}</p>}
           <DialogFooter>
-            <Button type="button" className="secondary" disabled={forgetMutation.isPending} onClick={() => setForgetItem(null)}>{t('cancel')}</Button>
+            <Button type="button" variant="outline" disabled={forgetMutation.isPending} onClick={() => setForgetItem(null)}>{t('cancel')}</Button>
             <Button type="button" variant="destructive" disabled={forgetMutation.isPending} onClick={() => { if (forgetItem) forgetMutation.mutate(forgetItem.id); }}>{forgetMutation.isPending ? t('loading') : t('forget')}</Button>
           </DialogFooter>
         </DialogContent>

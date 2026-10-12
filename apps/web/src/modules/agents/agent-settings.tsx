@@ -81,7 +81,7 @@ export function AgentSettingsWorkspace() {
     },
   });
 
-  if (profiles.isLoading || settings.isLoading || sources.isLoading) return <p className="muted" role="status">{t('agentLoading')}</p>;
+  if (profiles.isLoading || settings.isLoading || sources.isLoading) return <p className="text-muted-foreground" role="status">{t('agentLoading')}</p>;
   if (profiles.isError || settings.isError || sources.isError || !draft) return <p className="error" role="alert">{t('agentLoadFailed')}</p>;
   const listedSources = (sources.data?.pages ?? []).flatMap((page) => page.items);
   const sourceOptions = new Map(listedSources.map((item) => [item.id, item]));
@@ -160,14 +160,14 @@ export function AgentSettingsWorkspace() {
                 <span>{source.name}{source.status === 'unavailable' ? ` · ${t('agentSourceUnavailable')}` : ''}</span>
               </label>
             )) : <p className="text-sm text-muted-foreground">{t('agentNoSources')}</p>}
-            {sources.hasNextPage && <Button type="button" className="secondary" disabled={sources.isFetchingNextPage} onClick={() => { void sources.fetchNextPage(); }}>{sources.isFetchingNextPage ? t('agentSourcesLoadingMore') : t('agentSourcesLoadMore')}</Button>}
+            {sources.hasNextPage && <Button type="button" variant="outline" disabled={sources.isFetchingNextPage} onClick={() => { void sources.fetchNextPage(); }}>{sources.isFetchingNextPage ? t('agentSourcesLoadingMore') : t('agentSourcesLoadMore')}</Button>}
             {sources.isFetchNextPageError && <p role="alert" className="text-sm text-destructive">{t('agentLoadFailed')}</p>}
           </fieldset>
           {save.error && <p role="alert" className="text-sm text-destructive">{t('agentSaveFailed')}</p>}
           {save.isSuccess && <p role="status" className="text-sm text-muted-foreground">{t('agentSaved')}</p>}
           <div className="flex gap-2">
             <Button type="submit" disabled={save.isPending || JSON.stringify(draft) === JSON.stringify(selected)}>{t('agentSave')}</Button>
-            <Button type="button" className="secondary" disabled={save.isPending} onClick={() => setDraft(selected ? { ...selected, allowed_tools: [...selected.allowed_tools], source_ids: [...selected.source_ids] } : null)}>{t('agentCancel')}</Button>
+            <Button type="button" variant="outline" disabled={save.isPending} onClick={() => setDraft(selected ? { ...selected, allowed_tools: [...selected.allowed_tools], source_ids: [...selected.source_ids] } : null)}>{t('agentCancel')}</Button>
           </div>
         </form>
         <aside className="space-y-3 rounded-xl border border-border bg-surface p-4">

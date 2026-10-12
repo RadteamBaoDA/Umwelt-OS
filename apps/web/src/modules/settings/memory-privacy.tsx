@@ -64,7 +64,7 @@ export function MemoryPrivacySettings() {
   if (query.isPending) {
     return (
       <section
-        className="content-panel skeleton h-48 rounded-lg"
+        className="rounded-xl border bg-card p-6 skeleton h-48 rounded-lg"
         aria-label="Loading memory privacy settings"
       />
     );
@@ -77,7 +77,7 @@ export function MemoryPrivacySettings() {
         <p className="text-destructive text-sm" role="alert">
           {query.error instanceof ApiError ? query.error.message : t('saveFailed')}
         </p>
-        <Button className="secondary" onClick={() => query.refetch()}>
+        <Button variant="outline" onClick={() => query.refetch()}>
           Retry
         </Button>
       </section>
@@ -297,7 +297,7 @@ export function MemoryPrivacySettings() {
 
         <Button
           type="button"
-          className="secondary text-destructive hover:bg-destructive/10 hover:text-destructive border-destructive/30"
+          variant="outline" className="text-destructive hover:bg-destructive/10 hover:text-destructive border-destructive/30"
           disabled={
             purgeMutation.isPending ||
             (!purgeForgotten && !purgeRejected && !purgeHistory)

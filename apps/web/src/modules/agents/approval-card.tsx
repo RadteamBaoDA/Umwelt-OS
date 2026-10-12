@@ -2,6 +2,8 @@
 
 import * as React from 'react';
 import { useTranslations } from 'next-intl';
+import { formatDateTime } from '@/core/i18n';
+import { useDisplayPreferences } from '@/core/query-provider';
 import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { cn } from 'cn';
@@ -28,6 +30,7 @@ function useNow(active: boolean) {
 /** Show the immutable action and effect status in the design's accent-bordered approval block; missing protected arguments or stale data disable decisions. */
 export function ApprovalCard({ approval, busy = false, disabled = false, onDecision }: ApprovalCardProps) {
   const t = useTranslations('chat');
+  const display = useDisplayPreferences();
   const now = useNow(approval.status === 'pending');
   const expired = approval.status === 'pending' && Date.parse(approval.expires_at) <= now;
   const pending = approval.status === 'pending' && Boolean(approval.arguments) && !expired;
@@ -45,7 +48,7 @@ export function ApprovalCard({ approval, busy = false, disabled = false, onDecis
       </div>
       <dl className="grid gap-2 sm:grid-cols-2">
         <div><dt className="text-muted-foreground">{t('approvalTarget')}</dt><dd className="break-all font-medium">{approval.destination_id}</dd></div>
-        <div><dt className="text-muted-foreground">{t('approvalExpires')}</dt><dd>{new Date(approval.expires_at).toLocaleString()}</dd></div>
+        <div><dt className="text-muted-foreground">{t('approvalExpires')}</dt><dd>{formatDateTime(approval.expires_at, display.locale, display.timezone)}</dd></div>
       </dl>
       {approval.effect_status && (
         <p className="text-sm text-muted-foreground">

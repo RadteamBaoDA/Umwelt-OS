@@ -65,15 +65,15 @@ export function EntityDialogBody({ entityId, canGoBack, onBack, onOpenEntity }: 
         <TabsTrigger value="documents">{d('tabDocuments')}{evidence.isSuccess ? ` ${count(documents.length, !!evidence.hasNextPage)}` : ''}</TabsTrigger>
       </TabsList>
       <TabsContent value="overview" className="grid gap-5 pt-3">
-        {value.description ? <p className="text-sm leading-relaxed">{value.description}</p> : <p className="muted text-sm">{d('noDescription')}</p>}
+        {value.description ? <p className="text-sm leading-relaxed">{value.description}</p> : <p className="text-muted-foreground text-sm">{d('noDescription')}</p>}
         <div className="grid gap-2">
           <h3 className="text-sm font-semibold">{t('aliases')}</h3>
-          {value.aliases.length ? <ul className="flex flex-wrap gap-2">{value.aliases.map((item) => <li key={item.id} className={badgeClass}>{item.alias} · {item.confirmed ? t('confirmed') : t('unconfirmed')}</li>)}</ul> : <p className="muted text-sm">{t('noAliases')}</p>}
+          {value.aliases.length ? <ul className="flex flex-wrap gap-2">{value.aliases.map((item) => <li key={item.id} className={badgeClass}>{item.alias} · {item.confirmed ? t('confirmed') : t('unconfirmed')}</li>)}</ul> : <p className="text-muted-foreground text-sm">{t('noAliases')}</p>}
         </div>
         <div className="grid gap-2">
           <h3 className="text-sm font-semibold">{t('relationships')}</h3>
           {neighbors.isError && <p className="error" role="alert">{t('relationshipUnavailable')} <Button type="button" variant="outline" size="sm" onClick={() => { void neighbors.refetch(); }}>{t('retry')}</Button></p>}
-          {neighbors.isSuccess && !relations.length && <p className="muted text-sm">{t('noRelationships')}</p>}
+          {neighbors.isSuccess && !relations.length && <p className="text-muted-foreground text-sm">{t('noRelationships')}</p>}
           {!!relations.length && <div className="overflow-x-auto"><table className="w-full border-collapse text-sm">
             <caption className="sr-only">{t('relationships')}</caption>
             <thead className="sr-only"><tr><th scope="col">{d('colTo')}</th><th scope="col">{d('colBasis')}</th><th scope="col">{d('colValid')}</th><th scope="col">{d('colEvidence')}</th></tr></thead>
@@ -95,21 +95,21 @@ export function EntityDialogBody({ entityId, canGoBack, onBack, onOpenEntity }: 
               <blockquote className="mt-2 border-l-2 border-border pl-3">{item.excerpt}</blockquote>
               <p className="mt-1 text-xs text-muted-foreground">{t('observed')} {formatDateTime(item.observed_at, display.locale, display.timezone)}</p>
             </article>)}
-            {relEvidence.isSuccess && !relEvidence.data.items.length && <p className="muted text-sm">{d('noEvidence')}</p>}
+            {relEvidence.isSuccess && !relEvidence.data.items.length && <p className="text-muted-foreground text-sm">{d('noEvidence')}</p>}
           </div>}
         </div>
       </TabsContent>
       <TabsContent value="timeline" className="grid gap-3 pt-3">
         {timeline.isError && <p className="error" role="alert">{t('timelineUnavailable')} <Button type="button" variant="outline" size="sm" onClick={() => { void timeline.refetch(); }}>{t('retry')}</Button></p>}
         {timeline.isPending && <p role="status" className="text-sm text-muted-foreground">{d('loading')}</p>}
-        {timeline.isSuccess && !events.length && <p className="muted text-sm">{d('noEvents')}</p>}
+        {timeline.isSuccess && !events.length && <p className="text-muted-foreground text-sm">{d('noEvents')}</p>}
         {events.map((event) => <EventDetail key={event.id} event={event} locale={display.locale} timezone={display.timezone} entityNames={new Map([[value.id, nameOf(value.name)]])} />)}
         {timeline.hasNextPage && <Button type="button" variant="outline" className="w-fit" disabled={timeline.isFetchingNextPage} onClick={() => { void timeline.fetchNextPage(); }}>{t('loadTimeline')}</Button>}
       </TabsContent>
       <TabsContent value="documents" className="grid gap-3 pt-3">
         {evidence.isError && <p className="error" role="alert">{t('evidenceUnavailable')} <Button type="button" variant="outline" size="sm" onClick={() => { void evidence.refetch(); }}>{t('retry')}</Button></p>}
         {evidence.isPending && <p role="status" className="text-sm text-muted-foreground">{d('loading')}</p>}
-        {evidence.isSuccess && !documents.length && <p className="muted text-sm">{d('noEvidence')}</p>}
+        {evidence.isSuccess && !documents.length && <p className="text-muted-foreground text-sm">{d('noEvidence')}</p>}
         {documents.map((item) => <article key={item.id} className="rounded-md border border-border p-3 text-sm">
           <Link className="font-semibold text-primary underline-offset-4 hover:underline" href={`/knowledge/documents/${item.document_id}?version=${item.version_number}#cited-revision`}>{item.title}</Link>
           <blockquote className="mt-2 border-l-2 border-border pl-3">{item.excerpt}</blockquote>

@@ -35,19 +35,19 @@ export function LifecycleSettings() {
     <h2 id="lifecycle-title" className="text-lg font-semibold">{t('lifecycleTitle')}</h2>
     <article className="space-y-3">
       <h3 className="font-medium">{t('retentionTitle')}</h3>
-      <p className="muted text-sm">{t('retentionDescription')}</p>
+      <p className="text-muted-foreground text-sm">{t('retentionDescription')}</p>
       {retention.data && <div className="flex flex-wrap items-end gap-3">
         <label className="label">{t('agentTraceDays')}<input className="input mt-1 w-32" type="number" min={1} max={3650} value={days ?? retention.data.agent_trace_days} onChange={(event) => setDays(Number(event.target.value))} /></label>
-        <Button className="secondary" disabled={saveRetention.isPending || days === null || days < 1 || days > 3650} onClick={() => saveRetention.mutate(retention.data!)}>{t('saveRetention')}</Button>
+        <Button variant="outline" disabled={saveRetention.isPending || days === null || days < 1 || days > 3650} onClick={() => saveRetention.mutate(retention.data!)}>{t('saveRetention')}</Button>
       </div>}
       {retention.isError && <p role="alert" className="text-destructive">{t('lifecycleLoadFailed')}</p>}
       {saveRetention.isError && <p role="alert" className="text-destructive">{t('lifecycleSaveFailed')}</p>}
     </article>
     <article className="space-y-3">
       <h3 className="font-medium">{t('modulesTitle')}</h3>
-      <p className="muted text-sm">{t('modulesDescription')}</p>
+      <p className="text-muted-foreground text-sm">{t('modulesDescription')}</p>
       {modules.data?.modules.map((module) => <label key={module.id} className="flex items-center justify-between gap-4 border-b border-border py-2 text-sm">
-        <span>{module.name}{module.blocked_by.length > 0 && <span className="muted block">{t('blockedBy')}: {module.blocked_by.join(', ')}</span>}</span>
+        <span>{module.name}{module.blocked_by.length > 0 && <span className="text-muted-foreground block">{t('blockedBy')}: {module.blocked_by.join(', ')}</span>}</span>
         <input aria-label={`${module.name}: ${module.enabled ? t('enabled') : t('disabled')}`} type="checkbox" checked={module.enabled} disabled={toggleModule.isPending || module.blocked_by.length > 0} onChange={() => toggleModule.mutate({ state: modules.data!, module })} />
       </label>)}
       {modules.isError && <p role="alert" className="text-destructive">{t('lifecycleLoadFailed')}</p>}
@@ -55,8 +55,8 @@ export function LifecycleSettings() {
     </article>
     <article className="space-y-2">
       <h3 className="font-medium">{t('maintenanceTitle')}</h3>
-      {summary.data && <p className="muted text-sm">{t('maintenanceCounts', { traces: summary.data.agent_traces_redacted, temporary: summary.data.temporary_data_deleted })}{summary.data.completed_at ? ` · ${new Date(summary.data.completed_at).toLocaleString(locale)}` : ''}{summary.data.next_eligible_at ? ` · ${t('nextEligible')}: ${new Date(summary.data.next_eligible_at).toLocaleString(locale)}` : ''}</p>}
-      {summary.isError && <p className="muted text-sm">{t('lifecycleLoadFailed')}</p>}
+      {summary.data && <p className="text-muted-foreground text-sm">{t('maintenanceCounts', { traces: summary.data.agent_traces_redacted, temporary: summary.data.temporary_data_deleted })}{summary.data.completed_at ? ` · ${new Date(summary.data.completed_at).toLocaleString(locale)}` : ''}{summary.data.next_eligible_at ? ` · ${t('nextEligible')}: ${new Date(summary.data.next_eligible_at).toLocaleString(locale)}` : ''}</p>}
+      {summary.isError && <p className="text-muted-foreground text-sm">{t('lifecycleLoadFailed')}</p>}
     </article>
   </section>;
 }

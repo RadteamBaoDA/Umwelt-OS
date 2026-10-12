@@ -93,25 +93,25 @@ export function EntityReviewCard({ item }: { item: ReviewItem }) {
   /** Renders the review candidate endpoint label from the supplied endpoint state. */
   const endpoint = (value: ReviewItem['source_endpoint']) => value && <span>{value.state === 'assigned' && value.entity_id ? <Link href={`/knowledge/entities/${value.entity_id}`}>{value.entity_name ?? t('unnamedEntity')} · {value.entity_type ? t(`type_${value.entity_type}` as 'type_person') : t('unknownValue')}</Link> : value.state === 'ambiguous' ? t('endpointAmbiguous') : t('endpointUnassigned')}{value.membership_id && <small> · {t('membership')} {value.membership_id}</small>}</span>;
 
-  return <li className="card">
+  return <li className="rounded-xl border bg-card p-4 text-card-foreground">
     <strong>{item.candidate_name}</strong><p>{item.reason}</p>
-    <small className="muted">{item.kind === 'entity' ? t('entityCandidate') : t('relationshipCandidate')} · {statuses[item.status] ?? item.status}{!item.actionable ? ` · ${t('displayOnly')}` : ''}</small>
+    <small className="text-muted-foreground">{item.kind === 'entity' ? t('entityCandidate') : t('relationshipCandidate')} · {statuses[item.status] ?? item.status}{!item.actionable ? ` · ${t('displayOnly')}` : ''}</small>
     {item.kind === 'relationship' && item.relationship_type && <p>{t('relationshipType')}: {item.relationship_type}</p>}
     {item.kind === 'relationship' && <p>{t('sourceEndpoint')}: {endpoint(item.source_endpoint)}<br />{t('targetEndpoint')}: {endpoint(item.target_endpoint)}</p>}
     {item.possible_entity_ids.length > 0 && <p>{item.possible_entity_ids.map((id) => <Link key={id} href={`/knowledge/entities/${id}`}>{id.slice(0, 8)} </Link>)}</p>}
-    {item.evidence.length > 0 ? <ul className="stack" aria-label={t('evidence')}>
+    {item.evidence.length > 0 ? <ul className="flex flex-col gap-3" aria-label={t('evidence')}>
       {item.evidence.map((evidence) => <li key={`${evidence.document_version_id}:${evidence.chunk_id}`}>
-        <small className="muted">{evidence.source_name} · {t('observed')} {formatDateTime(evidence.observed_at, display.locale, display.timezone)}</small>
+        <small className="text-muted-foreground">{evidence.source_name} · {t('observed')} {formatDateTime(evidence.observed_at, display.locale, display.timezone)}</small>
         <p><Link href={`/knowledge/documents/${evidence.document_id}?version=${evidence.version_number}#cited-revision`}>{evidence.title} · {t('documentVersion')} {evidence.version_number}</Link></p>
-        <small className="muted">{evidence.metadata_is_version_snapshot ? t('metadataVersionSnapshot') : t('metadataCurrentFallback')}</small>
+        <small className="text-muted-foreground">{evidence.metadata_is_version_snapshot ? t('metadataVersionSnapshot') : t('metadataCurrentFallback')}</small>
         <blockquote>{evidence.excerpt}</blockquote>
       </li>)}
-    </ul> : item.document_id && item.version_number ? <p><Link href={`/knowledge/documents/${item.document_id}?version=${item.version_number}#cited-revision`}>{t('openDocumentRevision')} · {item.source_name}</Link> · {t('evidenceUnavailable')}</p> : <p className="muted">{t('evidenceUnavailable')}</p>}
+    </ul> : item.document_id && item.version_number ? <p><Link href={`/knowledge/documents/${item.document_id}?version=${item.version_number}#cited-revision`}>{t('openDocumentRevision')} · {item.source_name}</Link> · {t('evidenceUnavailable')}</p> : <p className="text-muted-foreground">{t('evidenceUnavailable')}</p>}
     {item.actionable && item.candidate_id && item.snapshot_digest && item.kind === 'entity' && <form className="form" onSubmit={form.handleSubmit((values) => { if (values.confirmed && selected) assigned.mutate(values); })}>
       <div className="field"><Label htmlFor={`target-query-${item.candidate_id}`}>{t('findTarget')}</Label><Input id={`target-query-${item.candidate_id}`} value={query} onChange={(event) => { setQuery(event.target.value); form.setValue('targetId', ''); form.setValue('confirmed', false); }} /></div>
-      {targets.isError && <p className="error" role="alert">{targets.error.message} <Button type="button" className="secondary" onClick={() => targets.refetch()}>{t('retry')}</Button></p>}
+      {targets.isError && <p className="error" role="alert">{targets.error.message} <Button type="button" variant="outline" onClick={() => targets.refetch()}>{t('retry')}</Button></p>}
       {query.trim().length >= 2 && <div className="field"><Label htmlFor={`target-${item.candidate_id}`}>{t('targetEntity')}</Label><Select value={targetId} onValueChange={(value) => form.setValue('targetId', value, { shouldDirty: true })}><SelectTrigger id={`target-${item.candidate_id}`}><SelectValue placeholder={t('chooseTarget')} /></SelectTrigger><SelectContent>{options.map((entity) => <SelectItem key={entity.id} value={entity.id}>{entity.name ?? t('name')} · {t(`type_${entity.type}` as 'type_person')} · {t('revision')} {entity.revision}</SelectItem>)}</SelectContent></Select></div>}
-      {targets.hasNextPage && <Button type="button" className="secondary" disabled={targets.isFetchingNextPage} onClick={() => targets.fetchNextPage()}>{t('loadMore')}</Button>}
+      {targets.hasNextPage && <Button type="button" variant="outline" disabled={targets.isFetchingNextPage} onClick={() => targets.fetchNextPage()}>{t('loadMore')}</Button>}
       <div className="field"><Label htmlFor={`reason-${item.candidate_id}`}>{t('reason')}</Label><Input id={`reason-${item.candidate_id}`} required maxLength={300} {...form.register('reason')} /></div>
       <label className="field"><span>{t('confirmAssign')} {selected && `${selected.name ?? t('unnamedEntity')} · ${t('revision')} ${selected.revision}`}</span><Checkbox checked={confirmed} onCheckedChange={(checked) => form.setValue('confirmed', checked === true)} /></label>
       <Button type="submit" disabled={!selected || !confirmed || assigned.isPending}>{t('assignEvidence')}</Button>
@@ -123,7 +123,7 @@ export function EntityReviewCard({ item }: { item: ReviewItem }) {
     </form>}
     {errorText && <p className="error" role="alert">{errorText}</p>}
     {conflictDetails(error).map((detail, index) => <p key={index} className="error">{detail}</p>)}
-    {error instanceof ApiError && error.status === 409 && <p className="muted">{t('conflictReload')}</p>}
-    <small className="muted">{t('documentVersion')} {item.version_number ?? item.document_version_id}</small>
+    {error instanceof ApiError && error.status === 409 && <p className="text-muted-foreground">{t('conflictReload')}</p>}
+    <small className="text-muted-foreground">{t('documentVersion')} {item.version_number ?? item.document_version_id}</small>
   </li>;
 }
