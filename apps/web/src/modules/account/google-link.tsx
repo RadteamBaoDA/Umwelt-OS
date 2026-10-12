@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
 import { apiFailureKey } from '@/core/api-failure-key';
+import { assignAuthorizationUrl } from '@/core/safe-url';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 
 type GoogleStatus = { configured: boolean; linked: boolean };
@@ -33,7 +34,7 @@ export function GoogleLink() {
         body: JSON.stringify({ purpose: 'link' }),
       });
     },
-    onSuccess: ({ authorization_url }) => window.location.assign(authorization_url),
+    onSuccess: ({ authorization_url }) => assignAuthorizationUrl(authorization_url),
   });
   const unlink = useMutation({
     mutationFn: async () => {

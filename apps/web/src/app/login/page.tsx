@@ -10,6 +10,7 @@ import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
 import { apiFailureKey } from '@/core/api-failure-key';
+import { assignAuthorizationUrl } from '@/core/safe-url';
 import { UmweltLogo } from '@/components/brand/umwelt-mark';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -51,7 +52,7 @@ export default function LoginPage() {
         body: JSON.stringify({ purpose: 'login' }),
       });
     },
-    onSuccess: ({ authorization_url }) => window.location.assign(authorization_url),
+    onSuccess: ({ authorization_url }) => assignAuthorizationUrl(authorization_url),
   });
   const login = useMutation({
     mutationFn: async (values: LoginForm) => {

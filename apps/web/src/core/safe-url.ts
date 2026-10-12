@@ -7,3 +7,13 @@ export function safeHttpUrl(value: string | null | undefined): string | undefine
     return (protocol === 'http:' || protocol === 'https:') && !username && !password ? value : undefined;
   } catch { return undefined; }
 }
+
+/**
+ * Navigates the window to an OAuth authorization URL returned by the API.
+ * @throws Error when the URL is not credential-free http(s), so a compromised response cannot trigger javascript: or data: navigation.
+ */
+export function assignAuthorizationUrl(url: string): void {
+  const safe = safeHttpUrl(url);
+  if (!safe) throw new Error('Unsafe authorization URL');
+  window.location.assign(safe);
+}

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { apiRequest, configureWorkspace, StaleWorkspaceError } from '@/core/api';
+import { ApiError, apiRequest, configureWorkspace, StaleWorkspaceError } from '@/core/api';
 
 const fetchMock = vi.fn();
 let generation = 1;
@@ -54,5 +54,14 @@ describe('apiRequest workspace scoping', () => {
     });
 
     await expect(apiRequest('/api/v1/documents')).rejects.toBeInstanceOf(StaleWorkspaceError);
+  });
+});
+
+describe('non-JSON responses', () => {
+  it('throws ApiError with the gateway status instead of a parse error', async () => {
+    fetchMock.mockResolvedValue(new Response('<html>Bad Gateway</html>', { status: 502 }));
+    await expect(apiRequest('/api/v1/x')).rejects.toMatchObject({ status: 502 });
+    fetchMock.mockResolvedValue(new Response('<html>Bad Gateway</html>', { status: 502 }));
+    await expect(apiRequest('/api/v1/x')).rejects.toBeInstanceOf(ApiError);
   });
 });

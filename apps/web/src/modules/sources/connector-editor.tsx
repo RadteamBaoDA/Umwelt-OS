@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ApiError } from '@/core/api';
+import { assignAuthorizationUrl } from '@/core/safe-url';
 import { DisconnectDialog } from './disconnect-dialog';
 import { SyncHistory } from './sync-history';
 import { pollCollectionRequest, useSourceActions } from './use-source-actions';
@@ -847,7 +848,7 @@ export function ConnectorEditor({
     try {
       const result = await startGitHubOAuth(id, generation, expectedRevision, csrfToken, token.controller.signal);
       if (!githubRequestIsCurrent(token, id, generation, expectedRevision)) return;
-      window.location.assign(result.authorization_url);
+      assignAuthorizationUrl(result.authorization_url);
     } catch {
       if (requestIsCurrent(token)) setError('githubConnectionFailed');
     } finally {
@@ -915,7 +916,7 @@ export function ConnectorEditor({
       if (!githubRequestIsCurrent(token, reviewed.sourceId, reviewed.generation, reviewed.revision)) return;
       setGithubRecoveryOpen(false);
       setGithubRecoveryReview(null);
-      window.location.assign(result.authorization_url);
+      assignAuthorizationUrl(result.authorization_url);
     } catch {
       if (requestIsCurrent(token)) setError('githubConnectionFailed');
       void githubStatusQuery.refetch();

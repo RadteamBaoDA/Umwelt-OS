@@ -32,6 +32,7 @@ import { workspacesMessages } from './messages/workspaces';
 import { workspaceMembersMessages } from './messages/workspace-members';
 import { sharingMessages } from './messages/sharing';
 import { translationsMessages } from './messages/translations';
+import { routeErrorsMessages } from './messages/route-errors';
 
 /**
  * Compose every locale from per-area fragments in ./messages/<area>.ts.
@@ -74,6 +75,7 @@ export const messages = {
     workspaceMembers: workspaceMembersMessages['en-us'],
     sharing: sharingMessages['en-us'],
     translations: translationsMessages['en-us'],
+    routeErrors: routeErrorsMessages['en-us'],
   },
   'vi-vi': {
     shell: shellMessages['vi-vi'],
@@ -111,5 +113,6 @@ export const messages = {
     workspaceMembers: workspaceMembersMessages['vi-vi'],
     sharing: sharingMessages['vi-vi'],
     translations: translationsMessages['vi-vi'],
+    routeErrors: routeErrorsMessages['vi-vi'],
   },
 } as const;
