@@ -25,14 +25,14 @@ Any other value fails closed to `production`.
 (Columns 2-4 above apply to explicit `development`/`test`, then to `production` or `auto` with a local origin, then to `production` or `auto` with a public domain. `auto` with a local origin therefore rejects placeholders even though it allows http.)
 | `/docs`, `/redoc`, `/openapi.json` served | yes | no | no |
 
-The frontend follows `NODE_ENV`: `npm run dev` (development) skips `Strict-Transport-Security` and allows the dev-only `unsafe-eval` and websocket CSP sources; `next build`/`next start` (production) sends HSTS. Browsers ignore HSTS over plain http, so a LAN http address keeps working.
+The frontend follows `NODE_ENV`: `npm run dev` (development) allows the dev-only `unsafe-eval` and websocket CSP sources; `next build`/`next start`. HSTS is sent by the TLS proxy only (see deployment.md).
 
 ## 2. First run (Docker, recommended)
 
 ```bash
 make setup      # scripts/ensure_env.py: creates/completes .env with generated secrets
 make dev        # hot-reload stack; Windows: ./scripts/dev.ps1 dev
-make migrate    # applies Alembic migrations (head: r18_auth_session_last_seen)
+make migrate    # applies Alembic migrations (head: r19_db_indexes_and_tuning)
 ```
 
 `make setup` writes a working `.env` for local use: `PUBLIC_ORIGIN=http://localhost:3000`, `SECURE_COOKIES=false`, plus every generated secret (real values, so the default `auto` mode accepts them) (database, Redis, graph, browser, n8n, both Fernet keys, `SETUP_TOKEN`, `CSRF_SIGNING_SECRET`). It never overwrites values you already set. Open `http://localhost:3000`, complete owner setup with the `SETUP_TOKEN` from `.env`.

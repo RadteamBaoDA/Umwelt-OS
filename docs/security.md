@@ -8,6 +8,13 @@ Use authenticated owner APIs and the existing CSRF dependency for mutations. A l
 
 Keep current upload size/archive/PDF, URL/SSRF and provider controls in their owning modules. Their live rejection behavior remains part of deferred acceptance. Internal databases, Docker socket and administrator-managed tool processes are private deployment interfaces; use the supported HTTPS proxy configuration in [deployment.md](deployment.md).
 
+## Transport and network hardening
+
+- **Redis password:** `REDISCLI_AUTH` (container `requirepass`) and the password inside `REDIS_URL` are mandatory. Unless `ENVIRONMENT` is explicitly `dev`, `development` or `test` (`auto` does not relax this), the API and workers refuse to start when `REDIS_URL` has no password or uses a `replace-with-` placeholder. `make setup` / `scripts/dev.ps1 setup` generate both.
+- **HSTS:** sent only by the TLS terminator (Caddy: `Strict-Transport-Security: max-age=31536000`). Next.js no longer emits it, so there is a single value; with Cloudflare Tunnel configure HSTS at Cloudflare.
+- **Client IP:** uvicorn runs with `--no-proxy-headers` and never reads forwarded headers. The per-IP auth limit uses the TCP peer unless `AUTH_TRUST_FORWARDED_FOR=true` (rightmost `X-Forwarded-For`, valid only when the front proxy overwrites it; see deployment.md). Per-session request budgets (`core/rate_limit.py`) key on the session cookie or bearer token first; the address is only a fallback for unauthenticated callers.
+- **SSE paths** (`/api/v1/realtime/events`, `/api/v1/responses/{id}/events`) need proxy buffering off, read timeout of at least 75 s and `Last-Event-ID` preserved; see deployment.md.
+
 ## Deletion completion
 
 Immediate access revocation, canonical cleanup, raw-file cleanup and external graph convergence are distinct stages. Source generation/tombstone changes deny stale access before asynchronous cleanup. Connector-only removal preserves imported data; with-data removal requires owned derived copies to be cleaned. Shared facts remain when independent retained evidence supports them.

@@ -2,7 +2,7 @@
 
 The production Compose stack contains PostgreSQL with pgvector installed, Redis, a one-shot Alembic migration service, the FastAPI API, one main ARQ worker, one chat ARQ worker, and the Next.js frontend. Application containers run as non-root users. Persistent database and Redis data live in named volumes.
 
-The web port binds to loopback by default. For remote access, terminate HTTPS at a trusted reverse proxy and set `PUBLIC_ORIGIN` to the exact browser origin and `SECURE_COOKIES=true` in `.env`. Keep the API, Redis, PostgreSQL, and Docker socket private. Do not deploy with the example placeholder values.
+The web port binds to loopback by default. For remote access, terminate HTTPS at a trusted reverse proxy and set `PUBLIC_ORIGIN` to the exact browser origin and `SECURE_COOKIES=true` in `.env`. Keep the API, Redis, PostgreSQL, and Docker socket private. Do not deploy with the example placeholder values. `REDISCLI_AUTH` and a password in `REDIS_URL` are required: outside explicit `ENVIRONMENT=development|test` the services refuse to start with a password-less or placeholder Redis URL. HSTS is sent by the TLS terminator only (Caddy overlay sets it; with a tunnel set it at the edge); the Next.js app does not emit it.
 
 **Modes (`ENVIRONMENT`):** `auto` (default) runs in *development* when `PUBLIC_ORIGIN` is `localhost`, a loopback/LAN IP (10.x, 172.16-31.x, 192.168.x), `*.local` or a single-label host, and in *production* for any public domain. Local `auto` accepts plain http and non-Secure cookies and serves `/docs`; placeholder secrets and `bbd:bbd` are rejected unless `ENVIRONMENT=development` is set explicitly. Production requires an `https://` origin with `SECURE_COOKIES=true` for non-local hosts, rejects `replace-with-*` placeholders and `bbd:bbd` database credentials, and disables `/docs`. Set `development` or `production` explicitly to override `auto`.
 
@@ -68,7 +68,7 @@ To apply migrations separately, run `./scripts/dev.ps1 migrate` or `make migrate
 
 Clean install, Phase 0 upgrade, protected proxy paths, module enable/disable and backup/restore procedures are listed in the [release checklist](release-checklist.md#release-procedures-documented-not-executed); acceptance remains pending (`functional_acceptance`, `live_integrations`, `target_capacity` pending; `restore_verified` false).
 
-Expected Alembic head: `r18_auth_session_last_seen` (chain continues `p12_evidence_version_index` → ... → `r16_ai_system_prompts` → `r17_ai_providers` → `r18_auth_session_last_seen`; verified against `infrastructure/postgres/migrations/versions/`). Earlier P12 lineage: P12 lineage: `p12_memory_document_cleanup` → `p12_agent_document_cleanup` → `p12_copied_stage_cleanup` → `p12_source_coverage` → `p12_evidence_version_index` (index on cleanup evidence `document_version_id`; each `down_revision` verified against `infrastructure/postgres/migrations/versions/`; the chain continues from `p12_source_cleanup_children`).
+Expected Alembic head: `r19_db_indexes_and_tuning` (chain continues `p12_evidence_version_index` → ... → `r16_ai_system_prompts` → `r17_ai_providers` → `r18_auth_session_last_seen`; verified against `infrastructure/postgres/migrations/versions/`). Earlier P12 lineage: P12 lineage: `p12_memory_document_cleanup` → `p12_agent_document_cleanup` → `p12_copied_stage_cleanup` → `p12_source_coverage` → `p12_evidence_version_index` (index on cleanup evidence `document_version_id`; each `down_revision` verified against `infrastructure/postgres/migrations/versions/`; the chain continues from `p12_source_cleanup_children`).
 
 - **Protected proxy paths:** besides `/api/v1/realtime/events`, apply the same no-buffering, no-cache, long-read-timeout and `Last-Event-ID` settings to the Chat response stream `/api/v1/responses/{response_id}/events`. The proxy must forward cookies and the CSRF header unchanged for all owner routes, including `/api/v1/system/*` and `/api/v1/settings/*`.
 - **Upgrade:** keep existing `.env` secrets, back up first with `make backup BACKUP=<path>.age` (or `./scripts/dev.ps1 backup -BackupPath <path>.age`), then `migrate`. Quiesce old API/worker processes before the additive P12 cleanup migrations described below.
@@ -152,6 +152,6 @@ n8n hardening: `docker-compose.connectors.yml` requires `N8N_ENCRYPTION_KEY` (co
 - [ ] `SETUP_TOKEN` used once to create the owner account; owner login works; then rotate/remove it if desired.
 - [ ] `AUTH_TRUST_FORWARDED_FOR` is `true` only if the front hop overwrites `X-Forwarded-For`.
 - [ ] SSE paths stream without buffering through the proxy; request body limit is set.
-- [ ] `make migrate` reached head `r18_auth_session_last_seen`; `/api/v1/system/ready` is healthy.
+- [ ] `make migrate` reached head `r19_db_indexes_and_tuning`; `/api/v1/system/ready` is healthy.
 - [ ] Backup configured (`BACKUP_AGE_RECIPIENT`) and a restore was rehearsed.
 - [ ] `AI_ALLOWED_ENDPOINT_*` lists are as narrow as intended; optional graph profile and connectors stay off unless needed.

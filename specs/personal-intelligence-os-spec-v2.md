@@ -4806,3 +4806,50 @@ Google client ID, client secret and exact callback URI are server/deployment con
 This revision changes specification and architecture documentation only. Current source has RSS/web/REST connector foundations and password-based owner authentication; it does not establish complete provider coverage, embedded n8n credential provisioning, MCP, SSE or Google login acceptance. The UI preview remains illustrative.
 
 Reconcile phase plans against sections 165–166 before production work resumes. Preserve the owner's code/build-only implementation stage; create/modify/run no tests, lint or standalone typecheck until all phase production code is complete. In the deferred validation stage cover connector activation/recovery, OAuth linking and replay, MCP authorization, SSE reconnect/snapshot recovery, privacy, source freshness and measured host capacity. Builds alone do not satisfy those acceptance gates. Record actual reused/ported code and licenses in OSS_USED.md and setup/usage in README.
+
+# 167. PRODUCTION CONCURRENCY, RESILIENCE AND DATA LIFECYCLE REQUIREMENTS (ADDENDUM 2026-10-13)
+
+This addendum is normative for production work and extends, without replacing, sections 139-143 (modular monolith) and 166. Status tags: **Implemented** means present in source on `feature/fix-ui` (uncommitted) and covered by offline unit tests (3265 passed, mypy 0 errors on 2026-10-13); **Verified** means exercised against a live database, Docker stack, proxy or load, which has not been done for any item below.
+
+## 167.1. External-call resilience
+
+- Calls to a remote model provider MUST go through a per-upstream circuit breaker shared by all processes (Redis, keyed by the gateway identity). Counted failures are timeouts, connection errors and HTTP 408/425/429/5xx; internal capacity waits, other 4xx, unsupported capability and privacy denials MUST NOT count. A provider `Retry-After` MUST be honored with a documented cap. Implemented (5 failures/60 s opens 30 s, cap 300 s, jittered retry 0.25-1 s); not verified.
+- An open breaker MUST fail fast with a distinct error and MUST fail open if the breaker store is unavailable. A user-triggered connection test MUST bypass and reset it. Implemented.
+- Retries MUST be bounded, MUST add jitter, and MUST NOT sleep long inside a held lease or lock. Retried model calls MUST be safe to repeat (idempotent or without side effects before the first token). Implemented for the gateway; connectors keep their own idempotent backoff.
+- Blocking or CPU-bound work (upload validation, XML/HTML parsing) MUST NOT run on the event loop; DNS lookups MUST have a deadline. Implemented.
+
+## 167.2. No database lock across external I/O
+
+- A transaction MUST NOT hold row, advisory or access-fence locks while awaiting a model, embedding, rerank, web search or graph call. The pattern is: lock and validate, release, perform the call, re-lock, compare the inputs that mattered, then publish; a mismatch MUST be a retryable outcome. Implemented for timeline extraction, entity extraction and chat retrieval; **not implemented** for temporal `_fresh_fact_action` (open item).
+- Streaming responses MUST flush buffered output before acquiring a database lock. Implemented for the publication gate and realtime fence.
+- Locks that are intentionally global for the single owner (privacy lock, replay lock) MUST NOT be held across batches of items. Implemented for chat purge.
+
+## 167.3. Bounded tables and retention
+
+- Every append-only or high-churn table MUST have a documented retention rule, a schedule and a per-run bound, or a documented reason it is exempt. Implemented for the tables inventoried in `docs/operations.md`; not verified on a live database.
+- Journals whose only reader needs in-flight state MUST NOT keep finished rows (`p12_backup_activity`). Implemented.
+- Duplicate source observations within a source generation MUST NOT be stored again (measurement providers excluded). Superseded document-version embeddings MUST be purged. Implemented.
+
+## 167.4. Index and foreign-key coverage
+
+- Every foreign key with ON DELETE CASCADE or SET NULL whose parent rows are deleted at runtime MUST have an index on the child column, unless the parent is never deleted (workspace). Indexes unused by any read path on high-churn tables SHOULD be dropped. Implemented in migration `r19_db_indexes_and_tuning`; the migration has **not** been applied to a live database.
+- Indexes on populated tables MUST be created with `CONCURRENTLY` outside a transaction, and releases MUST check for INVALID indexes afterward. Implemented; procedure in `docs/release-checklist.md`.
+- Semantic search MUST use a query shape that can use the partial vector index while keeping access, source and date filters before the limit. Implemented; recall and latency not measured.
+
+## 167.5. Connection budget
+
+- Total PostgreSQL connections MUST stay below `max_connections` minus a reserve: sum over processes of (pool size + overflow) plus background and reserved connections. The current budget is 84 of 100 (API 2x20, worker 17, chat 20, agent checkpoint 6, backup 1, reserved 3). Raising `WEB_CONCURRENCY` above 2 MUST be accompanied by a recomputed budget or a pooler configured without prepared-statement caches. Documented; not load tested.
+
+## 167.6. SSE and proxy
+
+- The realtime stream (`/api/v1/realtime/events`) and the chat run stream (`/api/v1/responses/{response_id}/events`) MUST be served by a proxy with response buffering and caching off, a read timeout of at least 75 seconds, and `Last-Event-ID` preserved. The service MUST NOT trust forwarded client addresses unless explicitly configured and the proxy overwrites them. Documented and partially implemented; not verified through a real proxy.
+
+## 167.7. Redis authentication
+
+- Redis MUST require a password in every environment except explicit development or test; the API and workers MUST refuse to start in other modes with a password-less or placeholder `REDIS_URL`. HSTS MUST be emitted by exactly one layer, the TLS terminator. Implemented.
+
+## 167.8. Monitoring minimums
+
+- The database MUST log slow statements, long autovacuum runs and lock waits, and MUST expose `pg_stat_statements`. Operators MUST have documented queries for dead tuples, table sizes, top statements, idle-in-transaction sessions and invalid indexes. Implemented in Compose flags and `docs/observability.md`.
+- Alerts SHOULD cover an open model breaker (`ModelGatewayUnavailable`), growth of `p12_backup_activity`, `event_outbox` and `chat_stream_events`, and long idle-in-transaction sessions. Documented in `docs/operations.md`; no alerting system is implemented.
+- Capacity claims MUST come from measured runs on the 2-core/8 GiB target (`docs/performance-report.md`); none exists. Not verified: Docker integration, live migration, load/capacity, restore drill, provider receipts, `pip-audit`.

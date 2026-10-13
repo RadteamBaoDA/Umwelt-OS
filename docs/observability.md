@@ -47,3 +47,41 @@ The base `api` and `worker` then force the exporter off even if `.env` still con
 The exporter uses Langfuse's current OpenTelemetry HTTP/JSON endpoint (`POST /api/public/otel/v1/traces`) with Basic authentication and ingestion version 4. It does not use the legacy v3 batch-ingestion API. See [Langfuse OpenTelemetry integration](https://langfuse.com/integrations/native/opentelemetry) and the [Langfuse API reference](https://api.reference.langfuse.com/); the v3 ingestion endpoint is deprecated and scheduled to stop accepting trace events on Langfuse Cloud on 2026-11-16. The application does not expose remote delivery state in its health or metrics APIs, so absent spans mean delivery is unknown until checked in Langfuse.
 
 No with/without performance measurements have been recorded. Measure both profiles on the target 2-core/8-GB host during deferred acceptance; this implementation-stage build is not capacity evidence.
+
+## Database
+
+Postgres runs with `pg_stat_statements` preloaded, slow statements (>500 ms), autovacuum runs (>10 s) and lock waits logged. Run these through `psql` as the application owner (read-only).
+
+```sql
+-- Dead tuples and last autovacuum per table
+SELECT relname, n_live_tup, n_dead_tup, last_autovacuum, last_autoanalyze
+FROM pg_stat_user_tables ORDER BY n_dead_tup DESC LIMIT 20;
+
+-- Largest tables including indexes and TOAST
+SELECT relname, pg_size_pretty(pg_total_relation_size(relid)) AS total
+FROM pg_stat_user_tables ORDER BY pg_total_relation_size(relid) DESC LIMIT 20;
+
+-- Top statements by total execution time
+SELECT calls, round(total_exec_time::numeric) AS total_ms, round(mean_exec_time::numeric, 2) AS mean_ms, left(query, 120) AS query
+FROM pg_stat_statements ORDER BY total_exec_time DESC LIMIT 20;
+```
+
+`pg_stat_statements` is created by migration only when the library is preloaded; reset counters with `SELECT pg_stat_statements_reset();`. Row retention is enforced by the worker retention jobs (expired chat runs, receipts, replay window, backup activity); a growing `n_dead_tup` or table size on those tables means a job is not running.
+
+### Additional monitoring (2026-10-13)
+
+```sql
+-- Long idle-in-transaction sessions (a lock held across external I/O would show up here)
+SELECT pid, now() - xact_start AS age, state, left(query, 100) AS last_query
+FROM pg_stat_activity WHERE state = 'idle in transaction' ORDER BY xact_start LIMIT 20;
+
+-- Invalid indexes (an interrupted CREATE INDEX CONCURRENTLY)
+SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid;
+
+-- Row counts of tables that must stay bounded
+SELECT 'p12_backup_activity' AS t, count(*) FROM p12_backup_activity
+UNION ALL SELECT 'event_outbox', count(*) FROM event_outbox
+UNION ALL SELECT 'chat_stream_events', count(*) FROM chat_stream_events;
+```
+
+Model-gateway breaker state is Redis-only and not exported as a metric: an open breaker shows as `ModelGatewayUnavailable` in logs; see [operations.md](operations.md) for reset and the retention job inventory. Slow statements and lock waits are in the Postgres container log (`docker compose logs postgres`).
