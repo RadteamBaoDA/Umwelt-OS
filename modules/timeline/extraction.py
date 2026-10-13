@@ -8,6 +8,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
 from modules.settings.prompts import DEFAULT_SYSTEM_PROMPTS
 
 MAX_EVENTS = 30

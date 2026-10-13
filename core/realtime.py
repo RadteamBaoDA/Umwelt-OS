@@ -27,11 +27,11 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.types import Uuid
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.types import Uuid
 
 from core.database import Base
 from core.workspaces import public as workspaces
@@ -207,12 +207,9 @@ class ReplayRecord(Base):
     __table_args__ = (
         CheckConstraint("sequence > 0", name="ck_realtime_replay_sequence_positive"),
         CheckConstraint("event_type IN ('source.changed', 'ingestion.changed', 'knowledge.changed', 'dashboard.changed')", name="ck_realtime_replay_event_type"),
-        Index("ix_realtime_replay_events_epoch_sequence", "epoch", "sequence"),
-        Index("ix_realtime_replay_events_created_at", "created_at"),
         ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_realtime_replay_events_workspace", ondelete="RESTRICT"),
         ForeignKeyConstraint(["workspace_id", "user_id"], ['workspace_memberships.workspace_id', 'workspace_memberships.user_id'], name="fk_w2_realtime_replay_events_principal", ondelete="RESTRICT"),
         ForeignKeyConstraint(["workspace_id", "user_id"], ["realtime_replay_head.workspace_id", "realtime_replay_head.user_id"], name="fk_w2_realtime_replay_events_head", ondelete="CASCADE"),
-        Index("ix_w2_realtime_replay_events_work", "workspace_id", "user_id", "created_at", "sequence"),
     )
 
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
@@ -398,7 +395,7 @@ async def _validate_replay_fence(
     by the caller. Current visible stale revisions are409, invisible admission stays401/404.
     """
     if not isinstance(scope, (WorkspaceContext, InternalJobScope)):
-        raise ValueError("A typed replay scope is required")
+        raise ValueError("A typed replay scope is required")  # noqa: TRY004  # ValueError is the documented contract for a missing typed scope
     if isinstance(scope, WorkspaceContext) and scope.role != "owner" and not allow_member:
         raise HTTPException(status_code=403, detail="Workspace owner required")
     if type(multi_workspace_enabled) is not bool or not isinstance(access_fence, AccessFence):
@@ -421,12 +418,20 @@ def _replay_epoch(fence: AccessFence) -> UUID:
 
 
 async def _bounded_replay_count(session: AsyncSession) -> int:
-    """Count at most cap+1 replay metadata rows; corrupt over-cap state fails controlled repair."""
-    bounded = select(1).select_from(ReplayRecord).limit(MAX_INSTANCE_REPLAY_EVENTS + 1).subquery()
-    count = int(await session.scalar(select(func.count()).select_from(bounded)) or 0)
-    if count > MAX_INSTANCE_REPLAY_EVENTS:
+    """Return total retained replay rows derived from head windows, failing closed on corruption.
+
+    Invariant I (held after every write; sole writer is ``_retain_and_append`` under the global
+    advisory gate): per head, retained rows == sequence - floor_sequence + 1, so the sum over
+    heads equals ``count(*)`` of ReplayRecord without scanning that table. A negative window or a
+    total above the instance cap means storage is corrupt and raises ``_ReplayStorageError``.
+    Must be called inside the gate lock after head updates are flushed.
+    """
+    window = ReplayHead.sequence - ReplayHead.floor_sequence + 1
+    total, smallest = (await session.execute(select(
+        func.coalesce(func.sum(window), 0), func.min(window)))).one()
+    if (smallest is not None and smallest < 0) or int(total) > MAX_INSTANCE_REPLAY_EVENTS:
         raise _ReplayStorageError()
-    return count
+    return int(total)
 
 
 async def _retained_window(session: AsyncSession, head: ReplayHead) -> int:
@@ -604,7 +609,7 @@ async def commit_with_replay(
         principal = _scope_principal(scope)
         for draft in drafts:
             if not isinstance(draft, (SourceChanged, IngestionChanged, KnowledgeChanged, DashboardChanged)):
-                raise ValueError("A typed replay draft is required")
+                raise ValueError("A typed replay draft is required")  # noqa: TRY004  # ValueError is the documented contract for an untyped replay draft
             if any(getattr(draft, key) != value for key, value in principal.items()):
                 raise ValueError("Replay draft principal does not match admission")
             # Round trip the exact Unicode serialization checked here. SSE uses these

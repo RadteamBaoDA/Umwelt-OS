@@ -95,7 +95,10 @@ def test_gated_sends_lock_and_roll_back(locks) -> None:
     scope, sessions = _scope(True)
     sent: list[dict] = []
     _run(_downstream(b"a", b""), scope, sent)
-    assert len(sent) == 3
+    # start, drain chunk + body "a", final empty body (ungated, no drain)
+    assert [(m["type"], m.get("body")) for m in sent] == [
+        ("http.response.start", None), ("http.response.body", b""), ("http.response.body", b"a"),
+        ("http.response.body", b"")]
     assert locks.calls == ["fence", "grants"] * 2  # start + one non-empty body; empty body ungated
     assert len(sessions) == 2 and all(s.rolled_back == 1 and s.closed == 1 for s in sessions)
 
@@ -110,13 +113,34 @@ def test_revoke_before_start_sends_404_or_409(locks, status, expected) -> None:
     assert sessions[0].rolled_back == 1
 
 
+def test_body_drain_happens_before_lock(locks, monkeypatch) -> None:
+    scope, _ = _scope(True)
+    order: list[str] = []
+    orig = publication.workspaces.lock_access_fence
+
+    async def fence(session, **kw):
+        order.append("lock")
+        await orig(session, **kw)
+
+    monkeypatch.setattr(publication.workspaces, "lock_access_fence", fence)
+
+    async def send(m):
+        order.append(f"{m['type']}:{m.get('body', b'')!r}")
+
+    asyncio.run(PublicationGateMiddleware(_downstream(b"a"))(scope, _receive, send))
+    assert order == ["lock", "http.response.start:b''", "http.response.body:b''", "lock",
+                     "http.response.body:b'a'"]
+
+
 def test_revoke_between_start_and_body_aborts(locks) -> None:
     locks.ok_fences = 1
     scope, sessions = _scope(True)
     sent: list[dict] = []
     with pytest.raises(RuntimeError, match="publication_revoked"):
         _run(_downstream(b"a"), scope, sent)
-    assert [m["type"] for m in sent] == ["http.response.start"]
+    # the drain chunk precedes the denied lock, but no real body leaks
+    assert [(m["type"], m.get("body")) for m in sent] == [
+        ("http.response.start", None), ("http.response.body", b"")]
     assert all(s.rolled_back == 1 for s in sessions)
 
 

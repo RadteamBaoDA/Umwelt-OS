@@ -242,7 +242,7 @@ async def test_reranker_does_not_send_after_config_revision_bump(monkeypatch):
     monkeypatch.setattr(retrieval, "ModelGateway", FakeGateway)
     item = MagicMock(spec=EvidenceItem, local_only=False, content="c", document_version_id="v", chunk_id="c1", source_generation=1)
     monkeypatch.setattr(retrieval.documents_public, "lock_chat_evidence_chunks", AsyncMock(return_value=[item]))
-    items, status, _ = await retrieval._apply_configured_reranking(MagicMock(), _factory(), MagicMock(), MagicMock(), "q", [item], OWNER)
+    items, status, _ = await retrieval._apply_configured_reranking(AsyncMock(), _factory(), MagicMock(), MagicMock(), "q", [item], OWNER)
     assert sent == [] and status == "unavailable" and items == [item]
 
 

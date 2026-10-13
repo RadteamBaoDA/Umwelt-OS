@@ -15,6 +15,7 @@ from uuid import uuid4
 
 import pytest
 
+from modules.chat import retrieval
 from modules.chat.citations import (
     INSUFFICIENT_EVIDENCE_MESSAGE,
     _contains_quote,
@@ -190,6 +191,43 @@ class TestContextBudgetAndReranking:
         assert status == "skipped"
         assert reordered == []
         assert warnings == []
+
+    @pytest.mark.asyncio
+    async def test_apply_configured_reranking_commits_before_provider_call(self) -> None:
+        """The outer session must be committed before the rerank network call (no snapshot over I/O)."""
+        order: list[str] = []
+        session = MagicMock()
+        session.commit = AsyncMock(side_effect=lambda: order.append("commit"))
+
+        async def fake_rerank(**_kw: object) -> dict[str, object]:
+            """Record call order and return a parseable reranker payload."""
+            order.append("rerank")
+            return {"results": [{"index": 0}]}
+
+        gateway = MagicMock()
+        gateway.rerank = fake_rerank
+        config = MagicMock()
+        config.endpoint_policy_denied = False
+        config.aliases = {"reranker": MagicMock(model="m")}
+        evidence = [
+            EvidenceItem(
+                source_id=uuid4(), source_generation=1, local_only=False, document_id=uuid4(),
+                document_version_id=uuid4(), version_number=1, chunk_id=uuid4(),
+                content="x", title="t",
+            )
+        ]
+        with (
+            patch.object(retrieval.settings_public, "get_ai_execution_config", AsyncMock(return_value=config)),
+            patch.object(retrieval.settings_public, "derive_for_alias", lambda c, _a: c),
+            patch.object(retrieval, "RequestPolicy", lambda **k: MagicMock()),
+            patch.object(retrieval, "may_send", lambda *a, **k: True),
+            patch.object(retrieval, "ModelGateway", lambda **k: gateway),
+        ):
+            _, status, _ = await _apply_configured_reranking(
+                session, MagicMock(), MagicMock(), MagicMock(), "q", evidence, SCOPE,
+            )
+        assert status == "applied"
+        assert order == ["commit", "rerank"]
 
 
 SCOPE = MagicMock()

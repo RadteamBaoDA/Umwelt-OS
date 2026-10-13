@@ -65,6 +65,13 @@ class PublicationGateMiddleware:
                 await send(message)
                 return
             assert fence is not None
+            if kind == "http.response.body":
+                # Drain-before-lock: uvicorn drains its write buffer at the start of send(), so an
+                # empty more_body chunk forces any backpressure wait to happen here, before the
+                # DB lock is taken, instead of holding the fence row lock while a slow client stalls.
+                # Not done for response.start: it has no buffered writes to drain.
+                async with asyncio.timeout(SEND_TIMEOUT_SECONDS):
+                    await send({"type": "http.response.body", "body": b"", "more_body": True})
             app: Any = scope["app"]
             session: AsyncSession = app.state.session_factory()
             try:

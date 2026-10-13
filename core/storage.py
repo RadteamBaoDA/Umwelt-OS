@@ -45,7 +45,7 @@ async def save_upload(
     Temporary bytes are removed on failure or cancellation; existing legacy URIs are untouched.
     """
     if not isinstance(workspace_id, UUID) or not isinstance(document_id, UUID):
-        raise ValueError("Valid workspace and document UUIDs are required")
+        raise ValueError("Valid workspace and document UUIDs are required")  # noqa: TRY004  # ValueError is the documented contract for invalid upload identity
     if type(max_bytes) is not int or max_bytes <= 0 or not suffix.startswith(".") or any(char in suffix for char in ("/", "\\", ":", "\x00")):
         raise ValueError("Invalid upload suffix or byte limit")
     relative = Path("workspaces") / str(workspace_id) / "documents" / str(document_id) / f"{document_id}{suffix}"

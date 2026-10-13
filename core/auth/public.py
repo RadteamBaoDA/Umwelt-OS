@@ -5,13 +5,13 @@ identifiers from callers. Callers own the short session lifetime and must not re
 """
 
 import asyncio
-from datetime import UTC, datetime
 from collections.abc import Iterable
+from datetime import UTC, datetime
+from hmac import compare_digest
 
+from fastapi import HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from fastapi import HTTPException, Request
-from hmac import compare_digest
 
 from core.auth.models import AuthSession, Owner
 from core.auth.schemas import AccountRead, AccountSessionRef
@@ -135,10 +135,18 @@ async def get_demo_owner_id(session: AsyncSession) -> int:
 
 
 __all__ = [
-    "account_emails", "account_id_for_email", "lock_account_lifecycle", "provision_invited_account_in_uow",
-    "get_active_account", "get_demo_owner_id", "normalize_account_email",
-    "provision_bootstrap_account_in_uow", "revalidate_account_session", "revalidate_owner_session",
-    "authenticated_session_ref", "lock_account_admission",
+    "account_emails",
+    "account_id_for_email",
+    "authenticated_session_ref",
+    "get_active_account",
+    "get_demo_owner_id",
+    "lock_account_admission",
+    "lock_account_lifecycle",
+    "normalize_account_email",
+    "provision_bootstrap_account_in_uow",
+    "provision_invited_account_in_uow",
+    "revalidate_account_session",
+    "revalidate_owner_session",
 ]
 
 

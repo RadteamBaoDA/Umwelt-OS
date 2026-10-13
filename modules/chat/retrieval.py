@@ -199,6 +199,9 @@ async def _apply_configured_reranking(
             allow_public_endpoints=config.allow_public_providers,
         )
 
+        # Release the outer session's snapshot/locks before the network call; the egress hook
+        # uses its own send_session and this session is unused afterwards in this function.
+        await session.commit()
         raw_result = await gateway.rerank(
             alias="reranker",
             mapping=rerank_mapping,
@@ -254,6 +257,10 @@ async def build_context(
         settings: Application settings.
         request: Validated AnswerContextRequest DTO.
         scope: Workspace scope of the caller (the actor's default workspace; job scope in the worker).
+
+    Note:
+        The caller's session must hold no locks or pending writes: reranking commits it before
+        the provider call so no snapshot or row lock spans network I/O.
 
     Returns:
         AnswerContext DTO containing ordered bounded evidence and contextual summaries.

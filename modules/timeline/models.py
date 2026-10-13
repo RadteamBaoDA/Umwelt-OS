@@ -112,6 +112,7 @@ class EventEvidence(Base):
         UniqueConstraint("event_id", "document_version_id", "chunk_id", name="uq_timeline_event_evidence"),
         Index("ix_timeline_event_evidence_source", "source_id", "document_id"),
         Index("ix_timeline_event_evidence_version", "document_version_id", "chunk_id"),
+        Index("ix_timeline_event_evidence_chunk_id", "chunk_id"),
         ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_timeline_event_evidence_workspace", ondelete="RESTRICT"),
         ForeignKeyConstraint(["workspace_id", "event_id"], ["timeline_events.workspace_id", "timeline_events.id"], name="fk_w2_timeline_event_evidence_event_id", ondelete="CASCADE"),
         # Scalar SET NULL clears only the parent ID; this deferred FK retains workspace.

@@ -52,7 +52,7 @@ class InternalJobScope:
     def __post_init__(self) -> None:
         """Require positive actor/revision and paired valid source identity/generation."""
         if not isinstance(self.workspace_id, UUID):
-            raise ValueError("A valid workspace ID is required")
+            raise ValueError("A valid workspace ID is required")  # noqa: TRY004  # ValueError is the documented contract for malformed snapshots
         if type(self.actor_user_id) is not int or self.actor_user_id <= 0:
             raise ValueError("A positive actor ID is required")
         if type(self.membership_revision) is not int or self.membership_revision <= 0:
@@ -66,7 +66,7 @@ class InternalJobScope:
             raise ValueError("A valid source ID and positive generation are required")
 
 
-Scope: TypeAlias = WorkspaceContext | InternalJobScope
+Scope: TypeAlias = WorkspaceContext | InternalJobScope  # noqa: UP040  # runtime alias is used in isinstance/pydantic positions; `type` statement would change that
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,7 +81,7 @@ class AccessFence:
     def __post_init__(self) -> None:
         """Reject malformed revision snapshots; a valid snapshot is still not permission."""
         if not isinstance(self.workspace_id, UUID):
-            raise ValueError("A valid workspace ID is required")
+            raise ValueError("A valid workspace ID is required")  # noqa: TRY004  # ValueError is the documented contract for malformed snapshots
         if any(type(value) is not int or value <= 0 for value in (
             self.user_id, self.membership_revision, self.configuration_revision,
         )):

@@ -69,7 +69,11 @@ from modules.sources import public as sources_public
 logger = logging.getLogger(__name__)
 
 CANCEL_KEY_PREFIX = "chat:cancel:"
-STREAM_FLUSH_SECONDS = 0.1
+# 0.4 s keeps SSE perceptibly live while cutting delta rows (each flush is one locked transaction) ~4x.
+STREAM_FLUSH_SECONDS = 0.4
+# Terminal runs keep their full text in message.done, so their deltas are dead weight after a day.
+DELTA_RETENTION = timedelta(days=1)
+DELTA_PURGE_LIMIT = 5000
 STREAM_FLUSH_CHARS = 256
 CHAT_QUEUE = "arq:chat"
 CHAT_JOB_TIMEOUT = 600  # arq job_timeout for ChatWorkerSettings (single source)
@@ -485,6 +489,7 @@ async def purge_expired_chat_runs(ctx: dict[str, object]) -> int:
         Run-only expiry never
         deletes a persistent parent. Agent cleanup uses its public owner contract, which preserves
         effect identities and uncertainty tombstones and never makes an external effect replayable.
+        Each candidate is its own short transaction; the privacy lock is never held across items.
     """
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     page_size = 100
@@ -503,6 +508,7 @@ async def purge_expired_chat_runs(ctx: dict[str, object]) -> int:
             ).order_by(Conversation.id).limit(page_size)
         )).all())
         for conversation_id in candidate_conversations:
+            await session.commit()  # end the previous item's unit: releases the global privacy lock between items
             await lock_export_privacy(session)
             conversation = await session.scalar(
                 select(Conversation).where(Conversation.id == conversation_id)
@@ -545,6 +551,7 @@ async def purge_expired_chat_runs(ctx: dict[str, object]) -> int:
             ).order_by(AgentActivityLink.id).limit(page_size)
         )).all())
         for link_id, conversation_id in candidate_links:
+            await session.commit()  # end the previous item's unit: releases the global privacy lock between items
             await lock_export_privacy(session)
             conversation = await session.scalar(
                 select(Conversation).where(Conversation.id == conversation_id)
@@ -612,6 +619,7 @@ async def purge_expired_chat_runs(ctx: dict[str, object]) -> int:
             ).order_by(ResponseRun.id).limit(page_size)
         )).all())
         for run_id, conversation_id in candidate_runs:
+            await session.commit()  # end the previous item's unit: releases the global privacy lock between items
             await lock_export_privacy(session)
             conversation = await session.scalar(
                 select(Conversation).where(Conversation.id == conversation_id)
@@ -637,7 +645,38 @@ async def purge_expired_chat_runs(ctx: dict[str, object]) -> int:
             removed += 1 + stream_count + receipt_count
 
         await session.commit()
-        return removed
+    await purge_terminal_message_deltas(factory)
+    return removed
+
+
+async def purge_terminal_message_deltas(
+    factory: async_sessionmaker[AsyncSession], *, now: datetime | None = None,
+) -> int:
+    """Delete one bounded slice of ``message.delta`` events of old terminal runs; returns rows deleted.
+
+    Replay reads ``seq > current_seq`` and tolerates gaps, and ``message.done`` (completed runs) already
+    carries the full answer, so deltas of runs that finished more than ``DELTA_RETENTION`` ago only
+    bloat ``chat_stream_events``. At most ``DELTA_PURGE_LIMIT`` rows go per call via an ``id IN
+    (subselect)`` so each delete stays short; the 15-minute cron drains a backlog. Runs in its own
+    transaction after the privacy-ordered purge commits: terminal events are immutable apart from
+    privacy redaction, which only rewrites deltas, so no parent/run locks are needed.
+    """
+    cutoff = (now or datetime.now(UTC)) - DELTA_RETENTION
+    ids = (
+        select(StreamEvent.id)
+        .join(ResponseRun, ResponseRun.id == StreamEvent.response_id)
+        .where(
+            StreamEvent.event_type == "message.delta",
+            ResponseRun.status.in_(("completed", "cancelled", "failed")),
+            ResponseRun.completed_at.is_not(None),
+            ResponseRun.completed_at < cutoff,
+        )
+        .limit(DELTA_PURGE_LIMIT)
+    )
+    async with factory() as session:
+        result = await session.execute(delete(StreamEvent).where(StreamEvent.id.in_(ids)))
+        await session.commit()
+    return int(getattr(result, "rowcount", 0) or 0)
 
 
 async def run_response_generation(
@@ -802,6 +841,7 @@ async def run_response_generation(
                 answer_context = await build_context(
                     session, session_factory, redis, settings, answer_request, job_scope,
                 )
+                await session.commit()  # release retrieval snapshot / selected-only Source FOR SHARE before awaiting web search
                 web_run = await search_task if search_task is not None else None
             except BaseException:
                 if search_task is not None:

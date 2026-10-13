@@ -147,6 +147,14 @@ class _RealtimeResponse(Response):
             session = None
             send_attempted = False
             try:
+                if protected and message["type"] == "http.response.body":
+                    # Drain-before-lock: uvicorn drains its write buffer at the start of send(), so
+                    # an empty more_body chunk makes a slow client stall here, before any DB lock
+                    # exists. A timeout is treated as an uncertain send (the 503 path below).
+                    send_attempted = True
+                    async with asyncio.timeout(SEND_TIMEOUT_SECONDS):
+                        await send({"type": "http.response.body", "body": b"", "more_body": True})
+                    send_attempted = False
                 if protected:
                     session = factory()
                     async with asyncio.timeout(DB_READ_TIMEOUT_SECONDS):

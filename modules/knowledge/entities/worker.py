@@ -471,8 +471,12 @@ async def recover_entity_extraction_work(ctx: dict[str, object]) -> int:
 async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: str) -> None:
     """Run one lease-owned extraction job and publish only fenced graph changes.
 
-    Commits the 110-second work claim, then holds source/document locks across
-    the provider request and rechecks privacy policy immediately before send.
+    Commits the 110-second work claim, locks source/document only to capture plain
+    DTOs, then releases every lock before the provider request so chat's access
+    fence is never blocked. Privacy policy and the access fence are rechecked on
+    an independent session immediately before send; after the response the worker
+    re-locks and compares source generation, raw URI and MIME type before
+    publication (drift raises retryable ``document_unavailable``).
     Policy/capability blocks with a saved dependency fingerprint can be requeued
     after recovery detects a changed dependency. Local-only blocks have no
     fingerprint and remain parked at ``datetime.max``; bounded-input blocks are
@@ -555,7 +559,7 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
                     scope=scope, multi_workspace_enabled=multi_workspace_enabled)
                 await session.commit()
                 return
-            # Keep source/document fences while remote work runs so deletion or generation changes cannot race publication.
+            # Locks are released before inference and reacquired for publication.
             ready = await documents.get_ready_version_ref(
                 session, version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
             )
@@ -633,15 +637,22 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
                         current.gateway_credential_configured, "structured",
                     ):
                         raise PrivacyPolicyDenied("Extraction policy denied before send")
-                current_ready = await documents.get_ready_version_ref(
-                    session, version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-                )
-                if (
-                    current_ready is None or current_ready.document_id != data.document_id
-                    or current_ready.source_id != data.source_id
-                    or current_ready.source_generation != captured_generation
-                ):
-                    raise PrivacyPolicyDenied("Extraction source revision changed before send")
+                    # Fresh session: the outer transaction is rolled back before inference.
+                    if await workspaces.read_access_fence(
+                        current_session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                    ) != access_fence:
+                        # 409 (not PrivacyPolicyDenied) so work is retried, not blocked forever.
+                        raise HTTPException(status_code=409, detail="Workspace access changed")
+                    current_ready = await documents.get_ready_version_ref(
+                        current_session, version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                    )
+                    if (
+                        current_ready is None or current_ready.document_id != data.document_id
+                        or current_ready.source_id != data.source_id
+                        or current_ready.source_generation != captured_generation
+                        or current_ready.local_only
+                    ):
+                        raise PrivacyPolicyDenied("Extraction source revision changed before send")
 
             gateway = ModelGateway(
                 redis=redis, base_url=config.gateway_base_url, api_key=config.gateway_api_key,
@@ -651,6 +662,8 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
                 approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
                 allow_public_endpoints=config.allow_public_providers,
             )
+            # Release workspace, membership, Source, Document and raw-URI locks before provider I/O.
+            await session.rollback()
             response = await gateway.structured(
                 alias, mapping, policy,
                 extraction_messages([(chunk.id, chunk.content) for chunk in data.chunks], resolve_prompt(config.system_prompts, "entity_extraction")),
@@ -659,15 +672,7 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
             if not isinstance(response, dict):
                 raise ValueError("invalid_model_response")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
             extracted, actual_model, usage = response_content(response)
-            current_ready = await documents.get_ready_version_ref(
-                session, version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-            )
-            if (
-                current_ready is None or current_ready.document_id != data.document_id
-                or current_ready.source_id != data.source_id
-                or current_ready.source_generation != captured_generation
-            ):
-                raise ValueError("document_unavailable")
+            # Pure response checks run before any lock is reacquired.
             allowed_chunks = {chunk.id for chunk in data.chunks}
             if any(not set(item.chunk_ids) <= allowed_chunks for item in extracted.entities):
                 raise ValueError("unknown_evidence_chunk")
@@ -677,6 +682,30 @@ async def process_entity_extraction_work(ctx: dict[str, object], work_id_value: 
                 raise ValueError("duplicate_candidate_key")
             if any(item.source_key == item.target_key or item.source_key not in {e.key for e in extracted.entities} or item.target_key not in {e.key for e in extracted.entities} for item in extracted.relationships):
                 raise ValueError("invalid_relationship_endpoint")
+            # Reacquire the locks released before inference and compare against the phase-1 snapshot.
+            relocked = await sources.lock_source(
+                session, data.source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                expected_access_fence=access_fence,
+            )
+            if (
+                relocked is None or relocked.status != "active" or relocked.generation != captured_generation
+                or relocked.local_only
+                or not await documents.lock_document_for_extraction(
+                    session, data.document_id, relocked.id, scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+                    source_fence=relocked, expected_raw_uri=ready.raw_uri, expected_mime_type=ready.mime_type,
+                )
+            ):
+                raise ValueError("document_unavailable")
+            current_ready = await documents.get_ready_version_ref(
+                session, version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
+            if (
+                current_ready is None or current_ready.document_id != data.document_id
+                or current_ready.source_id != data.source_id
+                or current_ready.source_generation != captured_generation
+            ):
+                raise ValueError("document_unavailable")
             membership_chunk_ids = sorted({chunk_id for item in extracted.entities for chunk_id in item.chunk_ids}, key=str)
             evidence_refs = await documents.read_extraction_evidence_refs(
                 session, document_id=data.document_id, document_version_id=version_id,

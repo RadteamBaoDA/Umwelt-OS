@@ -145,7 +145,13 @@ def _allowed(config: AIExecutionConfig, mapping: ModelMapping | None, destinatio
 
 @bounded_heavy_work
 async def process_timeline_extraction_work(ctx: dict[str, object], work_id_value: str) -> None:
-    """Run one durable extraction lease while holding source/document egress fences through publication.
+    """Run one durable extraction lease: lock -> release -> infer -> re-lock-and-compare -> publish.
+
+    Phase 1 locks workspace/membership/source/document rows only to capture plain DTOs, then
+    rolls back before provider I/O so chat's access fence is never blocked for the request's
+    duration. Egress is rechecked in ``before_send`` on an independent session, and publication
+    re-locks and compares source generation, raw URI and MIME type; any drift raises
+    ``ValueError("document_unavailable")`` (retryable) and nothing is published.
 
     The model call uses the existing two-slot ModelGateway and the worker's
     shared PostgreSQL heavy slot. Work status and replay omit source text; results
@@ -225,7 +231,7 @@ async def process_timeline_extraction_work(ctx: dict[str, object], work_id_value
                     scope=scope, multi_workspace_enabled=multi_workspace_enabled)
                 await session.commit()
                 return
-            # Keep this transaction's source/document locks across inference and publication.
+            # Locks are released before inference and reacquired for publication.
             ready = await documents.get_ready_version_ref(
                 session, version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
             )
@@ -296,15 +302,22 @@ async def process_timeline_extraction_work(ctx: dict[str, object], work_id_value
                         or not _allowed(current, current_mapping, current_destination, source.local_only)
                     ):
                         raise PrivacyPolicyDenied("Timeline extraction policy changed before send")
-                current_ready = await documents.get_ready_version_ref(
-                    session, version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-                )
-                if (
-                    current_ready is None or current_ready.document_id != data.document_id
-                    or current_ready.source_id != source.id
-                    or current_ready.source_generation != generation
-                ):
-                    raise PrivacyPolicyDenied("Timeline extraction source revision changed before send")
+                    # Fresh session: the outer transaction was rolled back before inference.
+                    if await workspaces.read_access_fence(
+                        check_session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                    ) != access_fence:
+                        # 409 (not PrivacyPolicyDenied) so work is retried, not blocked forever.
+                        raise HTTPException(status_code=409, detail="Workspace access changed")
+                    current_ready = await documents.get_ready_version_ref(
+                        check_session, version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                    )
+                    if (
+                        current_ready is None or current_ready.document_id != data.document_id
+                        or current_ready.source_id != source.id
+                        or current_ready.source_generation != generation
+                        or current_ready.local_only
+                    ):
+                        raise PrivacyPolicyDenied("Timeline extraction source revision changed before send")
 
             gateway = ModelGateway(
                 redis=redis, base_url=config.gateway_base_url, api_key=config.gateway_api_key,
@@ -314,6 +327,8 @@ async def process_timeline_extraction_work(ctx: dict[str, object], work_id_value
                 approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
                 allow_public_endpoints=config.allow_public_providers,
             )
+            # Release workspace, membership, Source, Document and raw-URI locks before provider I/O.
+            await session.rollback()
             response = await gateway.structured(
                 ALIAS, mapping, _policy(config, mapping, destination, source.local_only),
                 extraction_messages(
@@ -342,12 +357,27 @@ async def process_timeline_extraction_work(ctx: dict[str, object], work_id_value
                     # Keep the attempted-request fingerprint so recovery sees
                     # a changed, already-permitted configuration as retryable.
                     raise PrivacyPolicyDenied("Timeline extraction policy changed before publication")
+            # Reacquire the locks released before inference and compare against the phase-1 snapshot.
+            locked = await sources.lock_source(
+                session, data.source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                expected_access_fence=access_fence,
+            )
+            if (
+                locked is None or locked.status != "active" or locked.generation != generation or locked.local_only
+                or not await documents.lock_document_for_extraction(
+                    session, data.document_id, locked.id, scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+                    source_fence=locked, expected_raw_uri=ready.raw_uri, expected_mime_type=ready.mime_type,
+                )
+            ):
+                raise ValueError("document_unavailable")
             current_ready = await documents.get_ready_version_ref(
                 session, version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
             )
             if (
                 current_ready is None or current_ready.document_id != data.document_id
-                or current_ready.source_generation != generation or current_ready.source_id != source.id
+                or current_ready.source_id != data.source_id or current_ready.source_generation != generation
+                or current_ready.raw_uri != ready.raw_uri or current_ready.mime_type != ready.mime_type
             ):
                 raise ValueError("document_unavailable")
             if not await timeline.publish_extracted_events(

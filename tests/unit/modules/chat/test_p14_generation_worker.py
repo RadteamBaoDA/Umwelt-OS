@@ -119,7 +119,7 @@ class _Gen:
     async def stream(self, **_kwargs: Any) -> AsyncIterator[str]:
         for token in self.tokens:
             if token == "__SLEEP__":
-                await asyncio.sleep(0.15)
+                await asyncio.sleep(worker.STREAM_FLUSH_SECONDS + 0.05)
                 continue
             yield "data: " + json.dumps({"choices": [{"delta": {"content": token}}]})
         yield "data: [DONE]"
@@ -140,7 +140,7 @@ async def test_200_single_char_tokens_coalesce(monkeypatch: pytest.MonkeyPatch) 
     gen = _Gen(monkeypatch, ["a"] * 200)
     await gen.run()
     gen.failed.assert_not_awaited()
-    assert len(gen.deltas) <= 2  # ceil(200/256) + 1 is the plan bound; 200 fast tokens fit one 100 ms window
+    assert len(gen.deltas) <= 2  # ceil(200/256) + 1 is the plan bound; 200 fast tokens fit one flush window
     assert "".join(gen.deltas) == "a" * 200
 
 
@@ -156,7 +156,7 @@ async def test_time_threshold_flushes_and_final_flush_publishes_remainder(monkey
     monkeypatch.setattr(worker, "STREAM_FLUSH_CHARS", 10_000)
     gen = _Gen(monkeypatch, ["a", "b", "__SLEEP__", "c", "d"])
     await gen.run()
-    assert gen.deltas == ["a", "bc", "d"]  # a: first flush; c arrives after 150 ms; d is the final flush
+    assert gen.deltas == ["a", "bc", "d"]  # a: first flush; c arrives after the flush interval; d is the final flush
     done = next(e for e in gen.added if isinstance(e, StreamEvent) and e.event_type == "message.done")
     assert done.data["status"] == "completed"
     assert any(isinstance(m, Message) for m in gen.added)

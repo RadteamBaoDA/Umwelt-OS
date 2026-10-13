@@ -27,7 +27,7 @@ from httpx import AsyncClient, Response
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from tests.integration.test_p14_chat_worker import FAKE_BASE_URL, _docker, _service_container
+from tests.integration.test_p14_chat_worker import _docker, _service_container, configure_fake_model
 
 pytestmark = pytest.mark.skipif(
     os.getenv("INTEGRATION") != "1", reason="requires disposable Compose test services"
@@ -43,17 +43,7 @@ DEADLINE = 2.0
 async def brief_ready(ready_owner_client: AsyncClient) -> AsyncClient:
     """Point the brief alias at the fake model with remote reasoning allowed, and probe chat."""
     client = ready_owner_client
-    current = (await client.get("/api/v1/settings/ai")).json()
-    saved = await client.put("/api/v1/settings/ai", json={
-        "gateway_base_url": FAKE_BASE_URL,
-        "omniroute_credential_action": "replaced", "gateway_api_key": "fake-model-key",
-        "chat_alias": "reasoning-large", "brief_alias": "reasoning-large",
-        "aliases": {"reasoning-large": {"model": "fake-chat", "destination": "remote"}},
-        "privacy": {"allow_remote_reasoning": True, "allow_remote_embeddings": False},
-        "request_timeout_seconds": 30,
-        "expected_revision": current["configuration_revision"],
-    })
-    assert saved.status_code == 200, saved.text
+    await configure_fake_model(client)
     probe = await client.post("/api/v1/settings/models/reasoning-large/test", json={"capability": "chat"})
     assert probe.status_code == 200 and probe.json()["result"] == "supported", probe.text
     return client

@@ -291,7 +291,7 @@ async def test_rerank_applies_and_revalidates_evidence_before_send(monkeypatch: 
     send_session.close = AsyncMock()
 
     reordered, status, warnings = await _apply_configured_reranking(
-        MagicMock(), lambda: send_session, redis, MagicMock(), "q", items, OWNER,
+        AsyncMock(), lambda: send_session, redis, MagicMock(), "q", items, OWNER,
     )
     assert status == "applied" and warnings == []
     assert reordered == [items[1], items[0]]
@@ -316,7 +316,7 @@ async def test_rerank_before_send_blocks_when_evidence_became_local_only(monkeyp
     send_session.close = AsyncMock()
 
     reordered, status, _ = await _apply_configured_reranking(
-        MagicMock(), lambda: send_session, MagicMock(), MagicMock(), "q", items, OWNER,
+        AsyncMock(), lambda: send_session, MagicMock(), MagicMock(), "q", items, OWNER,
     )
     assert status == "unavailable" and reordered == items
     assert state["sent"] is False  # revalidation raised before any remote send
