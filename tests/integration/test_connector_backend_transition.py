@@ -46,6 +46,7 @@ class FakeN8n:
 def _settings() -> Any:
     return SimpleNamespace(
         multi_workspace_enabled=FLAG, n8n_api_key=SimpleNamespace(get_secret_value=lambda: "k"),
+        n8n_webhook_token=SimpleNamespace(get_secret_value=lambda: "t"),  # resolve_n8n reads env token too
         n8n_service_url="http://fake")
 
 

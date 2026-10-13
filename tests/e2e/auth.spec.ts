@@ -12,13 +12,13 @@ test('owner can set up, log in, and log out', async ({ page }) => {
   await page.getByRole('button', { name: 'Create owner' }).click();
   await expect(page).toHaveURL(/\/login$/);
   await page.getByLabel('Password', { exact: true }).fill('test-owner-password-42');
-  await page.getByRole('button', { name: 'Sign in' }).click();
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Dashboard', level: 1 })).toBeVisible();
   await page.getByRole('button', { name: 'User menu' }).click();
   await page.getByRole('menuitem', { name: 'Sign out' }).click();
   await expect(page).toHaveURL(/\/login$/);
   await page.getByLabel('Password', { exact: true }).fill('test-owner-password-42');
-  await page.getByRole('button', { name: 'Sign in' }).click();
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Dashboard', level: 1 })).toBeVisible();
   await mkdir('playwright/.auth', { recursive: true });
   await page.context().storageState({ path: 'playwright/.auth/owner.json' });
@@ -29,7 +29,7 @@ test('sign out stays a sign out when a request 401s before the logout reply', as
   // refetch) 401s and can reach the shell before the logout reply does. That must not read as "expired".
   await page.goto('/login');
   await page.getByLabel('Password', { exact: true }).fill('test-owner-password-42');
-  await page.getByRole('button', { name: 'Sign in' }).click();
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Dashboard', level: 1 })).toBeVisible();
   let releaseLogout = () => {};
   const held = new Promise<void>((resolve) => { releaseLogout = resolve; });
