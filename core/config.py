@@ -295,6 +295,7 @@ class Settings(BaseSettings):
 
         Local/LAN origins (see is_local_host) may use plain http with non-Secure cookies, including under "auto".
         Placeholder/default credentials are rejected unless the environment is explicitly dev/test (secrets_relaxed).
+        A redis_url without a password is rejected under the same condition.
         Raises ValueError (surfaced as ValidationError) naming the offending field, never its value.
         """
         if self.secrets_relaxed:
@@ -304,6 +305,10 @@ class Settings(BaseSettings):
                 raise ValueError("PUBLIC_ORIGIN must be https for a non-local host")
             if self.public_origin.scheme == "https" and not self.secure_cookies:
                 raise ValueError("SECURE_COOKIES must be true when PUBLIC_ORIGIN is https")
+        # Redis holds sessions, budgets and queues: an unauthenticated instance is refused outside explicit dev/test.
+        # Same rule as placeholder secrets, so "auto" does not relax it (setup tooling generates REDISCLI_AUTH).
+        if not urlsplit(self.redis_url).password:
+            raise ValueError("redis_url must include a password (redis://:<REDISCLI_AUTH>@host:port/db)")
         for name in type(self).model_fields:
             value = getattr(self, name)
             if isinstance(value, SecretStr):

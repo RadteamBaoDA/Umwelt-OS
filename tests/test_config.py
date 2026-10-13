@@ -50,7 +50,7 @@ def _no_placeholder_env(monkeypatch: pytest.MonkeyPatch) -> None:
 def _prod(**kw: object) -> Settings:
     base = {
         "ENVIRONMENT": "production",
-        "database_url": "postgresql+asyncpg://bbd:real-pw@db:5432/bbd",
+        "database_url": "postgresql+asyncpg://bbd:real-pw@db:5432/bbd", "redis_url": "redis://:real-pw@redis:6379/0",
         "public_origin": "https://example.com",
         "secure_cookies": True,
     }
@@ -92,7 +92,7 @@ def test_dev_allows_defaults_and_serves_docs() -> None:
 def test_auto_mode_is_development_for_local_origin(origin: str) -> None:
     # Default "auto" + local/LAN origin relaxes transport only: http and non-Secure cookies pass with real secrets.
     settings = Settings(_env_file=None, ENVIRONMENT="auto", public_origin=origin,  # type: ignore[arg-type]
-                        database_url="postgresql+asyncpg://bbd:real-pw@db:5432/bbd")
+                        database_url="postgresql+asyncpg://bbd:real-pw@db:5432/bbd", redis_url="redis://:real-pw@redis:6379/0")
     assert settings.mode == "development" and settings.is_dev
 
 
@@ -107,15 +107,15 @@ def test_auto_mode_never_accepts_placeholder_secrets() -> None:
 
 def test_auto_mode_is_production_for_public_domain() -> None:
     assert Settings(_env_file=None, ENVIRONMENT="auto", public_origin="https://example.com", secure_cookies=True,  # type: ignore[arg-type]
-                    database_url="postgresql+asyncpg://bbd:real-pw@db:5432/bbd").mode == "production"
+                    database_url="postgresql+asyncpg://bbd:real-pw@db:5432/bbd", redis_url="redis://:real-pw@redis:6379/0").mode == "production"
     with pytest.raises(ValidationError):  # http on a public domain
-        Settings(_env_file=None, ENVIRONMENT="auto", public_origin="http://example.com", database_url="postgresql+asyncpg://bbd:real-pw@db:5432/bbd")  # type: ignore[arg-type]
+        Settings(_env_file=None, ENVIRONMENT="auto", public_origin="http://example.com", database_url="postgresql+asyncpg://bbd:real-pw@db:5432/bbd", redis_url="redis://:real-pw@redis:6379/0")  # type: ignore[arg-type]
     with pytest.raises(ValidationError):  # https without Secure cookies
-        Settings(_env_file=None, ENVIRONMENT="auto", public_origin="https://example.com", database_url="postgresql+asyncpg://bbd:real-pw@db:5432/bbd")  # type: ignore[arg-type]
+        Settings(_env_file=None, ENVIRONMENT="auto", public_origin="https://example.com", database_url="postgresql+asyncpg://bbd:real-pw@db:5432/bbd", redis_url="redis://:real-pw@redis:6379/0")  # type: ignore[arg-type]
 
 
 def test_explicit_production_on_lan_keeps_secret_checks_but_allows_http() -> None:
-    ok = {"ENVIRONMENT": "production", "public_origin": "http://192.168.1.20:3000", "database_url": "postgresql+asyncpg://bbd:real-pw@db:5432/bbd"}
+    ok = {"ENVIRONMENT": "production", "public_origin": "http://192.168.1.20:3000", "database_url": "postgresql+asyncpg://bbd:real-pw@db:5432/bbd", "redis_url": "redis://:real-pw@redis:6379/0"}
     assert Settings(_env_file=None, **ok).mode == "production"  # type: ignore[arg-type]
     with pytest.raises(ValidationError):
         Settings(_env_file=None, **{**ok, "setup_token": "replace-with-x"})  # type: ignore[arg-type]
@@ -123,4 +123,4 @@ def test_explicit_production_on_lan_keeps_secret_checks_but_allows_http() -> Non
 
 def test_explicit_development_wins_over_public_domain() -> None:
     assert Settings(_env_file=None, ENVIRONMENT="development", public_origin="https://example.com").mode == "development"  # type: ignore[arg-type]
-    assert Settings(_env_file=None, ENVIRONMENT="bogus", public_origin="http://localhost:3000", database_url="postgresql+asyncpg://bbd:real-pw@db:5432/bbd").mode == "production"  # type: ignore[arg-type]
+    assert Settings(_env_file=None, ENVIRONMENT="bogus", public_origin="http://localhost:3000", database_url="postgresql+asyncpg://bbd:real-pw@db:5432/bbd", redis_url="redis://:real-pw@redis:6379/0").mode == "production"  # type: ignore[arg-type]

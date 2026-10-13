@@ -49,10 +49,10 @@ def _enc(value: str) -> str:
 
 
 def _row(**over: object) -> SimpleNamespace:
-    base = dict(
-        configuration_revision=2, providers={}, aliases={}, n8n={},
-        privacy={}, system_prompts={}, chat_alias="reasoning-large", brief_alias="reasoning-small",
-        web_search_provider="none", web_search_endpoint=None, web_search_api_key_ciphertext=None, request_timeout_seconds=20)
+    base = {
+        "configuration_revision": 2, "providers": {}, "aliases": {}, "n8n": {},
+        "privacy": {}, "system_prompts": {}, "chat_alias": "reasoning-large", "brief_alias": "reasoning-small",
+        "web_search_provider": "none", "web_search_endpoint": None, "web_search_api_key_ciphertext": None, "request_timeout_seconds": 20}
     return SimpleNamespace(**{**base, **over})
 
 

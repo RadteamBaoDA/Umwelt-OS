@@ -1,6 +1,8 @@
 from pathlib import Path
 
+import pytest
 import yaml
+from pydantic import ValidationError
 
 from core.config import Settings
 from modules.connectors.catalog import _ENTRIES
@@ -28,3 +30,20 @@ def test_catalog_requires_service() -> None:
     by_id = {e.provider_id: e.requires_service for e in _ENTRIES}
     assert by_id["browser"] == "browser" and by_id["web"] == "browser"
     assert by_id["rss"] is None
+
+
+def test_redis_url_without_password_rejected_outside_dev(monkeypatch) -> None:
+    """Non-dev/test environments (including "auto") refuse an unauthenticated Redis; dev/test accept it."""
+    monkeypatch.setenv("REDIS_URL", "redis://redis:6379/0")
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    Settings()  # explicit development keeps working
+    for env in ("auto", "production"):
+        monkeypatch.setenv("ENVIRONMENT", env)
+        monkeypatch.setenv("PUBLIC_ORIGIN", "http://localhost:3000")
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://u:realpw@postgres:5432/d")
+        with pytest.raises(ValidationError, match="redis_url must include a password"):
+            Settings()
+    monkeypatch.setenv("REDIS_URL", "redis://:s3cret@redis:6379/0")
+    with pytest.raises(ValidationError) as exc:  # other template secrets still fail, but not redis_url
+        Settings()
+    assert "redis_url" not in str(exc.value)

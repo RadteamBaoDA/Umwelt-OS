@@ -81,6 +81,7 @@ try {
     'setup' {
       if (-not (Test-Path '.env')) {
         $dbPassword = New-Secret
+        $redisPassword = New-Secret
         $config = @"
 PUBLIC_ORIGIN=http://localhost:3000
 SECURE_COOKIES=false
@@ -89,7 +90,8 @@ CSRF_SIGNING_SECRET=$(New-Secret)
 SESSION_LIFETIME_HOURS=24
 POSTGRES_PASSWORD=$dbPassword
 DATABASE_URL=postgresql+asyncpg://bbd:${dbPassword}@postgres:5432/bbd
-REDIS_URL=redis://redis:6379/0
+REDISCLI_AUTH=$redisPassword
+REDIS_URL=redis://:${redisPassword}@redis:6379/0
 DATA_DIR=/data
 WEB_PORT=3000
 N8N_ENCRYPTION_KEY=$(New-Secret)

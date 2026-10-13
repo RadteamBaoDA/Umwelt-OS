@@ -26,8 +26,7 @@ const csp = [
 
 const securityHeaders = [
   { key: 'Content-Security-Policy', value: csp },
-  // HSTS is production-only: browsers ignore it over plain http, and a dev server must stay reachable without https.
-  ...(isDev ? [] : [{ key: 'Strict-Transport-Security', value: 'max-age=31536000; includeSubDomains' }]),
+  // HSTS is deliberately not set here: the TLS terminator (infrastructure/proxy/Caddyfile, or the tunnel) owns it so there is one value.
   { key: 'X-Content-Type-Options', value: 'nosniff' },
   { key: 'X-Frame-Options', value: 'DENY' },
   { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },

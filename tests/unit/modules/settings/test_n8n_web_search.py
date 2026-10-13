@@ -115,8 +115,8 @@ async def test_env_secrets_not_sent_to_a_different_stored_url() -> None:
 
 
 def _web_row(**over: object) -> SimpleNamespace:
-    base = dict(configuration_revision=2, privacy={}, web_search_provider="none", web_search_endpoint=None,
-                web_search_api_key_ciphertext=None)
+    base = {"configuration_revision": 2, "privacy": {}, "web_search_provider": "none", "web_search_endpoint": None,
+            "web_search_api_key_ciphertext": None}
     return SimpleNamespace(**{**base, **over})
 
 
